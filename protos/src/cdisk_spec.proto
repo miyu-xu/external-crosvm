@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+message ComponentDisk {
+  string file_path = 1;
+  uint64 offset = 2;
+  uint64 length = 3;
+}
+
+message CompositeDisk {
+  uint64 version = 1;
+  repeated ComponentDisk component_disks = 2;
+};

@@ -1,15 +1,14 @@
 [package]
-name = "qcow"
+name = "cdisk"
 version = "0.1.0"
 authors = ["The Chromium OS Authors"]
 edition = "2018"
 
 [lib]
-path = "src/qcow.rs"
+path = "src/cdisk.rs"
 
 [dependencies]
-byteorder = "*"
-libc = "*"
-remain = "*"
+protobuf = "2.3"
 sys_util = { path = "../sys_util" }
 data_model = { path = "../data_model" }
+protos = { path = "../protos" }

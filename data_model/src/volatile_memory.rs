@@ -174,6 +174,18 @@ impl<'a> VolatileSlice<'a> {
         unsafe { Ok(VolatileSlice::new(new_addr as *mut u8, new_size)) }
     }
 
+    /// Creates a copy of this slice with the size decreased by `count` bytes. If `count` is greater
+    /// than self.size, returns an error result.
+    pub fn shorten(self, count: u64) -> Result<VolatileSlice<'a>> {
+        let new_size = self
+            .size
+            .checked_sub(count)
+            .ok_or(VolatileMemoryError::OutOfBounds { addr: self.addr as u64 })?;
+        // Safe because the memory has the same lifetime and points to a subset of the memory of the
+        // original slice.
+        unsafe { Ok(VolatileSlice::new(self.addr, new_size)) }
+    }
+
     /// Sets each byte of this slice with the given byte, similar to `memset`.
     ///
     /// The bytes of this slice are accessed in an arbitray order.
