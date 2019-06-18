@@ -1,0 +1,21 @@
+[package]
+name = "disk"
+version = "0.1.0"
+authors = ["The Chromium OS Authors"]
+edition = "2018"
+
+[lib]
+path = "src/disk.rs"
+
+[features]
+composite-disk = ["cdisk"]
+
+[dependencies]
+byteorder = "*"
+libc = "*"
+remain = "*"
+cdisk = { path = "../cdisk", optional = true }
+devices = { path = "../devices" }
+qcow = { path = "../qcow" }
+sys_util = { path = "../sys_util" }
+vm_control = { path = "../vm_control" }

@@ -30,7 +30,6 @@ use kvm::*;
 use libcras::CrasClient;
 use msg_socket::{MsgError, MsgReceiver, MsgSender, MsgSocket};
 use net_util::{Error as NetError, MacAddress, Tap};
-use qcow::{self, ImageType, QcowFile};
 use rand_ish::SimpleRng;
 use remain::sorted;
 use resources::{Alloc, SystemAllocator};
@@ -74,12 +73,12 @@ pub enum Error {
     AllocateGpuDeviceAddress,
     AllocatePmemDeviceAddress(resources::Error),
     BalloonDeviceNew(virtio::BalloonError),
-    BlockDeviceNew(sys_util::Error),
     BlockSignal(sys_util::signal::Error),
     BuildVm(<Arch as LinuxArch>::Error),
     ChownTpmStorage(sys_util::Error),
     CloneEventFd(sys_util::Error),
     CreateCrasClient(libcras::Error),
+    CreateDiskError(disk::Error),
     CreateEventFd(sys_util::Error),
     CreatePollContext(sys_util::Error),
     CreateSignalFd(sys_util::SignalFdError),
@@ -88,7 +87,6 @@ pub enum Error {
     CreateTimerFd(sys_util::Error),
     CreateTpmStorage(PathBuf, io::Error),
     CreateUsbProvider(devices::usb::host_backend::error::Error),
-    DetectImageType(qcow::Error),
     DeviceJail(io_jail::Error),
     DevicePivotRoot(io_jail::Error),
     Disk(io::Error),
@@ -112,7 +110,6 @@ pub enum Error {
     PmemDeviceNew(sys_util::Error),
     PollContextAdd(sys_util::Error),
     PollContextDelete(sys_util::Error),
-    QcowDeviceCreate(qcow::Error),
     ReadLowmemAvailable(io::Error),
     ReadLowmemMargin(io::Error),
     RegisterBalloon(arch::DeviceRegistrationError),
@@ -154,12 +151,12 @@ impl Display for Error {
                 write!(f, "failed to allocate memory for pmem device: {}", e)
             }
             BalloonDeviceNew(e) => write!(f, "failed to create balloon: {}", e),
-            BlockDeviceNew(e) => write!(f, "failed to create block device: {}", e),
             BlockSignal(e) => write!(f, "failed to block signal: {}", e),
             BuildVm(e) => write!(f, "The architecture failed to build the vm: {}", e),
             ChownTpmStorage(e) => write!(f, "failed to chown tpm storage: {}", e),
             CloneEventFd(e) => write!(f, "failed to clone eventfd: {}", e),
             CreateCrasClient(e) => write!(f, "failed to create cras client: {}", e),
+            CreateDiskError(e) => write!(f, "failed to create virtual disk: {}", e),
             CreateEventFd(e) => write!(f, "failed to create eventfd: {}", e),
             CreatePollContext(e) => write!(f, "failed to create poll context: {}", e),
             CreateSignalFd(e) => write!(f, "failed to create signalfd: {}", e),
@@ -170,7 +167,6 @@ impl Display for Error {
                 write!(f, "failed to create tpm storage dir {}: {}", p.display(), e)
             }
             CreateUsbProvider(e) => write!(f, "failed to create usb provider: {}", e),
-            DetectImageType(e) => write!(f, "failed to detect disk image type: {}", e),
             DeviceJail(e) => write!(f, "failed to jail device: {}", e),
             DevicePivotRoot(e) => write!(f, "failed to pivot root device: {}", e),
             Disk(e) => write!(f, "failed to load disk image: {}", e),
@@ -201,7 +197,6 @@ impl Display for Error {
             PmemDeviceNew(e) => write!(f, "failed to create pmem device: {}", e),
             PollContextAdd(e) => write!(f, "failed to add fd to poll context: {}", e),
             PollContextDelete(e) => write!(f, "failed to remove fd from poll context: {}", e),
-            QcowDeviceCreate(e) => write!(f, "failed to read qcow formatted file {}", e),
             ReadLowmemAvailable(e) => write!(
                 f,
                 "failed to read /sys/kernel/mm/chromeos-low_mem/available: {}",
@@ -340,22 +335,8 @@ fn create_block_device(
     };
     flock(&raw_image, lock_op, true).map_err(Error::DiskImageLock)?;
 
-    let image_type = qcow::detect_image_type(&raw_image).map_err(Error::DetectImageType)?;
-    let dev = match image_type {
-        ImageType::Raw => {
-            // Access as a raw block device.
-            let dev = virtio::Block::new(raw_image, disk.read_only, Some(disk_device_socket))
-                .map_err(Error::BlockDeviceNew)?;
-            Box::new(dev) as Box<dyn VirtioDevice>
-        }
-        ImageType::Qcow2 => {
-            // Valid qcow header present
-            let qcow_image = QcowFile::from(raw_image).map_err(Error::QcowDeviceCreate)?;
-            let dev = virtio::Block::new(qcow_image, disk.read_only, Some(disk_device_socket))
-                .map_err(Error::BlockDeviceNew)?;
-            Box::new(dev) as Box<dyn VirtioDevice>
-        }
-    };
+    let dev = disk::create_virtio_disk(raw_image, disk.read_only, disk_device_socket)
+        .map_err(Error::CreateDiskError)?;
 
     Ok(VirtioDeviceStub {
         dev,
