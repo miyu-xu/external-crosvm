@@ -113,9 +113,9 @@ impl<'a> DescriptorChain<'a> {
 
     #[allow(clippy::if_same_then_else)]
     fn is_valid(&self) -> bool {
-        if self.len > 0 && self
+        if self
             .mem
-            .checked_offset(self.addr, self.len as u64 - 1u64)
+            .checked_offset(self.addr, self.len as u64)
             .is_none()
         {
             false
