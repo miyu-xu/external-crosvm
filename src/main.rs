@@ -4,16 +4,10 @@
 
 //! Runs a virtual machine under KVM
 
-pub mod argument;
-pub mod linux;
 pub mod panic_hook;
-#[cfg(feature = "plugin")]
-pub mod plugin;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::net;
 use std::num::ParseIntError;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -21,6 +15,10 @@ use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
 
+use crosvm::{
+    argument::{self, print_help, set_arguments, Argument},
+    linux, BindMount, Config, DiskOption, Executable, GidMap, TouchDeviceOption,
+};
 use devices::{SerialParameters, SerialType};
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use qcow::QcowFile;
@@ -33,145 +31,10 @@ use vm_control::{
     VmControlRequestSocket, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
-use crate::argument::{print_help, set_arguments, Argument};
-
-static SECCOMP_POLICY_DIR: &'static str = "/usr/share/policy/crosvm";
-
-struct DiskOption {
-    path: PathBuf,
-    read_only: bool,
-}
-
-#[allow(dead_code)]
-struct BindMount {
-    src: PathBuf,
-    dst: PathBuf,
-    writable: bool,
-}
-
-#[allow(dead_code)]
-struct GidMap {
-    inner: libc::gid_t,
-    outer: libc::gid_t,
-    count: u32,
-}
-
-const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 800;
-const DEFAULT_TOUCH_DEVICE_HEIGHT: u32 = 1280;
-
-struct TouchDeviceOption {
-    path: PathBuf,
-    width: u32,
-    height: u32,
-}
-
-impl TouchDeviceOption {
-    fn new(path: PathBuf) -> TouchDeviceOption {
-        TouchDeviceOption {
-            path,
-            width: DEFAULT_TOUCH_DEVICE_WIDTH,
-            height: DEFAULT_TOUCH_DEVICE_HEIGHT,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Executable {
-    Bios(PathBuf),
-    Kernel(PathBuf),
-    Plugin(PathBuf),
-}
-
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     match executable {
         Some(Executable::Plugin(_)) => true,
         _ => false,
-    }
-}
-
-pub struct Config {
-    vcpu_count: Option<u32>,
-    vcpu_affinity: Vec<usize>,
-    memory: Option<usize>,
-    executable_path: Option<Executable>,
-    android_fstab: Option<PathBuf>,
-    initrd_path: Option<PathBuf>,
-    params: Vec<String>,
-    socket_path: Option<PathBuf>,
-    plugin_root: Option<PathBuf>,
-    plugin_mounts: Vec<BindMount>,
-    plugin_gid_maps: Vec<GidMap>,
-    disks: Vec<DiskOption>,
-    pmem_devices: Vec<DiskOption>,
-    host_ip: Option<net::Ipv4Addr>,
-    netmask: Option<net::Ipv4Addr>,
-    mac_address: Option<net_util::MacAddress>,
-    vhost_net: bool,
-    tap_fd: Vec<RawFd>,
-    cid: Option<u64>,
-    wayland_socket_path: Option<PathBuf>,
-    wayland_dmabuf: bool,
-    shared_dirs: Vec<(PathBuf, String)>,
-    sandbox: bool,
-    seccomp_policy_dir: PathBuf,
-    seccomp_log_failures: bool,
-    gpu: bool,
-    software_tpm: bool,
-    cras_audio: bool,
-    cras_capture: bool,
-    null_audio: bool,
-    serial_parameters: BTreeMap<u8, SerialParameters>,
-    syslog_tag: Option<String>,
-    virtio_single_touch: Option<TouchDeviceOption>,
-    virtio_trackpad: Option<TouchDeviceOption>,
-    virtio_mouse: Option<PathBuf>,
-    virtio_keyboard: Option<PathBuf>,
-    virtio_input_evdevs: Vec<PathBuf>,
-    split_irqchip: bool,
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            vcpu_count: None,
-            vcpu_affinity: Vec::new(),
-            memory: None,
-            executable_path: None,
-            android_fstab: None,
-            initrd_path: None,
-            params: Vec::new(),
-            socket_path: None,
-            plugin_root: None,
-            plugin_mounts: Vec::new(),
-            plugin_gid_maps: Vec::new(),
-            disks: Vec::new(),
-            pmem_devices: Vec::new(),
-            host_ip: None,
-            netmask: None,
-            mac_address: None,
-            vhost_net: false,
-            tap_fd: Vec::new(),
-            cid: None,
-            gpu: false,
-            software_tpm: false,
-            wayland_socket_path: None,
-            wayland_dmabuf: false,
-            shared_dirs: Vec::new(),
-            sandbox: !cfg!(feature = "default-no-sandbox"),
-            seccomp_policy_dir: PathBuf::from(SECCOMP_POLICY_DIR),
-            seccomp_log_failures: false,
-            cras_audio: false,
-            cras_capture: false,
-            null_audio: false,
-            serial_parameters: BTreeMap::new(),
-            syslog_tag: None,
-            virtio_single_touch: None,
-            virtio_trackpad: None,
-            virtio_mouse: None,
-            virtio_keyboard: None,
-            virtio_input_evdevs: Vec::new(),
-            split_irqchip: false,
-        }
     }
 }
 
@@ -251,6 +114,7 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
         path: None,
         num: 1,
         console: false,
+        stdin: false,
     };
 
     let opts = s
@@ -283,6 +147,11 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
                         "serial device console is not parseable: {}",
                         e
                     ))
+                })?
+            }
+            "stdin" => {
+                serial_setting.stdin = v.parse::<bool>().map_err(|e| {
+                    argument::Error::Syntax(format!("serial device stdin is not parseable: {}", e))
                 })?
             }
             "path" => serial_setting.path = Some(PathBuf::from(v)),
@@ -409,6 +278,15 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 }
             }
 
+            if serial_params.stdin {
+                if let Some(previous_stdin) = cfg.serial_parameters.values().find(|sp| sp.stdin) {
+                    return Err(argument::Error::TooManyArguments(format!(
+                        "serial device {} already connected to standard input",
+                        previous_stdin.num
+                    )));
+                }
+            }
+
             cfg.serial_parameters.insert(num, serial_params);
         }
         "syslog-tag" => {
@@ -528,6 +406,14 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
         }
         #[cfg(feature = "wl-dmabuf")]
         "wayland-dmabuf" => cfg.wayland_dmabuf = true,
+        "x-display" => {
+            if cfg.x_display.is_some() {
+                return Err(argument::Error::TooManyArguments(
+                    "`x-display` already given".to_owned(),
+                ));
+            }
+            cfg.x_display = Some(value.unwrap().to_owned());
+        }
         "socket" => {
             if cfg.socket_path.is_some() {
                 return Err(argument::Error::TooManyArguments(
@@ -840,15 +726,17 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
           Argument::flag("cras-capture", "Enable capturing audio from CRAS server to the cras-audio device"),
           Argument::flag("null-audio", "Add an audio device to the VM that plays samples to /dev/null"),
           Argument::value("serial",
-                          "type=TYPE,[num=NUM,path=PATH,console]",
+                          "type=TYPE,[num=NUM,path=PATH,console,stdin]",
                           "Comma seperated key=value pairs for setting up serial devices. Can be given more than once.
                           Possible key values:
                           type=(stdout,syslog,sink,file) - Where to route the serial device
                           num=(1,2,3,4) - Serial Device Number. If not provided, num will default to 1.
                           path=PATH - The path to the file to write to when type=file
                           console - Use this serial device as the guest console. Can only be given once. Will default to first serial port if not provided.
+                          stdin - Direct standard input to this serial device. Can only be given once. Will default to first serial port if not provided.
                           "),
           Argument::value("syslog-tag", "TAG", "When logging to syslog, use the provided tag."),
+          Argument::value("x-display", "DISPLAY", "X11 display name to use."),
           Argument::value("wayland-sock", "PATH", "Path to the Wayland socket to use."),
           #[cfg(feature = "wl-dmabuf")]
           Argument::flag("wayland-dmabuf", "Enable support for DMABufs in Wayland device."),
@@ -923,16 +811,18 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
 
     match match_res {
         #[cfg(feature = "plugin")]
-        Ok(()) if executable_is_plugin(&cfg.executable_path) => match plugin::run_config(cfg) {
-            Ok(_) => {
-                info!("crosvm and plugin have exited normally");
-                Ok(())
+        Ok(()) if executable_is_plugin(&cfg.executable_path) => {
+            match crosvm::plugin::run_config(cfg) {
+                Ok(_) => {
+                    info!("crosvm and plugin have exited normally");
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("{}", e);
+                    Err(())
+                }
             }
-            Err(e) => {
-                error!("{}", e);
-                Err(())
-            }
-        },
+        }
         Ok(()) => match linux::run_config(cfg) {
             Ok(_) => {
                 info!("crosvm has exited normally");
@@ -1423,7 +1313,8 @@ mod tests {
 
     #[test]
     fn parse_serial_vaild() {
-        parse_serial_options("type=syslog,num=1,console=true").expect("parse should have succeded");
+        parse_serial_options("type=syslog,num=1,console=true,stdin=true")
+            .expect("parse should have succeded");
     }
 
     #[test]
@@ -1454,5 +1345,14 @@ mod tests {
     #[test]
     fn parse_serial_invalid_option() {
         parse_serial_options("type=syslog,speed=lightspeed").expect_err("parse should have failed");
+    }
+
+    #[test]
+    fn parse_serial_invalid_two_stdin() {
+        let mut config = Config::default();
+        set_argument(&mut config, "serial", Some("num=1,type=stdout,stdin=true"))
+            .expect("should parse the first serial argument");
+        set_argument(&mut config, "serial", Some("num=2,type=stdout,stdin=true"))
+            .expect_err("should fail to parse a second serial port connected to stdin");
     }
 }
