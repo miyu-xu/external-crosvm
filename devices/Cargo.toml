@@ -9,6 +9,7 @@ gpu = ["gpu_buffer", "gpu_display", "gpu_renderer"]
 sandboxed-libusb = ["usb_util/sandboxed-libusb"]
 tpm = ["protos/trunks", "tpm2"]
 wl-dmabuf = []
+x = ["gpu_display/x"]
 
 [dependencies]
 audio_streams = "*"
@@ -37,3 +38,6 @@ usb_util = { path = "../usb_util" }
 vhost = { path = "../vhost" }
 virtio_sys = { path = "../virtio_sys" }
 vm_control = { path = "../vm_control" }
+
+[dev-dependencies]
+tempfile = { path = "../tempfile" }

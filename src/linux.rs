@@ -11,6 +11,7 @@ use std::fmt::{self, Display};
 use std::fs::{File, OpenOptions};
 use std::io::{self, stdin, Read};
 use std::net::Ipv4Addr;
+use std::num::NonZeroU8;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -270,7 +271,11 @@ impl AsRawFd for TaggedControlSocket {
     }
 }
 
-fn create_base_minijail(root: &Path, seccomp_policy: &Path) -> Result<Minijail> {
+fn create_base_minijail(
+    root: &Path,
+    log_failures: bool,
+    seccomp_policy: &Path,
+) -> Result<Minijail> {
     // All child jails run in a new user namespace without any users mapped,
     // they run as nobody unless otherwise configured.
     let mut j = Minijail::new().map_err(Error::DeviceJail)?;
@@ -289,8 +294,9 @@ fn create_base_minijail(root: &Path, seccomp_policy: &Path) -> Result<Minijail> 
     // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP, which will correctly kill
     // the entire device process if a worker thread commits a seccomp violation.
     j.set_seccomp_filter_tsync();
-    #[cfg(debug_assertions)]
-    j.log_seccomp_filter_failures();
+    if log_failures {
+        j.log_seccomp_filter_failures();
+    }
     j.parse_seccomp_filters(seccomp_policy)
         .map_err(Error::DeviceJail)?;
     j.use_seccomp_filter();
@@ -308,7 +314,11 @@ fn simple_jail(cfg: &Config, policy: &str) -> Result<Option<Minijail>> {
             return Err(Error::PivotRootDoesntExist(pivot_root));
         }
         let policy_path: PathBuf = cfg.seccomp_policy_dir.join(policy);
-        Ok(Some(create_base_minijail(root_path, &policy_path)?))
+        Ok(Some(create_base_minijail(
+            root_path,
+            cfg.seccomp_log_failures,
+            &policy_path,
+        )?))
     } else {
         Ok(None)
     }
@@ -552,20 +562,34 @@ fn create_gpu_device(
     cfg: &Config,
     exit_evt: &EventFd,
     gpu_device_socket: VmMemoryControlRequestSocket,
-    gpu_socket: virtio::resource_bridge::ResourceResponseSocket,
-    wayland_socket_path: &Path,
+    gpu_sockets: Vec<virtio::resource_bridge::ResourceResponseSocket>,
+    wayland_socket_path: Option<PathBuf>,
+    x_display: Option<String>,
 ) -> DeviceResult {
     let jailed_wayland_path = Path::new("/wayland-0");
+
+    let mut display_backends = vec![
+        virtio::DisplayBackend::X(x_display),
+        virtio::DisplayBackend::Null,
+    ];
+
+    if let Some(socket_path) = wayland_socket_path.as_ref() {
+        display_backends.insert(
+            0,
+            virtio::DisplayBackend::Wayland(if cfg.sandbox {
+                Some(jailed_wayland_path.to_owned())
+            } else {
+                Some(socket_path.to_owned())
+            }),
+        );
+    }
 
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEventFd)?,
         Some(gpu_device_socket),
-        Some(gpu_socket),
-        if cfg.sandbox {
-            &jailed_wayland_path
-        } else {
-            wayland_socket_path
-        },
+        NonZeroU8::new(1).unwrap(), // number of scanouts
+        gpu_sockets,
+        display_backends,
     );
 
     let jail = match simple_jail(&cfg, "gpu_device.policy")? {
@@ -588,17 +612,42 @@ fn create_gpu_device(
             let drm_dri_path = Path::new("/dev/dri");
             jail.mount_bind(drm_dri_path, drm_dri_path, false)?;
 
+            // If the ARM specific devices exist on the host, bind mount them in.
+            let mali0_path = Path::new("/dev/mali0");
+            if mali0_path.exists() {
+                jail.mount_bind(mali0_path, mali0_path, true)?;
+            }
+
+            let pvr_sync_path = Path::new("/dev/pvr_sync");
+            if pvr_sync_path.exists() {
+                jail.mount_bind(pvr_sync_path, pvr_sync_path, true)?;
+            }
+
             // Libraries that are required when mesa drivers are dynamically loaded.
-            let lib_path = Path::new("/lib64");
-            jail.mount_bind(lib_path, lib_path, false)?;
-            let usr_lib_path = Path::new("/usr/lib64");
-            jail.mount_bind(usr_lib_path, usr_lib_path, false)?;
+            let lib_dirs = &["/usr/lib", "/usr/lib64", "/lib", "/lib64"];
+            for dir in lib_dirs {
+                let dir_path = Path::new(dir);
+                if dir_path.exists() {
+                    jail.mount_bind(dir_path, dir_path, false)?;
+                }
+            }
 
             // Bind mount the wayland socket into jail's root. This is necessary since each
             // new wayland context must open() the socket.
-            jail.mount_bind(wayland_socket_path, jailed_wayland_path, true)?;
+            if let Some(path) = wayland_socket_path {
+                jail.mount_bind(path.as_ref(), jailed_wayland_path, true)?;
+            }
 
             add_crosvm_user_to_jail(&mut jail, "gpu")?;
+
+            // pvr driver requires read access to /proc/self/task/*/comm.
+            let proc_path = Path::new("/proc");
+            jail.mount(
+                proc_path,
+                proc_path,
+                "proc",
+                (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RDONLY) as usize,
+            )?;
 
             Some(jail)
         }
@@ -764,8 +813,7 @@ fn create_pmem_device(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev) as Box<dyn VirtioDevice>,
-        /// TODO(jstaron) Create separate device policy for pmem_device.
-        jail: simple_jail(&cfg, "block_device.policy")?,
+        jail: simple_jail(&cfg, "pmem_device.policy")?,
     })
 }
 
@@ -836,34 +884,42 @@ fn create_virtio_devices(
     }
 
     #[cfg_attr(not(feature = "gpu"), allow(unused_mut))]
-    let mut resource_bridge_wl_socket = None::<virtio::resource_bridge::ResourceRequestSocket>;
-
-    #[cfg(feature = "gpu")]
-    {
-        if cfg.gpu {
-            if let Some(wayland_socket_path) = &cfg.wayland_socket_path {
-                let (wl_socket, gpu_socket) =
-                    virtio::resource_bridge::pair().map_err(Error::CreateSocket)?;
-                resource_bridge_wl_socket = Some(wl_socket);
-
-                devs.push(create_gpu_device(
-                    cfg,
-                    _exit_evt,
-                    gpu_device_socket,
-                    gpu_socket,
-                    wayland_socket_path,
-                )?);
-            }
-        }
-    }
+    let mut resource_bridges = Vec::<virtio::resource_bridge::ResourceResponseSocket>::new();
 
     if let Some(wayland_socket_path) = cfg.wayland_socket_path.as_ref() {
+        #[cfg_attr(not(feature = "gpu"), allow(unused_mut))]
+        let mut wl_resource_bridge = None::<virtio::resource_bridge::ResourceRequestSocket>;
+
+        #[cfg(feature = "gpu")]
+        {
+            if cfg.gpu {
+                let (wl_socket, gpu_socket) =
+                    virtio::resource_bridge::pair().map_err(Error::CreateSocket)?;
+                resource_bridges.push(gpu_socket);
+                wl_resource_bridge = Some(wl_socket);
+            }
+        }
+
         devs.push(create_wayland_device(
             cfg,
             wayland_socket_path,
             wayland_device_socket,
-            resource_bridge_wl_socket,
+            wl_resource_bridge,
         )?);
+    }
+
+    #[cfg(feature = "gpu")]
+    {
+        if cfg.gpu {
+            devs.push(create_gpu_device(
+                cfg,
+                _exit_evt,
+                gpu_device_socket,
+                resource_bridges,
+                cfg.wayland_socket_path.clone(),
+                cfg.x_display.clone(),
+            )?);
+        }
     }
 
     if let Some(cid) = cfg.cid {
@@ -1415,16 +1471,15 @@ fn run_control(
         .set_raw_mode()
         .expect("failed to set terminal raw mode");
 
-    let poll_ctx = PollContext::new().map_err(Error::CreatePollContext)?;
-    poll_ctx
-        .add(&linux.exit_evt, Token::Exit)
-        .map_err(Error::PollContextAdd)?;
+    let poll_ctx = PollContext::build_with(&[
+        (&linux.exit_evt, Token::Exit),
+        (&sigchld_fd, Token::ChildSignal),
+    ])
+    .map_err(Error::PollContextAdd)?;
+
     if let Err(e) = poll_ctx.add(&stdin_handle, Token::Stdin) {
         warn!("failed to add stdin to poll context: {}", e);
     }
-    poll_ctx
-        .add(&sigchld_fd, Token::ChildSignal)
-        .map_err(Error::PollContextAdd)?;
 
     if let Some(socket_server) = &control_server_socket {
         poll_ctx

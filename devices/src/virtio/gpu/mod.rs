@@ -8,9 +8,10 @@ mod protocol;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::i64;
-use std::mem::size_of;
+use std::mem::{self, size_of};
+use std::num::NonZeroU8;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -23,13 +24,12 @@ use sys_util::{
     debug, error, warn, Error, EventFd, GuestAddress, GuestMemory, PollContext, PollToken,
 };
 
-use gpu_buffer::Device;
 use gpu_display::*;
-use gpu_renderer::{format_fourcc, Renderer};
+use gpu_renderer::{Renderer, RendererFlags};
 
 use super::{
-    resource_bridge::*, AvailIter, Queue, VirtioDevice, INTERRUPT_STATUS_USED_RING, TYPE_GPU,
-    VIRTIO_F_VERSION_1,
+    copy_config, resource_bridge::*, AvailIter, Queue, VirtioDevice, INTERRUPT_STATUS_USED_RING,
+    TYPE_GPU, VIRTIO_F_VERSION_1,
 };
 
 use self::backend::Backend;
@@ -107,24 +107,12 @@ impl Frontend {
             GpuCommand::GetDisplayInfo(_) => {
                 GpuResponse::OkDisplayInfo(self.backend.display_info().to_vec())
             }
-            GpuCommand::ResourceCreate2d(info) => {
-                let format = info.format.to_native();
-                match format_fourcc(format) {
-                    Some(fourcc) => self.backend.create_resource_2d(
-                        info.resource_id.to_native(),
-                        info.width.to_native(),
-                        info.height.to_native(),
-                        fourcc,
-                    ),
-                    None => {
-                        warn!(
-                            "failed to create resource with unrecognized pipe format {}",
-                            format
-                        );
-                        GpuResponse::ErrInvalidParameter
-                    }
-                }
-            }
+            GpuCommand::ResourceCreate2d(info) => self.backend.create_resource_2d(
+                info.resource_id.to_native(),
+                info.width.to_native(),
+                info.height.to_native(),
+                info.format.to_native(),
+            ),
             GpuCommand::ResourceUnref(info) => {
                 self.backend.unref_resource(info.resource_id.to_native())
             }
@@ -474,7 +462,7 @@ struct Worker {
     ctrl_evt: EventFd,
     cursor_queue: Queue,
     cursor_evt: EventFd,
-    resource_bridge: Option<ResourceResponseSocket>,
+    resource_bridges: Vec<ResourceResponseSocket>,
     kill_evt: EventFd,
     state: Frontend,
 }
@@ -492,24 +480,18 @@ impl Worker {
             CtrlQueue,
             CursorQueue,
             Display,
-            ResourceBridge,
             InterruptResample,
             Kill,
+            ResourceBridge { index: usize },
         }
 
-        let poll_ctx: PollContext<Token> = match PollContext::new()
-            .and_then(|pc| pc.add(&self.ctrl_evt, Token::CtrlQueue).and(Ok(pc)))
-            .and_then(|pc| pc.add(&self.cursor_evt, Token::CursorQueue).and(Ok(pc)))
-            .and_then(|pc| {
-                pc.add(&*self.state.display().borrow(), Token::Display)
-                    .and(Ok(pc))
-            })
-            .and_then(|pc| {
-                pc.add(&self.interrupt_resample_evt, Token::InterruptResample)
-                    .and(Ok(pc))
-            })
-            .and_then(|pc| pc.add(&self.kill_evt, Token::Kill).and(Ok(pc)))
-        {
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
+            (&self.ctrl_evt, Token::CtrlQueue),
+            (&self.cursor_evt, Token::CursorQueue),
+            (&*self.state.display().borrow(), Token::Display),
+            (&self.interrupt_resample_evt, Token::InterruptResample),
+            (&self.kill_evt, Token::Kill),
+        ]) {
             Ok(pc) => pc,
             Err(e) => {
                 error!("failed creating PollContext: {}", e);
@@ -517,12 +499,14 @@ impl Worker {
             }
         };
 
-        if let Some(resource_bridge) = &self.resource_bridge {
-            if let Err(e) = poll_ctx.add(resource_bridge, Token::ResourceBridge) {
+        for (index, bridge) in self.resource_bridges.iter().enumerate() {
+            if let Err(e) = poll_ctx.add(bridge, Token::ResourceBridge { index }) {
                 error!("failed to add resource bridge to PollContext: {}", e);
             }
         }
 
+        // Declare this outside the loop so we don't keep allocating and freeing the vector.
+        let mut process_resource_bridge = Vec::with_capacity(self.resource_bridges.len());
         'poll: loop {
             // If there are outstanding fences, wake up early to poll them.
             let duration = if !self.state.fence_descriptors.is_empty() {
@@ -539,7 +523,11 @@ impl Worker {
                 }
             };
             let mut signal_used = false;
-            let mut process_resource_bridge = false;
+
+            // Clear the old values and re-initialize with false.
+            process_resource_bridge.clear();
+            process_resource_bridge.resize(self.resource_bridges.len(), false);
+
             for event in events.iter_readable() {
                 match event.token() {
                     Token::CtrlQueue => {
@@ -558,7 +546,7 @@ impl Worker {
                             let _ = self.exit_evt.write(1);
                         }
                     }
-                    Token::ResourceBridge => process_resource_bridge = true,
+                    Token::ResourceBridge { index } => process_resource_bridge[index] = true,
                     Token::InterruptResample => {
                         let _ = self.interrupt_resample_evt.read();
                         if self.interrupt_status.load(Ordering::SeqCst) != 0 {
@@ -587,9 +575,11 @@ impl Worker {
             // Process the entire control queue before the resource bridge in case a resource is
             // created or destroyed by the control queue. Processing the resource bridge first may
             // lead to a race condition.
-            if process_resource_bridge {
-                if let Some(resource_bridge) = &self.resource_bridge {
-                    self.state.process_resource_bridge(resource_bridge);
+            for (bridge, &should_process) in
+                self.resource_bridges.iter().zip(&process_resource_bridge)
+            {
+                if should_process {
+                    self.state.process_resource_bridge(bridge);
                 }
             }
 
@@ -600,29 +590,114 @@ impl Worker {
     }
 }
 
+/// Indicates a backend that should be tried for the gpu to use for display.
+///
+/// Several instances of this enum are used in an ordered list to give the gpu device many backends
+/// to use as fallbacks in case some do not work.
+#[derive(Clone)]
+pub enum DisplayBackend {
+    /// Use the wayland backend with the given socket path if given.
+    Wayland(Option<PathBuf>),
+    /// Open a connection to the X server at the given display if given.
+    X(Option<String>),
+    /// Emulate a display without actually displaying it.
+    Null,
+}
+
+impl DisplayBackend {
+    fn build(&self) -> std::result::Result<GpuDisplay, GpuDisplayError> {
+        match self {
+            DisplayBackend::Wayland(path) => GpuDisplay::open_wayland(path.as_ref()),
+            DisplayBackend::X(display) => GpuDisplay::open_x(display.as_ref()),
+            DisplayBackend::Null => unimplemented!(),
+        }
+    }
+
+    fn is_x(&self) -> bool {
+        match self {
+            DisplayBackend::X(_) => true,
+            _ => false,
+        }
+    }
+}
+
+// Builds a gpu backend with one of the given possible display backends, or None if they all
+// failed.
+fn build_backend(
+    possible_displays: &[DisplayBackend],
+    gpu_device_socket: VmMemoryControlRequestSocket,
+) -> Option<Backend> {
+    let mut renderer_flags = RendererFlags::default();
+    let mut display_opt = None;
+    for display in possible_displays {
+        match display.build() {
+            Ok(c) => {
+                // If X11 is being used, that's an indication that the renderer should also be using
+                // glx. Otherwise, we are likely in an enviroment in which GBM will work for doing
+                // allocations of buffers we wish to display. TODO(zachr): this is a heuristic (or
+                // terrible hack depending on your POV). We should do something either smarter or
+                // more configurable
+                if display.is_x() {
+                    renderer_flags = RendererFlags::new().use_glx(true);
+                }
+                display_opt = Some(c);
+                break;
+            }
+            Err(e) => error!("failed to open display: {}", e),
+        };
+    }
+    let display = match display_opt {
+        Some(d) => d,
+        None => {
+            error!("failed to open any displays");
+            return None;
+        }
+    };
+
+    if cfg!(debug_assertions) {
+        let ret = unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) };
+        if ret == -1 {
+            warn!("unable to dup2 stdout to stderr: {}", Error::last());
+        }
+    }
+
+    let renderer = match Renderer::init(renderer_flags) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("failed to initialize gpu renderer: {}", e);
+            return None;
+        }
+    };
+
+    Some(Backend::new(display, renderer, gpu_device_socket))
+}
+
 pub struct Gpu {
     config_event: bool,
     exit_evt: EventFd,
     gpu_device_socket: Option<VmMemoryControlRequestSocket>,
-    resource_bridge: Option<ResourceResponseSocket>,
+    resource_bridges: Vec<ResourceResponseSocket>,
     kill_evt: Option<EventFd>,
-    wayland_socket_path: PathBuf,
+    num_scanouts: NonZeroU8,
+    display_backends: Vec<DisplayBackend>,
 }
 
 impl Gpu {
-    pub fn new<P: AsRef<Path>>(
+    pub fn new(
         exit_evt: EventFd,
         gpu_device_socket: Option<VmMemoryControlRequestSocket>,
-        resource_bridge: Option<ResourceResponseSocket>,
-        wayland_socket_path: P,
+        num_scanouts: NonZeroU8,
+        resource_bridges: Vec<ResourceResponseSocket>,
+        display_backends: Vec<DisplayBackend>,
     ) -> Gpu {
         Gpu {
             config_event: false,
             exit_evt,
             gpu_device_socket,
-            resource_bridge,
+            resource_bridges,
             kill_evt: None,
-            wayland_socket_path: wayland_socket_path.as_ref().to_path_buf(),
+            num_scanouts,
+            display_backends,
         }
     }
 
@@ -634,8 +709,8 @@ impl Gpu {
         virtio_gpu_config {
             events_read: Le32::from(events_read),
             events_clear: Le32::from(0),
-            num_scanouts: Le32::from(1),
-            num_capsets: Le32::from(2),
+            num_scanouts: Le32::from(self.num_scanouts.get() as u32),
+            num_capsets: Le32::from(3),
         }
     }
 }
@@ -664,8 +739,8 @@ impl VirtioDevice for Gpu {
         }
 
         keep_fds.push(self.exit_evt.as_raw_fd());
-        if let Some(resource_bridge) = &self.resource_bridge {
-            keep_fds.push(resource_bridge.as_raw_fd());
+        for bridge in &self.resource_bridges {
+            keep_fds.push(bridge.as_raw_fd());
         }
         keep_fds
     }
@@ -687,23 +762,12 @@ impl VirtioDevice for Gpu {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let offset = offset as usize;
-        let len = data.len();
-        let cfg = self.get_config();
-        let cfg_slice = cfg.as_slice();
-        if offset + len <= cfg_slice.len() {
-            data.copy_from_slice(&cfg_slice[offset..offset + len]);
-        }
+        copy_config(data, 0, self.get_config().as_slice(), offset);
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) {
-        let offset = offset as usize;
-        let len = data.len();
         let mut cfg = self.get_config();
-        let cfg_slice = cfg.as_mut_slice();
-        if offset + len <= cfg_slice.len() {
-            cfg_slice[offset..offset + len].copy_from_slice(data);
-        }
+        copy_config(cfg.as_mut_slice(), offset, data, 0);
         if (cfg.events_clear.to_native() & VIRTIO_GPU_EVENT_DISPLAY) != 0 {
             self.config_event = false;
         }
@@ -739,57 +803,21 @@ impl VirtioDevice for Gpu {
         };
         self.kill_evt = Some(self_kill_evt);
 
-        let resource_bridge = self.resource_bridge.take();
+        let resource_bridges = mem::replace(&mut self.resource_bridges, Vec::new());
 
         let ctrl_queue = queues.remove(0);
         let ctrl_evt = queue_evts.remove(0);
         let cursor_queue = queues.remove(0);
         let cursor_evt = queue_evts.remove(0);
-        let socket_path = self.wayland_socket_path.clone();
+        let display_backends = self.display_backends.clone();
         if let Some(gpu_device_socket) = self.gpu_device_socket.take() {
             let worker_result =
                 thread::Builder::new()
                     .name("virtio_gpu".to_string())
                     .spawn(move || {
-                        const UNDESIRED_CARDS: &[&str] = &["vgem", "pvr"];
-                        let drm_card = match gpu_buffer::rendernode::open_device(UNDESIRED_CARDS) {
-                            Ok(f) => f,
-                            Err(()) => {
-                                error!("failed to open card");
-                                return;
-                            }
-                        };
-
-                        let device = match Device::new(drm_card) {
-                            Ok(d) => d,
-                            Err(()) => {
-                                error!("failed to open device");
-                                return;
-                            }
-                        };
-
-                        let display = match GpuDisplay::new(socket_path) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                error!("failed to open display: {}", e);
-                                return;
-                            }
-                        };
-
-                        if cfg!(debug_assertions) {
-                            let ret =
-                                unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) };
-                            if ret == -1 {
-                                warn!("unable to dup2 stdout to stderr: {}", Error::last());
-                            }
-                        }
-
-                        let renderer = match Renderer::init() {
-                            Ok(r) => r,
-                            Err(e) => {
-                                error!("failed to initialize gpu renderer: {}", e);
-                                return;
-                            }
+                        let backend = match build_backend(&display_backends, gpu_device_socket) {
+                            Some(backend) => backend,
+                            None => return,
                         };
 
                         Worker {
@@ -802,14 +830,9 @@ impl VirtioDevice for Gpu {
                             ctrl_evt,
                             cursor_queue,
                             cursor_evt,
-                            resource_bridge,
+                            resource_bridges,
                             kill_evt,
-                            state: Frontend::new(Backend::new(
-                                device,
-                                display,
-                                renderer,
-                                gpu_device_socket,
-                            )),
+                            state: Frontend::new(backend),
                         }
                         .run()
                     });
