@@ -4,16 +4,10 @@
 
 //! Runs a virtual machine under KVM
 
-pub mod argument;
-pub mod linux;
 pub mod panic_hook;
-#[cfg(feature = "plugin")]
-pub mod plugin;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::net;
 use std::num::ParseIntError;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -21,6 +15,10 @@ use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
 
+use crosvm::{
+    argument::{self, print_help, set_arguments, Argument},
+    linux, BindMount, Config, DiskOption, Executable, GidMap, TouchDeviceOption,
+};
 use devices::{SerialParameters, SerialType};
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use qcow::QcowFile;
@@ -33,55 +31,6 @@ use vm_control::{
     VmControlRequestSocket, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
-use crate::argument::{print_help, set_arguments, Argument};
-
-static SECCOMP_POLICY_DIR: &'static str = "/usr/share/policy/crosvm";
-
-struct DiskOption {
-    path: PathBuf,
-    read_only: bool,
-}
-
-#[allow(dead_code)]
-struct BindMount {
-    src: PathBuf,
-    dst: PathBuf,
-    writable: bool,
-}
-
-#[allow(dead_code)]
-struct GidMap {
-    inner: libc::gid_t,
-    outer: libc::gid_t,
-    count: u32,
-}
-
-const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 800;
-const DEFAULT_TOUCH_DEVICE_HEIGHT: u32 = 1280;
-
-struct TouchDeviceOption {
-    path: PathBuf,
-    width: u32,
-    height: u32,
-}
-
-impl TouchDeviceOption {
-    fn new(path: PathBuf) -> TouchDeviceOption {
-        TouchDeviceOption {
-            path,
-            width: DEFAULT_TOUCH_DEVICE_WIDTH,
-            height: DEFAULT_TOUCH_DEVICE_HEIGHT,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Executable {
-    Bios(PathBuf),
-    Kernel(PathBuf),
-    Plugin(PathBuf),
-}
-
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     match executable {
         Some(Executable::Plugin(_)) => true,
@@ -89,6 +38,7 @@ fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     }
 }
 
+<<<<<<< HEAD   (7fe05a Allow to connect standard input to a serial port other than )
 pub struct Config {
     vcpu_count: Option<u32>,
     vcpu_affinity: Vec<usize>,
@@ -177,6 +127,8 @@ impl Default for Config {
     }
 }
 
+=======
+>>>>>>> BRANCH (b7bee3 gpu_display: fix clippy warnings)
 // Wait for all children to exit. Return true if they have all exited, false
 // otherwise.
 fn wait_all_children() -> bool {
@@ -950,16 +902,18 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
 
     match match_res {
         #[cfg(feature = "plugin")]
-        Ok(()) if executable_is_plugin(&cfg.executable_path) => match plugin::run_config(cfg) {
-            Ok(_) => {
-                info!("crosvm and plugin have exited normally");
-                Ok(())
+        Ok(()) if executable_is_plugin(&cfg.executable_path) => {
+            match crosvm::plugin::run_config(cfg) {
+                Ok(_) => {
+                    info!("crosvm and plugin have exited normally");
+                    Ok(())
+                }
+                Err(e) => {
+                    error!("{}", e);
+                    Err(())
+                }
             }
-            Err(e) => {
-                error!("{}", e);
-                Err(())
-            }
-        },
+        }
         Ok(()) => match linux::run_config(cfg) {
             Ok(_) => {
                 info!("crosvm has exited normally");

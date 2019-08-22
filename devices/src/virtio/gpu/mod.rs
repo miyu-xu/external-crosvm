@@ -24,13 +24,12 @@ use sys_util::{
     debug, error, warn, Error, EventFd, GuestAddress, GuestMemory, PollContext, PollToken,
 };
 
-use gpu_buffer::Device;
 use gpu_display::*;
 use gpu_renderer::{Renderer, RendererFlags};
 
 use super::{
-    resource_bridge::*, AvailIter, Queue, VirtioDevice, INTERRUPT_STATUS_USED_RING, TYPE_GPU,
-    VIRTIO_F_VERSION_1,
+    copy_config, resource_bridge::*, AvailIter, Queue, VirtioDevice, INTERRUPT_STATUS_USED_RING,
+    TYPE_GPU, VIRTIO_F_VERSION_1,
 };
 
 use self::backend::Backend;
@@ -486,19 +485,13 @@ impl Worker {
             ResourceBridge { index: usize },
         }
 
-        let poll_ctx: PollContext<Token> = match PollContext::new()
-            .and_then(|pc| pc.add(&self.ctrl_evt, Token::CtrlQueue).and(Ok(pc)))
-            .and_then(|pc| pc.add(&self.cursor_evt, Token::CursorQueue).and(Ok(pc)))
-            .and_then(|pc| {
-                pc.add(&*self.state.display().borrow(), Token::Display)
-                    .and(Ok(pc))
-            })
-            .and_then(|pc| {
-                pc.add(&self.interrupt_resample_evt, Token::InterruptResample)
-                    .and(Ok(pc))
-            })
-            .and_then(|pc| pc.add(&self.kill_evt, Token::Kill).and(Ok(pc)))
-        {
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
+            (&self.ctrl_evt, Token::CtrlQueue),
+            (&self.cursor_evt, Token::CursorQueue),
+            (&*self.state.display().borrow(), Token::Display),
+            (&self.interrupt_resample_evt, Token::InterruptResample),
+            (&self.kill_evt, Token::Kill),
+        ]) {
             Ok(pc) => pc,
             Err(e) => {
                 error!("failed creating PollContext: {}", e);
@@ -628,6 +621,7 @@ impl DisplayBackend {
     }
 }
 
+<<<<<<< HEAD   (7fe05a Allow to connect standard input to a serial port other than )
 /// Builds a Device for doing buffer allocation and sharing via dmabuf.
 fn build_buffer_device() -> Option<Device> {
     const UNDESIRED_CARDS: &[&str] = &["vgem", "pvr"];
@@ -704,6 +698,57 @@ fn build_backend(
         renderer,
         gpu_device_socket,
     ))
+=======
+// Builds a gpu backend with one of the given possible display backends, or None if they all
+// failed.
+fn build_backend(
+    possible_displays: &[DisplayBackend],
+    gpu_device_socket: VmMemoryControlRequestSocket,
+) -> Option<Backend> {
+    let mut renderer_flags = RendererFlags::default();
+    let mut display_opt = None;
+    for display in possible_displays {
+        match display.build() {
+            Ok(c) => {
+                // If X11 is being used, that's an indication that the renderer should also be using
+                // glx. Otherwise, we are likely in an enviroment in which GBM will work for doing
+                // allocations of buffers we wish to display. TODO(zachr): this is a heuristic (or
+                // terrible hack depending on your POV). We should do something either smarter or
+                // more configurable
+                if display.is_x() {
+                    renderer_flags = RendererFlags::new().use_glx(true);
+                }
+                display_opt = Some(c);
+                break;
+            }
+            Err(e) => error!("failed to open display: {}", e),
+        };
+    }
+    let display = match display_opt {
+        Some(d) => d,
+        None => {
+            error!("failed to open any displays");
+            return None;
+        }
+    };
+
+    if cfg!(debug_assertions) {
+        let ret = unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) };
+        if ret == -1 {
+            warn!("unable to dup2 stdout to stderr: {}", Error::last());
+        }
+    }
+
+    let renderer = match Renderer::init(renderer_flags) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("failed to initialize gpu renderer: {}", e);
+            return None;
+        }
+    };
+
+    Some(Backend::new(display, renderer, gpu_device_socket))
+>>>>>>> BRANCH (b7bee3 gpu_display: fix clippy warnings)
 }
 
 pub struct Gpu {
@@ -796,23 +841,12 @@ impl VirtioDevice for Gpu {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let offset = offset as usize;
-        let len = data.len();
-        let cfg = self.get_config();
-        let cfg_slice = cfg.as_slice();
-        if offset + len <= cfg_slice.len() {
-            data.copy_from_slice(&cfg_slice[offset..offset + len]);
-        }
+        copy_config(data, 0, self.get_config().as_slice(), offset);
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) {
-        let offset = offset as usize;
-        let len = data.len();
         let mut cfg = self.get_config();
-        let cfg_slice = cfg.as_mut_slice();
-        if offset + len <= cfg_slice.len() {
-            cfg_slice[offset..offset + len].copy_from_slice(data);
-        }
+        copy_config(cfg.as_mut_slice(), offset, data, 0);
         if (cfg.events_clear.to_native() & VIRTIO_GPU_EVENT_DISPLAY) != 0 {
             self.config_event = false;
         }

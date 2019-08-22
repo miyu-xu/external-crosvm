@@ -459,6 +459,7 @@ pub struct DisplayX {
 
 impl DisplayX {
     pub fn open_display(display: Option<&str>) -> Result<DisplayX, GpuDisplayError> {
+<<<<<<< HEAD   (7fe05a Allow to connect standard input to a serial port other than )
         let display_cstr = match display.map(|s| CString::new(s)) {
             Some(Ok(s)) => Some(s),
             Some(Err(_)) => return Err(GpuDisplayError::InvalidPath),
@@ -621,6 +622,170 @@ impl DisplayT for DisplayX {
         fourcc: u32,
     ) -> Result<u32, GpuDisplayError> {
         return Err(GpuDisplayError::Unsupported);
+=======
+        let display_cstr = match display.map(CString::new) {
+            Some(Ok(s)) => Some(s),
+            Some(Err(_)) => return Err(GpuDisplayError::InvalidPath),
+            None => None,
+        };
+
+        unsafe {
+            // Open the display
+            let display = match NonNull::new(xlib::XOpenDisplay(
+                display_cstr
+                    .as_ref()
+                    .map(|s| CStr::as_ptr(s))
+                    .unwrap_or(null()),
+            )) {
+                Some(display_ptr) => XDisplay(Rc::new(display_ptr)),
+                None => return Err(GpuDisplayError::Connect),
+            };
+
+            // Check for required extension.
+            if !display.supports_shm() {
+                return Err(GpuDisplayError::RequiredFeature("xshm extension"));
+            }
+
+            let screen = display
+                .default_screen()
+                .ok_or(GpuDisplayError::Connect)
+                .unwrap();
+            let screen_number = screen.get_number();
+
+            // Check for and save required visual (24-bit BGR for the default screen).
+            let mut visual_info_template = xlib::XVisualInfo {
+                visual: null_mut(),
+                visualid: 0,
+                screen: screen_number,
+                depth: 24,
+                class: 0,
+                red_mask: 0x00ff0000,
+                green_mask: 0x0000ff00,
+                blue_mask: 0x000000ff,
+                colormap_size: 0,
+                bits_per_rgb: 0,
+            };
+            let visual_info = xlib::XGetVisualInfo(
+                display.as_ptr(),
+                (xlib::VisualScreenMask
+                    | xlib::VisualDepthMask
+                    | xlib::VisualRedMaskMask
+                    | xlib::VisualGreenMaskMask
+                    | xlib::VisualBlueMaskMask) as i64,
+                &mut visual_info_template,
+                &mut 0,
+            );
+            if visual_info.is_null() {
+                return Err(GpuDisplayError::RequiredFeature("no matching visual"));
+            }
+            let visual = (*visual_info).visual;
+            x_free(visual_info);
+
+            Ok(DisplayX {
+                display,
+                screen,
+                visual,
+                next_surface_id: SurfaceId::new(1).unwrap(),
+                surfaces: Default::default(),
+            })
+        }
+    }
+
+    fn surface_ref(&self, surface_id: u32) -> Option<&Surface> {
+        SurfaceId::new(surface_id).and_then(move |id| self.surfaces.get(&id))
+    }
+
+    fn surface_mut(&mut self, surface_id: u32) -> Option<&mut Surface> {
+        SurfaceId::new(surface_id).and_then(move |id| self.surfaces.get_mut(&id))
+    }
+
+    fn handle_event(&mut self, ev: XEvent) {
+        let window = ev.window();
+        for surface in self.surfaces.values_mut() {
+            if surface.window != window {
+                continue;
+            }
+            surface.handle_event(ev);
+            return;
+        }
+    }
+}
+
+impl DisplayT for DisplayX {
+    fn dispatch_events(&mut self) {
+        loop {
+            self.display.flush();
+            if !self.display.pending_events() {
+                break;
+            }
+            let ev = self.display.next_event();
+            self.handle_event(ev);
+        }
+    }
+
+    fn create_surface(
+        &mut self,
+        parent_surface_id: Option<u32>,
+        width: u32,
+        height: u32,
+    ) -> Result<u32, GpuDisplayError> {
+        if parent_surface_id.is_some() {
+            return Err(GpuDisplayError::Unsupported);
+        }
+
+        let new_surface = Surface::create(
+            self.display.clone(),
+            &self.screen,
+            self.visual,
+            width,
+            height,
+        )?;
+        let new_surface_id = self.next_surface_id;
+        self.surfaces.insert(new_surface_id, new_surface);
+        self.next_surface_id = SurfaceId::new(self.next_surface_id.get() + 1).unwrap();
+
+        Ok(new_surface_id.get())
+    }
+
+    fn release_surface(&mut self, surface_id: u32) {
+        SurfaceId::new(surface_id).and_then(|id| self.surfaces.remove(&id));
+    }
+
+    fn framebuffer(&mut self, surface_id: u32) -> Option<GpuDisplayFramebuffer> {
+        self.surface_mut(surface_id).and_then(|s| s.framebuffer())
+    }
+
+    fn next_buffer_in_use(&self, surface_id: u32) -> bool {
+        self.surface_ref(surface_id)
+            .map(|s| s.next_buffer_in_use())
+            .unwrap_or(false)
+    }
+
+    fn flip(&mut self, surface_id: u32) {
+        if let Some(surface) = self.surface_mut(surface_id) {
+            surface.flip()
+        }
+    }
+
+    fn close_requested(&self, surface_id: u32) -> bool {
+        self.surface_ref(surface_id)
+            .map(|s| s.close_requested)
+            .unwrap_or(true)
+    }
+
+    #[allow(unused_variables)]
+    fn import_dmabuf(
+        &mut self,
+        fd: RawFd,
+        offset: u32,
+        stride: u32,
+        modifiers: u64,
+        width: u32,
+        height: u32,
+        fourcc: u32,
+    ) -> Result<u32, GpuDisplayError> {
+        Err(GpuDisplayError::Unsupported)
+>>>>>>> BRANCH (b7bee3 gpu_display: fix clippy warnings)
     }
     #[allow(unused_variables)]
     fn release_import(&mut self, import_id: u32) {
