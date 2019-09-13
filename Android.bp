@@ -1,9 +1,10 @@
 rust_binary_host {
-    name: "crosvm.experimental",
+    name: "x86_64_linux_gnu_crosvm",
     crate_name: "crosvm",
     edition: "2018",
     enabled: false,
     relative_install_path: "x86_64-linux-gnu",
+    stem: "crosvm",
     srcs: ["src/main.rs"],
 
     target: {
