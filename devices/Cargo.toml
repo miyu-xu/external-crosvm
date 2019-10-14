@@ -11,7 +11,7 @@ tpm = ["protos/trunks", "tpm2"]
 wl-dmabuf = []
 
 [dependencies]
-audio_streams = "*"
+audio_streams = { path = "../../adhd/audio_streams" }
 bit_field = { path = "../bit_field" }
 byteorder = "*"
 data_model = { path = "../data_model" }

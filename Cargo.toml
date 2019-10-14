@@ -32,7 +32,7 @@ wl-dmabuf = ["devices/wl-dmabuf", "gpu_buffer", "resources/wl-dmabuf"]
 [dependencies]
 arch = { path = "arch" }
 assertions = { path = "assertions" }
-audio_streams = "*"
+audio_streams = { path = "../adhd/audio_streams" }
 bit_field = { path = "bit_field" }
 byteorder = "=1.1.0"
 crosvm_plugin = { path = "crosvm_plugin", optional = true }
@@ -73,9 +73,9 @@ sys_util = "*"
 
 [patch.crates-io]
 assertions = { path = "assertions" }
-audio_streams = { path = "../../third_party/adhd/audio_streams" } # ignored by ebuild
+audio_streams = { path = "../adhd/audio_streams" }
 data_model = { path = "data_model" }
-libcras = { path = "../../third_party/adhd/cras/client/libcras" } # ignored by ebuild
+libcras = { path = "../adhd/cras/client/libcras" } # ignored by ebuild
 poll_token_derive = { path = "sys_util/poll_token_derive" }
 sync = { path = "sync" }
 sys_util = { path = "sys_util" }
