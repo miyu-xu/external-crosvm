@@ -17,7 +17,7 @@ use sys_util::{
 use vm_control::{BalloonControlCommand, BalloonControlResponseSocket};
 
 use super::{
-    copy_config, DescriptorChain, Queue, VirtioDevice, INTERRUPT_STATUS_CONFIG_CHANGED,
+    copy_config, Queue, Reader, VirtioDevice, INTERRUPT_STATUS_CONFIG_CHANGED,
     INTERRUPT_STATUS_USED_RING, TYPE_BALLOON, VIRTIO_F_VERSION_1,
 };
 
@@ -81,10 +81,6 @@ struct Worker {
     command_socket: BalloonControlResponseSocket,
 }
 
-fn valid_inflate_desc(desc: &DescriptorChain) -> bool {
-    !desc.is_write_only() && desc.len % 4 == 0
-}
-
 impl Worker {
     fn process_inflate_deflate(&mut self, inflate: bool) -> bool {
         let queue = if inflate {
@@ -95,19 +91,46 @@ impl Worker {
 
         let mut needs_interrupt = false;
         while let Some(avail_desc) = queue.pop(&self.mem) {
-            if inflate && valid_inflate_desc(&avail_desc) {
-                let num_addrs = avail_desc.len / 4;
-                for i in 0..num_addrs as usize {
-                    let addr = match avail_desc.addr.checked_add((i * 4) as u64) {
-                        Some(a) => a,
-                        None => break,
-                    };
-                    let guest_input: u32 = match self.mem.read_obj_from_addr(addr) {
-                        Ok(a) => a,
-                        Err(_) => continue,
+            let index = avail_desc.index;
+
+            if inflate {
+                let mut reader = match Reader::new(&self.mem, avail_desc) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!("balloon: failed to create reader: {}", e);
+                        queue.add_used(&self.mem, index, 0);
+                        needs_interrupt = true;
+                        continue;
+                    }
+                };
+                let data_length = match reader.available_bytes() {
+                    Ok(l) => l,
+                    Err(e) => {
+                        error!("balloon: failed to get available bytes: {}", e);
+                        queue.add_used(&self.mem, index, 0);
+                        needs_interrupt = true;
+                        continue;
+                    }
+                };
+
+                if data_length % 4 != 0 {
+                    error!("invalid inflate buffer size: {}", data_length);
+                    queue.add_used(&self.mem, index, 0);
+                    needs_interrupt = true;
+                    continue;
+                }
+
+                let num_addrs = data_length / 4;
+                for _ in 0..num_addrs as usize {
+                    let guest_input = match reader.read_obj::<Le32>() {
+                        Ok(a) => a.to_native(),
+                        Err(err) => {
+                            error!("error while reading unused pages: {}", err);
+                            break;
+                        }
                     };
                     let guest_address =
-                        GuestAddress((guest_input as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                        GuestAddress((u64::from(guest_input)) << VIRTIO_BALLOON_PFN_SHIFT);
 
                     if self
                         .mem
@@ -120,7 +143,7 @@ impl Worker {
                 }
             }
 
-            queue.add_used(&self.mem, avail_desc.index, 0);
+            queue.add_used(&self.mem, index, 0);
             needs_interrupt = true;
         }
 
@@ -235,6 +258,7 @@ pub struct Balloon {
     config: Arc<BalloonConfig>,
     features: u64,
     kill_evt: Option<EventFd>,
+    worker_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Balloon {
@@ -247,6 +271,7 @@ impl Balloon {
                 actual_pages: AtomicUsize::new(0),
             }),
             kill_evt: None,
+            worker_thread: None,
             // TODO(dgreid) - Add stats queue feature.
             features: 1 << VIRTIO_BALLOON_F_MUST_TELL_HOST | 1 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
         })
@@ -267,6 +292,10 @@ impl Drop for Balloon {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do with a failure.
             let _ = kill_evt.write(1);
+        }
+
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let _ = worker_thread.join();
         }
     }
 }
@@ -345,9 +374,15 @@ impl VirtioDevice for Balloon {
                 };
                 worker.run(queue_evts, kill_evt);
             });
-        if let Err(e) = worker_result {
-            error!("failed to spawn virtio_balloon worker: {}", e);
-            return;
+
+        match worker_result {
+            Err(e) => {
+                error!("failed to spawn virtio_balloon worker: {}", e);
+                return;
+            }
+            Ok(join_handle) => {
+                self.worker_thread = Some(join_handle);
+            }
         }
     }
 }

@@ -72,6 +72,7 @@ pub struct CompositeDiskFile {
 }
 
 fn ranges_overlap(a: &Range<u64>, b: &Range<u64>) -> bool {
+<<<<<<< HEAD   (7d1f5d Use explicitly 2018 edition)
     a.contains(&b.start)
         || a.contains(&(b.end - 1))
         || b.contains(&a.start)
@@ -278,6 +279,221 @@ impl PunchHole for CompositeDiskFile {
         let disks = self.disks_in_range(&range);
         for disk in disks {
             let intersection = range_intersection(&range, &disk.range());
+=======
+    // essentially !range_intersection(a, b).is_empty(), but that's experimental
+    let intersection = range_intersection(a, b);
+    intersection.start < intersection.end
+}
+
+fn range_intersection(a: &Range<u64>, b: &Range<u64>) -> Range<u64> {
+    Range {
+        start: max(a.start, b.start),
+        end: min(a.end, b.end),
+    }
+}
+
+/// A magic string placed at the beginning of a composite disk file to identify it.
+pub static CDISK_MAGIC: &str = "composite_disk\x1d";
+/// The length of the CDISK_MAGIC string. Created explicitly as a static constant so that it is
+/// possible to create a character array of the same length.
+pub const CDISK_MAGIC_LEN: usize = 15;
+
+impl CompositeDiskFile {
+    fn new(mut disks: Vec<ComponentDiskPart>) -> Result<CompositeDiskFile> {
+        disks.sort_by(|d1, d2| d1.offset.cmp(&d2.offset));
+        let contiguous_err = disks
+            .windows(2)
+            .map(|s| {
+                if s[0].offset == s[1].offset {
+                    let text = format!("Two disks at offset {}", s[0].offset);
+                    Err(Error::InvalidSpecification(text))
+                } else {
+                    Ok(())
+                }
+            })
+            .find(|r| r.is_err());
+        if let Some(Err(e)) = contiguous_err {
+            return Err(e);
+        }
+        Ok(CompositeDiskFile {
+            component_disks: disks,
+            cursor_location: 0,
+        })
+    }
+
+    /// Set up a composite disk by reading the specification from a file. The file must consist of
+    /// the CDISK_MAGIC string followed by one binary instance of the CompositeDisk protocol
+    /// buffer. Returns an error if it could not read the file or if the specification was invalid.
+    pub fn from_file(mut file: File) -> Result<CompositeDiskFile> {
+        file.seek(SeekFrom::Start(0))
+            .map_err(Error::ReadSpecificationError)?;
+        let mut magic_space = [0u8; CDISK_MAGIC_LEN];
+        file.read_exact(&mut magic_space[..])
+            .map_err(Error::ReadSpecificationError)?;
+        if magic_space != CDISK_MAGIC.as_bytes() {
+            return Err(Error::InvalidMagicHeader);
+        }
+        let proto: cdisk_spec::CompositeDisk =
+            protobuf::parse_from_reader(&mut file).map_err(Error::InvalidProto)?;
+        if proto.get_version() != 1 {
+            return Err(Error::UnknownVersion(proto.get_version()));
+        }
+        let mut open_options = OpenOptions::new();
+        open_options.read(true);
+        let mut disks: Vec<ComponentDiskPart> = proto
+            .get_component_disks()
+            .into_iter()
+            .map(|disk| {
+                open_options.write(
+                    disk.get_read_write_capability() == cdisk_spec::ReadWriteCapability::READ_WRITE,
+                );
+                let file = open_options
+                    .open(disk.get_file_path())
+                    .map_err(Error::OpenFile)?;
+                Ok(ComponentDiskPart {
+                    file: create_disk_file(file).map_err(|e| Error::DiskError(Box::new(e)))?,
+                    offset: disk.get_offset(),
+                    length: 0, // Assigned later
+                })
+            })
+            .collect::<Result<Vec<ComponentDiskPart>>>()?;
+        disks.sort_by(|d1, d2| d1.offset.cmp(&d2.offset));
+        for i in 0..(disks.len() - 1) {
+            let length = disks[i + 1].offset - disks[i].offset;
+            if length == 0 {
+                let text = format!("Two disks at offset {}", disks[i].offset);
+                return Err(Error::InvalidSpecification(text));
+            }
+            if let Some(disk) = disks.get_mut(i) {
+                disk.length = length;
+            } else {
+                let text = format!("Unable to set disk length {}", length);
+                return Err(Error::InvalidSpecification(text));
+            }
+        }
+        let num_disks = disks.len();
+        if let Some(last_disk) = disks.get_mut(num_disks - 1) {
+            if proto.get_length() <= last_disk.offset {
+                let text = format!(
+                    "Full size of disk doesn't match last offset. {} <= {}",
+                    proto.get_length(),
+                    last_disk.offset
+                );
+                return Err(Error::InvalidSpecification(text));
+            }
+            last_disk.length = proto.get_length() - last_disk.offset;
+        } else {
+            let text = format!(
+                "Unable to set last disk length to end at {}",
+                proto.get_length()
+            );
+            return Err(Error::InvalidSpecification(text));
+        }
+
+        CompositeDiskFile::new(disks)
+    }
+
+    fn length(&self) -> u64 {
+        if let Some(disk) = self.component_disks.last() {
+            disk.offset + disk.length
+        } else {
+            0
+        }
+    }
+
+    fn disk_at_offset<'a>(&'a mut self, offset: u64) -> io::Result<&'a mut ComponentDiskPart> {
+        self.component_disks
+            .iter_mut()
+            .find(|disk| disk.range().contains(&offset))
+            .ok_or(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("no disk at offset {}", offset),
+            ))
+    }
+
+    fn disks_in_range<'a>(&'a mut self, range: &Range<u64>) -> Vec<&'a mut ComponentDiskPart> {
+        self.component_disks
+            .iter_mut()
+            .filter(|disk| ranges_overlap(&disk.range(), range))
+            .collect()
+    }
+}
+
+impl FileSetLen for CompositeDiskFile {
+    fn set_len(&self, _len: u64) -> io::Result<()> {
+        Err(io::Error::new(ErrorKind::Other, "unsupported operation"))
+    }
+}
+
+impl FileSync for CompositeDiskFile {
+    fn fsync(&mut self) -> io::Result<()> {
+        for disk in self.component_disks.iter_mut() {
+            disk.file.fsync()?;
+        }
+        Ok(())
+    }
+}
+
+// Implements Read and Write targeting volatile storage for composite disks.
+//
+// Note that reads and writes will return early if crossing component disk boundaries.
+// This is allowed by the read and write specifications, which only say read and write
+// have to return how many bytes were actually read or written. Use read_exact_volatile
+// or write_all_volatile to make sure all bytes are received/transmitted.
+//
+// If one of the component disks does a partial read or write, that also gets passed
+// transparently to the parent.
+impl FileReadWriteVolatile for CompositeDiskFile {
+    fn read_volatile(&mut self, slice: VolatileSlice) -> io::Result<usize> {
+        let cursor_location = self.cursor_location;
+        let disk = self.disk_at_offset(cursor_location)?;
+        disk.file
+            .seek(SeekFrom::Start(cursor_location - disk.offset))?;
+        let subslice = if cursor_location + slice.size() > disk.offset + disk.length {
+            let new_size = disk.offset + disk.length - cursor_location;
+            slice
+                .sub_slice(0, new_size)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("{:?}", e)))?
+        } else {
+            slice
+        };
+        let result = disk.file.read_volatile(subslice);
+        if let Ok(size) = result {
+            self.cursor_location += size as u64;
+        }
+        result
+    }
+    fn write_volatile(&mut self, slice: VolatileSlice) -> io::Result<usize> {
+        let cursor_location = self.cursor_location;
+        let disk = self.disk_at_offset(cursor_location)?;
+        disk.file
+            .seek(SeekFrom::Start(cursor_location - disk.offset))?;
+        let subslice = if cursor_location + slice.size() > disk.offset + disk.length {
+            let new_size = disk.offset + disk.length - cursor_location;
+            slice
+                .sub_slice(0, new_size)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("{:?}", e)))?
+        } else {
+            slice
+        };
+        let result = disk.file.write_volatile(subslice);
+        if let Ok(size) = result {
+            self.cursor_location += size as u64;
+        }
+        result
+    }
+}
+
+impl PunchHole for CompositeDiskFile {
+    fn punch_hole(&mut self, offset: u64, length: u64) -> io::Result<()> {
+        let range = offset..(offset + length);
+        let disks = self.disks_in_range(&range);
+        for disk in disks {
+            let intersection = range_intersection(&range, &disk.range());
+            if intersection.start >= intersection.end {
+                continue;
+            }
+>>>>>>> BRANCH (99e6a6 devices: fs: Add fuse constants and struct definitions)
             let result = disk.file.punch_hole(
                 intersection.start - disk.offset,
                 intersection.end - intersection.start,

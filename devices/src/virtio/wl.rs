@@ -33,7 +33,6 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap as Map, BTreeSet as Set, VecDeque};
 use std::convert::From;
 use std::error::Error as StdError;
-use std::ffi::CStr;
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -725,9 +724,7 @@ impl WlVfd {
 
     fn allocate(vm: VmRequester, size: u64) -> WlResult<WlVfd> {
         let size_page_aligned = round_up_to_page_size(size as usize) as u64;
-        let mut vfd_shm =
-            SharedMemory::new(Some(CStr::from_bytes_with_nul(b"virtwl_alloc\0").unwrap()))
-                .map_err(WlError::NewAlloc)?;
+        let mut vfd_shm = SharedMemory::named("virtwl_alloc").map_err(WlError::NewAlloc)?;
         vfd_shm
             .set_size(size_page_aligned)
             .map_err(WlError::AllocSetSize)?;
@@ -1672,6 +1669,7 @@ impl Worker {
 
 pub struct Wl {
     kill_evt: Option<EventFd>,
+    worker_thread: Option<thread::JoinHandle<()>>,
     wayland_path: PathBuf,
     vm_socket: Option<VmMemoryControlRequestSocket>,
     resource_bridge: Option<ResourceRequestSocket>,
@@ -1686,6 +1684,7 @@ impl Wl {
     ) -> Result<Wl> {
         Ok(Wl {
             kill_evt: None,
+            worker_thread: None,
             wayland_path: wayland_path.as_ref().to_owned(),
             vm_socket: Some(vm_socket),
             resource_bridge,
@@ -1699,6 +1698,10 @@ impl Drop for Wl {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
             let _ = kill_evt.write(1);
+        }
+
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let _ = worker_thread.join();
         }
     }
 }
@@ -1780,9 +1783,14 @@ impl VirtioDevice for Wl {
                         .run(queue_evts, kill_evt);
                     });
 
-            if let Err(e) = worker_result {
-                error!("failed to spawn virtio_wl worker: {}", e);
-                return;
+            match worker_result {
+                Err(e) => {
+                    error!("failed to spawn virtio_wl worker: {}", e);
+                    return;
+                }
+                Ok(join_handle) => {
+                    self.worker_thread = Some(join_handle);
+                }
             }
         }
     }

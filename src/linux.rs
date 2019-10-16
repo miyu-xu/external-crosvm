@@ -10,6 +10,7 @@ use std::ffi::CStr;
 use std::fmt::{self, Display};
 use std::fs::{File, OpenOptions};
 use std::io::{self, stdin, Read};
+use std::mem;
 use std::net::Ipv4Addr;
 #[cfg(feature = "gpu")]
 use std::num::NonZeroU8;
@@ -26,7 +27,10 @@ use libc::{self, c_int, gid_t, uid_t};
 
 use audio_streams::DummyStreamSource;
 use devices::virtio::{self, VirtioDevice};
-use devices::{self, HostBackendDeviceProvider, PciDevice, VirtioPciDevice, XhciController};
+use devices::{
+    self, HostBackendDeviceProvider, PciDevice, VfioDevice, VfioPciDevice, VirtioPciDevice,
+    XhciController,
+};
 use io_jail::{self, Minijail};
 use kvm::*;
 use libcras::CrasClient;
@@ -40,16 +44,16 @@ use sys_util::net::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketLis
 
 use sys_util::{
     self, block_signal, clear_signal, drop_capabilities, error, flock, get_blocked_signals,
-    get_group_id, get_user_id, getegid, geteuid, info, register_signal_handler, set_cpu_affinity,
-    validate_raw_fd, warn, EventFd, FlockOperation, GuestAddress, GuestMemory, Killable,
-    MemoryMapping, PollContext, PollToken, Protection, SignalFd, Terminal, TimerFd, WatchingEvents,
-    SIGRTMIN,
+    get_group_id, get_user_id, getegid, geteuid, info, register_rt_signal_handler,
+    set_cpu_affinity, validate_raw_fd, warn, EventFd, FlockOperation, GuestAddress, GuestMemory,
+    Killable, MemoryMapping, PollContext, PollToken, Protection, SignalFd, Terminal, TimerFd,
+    WatchingEvents, SIGRTMIN,
 };
 use vhost;
 use vm_control::{
     BalloonControlCommand, BalloonControlRequestSocket, BalloonControlResponseSocket,
     DiskControlCommand, DiskControlRequestSocket, DiskControlResponseSocket, DiskControlResult,
-    UsbControlSocket, VmControlResponseSocket, VmMemoryControlRequestSocket,
+    UsbControlSocket, VmControlResponseSocket, VmIrqResponseSocket, VmMemoryControlRequestSocket,
     VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse, VmRunMode,
 };
 
@@ -90,6 +94,7 @@ pub enum Error {
     CreateTimerFd(sys_util::Error),
     CreateTpmStorage(PathBuf, io::Error),
     CreateUsbProvider(devices::usb::host_backend::error::Error),
+    CreateVfioDevice(devices::vfio::VfioError),
     DeviceJail(io_jail::Error),
     DevicePivotRoot(io_jail::Error),
     Disk(io::Error),
@@ -171,6 +176,7 @@ impl Display for Error {
                 write!(f, "failed to create tpm storage dir {}: {}", p.display(), e)
             }
             CreateUsbProvider(e) => write!(f, "failed to create usb provider: {}", e),
+            CreateVfioDevice(e) => write!(f, "Failed to create vfio device {}", e),
             DeviceJail(e) => write!(f, "failed to jail device: {}", e),
             DevicePivotRoot(e) => write!(f, "failed to pivot root device: {}", e),
             Disk(e) => write!(f, "failed to load disk image: {}", e),
@@ -251,6 +257,8 @@ type Result<T> = std::result::Result<T, Error>;
 enum TaggedControlSocket {
     Vm(VmControlResponseSocket),
     VmMemory(VmMemoryControlResponseSocket),
+    #[allow(dead_code)]
+    VmIrq(VmIrqResponseSocket),
 }
 
 impl AsRef<UnixSeqpacket> for TaggedControlSocket {
@@ -259,6 +267,7 @@ impl AsRef<UnixSeqpacket> for TaggedControlSocket {
         match &self {
             Vm(ref socket) => socket,
             VmMemory(ref socket) => socket,
+            VmIrq(ref socket) => socket,
         }
     }
 }
@@ -978,6 +987,14 @@ fn create_devices(
     let usb_controller = Box::new(XhciController::new(mem.clone(), usb_provider));
     pci_devices.push((usb_controller, simple_jail(&cfg, "xhci.policy")?));
 
+    if cfg.vfio.is_some() {
+        let vfio_path = cfg.vfio.as_ref().unwrap().as_path();
+        let vfiodevice =
+            Box::new(VfioDevice::new(vfio_path, vm, mem.clone()).map_err(Error::CreateVfioDevice)?);
+        let vfiopcidevice = Box::new(VfioPciDevice::new(vfiodevice));
+        pci_devices.push((vfiopcidevice, simple_jail(&cfg, "vfio_device.policy")?));
+    }
+
     Ok(pci_devices)
 }
 
@@ -1071,7 +1088,7 @@ fn setup_vcpu_signal_handler() -> Result<()> {
     unsafe {
         extern "C" fn handle_signal() {}
         // Our signal handler does nothing and is trivially async signal safe.
-        register_signal_handler(SIGRTMIN() + 0, handle_signal)
+        register_rt_signal_handler(SIGRTMIN() + 0, handle_signal)
             .map_err(Error::RegisterSignalHandler)?;
     }
     block_signal(SIGRTMIN() + 0).map_err(Error::BlockSignal)?;
@@ -1338,6 +1355,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         components,
         cfg.split_irqchip,
         &cfg.serial_parameters,
+        simple_jail(&cfg, "serial.policy")?,
         |mem, vm, sys_allocator, exit_evt| {
             create_devices(
                 &cfg,
@@ -1517,7 +1535,8 @@ fn run_control(
     let vcpu_thread_barrier = Arc::new(Barrier::new(linux.vcpus.len() + 1));
     let run_mode_arc = Arc::new(VcpuRunMode::default());
     setup_vcpu_signal_handler()?;
-    for (cpu_id, vcpu) in linux.vcpus.into_iter().enumerate() {
+    let vcpus = linux.vcpus.split_off(0);
+    for (cpu_id, vcpu) in vcpus.into_iter().enumerate() {
         let handle = run_vcpu(
             vcpu,
             cpu_id as u32,
@@ -1565,7 +1584,6 @@ fn run_control(
                         Ok(count) => {
                             if let Some(ref stdio_serial) = linux.stdio_serial {
                                 stdio_serial
-                                    .lock()
                                     .queue_input_bytes(&out[..count])
                                     .expect("failed to queue bytes into serial port");
                             }
@@ -1740,6 +1758,22 @@ fn run_control(
                                     }
                                 }
                             },
+                            TaggedControlSocket::VmIrq(socket) => match socket.recv() {
+                                Ok(request) => {
+                                    let response =
+                                        request.execute(&mut linux.vm, &mut linux.resources);
+                                    if let Err(e) = socket.send(&response) {
+                                        error!("failed to send VmIrqResponse: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                        vm_control_indices_to_remove.push(index);
+                                    } else {
+                                        error!("failed to recv VmIrqRequest: {}", e);
+                                    }
+                                }
+                            },
                         }
                     }
                 }
@@ -1803,6 +1837,10 @@ fn run_control(
             Err(e) => error!("failed to kill vcpu thread: {}", e),
         }
     }
+
+    // Explicitly drop the VM structure here to allow the devices to clean up before the
+    // control sockets are closed when this function exits.
+    mem::drop(linux);
 
     stdin_lock
         .set_canon_mode()

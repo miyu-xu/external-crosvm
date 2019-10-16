@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use std::fmt::{self, Display};
+use std::io::{self, Read, Write};
 use std::mem;
 use std::net::Ipv4Addr;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -10,18 +11,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use libc::EAGAIN;
+use libc::{EAGAIN, EEXIST};
 use net_sys;
 use net_util::{Error as TapError, MacAddress, TapT};
-use sys_util::guest_memory::Error as MemoryError;
 use sys_util::Error as SysError;
 use sys_util::{error, warn, EventFd, GuestMemory, PollContext, PollToken};
 use virtio_sys::virtio_net::virtio_net_hdr_v1;
 use virtio_sys::{vhost, virtio_net};
 
-use super::{
-    DescriptorError, Queue, Reader, VirtioDevice, Writer, INTERRUPT_STATUS_USED_RING, TYPE_NET,
-};
+use super::{Queue, Reader, VirtioDevice, Writer, INTERRUPT_STATUS_USED_RING, TYPE_NET};
 
 /// The maximum buffer size when segmentation offload is enabled. This
 /// includes the 12-byte virtio net header.
@@ -38,6 +36,10 @@ pub enum NetError {
     CreatePollContext(SysError),
     /// Cloning kill eventfd failed.
     CloneKillEventFd(SysError),
+    /// Adding the tap fd back to the poll context failed.
+    PollAddTap(SysError),
+    /// Removing the tap fd from the poll context failed.
+    PollDeleteTap(SysError),
     /// Open tap device failed.
     TapOpen(TapError),
     /// Setting tap IP failed.
@@ -66,6 +68,8 @@ impl Display for NetError {
             CreateKillEventFd(e) => write!(f, "failed to create kill eventfd: {}", e),
             CreatePollContext(e) => write!(f, "failed to create poll context: {}", e),
             CloneKillEventFd(e) => write!(f, "failed to clone kill eventfd: {}", e),
+            PollAddTap(e) => write!(f, "failed to add tap fd to poll context: {}", e),
+            PollDeleteTap(e) => write!(f, "failed to remove tap fd from poll context: {}", e),
             TapOpen(e) => write!(f, "failed to open tap device: {}", e),
             TapSetIp(e) => write!(f, "failed to set tap IP: {}", e),
             TapSetNetmask(e) => write!(f, "failed to set tap netmask: {}", e),
@@ -116,23 +120,30 @@ where
         };
 
         let index = desc_chain.index;
-        let mut writer = Writer::new(&self.mem, desc_chain);
+        let bytes_written = match Writer::new(&self.mem, desc_chain) {
+            Ok(mut writer) => {
+                match writer.write_all(&self.rx_buf[0..self.rx_count]) {
+                    Ok(()) => (),
+                    Err(ref e) if e.kind() == io::ErrorKind::WriteZero => {
+                        warn!(
+                            "net: rx: buffer is too small to hold frame of size {}",
+                            self.rx_count
+                        );
+                    }
+                    Err(e) => {
+                        warn!("net: rx: failed to write slice: {}", e);
+                    }
+                };
 
-        match writer.write_all(&self.rx_buf[0..self.rx_count]) {
-            Ok(()) => (),
-            Err(DescriptorError::GuestMemoryError(MemoryError::ShortWrite { .. })) => {
-                warn!(
-                    "net: rx: buffer is too small to hold frame of size {}",
-                    self.rx_count
-                );
+                writer.bytes_written() as u32
             }
             Err(e) => {
-                warn!("net: rx: failed to write slice: {}", e);
+                error!("net: failed to create Writer: {}", e);
+                0
             }
-        }
+        };
 
-        self.rx_queue
-            .add_used(&self.mem, index, writer.bytes_written() as u32);
+        self.rx_queue.add_used(&self.mem, index, bytes_written);
 
         // Interrupt the guest immediately for received frames to
         // reduce latency.
@@ -168,21 +179,38 @@ where
     fn process_tx(&mut self) {
         let mut frame = [0u8; MAX_BUFFER_SIZE];
 
+        // Reads up to `buf.len()` bytes or until there is no more data in `r`, whichever
+        // is smaller.
+        fn read_to_end(mut r: Reader, buf: &mut [u8]) -> io::Result<usize> {
+            let mut count = 0;
+            while count < buf.len() {
+                match r.read(&mut buf[count..]) {
+                    Ok(0) => break,
+                    Ok(n) => count += n,
+                    Err(e) => return Err(e),
+                }
+            }
+
+            Ok(count)
+        }
+
         while let Some(desc_chain) = self.tx_queue.pop(&self.mem) {
             let index = desc_chain.index;
-            let mut reader = Reader::new(&self.mem, desc_chain);
 
-            match reader.read(&mut frame) {
-                // We need to copy frame into continuous buffer before writing it to tap
-                // because tap requires frame to complete in a single write.
-                Ok(read_count) => {
-                    if let Err(err) = self.tap.write_all(&frame[..read_count]) {
-                        error!("net: tx: failed to write to tap: {}", err);
+            match Reader::new(&self.mem, desc_chain) {
+                Ok(reader) => {
+                    match read_to_end(reader, &mut frame[..]) {
+                        Ok(len) => {
+                            // We need to copy frame into continuous buffer before writing it to tap
+                            // because tap requires frame to complete in a single write.
+                            if let Err(err) = self.tap.write_all(&frame[..len]) {
+                                error!("net: tx: failed to write to tap: {}", err);
+                            }
+                        }
+                        Err(e) => error!("net: tx: failed to read frame into buffer: {}", e),
                     }
                 }
-                Err(err) => {
-                    error!("net: tx: failed to read frame into buffer: {}", err);
-                }
+                Err(e) => error!("net: failed to create Reader: {}", e),
             }
 
             self.tx_queue.add_used(&self.mem, index, 0);
@@ -231,6 +259,12 @@ where
                             if self.rx_single_frame() {
                                 self.deferred_rx = false;
                             } else {
+                                // There is an outstanding deferred frame and the guest has not yet
+                                // made any buffers available. Remove the tapfd from the poll
+                                // context until more are made available.
+                                poll_ctx
+                                    .delete(&self.tap)
+                                    .map_err(NetError::PollDeleteTap)?;
                                 continue;
                             }
                         }
@@ -243,6 +277,15 @@ where
                         }
                         // There should be a buffer available now to receive the frame into.
                         if self.deferred_rx && self.rx_single_frame() {
+                            // The guest has made buffers available, so add the tap back to the
+                            // poll context in case it was removed.
+                            match poll_ctx.add(&self.tap, Token::RxTap) {
+                                Ok(_) => {}
+                                Err(e) if e.errno() == EEXIST => {}
+                                Err(e) => {
+                                    return Err(NetError::PollAddTap(e));
+                                }
+                            }
                             self.deferred_rx = false;
                         }
                     }
@@ -270,6 +313,7 @@ where
 pub struct Net<T: TapT> {
     workers_kill_evt: Option<EventFd>,
     kill_evt: EventFd,
+    worker_thread: Option<thread::JoinHandle<()>>,
     tap: Option<T>,
     avail_features: u64,
     acked_features: u64,
@@ -317,6 +361,7 @@ where
         Ok(Net {
             workers_kill_evt: Some(kill_evt.try_clone().map_err(NetError::CloneKillEventFd)?),
             kill_evt,
+            worker_thread: None,
             tap: Some(tap),
             avail_features,
             acked_features: 0u64,
@@ -375,6 +420,10 @@ where
         if self.workers_kill_evt.is_none() {
             // Ignore the result because there is nothing we can do about it.
             let _ = self.kill_evt.write(1);
+        }
+
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let _ = worker_thread.join();
         }
     }
 }
@@ -468,9 +517,14 @@ where
                             }
                         });
 
-                if let Err(e) = worker_result {
-                    error!("failed to spawn virtio_net worker: {}", e);
-                    return;
+                match worker_result {
+                    Err(e) => {
+                        error!("failed to spawn virtio_net worker: {}", e);
+                        return;
+                    }
+                    Ok(join_handle) => {
+                        self.worker_thread = Some(join_handle);
+                    }
                 }
             }
         }
