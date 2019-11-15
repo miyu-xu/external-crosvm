@@ -1,0 +1,9 @@
+Code-Review+2: Anna Trostanetski <atrost@google.com>
+Code-Review+2: Jeffrey Vander Stoep <jeffv@google.com>
+Build-Cop-Override+1: Anna Trostanetski <atrost@google.com>
+Presubmit-Ready+1: Anna Trostanetski <atrost@google.com>
+Submitted-by: Anna Trostanetski <atrost@google.com>
+Submitted-at: Fri, 15 Nov 2019 13:18:54 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1168124
+Project: platform/external/crosvm
+Branch: refs/heads/master
