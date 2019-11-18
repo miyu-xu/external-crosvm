@@ -572,7 +572,7 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEventFd)?,
         Some(gpu_device_socket),
-        NonZeroU8::new(1).unwrap(), // number of scanouts
+        NonZeroU8::new(3).unwrap(), // number of scanouts
         gpu_sockets,
         display_backends,
     );
