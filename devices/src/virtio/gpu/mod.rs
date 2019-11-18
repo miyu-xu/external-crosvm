@@ -116,7 +116,7 @@ impl Frontend {
             GpuCommand::ResourceUnref(info) => {
                 self.backend.unref_resource(info.resource_id.to_native())
             }
-            GpuCommand::SetScanout(info) => self.backend.set_scanout(info.resource_id.to_native()),
+            GpuCommand::SetScanout(info) => self.backend.set_scanout(info.scanout_id.to_native(), info.resource_id.to_native()),
             GpuCommand::ResourceFlush(info) => self.backend.flush_resource(
                 info.resource_id.to_native(),
                 info.r.x.to_native(),
@@ -169,6 +169,9 @@ impl Frontend {
             GpuCommand::GetCapset(info) => self
                 .backend
                 .get_capset(info.capset_id.to_native(), info.capset_version.to_native()),
+            GpuCommand::GetEdid(info) => self
+                .backend
+                .get_edid(info.scanout.to_native()),
             GpuCommand::CtxCreate(info) => self
                 .backend
                 .create_renderer_context(info.hdr.ctx_id.to_native()),

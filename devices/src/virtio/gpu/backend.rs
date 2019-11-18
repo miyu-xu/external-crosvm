@@ -14,7 +14,7 @@ use std::usize;
 use data_model::*;
 
 use msg_socket::{MsgReceiver, MsgSender};
-use sys_util::{error, GuestAddress, GuestMemory};
+use sys_util::{debug, error, GuestAddress, GuestMemory};
 
 use gpu_display::*;
 use gpu_renderer::{
@@ -257,9 +257,10 @@ impl Backend {
     }
 
     /// Sets the given resource id as the source of scanout to the display.
-    pub fn set_scanout(&mut self, id: u32) -> GpuResponse {
+    pub fn set_scanout(&mut self, scanout_id: u32, resource_id: u32) -> GpuResponse {
+        debug!("set_scanout scanout_id = {} resource_id = {}", scanout_id, resource_id);
         let mut display = self.display.borrow_mut();
-        if id == 0 {
+        if resource_id == 0 {
             if let Some(surface) = self.scanout_surface.take() {
                 display.release_surface(surface);
             }
@@ -269,8 +270,8 @@ impl Backend {
             }
             self.cursor_resource = 0;
             GpuResponse::OkNoData
-        } else if self.resources.get_mut(&id).is_some() {
-            self.scanout_resource = id;
+        } else if self.resources.get_mut(&resource_id).is_some() {
+            self.scanout_resource = resource_id;
 
             if self.scanout_surface.is_none() {
                 match display.create_surface(None, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
@@ -494,6 +495,12 @@ impl Backend {
     /// Gets the capset of `version` associated with `id`.
     pub fn get_capset(&self, id: u32, version: u32) -> GpuResponse {
         GpuResponse::OkCapset(self.renderer.get_cap_set(id, version))
+    }
+
+    /// Gets the edid with `scanout_id`.
+    pub fn get_edid(&self, scanout_id: u32) -> GpuResponse {
+        debug!("get_edid scanout_id = {}", scanout_id);
+        GpuResponse::ErrInvalidParameter
     }
 
     /// Creates a fresh renderer context with the given `id`.
