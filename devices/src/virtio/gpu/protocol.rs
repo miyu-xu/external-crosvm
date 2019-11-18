@@ -14,6 +14,7 @@ use std::str::from_utf8;
 use data_model::{DataInit, Le32, Le64, VolatileMemory, VolatileMemoryError, VolatileSlice};
 
 pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
+pub const VIRTIO_GPU_F_EDID: u32 = 1;
 
 pub const VIRTIO_GPU_UNDEFINED: u32 = 0x0;
 
@@ -28,6 +29,7 @@ pub const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x106;
 pub const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x107;
 pub const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x108;
 pub const VIRTIO_GPU_CMD_GET_CAPSET: u32 = 0x109;
+pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x10A;
 
 /* 3d commands */
 pub const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x200;
@@ -48,6 +50,7 @@ pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 pub const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 pub const VIRTIO_GPU_RESP_OK_CAPSET_INFO: u32 = 0x1102;
 pub const VIRTIO_GPU_RESP_OK_CAPSET: u32 = 0x1103;
+pub const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
 pub const VIRTIO_GPU_RESP_OK_RESOURCE_PLANE_INFO: u32 = 0x1104;
 
 /* error responses */
@@ -70,6 +73,7 @@ pub fn virtio_gpu_cmd_str(cmd: u32) -> &'static str {
         VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => "VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING",
         VIRTIO_GPU_CMD_GET_CAPSET_INFO => "VIRTIO_GPU_CMD_GET_CAPSET_INFO",
         VIRTIO_GPU_CMD_GET_CAPSET => "VIRTIO_GPU_CMD_GET_CAPSET",
+        VIRTIO_GPU_CMD_GET_EDID => "VIRTIO_GPU_CMD_GET_EDID",
         VIRTIO_GPU_CMD_CTX_CREATE => "VIRTIO_GPU_CMD_CTX_CREATE",
         VIRTIO_GPU_CMD_CTX_DESTROY => "VIRTIO_GPU_CMD_CTX_DESTROY",
         VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE => "VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE",
@@ -424,6 +428,35 @@ pub struct virtio_gpu_resp_capset {
 
 unsafe impl DataInit for virtio_gpu_resp_capset {}
 
+/* VIRTIO_GPU_CMD_GET_EDID */
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+pub struct virtio_gpu_get_edid {
+    pub hdr: virtio_gpu_ctrl_hdr,
+    pub scanout: Le32,
+    pub padding: Le32,
+}
+
+unsafe impl DataInit for virtio_gpu_get_edid {}
+
+/* VIRTIO_GPU_RESP_OK_EDID */
+#[derive(Copy)]
+#[repr(C)]
+pub struct virtio_gpu_resp_edid {
+    pub hdr: virtio_gpu_ctrl_hdr,
+    pub size: Le32,
+    pub padding: Le32,
+    pub edid: [u8; 1024],
+}
+
+unsafe impl DataInit for virtio_gpu_resp_edid {}
+
+impl Clone for virtio_gpu_resp_edid {
+    fn clone(&self) -> virtio_gpu_resp_edid {
+        *self
+    }
+}
+
 /* VIRTIO_GPU_RESP_OK_RESOURCE_PLANE_INFO */
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
@@ -476,6 +509,7 @@ pub enum GpuCommand {
     ResourceDetachBacking(virtio_gpu_resource_detach_backing),
     GetCapsetInfo(virtio_gpu_get_capset_info),
     GetCapset(virtio_gpu_get_capset),
+    GetEdid(virtio_gpu_get_edid),
     CtxCreate(virtio_gpu_ctx_create),
     CtxDestroy(virtio_gpu_ctx_destroy),
     CtxAttachResource(virtio_gpu_ctx_resource),
@@ -533,6 +567,7 @@ impl fmt::Debug for GpuCommand {
             ResourceDetachBacking(_info) => f.debug_struct("ResourceDetachBacking").finish(),
             GetCapsetInfo(_info) => f.debug_struct("GetCapsetInfo").finish(),
             GetCapset(_info) => f.debug_struct("GetCapset").finish(),
+            GetEdid(_info) => f.debug_struct("GetEdid").finish(),
             CtxCreate(_info) => f.debug_struct("CtxCreate").finish(),
             CtxDestroy(_info) => f.debug_struct("CtxDestroy").finish(),
             CtxAttachResource(_info) => f.debug_struct("CtxAttachResource").finish(),
@@ -563,6 +598,7 @@ impl GpuCommand {
             VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => ResourceDetachBacking(cmd.get_ref(0)?.load()),
             VIRTIO_GPU_CMD_GET_CAPSET_INFO => GetCapsetInfo(cmd.get_ref(0)?.load()),
             VIRTIO_GPU_CMD_GET_CAPSET => GetCapset(cmd.get_ref(0)?.load()),
+            VIRTIO_GPU_CMD_GET_EDID => GetEdid(cmd.get_ref(0)?.load()),
             VIRTIO_GPU_CMD_CTX_CREATE => CtxCreate(cmd.get_ref(0)?.load()),
             VIRTIO_GPU_CMD_CTX_DESTROY => CtxDestroy(cmd.get_ref(0)?.load()),
             VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE => CtxAttachResource(cmd.get_ref(0)?.load()),
@@ -591,6 +627,7 @@ impl GpuCommand {
             ResourceDetachBacking(info) => &info.hdr,
             GetCapsetInfo(info) => &info.hdr,
             GetCapset(info) => &info.hdr,
+            GetEdid(info) => &info.hdr,
             CtxCreate(info) => &info.hdr,
             CtxDestroy(info) => &info.hdr,
             CtxAttachResource(info) => &info.hdr,
@@ -622,6 +659,7 @@ pub enum GpuResponse {
         size: u32,
     },
     OkCapset(Vec<u8>),
+    OkEdid(Vec<u8>),
     OkResourcePlaneInfo {
         format_modifier: u64,
         plane_info: Vec<GpuResponsePlaneInfo>,
@@ -717,6 +755,17 @@ impl GpuResponse {
                 resp_data_slice.copy_from(data);
                 size_of_val(&hdr) + data.len()
             }
+            GpuResponse::OkEdid(ref data) => {
+                let mut edid_info = virtio_gpu_resp_edid {
+                    hdr,
+                    size: Le32::from(data.len() as u32),
+                    padding: Le32::from(0),
+                    edid: [0; 1024],
+                };
+                edid_info.edid[0..data.len() as usize].copy_from_slice(data);
+                resp.get_ref(0)?.store(edid_info);
+                size_of::<virtio_gpu_resp_edid>()
+            }
             GpuResponse::OkResourcePlaneInfo {
                 format_modifier,
                 ref plane_info,
@@ -770,6 +819,7 @@ impl GpuResponse {
             GpuResponse::OkDisplayInfo(_) => VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
             GpuResponse::OkCapsetInfo { .. } => VIRTIO_GPU_RESP_OK_CAPSET_INFO,
             GpuResponse::OkCapset(_) => VIRTIO_GPU_RESP_OK_CAPSET,
+            GpuResponse::OkEdid(_) => VIRTIO_GPU_RESP_OK_EDID,
             GpuResponse::OkResourcePlaneInfo { .. } => VIRTIO_GPU_RESP_OK_RESOURCE_PLANE_INFO,
             GpuResponse::ErrUnspec => VIRTIO_GPU_RESP_ERR_UNSPEC,
             GpuResponse::ErrOutOfMemory => VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY,
@@ -787,6 +837,7 @@ impl GpuResponse {
             GpuResponse::OkDisplayInfo(_) => true,
             GpuResponse::OkCapsetInfo { .. } => true,
             GpuResponse::OkCapset(_) => true,
+            GpuResponse::OkEdid(_) => true,
             GpuResponse::OkResourcePlaneInfo { .. } => true,
             _ => false,
         }
