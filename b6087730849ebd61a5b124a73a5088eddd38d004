@@ -1,0 +1,7 @@
+Presubmit-Verified+1: Treehugger Robot <treehugger-gerrit@google.com>
+Code-Review+2: Alistair Delva <adelva@google.com>
+Submitted-by: Chih-hung Hsieh <chh@google.com>
+Submitted-at: Tue, 19 Nov 2019 17:53:52 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1168524
+Project: platform/external/crosvm
+Branch: refs/heads/master
