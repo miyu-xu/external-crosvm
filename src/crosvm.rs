@@ -14,10 +14,13 @@ use std::collections::BTreeMap;
 use std::net;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use devices::virtio::fs::passthrough;
 use devices::SerialParameters;
+use libc::{getegid, geteuid};
 
-static SECCOMP_POLICY_DIR: &'static str = "/usr/share/policy/crosvm";
+static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
 
 /// Indicates the location and kind of executable kernel for a VM.
 #[derive(Debug)]
@@ -33,6 +36,7 @@ pub enum Executable {
 pub struct DiskOption {
     pub path: PathBuf,
     pub read_only: bool,
+    pub sparse: bool,
 }
 
 /// A bind mount for directories in the plugin process.
@@ -68,6 +72,52 @@ impl TouchDeviceOption {
     }
 }
 
+pub enum SharedDirKind {
+    FS,
+    P9,
+}
+
+impl FromStr for SharedDirKind {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use SharedDirKind::*;
+        match s {
+            "fs" | "FS" => Ok(FS),
+            "9p" | "9P" | "p9" | "P9" => Ok(P9),
+            _ => Err("invalid file system type"),
+        }
+    }
+}
+
+impl Default for SharedDirKind {
+    fn default() -> SharedDirKind {
+        SharedDirKind::P9
+    }
+}
+
+pub struct SharedDir {
+    pub src: PathBuf,
+    pub tag: String,
+    pub kind: SharedDirKind,
+    pub uid_map: String,
+    pub gid_map: String,
+    pub cfg: passthrough::Config,
+}
+
+impl Default for SharedDir {
+    fn default() -> SharedDir {
+        SharedDir {
+            src: Default::default(),
+            tag: Default::default(),
+            kind: Default::default(),
+            uid_map: format!("0 {} 1", unsafe { geteuid() }),
+            gid_map: format!("0 {} 1", unsafe { getegid() }),
+            cfg: Default::default(),
+        }
+    }
+}
+
 /// Aggregate of all configurable options for a running VM.
 pub struct Config {
     pub vcpu_count: Option<u32>,
@@ -92,7 +142,7 @@ pub struct Config {
     pub wayland_socket_path: Option<PathBuf>,
     pub wayland_dmabuf: bool,
     pub x_display: Option<String>,
-    pub shared_dirs: Vec<(PathBuf, String)>,
+    pub shared_dirs: Vec<SharedDir>,
     pub sandbox: bool,
     pub seccomp_policy_dir: PathBuf,
     pub seccomp_log_failures: bool,
@@ -109,6 +159,7 @@ pub struct Config {
     pub virtio_keyboard: Option<PathBuf>,
     pub virtio_input_evdevs: Vec<PathBuf>,
     pub split_irqchip: bool,
+    pub vfio: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -153,6 +204,7 @@ impl Default for Config {
             virtio_keyboard: None,
             virtio_input_evdevs: Vec::new(),
             split_irqchip: false,
+            vfio: None,
         }
     }
 }

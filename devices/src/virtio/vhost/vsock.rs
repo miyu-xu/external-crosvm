@@ -3,30 +3,28 @@
 // found in the LICENSE file.
 
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 use std::thread;
 
 use data_model::{DataInit, Le64};
 
-use ::vhost::Vsock as VhostVsockHandle;
 use sys_util::{error, warn, EventFd, GuestMemory};
-use virtio_sys::vhost;
+use vhost::Vsock as VhostVsockHandle;
 
 use super::worker::Worker;
 use super::{Error, Result};
-use crate::virtio::{copy_config, Queue, VirtioDevice, TYPE_VSOCK};
+use crate::virtio::{copy_config, Interrupt, Queue, VirtioDevice, TYPE_VSOCK};
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 3;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
+const NUM_MSIX_VECTORS: u16 = NUM_QUEUES as u16;
 
 pub struct Vsock {
     worker_kill_evt: Option<EventFd>,
     kill_evt: Option<EventFd>,
     vhost_handle: Option<VhostVsockHandle>,
     cid: u64,
-    interrupt: Option<EventFd>,
+    interrupts: Option<Vec<EventFd>>,
     avail_features: u64,
     acked_features: u64,
 }
@@ -37,19 +35,24 @@ impl Vsock {
         let kill_evt = EventFd::new().map_err(Error::CreateKillEventFd)?;
         let handle = VhostVsockHandle::new(mem).map_err(Error::VhostOpen)?;
 
-        let avail_features = 1 << vhost::VIRTIO_F_NOTIFY_ON_EMPTY
-            | 1 << vhost::VIRTIO_RING_F_INDIRECT_DESC
-            | 1 << vhost::VIRTIO_RING_F_EVENT_IDX
-            | 1 << vhost::VHOST_F_LOG_ALL
-            | 1 << vhost::VIRTIO_F_ANY_LAYOUT
-            | 1 << vhost::VIRTIO_F_VERSION_1;
+        let avail_features = 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
+            | 1 << virtio_sys::vhost::VIRTIO_RING_F_INDIRECT_DESC
+            | 1 << virtio_sys::vhost::VIRTIO_RING_F_EVENT_IDX
+            | 1 << virtio_sys::vhost::VHOST_F_LOG_ALL
+            | 1 << virtio_sys::vhost::VIRTIO_F_ANY_LAYOUT
+            | 1 << virtio_sys::vhost::VIRTIO_F_VERSION_1;
+
+        let mut interrupts = Vec::new();
+        for _ in 0..NUM_MSIX_VECTORS {
+            interrupts.push(EventFd::new().map_err(Error::VhostIrqCreate)?);
+        }
 
         Ok(Vsock {
             worker_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEventFd)?),
             kill_evt: Some(kill_evt),
             vhost_handle: Some(handle),
             cid,
-            interrupt: Some(EventFd::new().map_err(Error::VhostIrqCreate)?),
+            interrupts: Some(interrupts),
             avail_features,
             acked_features: 0,
         })
@@ -61,7 +64,7 @@ impl Vsock {
             kill_evt: None,
             vhost_handle: None,
             cid,
-            interrupt: None,
+            interrupts: None,
             avail_features: features,
             acked_features: 0,
         }
@@ -92,8 +95,10 @@ impl VirtioDevice for Vsock {
             keep_fds.push(handle.as_raw_fd());
         }
 
-        if let Some(interrupt) = &self.interrupt {
-            keep_fds.push(interrupt.as_raw_fd());
+        if let Some(interrupt) = &self.interrupts {
+            for vhost_int in interrupt.iter() {
+                keep_fds.push(vhost_int.as_raw_fd());
+            }
         }
 
         if let Some(worker_kill_evt) = &self.worker_kill_evt {
@@ -105,6 +110,10 @@ impl VirtioDevice for Vsock {
 
     fn device_type(&self) -> u32 {
         TYPE_VSOCK
+    }
+
+    fn msix_vectors(&self) -> u16 {
+        NUM_MSIX_VECTORS
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
@@ -137,9 +146,7 @@ impl VirtioDevice for Vsock {
     fn activate(
         &mut self,
         _: GuestMemory,
-        interrupt_evt: EventFd,
-        interrupt_resample_evt: EventFd,
-        status: Arc<AtomicUsize>,
+        interrupt: Interrupt,
         queues: Vec<Queue>,
         queue_evts: Vec<EventFd>,
     ) {
@@ -149,7 +156,7 @@ impl VirtioDevice for Vsock {
         }
 
         if let Some(vhost_handle) = self.vhost_handle.take() {
-            if let Some(interrupt) = self.interrupt.take() {
+            if let Some(interrupts) = self.interrupts.take() {
                 if let Some(kill_evt) = self.worker_kill_evt.take() {
                     let acked_features = self.acked_features;
                     let cid = self.cid;
@@ -162,10 +169,8 @@ impl VirtioDevice for Vsock {
                             let mut worker = Worker::new(
                                 vhost_queues,
                                 vhost_handle,
+                                interrupts,
                                 interrupt,
-                                status,
-                                interrupt_evt,
-                                interrupt_resample_evt,
                                 acked_features,
                             );
                             let activate_vqs = |handle: &VhostVsockHandle| -> Result<()> {

@@ -6,17 +6,20 @@ use std;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use sync::Mutex;
 
 use data_model::{DataInit, Le32};
 use kvm::Datamatch;
-use resources::{Alloc, SystemAllocator};
+use resources::{Alloc, MmioType, SystemAllocator};
 use sys_util::{EventFd, GuestMemory, Result};
 
 use super::*;
 use crate::pci::{
-    PciBarConfiguration, PciCapability, PciCapabilityID, PciClassCode, PciConfiguration, PciDevice,
-    PciDeviceError, PciHeaderType, PciInterruptPin, PciSubclass,
+    MsixCap, MsixConfig, PciBarConfiguration, PciCapability, PciCapabilityID, PciClassCode,
+    PciConfiguration, PciDevice, PciDeviceError, PciHeaderType, PciInterruptPin, PciSubclass,
 };
+
+use vm_control::VmIrqRequestSocket;
 
 use self::virtio_pci_common_config::VirtioPciCommonConfig;
 
@@ -136,7 +139,11 @@ const DEVICE_CONFIG_BAR_OFFSET: u64 = 0x2000;
 const DEVICE_CONFIG_SIZE: u64 = 0x1000;
 const NOTIFICATION_BAR_OFFSET: u64 = 0x3000;
 const NOTIFICATION_SIZE: u64 = 0x1000;
-const CAPABILITY_BAR_SIZE: u64 = 0x4000;
+const MSIX_TABLE_BAR_OFFSET: u64 = 0x6000;
+const MSIX_TABLE_SIZE: u64 = 0x1000;
+const MSIX_PBA_BAR_OFFSET: u64 = 0x7000;
+const MSIX_PBA_SIZE: u64 = 0x1000;
+const CAPABILITY_BAR_SIZE: u64 = 0x8000;
 
 const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
 
@@ -160,13 +167,18 @@ pub struct VirtioPciDevice {
     queue_evts: Vec<EventFd>,
     mem: Option<GuestMemory>,
     settings_bar: u8,
-
+    msix_config: Option<Arc<Mutex<MsixConfig>>>,
+    msix_cap_reg_idx: Option<usize>,
     common_config: VirtioPciCommonConfig,
 }
 
 impl VirtioPciDevice {
     /// Constructs a new PCI transport for the given virtio device.
-    pub fn new(mem: GuestMemory, device: Box<dyn VirtioDevice>) -> Result<Self> {
+    pub fn new(
+        mem: GuestMemory,
+        device: Box<dyn VirtioDevice>,
+        msi_device_socket: Option<VmIrqRequestSocket>,
+    ) -> Result<Self> {
         let mut queue_evts = Vec::new();
         for _ in device.queue_max_sizes() {
             queue_evts.push(EventFd::new()?)
@@ -178,6 +190,17 @@ impl VirtioPciDevice {
             .collect();
 
         let pci_device_id = VIRTIO_PCI_DEVICE_ID_BASE + device.device_type() as u16;
+
+        let msix_num = device.msix_vectors();
+        let msix_config = if msix_num > 0 && msi_device_socket.is_some() {
+            let msix_config = Arc::new(Mutex::new(MsixConfig::new(
+                msix_num,
+                msi_device_socket.unwrap(),
+            )));
+            Some(msix_config)
+        } else {
+            None
+        };
 
         let config_regs = PciConfiguration::new(
             VIRTIO_PCI_VENDOR_ID,
@@ -202,26 +225,17 @@ impl VirtioPciDevice {
             queue_evts,
             mem: Some(mem),
             settings_bar: 0,
+            msix_config,
+            msix_cap_reg_idx: None,
             common_config: VirtioPciCommonConfig {
                 driver_status: 0,
                 config_generation: 0,
                 device_feature_select: 0,
                 driver_feature_select: 0,
                 queue_select: 0,
+                msix_config: VIRTIO_MSI_NO_VECTOR,
             },
         })
-    }
-
-    /// Gets the list of queue events that must be triggered whenever the VM writes to
-    /// `virtio::NOTIFY_REG_OFFSET` past the MMIO base. Each event must be triggered when the
-    /// value being written equals the index of the event in this list.
-    pub fn queue_evts(&self) -> &[EventFd] {
-        self.queue_evts.as_slice()
-    }
-
-    /// Gets the event this device uses to interrupt the VM when the used queue is changed.
-    pub fn interrupt_evt(&self) -> Option<&EventFd> {
-        self.interrupt_evt.as_ref()
     }
 
     fn is_driver_ready(&self) -> bool {
@@ -292,6 +306,21 @@ impl VirtioPciDevice {
             .add_capability(&configuration_cap)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
+        if self.msix_config.is_some() && self.device.msix_vectors() > 0 {
+            let msix_cap = MsixCap::new(
+                settings_bar,
+                self.device.msix_vectors(),
+                MSIX_TABLE_BAR_OFFSET as u32,
+                settings_bar,
+                MSIX_PBA_BAR_OFFSET as u32,
+            );
+            let msix_offset = self
+                .config_regs
+                .add_capability(&msix_cap)
+                .map_err(PciDeviceError::CapabilitiesSetup)?;
+            self.msix_cap_reg_idx = Some(msix_offset / 4);
+        }
+
         self.settings_bar = settings_bar;
         Ok(())
     }
@@ -313,6 +342,10 @@ impl PciDevice for VirtioPciDevice {
         }
         if let Some(interrupt_resample_evt) = &self.interrupt_resample_evt {
             fds.push(interrupt_resample_evt.as_raw_fd());
+        }
+        if let Some(msix_config) = &self.msix_config {
+            let fd = msix_config.lock().get_msi_socket();
+            fds.push(fd);
         }
         fds
     }
@@ -339,7 +372,7 @@ impl PciDevice for VirtioPciDevice {
         // Allocate one bar for the structures pointed to by the capability structures.
         let mut ranges = Vec::new();
         let settings_config_addr = resources
-            .mmio_allocator()
+            .mmio_allocator(MmioType::Low)
             .allocate_with_align(
                 CAPABILITY_BAR_SIZE,
                 Alloc::PciBar { bus, dev, bar: 0 },
@@ -375,9 +408,9 @@ impl PciDevice for VirtioPciDevice {
             .pci_bus_dev
             .expect("assign_bus_dev must be called prior to allocate_device_bars");
         let mut ranges = Vec::new();
-        for config in self.device.get_device_bars() {
+        for config in self.device.get_device_bars(bus, dev) {
             let device_addr = resources
-                .device_allocator()
+                .mmio_allocator(MmioType::High)
                 .allocate_with_align(
                     config.get_size(),
                     Alloc::PciBar {
@@ -413,9 +446,9 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn ioeventfds(&self) -> Vec<(&EventFd, u64, Datamatch)> {
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize) as u64;
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
-        self.queue_evts()
+        self.queue_evts
             .iter()
             .enumerate()
             .map(|(i, event)| {
@@ -429,10 +462,27 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn read_config_register(&self, reg_idx: usize) -> u32 {
-        self.config_regs.read_reg(reg_idx)
+        let mut data: u32 = self.config_regs.read_reg(reg_idx);
+        if let Some(msix_cap_reg_idx) = self.msix_cap_reg_idx {
+            if let Some(msix_config) = &self.msix_config {
+                if msix_cap_reg_idx == reg_idx {
+                    data = msix_config.lock().read_msix_capability(data);
+                }
+            }
+        }
+
+        data
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
+        if let Some(msix_cap_reg_idx) = self.msix_cap_reg_idx {
+            if let Some(msix_config) = &self.msix_config {
+                if msix_cap_reg_idx == reg_idx {
+                    msix_config.lock().write_msix_capability(offset, data);
+                }
+            }
+        }
+
         (&mut self.config_regs).write_reg(reg_idx, offset, data)
     }
 
@@ -442,7 +492,7 @@ impl PciDevice for VirtioPciDevice {
     #[allow(clippy::absurd_extreme_comparisons)]
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
         // The driver is only allowed to do aligned, properly sized access.
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize) as u64;
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
         let offset = addr - bar0;
         match offset {
             o if COMMON_CONFIG_BAR_OFFSET <= o
@@ -471,13 +521,30 @@ impl PciDevice for VirtioPciDevice {
             {
                 // Handled with ioeventfds.
             }
+
+            o if MSIX_TABLE_BAR_OFFSET <= o && o < MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE => {
+                if let Some(msix_config) = &self.msix_config {
+                    msix_config
+                        .lock()
+                        .read_msix_table(o - MSIX_TABLE_BAR_OFFSET, data);
+                }
+            }
+
+            o if MSIX_PBA_BAR_OFFSET <= o && o < MSIX_PBA_BAR_OFFSET + MSIX_PBA_SIZE => {
+                if let Some(msix_config) = &self.msix_config {
+                    msix_config
+                        .lock()
+                        .read_pba_entries(o - MSIX_PBA_BAR_OFFSET, data);
+                }
+            }
+
             _ => (),
         }
     }
 
     #[allow(clippy::absurd_extreme_comparisons)]
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize) as u64;
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
         let offset = addr - bar0;
         match offset {
             o if COMMON_CONFIG_BAR_OFFSET <= o
@@ -506,6 +573,21 @@ impl PciDevice for VirtioPciDevice {
             {
                 // Handled with ioeventfds.
             }
+            o if MSIX_TABLE_BAR_OFFSET <= o && o < MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE => {
+                if let Some(msix_config) = &self.msix_config {
+                    msix_config
+                        .lock()
+                        .write_msix_table(o - MSIX_TABLE_BAR_OFFSET, data);
+                }
+            }
+            o if MSIX_PBA_BAR_OFFSET <= o && o < MSIX_PBA_BAR_OFFSET + MSIX_PBA_SIZE => {
+                if let Some(msix_config) = &self.msix_config {
+                    msix_config
+                        .lock()
+                        .write_pba_entries(o - MSIX_PBA_BAR_OFFSET, data);
+                }
+            }
+
             _ => (),
         };
 
@@ -513,11 +595,23 @@ impl PciDevice for VirtioPciDevice {
             if let Some(interrupt_evt) = self.interrupt_evt.take() {
                 if let Some(interrupt_resample_evt) = self.interrupt_resample_evt.take() {
                     if let Some(mem) = self.mem.take() {
-                        self.device.activate(
-                            mem,
+                        let msix_config = if let Some(msix_config) = &self.msix_config {
+                            Some(msix_config.clone())
+                        } else {
+                            None
+                        };
+
+                        let interrupt = Interrupt::new(
+                            self.interrupt_status.clone(),
                             interrupt_evt,
                             interrupt_resample_evt,
-                            self.interrupt_status.clone(),
+                            msix_config,
+                            self.common_config.msix_config,
+                        );
+
+                        self.device.activate(
+                            mem,
+                            interrupt,
                             self.queues.clone(),
                             self.queue_evts.split_off(0),
                         );

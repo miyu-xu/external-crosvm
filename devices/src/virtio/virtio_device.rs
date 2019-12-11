@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 
 use std::os::unix::io::RawFd;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 
 use sys_util::{EventFd, GuestMemory};
 
@@ -33,6 +31,11 @@ pub trait VirtioDevice: Send {
 
     /// The virtio device type.
     fn device_type(&self) -> u32;
+
+    /// number of MSI-X vectors. 0 means MSI-X not supported.
+    fn msix_vectors(&self) -> u16 {
+        0
+    }
 
     /// The maximum size of each queue that this device supports.
     fn queue_max_sizes(&self) -> &[u16];
@@ -63,9 +66,7 @@ pub trait VirtioDevice: Send {
     fn activate(
         &mut self,
         mem: GuestMemory,
-        interrupt_evt: EventFd,
-        interrupt_resample_evt: EventFd,
-        status: Arc<AtomicUsize>,
+        interrupt: Interrupt,
         queues: Vec<Queue>,
         queue_evts: Vec<EventFd>,
     );
@@ -77,7 +78,7 @@ pub trait VirtioDevice: Send {
     }
 
     /// Returns any additional BAR configuration required by the device.
-    fn get_device_bars(&self) -> Vec<PciBarConfiguration> {
+    fn get_device_bars(&mut self, _bus: u8, _dev: u8) -> Vec<PciBarConfiguration> {
         Vec::new()
     }
 
