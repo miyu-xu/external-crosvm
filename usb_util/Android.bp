@@ -2,12 +2,17 @@
 
 rust_library_host_rlib {
     name: "libusb_util",
-    defaults: ["crosvm_defaults"],
     crate_name: "usb_util",
     srcs: ["src/lib.rs"],
+    edition: "2018",
     rlibs: [
         "libassertions",
         "libdata_model",
-        "libsync_rust",
+        "liblibc",
+        "libsys_util",
+        "libusb_sys",
+    ],
+    proc_macros: [
+        "libremain",
     ],
 }
