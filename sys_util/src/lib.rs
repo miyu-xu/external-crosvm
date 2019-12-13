@@ -17,7 +17,7 @@ mod clock;
 mod errno;
 mod eventfd;
 mod file_flags;
-mod file_traits;
+pub mod file_traits;
 mod fork;
 mod guest_address;
 pub mod guest_memory;
@@ -63,12 +63,14 @@ pub use crate::terminal::*;
 pub use crate::timerfd::*;
 pub use poll_token_derive::*;
 
-pub use crate::file_traits::{AsRawFds, FileReadWriteVolatile, FileSetLen, FileSync};
+pub use crate::file_traits::{
+    AsRawFds, FileGetLen, FileReadWriteAtVolatile, FileReadWriteVolatile, FileSetLen, FileSync,
+};
 pub use crate::guest_memory::Error as GuestMemoryError;
 pub use crate::mmap::Error as MmapError;
 pub use crate::seek_hole::SeekHole;
 pub use crate::signalfd::Error as SignalFdError;
-pub use crate::write_zeroes::{PunchHole, WriteZeroes};
+pub use crate::write_zeroes::{PunchHole, WriteZeroes, WriteZeroesAt};
 
 use std::ffi::CStr;
 use std::fs::{remove_file, File};
@@ -78,7 +80,7 @@ use std::ptr;
 
 use libc::{
     c_long, gid_t, kill, pid_t, pipe2, syscall, sysconf, uid_t, waitpid, O_CLOEXEC, SIGKILL,
-    WNOHANG, _SC_PAGESIZE,
+    WNOHANG, _SC_IOV_MAX, _SC_PAGESIZE,
 };
 
 use syscall_defines::linux::LinuxSyscall::SYS_getpid;
@@ -88,6 +90,12 @@ use syscall_defines::linux::LinuxSyscall::SYS_getpid;
 pub fn pagesize() -> usize {
     // Trivially safe
     unsafe { sysconf(_SC_PAGESIZE) as usize }
+}
+
+/// Safe wrapper for `sysconf(_SC_IOV_MAX)`.
+pub fn iov_max() -> usize {
+    // Trivially safe
+    unsafe { sysconf(_SC_IOV_MAX) as usize }
 }
 
 /// Uses the system's page size in bytes to round the given value up to the nearest page boundary.
@@ -318,4 +326,25 @@ pub fn validate_raw_fd(raw_fd: RawFd) -> Result<RawFd> {
         return Err(Error::last());
     }
     Ok(dup_fd as RawFd)
+}
+
+/// Utility function that returns true if the given FD is readable without blocking.
+///
+/// On an error, such as an invalid or incompatible FD, this will return false, which can not be
+/// distinguished from a non-ready to read FD.
+pub fn poll_in(fd: &dyn AsRawFd) -> bool {
+    let mut fds = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // Safe because we give a valid pointer to a list (of 1) FD and check the return value.
+    let ret = unsafe { libc::poll(&mut fds, 1, 0) };
+    // An error probably indicates an invalid FD, or an FD that can't be polled. Returning false in
+    // that case is probably correct as such an FD is unlikely to be readable, although there are
+    // probably corner cases in which that is wrong.
+    if ret == -1 {
+        return false;
+    }
+    fds.revents & libc::POLLIN != 0
 }
