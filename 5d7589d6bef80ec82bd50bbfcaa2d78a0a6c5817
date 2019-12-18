@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "2ad2abdd_edff7583",
+        "filename": "gpu_display/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 58,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2019-12-18T18:27:03Z",
+      "side": 1,
+      "message": "Missing newline at the end is not intentional, right?",
+      "range": {
+        "startLine": 58,
+        "startChar": 0,
+        "endLine": 58,
+        "endChar": 1
+      },
+      "revId": "5d7589d6bef80ec82bd50bbfcaa2d78a0a6c5817",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
