@@ -22,6 +22,30 @@
       "revId": "5d7589d6bef80ec82bd50bbfcaa2d78a0a6c5817",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "8e7fe845_58fd7a56",
+        "filename": "gpu_display/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 58,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2019-12-26T18:15:51Z",
+      "side": 1,
+      "message": "Fixed.",
+      "parentUuid": "2ad2abdd_edff7583",
+      "range": {
+        "startLine": 58,
+        "startChar": 0,
+        "endLine": 58,
+        "endChar": 1
+      },
+      "revId": "5d7589d6bef80ec82bd50bbfcaa2d78a0a6c5817",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
