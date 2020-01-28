@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "7872d81f_3f0d4fee",
+        "filename": "gpu_display/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-01-28T20:13:47Z",
+      "side": 1,
+      "message": "optional: can drop the x feature as we\u0027re no longer using the x display.",
+      "range": {
+        "startLine": 14,
+        "startChar": 4,
+        "endLine": 16,
+        "endChar": 5
+      },
+      "revId": "bc128a9aa443413717515bf3b3511e701f298524",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
