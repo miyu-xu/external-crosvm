@@ -1,0 +1,78 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "9082fa53_d7b2cd55",
+        "filename": "devices/src/virtio/gpu/backend.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 40,
+      "author": {
+        "id": 1611820
+      },
+      "writtenOn": "2020-01-29T19:29:47Z",
+      "side": 1,
+      "message": "If sEID has a fixed length of 128, it is suggested to use a global reference:\n\nstatic S_EDID_0: \u0026\u0027static [u8] \u003d [ ... ]",
+      "revId": "0adac8ee4f83c77bdbff8b2c465fbc74388c16c4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "b4074c43_4f4213c7",
+        "filename": "devices/src/virtio/gpu/backend.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 550,
+      "author": {
+        "id": 1611820
+      },
+      "writtenOn": "2020-01-29T19:29:47Z",
+      "side": 1,
+      "message": "to_vec() creates an extra copy; it could be avoided using references:\n\nreturn GpuResponse::OkEdid(S_EDID_0);",
+      "range": {
+        "startLine": 550,
+        "startChar": 12,
+        "endLine": 550,
+        "endChar": 55
+      },
+      "revId": "0adac8ee4f83c77bdbff8b2c465fbc74388c16c4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "b89a0eb8_8eba2f9d",
+        "filename": "devices/src/virtio/gpu/protocol.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 662,
+      "author": {
+        "id": 1611820
+      },
+      "writtenOn": "2020-01-29T19:29:47Z",
+      "side": 1,
+      "message": "We can let this enum variant carry length information:\n\nOkEdid(\u0026\u0027static [u8; 128]),",
+      "revId": "0adac8ee4f83c77bdbff8b2c465fbc74388c16c4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "93e4384e_2e3043ac",
+        "filename": "devices/src/virtio/gpu/protocol.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 765,
+      "author": {
+        "id": 1611820
+      },
+      "writtenOn": "2020-01-29T19:29:47Z",
+      "side": 1,
+      "message": "edid_info.edid[..data.len() as usize].copy_from_slice(data);\n\nOr, enforce a hard limit to copy only 128 bytes:\n\nedid_info.edid[..128].copy_from_slice(data[..128]);",
+      "revId": "0adac8ee4f83c77bdbff8b2c465fbc74388c16c4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
