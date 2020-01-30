@@ -88,6 +88,30 @@
     },
     {
       "key": {
+        "uuid": "7208b49d_1b752041",
+        "filename": "devices/src/virtio/gpu/mod.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 760,
+      "author": {
+        "id": 1128849
+      },
+      "writtenOn": "2020-01-30T07:03:48Z",
+      "side": 1,
+      "message": "There are some issues on edid, so I commented it out.",
+      "parentUuid": "a083f399_2c7d50c0",
+      "range": {
+        "startLine": 760,
+        "startChar": 32,
+        "endLine": 760,
+        "endChar": 61
+      },
+      "revId": "0adac8ee4f83c77bdbff8b2c465fbc74388c16c4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "b89a0eb8_8eba2f9d",
         "filename": "devices/src/virtio/gpu/protocol.rs",
         "patchSetId": 5
