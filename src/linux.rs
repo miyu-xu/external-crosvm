@@ -51,11 +51,11 @@ use sys_util::{
 };
 use vm_control::{
     BalloonControlCommand, BalloonControlRequestSocket, BalloonControlResponseSocket,
-    BalloonControlResult, DiskControlCommand, DiskControlRequestSocket, DiskControlResponseSocket,
-    DiskControlResult, UsbControlSocket, VmControlResponseSocket, VmIrqRequest, VmIrqResponse,
-    VmIrqResponseSocket, VmMemoryControlRequestSocket, VmMemoryControlResponseSocket,
-    VmMemoryRequest, VmMemoryResponse, VmMsyncRequest, VmMsyncRequestSocket, VmMsyncResponse,
-    VmMsyncResponseSocket, VmRunMode,
+    BalloonControlResult, DeviceMemoryMappingRequests, DiskControlCommand,
+    DiskControlRequestSocket, DiskControlResponseSocket, DiskControlResult, UsbControlSocket,
+    VmControlResponseSocket, VmIrqRequest, VmIrqResponse, VmIrqResponseSocket,
+    VmMemoryControlRequestSocket, VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse,
+    VmMsyncRequest, VmMsyncRequestSocket, VmMsyncResponse, VmMsyncResponseSocket, VmRunMode,
 };
 
 use crate::{Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption};
@@ -648,6 +648,7 @@ fn create_gpu_device(
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
     event_devices: Vec<EventDevice>,
+    _device_memory_mapping_requests: Arc<Mutex<DeviceMemoryMappingRequests>>,
 ) -> DeviceResult {
     let jailed_wayland_path = Path::new("/wayland-0");
 
@@ -993,6 +994,7 @@ fn create_virtio_devices(
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
+    device_memory_mapping_requests: Arc<Mutex<DeviceMemoryMappingRequests>>,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
 
@@ -1131,6 +1133,7 @@ fn create_virtio_devices(
                 cfg.wayland_socket_paths.get(""),
                 cfg.x_display.clone(),
                 event_devices,
+                device_memory_mapping_requests,
             )?);
         }
     }
@@ -1172,6 +1175,7 @@ fn create_devices(
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
     usb_provider: HostBackendDeviceProvider,
+    device_memory_mapping_requests: Arc<Mutex<DeviceMemoryMappingRequests>>,
 ) -> DeviceResult<Vec<(Box<dyn PciDevice>, Option<Minijail>)>> {
     let stubs = create_virtio_devices(
         &cfg,
@@ -1184,6 +1188,7 @@ fn create_devices(
         balloon_device_socket,
         disk_device_sockets,
         pmem_device_sockets,
+        device_memory_mapping_requests,
     )?;
 
     let mut pci_devices = Vec::new();
@@ -1671,6 +1676,8 @@ pub fn run_config(cfg: Config) -> Result<()> {
         msg_socket::pair::<VmIrqResponse, VmIrqRequest>().map_err(Error::CreateSocket)?;
     control_sockets.push(TaggedControlSocket::VmIrq(ioapic_host_socket));
 
+    let device_memory_mapping_requests = Arc::new(Mutex::new(DeviceMemoryMappingRequests::new()));
+
     let sandbox = cfg.sandbox;
     let linux = Arch::build_vm(
         components,
@@ -1692,6 +1699,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
                 &mut disk_device_sockets,
                 &mut pmem_device_sockets,
                 usb_provider,
+                Arc::clone(&device_memory_mapping_requests),
             )
         },
     )
@@ -1706,6 +1714,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         usb_control_socket,
         sigchld_fd,
         sandbox,
+        Arc::clone(&device_memory_mapping_requests),
     )
 }
 
@@ -1718,6 +1727,7 @@ fn run_control(
     usb_control_socket: UsbControlSocket,
     sigchld_fd: SignalFd,
     sandbox: bool,
+    device_memory_mapping_requests: Arc<Mutex<DeviceMemoryMappingRequests>>,
 ) -> Result<()> {
     const LOWMEM_AVAILABLE: &str = "/sys/kernel/mm/chromeos-low_mem/available";
 
@@ -2059,8 +2069,11 @@ fn run_control(
                             },
                             TaggedControlSocket::VmMemory(socket) => match socket.recv() {
                                 Ok(request) => {
-                                    let response =
-                                        request.execute(&mut linux.vm, &mut linux.resources);
+                                    let response = request.execute(
+                                        &mut linux.vm,
+                                        &mut linux.resources,
+                                        Arc::clone(&device_memory_mapping_requests),
+                                    );
                                     if let Err(e) = socket.send(&response) {
                                         error!("failed to send VmMemoryControlResponse: {}", e);
                                     }

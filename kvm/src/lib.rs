@@ -24,11 +24,12 @@ use libc::{open, EBUSY, EINVAL, ENOENT, ENOSPC, EOVERFLOW, O_CLOEXEC, O_RDWR};
 use kvm_sys::*;
 
 use msg_socket::MsgOnSocket;
+
 #[allow(unused_imports)]
 use sys_util::{
     block_signal, ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref,
-    ioctl_with_val, pagesize, signal, unblock_signal, warn, Error, EventFd, GuestAddress,
-    GuestMemory, MemoryMapping, MemoryMappingArena, Result, SIGRTMIN,
+    ioctl_with_val, pagesize, signal, unblock_signal, warn, DeviceMemoryMapping, Error, EventFd,
+    GuestAddress, GuestMemory, MemoryMapping, MemoryMappingArena, Result, SIGRTMIN,
 };
 
 pub use crate::cap::*;
@@ -309,6 +310,7 @@ pub struct Vm {
     guest_mem: GuestMemory,
     mmio_memory: HashMap<u32, MemoryMapping>,
     mmap_arenas: HashMap<u32, MemoryMappingArena>,
+    device_memory_mappings: HashMap<u32, DeviceMemoryMapping>,
     mem_slot_gaps: BinaryHeap<MemSlot>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     routes: Vec<IrqRoute>,
@@ -343,6 +345,7 @@ impl Vm {
                 guest_mem,
                 mmio_memory: HashMap::new(),
                 mmap_arenas: HashMap::new(),
+                device_memory_mappings: HashMap::new(),
                 mem_slot_gaps: BinaryHeap::new(),
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 routes: kvm_default_irq_routing_table(),
@@ -366,7 +369,8 @@ impl Vm {
             None => {
                 (self.mmio_memory.len()
                     + self.guest_mem.num_regions() as usize
-                    + self.mmap_arenas.len()) as u32
+                    + self.mmap_arenas.len()
+                    + self.device_memory_mappings.len()) as u32
             }
         };
 
@@ -462,6 +466,58 @@ impl Vm {
             }
             // Safe to unwrap since map is checked to contain key
             Ok(self.mmio_memory.remove(&slot).unwrap())
+        } else {
+            Err(Error::new(ENOENT))
+        }
+    }
+
+    /// Inserts the given `DeviceMemoryMapping` into the VM's address space at `guest_addr`.
+    ///
+    /// The slot that was assigned the memory is returned on success. The slot can be given to
+    /// `Vm::remove_device_memory_mappings` to remove the memory from the VM's address space and
+    /// take back ownership of `mem`.
+    ///
+    /// Same rules apply for the `read_only` argument as for add_mmio_memory.  We do not currently
+    /// support dirty page logging here.
+    pub fn add_device_memory_mapping(
+        &mut self,
+        guest_addr: GuestAddress,
+        mem: DeviceMemoryMapping,
+        read_only: bool,
+    ) -> Result<u32> {
+        let size = mem.size();
+        let end_addr = guest_addr.checked_add(size).ok_or(Error::new(EOVERFLOW))?;
+        if self.guest_mem.range_overlap(guest_addr, end_addr) {
+            return Err(Error::new(ENOSPC));
+        }
+
+        // Safe because we check that the given guest address is valid and has no overlaps, and we
+        // assume that the presence of DeviceMemoryMapping means that it referes to a valid range
+        // of memory that will remain valid throughout, including after the memory region is
+        // removed from KVM.
+        let slot = unsafe {
+            self.set_user_memory_region(
+                read_only,
+                false,
+                guest_addr.offset() as u64,
+                size,
+                mem.as_ptr(),
+            )?
+        };
+        self.device_memory_mappings.insert(slot, mem);
+
+        Ok(slot)
+    }
+
+    /// Removes DeviceMemoryMapping that was previously added at the given slot.
+    pub fn remove_device_memory_mapping(&mut self, slot: u32) -> Result<DeviceMemoryMapping> {
+        if self.device_memory_mappings.contains_key(&slot) {
+            // Safe because the slot is checked against the list of mmio memory slots.
+            unsafe {
+                self.remove_user_memory_region(slot)?;
+            }
+            // Safe to unwrap since map is checked to contain key
+            Ok(self.device_memory_mappings.remove(&slot).unwrap())
         } else {
             Err(Error::new(ENOENT))
         }

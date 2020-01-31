@@ -822,6 +822,53 @@ impl Drop for MemoryMappingArena {
     }
 }
 
+/// DeviceMemoryMapping represents an existing buffer in the current address space for purposes
+/// of sharing device memory to the guest where the device memory is not compatible with the mmap
+/// interface, such as Vulkan VkDeviceMemory in the non-exportable case or when exported as an
+/// opaque fd.
+///
+/// It makes the critical assumption that the buffer outlives it. It is only used to pass to the
+/// hypervisor so that the memory can be shared to the guest.
+
+/// DeviceMemoryMapping uses a trait object `DeviceMemoryMapping` that performs device
+/// specific setup and cleanup operations (via the concrete object's new and drop methods)
+/// and also implements the method to get the host address.
+pub trait DeviceMemoryMappingInfo {
+    fn as_ptr(&self) -> *mut u8;
+    fn size(&self) -> u64;
+}
+
+pub struct DeviceMemoryMapping {
+    info: Box<dyn DeviceMemoryMappingInfo + Send>,
+}
+
+impl DeviceMemoryMapping {
+    /// Creates a non-mapped device memory object. This is marked unsafe because it is not
+    /// guaranteed that the address and size don't alias some other memory in Rust.
+    pub unsafe fn new(
+        info: Box<dyn DeviceMemoryMappingInfo + Send>,
+    ) -> Result<DeviceMemoryMapping> {
+        if info.as_ptr() == std::ptr::null_mut() {
+            return Err(Error::InvalidAddress);
+        }
+        if info.size() == 0 {
+            return Err(Error::InvalidAddress);
+        }
+        Ok(DeviceMemoryMapping { info })
+    }
+
+    /// Returns a pointer to the beginning of the memory region. Should only be
+    /// used for passing this region to ioctls for setting guest memory.
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.info.as_ptr()
+    }
+
+    /// Returns the size of the memory region in bytes.
+    pub fn size(&self) -> u64 {
+        self.info.size()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1012,5 +1059,88 @@ mod tests {
         m.add_anon(0, ps).expect("failed to add mapping");
         m.remove(0, ps - 1)
             .expect("failed to remove unaligned mapping");
+    }
+
+    struct MemoryInfoForTest {
+        hva: u64,
+        size: u64,
+    }
+
+    impl DeviceMemoryMappingInfo for MemoryInfoForTest {
+        fn as_ptr(&self) -> *mut u8 {
+            self.hva as *mut u8
+        }
+        fn size(&self) -> u64 {
+            self.size
+        }
+    }
+
+    #[test]
+    fn device_memory_mapping_memory_invalid_address() {
+        let res =
+            unsafe { DeviceMemoryMapping::new(Box::new(MemoryInfoForTest { hva: 0, size: 1 })) };
+        match res {
+            Err(Error::InvalidAddress) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(_) => {
+                panic!("Should not be able to create DeviceMemoryMapping with null host address")
+            }
+        }
+    }
+
+    #[test]
+    fn device_memory_mapping_memory_invalid_size() {
+        let res =
+            unsafe { DeviceMemoryMapping::new(Box::new(MemoryInfoForTest { hva: 1, size: 0 })) };
+        match res {
+            Err(Error::InvalidAddress) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(_) => panic!("Should not be able to create DeviceMemoryMapping with zero size"),
+        }
+    }
+
+    #[test]
+    fn device_memory_mapping_memory_valid_parameters() {
+        let res =
+            unsafe { DeviceMemoryMapping::new(Box::new(MemoryInfoForTest { hva: 1, size: 1 })) };
+        match res {
+            Ok(_) => (),
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn device_memory_mapping_memory_get_address() {
+        let address = 1234 as *mut u8;
+        let res = unsafe {
+            DeviceMemoryMapping::new(Box::new(MemoryInfoForTest {
+                hva: address as u64,
+                size: 1,
+            }))
+        };
+        match res {
+            Ok(mem) => {
+                assert_eq!(mem.as_ptr(), address);
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn device_memory_mapping_memory_get_address_with_size() {
+        let address = 1234 as *mut u8;
+        let size = 5678 as u64;
+        let res = unsafe {
+            DeviceMemoryMapping::new(Box::new(MemoryInfoForTest {
+                hva: address as u64,
+                size,
+            }))
+        };
+        match res {
+            Ok(mem) => {
+                assert_eq!(mem.size(), size);
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
     }
 }

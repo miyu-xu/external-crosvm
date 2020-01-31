@@ -15,13 +15,18 @@ use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::sync::Arc;
 
 use libc::{EINVAL, EIO, ENODEV};
 
 use kvm::{IrqRoute, IrqSource, Vm};
 use msg_socket::{MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
 use resources::{Alloc, GpuMemoryDesc, MmioType, SystemAllocator};
-use sys_util::{error, Error as SysError, EventFd, GuestAddress, MemoryMapping, MmapError, Result};
+use sync::Mutex;
+use sys_util::{
+    error, DeviceMemoryMapping, Error as SysError, EventFd, GuestAddress, MemoryMapping, MmapError,
+    Result,
+};
 
 /// A file descriptor either borrowed or owned by this.
 #[derive(Debug)]
@@ -251,6 +256,62 @@ impl Display for UsbControlResult {
     }
 }
 
+#[derive(Debug)]
+pub enum DeviceMemoryMappingError {
+    /// A request is already pending so we shouldn't try to add another one.
+    PendingRequestExists,
+    /// No request was pending when there should have been one (on receive of
+    /// RegisterPendingHostPointerAtPciBarOffset)
+    NoPendingRequest,
+    /// Too many requests are in flight so we can't disambiguate requestors
+    TooManyPendingRequests,
+}
+
+/// Not everything can be completely communicated over MsgOnSocket; DeviceMemoryMappingRequests
+/// holds Rust objects with ownership/lifetime data.  It is intended for there to be only one
+/// producer and consumer of DeviceMemoryMappingRequests at a time, in parallel to how
+/// VmMemoryControlRequestSocket works one request in flight at a time.  Once a pending device
+/// memory mapping request is pushed into DeviceMemoryMappingRequests, the user follows up with
+/// traffic to VmMemoryControlRequestSocket which will examine the contents of
+/// DeviceMemoryMappingRequests, process, and send back a response.
+pub struct DeviceMemoryMappingRequests {
+    device_memory_mapping_requests: Vec<DeviceMemoryMapping>,
+}
+
+impl DeviceMemoryMappingRequests {
+    pub fn new() -> DeviceMemoryMappingRequests {
+        DeviceMemoryMappingRequests {
+            device_memory_mapping_requests: Vec::new(),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        mapping: DeviceMemoryMapping,
+    ) -> std::result::Result<(), DeviceMemoryMappingError> {
+        if 0 != self.device_memory_mapping_requests.len() {
+            error!("already a pending memory mapping request!");
+            return Err(DeviceMemoryMappingError::PendingRequestExists);
+        }
+
+        Ok(self.device_memory_mapping_requests.push(mapping))
+    }
+
+    pub fn pop(&mut self) -> std::result::Result<DeviceMemoryMapping, DeviceMemoryMappingError> {
+        if 0 == self.device_memory_mapping_requests.len() {
+            error!("no pending device memory mapping request found!");
+            return Err(DeviceMemoryMappingError::NoPendingRequest);
+        }
+
+        if 1 != self.device_memory_mapping_requests.len() {
+            error!("too many pending device memory mapping requests!");
+            return Err(DeviceMemoryMappingError::TooManyPendingRequests);
+        }
+
+        Ok(self.device_memory_mapping_requests.remove(0))
+    }
+}
+
 #[derive(MsgOnSocket, Debug)]
 pub enum VmMemoryRequest {
     /// Register shared memory represented by the given fd into guest address space. The response
@@ -259,8 +320,14 @@ pub enum VmMemoryRequest {
     /// Similiar to `VmMemoryRequest::RegisterMemory`, but doesn't allocate new address space.
     /// Useful for cases where the address space is already allocated (PCI regions).
     RegisterFdAtPciBarOffset(Alloc, MaybeOwnedFd, usize, u64),
-    /// Unregister the given memory slot that was previously registereed with `RegisterMemory`.
+    /// Similar to RegisterFdAtPciBarOffset, but is for buffers in the current
+    /// address space and requiores that DeviceMemoryMappingRequests has exactly 1 pending request
+    RegisterPendingHostPointerAtPciBarOffset(Alloc, u64),
+    /// Unregister the given memory slot that was previously registered with `RegisterMemory`.
     UnregisterMemory(u32),
+    /// Unregister the DeviceMemoryMapping that was previously registered with
+    /// `RegisterHostPointerAtPciBarOffset`.
+    UnregisterHostPointerMemory(u32),
     /// Allocate GPU buffer of a given size/format and register the memory into guest address space.
     /// The response variant is `VmResponse::AllocateAndRegisterGpuMemory`
     AllocateAndRegisterGpuMemory {
@@ -287,7 +354,12 @@ impl VmMemoryRequest {
     /// This does not return a result, instead encapsulating the success or failure in a
     /// `VmMemoryResponse` with the intended purpose of sending the response back over the socket
     /// that received this `VmMemoryResponse`.
-    pub fn execute(&self, vm: &mut Vm, sys_allocator: &mut SystemAllocator) -> VmMemoryResponse {
+    pub fn execute(
+        &self,
+        vm: &mut Vm,
+        sys_allocator: &mut SystemAllocator,
+        non_socket_expr_reqs: Arc<Mutex<DeviceMemoryMappingRequests>>,
+    ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match *self {
             RegisterMemory(ref fd, size) => {
@@ -302,7 +374,25 @@ impl VmMemoryRequest {
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
+            RegisterPendingHostPointerAtPciBarOffset(alloc, offset) => {
+                let mut locked_reqs = non_socket_expr_reqs.lock();
+                let request_mem = match locked_reqs.pop() {
+                    Ok(mem) => mem,
+                    Err(_) => {
+                        return VmMemoryResponse::Err(SysError::new(EINVAL));
+                    }
+                };
+
+                match register_memory_hva(vm, sys_allocator, request_mem, (alloc, offset)) {
+                    Ok((pfn, slot)) => VmMemoryResponse::RegisterMemory { pfn, slot },
+                    Err(e) => VmMemoryResponse::Err(e),
+                }
+            }
             UnregisterMemory(slot) => match vm.remove_mmio_memory(slot) {
+                Ok(_) => VmMemoryResponse::Ok,
+                Err(e) => VmMemoryResponse::Err(e),
+            },
+            UnregisterHostPointerMemory(slot) => match vm.remove_device_memory_mapping(slot) {
                 Ok(_) => VmMemoryResponse::Ok,
                 Err(e) => VmMemoryResponse::Err(e),
             },
@@ -564,6 +654,21 @@ fn register_memory(
     };
 
     let slot = vm.add_mmio_memory(GuestAddress(addr), mmap, false, false)?;
+    Ok((addr >> 12, slot))
+}
+
+fn register_memory_hva(
+    vm: &mut Vm,
+    allocator: &mut SystemAllocator,
+    mem: DeviceMemoryMapping,
+    pci_allocation: (Alloc, u64),
+) -> Result<(u64, u32)> {
+    let addr = allocator
+        .mmio_allocator(MmioType::High)
+        .address_from_pci_offset(pci_allocation.0, pci_allocation.1, mem.size() as u64)
+        .map_err(|_e| SysError::new(EINVAL))?;
+
+    let slot = vm.add_device_memory_mapping(GuestAddress(addr), mem, false)?;
     Ok((addr >> 12, slot))
 }
 
