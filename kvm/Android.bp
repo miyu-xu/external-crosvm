@@ -49,6 +49,7 @@ rust_library_host_rlib {
         "libkvm_sys",
         "liblibc",
         "libmsg_socket",
+        "libresources",
         "libsys_util",
     ],
 }
