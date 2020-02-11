@@ -2,12 +2,12 @@
 
 rust_library_host_rlib {
     name: "libvhost",
+    defaults: ["crosvm_defaults"],
     crate_name: "vhost",
     srcs: ["src/lib.rs"],
-    edition: "2018",
     rlibs: [
         "libassertions",
-        "libc_rust",
+        "liblibc",
         "libnet_util",
         "libsys_util",
         "libvirtio_sys",

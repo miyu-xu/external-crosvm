@@ -4,8 +4,8 @@ rust_library_host_rlib {
     name: "libio_jail",
     crate_name: "io_jail",
     srcs: ["src/lib.rs"],
-    edition: "2018",
+    defaults: ["crosvm_defaults"],
     rlibs: [
-        "libc_rust",
+        "liblibc",
     ],
 }
