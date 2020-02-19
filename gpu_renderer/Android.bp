@@ -5,6 +5,11 @@ rust_library_host_rlib {
     defaults: ["crosvm_defaults"],
     crate_name: "gpu_renderer",
     srcs: ["src/lib.rs"],
+    features: [
+        "default-no-sandbox",
+        "gpu",
+        "x",
+    ],
     rlibs: [
         "libdata_model",
         "liblibc",

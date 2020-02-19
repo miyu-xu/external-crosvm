@@ -2,9 +2,9 @@
 
 rust_library_host_rlib {
     name: "libarch",
-    defaults: ["crosvm_defaults"],
     crate_name: "arch",
     srcs: ["src/lib.rs"],
+    edition: "2018",
     rlibs: [
         "libdevices",
         "libio_jail",

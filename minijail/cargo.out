@@ -1,0 +1,12 @@
+### Running: cargo -v clean --target-dir target.tmp >> cargo.out 2>&1
+### Running: cargo -v build --target-dir target.tmp >> cargo.out 2>&1
+error: failed to load source for a dependency on `data_model`
+
+Caused by:
+  Unable to update /usr/local/google/home/lfy/aosp-crosvm-master/platform/crosvm/data_model
+
+Caused by:
+  failed to read `/usr/local/google/home/lfy/aosp-crosvm-master/platform/crosvm/data_model/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)

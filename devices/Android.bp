@@ -2,14 +2,12 @@
 
 rust_library_host_rlib {
     name: "libdevices",
-    defaults: ["crosvm_defaults"],
     crate_name: "devices",
     srcs: ["src/lib.rs"],
+    edition: "2018",
     features: [
+        "default-no-sandbox",
         "gpu",
-        "gpu_buffer",
-        "gpu_display",
-        "gpu_renderer",
         "x",
     ],
     rlibs: [
