@@ -62,7 +62,10 @@ use vm_control::{
     VmRunMode,
 };
 
-use crate::{Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption};
+use crate::{
+    Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption,
+    DEFAULT_TOUCH_DEVICE_HEIGHT, DEFAULT_TOUCH_DEVICE_WIDTH,
+};
 
 use arch::{self, LinuxArch, RunnableLinuxVm, VirtioDeviceStub, VmComponents, VmImage};
 
@@ -473,13 +476,16 @@ fn create_tpm_device(cfg: &Config) -> DeviceResult {
 }
 
 fn create_single_touch_device(cfg: &Config, single_touch_spec: &TouchDeviceOption) -> DeviceResult {
-    let socket = single_touch_spec.path.into_unix_stream().map_err(|e| {
-        error!("failed configuring virtio single touch: {:?}", e);
-        e
-    })?;
+    let socket = single_touch_spec
+        .get_path()
+        .into_unix_stream()
+        .map_err(|e| {
+            error!("failed configuring virtio single touch: {:?}", e);
+            e
+        })?;
 
-    let dev = virtio::new_single_touch(socket, single_touch_spec.width, single_touch_spec.height)
-        .map_err(Error::InputDeviceNew)?;
+    let (width, height) = single_touch_spec.get_size();
+    let dev = virtio::new_single_touch(socket, width, height).map_err(Error::InputDeviceNew)?;
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
         jail: simple_jail(&cfg, "input_device")?,
@@ -487,13 +493,13 @@ fn create_single_touch_device(cfg: &Config, single_touch_spec: &TouchDeviceOptio
 }
 
 fn create_trackpad_device(cfg: &Config, trackpad_spec: &TouchDeviceOption) -> DeviceResult {
-    let socket = trackpad_spec.path.into_unix_stream().map_err(|e| {
+    let socket = trackpad_spec.get_path().into_unix_stream().map_err(|e| {
         error!("failed configuring virtio trackpad: {}", e);
         e
     })?;
 
-    let dev = virtio::new_trackpad(socket, trackpad_spec.width, trackpad_spec.height)
-        .map_err(Error::InputDeviceNew)?;
+    let (width, height) = trackpad_spec.get_size();
+    let dev = virtio::new_trackpad(socket, width, height).map_err(Error::InputDeviceNew)?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -825,6 +831,10 @@ fn create_9p_device(cfg: &Config, src: &Path, tag: &str) -> DeviceResult {
             let root = Path::new("/");
             jail.mount_bind(src, root, true)?;
 
+            // We want bind mounts from the parent namespaces to propagate into the 9p server's
+            // namespace.
+            jail.set_remount_mode(libc::MS_SLAVE);
+
             add_crosvm_user_to_jail(&mut jail, "p9")?;
             (Some(jail), root)
         }
@@ -1026,8 +1036,17 @@ fn create_virtio_devices(
                 // TODO(nkgold): the width/height here should match the display's height/width. When
                 // those settings are available as CLI options, we should use the CLI options here
                 // as well.
-                let dev = virtio::new_single_touch(virtio_dev_socket, 1280, 1024)
-                    .map_err(Error::InputDeviceNew)?;
+                let (single_touch_width, single_touch_height) = cfg
+                    .virtio_single_touch
+                    .as_ref()
+                    .map(|single_touch_spec| single_touch_spec.get_size())
+                    .unwrap_or((DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT));
+                let dev = virtio::new_single_touch(
+                    virtio_dev_socket,
+                    single_touch_width,
+                    single_touch_height,
+                )
+                .map_err(Error::InputDeviceNew)?;
                 devs.push(VirtioDeviceStub {
                     dev: Box::new(dev),
                     jail: simple_jail(&cfg, "input_device")?,
@@ -1619,6 +1638,7 @@ fn run_control(
     #[derive(PollToken)]
     enum Token {
         Exit,
+        Suspend,
         ChildSignal,
         CheckAvailableMemory,
         LowMemory,
@@ -1633,6 +1653,7 @@ fn run_control(
 
     let poll_ctx = PollContext::build_with(&[
         (&linux.exit_evt, Token::Exit),
+        (&linux.suspend_evt, Token::Suspend),
         (&sigchld_fd, Token::ChildSignal),
     ])
     .map_err(Error::PollContextAdd)?;
@@ -1724,6 +1745,14 @@ fn run_control(
                 Token::Exit => {
                     info!("vcpu requested shutdown");
                     break 'poll;
+                }
+                Token::Suspend => {
+                    info!("VM requested suspend");
+                    linux.suspend_evt.read().unwrap();
+                    run_mode_arc.set_and_notify(VmRunMode::Suspending);
+                    for handle in &vcpu_handles {
+                        let _ = handle.kill(SIGRTMIN() + 0);
+                    }
                 }
                 Token::ChildSignal => {
                     // Print all available siginfo structs, then exit the loop.
@@ -1860,6 +1889,17 @@ fn run_control(
                                             VmRunMode::Exiting => {
                                                 break 'poll;
                                             }
+                                            VmRunMode::Running => {
+                                                if let VmRunMode::Suspending =
+                                                    *run_mode_arc.mtx.lock()
+                                                {
+                                                    linux.io_bus.notify_resume();
+                                                }
+                                                run_mode_arc.set_and_notify(VmRunMode::Running);
+                                                for handle in &vcpu_handles {
+                                                    let _ = handle.kill(SIGRTMIN() + 0);
+                                                }
+                                            }
                                             other => {
                                                 run_mode_arc.set_and_notify(other);
                                                 for handle in &vcpu_handles {
@@ -1918,6 +1958,7 @@ fn run_control(
         for event in events.iter_hungup() {
             match event.token() {
                 Token::Exit => {}
+                Token::Suspend => {}
                 Token::ChildSignal => {}
                 Token::CheckAvailableMemory => {}
                 Token::LowMemory => {}
