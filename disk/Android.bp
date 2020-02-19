@@ -2,9 +2,9 @@
 
 rust_library_host_rlib {
     name: "libdisk",
-    defaults: ["crosvm_defaults"],
     crate_name: "disk",
     srcs: ["src/disk.rs"],
+    edition: "2018",
     rlibs: [
         "libdata_model",
         "liblibc",
