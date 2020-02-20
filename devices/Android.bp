@@ -11,6 +11,7 @@ rust_library_host_rlib {
         "gpu_display",
         "gpu_renderer",
         "x",
+        "gfxstream",
     ],
     rlibs: [
         "libaudio_streams",
