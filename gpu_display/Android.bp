@@ -14,7 +14,6 @@ rust_library_host_rlib {
     features: [
         "x",
     ],
-
     rlibs: [
         "libdata_model",
         "liblibc",
