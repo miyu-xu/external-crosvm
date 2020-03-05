@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "cf01139e_7ba7af51",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1067948
+      },
+      "writtenOn": "2020-03-05T22:30:08Z",
+      "side": 1,
+      "message": "Note that crosvm now uses syn 1.0.14, and that for the move to 1.0 we had to change the APIs to the 1.0 stabilized ones in some places.",
+      "revId": "f8dc3deb410156102ae5e84235429b317060a78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
