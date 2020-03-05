@@ -16,6 +16,24 @@
       "revId": "f8dc3deb410156102ae5e84235429b317060a78f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "89850371_f5511471",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-03-05T22:37:58Z",
+      "side": 1,
+      "message": "Yes, Lingfeng tried the new crosvm with syn-1.0.7. It seems to work. Later when we upgrade default syn-1.0.7 to newer version, new crosvm will use it automatically.",
+      "parentUuid": "cf01139e_7ba7af51",
+      "revId": "f8dc3deb410156102ae5e84235429b317060a78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
