@@ -34,6 +34,24 @@
       "revId": "f8dc3deb410156102ae5e84235429b317060a78f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "26bd3165_0d504e05",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1067948
+      },
+      "writtenOn": "2020-03-05T23:02:35Z",
+      "side": 1,
+      "message": "sounds like a plan. lgtm, thanks.",
+      "parentUuid": "89850371_f5511471",
+      "revId": "f8dc3deb410156102ae5e84235429b317060a78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
