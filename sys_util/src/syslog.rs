@@ -33,7 +33,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::ptr::null;
-use std::sync::{MutexGuard, Once, ONCE_INIT};
+use std::sync::{MutexGuard, Once};
 
 use libc::{
     closelog, fcntl, localtime_r, openlog, time, time_t, tm, F_GETFD, LOG_NDELAY, LOG_PERROR,
@@ -205,7 +205,7 @@ impl State {
     }
 }
 
-static STATE_ONCE: Once = ONCE_INIT;
+static STATE_ONCE: Once = Once::new();
 static mut STATE: *const Mutex<State> = 0 as *const _;
 
 fn new_mutex_ptr<T>(inner: T) -> *const Mutex<T> {
@@ -610,6 +610,7 @@ mod tests {
             shm_unlink(shm_name.as_ptr());
             let fd = shm_open(shm_name.as_ptr(), O_RDWR | O_CREAT | O_EXCL, 0666);
             assert!(fd >= 0, "error creating shared memory;");
+            shm_unlink(shm_name.as_ptr());
             File::from_raw_fd(fd)
         };
 
