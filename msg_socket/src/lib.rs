@@ -6,10 +6,18 @@ mod msg_on_socket;
 
 use std::io::Result;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use sys_util::{handle_eintr, net::UnixSeqpacket, Error as SysError, ScmSocket};
+use futures::Stream;
+use libc::{EWOULDBLOCK, O_NONBLOCK};
+
+use cros_async::fd_executor::add_read_waker;
+use sys_util::{
+    add_fd_flags, clear_fd_flags, error, handle_eintr, net::UnixSeqpacket, Error as SysError,
+    ScmSocket,
+};
 
 pub use crate::msg_on_socket::*;
 pub use msg_on_socket_derive::*;
@@ -19,16 +27,8 @@ pub use msg_on_socket_derive::*;
 pub fn pair<Request: MsgOnSocket, Response: MsgOnSocket>(
 ) -> Result<(MsgSocket<Request, Response>, MsgSocket<Response, Request>)> {
     let (sock1, sock2) = UnixSeqpacket::pair()?;
-    let requester = MsgSocket {
-        sock: sock1,
-        _i: PhantomData,
-        _o: PhantomData,
-    };
-    let responder = MsgSocket {
-        sock: sock2,
-        _i: PhantomData,
-        _o: PhantomData,
-    };
+    let requester = MsgSocket::new(sock1);
+    let responder = MsgSocket::new(sock2);
     Ok((requester, responder))
 }
 
@@ -48,12 +48,10 @@ impl<I: MsgOnSocket, O: MsgOnSocket> MsgSocket<I, O> {
             _o: PhantomData,
         }
     }
-}
 
-impl<I: MsgOnSocket, O: MsgOnSocket> Deref for MsgSocket<I, O> {
-    type Target = UnixSeqpacket;
-    fn deref(&self) -> &Self::Target {
-        &self.sock
+    // Creates an async receiver that implements `futures::Stream`.
+    pub fn async_receiver(&mut self) -> MsgResult<AsyncReceiver<I, O>> {
+        AsyncReceiver::new(self)
     }
 }
 
@@ -126,10 +124,11 @@ impl<M: MsgOnSocket> AsRawFd for Receiver<M> {
 }
 
 /// Types that could send a message.
-pub trait MsgSender<M: MsgOnSocket>: AsRef<UnixSeqpacket> {
-    fn send(&self, msg: &M) -> MsgResult<()> {
-        let msg_size = M::msg_size();
-        let fd_size = M::max_fd_count();
+pub trait MsgSender: AsRef<UnixSeqpacket> {
+    type M: MsgOnSocket;
+    fn send(&self, msg: &Self::M) -> MsgResult<()> {
+        let msg_size = Self::M::msg_size();
+        let fd_size = Self::M::max_fd_count();
         let mut msg_buffer: Vec<u8> = vec![0; msg_size];
         let mut fd_buffer: Vec<RawFd> = vec![0; fd_size];
 
@@ -147,45 +146,114 @@ pub trait MsgSender<M: MsgOnSocket>: AsRef<UnixSeqpacket> {
 }
 
 /// Types that could receive a message.
-pub trait MsgReceiver<M: MsgOnSocket>: AsRef<UnixSeqpacket> {
-    fn recv(&self) -> MsgResult<M> {
-        let msg_size = M::msg_size();
-        let fd_size = M::max_fd_count();
-        let mut msg_buffer: Vec<u8> = vec![0; msg_size];
-        let mut fd_buffer: Vec<RawFd> = vec![0; fd_size];
+pub trait MsgReceiver: AsRef<UnixSeqpacket> {
+    type M: MsgOnSocket;
+    fn recv(&self) -> MsgResult<Self::M> {
+        let msg_size = Self::M::msg_size();
+        let fd_size = Self::M::max_fd_count();
 
         let sock: &UnixSeqpacket = self.as_ref();
 
-        let (recv_msg_size, recv_fd_size) = {
+        let (msg_buffer, fd_buffer) = {
             if fd_size == 0 {
-                let size = sock
-                    .recv(&mut msg_buffer)
-                    .map_err(|e| MsgError::Recv(SysError::new(e.raw_os_error().unwrap_or(0))))?;
-                (size, 0)
+                (
+                    sock.recv_as_vec().map_err(|e| {
+                        MsgError::Recv(SysError::new(e.raw_os_error().unwrap_or(0)))
+                    })?,
+                    vec![],
+                )
             } else {
-                sock.recv_with_fds(&mut msg_buffer, &mut fd_buffer)
-                    .map_err(MsgError::Recv)?
+                sock.recv_as_vec_with_fds()
+                    .map_err(|e| MsgError::Recv(SysError::new(e.raw_os_error().unwrap_or(0))))?
             }
         };
-        if msg_size != recv_msg_size {
+
+        if msg_size != msg_buffer.len() {
             return Err(MsgError::BadRecvSize {
                 expected: msg_size,
-                actual: recv_msg_size,
+                actual: msg_buffer.len(),
             });
         }
         // Safe because fd buffer is read from socket.
-        let (v, read_fd_size) = unsafe {
-            M::read_from_buffer(&msg_buffer[0..recv_msg_size], &fd_buffer[0..recv_fd_size])?
-        };
-        if recv_fd_size != read_fd_size {
+        let (v, read_fd_size) =
+            unsafe { Self::M::read_from_buffer(&msg_buffer[..], &fd_buffer[..])? };
+        if fd_buffer.len() != read_fd_size {
             return Err(MsgError::NotExpectFd);
         }
         Ok(v)
     }
 }
 
-impl<I: MsgOnSocket, O: MsgOnSocket> MsgSender<I> for MsgSocket<I, O> {}
-impl<I: MsgOnSocket, O: MsgOnSocket> MsgReceiver<O> for MsgSocket<I, O> {}
+impl<I: MsgOnSocket, O: MsgOnSocket> MsgSender for MsgSocket<I, O> {
+    type M = I;
+}
+impl<I: MsgOnSocket, O: MsgOnSocket> MsgReceiver for MsgSocket<I, O> {
+    type M = O;
+}
 
-impl<M: MsgOnSocket> MsgSender<M> for Sender<M> {}
-impl<M: MsgOnSocket> MsgReceiver<M> for Receiver<M> {}
+impl<I: MsgOnSocket> MsgSender for Sender<I> {
+    type M = I;
+}
+impl<O: MsgOnSocket> MsgReceiver for Receiver<O> {
+    type M = O;
+}
+
+/// Asynchronous adaptor for `MsgSocket`.
+pub struct AsyncReceiver<'a, I: MsgOnSocket, O: MsgOnSocket> {
+    inner: &'a mut MsgSocket<I, O>,
+    done: bool, // Have hit an error and the Stream should return null when polled.
+}
+
+impl<'a, I: MsgOnSocket, O: MsgOnSocket> AsyncReceiver<'a, I, O> {
+    fn new(msg_socket: &mut MsgSocket<I, O>) -> MsgResult<AsyncReceiver<I, O>> {
+        add_fd_flags(msg_socket.as_raw_fd(), O_NONBLOCK).map_err(MsgError::SettingFdFlags)?;
+        Ok(AsyncReceiver {
+            inner: msg_socket,
+            done: false,
+        })
+    }
+}
+
+impl<'a, I: MsgOnSocket, O: MsgOnSocket> Drop for AsyncReceiver<'a, I, O> {
+    fn drop(&mut self) {
+        if let Err(e) = clear_fd_flags(self.inner.as_raw_fd(), O_NONBLOCK) {
+            error!(
+                "Failed to restore non-blocking behavior to message socket: {}",
+                e
+            );
+        }
+    }
+}
+
+impl<'a, I: MsgOnSocket, O: MsgOnSocket> Stream for AsyncReceiver<'a, I, O> {
+    type Item = MsgResult<O>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+
+        let ret = match self.inner.recv() {
+            Ok(msg) => Ok(Poll::Ready(Some(Ok(msg)))),
+            Err(MsgError::Recv(e)) => {
+                if e.errno() == EWOULDBLOCK {
+                    add_read_waker(self.inner.as_raw_fd(), cx.waker().clone())
+                        .map(|_| Poll::Pending)
+                        .map_err(MsgError::AddingWaker)
+                } else {
+                    Err(MsgError::Recv(e))
+                }
+            }
+            Err(e) => Err(e),
+        };
+
+        match ret {
+            Ok(p) => p,
+            Err(e) => {
+                // Indicate something went wrong and no more events will be provided.
+                self.done = true;
+                Poll::Ready(Some(Err(e)))
+            }
+        }
+    }
+}

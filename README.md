@@ -1,16 +1,70 @@
 # crosvm - The Chrome OS Virtual Machine Monitor
 
 This component, known as crosvm, runs untrusted operating systems along with
-virtualized devices. No actual hardware is emulated. This only runs VMs
-through the Linux's KVM interface. What makes crosvm unique is a focus on
-safety within the programming language and a sandbox around the virtual
-devices to protect the kernel from attack in case of an exploit in the
-devices.
+virtualized devices. This only runs VMs through the Linux's KVM interface. What
+makes crosvm unique is a focus on safety within the programming language and a
+sandbox around the virtual devices to protect the kernel from attack in case of
+an exploit in the devices.
 
-## Building with Docker
+## IRC
+
+The channel #crosvm on [freenode](https://webchat.freenode.net/#crosvm) is used
+for technical discussion related to crosvm development and integration.
+
+## Getting started
+
+### Building for CrOS
+
+crosvm on Chromium OS is built with Portage, so it follows the same general
+workflow as any `cros_workon` package. The full package name is
+`chromeos-base/crosvm`.
+
+See the [Chromium OS developer guide] for more on how to build and deploy with
+Portage.
+
+[Chromium OS developer guide]: https://chromium.googlesource.com/chromiumos/docs/+/master/developer_guide.md
+
+### Building with Docker
 
 See the [README](docker/README.md) from the `docker` subdirectory to learn how
 to build crosvm in enviroments outside of the Chrome OS chroot.
+
+### Building for Linux
+
+>**NOTE:** Building for Linux natively is new and not fully supported.
+
+First, [set up depot_tools] and use `repo` to sync down the crosvm source
+tree. This is a subset of the entire Chromium OS manifest with just enough repos
+to build crosvm.
+
+```sh
+mkdir crosvm
+cd crosvm
+repo init -g crosvm -u https://chromium.googlesource.com/chromiumos/manifest.git --repo-url=https://chromium.googlesource.com/external/repo.git
+repo sync
+```
+
+A basic crosvm build links against `libcap` and `libfdt`. On a Debian-based system,
+you can install `libcap-dev` and `libfdt-dev`.
+
+Handy Debian one-liner for all build and runtime deps, particularly if you're
+running Crostini:
+```sh
+sudo apt install build-essential libcap-dev libfdt-dev pkg-config python
+```
+
+Known issues:
+*   Seccomp policy files have hardcoded absolute paths. You can either fix up
+    the paths locally, or set up an awesome hacky symlink: `sudo mkdir
+    /usr/share/policy && sudo ln -s /path/to/crosvm/seccomp/x86_64
+    /usr/share/policy/crosvm`. We'll eventually build the precompiled
+    policies [into the crosvm binary](http://crbug.com/1052126).
+*   Devices can't be jailed if `/var/empty` doesn't exist. `sudo mkdir -p
+    /var/empty` to work around this for now.
+
+And that's it! You should be able to `cargo build/run/test`.
+
+[set up depot_tools]: https://commondatastorage.googleapis.com/chrome-infra-docs/flat/depot_tools/docs/html/depot_tools_tutorial.html#_setting_up
 
 ## Usage
 
@@ -157,7 +211,6 @@ binary size by including dozens of transitive dependencies. All these
 dependencies also must be reviewed to ensure their suitability to the crosvm
 project. Currently allowed crates are:
 
-* `byteorder` - A very small library used for endian swaps.
 * `cc` - Build time dependency needed to build C source code used in crosvm.
 * `libc` - Required to use the standard library, this crate is a simple wrapper around `libc`'s symbols.
 
