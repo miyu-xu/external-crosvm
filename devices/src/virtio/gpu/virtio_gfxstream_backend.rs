@@ -341,7 +341,7 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// If supported, export the resource with the given id to a file.
     fn export_resource(&mut self, _id: u32) -> Option<File> {
-        None
+        ResourceResponse::Invalid
     }
 
     /// Creates a fence with the given id that can be used to determine when the previous command
