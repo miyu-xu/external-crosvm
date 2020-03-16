@@ -3,6 +3,7 @@
 rust_library_host_rlib {
     name: "libx86_64_rust",
     defaults: ["crosvm_defaults"],
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
     deny_warnings: false,
     stem: "libx86_64",
     crate_name: "x86_64",
@@ -25,6 +26,28 @@ rust_library_host_rlib {
     ],
     proc_macros: [
         "libremain-0.1.3",
+=======
+    stem: "libx86_64",
+    crate_name: "x86_64",
+    srcs: ["src/lib.rs"],
+    rlibs: [
+        "libarch",
+        "libassertions",
+        "libdata_model",
+        "libdevices",
+        "libio_jail",
+        "libkernel_cmdline",
+        "libkernel_loader",
+        "libkvm",
+        "libkvm_sys",
+        "liblibc",
+        "libresources",
+        "libsync_rust",
+        "libsys_util",
+    ],
+    proc_macros: [
+        "libremain",
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
     ],
     static_libs: [
         "libhost_cpuid",

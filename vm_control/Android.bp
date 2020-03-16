@@ -6,7 +6,10 @@ rust_library_host_rlib {
     crate_name: "vm_control",
     srcs: ["src/lib.rs"],
     rlibs: [
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
         "libbyteorder",
+=======
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
         "libdata_model",
         "libkvm",
         "liblibc",

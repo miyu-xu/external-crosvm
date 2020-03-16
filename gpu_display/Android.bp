@@ -11,9 +11,20 @@ rust_library_host_rlib {
     crate_name: "gpu_display",
     srcs: ["src/lib.rs"],
 
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
     rlibs: [
         "libdata_model",
         "liblibc",
+=======
+    features: [
+        "x",
+    ],
+
+    rlibs: [
+        "libdata_model",
+        "liblibc",
+        "liblinux_input_sys",
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
         "libsys_util",
     ],
     static_libs: ["libdisplay_wl"],

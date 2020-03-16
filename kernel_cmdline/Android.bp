@@ -3,7 +3,10 @@
 rust_library_host_rlib {
     name: "libkernel_cmdline",
     defaults: ["crosvm_defaults"],
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
     deny_warnings: false,
+=======
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
     crate_name: "kernel_cmdline",
     srcs: ["src/kernel_cmdline.rs"],
     rlibs: [

@@ -2,9 +2,15 @@
 
 rust_library_host_rlib {
     name: "libnet_sys",
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
     crate_name: "net_sys",
     srcs: ["src/lib.rs"],
     defaults: ["crosvm_defaults"],
+=======
+    defaults: ["crosvm_defaults"],
+    crate_name: "net_sys",
+    srcs: ["src/lib.rs"],
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
     rlibs: [
         "libsys_util",
     ],

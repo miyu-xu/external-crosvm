@@ -6,6 +6,10 @@ rust_library_host_rlib {
     crate_name: "net_util",
     srcs: ["src/lib.rs"],
     rlibs: [
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
+=======
+        "libdata_model",
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
         "liblibc",
         "libnet_sys",
         "libsys_util",

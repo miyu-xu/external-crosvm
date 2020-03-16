@@ -8,6 +8,15 @@ rust_library_host_rlib {
     rlibs: [
         "libassertions",
         "libdata_model",
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
         "libsync_rust",
+=======
+        "liblibc",
+        "libsys_util",
+        "libusb_sys",
+    ],
+    proc_macros: [
+        "libremain",
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
     ],
 }

@@ -8,6 +8,10 @@ rust_proc_macro {
     rlibs: [
         "libproc_macro2",
         "libquote",
+<<<<<<< HEAD   (8e3003 Merge "Change rust 'syn' module default to 1.0.7")
         "libsyn-0.15.42",
+=======
+        "libsyn",
+>>>>>>> BRANCH (4cdfa9 Change rust 'syn' module default to 1.0.7)
     ],
 }
