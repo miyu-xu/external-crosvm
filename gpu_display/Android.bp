@@ -8,20 +8,21 @@
 rust_library_host_rlib {
     name: "libgpu_display",
     defaults: ["crosvm_defaults"],
+    deny_warnings: false,
     crate_name: "gpu_display",
     srcs: ["src/lib.rs"],
-
-    features: [
-        "x",
-    ],
-
     rlibs: [
         "libdata_model",
         "liblibc",
         "liblinux_input_sys",
         "libsys_util",
     ],
-    static_libs: ["libdisplay_wl"],
+    static_libs: [
+        "libdisplay_wl",
+    ],
+    shared_libs: [
+        "libwayland-client",
+    ],
 }
 
 cc_library_host_static {
