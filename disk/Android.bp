@@ -5,9 +5,16 @@ rust_library_host_rlib {
     defaults: ["crosvm_defaults"],
     crate_name: "disk",
     srcs: ["src/disk.rs"],
+    features: [
+        "composite-disk",
+        "protobuf",
+        "protos",
+    ],
     rlibs: [
         "libdata_model",
         "liblibc",
+        "libprotobuf",
+        "libprotos",
         "libsys_util",
     ],
     proc_macros: [
