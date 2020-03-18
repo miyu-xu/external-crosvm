@@ -4,6 +4,9 @@
     {
       "name": "data_model_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "data_model_device_test_src_lib"
     }
   ]
 }

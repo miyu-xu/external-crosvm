@@ -4,6 +4,9 @@
     {
       "name": "disk_host_test_src_disk",
       "host": true
+    },
+    {
+      "name": "disk_device_test_src_disk"
     }
   ]
 }
