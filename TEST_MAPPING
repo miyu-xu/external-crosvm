@@ -6,8 +6,14 @@
       "host": true
     },
     {
+      "name": "crosvm_device_test_src_crosvm"
+    },
+    {
       "name": "crosvm_host_test_src_main",
       "host": true
+    },
+    {
+      "name": "crosvm_device_test_src_main"
     }
   ]
 }

@@ -13,9 +13,10 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libbase_rust",
     defaults: ["crosvm_defaults"],
+    host_supported: true,
     stem: "libbase",
     crate_name: "base",
     srcs: ["src/lib.rs"],

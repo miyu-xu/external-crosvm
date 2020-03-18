@@ -6,12 +6,21 @@
       "host": true
     },
     {
+      "name": "bit_field_device_test_src_lib"
+    },
+    {
       "name": "bit_field_host_test_tests_test_enum",
       "host": true
     },
     {
+      "name": "bit_field_device_test_tests_test_enum"
+    },
+    {
       "name": "bit_field_host_test_tests_test_tuple_struct",
       "host": true
+    },
+    {
+      "name": "bit_field_device_test_tests_test_tuple_struct"
     }
   ]
 }
