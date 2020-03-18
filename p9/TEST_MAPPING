@@ -4,6 +4,9 @@
     {
       "name": "p9_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "p9_device_test_src_lib"
     }
   ]
 }
