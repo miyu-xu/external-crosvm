@@ -4,6 +4,9 @@
     {
       "name": "arch_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "arch_device_test_src_lib"
     }
   ]
 }

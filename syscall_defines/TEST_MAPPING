@@ -4,6 +4,9 @@
     {
       "name": "syscall_defines_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "syscall_defines_device_test_src_lib"
     }
   ]
 }

@@ -4,6 +4,9 @@
     {
       "name": "vm_memory_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "vm_memory_device_test_src_lib"
     }
   ]
 }
