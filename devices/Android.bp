@@ -61,36 +61,42 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libdevices",
     defaults: ["crosvm_defaults"],
     crate_name: "devices",
     srcs: ["src/lib.rs"],
     edition: "2018",
-    features: [  // added manually
-        "audio",
-        "gfxstream",
-        "gpu",
-        "gpu_buffer",
-        "gpu_display",
-        "gpu_renderer",
-    ],
+    target: { // added manually
+        linux_glibc_x86_64: {
+            features: [
+                "audio",
+                "gfxstream",
+                "gpu",
+                "gpu_buffer",
+                "gpu_display",
+                "gpu_renderer",
+            ],
+            rustlibs: [
+                "libaudio_streams",
+                "libgpu_buffer",
+                "libgpu_display",
+                "libgpu_renderer",
+                "liblibcras",
+            ],
+        },
+    },
     rustlibs: [
         "libacpi_tables",
-        "libaudio_streams",
         "libbit_field",
         "libbitflags",
         "libcros_async",
         "libdata_model",
         "libdisk",
-        "libgpu_buffer",  // added manually
-        "libgpu_display",  // added manually
-        "libgpu_renderer",  // added manually
         "libhypervisor",
         "libkvm",
         "libkvm_sys",
         "liblibc",
-        "liblibcras",
         "liblinux_input_sys",
         "libminijail_rust",
         "libmsg_socket",

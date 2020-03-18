@@ -21,7 +21,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libcros_async",
     defaults: ["crosvm_defaults"],
     crate_name: "cros_async",

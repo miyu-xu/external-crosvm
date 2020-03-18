@@ -29,7 +29,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libkvm_sys",
     defaults: ["crosvm_defaults"],
     crate_name: "kvm_sys",

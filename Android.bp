@@ -16,8 +16,13 @@ rust_defaults {
     name: "crosvm_defaults",
     edition: "2018",
     enabled: false,
+    host_supported: true,
     target: {
         linux_glibc_x86_64: {
+            enabled: true,
+        },
+        android64: {
+            compile_multilib: "64",
             enabled: true,
         },
     },
@@ -26,7 +31,7 @@ rust_defaults {
     ],
 }
 
-rust_binary_host {
+rust_binary {
     name: "crosvm.experimental",
     defaults: ["crosvm_defaults"],
     crate_name: "crosvm",
@@ -35,33 +40,44 @@ rust_binary_host {
     target: {
         linux_glibc_x86_64: {
             relative_install_path: "x86_64-linux-gnu",
-            rustlibs: ["libx86_64_rust"],
+            rustlibs: [
+                "libaudio_streams",
+                "liblibcras",
+                "libx86_64_rust",
+            ],
+
+            // Install the crosvm prebuilts as requirements until we're building these as well.
+            required: [
+                "x86_64_linux_gnu_libandroid_emu_shared.so_for_crosvm",
+                "x86_64_linux_gnu_libc++.so.1_for_crosvm",
+                "x86_64_linux_gnu_libemugl_common.so_for_crosvm",
+                "x86_64_linux_gnu_libgfxstream_backend.so_for_crosvm",
+                "x86_64_linux_gnu_libOpenglRender.so_for_crosvm",
+            ],
+
+            features: [
+                "audio",
+                "gpu",
+            ],
+
+            flags: [
+                "-C panic=abort",
+                "-L device/google/cuttlefish_vmm/x86_64-linux-gnu/bin/",
+            ],
         },
         darwin: {
             enabled: false,
         },
     },
 
-    // Install the crosvm prebuilts as requirements until we're building these as well.
-    required: [
-        "x86_64_linux_gnu_libandroid_emu_shared.so_for_crosvm",
-        "x86_64_linux_gnu_libc++.so.1_for_crosvm",
-        "x86_64_linux_gnu_libemugl_common.so_for_crosvm",
-        "x86_64_linux_gnu_libgfxstream_backend.so_for_crosvm",
-        "x86_64_linux_gnu_libOpenglRender.so_for_crosvm",
-    ],
-
     edition: "2018",
     features: [
-        "audio",
         "default",
         "gfxstream",
-        "gpu",
     ],
 
     flags: [
         "-C overflow-checks=y",
-        "-C panic=abort",
     ],
     ld_flags: [
         "-Wl,--rpath,\\$$ORIGIN",
@@ -72,7 +88,6 @@ rust_binary_host {
         "libacpi_tables",
         "libarch",
         "libassertions",
-        "libaudio_streams",
         "libbit_field",
         "libcrosvm",
         "libdata_model",
@@ -83,7 +98,6 @@ rust_binary_host {
         "libkvm",
         "libkvm_sys",
         "liblibc",
-        "liblibcras",
         "libminijail_rust",
         "libmsg_socket",
         "libnet_util",
@@ -193,23 +207,32 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libcrosvm",
     defaults: ["crosvm_defaults"],
     crate_name: "crosvm",
     srcs: ["src/crosvm.rs"],
     edition: "2018",
+    target: {
+        linux_glibc_x86_64: {
+            features: [
+                "audio",
+                "gpu",
+            ],
+            rlibs: [
+                "libaudio_streams",
+                "liblibcras",
+            ],
+        },
+    },
     features: [
-        "audio",
         "default",
         "gfxstream",
-        "gpu",
     ],
     rustlibs: [
         "libacpi_tables",
         "libarch",
         "libassertions",
-        "libaudio_streams",
         "libbit_field",
         "libdata_model",
         "libdevices",
@@ -219,7 +242,6 @@ rust_library_host {
         "libkvm",
         "libkvm_sys",
         "liblibc",
-        "liblibcras",
         "libminijail_rust",
         "libmsg_socket",
         "libnet_util",

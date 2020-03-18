@@ -16,7 +16,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libio_uring",
     defaults: ["crosvm_defaults"],
     crate_name: "io_uring",

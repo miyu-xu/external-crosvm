@@ -19,7 +19,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libdisk",
     defaults: ["crosvm_defaults"],
     crate_name: "disk",

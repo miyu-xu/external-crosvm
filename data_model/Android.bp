@@ -14,7 +14,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libdata_model",
     defaults: ["crosvm_defaults"],
     crate_name: "data_model",

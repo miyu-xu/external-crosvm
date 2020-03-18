@@ -54,7 +54,7 @@ rust_test_host {
     srcs: ["tests/real_run_adder.rs"],
 }
 
-rust_library_host {
+rust_library {
     name: "libkvm",
     defaults: ["crosvm_defaults"],
     crate_name: "kvm",

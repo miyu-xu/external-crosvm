@@ -23,7 +23,7 @@ rust_test_host {
     ],
 }
 
-rust_library_host {
+rust_library {
     name: "libhypervisor",
     defaults: ["crosvm_defaults"],
     crate_name: "hypervisor",

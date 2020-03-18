@@ -10,7 +10,7 @@ rust_test_host {
     edition: "2018",
 }
 
-rust_library_host {
+rust_library {
     name: "libassertions",
     defaults: ["crosvm_defaults"],
     crate_name: "assertions",

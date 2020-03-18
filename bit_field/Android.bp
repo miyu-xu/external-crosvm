@@ -40,7 +40,7 @@ rust_test_host {
     srcs: ["tests/test_tuple_struct.rs"],
 }
 
-rust_library_host {
+rust_library {
     name: "libbit_field",
     defaults: ["crosvm_defaults"],
     crate_name: "bit_field",

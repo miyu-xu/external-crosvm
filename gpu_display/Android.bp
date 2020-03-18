@@ -5,22 +5,26 @@
 //   does not generate cc_library module yet
 //   does not generate wayland_protocol_codegen module yet
 
-rust_library_host {
+rust_library {
     name: "libgpu_display",
     defaults: ["crosvm_defaults"],
     crate_name: "gpu_display",
     srcs: ["src/lib.rs"],
+    target: {
+        linux_glibc_x86_64: {
+            shared_libs: [
+                "libwayland_client",
+            ],
+            static_libs: [
+                "libdisplay_wl",
+            ],
+        },
+    },
     rustlibs: [
         "libdata_model",
         "liblibc",
         "liblinux_input_sys",
         "libsys_util",
-    ],
-    shared_libs: [
-        "libwayland_client",
-    ],
-    static_libs: [
-        "libdisplay_wl",
     ],
 }
 
