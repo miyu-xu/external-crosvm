@@ -2,11 +2,11 @@
 {
   "presubmit": [
     {
-      "name": "disk_host_test_src_disk",
+      "name": "aarch64_host_test_src_lib",
       "host": true
     },
     {
-      "name": "disk_device_test_src_disk"
+      "name": "aarch64_device_test_src_lib"
     }
   ]
 }
