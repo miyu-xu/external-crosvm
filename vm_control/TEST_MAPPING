@@ -4,6 +4,9 @@
     {
       "name": "vm_control_host_test_src_lib",
       "host": true
+    },
+    {
+      "name": "vm_control_device_test_src_lib"
     }
   ]
 }
