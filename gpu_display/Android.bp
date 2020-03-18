@@ -10,17 +10,21 @@ rust_library_host {
     defaults: ["crosvm_defaults"],
     crate_name: "gpu_display",
     srcs: ["src/lib.rs"],
+    target: {
+        linux_glibc_x86_64: {
+            shared_libs: [
+                "libwayland_client",
+            ],
+            static_libs: [
+                "libdisplay_wl",
+            ],
+        },
+    },
     rustlibs: [
         "libdata_model",
         "liblibc",
         "liblinux_input_sys",
         "libsys_util",
-    ],
-    shared_libs: [
-        "libwayland_client",
-    ],
-    static_libs: [
-        "libdisplay_wl",
     ],
 }
 

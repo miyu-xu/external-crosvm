@@ -32,7 +32,7 @@ genrule {
 }
 
 // Only enable composite-disk and include cdisk_spec.rs for now.
-rust_library_host {
+rust_library {
     name: "libprotos",
     defaults: ["crosvm_defaults"],
     crate_name: "protos",
