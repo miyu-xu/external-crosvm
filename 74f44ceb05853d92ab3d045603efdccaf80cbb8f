@@ -1,0 +1,400 @@
+{
+  "comments": [
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "b8859f3b_b9fbdfb4",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 497,
+                "startChar": 4,
+                "endLine": 497,
+                "endChar": 10
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "1fa78d48_226bf1a5",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 497,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 497,
+        "startChar": 4,
+        "endLine": 497,
+        "endChar": 10
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "8547a0f1_52b4ac7f",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 498,
+                "startChar": 21,
+                "endLine": 498,
+                "endChar": 27
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "b24104a6_ca1f9c4f",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 498,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 498,
+        "startChar": 21,
+        "endLine": 498,
+        "endChar": 27
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "712b5d66_f720313a",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 505,
+                "startChar": 3,
+                "endLine": 505,
+                "endChar": 9
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "ab29b0cb_d8c28e39",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 505,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 505,
+        "startChar": 3,
+        "endLine": 505,
+        "endChar": 9
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "ef73bed0_5e2e578f",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 506,
+                "startChar": 21,
+                "endLine": 506,
+                "endChar": 27
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "911f5a5b_ad03c0ea",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 506,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 506,
+        "startChar": 21,
+        "endLine": 506,
+        "endChar": 27
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "efaa653c_4dee2ae0",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 513,
+                "startChar": 11,
+                "endLine": 513,
+                "endChar": 17
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "68149f71_b21a618a",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 513,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 513,
+        "startChar": 11,
+        "endLine": 513,
+        "endChar": 17
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "6f657e33_60a73eb9",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 514,
+                "startChar": 21,
+                "endLine": 514,
+                "endChar": 27
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "b611b1ea_1d550242",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 514,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 514,
+        "startChar": 21,
+        "endLine": 514,
+        "endChar": 27
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "8e0e56fe_9b77fb2c",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 521,
+                "startChar": 10,
+                "endLine": 521,
+                "endChar": 16
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "4fdcc481_68dd6c4b",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 521,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 521,
+        "startChar": 10,
+        "endLine": 521,
+        "endChar": 16
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "5c57bd47_591edd2c",
+          "description": "Change to \"minijail/common.mk\"",
+          "replacements": [
+            {
+              "path": "minijail/common.mk",
+              "range": {
+                "startLine": 522,
+                "startChar": 21,
+                "endLine": 522,
+                "endChar": 27
+              },
+              "replacement": "LIBRARY"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "5c32150d_3a9d8cb7",
+        "filename": "minijail/common.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 522,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"LIBARY\" -- should it be \"LIBRARY\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 522,
+        "startChar": 21,
+        "endLine": 522,
+        "endChar": 27
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000001662133",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1239891?revision\u003d1",
+      "fixSuggestions": [
+        {
+          "fixId": "17a2ca82_abe70d86",
+          "description": "Change to \"minijail/util.h\"",
+          "replacements": [
+            {
+              "path": "minijail/util.h",
+              "range": {
+                "startLine": 37,
+                "startChar": 15,
+                "endLine": 37,
+                "endChar": 24
+              },
+              "replacement": "overridden"
+            }
+          ]
+        }
+      ],
+      "key": {
+        "uuid": "9cf0eec8_75c02642",
+        "filename": "minijail/util.h",
+        "patchSetId": 1
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1550585
+      },
+      "writtenOn": "2020-04-20T20:47:42Z",
+      "side": 1,
+      "message": "Common typo found: \"overriden\" -- should it be \"overridden\"?\nNote: a line containing \"common_typos_disable\" or \"common_typos_enable\" will turn off or on (respectively) the linter for subsequent lines in the file. Alternatively include the token \"NOTYPO\" within a line to skip typo linting that line.",
+      "range": {
+        "startLine": 37,
+        "startChar": 15,
+        "endLine": 37,
+        "endChar": 24
+      },
+      "revId": "74f44ceb05853d92ab3d045603efdccaf80cbb8f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
