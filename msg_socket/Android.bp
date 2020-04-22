@@ -6,7 +6,10 @@ rust_library_host_rlib {
     crate_name: "msg_socket",
     srcs: ["src/lib.rs"],
     rlibs: [
+        "libcros_async",
         "libdata_model",
+        "libfutures",
+        "liblibc",
         "libsys_util",
     ],
     proc_macros: [
