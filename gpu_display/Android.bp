@@ -10,16 +10,21 @@ rust_library_host_rlib {
     defaults: ["crosvm_defaults"],
     crate_name: "gpu_display",
     srcs: ["src/lib.rs"],
+<<<<<<< HEAD   (2508eb Update to aosp/crosvm-master 4cdfa9a264c)
     features: [
         "x",
     ],
+=======
+>>>>>>> BRANCH (9cc95d Fix crosvm.experimental build)
     rlibs: [
         "libdata_model",
         "liblibc",
         "liblinux_input_sys",
         "libsys_util",
     ],
-    static_libs: ["libdisplay_wl"],
+    static_libs: [
+        "libdisplay_wl",
+    ],
 }
 
 cc_library_host_static {
