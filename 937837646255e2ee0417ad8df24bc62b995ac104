@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "24faf873_6660a51c",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-04-23T17:08:41Z",
+      "side": 1,
+      "message": "nit, a redundant comma",
+      "range": {
+        "startLine": 8,
+        "startChar": 30,
+        "endLine": 8,
+        "endChar": 31
+      },
+      "revId": "937837646255e2ee0417ad8df24bc62b995ac104",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "c17a5f61_5e003bc3",
+        "filename": "x86_64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-04-23T17:08:41Z",
+      "side": 1,
+      "message": "nit: redundant comma",
+      "range": {
+        "startLine": 8,
+        "startChar": 30,
+        "endLine": 8,
+        "endChar": 31
+      },
+      "revId": "937837646255e2ee0417ad8df24bc62b995ac104",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
