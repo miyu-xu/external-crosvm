@@ -1,0 +1,8 @@
+Presubmit-Verified+1: Treehugger Robot <treehugger-gerrit@google.com>
+Code-Review+2: Jason Macnak <natsu@google.com>
+Lint+1: Lint 🤖 <android-build-prod-ayeaye@system.gserviceaccount.com>
+Submitted-by: Chih-hung Hsieh <chh@google.com>
+Submitted-at: Thu, 23 Apr 2020 00:25:01 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1293236
+Project: platform/external/crosvm
+Branch: refs/heads/master
