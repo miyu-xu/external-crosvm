@@ -13,7 +13,11 @@ use sys_util::EventFd;
 
 type SurfaceId = NonZeroU32;
 
+<<<<<<< HEAD   (9cc95d Fix crosvm.experimental build)
 #[allow(dead_code, unused_variables)]
+=======
+#[allow(dead_code)]
+>>>>>>> BRANCH (9f0b9e docker: update CRAS commit to fix clippy error)
 struct Buffer {
     width: u32,
     height: u32,
