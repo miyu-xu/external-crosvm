@@ -13,7 +13,11 @@ use sys_util::EventFd;
 
 type SurfaceId = NonZeroU32;
 
+<<<<<<< HEAD   (937837 Allow new warnings from rust 1.42)
 #[allow(dead_code, unused_variables)]
+=======
+#[allow(dead_code)]
+>>>>>>> BRANCH (d4cc91 devices: pci: refactor device location address.)
 struct Buffer {
     width: u32,
     height: u32,
