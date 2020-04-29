@@ -164,8 +164,50 @@ impl MemoryMapping {
         MemoryMapping::from_fd_offset(fd, size, 0)
     }
 
-    pub fn from_fd_offset(fd: &dyn AsRawFd, size: usize, offset: usize) -> Result<MemoryMapping> {
+    pub fn from_fd_offset(fd: &dyn AsRawFd, size: usize, offset: u64) -> Result<MemoryMapping> {
         MemoryMapping::from_fd_offset_protection(fd, size, offset, Protection::read_write())
+    }
+
+    /// Maps `size` bytes starting at `offset` from the given `fd` as read/write, and requests
+    /// that the pages are pre-populated.
+    /// # Arguments
+    /// * `fd` - File descriptor to mmap from.
+    /// * `size` - Size of memory region in bytes.
+    /// * `offset` - Offset in bytes from the beginning of `fd` to start the mmap.
+    pub fn from_fd_offset_populate(
+        fd: &dyn AsRawFd,
+        size: usize,
+        offset: u64,
+    ) -> Result<MemoryMapping> {
+        MemoryMapping::from_fd_offset_flags(
+            fd,
+            size,
+            offset,
+            libc::MAP_SHARED | libc::MAP_POPULATE,
+            Protection::read_write(),
+        )
+    }
+
+    /// Maps the `size` bytes starting at `offset` bytes of the given `fd` as read/write.
+    ///
+    /// # Arguments
+    /// * `fd` - File descriptor to mmap from.
+    /// * `size` - Size of memory region in bytes.
+    /// * `offset` - Offset in bytes from the beginning of `fd` to start the mmap.
+    /// * `flags` - flags passed directly to mmap.
+    /// * `prot` - Protection (e.g. readable/writable) of the memory region.
+    fn from_fd_offset_flags(
+        fd: &dyn AsRawFd,
+        size: usize,
+        offset: u64,
+        flags: c_int,
+        prot: Protection,
+    ) -> Result<MemoryMapping> {
+        unsafe {
+            // This is safe because we are creating an anonymous mapping in a place not already used
+            // by any other area in this process.
+            MemoryMapping::try_mmap(None, size, prot.into(), flags, Some((fd, offset)))
+        }
     }
 
     /// Maps the `size` bytes starting at `offset` bytes of the given `fd` as read/write.
@@ -178,20 +220,10 @@ impl MemoryMapping {
     pub fn from_fd_offset_protection(
         fd: &dyn AsRawFd,
         size: usize,
-        offset: usize,
+        offset: u64,
         prot: Protection,
     ) -> Result<MemoryMapping> {
-        // This is safe because we are creating an anonymous mapping in a place not already used by
-        // any other area in this process.
-        unsafe {
-            MemoryMapping::try_mmap(
-                None,
-                size,
-                prot.into(),
-                libc::MAP_SHARED,
-                Some((fd, offset)),
-            )
-        }
+        MemoryMapping::from_fd_offset_flags(fd, size, offset, libc::MAP_SHARED, prot)
     }
 
     /// Creates an anonymous shared mapping of `size` bytes with `prot` protection.
@@ -229,7 +261,7 @@ impl MemoryMapping {
         addr: *mut u8,
         fd: &dyn AsRawFd,
         size: usize,
-        offset: usize,
+        offset: u64,
         prot: Protection,
     ) -> Result<MemoryMapping> {
         MemoryMapping::try_mmap(
@@ -248,7 +280,7 @@ impl MemoryMapping {
         size: usize,
         prot: c_int,
         flags: c_int,
-        fd: Option<(&dyn AsRawFd, usize)>,
+        fd: Option<(&dyn AsRawFd, u64)>,
     ) -> Result<MemoryMapping> {
         let mut flags = flags;
         // If addr is provided, set the FIXED flag, and validate addr alignment
@@ -265,7 +297,7 @@ impl MemoryMapping {
         // If fd is provided, validate fd offset is within bounds
         let (fd, offset) = match fd {
             Some((fd, offset)) => {
-                if offset > libc::off_t::max_value() as usize {
+                if offset > libc::off_t::max_value() as u64 {
                     return Err(Error::InvalidOffset);
                 }
                 (fd.as_raw_fd(), offset as libc::off_t)
@@ -682,7 +714,7 @@ impl MemoryMappingArena {
         offset: usize,
         size: usize,
         fd: &dyn AsRawFd,
-        fd_offset: usize,
+        fd_offset: u64,
     ) -> Result<()> {
         self.add_fd_offset_protection(offset, size, fd, fd_offset, Protection::read_write())
     }
@@ -702,7 +734,7 @@ impl MemoryMappingArena {
         offset: usize,
         size: usize,
         fd: &dyn AsRawFd,
-        fd_offset: usize,
+        fd_offset: u64,
         prot: Protection,
     ) -> Result<()> {
         self.try_add(offset, size, prot, Some((fd, fd_offset)))
@@ -715,7 +747,7 @@ impl MemoryMappingArena {
         offset: usize,
         size: usize,
         prot: Protection,
-        fd: Option<(&dyn AsRawFd, usize)>,
+        fd: Option<(&dyn AsRawFd, u64)>,
     ) -> Result<()> {
         self.validate_range(offset, size)?;
 
@@ -921,7 +953,7 @@ mod tests {
     #[test]
     fn from_fd_offset_invalid() {
         let fd = unsafe { std::fs::File::from_raw_fd(-1) };
-        let res = MemoryMapping::from_fd_offset(&fd, 4096, (libc::off_t::max_value() as usize) + 1)
+        let res = MemoryMapping::from_fd_offset(&fd, 4096, (libc::off_t::max_value() as u64) + 1)
             .unwrap_err();
         match res {
             Error::InvalidOffset => {}

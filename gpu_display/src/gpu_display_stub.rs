@@ -13,7 +13,11 @@ use sys_util::EventFd;
 
 type SurfaceId = NonZeroU32;
 
+<<<<<<< HEAD   (9cc95d Fix crosvm.experimental build)
 #[allow(dead_code, unused_variables)]
+=======
+#[allow(dead_code)]
+>>>>>>> BRANCH (7b8f77 ac97: Create CrasClient with unified socket)
 struct Buffer {
     width: u32,
     height: u32,
