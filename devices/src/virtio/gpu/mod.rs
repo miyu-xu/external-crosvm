@@ -17,11 +17,13 @@ use std::num::NonZeroU8;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use data_model::*;
 
+use sync::Mutex;
 use sys_util::{debug, error, warn, EventFd, GuestAddress, GuestMemory, PollContext, PollToken};
 
 pub use gpu_display::EventDevice;
@@ -46,7 +48,7 @@ use crate::pci::{
     PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciCapability,
 };
 
-use vm_control::VmMemoryControlRequestSocket;
+use vm_control::{NonSocketExpressibleRequests, VmMemoryControlRequestSocket};
 
 pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
 pub const DEFAULT_DISPLAY_HEIGHT: u32 = 1024;
@@ -118,6 +120,7 @@ trait Backend {
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     ) -> Option<Box<dyn Backend>>
     where
         Self: Sized;
@@ -345,6 +348,7 @@ impl BackendKind {
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     ) -> Option<Box<dyn Backend>> {
         match self {
             BackendKind::Virtio2D => Virtio2DBackend::build(
@@ -355,6 +359,7 @@ impl BackendKind {
                 event_devices,
                 gpu_device_socket,
                 pci_bar,
+                non_socket_expr_reqs,
             ),
             BackendKind::Virtio3D => Virtio3DBackend::build(
                 possible_displays,
@@ -364,6 +369,7 @@ impl BackendKind {
                 event_devices,
                 gpu_device_socket,
                 pci_bar,
+                non_socket_expr_reqs,
             ),
             #[cfg(feature = "gfxstream")]
             BackendKind::VirtioGfxStream => VirtioGfxStreamBackend::build(
@@ -374,6 +380,7 @@ impl BackendKind {
                 event_devices,
                 gpu_device_socket,
                 pci_bar,
+                non_socket_expr_reqs,
             ),
         }
     }
@@ -1003,6 +1010,7 @@ pub struct Gpu {
     display_height: u32,
     renderer_flags: RendererFlags,
     pci_bar: Option<Alloc>,
+    non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     backend_kind: BackendKind,
 }
 
@@ -1015,6 +1023,7 @@ impl Gpu {
         display_backends: Vec<DisplayBackend>,
         gpu_parameters: &GpuParameters,
         event_devices: Vec<EventDevice>,
+        non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     ) -> Gpu {
         let renderer_flags = RendererFlags::new()
             .use_egl(gpu_parameters.renderer_use_egl)
@@ -1043,6 +1052,7 @@ impl Gpu {
             display_height: gpu_parameters.display_height,
             renderer_flags,
             pci_bar: None,
+            non_socket_expr_reqs,
             backend_kind,
         }
     }
@@ -1163,6 +1173,7 @@ impl VirtioDevice for Gpu {
         let display_height = self.display_height;
         let renderer_flags = self.renderer_flags;
         let event_devices = self.event_devices.split_off(0);
+        let non_socket_expr_reqs = Arc::clone(&self.non_socket_expr_reqs);
         if let (Some(gpu_device_socket), Some(pci_bar)) =
             (self.gpu_device_socket.take(), self.pci_bar.take())
         {
@@ -1178,6 +1189,7 @@ impl VirtioDevice for Gpu {
                             event_devices,
                             gpu_device_socket,
                             pci_bar,
+                            non_socket_expr_reqs,
                         ) {
                             Some(backend) => backend,
                             None => return,

@@ -14,18 +14,25 @@ use std::mem::transmute;
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
 use std::panic;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
-use resources::Alloc;
+use msg_socket::{MsgReceiver, MsgSender};
+use resources::{Alloc, NonMappedDeviceMemory, NonMappedDeviceMemoryInfo};
+use sync::Mutex;
 use sys_util::{error, GuestAddress, GuestMemory};
-use vm_control::VmMemoryControlRequestSocket;
+use vm_control::{
+    NonSocketExpressibleRequests, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+};
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
-use crate::virtio::gpu::{Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_VIRGL};
+use crate::virtio::gpu::{
+    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
+};
 use crate::virtio::resource_bridge::ResourceResponse;
 
 // C definitions related to gfxstream
@@ -164,6 +171,12 @@ extern "C" {
         pixels: *mut c_uchar,
         max_bytes: u32,
     );
+
+    fn stream_renderer_resource_create_v2(res_handle: u32, hostmemId: u64);
+    fn stream_renderer_resource_get_hva(res_handle: u32) -> u64;
+    fn stream_renderer_resource_get_hva_size(res_handle: u32) -> u64;
+    fn stream_renderer_resource_set_hv_slot(res_handle: u32, slot: u32);
+    fn stream_renderer_resource_get_hv_slot(res_handle: u32) -> u32;
 }
 
 // Fence state stuff (begin)
@@ -171,6 +184,7 @@ extern "C" {
 struct FenceState {
     latest_fence: u32,
 }
+
 impl FenceState {
     pub fn write(&mut self, latest_fence: u32) {
         if latest_fence > self.latest_fence {
@@ -210,6 +224,48 @@ pub struct VirtioGfxStreamBackend {
     /// so we just need to keep track of the latest created fence
     /// and return that in fence_poll().
     fence_state: Rc<RefCell<FenceState>>,
+
+    /// For host coherent memory: Retrieves the result
+    /// of mapping host memory to the guest along with
+    /// kvm slot.
+    gpu_device_socket: VmMemoryControlRequestSocket,
+    pci_bar: Alloc,
+
+    non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
+}
+
+struct VirtioGfxStreamBackendHostMemory {
+    hva: u64,
+    size: u64,
+}
+
+impl VirtioGfxStreamBackendHostMemory {
+    pub fn new(resource_id: u32) -> VirtioGfxStreamBackendHostMemory {
+        let hva_page = unsafe { stream_renderer_resource_get_hva(resource_id) & !(0xfff) };
+        let size_to_page =
+            unsafe { 4096 * ((4095 + stream_renderer_resource_get_hva_size(resource_id)) / 4096) };
+
+        VirtioGfxStreamBackendHostMemory {
+            hva: hva_page,
+            size: size_to_page,
+        }
+    }
+}
+
+impl NonMappedDeviceMemoryInfo for VirtioGfxStreamBackendHostMemory {
+    fn as_ptr(&self) -> *mut u8 {
+        self.hva as *mut u8
+    }
+    fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+impl Drop for VirtioGfxStreamBackendHostMemory {
+    fn drop(&mut self) {
+        // no-op: No further cleanup considered outside of what happens in
+        // resource unmap
+    }
 }
 
 impl VirtioGfxStreamBackend {
@@ -217,8 +273,9 @@ impl VirtioGfxStreamBackend {
         display: GpuDisplay,
         display_width: u32,
         display_height: u32,
-        _gpu_device_socket: VmMemoryControlRequestSocket,
-        _pci_bar: Alloc,
+        gpu_device_socket: VmMemoryControlRequestSocket,
+        pci_bar: Alloc,
+        non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     ) -> VirtioGfxStreamBackend {
         let fence_state = Rc::new(RefCell::new(FenceState { latest_fence: 0 }));
         let cookie: *mut VirglCookie = Box::into_raw(Box::new(VirglCookie {
@@ -265,6 +322,9 @@ impl VirtioGfxStreamBackend {
             },
             resources: Default::default(),
             fence_state,
+            gpu_device_socket,
+            pci_bar,
+            non_socket_expr_reqs,
         }
     }
 }
@@ -277,7 +337,7 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// Returns the bitset of virtio features provided by the Backend.
     fn features() -> u64 {
-        1 << VIRTIO_GPU_F_VIRGL | 1 << VIRTIO_F_VERSION_1
+        1 << VIRTIO_GPU_F_VIRGL | 1 << VIRTIO_F_VERSION_1 | 1 << VIRTIO_GPU_F_RESOURCE_BLOB
     }
 
     /// Returns the underlying Backend.
@@ -289,6 +349,7 @@ impl Backend for VirtioGfxStreamBackend {
         _event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        non_socket_expr_reqs: Arc<Mutex<NonSocketExpressibleRequests>>,
     ) -> Option<Box<dyn Backend>> {
         let mut display_opt = None;
         for display in possible_displays {
@@ -315,6 +376,7 @@ impl Backend for VirtioGfxStreamBackend {
             display_height,
             gpu_device_socket,
             pci_bar,
+            non_socket_expr_reqs,
         )))
     }
 
@@ -719,4 +781,133 @@ impl Backend for VirtioGfxStreamBackend {
 
     // Not considered for gfxstream
     fn force_ctx_0(&mut self) {}
+
+    // TODO: Store hva, hvaSize in args
+    fn resource_create_blob(
+        &mut self,
+        resource_id: u32,
+        _ctx_id: u32,
+        _blob_mem: u32,
+        _blob_flags: u32,
+        blob_id: u64,
+        _size: u64,
+        _vecs: Vec<(GuestAddress, usize)>,
+        _mem: &GuestMemory,
+    ) -> GpuResponse {
+        match self.resources.entry(resource_id) {
+            Entry::Vacant(slot) => {
+                slot.insert(None /* no guest memory attached yet */);
+            }
+            Entry::Occupied(_) => {
+                return GpuResponse::ErrInvalidResourceId;
+            }
+        }
+
+        let hostmem_id = blob_id;
+
+        unsafe {
+            stream_renderer_resource_create_v2(resource_id, hostmem_id);
+        }
+        GpuResponse::OkNoData
+    }
+
+    fn resource_map_blob(&mut self, resource_id: u32, offset: u64) -> GpuResponse {
+        let meminfo = Box::new(VirtioGfxStreamBackendHostMemory::new(resource_id));
+        let mem = unsafe { NonMappedDeviceMemory::new(meminfo) };
+
+        {
+            // scope for lock
+            let mut locked_reqs = self.non_socket_expr_reqs.lock();
+
+            if 0 != locked_reqs.non_mapped_memory_requests.len() {
+                error!("Already has a request pending!");
+                return GpuResponse::ErrOutOfMemory;
+            }
+
+            locked_reqs.non_mapped_memory_requests.push(mem.unwrap());
+        }
+
+        let request =
+            VmMemoryRequest::RegisterPendingHostPointerAtPciBarOffset(self.pci_bar, offset);
+
+        match self.gpu_device_socket.send(&request) {
+            Ok(_resq) => match self.gpu_device_socket.recv() {
+                Ok(response) => match response {
+                    VmMemoryResponse::RegisterMemory { pfn: _, slot } => unsafe {
+                        stream_renderer_resource_set_hv_slot(resource_id, slot);
+                    },
+                    VmMemoryResponse::Err(e) => {
+                        error!(
+                            "received an error from gpu device socket on mapping memory: {}",
+                            e
+                        );
+                        return GpuResponse::ErrOutOfMemory;
+                    }
+                    _ => {
+                        error!("recieved an unexpected response for memory map");
+                        return GpuResponse::ErrOutOfMemory;
+                    }
+                },
+                Err(e) => {
+                    error!("gpu device socket returned error. error: {}", e);
+                    return GpuResponse::ErrOutOfMemory;
+                }
+            },
+            Err(e) => {
+                error!(
+                    "failed to send map request to gpu device socket. error: {}",
+                    e
+                );
+                return GpuResponse::ErrOutOfMemory;
+            }
+        }
+
+        // 0x02 for uncached type in map info
+        GpuResponse::OkMapInfo { map_info: 0x02 }
+    }
+
+    fn resource_unmap_blob(&mut self, resource_id: u32) -> GpuResponse {
+        let hva = unsafe { stream_renderer_resource_get_hva(resource_id) };
+
+        if 0 == hva {
+            return GpuResponse::OkNoData;
+        }
+
+        let slot = unsafe { stream_renderer_resource_get_hv_slot(resource_id) };
+
+        if 0xffffffff == slot {
+            return GpuResponse::OkNoData;
+        }
+
+        let request = VmMemoryRequest::UnregisterHostPointerMemory(slot);
+
+        match self.gpu_device_socket.send(&request) {
+            Ok(_resq) => match self.gpu_device_socket.recv() {
+                Ok(response) => match response {
+                    VmMemoryResponse::Ok => {}
+                    VmMemoryResponse::Err(e) => {
+                        error!("failed to unmap memory. error: {}", e);
+                        return GpuResponse::ErrOutOfMemory;
+                    }
+                    _ => {
+                        error!("recieved an unexpected response when unmapping memory");
+                        return GpuResponse::ErrOutOfMemory;
+                    }
+                },
+                Err(e) => {
+                    error!("gpu device socket returned error. error: {}", e);
+                    return GpuResponse::ErrOutOfMemory;
+                }
+            },
+            Err(e) => {
+                error!(
+                    "failed to send unmap request to gpu device socket. error: {}",
+                    e
+                );
+                return GpuResponse::ErrOutOfMemory;
+            }
+        }
+
+        GpuResponse::OkNoData
+    }
 }
