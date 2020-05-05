@@ -10,6 +10,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use libc::EINVAL;
@@ -17,7 +18,8 @@ use libc::EINVAL;
 use data_model::*;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
-use sys_util::{error, warn, Error, GuestAddress, GuestMemory};
+use sync::Mutex;
+use sys_util::{error, warn, Error, ExternalMapping, GuestAddress, GuestMemory};
 
 use gpu_display::*;
 use gpu_renderer::{
@@ -268,6 +270,8 @@ impl Backend for Virtio3DBackend {
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        _map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        _external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
         let mut renderer_flags = renderer_flags;
         if display.is_x() {

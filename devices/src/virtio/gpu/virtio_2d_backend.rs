@@ -11,13 +11,15 @@ use std::collections::BTreeMap as Map;
 use std::fmt::{self, Display};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use resources::Alloc;
-use sys_util::{error, GuestAddress, GuestMemory};
+use sync::Mutex;
+use sys_util::{error, ExternalMapping, GuestAddress, GuestMemory};
 use vm_control::VmMemoryControlRequestSocket;
 
 use super::protocol::GpuResponse;
@@ -423,6 +425,8 @@ impl Backend for Virtio2DBackend {
         _event_devices: Vec<EventDevice>,
         _gpu_device_socket: VmMemoryControlRequestSocket,
         _pci_bar: Alloc,
+        _map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        _external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
         Some(Box::new(Virtio2DBackend::new(
             display,

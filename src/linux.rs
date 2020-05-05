@@ -656,7 +656,7 @@ fn create_gpu_device(
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
     event_devices: Vec<EventDevice>,
-    _map_request: Arc<Mutex<Option<ExternalMapping>>>,
+    map_request: Arc<Mutex<Option<ExternalMapping>>>,
 ) -> DeviceResult {
     let jailed_wayland_path = Path::new("/wayland-0");
 
@@ -684,6 +684,8 @@ fn create_gpu_device(
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
         event_devices,
+        map_request,
+        cfg.sandbox,
     );
 
     let jail = match simple_jail(&cfg, "gpu_device")? {
