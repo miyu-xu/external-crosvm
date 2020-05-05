@@ -11,14 +11,16 @@ use std::collections::BTreeMap as Map;
 use std::fmt::{self, Display};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use resources::Alloc;
+use sync::Mutex;
 use sys_util::{error, GuestAddress, GuestMemory};
-use vm_control::VmMemoryControlRequestSocket;
+use vm_control::{DeviceMemoryMappingRequests, VmMemoryControlRequestSocket};
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
@@ -434,6 +436,7 @@ impl Backend for Virtio2DBackend {
         _event_devices: Vec<EventDevice>,
         _gpu_device_socket: VmMemoryControlRequestSocket,
         _pci_bar: Alloc,
+        _device_memory_mapping_requests: Arc<Mutex<DeviceMemoryMappingRequests>>,
     ) -> Option<Box<dyn Backend>> {
         let mut display_opt = None;
         for display in possible_displays {
