@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "78cb0c49_908839b2",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 246,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2020-05-06T20:14:57Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "458747fc_8a3e9b5a",
+      "range": {
+        "startLine": 246,
+        "startChar": 21,
+        "endLine": 246,
+        "endChar": 25
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "6a355399_d0aa1f4b",
         "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
         "patchSetId": 3
@@ -45,6 +69,30 @@
       "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "788be509_880064ea",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 797,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2020-05-06T20:14:57Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "6a355399_d0aa1f4b",
+      "range": {
+        "startLine": 797,
+        "startChar": 26,
+        "endLine": 797,
+        "endChar": 30
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     },
     {
       "key": {
@@ -71,6 +119,30 @@
     },
     {
       "key": {
+        "uuid": "0d123ef2_18c3559d",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 814,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2020-05-06T20:14:57Z",
+      "side": 1,
+      "message": "Done (via keeping a |mapped| field and making it an error to map what\u0027s already mapped, or to unmap what\u0027s not mapped)",
+      "parentUuid": "cf619891_61047f66",
+      "range": {
+        "startLine": 814,
+        "startChar": 8,
+        "endLine": 814,
+        "endChar": 83
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "aa815707_5b9a1d87",
         "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
         "patchSetId": 3
@@ -94,6 +166,30 @@
     },
     {
       "key": {
+        "uuid": "5bc760ec_608c168d",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 846,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2020-05-06T20:14:57Z",
+      "side": 1,
+      "message": "iiuc, the GuestMemory is supposed to be populated upon cmd_attach_backing where a particular scatterlist of guest RAM (not host memory) is associated with the resource; blob resources map host memory outside guest RAM (unless we\u0027re using the guest memory version of blob (which isn\u0027t used in gfxstream yet)) so I don\u0027t think we should make up a GuestMemory for the slot.",
+      "parentUuid": "aa815707_5b9a1d87",
+      "range": {
+        "startLine": 846,
+        "startChar": 11,
+        "endLine": 846,
+        "endChar": 66
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "1e8983a5_de017acc",
         "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
         "patchSetId": 3
@@ -105,6 +201,30 @@
       "writtenOn": "2020-05-06T17:37:27Z",
       "side": 1,
       "message": "Assuming you agree with above comment, should we be updating\n\nself.resources.entry(resource_id)\n\nto be None?",
+      "range": {
+        "startLine": 898,
+        "startChar": 12,
+        "endLine": 898,
+        "endChar": 57
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5a8885ec_312a1e63",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 898,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2020-05-06T20:14:57Z",
+      "side": 1,
+      "message": "Done, if we won\u0027t be associating it with a GuestMemory on map. Then we\u0027ll also leave it alone on unmap",
+      "parentUuid": "1e8983a5_de017acc",
       "range": {
         "startLine": 898,
         "startChar": 12,
