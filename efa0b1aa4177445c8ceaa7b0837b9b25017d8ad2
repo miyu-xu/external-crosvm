@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "6ba94620_e9a11614",
+        "filename": "kvm/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 495,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: refers",
+      "range": {
+        "startLine": 495,
+        "startChar": 73,
+        "endLine": 495,
+        "endChar": 80
+      },
+      "revId": "efa0b1aa4177445c8ceaa7b0837b9b25017d8ad2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}

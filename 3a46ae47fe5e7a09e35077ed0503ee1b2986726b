@@ -1,0 +1,211 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "2f3b3893_25e431e6",
+        "filename": "kvm/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 496,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: refers",
+      "range": {
+        "startLine": 496,
+        "startChar": 80,
+        "endLine": 496,
+        "endChar": 87
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "514507b4_e14b4f48",
+        "filename": "kvm/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 496,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: wrap comment to 100",
+      "range": {
+        "startLine": 496,
+        "startChar": 100,
+        "endLine": 496,
+        "endChar": 104
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "8894794c_6548e422",
+        "filename": "sys_util/src/mmap.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 825,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: wrap comment to 100",
+      "range": {
+        "startLine": 825,
+        "startChar": 100,
+        "endLine": 825,
+        "endChar": 102
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "6f4ba114_80d4cd6d",
+        "filename": "sys_util/src/mmap.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 833,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "trait object `ExternallyMappedHostMemory` -\u003e trait object `ExternallyMappedHostMemoryInfo`",
+      "range": {
+        "startLine": 833,
+        "startChar": 52,
+        "endLine": 833,
+        "endChar": 78
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "2079495e_d76aa744",
+        "filename": "sys_util/src/mmap.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 846,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "\"non-mapped device\" -\u003e \"externally mapped\"",
+      "range": {
+        "startLine": 846,
+        "startChar": 18,
+        "endLine": 846,
+        "endChar": 35
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "064ddca0_6656423f",
+        "filename": "vm_control/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 270,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: wrap comment to 100",
+      "range": {
+        "startLine": 270,
+        "startChar": 68,
+        "endLine": 270,
+        "endChar": 102
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "a42eeb91_60959f67",
+        "filename": "vm_control/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 274,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: wrap comment to 100",
+      "range": {
+        "startLine": 274,
+        "startChar": 100,
+        "endLine": 274,
+        "endChar": 102
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "26e69cda_cb28d831",
+        "filename": "vm_control/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 326,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: wrap comment to 100",
+      "range": {
+        "startLine": 326,
+        "startChar": 100,
+        "endLine": 326,
+        "endChar": 105
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "094b02e8_3b3d0429",
+        "filename": "vm_control/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 326,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T20:27:59Z",
+      "side": 1,
+      "message": "nit: requires",
+      "range": {
+        "startLine": 326,
+        "startChar": 26,
+        "endLine": 326,
+        "endChar": 35
+      },
+      "revId": "3a46ae47fe5e7a09e35077ed0503ee1b2986726b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
