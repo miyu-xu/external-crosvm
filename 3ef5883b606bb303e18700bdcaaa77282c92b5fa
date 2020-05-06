@@ -1,0 +1,119 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "458747fc_8a3e9b5a",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 246,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T17:37:27Z",
+      "side": 1,
+      "message": "Could you make PAGE_SIZE and PAGE_MASK constants and align_to_page() and align_to_page_size() helper functions to make this a little more readable?\n\nAnd then if you agree with the above, maybe do:\n\nlet raw_hva \u003d unsafe { stream_renderer_resource_get_hva(resource_id) };\nlet raw_hva_size \u003d unsafe {  stream_renderer_resource_get_hva_size(resource_id) };\n\nlet aligned_hva \u003d align_to_page(raw_hva);\nlet aligned_hva_size \u003d align_to_page_size(raw_hva_size);\n\njust to minimize the amount of code inside the unsafe {} blocks.",
+      "range": {
+        "startLine": 246,
+        "startChar": 21,
+        "endLine": 246,
+        "endChar": 25
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "6a355399_d0aa1f4b",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 797,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T17:37:27Z",
+      "side": 1,
+      "message": "Can we call this entry to not be confused with the slot below.",
+      "range": {
+        "startLine": 797,
+        "startChar": 26,
+        "endLine": 797,
+        "endChar": 30
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "cf619891_61047f66",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 814,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T17:37:27Z",
+      "side": 1,
+      "message": "Should we first check if \n\nself.resources.entry(resource_id)\n\nis already non-none and return the already mapped guest memory?",
+      "range": {
+        "startLine": 814,
+        "startChar": 8,
+        "endLine": 814,
+        "endChar": 83
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "aa815707_5b9a1d87",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 846,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T17:37:27Z",
+      "side": 1,
+      "message": "Should we be updating \n\nself.resources.entry(resource_id)\n\nhere with the mapped guest memory?",
+      "range": {
+        "startLine": 846,
+        "startChar": 11,
+        "endLine": 846,
+        "endChar": 66
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "1e8983a5_de017acc",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 898,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-05-06T17:37:27Z",
+      "side": 1,
+      "message": "Assuming you agree with above comment, should we be updating\n\nself.resources.entry(resource_id)\n\nto be None?",
+      "range": {
+        "startLine": 898,
+        "startChar": 12,
+        "endLine": 898,
+        "endChar": 57
+      },
+      "revId": "3ef5883b606bb303e18700bdcaaa77282c92b5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
