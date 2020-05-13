@@ -9,7 +9,6 @@ readlinkat: 1
 getdents64: 1
 name_to_handle_at: 1
 faccessat: 1
-gettid: 1
 clock_gettime: 1
 timerfd_create: 1
 getsockname: 1

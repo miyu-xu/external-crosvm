@@ -66,7 +66,6 @@ openat: 1
 geteuid: 1
 getuid: 1
 readlinkat: 1
-gettid: 1
 fcntl: 1
 tgkill: 1
 clock_gettime: 1
