@@ -13,6 +13,17 @@ rust_defaults {
     },
 }
 
+genrule_defaults {
+    name: "crosvm_bindgen_defaults",
+    tools: ["bindgen"],
+    cmd: "RUSTFMT=prebuilts/rust/linux-x86/1.43.0/bin/rustfmt"
+    + " CLANG_PATH=prebuilts/clang/host/linux-x86/clang-r383902/bin/clang"
+    + " LIBCLANG_PATH=prebuilts/clang/host/linux-x86/clang-r383902/lib64/libclang.so.11git"
+    + " $(location) -o $(out) $(in) --constified-enum '*' --with-derive-default"
+    + " && cp $(out) `dirname $(in)`/`basename $(in) .h`.rs",
+    // HACK: copy generated file sockios.rs into src for src/lib.rs.
+}
+
 rust_binary_host {
     name: "crosvm.experimental",
     defaults: ["crosvm_defaults"],
