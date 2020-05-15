@@ -2,6 +2,24 @@
 //   module name, enabled, relative_install_path, target, required,
 //   flags, ld_flags, shared_libs, static_libs.
 
+rustc_version = "1.43.0"
+clang_version = "clang-r383902"
+clang_prebuilt = "prebuilts/clang/host/linux-x86/" + clang_version
+
+bindgen_vars = "CLANG_PATH=" + clang_prebuilt + "/bin/clang"
+    + " LIBCLANG_PATH=" + clang_prebuilt + "/lib64/libclang.so.11git"
+    + " RUSTFMT=prebuilts/rust/linux-x86/" + rustc_version + "/bin/rustfmt"
+
+bindgen_flags = " --constified-enum '*' --with-derive-default"
+
+genrule_defaults {
+    name: "crosvm_bindgen_defaults",
+    tools: ["bindgen"],
+    cmd: bindgen_vars + " $(location) -o $(out) $(in)" + bindgen_flags
+    + " && cp $(out) `dirname $(in)`/`basename $(in) .h`.rs",
+    // HACK: copy generated file sockios.rs into src for src/lib.rs.
+}
+
 rust_defaults {
     name: "crosvm_defaults",
     edition: "2018",
