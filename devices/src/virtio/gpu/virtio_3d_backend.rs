@@ -210,6 +210,8 @@ pub struct Virtio3DBackend {
     contexts: Map<u32, RendererContext>,
     gpu_device_socket: VmMemoryControlRequestSocket,
     pci_bar: Alloc,
+    map_request: Arc<Mutex<Option<ExternalMapping>>>,
+    external_blob: bool,
 }
 
 impl Virtio3DBackend {
@@ -225,6 +227,8 @@ impl Virtio3DBackend {
         renderer: Renderer,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        external_blob: bool,
     ) -> Virtio3DBackend {
         Virtio3DBackend {
             base: VirtioBackend {
@@ -242,6 +246,8 @@ impl Virtio3DBackend {
             contexts: Default::default(),
             gpu_device_socket,
             pci_bar,
+            map_request,
+            external_blob,
         }
     }
 }
@@ -270,8 +276,8 @@ impl Backend for Virtio3DBackend {
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
-        _map_request: Arc<Mutex<Option<ExternalMapping>>>,
-        _external_blob: bool,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
         let mut renderer_flags = renderer_flags;
         if display.is_x() {
@@ -290,6 +296,7 @@ impl Backend for Virtio3DBackend {
             }
         }
 
+        renderer_flags.use_external_blob(external_blob);
         let renderer = match Renderer::init(renderer_flags) {
             Ok(r) => r,
             Err(e) => {
@@ -305,6 +312,8 @@ impl Backend for Virtio3DBackend {
             renderer,
             gpu_device_socket,
             pci_bar,
+            map_request,
+            external_blob,
         );
 
         for event_device in event_devices {
@@ -863,20 +872,36 @@ impl Backend for Virtio3DBackend {
             }
         };
 
-        let dma_buf_fd = match resource.gpu_resource.export() {
-            Ok(export) => export.1,
-            Err(e) => {
-                error!("failed to export plane fd: {}", e);
-                return GpuResponse::ErrUnspec;
+        let export = resource.gpu_resource.export();
+        let request = match export {
+            Ok(ref export) => VmMemoryRequest::RegisterFdAtPciBarOffset(
+                self.pci_bar,
+                MaybeOwnedFd::Borrowed(export.1.as_raw_fd()),
+                resource.size as usize,
+                offset,
+            ),
+            Err(_) => {
+                if self.external_blob {
+                    return GpuResponse::ErrUnspec;
+                }
+
+                let mapping = match resource.gpu_resource.map() {
+                    Ok(mapping) => mapping,
+                    Err(_) => {
+                        return GpuResponse::ErrUnspec;
+                    }
+                };
+
+                {
+                    let mut map_req = self.map_request.lock();
+                    if map_req.is_some() {
+                        return GpuResponse::ErrUnspec;
+                    }
+                    *map_req = Some(mapping);
+                }
+                VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset)
             }
         };
-
-        let request = VmMemoryRequest::RegisterFdAtPciBarOffset(
-            self.pci_bar,
-            MaybeOwnedFd::Borrowed(dma_buf_fd.as_raw_fd()),
-            resource.size as usize,
-            offset,
-        );
 
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
