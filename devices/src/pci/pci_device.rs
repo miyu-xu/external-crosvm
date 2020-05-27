@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std;
 use std::fmt::{self, Display};
 use std::os::unix::io::RawFd;
 
@@ -11,7 +10,7 @@ use resources::{Error as SystemAllocatorFaliure, SystemAllocator};
 use sys_util::EventFd;
 
 use crate::pci::pci_configuration;
-use crate::pci::PciInterruptPin;
+use crate::pci::{PciAddress, PciInterruptPin};
 use crate::BusDevice;
 
 #[derive(Debug)]
@@ -22,6 +21,8 @@ pub enum Error {
     IoAllocationFailed(u64, SystemAllocatorFaliure),
     /// Registering an IO BAR failed.
     IoRegistrationFailed(u64, pci_configuration::Error),
+    /// Create cras client failed.
+    CreateCrasClientFailed(libcras::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -31,6 +32,7 @@ impl Display for Error {
 
         match self {
             CapabilitiesSetup(e) => write!(f, "failed to add capability {}", e),
+            CreateCrasClientFailed(e) => write!(f, "failed to create CRAS Client: {}", e),
             IoAllocationFailed(size, e) => write!(
                 f,
                 "failed to allocate space for an IO BAR, size={}: {}",
@@ -46,8 +48,8 @@ impl Display for Error {
 pub trait PciDevice: Send {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String;
-    /// Assign a unique bus and device number to this device.
-    fn assign_bus_dev(&mut self, _bus: u8, _device: u8 /*u5*/) {}
+    /// Assign a unique bus, device and function number to this device.
+    fn assign_address(&mut self, _address: PciAddress) {}
     /// A vector of device-specific file descriptors that must be kept open
     /// after jailing. Must be called before the process is jailed.
     fn keep_fds(&self) -> Vec<RawFd>;
@@ -146,8 +148,8 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     fn debug_label(&self) -> String {
         (**self).debug_label()
     }
-    fn assign_bus_dev(&mut self, bus: u8, device: u8 /*u5*/) {
-        (**self).assign_bus_dev(bus, device)
+    fn assign_address(&mut self, address: PciAddress) {
+        (**self).assign_address(address)
     }
     fn keep_fds(&self) -> Vec<RawFd> {
         (**self).keep_fds()
