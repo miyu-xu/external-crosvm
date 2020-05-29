@@ -1,0 +1,1 @@
+../../../../out/soong/.intermediates/external/crosvm/protos/crosvm_cdisk_spec_proto/gen/cdisk_spec.rs
