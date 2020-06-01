@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "a5325c26_9bb548a2",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 821,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2020-06-01T19:23:22Z",
+      "side": 1,
+      "message": "optional: Maybe just drop this comment. My default expectation of a virtio backend was that a submit_command() method would be used. IMO, this change is kind of going from a more strange behavior (of using the transfer* commands for submitting) back to the expected behavior so you don\u0027t need a comment to justify.",
+      "range": {
+        "startLine": 820,
+        "startChar": 4,
+        "endLine": 821,
+        "endChar": 53
+      },
+      "revId": "10bf106c6ff35c27ada65b6f2cd6a17701ad446e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
