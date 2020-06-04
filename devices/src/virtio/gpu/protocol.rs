@@ -40,8 +40,6 @@ pub const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x10a;
 pub const VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID: u32 = 0x10b;
 /* The following hypercalls are not upstreamed. */
 pub const VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB: u32 = 0x10c;
-pub const VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB: u32 = 0x10d;
-pub const VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB: u32 = 0x10e;
 
 /* 3d commands */
 pub const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x200;
@@ -52,6 +50,8 @@ pub const VIRTIO_GPU_CMD_RESOURCE_CREATE_3D: u32 = 0x204;
 pub const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D: u32 = 0x205;
 pub const VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D: u32 = 0x206;
 pub const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x207;
+pub const VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB: u32 = 0x208;
+pub const VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB: u32 = 0x209;
 
 /* cursor commands */
 pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x300;
