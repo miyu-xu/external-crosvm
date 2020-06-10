@@ -35,6 +35,7 @@ unsafe impl data_model::DataInit for mpspec::mpc_table {}
 unsafe impl data_model::DataInit for mpspec::mpc_lintsrc {}
 unsafe impl data_model::DataInit for mpspec::mpf_intel {}
 
+mod acpi;
 mod bzimage;
 mod cpuid;
 mod gdt;
@@ -53,24 +54,34 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::bootparam::boot_params;
-use arch::{RunnableLinuxVm, VmComponents, VmImage};
-use devices::{get_serial_tty_string, PciConfigIo, PciDevice, PciInterruptPin, SerialParameters};
+use arch::{
+    get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
+    VmComponents, VmImage,
+};
+use devices::split_irqchip_common::GsiRelay;
+use devices::{
+    Ioapic, PciConfigIo, PciDevice, PciInterruptPin, Pic, IOAPIC_BASE_ADDRESS,
+    IOAPIC_MEM_LENGTH_BYTES,
+};
 use io_jail::Minijail;
 use kvm::*;
 use remain::sorted;
 use resources::SystemAllocator;
 use sync::Mutex;
 use sys_util::{Clock, EventFd, GuestAddress, GuestMemory, GuestMemoryError};
+use vm_control::VmIrqRequestSocket;
 
 #[sorted]
 #[derive(Debug)]
 pub enum Error {
+    AllocateIrq,
     CloneEventFd(sys_util::Error),
     Cmdline(kernel_cmdline::Error),
     ConfigureSystem,
     CreateDevices(Box<dyn StdError>),
     CreateEventFd(sys_util::Error),
     CreateFdt(arch::fdt::Error),
+    CreateIoapicDevice(sys_util::Error),
     CreateIrqChip(sys_util::Error),
     CreateKvm(sys_util::Error),
     CreatePciRoot(arch::DeviceRegistrationError),
@@ -81,6 +92,8 @@ pub enum Error {
     CreateVcpu(sys_util::Error),
     CreateVm(sys_util::Error),
     E820Configuration,
+    EnableSplitIrqchip(sys_util::Error),
+    GetSerialCmdline(GetSerialCmdlineError),
     KernelOffsetPastEnd,
     LoadBios(io::Error),
     LoadBzImage(bzimage::Error),
@@ -111,12 +124,14 @@ impl Display for Error {
 
         #[sorted]
         match self {
+            AllocateIrq => write!(f, "error allocating a single irq"),
             CloneEventFd(e) => write!(f, "unable to clone an EventFd: {}", e),
             Cmdline(e) => write!(f, "the given kernel command line was invalid: {}", e),
             ConfigureSystem => write!(f, "error configuring the system"),
             CreateDevices(e) => write!(f, "error creating devices: {}", e),
             CreateEventFd(e) => write!(f, "unable to make an EventFd: {}", e),
             CreateFdt(e) => write!(f, "failed to create fdt: {}", e),
+            CreateIoapicDevice(e) => write!(f, "failed to create IOAPIC device: {}", e),
             CreateIrqChip(e) => write!(f, "failed to create irq chip: {}", e),
             CreateKvm(e) => write!(f, "failed to open /dev/kvm: {}", e),
             CreatePciRoot(e) => write!(f, "failed to create a PCI root hub: {}", e),
@@ -127,6 +142,8 @@ impl Display for Error {
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create VM: {}", e),
             E820Configuration => write!(f, "invalid e820 setup params"),
+            EnableSplitIrqchip(e) => write!(f, "failed to enable split irqchip: {}", e),
+            GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
             KernelOffsetPastEnd => write!(f, "the kernel extends past the end of RAM"),
             LoadBios(e) => write!(f, "error loading bios: {}", e),
             LoadBzImage(e) => write!(f, "error loading kernel bzImage: {}", e),
@@ -160,8 +177,8 @@ pub struct X8664arch;
 
 const BOOT_STACK_POINTER: u64 = 0x8000;
 // Make sure it align to 256MB for MTRR convenient
-const MEM_32BIT_GAP_SIZE: u64 = (768 << 20);
-const FIRST_ADDR_PAST_32BITS: u64 = (1 << 32);
+const MEM_32BIT_GAP_SIZE: u64 = 768 << 20;
+const FIRST_ADDR_PAST_32BITS: u64 = 1 << 32;
 const END_ADDR_BEFORE_32BITS: u64 = FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE;
 const MMIO_SIZE: u64 = MEM_32BIT_GAP_SIZE - 0x8000000;
 const KERNEL_64BIT_ENTRY_OFFSET: u64 = 0x200;
@@ -177,7 +194,16 @@ const CMDLINE_OFFSET: u64 = 0x20000;
 const CMDLINE_MAX_SIZE: u64 = KERNEL_START_OFFSET - CMDLINE_OFFSET;
 const X86_64_SERIAL_1_3_IRQ: u32 = 4;
 const X86_64_SERIAL_2_4_IRQ: u32 = 3;
-const X86_64_IRQ_BASE: u32 = 5;
+// X86_64_SCI_IRQ is used to fill the ACPI FACP table.
+// The sci_irq number is better to be a legacy
+// IRQ number which is less than 16(actually most of the
+// platforms have fixed IRQ number 9). So we can
+// reserve the IRQ number 5 for SCI and let the
+// the other devices starts from next.
+pub const X86_64_SCI_IRQ: u32 = 5;
+// So the IRQ_BASE start from SCI_IRQ + 1
+pub const X86_64_IRQ_BASE: u32 = X86_64_SCI_IRQ + 1;
+const ACPI_HI_RSDP_WINDOW_BASE: u64 = 0x000E0000;
 
 fn configure_system(
     guest_mem: &GuestMemory,
@@ -252,6 +278,10 @@ fn configure_system(
     guest_mem
         .write_obj_at_addr(params, zero_page_addr)
         .map_err(|_| Error::ZeroPageSetup)?;
+
+    let rsdp_addr = acpi::create_acpi_tables(guest_mem, num_cpus, X86_64_SCI_IRQ);
+    params.acpi_rsdp_addr = rsdp_addr.0;
+
     Ok(())
 }
 
@@ -305,7 +335,8 @@ impl arch::LinuxArch for X8664arch {
     fn build_vm<F, E>(
         mut components: VmComponents,
         split_irqchip: bool,
-        serial_parameters: &BTreeMap<u8, SerialParameters>,
+        ioapic_device_socket: VmIrqRequestSocket,
+        serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         create_devices: F,
     ) -> Result<RunnableLinuxVm>
@@ -353,11 +384,34 @@ impl arch::LinuxArch for X8664arch {
 
         let exit_evt = EventFd::new().map_err(Error::CreateEventFd)?;
 
+        let (split_irqchip, mut gsi_relay) = if split_irqchip {
+            let gsi_relay = GsiRelay::new();
+            let pic = Arc::new(Mutex::new(Pic::new()));
+            let ioapic = Arc::new(Mutex::new(
+                Ioapic::new(&mut vm, ioapic_device_socket).map_err(Error::CreateIoapicDevice)?,
+            ));
+            mmio_bus
+                .insert(
+                    ioapic.clone(),
+                    IOAPIC_BASE_ADDRESS,
+                    IOAPIC_MEM_LENGTH_BYTES,
+                    false,
+                )
+                .unwrap();
+            (Some((pic, ioapic)), Some(gsi_relay))
+        } else {
+            (None, None)
+        };
         let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
             .map_err(|e| Error::CreateDevices(Box::new(e)))?;
-        let (pci, pci_irqs, pid_debug_label_map) =
-            arch::generate_pci_root(pci_devices, &mut mmio_bus, &mut resources, &mut vm)
-                .map_err(Error::CreatePciRoot)?;
+        let (pci, pci_irqs, pid_debug_label_map) = arch::generate_pci_root(
+            pci_devices,
+            &mut gsi_relay,
+            &mut mmio_bus,
+            &mut resources,
+            &mut vm,
+        )
+        .map_err(Error::CreatePciRoot)?;
         let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(pci)));
 
         // Event used to notify crosvm that guest OS is trying to suspend.
@@ -365,15 +419,20 @@ impl arch::LinuxArch for X8664arch {
 
         let mut io_bus = Self::setup_io_bus(
             &mut vm,
-            split_irqchip,
+            &mut gsi_relay,
             exit_evt.try_clone().map_err(Error::CloneEventFd)?,
             Some(pci_bus.clone()),
             components.memory_size,
             suspend_evt.try_clone().map_err(Error::CloneEventFd)?,
         )?;
 
-        let stdio_serial_num =
-            Self::setup_serial_devices(&mut vm, &mut io_bus, serial_parameters, serial_jail)?;
+        Self::setup_serial_devices(
+            &mut vm,
+            &mut io_bus,
+            &mut gsi_relay,
+            serial_parameters,
+            serial_jail,
+        )?;
 
         let ramoops_region = match components.pstore {
             Some(pstore) => Some(
@@ -383,10 +442,33 @@ impl arch::LinuxArch for X8664arch {
             None => None,
         };
 
+        let gsi_relay = if let Some((pic, ioapic)) = &split_irqchip {
+            io_bus.insert(pic.clone(), 0x20, 0x2, true).unwrap();
+            io_bus.insert(pic.clone(), 0xa0, 0x2, true).unwrap();
+            io_bus.insert(pic.clone(), 0x4d0, 0x2, true).unwrap();
+
+            let mut irq_num = resources.allocate_irq().unwrap();
+            while irq_num < kvm::NUM_IOAPIC_PINS as u32 {
+                irq_num = resources.allocate_irq().unwrap();
+            }
+
+            // This will never fail because gsi_relay is Some iff split_irqchip is Some.
+            let gsi_relay = Arc::new(gsi_relay.unwrap());
+            pic.lock().register_relay(gsi_relay.clone());
+            ioapic.lock().register_relay(gsi_relay.clone());
+            Some(gsi_relay)
+        } else {
+            None
+        };
+
         match components.vm_image {
             VmImage::Bios(ref mut bios) => Self::load_bios(&mem, bios)?,
             VmImage::Kernel(ref mut kernel_image) => {
-                let mut cmdline = Self::get_base_linux_cmdline(stdio_serial_num);
+                let mut cmdline = Self::get_base_linux_cmdline();
+
+                get_serial_cmdline(&mut cmdline, serial_parameters, "io")
+                    .map_err(Error::GetSerialCmdline)?;
+
                 for param in components.extra_kernel_params {
                     cmdline.insert_str(&param).map_err(Error::Cmdline)?;
                 }
@@ -435,6 +517,8 @@ impl arch::LinuxArch for X8664arch {
             vcpus,
             vcpu_affinity,
             irq_chip,
+            split_irqchip,
+            gsi_relay,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -581,12 +665,28 @@ impl X8664arch {
     /// * `split_irqchip` - Whether to use a split IRQ chip.
     /// * `mem` - The memory to be used by the guest.
     fn create_vm(kvm: &Kvm, split_irqchip: bool, mem: GuestMemory) -> Result<Vm> {
-        let vm = Vm::new(&kvm, mem).map_err(Error::CreateVm)?;
+        let mut vm = Vm::new(&kvm, mem).map_err(Error::CreateVm)?;
         let tss_addr = GuestAddress(0xfffbd000);
         vm.set_tss_addr(tss_addr).map_err(Error::SetTssAddr)?;
         if !split_irqchip {
             vm.create_pit().map_err(Error::CreatePit)?;
             vm.create_irq_chip().map_err(Error::CreateIrqChip)?;
+        } else {
+            vm.enable_split_irqchip()
+                .map_err(Error::EnableSplitIrqchip)?;
+            for i in 0..kvm::NUM_IOAPIC_PINS {
+                // Add dummy MSI routes to replace the default IRQChip routes.
+                let route = IrqRoute {
+                    gsi: i as u32,
+                    source: IrqSource::Msi {
+                        address: 0,
+                        data: 0,
+                    },
+                };
+                // Safe to ignore errors because errors are caused by the default routes and dummy
+                // MSI routes will always be registered.
+                let _ = vm.add_irq_route_entry(route);
+            }
         }
         Ok(vm)
     }
@@ -628,13 +728,9 @@ impl X8664arch {
     }
 
     /// This returns a minimal kernel command for this architecture
-    fn get_base_linux_cmdline(stdio_serial_num: Option<u8>) -> kernel_cmdline::Cmdline {
+    fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(CMDLINE_MAX_SIZE as usize);
-        if let Some(stdio_serial_num) = stdio_serial_num {
-            let tty_string = get_serial_tty_string(stdio_serial_num);
-            cmdline.insert("console", &tty_string).unwrap();
-        }
-        cmdline.insert_str("acpi=off reboot=k panic=-1").unwrap();
+        cmdline.insert_str("pci=noacpi reboot=k panic=-1").unwrap();
 
         cmdline
     }
@@ -655,13 +751,13 @@ impl X8664arch {
     /// # Arguments
     ///
     /// * - `vm` the vm object
-    /// * - `split_irqchip`: whether to use a split IRQ chip (i.e. userspace PIT/PIC/IOAPIC)
+    /// * - `gsi_relay`: only valid for split IRQ chip (i.e. userspace PIT/PIC/IOAPIC)
     /// * - `exit_evt` - the event fd object which should receive exit events
     /// * - `mem_size` - the size in bytes of physical ram for the guest
     /// * - `suspend_evt` - the event fd object which used to suspend the vm
     fn setup_io_bus(
-        vm: &mut Vm,
-        split_irqchip: bool,
+        _vm: &mut Vm,
+        gsi_relay: &mut Option<GsiRelay>,
         exit_evt: EventFd,
         pci: Option<Arc<Mutex<devices::PciConfigIo>>>,
         mem_size: u64,
@@ -694,7 +790,7 @@ impl X8664arch {
             exit_evt.try_clone().map_err(Error::CloneEventFd)?,
         )));
 
-        if split_irqchip {
+        if let Some(gsi_relay) = gsi_relay {
             let pit_evt = EventFd::new().map_err(Error::CreateEventFd)?;
             let pit = Arc::new(Mutex::new(
                 devices::Pit::new(
@@ -706,8 +802,7 @@ impl X8664arch {
             io_bus.insert(pit.clone(), 0x040, 0x8, true).unwrap();
             io_bus.insert(pit.clone(), 0x061, 0x1, true).unwrap();
             io_bus.insert(i8042, 0x062, 0x3, true).unwrap();
-            vm.register_irqfd(&pit_evt, 0)
-                .map_err(Error::RegisterIrqfd)?;
+            gsi_relay.register_irqfd(pit_evt, 0);
         } else {
             io_bus
                 .insert(nul_device.clone(), 0x040, 0x8, false)
@@ -736,7 +831,7 @@ impl X8664arch {
             .insert(
                 pm.clone(),
                 devices::acpi::ACPIPM_RESOURCE_BASE,
-                devices::acpi::ACPIPM_RESOURCE_LEN,
+                devices::acpi::ACPIPM_RESOURCE_LEN as u64,
                 false,
             )
             .unwrap();
@@ -752,17 +847,19 @@ impl X8664arch {
     ///
     /// * - `vm` the vm object
     /// * - `io_bus` the I/O bus to add the devices to
+    /// * - `gsi_relay`: only valid for split IRQ chip (i.e. userspace PIT/PIC/IOAPIC)
     /// * - `serial_parmaters` - definitions for how the serial devices should be configured
     fn setup_serial_devices(
         vm: &mut Vm,
         io_bus: &mut devices::Bus,
-        serial_parameters: &BTreeMap<u8, SerialParameters>,
+        gsi_relay: &mut Option<GsiRelay>,
+        serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
-    ) -> Result<Option<u8>> {
+    ) -> Result<()> {
         let com_evt_1_3 = EventFd::new().map_err(Error::CreateEventFd)?;
         let com_evt_2_4 = EventFd::new().map_err(Error::CreateEventFd)?;
 
-        let stdio_serial_num = arch::add_serial_devices(
+        arch::add_serial_devices(
             io_bus,
             &com_evt_1_3,
             &com_evt_2_4,
@@ -771,12 +868,17 @@ impl X8664arch {
         )
         .map_err(Error::CreateSerialDevices)?;
 
-        vm.register_irqfd(&com_evt_1_3, X86_64_SERIAL_1_3_IRQ)
-            .map_err(Error::RegisterIrqfd)?;
-        vm.register_irqfd(&com_evt_2_4, X86_64_SERIAL_2_4_IRQ)
-            .map_err(Error::RegisterIrqfd)?;
+        if let Some(gsi_relay) = gsi_relay {
+            gsi_relay.register_irqfd(com_evt_1_3, X86_64_SERIAL_1_3_IRQ as usize);
+            gsi_relay.register_irqfd(com_evt_2_4, X86_64_SERIAL_2_4_IRQ as usize);
+        } else {
+            vm.register_irqfd(&com_evt_1_3, X86_64_SERIAL_1_3_IRQ)
+                .map_err(Error::RegisterIrqfd)?;
+            vm.register_irqfd(&com_evt_2_4, X86_64_SERIAL_2_4_IRQ)
+                .map_err(Error::RegisterIrqfd)?;
+        }
 
-        Ok(stdio_serial_num)
+        Ok(())
     }
 
     /// Configures the vcpu and should be called once per vcpu from the vcpu's thread.

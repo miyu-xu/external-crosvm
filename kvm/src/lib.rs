@@ -24,11 +24,13 @@ use libc::{open, EBUSY, EINVAL, ENOENT, ENOSPC, EOVERFLOW, O_CLOEXEC, O_RDWR};
 use kvm_sys::*;
 
 use msg_socket::MsgOnSocket;
+
 #[allow(unused_imports)]
 use sys_util::{
     block_signal, ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref,
-    ioctl_with_val, pagesize, signal, unblock_signal, warn, Error, EventFd, GuestAddress,
-    GuestMemory, MemoryMapping, MemoryMappingArena, Result, SIGRTMIN,
+    ioctl_with_val, pagesize, signal, unblock_signal, warn, Error, EventFd,
+    ExternallyMappedHostMemory, GuestAddress, GuestMemory, MemoryMapping, MemoryMappingArena,
+    Result, SIGRTMIN,
 };
 
 pub use crate::cap::*;
@@ -309,6 +311,7 @@ pub struct Vm {
     guest_mem: GuestMemory,
     mmio_memory: HashMap<u32, MemoryMapping>,
     mmap_arenas: HashMap<u32, MemoryMappingArena>,
+    ext_mapped_hostmems: HashMap<u32, ExternallyMappedHostMemory>,
     mem_slot_gaps: BinaryHeap<MemSlot>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     routes: Vec<IrqRoute>,
@@ -343,6 +346,7 @@ impl Vm {
                 guest_mem,
                 mmio_memory: HashMap::new(),
                 mmap_arenas: HashMap::new(),
+                ext_mapped_hostmems: HashMap::new(),
                 mem_slot_gaps: BinaryHeap::new(),
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 routes: kvm_default_irq_routing_table(),
@@ -366,7 +370,8 @@ impl Vm {
             None => {
                 (self.mmio_memory.len()
                     + self.guest_mem.num_regions() as usize
-                    + self.mmap_arenas.len()) as u32
+                    + self.mmap_arenas.len()
+                    + self.ext_mapped_hostmems.len()) as u32
             }
         };
 
@@ -462,6 +467,61 @@ impl Vm {
             }
             // Safe to unwrap since map is checked to contain key
             Ok(self.mmio_memory.remove(&slot).unwrap())
+        } else {
+            Err(Error::new(ENOENT))
+        }
+    }
+
+    /// Inserts the given `ExternallyMappedHostMemory` into the VM's address space at `guest_addr`.
+    ///
+    /// The slot that was assigned the memory is returned on success. The slot can be given to
+    /// `Vm::remove_ext_mapped_hostmems` to remove the memory from the VM's address space and
+    /// take back ownership of `mem`.
+    ///
+    /// Same rules apply for the `read_only` argument as for add_mmio_memory.  We do not currently
+    /// support dirty page logging here.
+    pub fn add_externally_mapped_host_memory(
+        &mut self,
+        guest_addr: GuestAddress,
+        mem: ExternallyMappedHostMemory,
+        read_only: bool,
+    ) -> Result<u32> {
+        let size = mem.size();
+        let end_addr = guest_addr.checked_add(size).ok_or(Error::new(EOVERFLOW))?;
+        if self.guest_mem.range_overlap(guest_addr, end_addr) {
+            return Err(Error::new(ENOSPC));
+        }
+
+        // Safe because we check that the given guest address is valid and has no overlaps, and we
+        // assume that the presence of ExternallyMappedHostMemory means that it refers
+        // to a valid range of memory that will remain valid throughout,
+        // including after the memory region is removed from KVM.
+        let slot = unsafe {
+            self.set_user_memory_region(
+                read_only,
+                false,
+                guest_addr.offset() as u64,
+                size,
+                mem.as_ptr(),
+            )?
+        };
+        self.ext_mapped_hostmems.insert(slot, mem);
+
+        Ok(slot)
+    }
+
+    /// Removes ExternallyMappedHostMemory that was previously added at the given slot.
+    pub fn remove_externally_mapped_host_memory(
+        &mut self,
+        slot: u32,
+    ) -> Result<ExternallyMappedHostMemory> {
+        if self.ext_mapped_hostmems.contains_key(&slot) {
+            // Safe because the slot is checked against the list of mmio memory slots.
+            unsafe {
+                self.remove_user_memory_region(slot)?;
+            }
+            // Safe to unwrap since map is checked to contain key
+            Ok(self.ext_mapped_hostmems.remove(&slot).unwrap())
         } else {
             Err(Error::new(ENOENT))
         }
@@ -1121,6 +1181,19 @@ pub enum VcpuExit {
         size: usize,
         data: [u8; 8],
     },
+    IoapicEoi {
+        vector: u8,
+    },
+    HypervSynic {
+        msr: u32,
+        control: u64,
+        evt_page: u64,
+        msg_page: u64,
+    },
+    HypervHcall {
+        input: u64,
+        params: [u64; 2],
+    },
     Unknown,
     Exception,
     Hypercall,
@@ -1240,10 +1313,10 @@ impl Vcpu {
         &self.guest_mem
     }
 
-    /// Sets the data received by an mmio or ioport read/in instruction.
+    /// Sets the data received by a mmio read, ioport in, or hypercall instruction.
     ///
-    /// This function should be called after `Vcpu::run` returns an `VcpuExit::IoIn` or
-    /// `Vcpu::MmioRead`.
+    /// This function should be called after `Vcpu::run` returns an `VcpuExit::IoIn`,
+    /// `VcpuExit::MmioRead`, or 'VcpuExit::HypervHcall`.
     #[allow(clippy::cast_ptr_alignment)]
     pub fn set_data(&self, data: &[u8]) -> Result<()> {
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
@@ -1285,6 +1358,20 @@ impl Vcpu {
                 mmio.data[..len].copy_from_slice(data);
                 Ok(())
             }
+            KVM_EXIT_HYPERV => {
+                // Safe because the exit_reason (which comes from the kernel) told us which
+                // union field to use.
+                let hyperv = unsafe { &mut run.__bindgen_anon_1.hyperv };
+                if hyperv.type_ != KVM_EXIT_HYPERV_HCALL {
+                    return Err(Error::new(EINVAL));
+                }
+                let hcall = unsafe { &mut hyperv.u.hcall };
+                if data.len() != std::mem::size_of::<u64>() {
+                    return Err(Error::new(EINVAL));
+                }
+                hcall.result.to_ne_bytes().copy_from_slice(data);
+                Ok(())
+            }
             _ => Err(Error::new(EINVAL)),
         }
     }
@@ -1308,6 +1395,26 @@ impl Vcpu {
                 };
             }
         });
+    }
+
+    /// Request the VCPU to exit when it becomes possible to inject interrupts into the guest.
+    #[allow(clippy::cast_ptr_alignment)]
+    pub fn request_interrupt_window(&self) {
+        // Safe because we know we mapped enough memory to hold the kvm_run struct because the
+        // kernel told us how large it was. The pointer is page aligned so casting to a different
+        // type is well defined, hence the clippy allow attribute.
+        let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
+        run.request_interrupt_window = 1;
+    }
+
+    /// Checks if we can inject an interrupt into the VCPU.
+    #[allow(clippy::cast_ptr_alignment)]
+    pub fn ready_for_interrupt(&self) -> bool {
+        // Safe because we know we mapped enough memory to hold the kvm_run struct because the
+        // kernel told us how large it was. The pointer is page aligned so casting to a different
+        // type is well defined, hence the clippy allow attribute.
+        let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
+        run.ready_for_interrupt_injection != 0 && run.if_flag != 0
     }
 
     /// Gets the VCPU registers.
@@ -1502,6 +1609,24 @@ impl Vcpu {
         Ok(())
     }
 
+    /// X86 specific call to get the system emulated hyper-v CPUID values
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub fn get_hyperv_cpuid(&self) -> Result<CpuId> {
+        const MAX_KVM_CPUID_ENTRIES: usize = 256;
+        let mut cpuid = CpuId::new(MAX_KVM_CPUID_ENTRIES);
+
+        let ret = unsafe {
+            // ioctl is unsafe. The kernel is trusted not to write beyond the bounds of the memory
+            // allocated for the struct. The limit is read from nent, which is set to the allocated
+            // size(MAX_KVM_CPUID_ENTRIES) above.
+            ioctl_with_mut_ptr(self, KVM_GET_SUPPORTED_HV_CPUID(), cpuid.as_mut_ptr())
+        };
+        if ret < 0 {
+            return errno_result();
+        }
+        Ok(cpuid)
+    }
+
     /// X86 specific call to get the state of the "Local Advanced Programmable Interrupt Controller".
     ///
     /// See the documentation for KVM_GET_LAPIC.
@@ -1601,6 +1726,18 @@ impl Vcpu {
             // kvm_vcpu_events.
             ioctl_with_ref(self, KVM_SET_VCPU_EVENTS(), events)
         };
+        if ret < 0 {
+            return errno_result();
+        }
+        Ok(())
+    }
+
+    /// Enable the specified capability.
+    /// See documentation for KVM_ENABLE_CAP.
+    pub fn kvm_enable_cap(&self, cap: &kvm_enable_cap) -> Result<()> {
+        // safe becuase we allocated the struct and we know the kernel will read
+        // exactly the size of the struct
+        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), cap) };
         if ret < 0 {
             return errno_result();
         }
@@ -1779,6 +1916,36 @@ impl RunnableVcpu {
                         })
                     } else {
                         Ok(VcpuExit::MmioRead { address, size })
+                    }
+                }
+                KVM_EXIT_IOAPIC_EOI => {
+                    // Safe because the exit_reason (which comes from the kernel) told us which
+                    // union field to use.
+                    let vector = unsafe { run.__bindgen_anon_1.eoi.vector };
+                    Ok(VcpuExit::IoapicEoi { vector })
+                }
+                KVM_EXIT_HYPERV => {
+                    // Safe because the exit_reason (which comes from the kernel) told us which
+                    // union field to use.
+                    let hyperv = unsafe { &run.__bindgen_anon_1.hyperv };
+                    match hyperv.type_ as u32 {
+                        KVM_EXIT_HYPERV_SYNIC => {
+                            let synic = unsafe { &hyperv.u.synic };
+                            Ok(VcpuExit::HypervSynic {
+                                msr: synic.msr,
+                                control: synic.control,
+                                evt_page: synic.evt_page,
+                                msg_page: synic.msg_page,
+                            })
+                        }
+                        KVM_EXIT_HYPERV_HCALL => {
+                            let hcall = unsafe { &hyperv.u.hcall };
+                            Ok(VcpuExit::HypervHcall {
+                                input: hcall.input,
+                                params: hcall.params,
+                            })
+                        }
+                        _ => Err(Error::new(EINVAL)),
                     }
                 }
                 KVM_EXIT_UNKNOWN => Ok(VcpuExit::Unknown),
@@ -2329,6 +2496,36 @@ mod tests {
         ];
         vcpu.get_msrs(&mut msrs).unwrap();
         assert_eq!(msrs.len(), 1);
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn get_hyperv_cpuid() {
+        let kvm = Kvm::new().unwrap();
+        let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
+        let vm = Vm::new(&kvm, gm).unwrap();
+        let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
+        let cpuid = vcpu.get_hyperv_cpuid();
+        // Older kernels don't support so tolerate this kind of failure.
+        match cpuid {
+            Ok(_) => {}
+            Err(e) => {
+                assert_eq!(e.errno(), EINVAL);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn enable_feature() {
+        let kvm = Kvm::new().unwrap();
+        let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
+        let vm = Vm::new(&kvm, gm).unwrap();
+        vm.create_irq_chip().unwrap();
+        let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
+        let mut cap: kvm_enable_cap = Default::default();
+        cap.cap = kvm_sys::KVM_CAP_HYPERV_SYNIC;
+        vcpu.kvm_enable_cap(&cap).unwrap();
     }
 
     #[test]

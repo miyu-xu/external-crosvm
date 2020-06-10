@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std;
-use std::cmp::min;
+use std::cmp::max;
 use std::convert::TryFrom;
 use std::error::Error as StdError;
 use std::ffi::CStr;
@@ -23,24 +22,21 @@ use std::str;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use libc::{self, c_int, gid_t, uid_t};
 
-use audio_streams::DummyStreamSource;
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
-use devices::virtio::{self, VirtioDevice};
+use devices::virtio::{self, Console, VirtioDevice};
 use devices::{
-    self, HostBackendDeviceProvider, PciDevice, VfioDevice, VfioPciDevice, VirtioPciDevice,
-    XhciController,
+    self, Ac97Backend, Ac97Dev, HostBackendDeviceProvider, PciDevice, VfioContainer, VfioDevice,
+    VfioPciDevice, VirtioPciDevice, XhciController,
 };
 use io_jail::{self, Minijail};
 use kvm::*;
-use libcras::CrasClient;
 use msg_socket::{MsgError, MsgReceiver, MsgSender, MsgSocket};
 use net_util::{Error as NetError, MacAddress, Tap};
-use rand_ish::SimpleRng;
 use remain::sorted;
 use resources::{Alloc, MmioType, SystemAllocator};
 use sync::{Condvar, Mutex};
@@ -53,21 +49,20 @@ use sys_util::{
     Killable, MemoryMappingArena, PollContext, PollToken, Protection, ScopedEvent, SignalFd,
     Terminal, TimerFd, WatchingEvents, SIGRTMIN,
 };
-use vhost;
 use vm_control::{
     BalloonControlCommand, BalloonControlRequestSocket, BalloonControlResponseSocket,
-    DiskControlCommand, DiskControlRequestSocket, DiskControlResponseSocket, DiskControlResult,
-    UsbControlSocket, VmControlResponseSocket, VmIrqRequest, VmIrqResponse, VmIrqResponseSocket,
+    BalloonControlResult, DiskControlCommand, DiskControlRequestSocket, DiskControlResponseSocket,
+    DiskControlResult, ExternallyMappedHostMemoryRequests, UsbControlSocket,
+    VmControlResponseSocket, VmIrqRequest, VmIrqResponse, VmIrqResponseSocket,
     VmMemoryControlRequestSocket, VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse,
-    VmRunMode,
+    VmMsyncRequest, VmMsyncRequestSocket, VmMsyncResponse, VmMsyncResponseSocket, VmRunMode,
 };
 
-use crate::{
-    Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption,
-    DEFAULT_TOUCH_DEVICE_HEIGHT, DEFAULT_TOUCH_DEVICE_WIDTH,
+use crate::{Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption};
+use arch::{
+    self, LinuxArch, RunnableLinuxVm, SerialHardware, SerialParameters, VirtioDeviceStub,
+    VmComponents, VmImage,
 };
-
-use arch::{self, LinuxArch, RunnableLinuxVm, VirtioDeviceStub, VmComponents, VmImage};
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use aarch64::AArch64 as Arch;
@@ -87,7 +82,8 @@ pub enum Error {
     BuildVm(<Arch as LinuxArch>::Error),
     ChownTpmStorage(sys_util::Error),
     CloneEventFd(sys_util::Error),
-    CreateCrasClient(libcras::Error),
+    CreateAc97(devices::PciDeviceError),
+    CreateConsole(arch::serial::Error),
     CreateDiskError(disk::Error),
     CreateEventFd(sys_util::Error),
     CreatePollContext(sys_util::Error),
@@ -100,7 +96,7 @@ pub enum Error {
     CreateVfioDevice(devices::vfio::VfioError),
     DeviceJail(io_jail::Error),
     DevicePivotRoot(io_jail::Error),
-    Disk(io::Error),
+    Disk(PathBuf, io::Error),
     DiskImageLock(sys_util::Error),
     DropCapabilities(sys_util::Error),
     FsDeviceNew(virtio::fs::Error),
@@ -125,8 +121,7 @@ pub enum Error {
     PmemDeviceNew(sys_util::Error),
     PollContextAdd(sys_util::Error),
     PollContextDelete(sys_util::Error),
-    ReadLowmemAvailable(io::Error),
-    ReadLowmemMargin(io::Error),
+    ReadMemAvailable(io::Error),
     RegisterBalloon(arch::DeviceRegistrationError),
     RegisterBlock(arch::DeviceRegistrationError),
     RegisterGpu(arch::DeviceRegistrationError),
@@ -172,7 +167,8 @@ impl Display for Error {
             BuildVm(e) => write!(f, "The architecture failed to build the vm: {}", e),
             ChownTpmStorage(e) => write!(f, "failed to chown tpm storage: {}", e),
             CloneEventFd(e) => write!(f, "failed to clone eventfd: {}", e),
-            CreateCrasClient(e) => write!(f, "failed to create cras client: {}", e),
+            CreateAc97(e) => write!(f, "failed to create ac97 device: {}", e),
+            CreateConsole(e) => write!(f, "failed to create console device: {}", e),
             CreateDiskError(e) => write!(f, "failed to create virtual disk: {}", e),
             CreateEventFd(e) => write!(f, "failed to create eventfd: {}", e),
             CreatePollContext(e) => write!(f, "failed to create poll context: {}", e),
@@ -187,7 +183,7 @@ impl Display for Error {
             CreateVfioDevice(e) => write!(f, "Failed to create vfio device {}", e),
             DeviceJail(e) => write!(f, "failed to jail device: {}", e),
             DevicePivotRoot(e) => write!(f, "failed to pivot root device: {}", e),
-            Disk(e) => write!(f, "failed to load disk image: {}", e),
+            Disk(p, e) => write!(f, "failed to load disk image {}: {}", p.display(), e),
             DiskImageLock(e) => write!(f, "failed to lock disk image: {}", e),
             DropCapabilities(e) => write!(f, "failed to drop process capabilities: {}", e),
             FsDeviceNew(e) => write!(f, "failed to create fs device: {}", e),
@@ -219,16 +215,7 @@ impl Display for Error {
             PmemDeviceNew(e) => write!(f, "failed to create pmem device: {}", e),
             PollContextAdd(e) => write!(f, "failed to add fd to poll context: {}", e),
             PollContextDelete(e) => write!(f, "failed to remove fd from poll context: {}", e),
-            ReadLowmemAvailable(e) => write!(
-                f,
-                "failed to read /sys/kernel/mm/chromeos-low_mem/available: {}",
-                e
-            ),
-            ReadLowmemMargin(e) => write!(
-                f,
-                "failed to read /sys/kernel/mm/chromeos-low_mem/margin: {}",
-                e
-            ),
+            ReadMemAvailable(e) => write!(f, "failed to read /proc/meminfo: {}", e),
             RegisterBalloon(e) => write!(f, "error registering balloon device: {}", e),
             RegisterBlock(e) => write!(f, "error registering block device: {}", e),
             RegisterGpu(e) => write!(f, "error registering gpu device: {}", e),
@@ -271,6 +258,7 @@ enum TaggedControlSocket {
     Vm(VmControlResponseSocket),
     VmMemory(VmMemoryControlResponseSocket),
     VmIrq(VmIrqResponseSocket),
+    VmMsync(VmMsyncResponseSocket),
 }
 
 impl AsRef<UnixSeqpacket> for TaggedControlSocket {
@@ -280,6 +268,7 @@ impl AsRef<UnixSeqpacket> for TaggedControlSocket {
             Vm(ref socket) => socket.as_ref(),
             VmMemory(ref socket) => socket.as_ref(),
             VmIrq(ref socket) => socket.as_ref(),
+            VmMsync(ref socket) => socket.as_ref(),
         }
     }
 }
@@ -335,9 +324,13 @@ fn create_base_minijail(
         if let Some(gid_map) = config.gid_map {
             j.gidmap(gid_map).map_err(Error::SettingGidMap)?;
         }
+        // Run in a new mount namespace.
+        j.namespace_vfs();
+
         // Run in an empty network namespace.
         j.namespace_net();
-        // Apply the block device seccomp policy.
+
+        // Don't allow the device to gain new privileges.
         j.no_new_privs();
 
         // By default we'll prioritize using the pre-compiled .bpf over the .policy
@@ -367,9 +360,12 @@ fn create_base_minijail(
         j.run_as_init();
     }
 
-    // Create a new mount namespace with an empty root FS.
-    j.namespace_vfs();
-    j.enter_pivot_root(root).map_err(Error::DevicePivotRoot)?;
+    // Only pivot_root if we are not re-using the current root directory.
+    if root != Path::new("/") {
+        // It's safe to call `namespace_vfs` multiple times.
+        j.namespace_vfs();
+        j.enter_pivot_root(root).map_err(Error::DevicePivotRoot)?;
+    }
 
     // Most devices don't need to open many fds.
     let limit = if let Some(r) = r_limit { r } else { 1024u64 };
@@ -417,7 +413,7 @@ fn create_block_device(
             .read(true)
             .write(!disk.read_only)
             .open(&disk.path)
-            .map_err(Error::Disk)?
+            .map_err(|e| Error::Disk(disk.path.to_path_buf(), e))?
     };
     // Lock the disk image to prevent other crosvm instances from using it.
     let lock_op = if disk.read_only {
@@ -592,7 +588,13 @@ fn create_tap_net_device(cfg: &Config, tap_fd: RawFd) -> DeviceResult {
             .map_err(Error::CreateTapDevice)?
     };
 
-    let dev = virtio::Net::from(tap).map_err(Error::NetDeviceNew)?;
+    let mut vq_pairs = cfg.net_vq_pairs.unwrap_or(1);
+    let vcpu_count = cfg.vcpu_count.unwrap_or(1);
+    if vcpu_count < vq_pairs as u32 {
+        error!("net vq pairs must be smaller than vcpu count, fall back to single queue mode");
+        vq_pairs = 1;
+    }
+    let dev = virtio::Net::from(tap, vq_pairs).map_err(Error::NetDeviceNew)?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -607,14 +609,21 @@ fn create_net_device(
     mac_address: MacAddress,
     mem: &GuestMemory,
 ) -> DeviceResult {
+    let mut vq_pairs = cfg.net_vq_pairs.unwrap_or(1);
+    let vcpu_count = cfg.vcpu_count.unwrap_or(1);
+    if vcpu_count < vq_pairs as u32 {
+        error!("net vq pairs must be smaller than vcpu count, fall back to single queue mode");
+        vq_pairs = 1;
+    }
+
     let dev = if cfg.vhost_net {
         let dev =
             virtio::vhost::Net::<Tap, vhost::Net<Tap>>::new(host_ip, netmask, mac_address, mem)
                 .map_err(Error::VhostNetDeviceNew)?;
         Box::new(dev) as Box<dyn VirtioDevice>
     } else {
-        let dev =
-            virtio::Net::<Tap>::new(host_ip, netmask, mac_address).map_err(Error::NetDeviceNew)?;
+        let dev = virtio::Net::<Tap>::new(host_ip, netmask, mac_address, vq_pairs)
+            .map_err(Error::NetDeviceNew)?;
         Box::new(dev) as Box<dyn VirtioDevice>
     };
 
@@ -639,6 +648,7 @@ fn create_gpu_device(
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
     event_devices: Vec<EventDevice>,
+    ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
 ) -> DeviceResult {
     let jailed_wayland_path = Path::new("/wayland-0");
 
@@ -666,6 +676,7 @@ fn create_gpu_device(
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
         event_devices,
+        ext_mapped_hostmem_requests,
     );
 
     let jail = match simple_jail(&cfg, "gpu_device")? {
@@ -810,7 +821,12 @@ fn create_fs_device(
             log_failures: cfg.seccomp_log_failures,
             seccomp_policy: &seccomp_policy,
         };
-        create_base_minijail(src, Some(max_open_files), Some(&config))?
+        let mut jail = create_base_minijail(src, Some(max_open_files), Some(&config))?;
+        // We want bind mounts from the parent namespaces to propagate into the fs device's
+        // namespace.
+        jail.set_remount_mode(libc::MS_SLAVE);
+
+        jail
     } else {
         create_base_minijail(src, Some(max_open_files), None)?
     };
@@ -825,25 +841,36 @@ fn create_fs_device(
     })
 }
 
-fn create_9p_device(cfg: &Config, src: &Path, tag: &str) -> DeviceResult {
-    let (jail, root) = match simple_jail(&cfg, "9p_device")? {
-        Some(mut jail) => {
-            //  The shared directory becomes the root of the device's file system.
-            let root = Path::new("/");
-            jail.mount_bind(src, root, true)?;
+fn create_9p_device(
+    cfg: &Config,
+    uid_map: &str,
+    gid_map: &str,
+    src: &Path,
+    tag: &str,
+) -> DeviceResult {
+    let max_open_files = get_max_open_files()?;
+    let (jail, root) = if cfg.sandbox {
+        let seccomp_policy = cfg.seccomp_policy_dir.join("9p_device");
+        let config = SandboxConfig {
+            limit_caps: false,
+            uid_map: Some(uid_map),
+            gid_map: Some(gid_map),
+            log_failures: cfg.seccomp_log_failures,
+            seccomp_policy: &seccomp_policy,
+        };
 
-            // We want bind mounts from the parent namespaces to propagate into the 9p server's
-            // namespace.
-            jail.set_remount_mode(libc::MS_SLAVE);
+        let mut jail = create_base_minijail(src, Some(max_open_files), Some(&config))?;
+        // We want bind mounts from the parent namespaces to propagate into the 9p server's
+        // namespace.
+        jail.set_remount_mode(libc::MS_SLAVE);
 
-            add_crosvm_user_to_jail(&mut jail, "p9")?;
-            (Some(jail), root)
-        }
-        None => {
-            // There's no bind mount so we tell the server to treat the source directory as the
-            // root.
-            (None, src)
-        }
+        //  The shared directory becomes the root of the device's file system.
+        let root = Path::new("/");
+        (Some(jail), root)
+    } else {
+        // There's no mount namespace so we tell the server to treat the source directory as the
+        // root.
+        (None, src)
     };
 
     let dev = virtio::P9::new(root, tag).map_err(Error::P9DeviceNew)?;
@@ -860,15 +887,17 @@ fn create_pmem_device(
     resources: &mut SystemAllocator,
     disk: &DiskOption,
     index: usize,
+    pmem_device_socket: VmMsyncRequestSocket,
 ) -> DeviceResult {
     let fd = OpenOptions::new()
         .read(true)
         .write(!disk.read_only)
         .open(&disk.path)
-        .map_err(Error::Disk)?;
+        .map_err(|e| Error::Disk(disk.path.to_path_buf(), e))?;
 
-    let (disk_size, arena_size) = {
-        let metadata = std::fs::metadata(&disk.path).map_err(Error::Disk)?;
+    let arena_size = {
+        let metadata =
+            std::fs::metadata(&disk.path).map_err(|e| Error::Disk(disk.path.to_path_buf(), e))?;
         let disk_len = metadata.len();
         // Linux requires pmem region sizes to be 2 MiB aligned. Linux will fill any partial page
         // at the end of an mmap'd file and won't write back beyond the actual file length, but if
@@ -881,12 +910,9 @@ fn create_pmem_device(
         } else {
             0
         };
-        (
-            disk_len,
-            disk_len
-                .checked_add(align_adjust)
-                .ok_or(Error::PmemDeviceImageTooBig)?,
-        )
+        disk_len
+            .checked_add(align_adjust)
+            .ok_or(Error::PmemDeviceImageTooBig)?
     };
 
     let protection = {
@@ -900,11 +926,10 @@ fn create_pmem_device(
     let arena = {
         // Conversion from u64 to usize may fail on 32bit system.
         let arena_size = usize::try_from(arena_size).map_err(|_| Error::PmemDeviceImageTooBig)?;
-        let disk_size = usize::try_from(disk_size).map_err(|_| Error::PmemDeviceImageTooBig)?;
 
         let mut arena = MemoryMappingArena::new(arena_size).map_err(Error::ReservePmemMemory)?;
         arena
-            .add_fd_offset_protection(0, disk_size, &fd, 0, protection)
+            .add_fd_offset_protection(0, arena_size, &fd, 0, protection)
             .map_err(Error::ReservePmemMemory)?;
         arena
     };
@@ -920,20 +945,40 @@ fn create_pmem_device(
         )
         .map_err(Error::AllocatePmemDeviceAddress)?;
 
-    vm.add_mmap_arena(
-        GuestAddress(mapping_address),
-        arena,
-        /* read_only = */ disk.read_only,
-        /* log_dirty_pages = */ false,
-    )
-    .map_err(Error::AddPmemDeviceMemory)?;
+    let slot = vm
+        .add_mmap_arena(
+            GuestAddress(mapping_address),
+            arena,
+            /* read_only = */ disk.read_only,
+            /* log_dirty_pages = */ false,
+        )
+        .map_err(Error::AddPmemDeviceMemory)?;
 
-    let dev = virtio::Pmem::new(fd, GuestAddress(mapping_address), arena_size)
-        .map_err(Error::PmemDeviceNew)?;
+    let dev = virtio::Pmem::new(
+        fd,
+        GuestAddress(mapping_address),
+        slot,
+        arena_size,
+        Some(pmem_device_socket),
+    )
+    .map_err(Error::PmemDeviceNew)?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev) as Box<dyn VirtioDevice>,
         jail: simple_jail(&cfg, "pmem_device")?,
+    })
+}
+
+fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult {
+    let mut keep_fds = Vec::new();
+    let evt = EventFd::new().map_err(Error::CreateEventFd)?;
+    let dev = param
+        .create_serial_device::<Console>(&evt, &mut keep_fds)
+        .map_err(Error::CreateConsole)?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(&cfg, "serial")?, // TODO(dverkamp): use a separate policy for console?
     })
 }
 
@@ -949,8 +994,19 @@ fn create_virtio_devices(
     gpu_device_socket: VmMemoryControlRequestSocket,
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
+    pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
+    ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
+
+    for (_, param) in cfg
+        .serial_parameters
+        .iter()
+        .filter(|(_k, v)| v.hardware == SerialHardware::VirtioConsole)
+    {
+        let dev = create_console_device(cfg, param)?;
+        devs.push(dev);
+    }
 
     for disk in &cfg.disks {
         let disk_device_socket = disk_device_sockets.remove(0);
@@ -958,7 +1014,15 @@ fn create_virtio_devices(
     }
 
     for (index, pmem_disk) in cfg.pmem_devices.iter().enumerate() {
-        devs.push(create_pmem_device(cfg, vm, resources, pmem_disk, index)?);
+        let pmem_device_socket = pmem_device_sockets.remove(0);
+        devs.push(create_pmem_device(
+            cfg,
+            vm,
+            resources,
+            pmem_disk,
+            index,
+            pmem_device_socket,
+        )?);
     }
 
     devs.push(create_rng_device(cfg)?);
@@ -1029,19 +1093,16 @@ fn create_virtio_devices(
 
     #[cfg(feature = "gpu")]
     {
-        if cfg.gpu_parameters.is_some() {
+        if let Some(gpu_parameters) = &cfg.gpu_parameters {
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
                     UnixStream::pair().map_err(Error::CreateSocket)?;
-                // TODO(nkgold): the width/height here should match the display's height/width. When
-                // those settings are available as CLI options, we should use the CLI options here
-                // as well.
                 let (single_touch_width, single_touch_height) = cfg
                     .virtio_single_touch
                     .as_ref()
                     .map(|single_touch_spec| single_touch_spec.get_size())
-                    .unwrap_or((DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT));
+                    .unwrap_or((gpu_parameters.display_width, gpu_parameters.display_height));
                 let dev = virtio::new_single_touch(
                     virtio_dev_socket,
                     single_touch_width,
@@ -1073,6 +1134,7 @@ fn create_virtio_devices(
                 cfg.wayland_socket_paths.get(""),
                 cfg.x_display.clone(),
                 event_devices,
+                ext_mapped_hostmem_requests,
             )?);
         }
     }
@@ -1093,7 +1155,7 @@ fn create_virtio_devices(
 
         let dev = match kind {
             SharedDirKind::FS => create_fs_device(cfg, uid_map, gid_map, src, tag, fs_cfg.clone())?,
-            SharedDirKind::P9 => create_9p_device(cfg, src, tag)?,
+            SharedDirKind::P9 => create_9p_device(cfg, uid_map, gid_map, src, tag)?,
         };
         devs.push(dev);
     }
@@ -1112,7 +1174,9 @@ fn create_devices(
     gpu_device_socket: VmMemoryControlRequestSocket,
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
+    pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
     usb_provider: HostBackendDeviceProvider,
+    ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
 ) -> DeviceResult<Vec<(Box<dyn PciDevice>, Option<Minijail>)>> {
     let stubs = create_virtio_devices(
         &cfg,
@@ -1124,6 +1188,8 @@ fn create_devices(
         gpu_device_socket,
         balloon_device_socket,
         disk_device_sockets,
+        pmem_device_sockets,
+        ext_mapped_hostmem_requests,
     )?;
 
     let mut pci_devices = Vec::new();
@@ -1138,50 +1204,44 @@ fn create_devices(
         pci_devices.push((dev, stub.jail));
     }
 
-    if cfg.cras_audio {
-        let mut server = Box::new(CrasClient::new().map_err(Error::CreateCrasClient)?);
-        if cfg.cras_capture {
-            server.enable_cras_capture();
-        }
-        let cras_audio = devices::Ac97Dev::new(mem.clone(), server);
+    for ac97_param in &cfg.ac97_parameters {
+        let dev = Ac97Dev::try_new(mem.clone(), ac97_param.clone()).map_err(Error::CreateAc97)?;
+        let policy = match ac97_param.backend {
+            Ac97Backend::CRAS => "cras_audio_device",
+            Ac97Backend::NULL => "null_audio_device",
+        };
 
-        pci_devices.push((
-            Box::new(cras_audio),
-            simple_jail(&cfg, "cras_audio_device")?,
-        ));
-    }
-
-    if cfg.null_audio {
-        let server = Box::new(DummyStreamSource::new());
-        let null_audio = devices::Ac97Dev::new(mem.clone(), server);
-
-        pci_devices.push((
-            Box::new(null_audio),
-            simple_jail(&cfg, "null_audio_device")?,
-        ));
+        pci_devices.push((Box::new(dev), simple_jail(&cfg, &policy)?));
     }
     // Create xhci controller.
     let usb_controller = Box::new(XhciController::new(mem.clone(), usb_provider));
     pci_devices.push((usb_controller, simple_jail(&cfg, "xhci")?));
 
-    if cfg.vfio.is_some() {
-        let (vfio_host_socket_irq, vfio_device_socket_irq) =
-            msg_socket::pair::<VmIrqResponse, VmIrqRequest>().map_err(Error::CreateSocket)?;
-        control_sockets.push(TaggedControlSocket::VmIrq(vfio_host_socket_irq));
-
-        let (vfio_host_socket_mem, vfio_device_socket_mem) =
-            msg_socket::pair::<VmMemoryResponse, VmMemoryRequest>().map_err(Error::CreateSocket)?;
-        control_sockets.push(TaggedControlSocket::VmMemory(vfio_host_socket_mem));
-
-        let vfio_path = cfg.vfio.as_ref().unwrap().as_path();
-        let vfiodevice =
-            VfioDevice::new(vfio_path, vm, mem.clone()).map_err(Error::CreateVfioDevice)?;
-        let vfiopcidevice = Box::new(VfioPciDevice::new(
-            vfiodevice,
-            vfio_device_socket_irq,
-            vfio_device_socket_mem,
+    if !cfg.vfio.is_empty() {
+        let vfio_container = Arc::new(Mutex::new(
+            VfioContainer::new().map_err(Error::CreateVfioDevice)?,
         ));
-        pci_devices.push((vfiopcidevice, simple_jail(&cfg, "vfio_device")?));
+
+        for vfio_path in &cfg.vfio {
+            // create one Irq and Mem request socket for each vfio device
+            let (vfio_host_socket_irq, vfio_device_socket_irq) =
+                msg_socket::pair::<VmIrqResponse, VmIrqRequest>().map_err(Error::CreateSocket)?;
+            control_sockets.push(TaggedControlSocket::VmIrq(vfio_host_socket_irq));
+
+            let (vfio_host_socket_mem, vfio_device_socket_mem) =
+                msg_socket::pair::<VmMemoryResponse, VmMemoryRequest>()
+                    .map_err(Error::CreateSocket)?;
+            control_sockets.push(TaggedControlSocket::VmMemory(vfio_host_socket_mem));
+
+            let vfiodevice = VfioDevice::new(vfio_path.as_path(), vm, mem, vfio_container.clone())
+                .map_err(Error::CreateVfioDevice)?;
+            let vfiopcidevice = Box::new(VfioPciDevice::new(
+                vfiodevice,
+                vfio_device_socket_irq,
+                vfio_device_socket_mem,
+            ));
+            pci_devices.push((vfiopcidevice, simple_jail(&cfg, "vfio_device")?));
+        }
     }
 
     Ok(pci_devices)
@@ -1330,6 +1390,26 @@ fn runnable_vcpu(vcpu: Vcpu, use_kvm_signals: bool, cpu_id: u32) -> Option<Runna
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn inject_interrupt(pic: &Arc<Mutex<devices::Pic>>, vcpu: &RunnableVcpu) {
+    let mut pic = pic.lock();
+    if pic.interrupt_requested() && vcpu.ready_for_interrupt() {
+        if let Some(vector) = pic.get_external_interrupt() {
+            if let Err(e) = vcpu.interrupt(vector as u32) {
+                error!("PIC: failed to inject interrupt to vCPU0: {}", e);
+            }
+        }
+        // The second interrupt request should be handled immediately, so ask
+        // vCPU to exit as soon as possible.
+        if pic.interrupt_requested() {
+            vcpu.request_interrupt_window();
+        }
+    }
+}
+
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+fn inject_interrupt(pic: &Arc<Mutex<devices::Pic>>, vcpu: &RunnableVcpu) {}
+
 fn run_vcpu(
     vcpu: Vcpu,
     cpu_id: u32,
@@ -1337,6 +1417,7 @@ fn run_vcpu(
     start_barrier: Arc<Barrier>,
     io_bus: devices::Bus,
     mmio_bus: devices::Bus,
+    split_irqchip: Option<(Arc<Mutex<devices::Pic>>, Arc<Mutex<devices::Ioapic>>)>,
     exit_evt: EventFd,
     requires_kvmclock_ctrl: bool,
     run_mode_arc: Arc<VcpuRunMode>,
@@ -1349,7 +1430,7 @@ fn run_vcpu(
             // implementation accomplishes that.
             let _scoped_exit_evt = ScopedEvent::from(exit_evt);
 
-            if vcpu_affinity.len() != 0 {
+            if !vcpu_affinity.is_empty() {
                 if let Err(e) = set_cpu_affinity(vcpu_affinity) {
                     error!("Failed to set CPU affinity: {}", e);
                 }
@@ -1398,6 +1479,13 @@ fn run_vcpu(
                         }) => {
                             mmio_bus.write(address, &data[..size]);
                         }
+                        Ok(VcpuExit::IoapicEoi{vector}) => {
+                            if let Some((_, ioapic)) = &split_irqchip {
+                                ioapic.lock().end_of_interrupt(vector);
+                            } else {
+                                panic!("userspace ioapic not found in split irqchip mode, should be impossible.");
+                            }
+                        },
                         Ok(VcpuExit::Hlt) => break,
                         Ok(VcpuExit::Shutdown) => break,
                         Ok(VcpuExit::FailEntry {
@@ -1453,15 +1541,20 @@ fn run_vcpu(
                             run_mode_lock = run_mode_arc.cvar.wait(run_mode_lock);
                         }
                     }
+
+                    if cpu_id != 0 { continue; }
+                    if let Some((pic, _)) = &split_irqchip {
+                        inject_interrupt(pic, &vcpu);
+                    }
                 }
             }
         })
         .map_err(Error::SpawnVcpu)
 }
 
-// Reads the contents of a file and converts the space-separated fields into a Vec of u64s.
+// Reads the contents of a file and converts the space-separated fields into a Vec of i64s.
 // Returns an error if any of the fields fail to parse.
-fn file_fields_to_u64<P: AsRef<Path>>(path: P) -> io::Result<Vec<u64>> {
+fn file_fields_to_i64<P: AsRef<Path>>(path: P) -> io::Result<Vec<i64>> {
     let mut file = File::open(path)?;
 
     let mut buf = [0u8; 32];
@@ -1473,7 +1566,7 @@ fn file_fields_to_u64<P: AsRef<Path>>(path: P) -> io::Result<Vec<u64>> {
         .trim()
         .split_whitespace()
         .map(|x| {
-            x.parse::<u64>()
+            x.parse::<i64>()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         })
         .collect()
@@ -1481,8 +1574,8 @@ fn file_fields_to_u64<P: AsRef<Path>>(path: P) -> io::Result<Vec<u64>> {
 
 // Reads the contents of a file and converts them into a u64, and if there
 // are multiple fields it only returns the first one.
-fn file_to_u64<P: AsRef<Path>>(path: P) -> io::Result<u64> {
-    file_fields_to_u64(path)?
+fn file_to_i64<P: AsRef<Path>>(path: P) -> io::Result<i64> {
+    file_fields_to_i64(path)?
         .into_iter()
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty file"))
@@ -1552,7 +1645,8 @@ pub fn run_config(cfg: Config) -> Result<()> {
     control_sockets.push(TaggedControlSocket::VmMemory(wayland_host_socket));
     // Balloon gets a special socket so balloon requests can be forwarded from the main process.
     let (balloon_host_socket, balloon_device_socket) =
-        msg_socket::pair::<BalloonControlCommand, ()>().map_err(Error::CreateSocket)?;
+        msg_socket::pair::<BalloonControlCommand, BalloonControlResult>()
+            .map_err(Error::CreateSocket)?;
 
     // Create one control socket per disk.
     let mut disk_device_sockets = Vec::new();
@@ -1566,14 +1660,31 @@ pub fn run_config(cfg: Config) -> Result<()> {
         disk_device_sockets.push(disk_device_socket);
     }
 
+    let mut pmem_device_sockets = Vec::new();
+    let pmem_count = cfg.pmem_devices.len();
+    for _ in 0..pmem_count {
+        let (pmem_host_socket, pmem_device_socket) =
+            msg_socket::pair::<VmMsyncResponse, VmMsyncRequest>().map_err(Error::CreateSocket)?;
+        pmem_device_sockets.push(pmem_device_socket);
+        control_sockets.push(TaggedControlSocket::VmMsync(pmem_host_socket));
+    }
+
     let (gpu_host_socket, gpu_device_socket) =
         msg_socket::pair::<VmMemoryResponse, VmMemoryRequest>().map_err(Error::CreateSocket)?;
     control_sockets.push(TaggedControlSocket::VmMemory(gpu_host_socket));
+
+    let (ioapic_host_socket, ioapic_device_socket) =
+        msg_socket::pair::<VmIrqResponse, VmIrqRequest>().map_err(Error::CreateSocket)?;
+    control_sockets.push(TaggedControlSocket::VmIrq(ioapic_host_socket));
+
+    let ext_mapped_hostmem_requests =
+        Arc::new(Mutex::new(ExternallyMappedHostMemoryRequests::new()));
 
     let sandbox = cfg.sandbox;
     let linux = Arch::build_vm(
         components,
         cfg.split_irqchip,
+        ioapic_device_socket,
         &cfg.serial_parameters,
         simple_jail(&cfg, "serial")?,
         |mem, vm, sys_allocator, exit_evt| {
@@ -1588,7 +1699,9 @@ pub fn run_config(cfg: Config) -> Result<()> {
                 gpu_device_socket,
                 balloon_device_socket,
                 &mut disk_device_sockets,
+                &mut pmem_device_sockets,
                 usb_provider,
+                Arc::clone(&ext_mapped_hostmem_requests),
             )
         },
     )
@@ -1603,6 +1716,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         usb_control_socket,
         sigchld_fd,
         sandbox,
+        Arc::clone(&ext_mapped_hostmem_requests),
     )
 }
 
@@ -1615,35 +1729,18 @@ fn run_control(
     usb_control_socket: UsbControlSocket,
     sigchld_fd: SignalFd,
     sandbox: bool,
+    ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
 ) -> Result<()> {
-    // Paths to get the currently available memory and the low memory threshold.
-    const LOWMEM_MARGIN: &str = "/sys/kernel/mm/chromeos-low_mem/margin";
     const LOWMEM_AVAILABLE: &str = "/sys/kernel/mm/chromeos-low_mem/available";
-
-    // The amount of additional memory to claim back from the VM whenever the system is
-    // low on memory.
-    const ONE_GB: u64 = (1 << 30);
-
-    let max_balloon_memory = match linux.vm.get_memory().memory_size() {
-        // If the VM has at least 1.5 GB, the balloon driver can consume all but the last 1 GB.
-        n if n >= (ONE_GB / 2) * 3 => n - ONE_GB,
-        // Otherwise, if the VM has at least 500MB the balloon driver will consume at most
-        // half of it.
-        n if n >= (ONE_GB / 2) => n / 2,
-        // Otherwise, the VM is too small for us to take memory away from it.
-        _ => 0,
-    };
-    let mut current_balloon_memory: u64 = 0;
-    let balloon_memory_increment: u64 = max_balloon_memory / 16;
 
     #[derive(PollToken)]
     enum Token {
         Exit,
         Suspend,
         ChildSignal,
-        CheckAvailableMemory,
-        LowMemory,
-        LowmemTimer,
+        IrqFd { gsi: usize },
+        BalanceMemory,
+        BalloonResult,
         VmControlServer,
         VmControl { index: usize },
     }
@@ -1670,36 +1767,36 @@ fn run_control(
             .map_err(Error::PollContextAdd)?;
     }
 
-    // Watch for low memory notifications and take memory back from the VM.
-    let low_mem = File::open("/dev/chromeos-low-mem").ok();
-    if let Some(low_mem) = &low_mem {
-        poll_ctx
-            .add(low_mem, Token::LowMemory)
-            .map_err(Error::PollContextAdd)?;
-    } else {
-        warn!("Unable to open low mem indicator, maybe not a chrome os kernel");
+    if let Some(gsi_relay) = &linux.gsi_relay {
+        for (gsi, evt) in gsi_relay.irqfd.iter().enumerate() {
+            if let Some(evt) = evt {
+                poll_ctx
+                    .add(evt, Token::IrqFd { gsi })
+                    .map_err(Error::PollContextAdd)?;
+            }
+        }
     }
 
-    // Used to rate limit balloon requests.
-    let mut lowmem_timer = TimerFd::new().map_err(Error::CreateTimerFd)?;
-    poll_ctx
-        .add(&lowmem_timer, Token::LowmemTimer)
-        .map_err(Error::PollContextAdd)?;
+    // Balance available memory between guest and host every second.
+    let balancemem_timer = TimerFd::new().map_err(Error::CreateTimerFd)?;
+    if Path::new(LOWMEM_AVAILABLE).exists() {
+        // Create timer request balloon stats every 1s.
+        poll_ctx
+            .add(&balancemem_timer, Token::BalanceMemory)
+            .map_err(Error::PollContextAdd)?;
+        let balancemem_dur = Duration::from_secs(1);
+        let balancemem_int = Duration::from_secs(1);
+        balancemem_timer
+            .reset(balancemem_dur, Some(balancemem_int))
+            .map_err(Error::ResetTimerFd)?;
 
-    // Used to check whether it's ok to start giving memory back to the VM.
-    let mut freemem_timer = TimerFd::new().map_err(Error::CreateTimerFd)?;
-    poll_ctx
-        .add(&freemem_timer, Token::CheckAvailableMemory)
-        .map_err(Error::PollContextAdd)?;
-
-    // Used to add jitter to timer values so that we don't have a thundering herd problem when
-    // multiple VMs are running.
-    let mut simple_rng = SimpleRng::new(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time went backwards")
-            .subsec_nanos() as u64,
-    );
+        // Listen for balloon statistics from the guest so we can balance.
+        poll_ctx
+            .add(&balloon_host_socket, Token::BalloonResult)
+            .map_err(Error::PollContextAdd)?;
+    } else {
+        warn!("Unable to open low mem available, maybe not a chrome os kernel");
+    }
 
     if sandbox {
         // Before starting VCPUs, in case we started with some capabilities, drop them all.
@@ -1720,6 +1817,7 @@ fn run_control(
             vcpu_thread_barrier.clone(),
             linux.io_bus.clone(),
             linux.mmio_bus.clone(),
+            linux.split_irqchip.clone(),
             linux.exit_evt.try_clone().map_err(Error::CloneEventFd)?,
             linux.vm.check_extension(Cap::KvmclockCtrl),
             run_mode_arc.clone(),
@@ -1729,6 +1827,7 @@ fn run_control(
     }
     vcpu_thread_barrier.wait();
 
+    let mut ioapic_delayed = Vec::<usize>::default();
     'poll: loop {
         let events = {
             match poll_ctx.wait() {
@@ -1739,6 +1838,26 @@ fn run_control(
                 }
             }
         };
+
+        ioapic_delayed.retain(|&gsi| {
+            if let Some((_, ioapic)) = &linux.split_irqchip {
+                if let Ok(mut ioapic) = ioapic.try_lock() {
+                    // The unwrap will never fail because gsi_relay is Some iff split_irqchip is
+                    // Some.
+                    if linux.gsi_relay.as_ref().unwrap().irqfd_resample[gsi].is_some() {
+                        ioapic.service_irq(gsi, true);
+                    } else {
+                        ioapic.service_irq(gsi, true);
+                        ioapic.service_irq(gsi, false);
+                    }
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        });
 
         let mut vm_control_indices_to_remove = Vec::new();
         for event in events.iter_readable() {
@@ -1770,85 +1889,117 @@ fn run_control(
                     }
                     break 'poll;
                 }
-                Token::CheckAvailableMemory => {
-                    // Acknowledge the timer.
-                    freemem_timer.wait().map_err(Error::TimerFd)?;
-                    if current_balloon_memory == 0 {
-                        // Nothing to see here.
-                        if let Err(e) = freemem_timer.clear() {
-                            warn!("unable to clear available memory check timer: {}", e);
+                Token::IrqFd { gsi } => {
+                    if let Some((pic, ioapic)) = &linux.split_irqchip {
+                        // This will never fail because gsi_relay is Some iff split_irqchip is
+                        // Some.
+                        let gsi_relay = linux.gsi_relay.as_ref().unwrap();
+                        if let Some(eventfd) = &gsi_relay.irqfd[gsi] {
+                            eventfd.read().unwrap();
+                        } else {
+                            warn!(
+                                "irqfd {} not found in GSI relay, should be impossible.",
+                                gsi
+                            );
                         }
-                        continue;
-                    }
 
-                    // Otherwise see if we can free up some memory.
-                    let margin = file_to_u64(LOWMEM_MARGIN).map_err(Error::ReadLowmemMargin)?;
-                    let available =
-                        file_to_u64(LOWMEM_AVAILABLE).map_err(Error::ReadLowmemAvailable)?;
+                        let mut pic = pic.lock();
+                        if gsi_relay.irqfd_resample[gsi].is_some() {
+                            pic.service_irq(gsi as u8, true);
+                        } else {
+                            pic.service_irq(gsi as u8, true);
+                            pic.service_irq(gsi as u8, false);
+                        }
+                        if let Err(e) = vcpu_handles[0].kill(SIGRTMIN() + 0) {
+                            warn!("PIC: failed to kick vCPU0: {}", e);
+                        }
 
-                    // `available` and `margin` are specified in MB while `balloon_memory_increment` is in
-                    // bytes.  So to correctly compare them we need to turn the increment value into MB.
-                    if available >= margin + 2 * (balloon_memory_increment >> 20) {
-                        current_balloon_memory =
-                            if current_balloon_memory >= balloon_memory_increment {
-                                current_balloon_memory - balloon_memory_increment
+                        // When IOAPIC is configuring its redirection table, we should first
+                        // process its AddMsiRoute request, otherwise we would deadlock.
+                        if let Ok(mut ioapic) = ioapic.try_lock() {
+                            if gsi_relay.irqfd_resample[gsi].is_some() {
+                                ioapic.service_irq(gsi, true);
                             } else {
-                                0
-                            };
-                        let command = BalloonControlCommand::Adjust {
-                            num_bytes: current_balloon_memory,
-                        };
-                        if let Err(e) = balloon_host_socket.send(&command) {
-                            warn!("failed to send memory value to balloon device: {}", e);
+                                ioapic.service_irq(gsi, true);
+                                ioapic.service_irq(gsi, false);
+                            }
+                        } else {
+                            ioapic_delayed.push(gsi);
                         }
+                    } else {
+                        panic!("split irqchip not found, should be impossible.");
                     }
                 }
-                Token::LowMemory => {
-                    if let Some(low_mem) = &low_mem {
-                        let old_balloon_memory = current_balloon_memory;
-                        current_balloon_memory = min(
-                            current_balloon_memory + balloon_memory_increment,
-                            max_balloon_memory,
-                        );
-                        if current_balloon_memory != old_balloon_memory {
-                            let command = BalloonControlCommand::Adjust {
-                                num_bytes: current_balloon_memory,
+                Token::BalanceMemory => {
+                    balancemem_timer.wait().map_err(Error::TimerFd)?;
+                    let command = BalloonControlCommand::Stats {};
+                    if let Err(e) = balloon_host_socket.send(&command) {
+                        warn!("failed to send stats request to balloon device: {}", e);
+                    }
+                }
+                Token::BalloonResult => {
+                    match balloon_host_socket.recv() {
+                        Ok(BalloonControlResult::Stats {
+                            stats,
+                            balloon_actual: balloon_actual_u,
+                        }) => {
+                            // Available memory is reported in MB, and we need bytes.
+                            let host_available = file_to_i64(LOWMEM_AVAILABLE)
+                                .map_err(Error::ReadMemAvailable)?
+                                << 20;
+                            let guest_available_u = if let Some(available) = stats.available_memory
+                            {
+                                available
+                            } else {
+                                warn!("guest available_memory stat is missing");
+                                continue;
                             };
-                            if let Err(e) = balloon_host_socket.send(&command) {
-                                warn!("failed to send memory value to balloon device: {}", e);
+                            if guest_available_u > i64::max_value() as u64 {
+                                warn!("guest available memory is too large");
+                                continue;
+                            }
+                            if balloon_actual_u > i64::max_value() as u64 {
+                                warn!("actual balloon size is too large");
+                                continue;
+                            }
+                            // Guest and host available memory is balanced equally.
+                            const GUEST_SHARE: i64 = 1;
+                            const HOST_SHARE: i64 = 1;
+                            // Tell the guest to change the balloon size if the
+                            // target balloon size is more than 5% different
+                            // from the current balloon size.
+                            const RESIZE_PERCENT: i64 = 5;
+                            let balloon_actual = balloon_actual_u as i64;
+                            let guest_available = guest_available_u as i64;
+                            // Compute how much memory the guest should have
+                            // available after we rebalance.
+                            let guest_available_target = (GUEST_SHARE
+                                * (guest_available + host_available))
+                                / (GUEST_SHARE + HOST_SHARE);
+                            let guest_available_delta = guest_available_target - guest_available;
+                            // How much do we have to change the balloon to
+                            // balance.
+                            let balloon_target = max(balloon_actual - guest_available_delta, 0);
+                            // Compute the change in balloon size in percent.
+                            // If the balloon size is 0, use 1 so we don't
+                            // overflow from the infinity % increase.
+                            let balloon_change_percent = (balloon_actual - balloon_target).abs()
+                                * 100
+                                / max(balloon_actual, 1);
+
+                            if balloon_change_percent >= RESIZE_PERCENT {
+                                let command = BalloonControlCommand::Adjust {
+                                    num_bytes: balloon_target as u64,
+                                };
+                                if let Err(e) = balloon_host_socket.send(&command) {
+                                    warn!("failed to send memory value to balloon device: {}", e);
+                                }
                             }
                         }
-
-                        // Stop polling the lowmem device until the timer fires.
-                        poll_ctx.delete(low_mem).map_err(Error::PollContextDelete)?;
-
-                        // Add some jitter to the timer so that if there are multiple VMs running
-                        // they don't all start ballooning at exactly the same time.
-                        let lowmem_dur = Duration::from_millis(1000 + simple_rng.rng() % 200);
-                        lowmem_timer
-                            .reset(lowmem_dur, None)
-                            .map_err(Error::ResetTimerFd)?;
-
-                        // Also start a timer to check when we can start giving memory back.  Do the
-                        // first check after a minute (with jitter) and subsequent checks after
-                        // every 30 seconds (with jitter).
-                        let freemem_dur = Duration::from_secs(60 + simple_rng.rng() % 12);
-                        let freemem_int = Duration::from_secs(30 + simple_rng.rng() % 6);
-                        freemem_timer
-                            .reset(freemem_dur, Some(freemem_int))
-                            .map_err(Error::ResetTimerFd)?;
-                    }
-                }
-                Token::LowmemTimer => {
-                    // Acknowledge the timer.
-                    lowmem_timer.wait().map_err(Error::TimerFd)?;
-
-                    if let Some(low_mem) = &low_mem {
-                        // Start polling the lowmem device again.
-                        poll_ctx
-                            .add(low_mem, Token::LowMemory)
-                            .map_err(Error::PollContextAdd)?;
-                    }
+                        Err(e) => {
+                            error!("failed to recv BalloonControlResult: {}", e);
+                        }
+                    };
                 }
                 Token::VmControlServer => {
                     if let Some(socket_server) = &control_server_socket {
@@ -1911,7 +2062,7 @@ fn run_control(
                                     }
                                 }
                                 Err(e) => {
-                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                    if let MsgError::RecvZero = e {
                                         vm_control_indices_to_remove.push(index);
                                     } else {
                                         error!("failed to recv VmRequest: {}", e);
@@ -1920,14 +2071,17 @@ fn run_control(
                             },
                             TaggedControlSocket::VmMemory(socket) => match socket.recv() {
                                 Ok(request) => {
-                                    let response =
-                                        request.execute(&mut linux.vm, &mut linux.resources);
+                                    let response = request.execute(
+                                        &mut linux.vm,
+                                        &mut linux.resources,
+                                        Arc::clone(&ext_mapped_hostmem_requests),
+                                    );
                                     if let Err(e) = socket.send(&response) {
                                         error!("failed to send VmMemoryControlResponse: {}", e);
                                     }
                                 }
                                 Err(e) => {
-                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                    if let MsgError::RecvZero = e {
                                         vm_control_indices_to_remove.push(index);
                                     } else {
                                         error!("failed to recv VmMemoryControlRequest: {}", e);
@@ -1943,10 +2097,25 @@ fn run_control(
                                     }
                                 }
                                 Err(e) => {
-                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                    if let MsgError::RecvZero = e {
                                         vm_control_indices_to_remove.push(index);
                                     } else {
                                         error!("failed to recv VmIrqRequest: {}", e);
+                                    }
+                                }
+                            },
+                            TaggedControlSocket::VmMsync(socket) => match socket.recv() {
+                                Ok(request) => {
+                                    let response = request.execute(&mut linux.vm);
+                                    if let Err(e) = socket.send(&response) {
+                                        error!("failed to send VmMsyncResponse: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                        vm_control_indices_to_remove.push(index);
+                                    } else {
+                                        error!("failed to recv VmMsyncRequest: {}", e);
                                     }
                                 }
                             },
@@ -1961,9 +2130,9 @@ fn run_control(
                 Token::Exit => {}
                 Token::Suspend => {}
                 Token::ChildSignal => {}
-                Token::CheckAvailableMemory => {}
-                Token::LowMemory => {}
-                Token::LowmemTimer => {}
+                Token::IrqFd { gsi: _ } => {}
+                Token::BalanceMemory => {}
+                Token::BalloonResult => {}
                 Token::VmControlServer => {}
                 Token::VmControl { index } => {
                     // It's possible more data is readable and buffered while the socket is hungup,

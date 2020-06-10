@@ -517,6 +517,21 @@ pub fn run_vcpus(
                                             &vcpu,
                                         );
                                     }
+                                    VcpuExit::HypervHcall { input, params } => {
+                                        let mut data = [0; 8];
+                                        vcpu_plugin.hyperv_call(input, params, &mut data, &vcpu);
+                                        // Setting data for hyperv call can not fail.
+                                        let _ = vcpu.set_data(&data);
+                                    }
+                                    VcpuExit::HypervSynic {
+                                        msr,
+                                        control,
+                                        evt_page,
+                                        msg_page,
+                                    } => {
+                                        vcpu_plugin
+                                            .hyperv_synic(msr, control, evt_page, msg_page, &vcpu);
+                                    }
                                     VcpuExit::Hlt => break,
                                     VcpuExit::Shutdown => break,
                                     VcpuExit::InternalError => {
@@ -647,7 +662,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
     if let Some(host_ip) = cfg.host_ip {
         if let Some(netmask) = cfg.netmask {
             if let Some(mac_address) = cfg.mac_address {
-                let tap = Tap::new(false).map_err(Error::TapOpen)?;
+                let tap = Tap::new(false, false).map_err(Error::TapOpen)?;
                 tap.set_ip_addr(host_ip).map_err(Error::TapSetIp)?;
                 tap.set_netmask(netmask).map_err(Error::TapSetNetmask)?;
                 tap.set_mac_address(mac_address)

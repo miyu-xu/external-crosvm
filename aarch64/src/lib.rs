@@ -11,16 +11,17 @@ use std::io;
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 
-use arch::{RunnableLinuxVm, VmComponents, VmImage};
-use devices::{
-    get_serial_tty_string, Bus, BusError, PciConfigMmio, PciDevice, PciInterruptPin,
-    SerialParameters,
+use arch::{
+    get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
+    VmComponents, VmImage,
 };
+use devices::{Bus, BusError, PciConfigMmio, PciDevice, PciInterruptPin};
 use io_jail::Minijail;
 use remain::sorted;
 use resources::SystemAllocator;
 use sync::Mutex;
 use sys_util::{EventFd, GuestAddress, GuestMemory, GuestMemoryError};
+use vm_control::VmIrqRequestSocket;
 
 use kvm::*;
 use kvm_sys::kvm_device_attr;
@@ -123,6 +124,7 @@ pub enum Error {
     CreateSocket(io::Error),
     CreateVcpu(sys_util::Error),
     CreateVm(sys_util::Error),
+    GetSerialCmdline(GetSerialCmdlineError),
     InitrdLoadFailure(arch::LoadImageError),
     KernelLoadFailure(arch::LoadImageError),
     KernelMissing,
@@ -155,6 +157,7 @@ impl Display for Error {
             CreateSocket(e) => write!(f, "failed to create socket: {}", e),
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create vm: {}", e),
+            GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
             InitrdLoadFailure(e) => write!(f, "initrd cound not be loaded: {}", e),
             KernelLoadFailure(e) => write!(f, "kernel cound not be loaded: {}", e),
             KernelMissing => write!(f, "aarch64 requires a kernel"),
@@ -195,7 +198,8 @@ impl arch::LinuxArch for AArch64 {
     fn build_vm<F, E>(
         mut components: VmComponents,
         _split_irqchip: bool,
-        serial_parameters: &BTreeMap<u8, SerialParameters>,
+        _ioapic_device_socket: VmIrqRequestSocket,
+        serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         create_devices: F,
     ) -> Result<RunnableLinuxVm>
@@ -243,9 +247,14 @@ impl arch::LinuxArch for AArch64 {
 
         let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
             .map_err(|e| Error::CreateDevices(Box::new(e)))?;
-        let (pci, pci_irqs, pid_debug_label_map) =
-            arch::generate_pci_root(pci_devices, &mut mmio_bus, &mut resources, &mut vm)
-                .map_err(Error::CreatePciRoot)?;
+        let (pci, pci_irqs, pid_debug_label_map) = arch::generate_pci_root(
+            pci_devices,
+            &mut None,
+            &mut mmio_bus,
+            &mut resources,
+            &mut vm,
+        )
+        .map_err(Error::CreatePciRoot)?;
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci)));
 
         // ARM doesn't really use the io bus like x86, so just create an empty bus.
@@ -255,11 +264,11 @@ impl arch::LinuxArch for AArch64 {
 
         let com_evt_1_3 = EventFd::new().map_err(Error::CreateEventFd)?;
         let com_evt_2_4 = EventFd::new().map_err(Error::CreateEventFd)?;
-        let stdio_serial_num = arch::add_serial_devices(
+        arch::add_serial_devices(
             &mut mmio_bus,
             &com_evt_1_3,
             &com_evt_2_4,
-            &serial_parameters,
+            serial_parameters,
             serial_jail,
         )
         .map_err(Error::CreateSerialDevices)?;
@@ -278,7 +287,9 @@ impl arch::LinuxArch for AArch64 {
             )
             .map_err(Error::RegisterPci)?;
 
-        let mut cmdline = Self::get_base_linux_cmdline(stdio_serial_num);
+        let mut cmdline = Self::get_base_linux_cmdline();
+        get_serial_cmdline(&mut cmdline, serial_parameters, "mmio")
+            .map_err(Error::GetSerialCmdline)?;
         for param in components.extra_kernel_params {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;
         }
@@ -314,6 +325,8 @@ impl arch::LinuxArch for AArch64 {
             vcpus,
             vcpu_affinity,
             irq_chip,
+            split_irqchip: None,
+            gsi_relay: None,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -379,12 +392,8 @@ impl AArch64 {
     }
 
     /// This returns a base part of the kernel command for this architecture
-    fn get_base_linux_cmdline(stdio_serial_num: Option<u8>) -> kernel_cmdline::Cmdline {
+    fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(sys_util::pagesize());
-        if let Some(stdio_serial_num) = stdio_serial_num {
-            let tty_string = get_serial_tty_string(stdio_serial_num);
-            cmdline.insert("console", &tty_string).unwrap();
-        }
         cmdline.insert_str("panic=-1").unwrap();
         cmdline
     }

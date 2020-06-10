@@ -9,21 +9,23 @@ use std::cmp::{max, min};
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
 use std::fmt::{self, Display};
-use std::fs::File;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use resources::Alloc;
+use sync::Mutex;
 use sys_util::{error, GuestAddress, GuestMemory};
-use vm_control::VmMemoryControlRequestSocket;
+use vm_control::{ExternallyMappedHostMemoryRequests, VmMemoryControlRequestSocket};
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{Backend, DisplayBackend, VIRTIO_F_VERSION_1};
+use crate::virtio::resource_bridge::ResourceResponse;
 
 #[derive(Debug)]
 pub enum Error {
@@ -434,6 +436,7 @@ impl Backend for Virtio2DBackend {
         _event_devices: Vec<EventDevice>,
         _gpu_device_socket: VmMemoryControlRequestSocket,
         _pci_bar: Alloc,
+        _ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
         let mut display_opt = None;
         for display in possible_displays {
@@ -481,8 +484,8 @@ impl Backend for Virtio2DBackend {
     }
 
     /// If supported, export the resource with the given id to a file.
-    fn export_resource(&mut self, _id: u32) -> Option<File> {
-        None
+    fn export_resource(&mut self, _id: u32) -> ResourceResponse {
+        ResourceResponse::Invalid
     }
 
     /// Creates a fence with the given id that can be used to determine when the previous command

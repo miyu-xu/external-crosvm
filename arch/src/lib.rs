@@ -5,6 +5,7 @@
 pub mod android;
 pub mod fdt;
 pub mod pstore;
+pub mod serial;
 
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
@@ -15,16 +16,23 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use devices::split_irqchip_common::GsiRelay;
 use devices::virtio::VirtioDevice;
 use devices::{
-    Bus, BusDevice, BusError, PciDevice, PciDeviceError, PciInterruptPin, PciRoot, ProxyDevice,
-    SerialParameters, DEFAULT_SERIAL_PARAMS, SERIAL_ADDR,
+    Bus, BusDevice, BusError, PciAddress, PciDevice, PciDeviceError, PciInterruptPin, PciRoot,
+    ProxyDevice,
 };
 use io_jail::Minijail;
 use kvm::{IoeventAddress, Kvm, Vcpu, Vm};
 use resources::SystemAllocator;
 use sync::Mutex;
 use sys_util::{syslog, EventFd, GuestAddress, GuestMemory, GuestMemoryError};
+use vm_control::VmIrqRequestSocket;
+
+pub use serial::{
+    add_serial_devices, get_serial_cmdline, set_default_serial_parameters, GetSerialCmdlineError,
+    SerialHardware, SerialParameters, SerialType, SERIAL_ADDR,
+};
 
 pub enum VmImage {
     Kernel(File),
@@ -60,6 +68,8 @@ pub struct RunnableLinuxVm {
     pub vcpus: Vec<Vcpu>,
     pub vcpu_affinity: Vec<usize>,
     pub irq_chip: Option<File>,
+    pub split_irqchip: Option<(Arc<Mutex<devices::Pic>>, Arc<Mutex<devices::Ioapic>>)>,
+    pub gsi_relay: Option<Arc<GsiRelay>>,
     pub io_bus: Bus,
     pub mmio_bus: Bus,
     pub pid_debug_label_map: BTreeMap<u32, String>,
@@ -88,7 +98,8 @@ pub trait LinuxArch {
     fn build_vm<F, E>(
         components: VmComponents,
         split_irqchip: bool,
-        serial_parameters: &BTreeMap<u8, SerialParameters>,
+        ioapic_device_socket: VmIrqRequestSocket,
+        serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         create_devices: F,
     ) -> Result<RunnableLinuxVm, Self::Error>
@@ -114,9 +125,13 @@ pub enum DeviceRegistrationError {
     // Unable to create a pipe.
     CreatePipe(sys_util::Error),
     // Unable to create serial device from serial parameters
-    CreateSerialDevice(devices::SerialError),
+    CreateSerialDevice(serial::Error),
+    /// Could not clone an event fd.
+    EventFdClone(sys_util::Error),
     /// Could not create an event fd.
     EventFdCreate(sys_util::Error),
+    /// Missing a required serial device.
+    MissingRequiredSerialDevice(u8),
     /// Could not add a device to the mmio bus.
     MmioInsert(BusError),
     /// Failed to register ioevent with VM.
@@ -146,7 +161,9 @@ impl Display for DeviceRegistrationError {
             CreatePipe(e) => write!(f, "failed to create pipe: {}", e),
             CreateSerialDevice(e) => write!(f, "failed to create serial device: {}", e),
             Cmdline(e) => write!(f, "unable to add device to kernel command line: {}", e),
+            EventFdClone(e) => write!(f, "failed to clone eventfd: {}", e),
             EventFdCreate(e) => write!(f, "failed to create eventfd: {}", e),
+            MissingRequiredSerialDevice(n) => write!(f, "missing required serial device {}", n),
             MmioInsert(e) => write!(f, "failed to add to mmio bus: {}", e),
             RegisterIoevent(e) => write!(f, "failed to register ioevent to VM: {}", e),
             RegisterIrqfd(e) => write!(f, "failed to register irq eventfd to VM: {}", e),
@@ -163,6 +180,7 @@ impl Display for DeviceRegistrationError {
 /// Creates a root PCI device for use by this Vm.
 pub fn generate_pci_root(
     devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
+    gsi_relay: &mut Option<GsiRelay>,
     mmio_bus: &mut Bus,
     resources: &mut SystemAllocator,
     vm: &mut Vm,
@@ -172,8 +190,13 @@ pub fn generate_pci_root(
     let mut pci_irqs = Vec::new();
     let mut pid_labels = BTreeMap::new();
     for (dev_idx, (mut device, jail)) in devices.into_iter().enumerate() {
-        // Only support one bus.
-        device.assign_bus_dev(0, dev_idx as u8);
+        // Auto assign PCI device numbers starting from 1
+        let address = PciAddress {
+            bus: 0,
+            dev: 1 + dev_idx as u8,
+            func: 0,
+        };
+        device.assign_address(address);
 
         let mut keep_fds = device.keep_fds();
         syslog::push_fds(&mut keep_fds);
@@ -188,10 +211,22 @@ pub fn generate_pci_root(
             1 => PciInterruptPin::IntB,
             2 => PciInterruptPin::IntC,
             3 => PciInterruptPin::IntD,
-            _ => panic!(""), // Obviously not possible, but the compiler is not smart enough.
+            _ => unreachable!(), // Obviously not possible, but the compiler is not smart enough.
         };
-        vm.register_irqfd_resample(&irqfd, &irq_resample_fd, irq_num)
-            .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+        if let Some(relay) = gsi_relay {
+            relay.register_irqfd_resample(
+                irqfd
+                    .try_clone()
+                    .map_err(DeviceRegistrationError::EventFdClone)?,
+                irq_resample_fd
+                    .try_clone()
+                    .map_err(DeviceRegistrationError::EventFdClone)?,
+                irq_num as usize,
+            );
+        } else {
+            vm.register_irqfd_resample(&irqfd, &irq_resample_fd, irq_num)
+                .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+        }
         keep_fds.push(irqfd.as_raw_fd());
         keep_fds.push(irq_resample_fd.as_raw_fd());
         device.assign_irq(irqfd, irq_resample_fd, irq_num, pci_irq_pin);
@@ -221,7 +256,7 @@ pub fn generate_pci_root(
             device.on_sandboxed();
             Arc::new(Mutex::new(device))
         };
-        root.add_device(arced_dev.clone());
+        root.add_device(address, arced_dev.clone());
         for range in &ranges {
             mmio_bus
                 .insert(arced_dev.clone(), range.0, range.1, true)
@@ -235,70 +270,6 @@ pub fn generate_pci_root(
         }
     }
     Ok((root, pci_irqs, pid_labels))
-}
-
-/// Adds serial devices to the provided bus based on the serial parameters given. Returns the serial
-///  port number and serial device to be used for stdout if defined.
-///
-/// # Arguments
-///
-/// * `io_bus` - Bus to add the devices to
-/// * `com_evt_1_3` - eventfd for com1 and com3
-/// * `com_evt_1_4` - eventfd for com2 and com4
-/// * `io_bus` - Bus to add the devices to
-/// * `serial_parameters` - definitions of serial parameter configuationis. If a setting is not
-///     provided for a port, then it will use the default configuation.
-pub fn add_serial_devices(
-    io_bus: &mut Bus,
-    com_evt_1_3: &EventFd,
-    com_evt_2_4: &EventFd,
-    serial_parameters: &BTreeMap<u8, SerialParameters>,
-    serial_jail: Option<Minijail>,
-) -> Result<Option<u8>, DeviceRegistrationError> {
-    let mut stdio_serial_num = None;
-
-    for x in 0..=3 {
-        let com_evt = match x {
-            0 => com_evt_1_3,
-            1 => com_evt_2_4,
-            2 => com_evt_1_3,
-            3 => com_evt_2_4,
-            _ => com_evt_1_3,
-        };
-
-        let param = serial_parameters
-            .get(&(x + 1))
-            .unwrap_or(&DEFAULT_SERIAL_PARAMS[x as usize]);
-
-        if param.console {
-            stdio_serial_num = Some(x + 1);
-        }
-
-        let mut preserved_fds = Vec::new();
-        let com = param
-            .create_serial_device(&com_evt, &mut preserved_fds)
-            .map_err(DeviceRegistrationError::CreateSerialDevice)?;
-
-        match serial_jail.as_ref() {
-            Some(jail) => {
-                let com = Arc::new(Mutex::new(
-                    ProxyDevice::new(com, &jail, preserved_fds)
-                        .map_err(DeviceRegistrationError::ProxyDeviceCreation)?,
-                ));
-                io_bus
-                    .insert(com.clone(), SERIAL_ADDR[x as usize], 0x8, false)
-                    .unwrap();
-            }
-            None => {
-                let com = Arc::new(Mutex::new(com));
-                io_bus
-                    .insert(com.clone(), SERIAL_ADDR[x as usize], 0x8, false)
-                    .unwrap();
-            }
-        }
-    }
-
-    Ok(stdio_serial_num)
 }
 
 /// Errors for image loading.

@@ -8,9 +8,9 @@
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
-use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::usize;
 
 use libc::EINVAL;
@@ -18,6 +18,7 @@ use libc::EINVAL;
 use data_model::*;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
+use sync::Mutex;
 use sys_util::{error, warn, Error, GuestAddress, GuestMemory};
 
 use gpu_display::*;
@@ -27,16 +28,20 @@ use gpu_renderer::{
 };
 
 use super::protocol::{
-    AllocationMetadataResponse, GpuResponse, GpuResponsePlaneInfo, VIRTIO_GPU_CAPSET3,
-    VIRTIO_GPU_CAPSET_VIRGL, VIRTIO_GPU_CAPSET_VIRGL2, VIRTIO_GPU_MEMORY_HOST_COHERENT,
+    GpuResponse, GpuResponsePlaneInfo, VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE, VIRTIO_GPU_CAPSET3,
+    VIRTIO_GPU_CAPSET_VIRGL, VIRTIO_GPU_CAPSET_VIRGL2,
 };
 pub use crate::virtio::gpu::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_HOST_COHERENT, VIRTIO_GPU_F_MEMORY,
-    VIRTIO_GPU_F_VIRGL,
+    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    VIRTIO_GPU_F_RESOURCE_UUID, VIRTIO_GPU_F_VIRGL, VIRTIO_GPU_F_VULKAN,
 };
+use crate::virtio::resource_bridge::{PlaneInfo, ResourceInfo, ResourceResponse};
 
-use vm_control::{MaybeOwnedFd, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{
+    ExternallyMappedHostMemoryRequests, MaybeOwnedFd, VmMemoryControlRequestSocket,
+    VmMemoryRequest, VmMemoryResponse,
+};
 
 struct Virtio3DResource {
     width: u32,
@@ -44,6 +49,8 @@ struct Virtio3DResource {
     gpu_resource: GpuRendererResource,
     display_import: Option<(Rc<RefCell<GpuDisplay>>, u32)>,
     kvm_slot: Option<u32>,
+    size: u64,
+    blob_flags: u32,
 }
 
 impl Virtio3DResource {
@@ -54,21 +61,28 @@ impl Virtio3DResource {
             gpu_resource,
             display_import: None,
             kvm_slot: None,
+            blob_flags: 0,
+            // The size of the host resource isn't really zero, but it's undefined by
+            // virtio_gpu_resource_create_3d
+            size: 0,
         }
     }
 
-    pub fn v2_new(
+    pub fn blob_new(
         width: u32,
         height: u32,
-        kvm_slot: u32,
         gpu_resource: GpuRendererResource,
+        blob_flags: u32,
+        size: u64,
     ) -> Virtio3DResource {
         Virtio3DResource {
             width,
             height,
             gpu_resource,
             display_import: None,
-            kvm_slot: Some(kvm_slot),
+            kvm_slot: None,
+            blob_flags,
+            size,
         }
     }
 
@@ -225,8 +239,9 @@ impl Backend for Virtio3DBackend {
     fn features() -> u64 {
         1 << VIRTIO_GPU_F_VIRGL
             | 1 << VIRTIO_F_VERSION_1
-            | 1 << VIRTIO_GPU_F_MEMORY
-            | 1 << VIRTIO_GPU_F_HOST_COHERENT
+            | 1 << VIRTIO_GPU_F_RESOURCE_UUID
+            | 1 << VIRTIO_GPU_F_RESOURCE_BLOB
+            | 1 << VIRTIO_GPU_F_VULKAN
     }
 
     /// Returns the underlying Backend.
@@ -238,6 +253,7 @@ impl Backend for Virtio3DBackend {
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        _ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
         let mut renderer_flags = renderer_flags;
         let mut display_opt = None;
@@ -319,13 +335,19 @@ impl Backend for Virtio3DBackend {
     }
 
     /// If supported, export the resource with the given id to a file.
-    fn export_resource(&mut self, id: u32) -> Option<File> {
-        let test: Option<File> = self
-            .resources
+    fn export_resource(&mut self, id: u32) -> ResourceResponse {
+        self
+             .resources
             .get(&id) // Option<resource>
             .and_then(|resource| resource.gpu_resource.export().ok()) // Option<(Query, File)>
-            .and_then(|t| Some(t.1)); // Option<File>
-        return test;
+            .map(|(q, file)| {
+                ResourceResponse::Resource(ResourceInfo{file, planes: [
+                    PlaneInfo{offset: q.out_offsets[0], stride: q.out_strides[0]},
+                    PlaneInfo{offset: q.out_offsets[1], stride: q.out_strides[1]},
+                    PlaneInfo{offset: q.out_offsets[2], stride: q.out_strides[2]},
+                    PlaneInfo{offset: q.out_offsets[3], stride: q.out_strides[3]},
+                ]})
+            }).unwrap_or(ResourceResponse::Invalid)
     }
 
     /// Creates a fence with the given id that can be used to determine when the previous command
@@ -474,6 +496,23 @@ impl Backend for Virtio3DBackend {
     /// Moves the cursor's position to the given coordinates.
     fn move_cursor(&mut self, x: u32, y: u32) -> GpuResponse {
         self.base.move_cursor(x, y)
+    }
+
+    /// Returns a uuid for the resource.
+    fn resource_assign_uuid(&mut self, id: u32) -> GpuResponse {
+        match self.resources.entry(id) {
+            Entry::Vacant(_) => GpuResponse::ErrInvalidResourceId,
+            Entry::Occupied(_) => {
+                // TODO(stevensd): use real uuids once the virtio wayland protocol is updated to
+                // handle more than 32 bits. For now, the virtwl driver knows that the uuid is
+                // actually just the resource id.
+                let mut uuid: [u8; 16] = [0; 16];
+                for (idx, byte) in id.to_be_bytes().iter().enumerate() {
+                    uuid[12 + idx] = *byte;
+                }
+                GpuResponse::OkResourceUuid { uuid }
+            }
+        }
     }
 
     /// Gets the renderer's capset information associated with `index`.
@@ -751,51 +790,28 @@ impl Backend for Virtio3DBackend {
         }
     }
 
-    fn allocation_metadata(
-        &mut self,
-        request_id: u32,
-        request: Vec<u8>,
-        mut response: Vec<u8>,
-    ) -> GpuResponse {
-        let res = self.renderer.allocation_metadata(&request, &mut response);
-
-        match res {
-            Ok(_) => {
-                let res_info = AllocationMetadataResponse {
-                    request_id,
-                    response,
-                };
-
-                GpuResponse::OkAllocationMetadata { res_info }
-            }
-            Err(_) => {
-                error!("failed to get metadata");
-                GpuResponse::ErrUnspec
-            }
-        }
-    }
-
-    fn resource_create_v2(
+    fn resource_create_blob(
         &mut self,
         resource_id: u32,
-        guest_memory_type: u32,
-        guest_caching_type: u32,
+        ctx_id: u32,
+        blob_mem: u32,
+        blob_flags: u32,
+        blob_id: u64,
         size: u64,
-        pci_addr: u64,
-        mem: &GuestMemory,
         vecs: Vec<(GuestAddress, usize)>,
-        args: Vec<u8>,
+        mem: &GuestMemory,
     ) -> GpuResponse {
         match self.resources.entry(resource_id) {
             Entry::Vacant(entry) => {
-                let resource = match self.renderer.resource_create_v2(
+                let resource = match self.renderer.resource_create_blob(
                     resource_id,
-                    guest_memory_type,
-                    guest_caching_type,
+                    ctx_id,
+                    blob_mem,
+                    blob_flags,
+                    blob_id,
                     size,
-                    mem,
                     &vecs,
-                    &args,
+                    mem,
                 ) {
                     Ok(resource) => resource,
                     Err(e) => {
@@ -804,102 +820,127 @@ impl Backend for Virtio3DBackend {
                     }
                 };
 
-                match guest_memory_type {
-                    VIRTIO_GPU_MEMORY_HOST_COHERENT => {
-                        let dma_buf_fd = match resource.export() {
-                            Ok(export) => export.1,
-                            Err(e) => {
-                                error!("failed to export plane fd: {}", e);
-                                return GpuResponse::ErrUnspec;
-                            }
-                        };
+                entry.insert(Virtio3DResource::blob_new(
+                    self.base.display_width,
+                    self.base.display_height,
+                    resource,
+                    blob_flags,
+                    size,
+                ));
 
-                        let request = VmMemoryRequest::RegisterMemoryAtAddress(
-                            self.pci_bar,
-                            MaybeOwnedFd::Borrowed(dma_buf_fd.as_raw_fd()),
-                            size as usize,
-                            pci_addr,
-                        );
-
-                        match self.gpu_device_socket.send(&request) {
-                            Ok(_resq) => match self.gpu_device_socket.recv() {
-                                Ok(response) => match response {
-                                    VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
-                                        entry.insert(Virtio3DResource::v2_new(
-                                            self.base.display_width,
-                                            self.base.display_height,
-                                            slot,
-                                            resource,
-                                        ));
-                                        GpuResponse::OkNoData
-                                    }
-                                    VmMemoryResponse::Err(e) => {
-                                        error!("received an error: {}", e);
-                                        GpuResponse::ErrUnspec
-                                    }
-                                    _ => {
-                                        error!("recieved an unexpected response");
-                                        GpuResponse::ErrUnspec
-                                    }
-                                },
-                                Err(e) => {
-                                    error!("failed to receive data: {}", e);
-                                    GpuResponse::ErrUnspec
-                                }
-                            },
-                            Err(e) => {
-                                error!("failed to send request: {}", e);
-                                GpuResponse::ErrUnspec
-                            }
-                        }
-                    }
-                    _ => {
-                        entry.insert(Virtio3DResource::new(
-                            self.base.display_width,
-                            self.base.display_height,
-                            resource,
-                        ));
-
-                        GpuResponse::OkNoData
-                    }
-                }
+                GpuResponse::OkNoData
             }
             Entry::Occupied(_) => GpuResponse::ErrInvalidResourceId,
         }
     }
 
-    fn resource_v2_unref(&mut self, resource_id: u32) -> GpuResponse {
-        match self.resources.remove(&resource_id) {
-            Some(entry) => match entry.kvm_slot {
-                Some(kvm_slot) => {
-                    let request = VmMemoryRequest::UnregisterMemory(kvm_slot);
-                    match self.gpu_device_socket.send(&request) {
-                        Ok(_resq) => match self.gpu_device_socket.recv() {
-                            Ok(response) => match response {
-                                VmMemoryResponse::Ok => GpuResponse::OkNoData,
-                                VmMemoryResponse::Err(e) => {
-                                    error!("received an error: {}", e);
-                                    GpuResponse::ErrUnspec
-                                }
-                                _ => {
-                                    error!("recieved an unexpected response");
-                                    GpuResponse::ErrUnspec
-                                }
-                            },
-                            Err(e) => {
-                                error!("failed to receive data: {}", e);
-                                GpuResponse::ErrUnspec
-                            }
-                        },
-                        Err(e) => {
-                            error!("failed to send request: {}", e);
-                            GpuResponse::ErrUnspec
-                        }
-                    }
-                }
-                None => GpuResponse::OkNoData,
-            },
-            None => GpuResponse::ErrInvalidResourceId,
+    fn resource_map_blob(&mut self, resource_id: u32, offset: u64) -> GpuResponse {
+        let resource = match self.resources.get_mut(&resource_id) {
+            Some(r) => r,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+
+        if resource.blob_flags & VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE == 0 {
+            error!("resource not mappable");
+            return GpuResponse::ErrUnspec;
+        }
+
+        let map_info = match self.renderer.resource_map_info(resource_id) {
+            Ok(map_info) => map_info,
+            Err(e) => {
+                error!("failed to get map info: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        let dma_buf_fd = match resource.gpu_resource.export() {
+            Ok(export) => export.1,
+            Err(e) => {
+                error!("failed to export plane fd: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        let request = VmMemoryRequest::RegisterFdAtPciBarOffset(
+            self.pci_bar,
+            MaybeOwnedFd::Borrowed(dma_buf_fd.as_raw_fd()),
+            resource.size as usize,
+            offset,
+        );
+
+        match self.gpu_device_socket.send(&request) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("failed to send request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        }
+
+        let response = match self.gpu_device_socket.recv() {
+            Ok(response) => response,
+            Err(e) => {
+                error!("failed to receive data: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        match response {
+            VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
+                resource.kvm_slot = Some(slot);
+                GpuResponse::OkMapInfo { map_info }
+            }
+            VmMemoryResponse::Err(e) => {
+                error!("received an error: {}", e);
+                GpuResponse::ErrUnspec
+            }
+            _ => {
+                error!("recieved an unexpected response");
+                GpuResponse::ErrUnspec
+            }
+        }
+    }
+
+    fn resource_unmap_blob(&mut self, resource_id: u32) -> GpuResponse {
+        let resource = match self.resources.get_mut(&resource_id) {
+            Some(r) => r,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+
+        let kvm_slot = match resource.kvm_slot {
+            Some(kvm_slot) => kvm_slot,
+            None => return GpuResponse::ErrUnspec,
+        };
+
+        let request = VmMemoryRequest::UnregisterMemory(kvm_slot);
+        match self.gpu_device_socket.send(&request) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("failed to send request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        }
+
+        let response = match self.gpu_device_socket.recv() {
+            Ok(response) => response,
+            Err(e) => {
+                error!("failed to receive data: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        match response {
+            VmMemoryResponse::Ok => {
+                resource.kvm_slot = None;
+                GpuResponse::OkNoData
+            }
+            VmMemoryResponse::Err(e) => {
+                error!("received an error: {}", e);
+                GpuResponse::ErrUnspec
+            }
+            _ => {
+                error!("recieved an unexpected response");
+                GpuResponse::ErrUnspec
+            }
         }
     }
 }

@@ -75,7 +75,7 @@ fn build_plugin(src: &str) -> RemovePath {
     let status = child.wait().expect("failed to wait for compiler");
     assert!(status.success(), "failed to build plugin");
 
-    RemovePath(PathBuf::from(out_bin))
+    RemovePath(out_bin)
 }
 
 fn run_plugin(bin_path: &Path, with_sandbox: bool) {
@@ -258,6 +258,11 @@ fn test_extensions() {
 #[test]
 fn test_supported_cpuid() {
     test_plugin(include_str!("plugin_supported_cpuid.c"));
+}
+
+#[test]
+fn test_enable_cap() {
+    test_plugin(include_str!("plugin_enable_cap.c"));
 }
 
 #[test]

@@ -4,6 +4,7 @@
 
 //! Track memory regions that are mapped to the guest VM.
 
+use std::convert::AsRef;
 use std::convert::TryFrom;
 use std::fmt::{self, Display};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -83,7 +84,7 @@ impl Display for Error {
 struct MemoryRegion {
     mapping: MemoryMapping,
     guest_base: GuestAddress,
-    memfd_offset: usize,
+    memfd_offset: u64,
 }
 
 fn region_end(region: &MemoryRegion) -> GuestAddress {
@@ -104,6 +105,12 @@ pub struct GuestMemory {
 impl AsRawFd for GuestMemory {
     fn as_raw_fd(&self) -> RawFd {
         self.memfd.as_raw_fd()
+    }
+}
+
+impl AsRef<SharedMemory> for GuestMemory {
+    fn as_ref(&self) -> &SharedMemory {
+        &self.memfd
     }
 }
 
@@ -168,7 +175,7 @@ impl GuestMemory {
                 memfd_offset: offset,
             });
 
-            offset += size;
+            offset += size as u64;
         }
 
         Ok(GuestMemory {
@@ -255,7 +262,7 @@ impl GuestMemory {
     ///  * memfd_offset: usize
     pub fn with_regions<F, E>(&self, mut cb: F) -> result::Result<(), E>
     where
-        F: FnMut(usize, GuestAddress, usize, usize, usize) -> result::Result<(), E>,
+        F: FnMut(usize, GuestAddress, usize, usize, u64) -> result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(
@@ -577,10 +584,10 @@ impl GuestMemory {
     ///                .expect("failed to get offset");
     /// assert_eq!(offset, 0x3500);
     /// ```
-    pub fn offset_from_base(&self, guest_addr: GuestAddress) -> Result<usize> {
+    pub fn offset_from_base(&self, guest_addr: GuestAddress) -> Result<u64> {
         for region in self.regions.iter() {
             if guest_addr >= region.guest_base && guest_addr < region_end(region) {
-                return Ok(region.memfd_offset + guest_addr.offset_from(region.guest_base) as usize);
+                return Ok(region.memfd_offset + guest_addr.offset_from(region.guest_base) as u64);
             }
         }
         Err(Error::InvalidGuestAddress(guest_addr))

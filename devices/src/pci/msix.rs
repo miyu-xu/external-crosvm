@@ -3,19 +3,20 @@
 // found in the LICENSE file.
 
 use crate::pci::{PciCapability, PciCapabilityID};
-use msg_socket::{MsgReceiver, MsgSender};
+use msg_socket::{MsgError, MsgReceiver, MsgSender};
 use std::convert::TryInto;
+use std::fmt::{self, Display};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
-use sys_util::{error, EventFd};
+use sys_util::{error, Error as SysError, EventFd};
 use vm_control::{MaybeOwnedFd, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse};
 
 use data_model::DataInit;
 
 const MAX_MSIX_VECTORS_PER_DEVICE: u16 = 2048;
-const MSIX_TABLE_ENTRIES_MODULO: u64 = 16;
-const MSIX_PBA_ENTRIES_MODULO: u64 = 8;
-const BITS_PER_PBA_ENTRY: usize = 64;
+pub const MSIX_TABLE_ENTRIES_MODULO: u64 = 16;
+pub const MSIX_PBA_ENTRIES_MODULO: u64 = 8;
+pub const BITS_PER_PBA_ENTRY: usize = 64;
 const FUNCTION_MASK_BIT: u16 = 0x4000;
 const MSIX_ENABLE_BIT: u16 = 0x8000;
 
@@ -60,6 +61,40 @@ pub struct MsixConfig {
     msix_num: u16,
 }
 
+enum MsixError {
+    AddMsiRoute(SysError),
+    AddMsiRouteRecv(MsgError),
+    AddMsiRouteSend(MsgError),
+    AllocateOneMsi(SysError),
+    AllocateOneMsiRecv(MsgError),
+    AllocateOneMsiSend(MsgError),
+}
+
+impl Display for MsixError {
+    #[remain::check]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::MsixError::*;
+
+        #[sorted]
+        match self {
+            AddMsiRoute(e) => write!(f, "AddMsiRoute failed: {}", e),
+            AddMsiRouteRecv(e) => write!(f, "failed to receive AddMsiRoute response: {}", e),
+            AddMsiRouteSend(e) => write!(f, "failed to send AddMsiRoute request: {}", e),
+            AllocateOneMsi(e) => write!(f, "AllocateOneMsi failed: {}", e),
+            AllocateOneMsiRecv(e) => write!(f, "failed to receive AllocateOneMsi response: {}", e),
+            AllocateOneMsiSend(e) => write!(f, "failed to send AllocateOneMsi request: {}", e),
+        }
+    }
+}
+
+type MsixResult<T> = std::result::Result<T, MsixError>;
+
+pub enum MsixStatus {
+    Changed,
+    EntryChanged(usize),
+    NothingToDo,
+}
+
 impl MsixConfig {
     pub fn new(msix_vectors: u16, vm_socket: Arc<VmIrqRequestSocket>) -> Self {
         assert!(msix_vectors <= MAX_MSIX_VECTORS_PER_DEVICE);
@@ -94,6 +129,18 @@ impl MsixConfig {
         self.masked
     }
 
+    /// Check whether the Function Mask bit in MSIX table Message Control
+    /// word in set or not.
+    /// If true, the vector is masked.
+    /// If false, the vector is unmasked.
+    pub fn table_masked(&self, index: usize) -> bool {
+        if index >= self.table_entries.len() {
+            true
+        } else {
+            self.table_entries[index].masked()
+        }
+    }
+
     /// Check whether the MSI-X Enable bit in Message Control word in set or not.
     /// if 1, the function is permitted to use MSI-X to request service.
     pub fn enabled(&self) -> bool {
@@ -118,7 +165,7 @@ impl MsixConfig {
 
     /// Write to the MSI-X Capability Structure.
     /// Only the top 2 bits in Message Control Word are writable.
-    pub fn write_msix_capability(&mut self, offset: u64, data: &[u8]) {
+    pub fn write_msix_capability(&mut self, offset: u64, data: &[u8]) -> MsixStatus {
         if offset == 2 && data.len() == 2 {
             let reg = u16::from_le_bytes([data[0], data[1]]);
             let old_masked = self.masked;
@@ -128,7 +175,10 @@ impl MsixConfig {
             self.enabled = (reg & MSIX_ENABLE_BIT) == MSIX_ENABLE_BIT;
 
             if !old_enabled && self.enabled {
-                self.msix_enable();
+                if let Err(e) = self.msix_enable() {
+                    error!("failed to enable MSI-X: {}", e);
+                    self.enabled = false;
+                }
             }
 
             // If the Function Mask bit was set, and has just been cleared, it's
@@ -141,6 +191,9 @@ impl MsixConfig {
                         self.inject_msix_and_clear_pba(index);
                     }
                 }
+                return MsixStatus::Changed;
+            } else if !old_masked && self.masked {
+                return MsixStatus::Changed;
             }
         } else {
             error!(
@@ -148,9 +201,10 @@ impl MsixConfig {
                 offset
             );
         }
+        MsixStatus::NothingToDo
     }
 
-    fn add_msi_route(&self, index: u16, gsi: u32) {
+    fn add_msi_route(&self, index: u16, gsi: u32) -> MsixResult<()> {
         let mut data: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
         self.read_msix_table((index * 16).into(), data.as_mut());
         let msi_address: u64 = u64::from_le_bytes(data);
@@ -159,44 +213,53 @@ impl MsixConfig {
         let msi_data: u32 = u32::from_le_bytes(data);
 
         if msi_address == 0 {
-            return;
+            return Ok(());
         }
 
-        if let Err(e) = self.msi_device_socket.send(&VmIrqRequest::AddMsiRoute {
-            gsi,
-            msi_address,
-            msi_data,
-        }) {
-            error!("failed to send AddMsiRoute request: {:?}", e);
-            return;
+        self.msi_device_socket
+            .send(&VmIrqRequest::AddMsiRoute {
+                gsi,
+                msi_address,
+                msi_data,
+            })
+            .map_err(MsixError::AddMsiRouteSend)?;
+        if let VmIrqResponse::Err(e) = self
+            .msi_device_socket
+            .recv()
+            .map_err(MsixError::AddMsiRouteRecv)?
+        {
+            return Err(MsixError::AddMsiRoute(e));
         }
-        if self.msi_device_socket.recv().is_err() {
-            error!("Faied to receive AddMsiRoute Response");
-        }
+        Ok(())
     }
 
-    fn msix_enable(&mut self) {
+    fn msix_enable(&mut self) -> MsixResult<()> {
         self.irq_vec.clear();
         for i in 0..self.msix_num {
             let irqfd = EventFd::new().unwrap();
-            if let Err(e) = self.msi_device_socket.send(&VmIrqRequest::AllocateOneMsi {
-                irqfd: MaybeOwnedFd::Borrowed(irqfd.as_raw_fd()),
-            }) {
-                error!("failed to send AllocateOneMsi request: {:?}", e);
-                continue;
-            }
+            self.msi_device_socket
+                .send(&VmIrqRequest::AllocateOneMsi {
+                    irqfd: MaybeOwnedFd::Borrowed(irqfd.as_raw_fd()),
+                })
+                .map_err(MsixError::AllocateOneMsiSend)?;
             let irq_num: u32;
-            match self.msi_device_socket.recv() {
-                Ok(VmIrqResponse::AllocateOneMsi { gsi }) => irq_num = gsi,
-                _ => continue,
+            match self
+                .msi_device_socket
+                .recv()
+                .map_err(MsixError::AllocateOneMsiRecv)?
+            {
+                VmIrqResponse::AllocateOneMsi { gsi } => irq_num = gsi,
+                VmIrqResponse::Err(e) => return Err(MsixError::AllocateOneMsi(e)),
+                _ => unreachable!(),
             }
             self.irq_vec.push(IrqfdGsi {
                 irqfd,
                 gsi: irq_num,
             });
 
-            self.add_msi_route(i, irq_num);
+            self.add_msi_route(i, irq_num)?;
         }
+        Ok(())
     }
 
     /// Read MSI-X table
@@ -263,7 +326,7 @@ impl MsixConfig {
     /// Vector Control: only bit 0 (Mask Bit) is not reserved: when this bit
     ///     is set, the function is prohibited from sending a message using
     ///     this MSI-X Table entry.
-    pub fn write_msix_table(&mut self, offset: u64, data: &[u8]) {
+    pub fn write_msix_table(&mut self, offset: u64, data: &[u8]) -> MsixStatus {
         let index: usize = (offset / MSIX_TABLE_ENTRIES_MODULO) as usize;
         let modulo_offset = offset % MSIX_TABLE_ENTRIES_MODULO;
 
@@ -305,7 +368,9 @@ impl MsixConfig {
                 || old_entry.msg_data != new_entry.msg_data)
         {
             let irq_num = self.irq_vec[index].gsi;
-            self.add_msi_route(index as u16, irq_num);
+            if let Err(e) = self.add_msi_route(index as u16, irq_num) {
+                error!("add_msi_route failed: {}", e);
+            }
         }
 
         // After the MSI-X table entry has been updated, it is necessary to
@@ -317,13 +382,17 @@ impl MsixConfig {
         // device.
 
         // Check if bit has been flipped
-        if !self.masked()
-            && old_entry.masked()
-            && !self.table_entries[index].masked()
-            && self.get_pba_bit(index as u16) == 1
-        {
-            self.inject_msix_and_clear_pba(index);
+        if !self.masked() {
+            if old_entry.masked() && !self.table_entries[index].masked() {
+                if self.get_pba_bit(index as u16) == 1 {
+                    self.inject_msix_and_clear_pba(index);
+                }
+                return MsixStatus::EntryChanged(index);
+            } else if !old_entry.masked() && self.table_entries[index].masked() {
+                return MsixStatus::EntryChanged(index);
+            }
         }
+        MsixStatus::NothingToDo
     }
 
     /// Read PBA Entries
@@ -432,6 +501,17 @@ impl MsixConfig {
     /// Return the raw fd of the MSI device socket
     pub fn get_msi_socket(&self) -> RawFd {
         self.msi_device_socket.as_ref().as_raw_fd()
+    }
+
+    /// Return irqfd of MSI-X Table entry
+    ///
+    ///  # Arguments
+    ///  * 'vector' - the index to the MSI-X table entry
+    pub fn get_irqfd(&self, vector: usize) -> Option<&EventFd> {
+        match self.irq_vec.get(vector) {
+            Some(irq) => Some(&irq.irqfd),
+            None => None,
+        }
     }
 }
 

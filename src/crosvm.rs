@@ -16,11 +16,11 @@ use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use arch::Pstore;
+use arch::{Pstore, SerialHardware, SerialParameters};
 use devices::virtio::fs::passthrough;
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::GpuParameters;
-use devices::SerialParameters;
+use devices::Ac97Parameters;
 use libc::{getegid, geteuid};
 
 static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
@@ -57,8 +57,8 @@ pub struct GidMap {
     pub count: u32,
 }
 
-pub const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 800;
-pub const DEFAULT_TOUCH_DEVICE_HEIGHT: u32 = 1280;
+pub const DEFAULT_TOUCH_DEVICE_HEIGHT: u32 = 1024;
+pub const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 1280;
 
 pub struct TouchDeviceOption {
     path: PathBuf,
@@ -176,6 +176,7 @@ pub struct Config {
     pub host_ip: Option<net::Ipv4Addr>,
     pub netmask: Option<net::Ipv4Addr>,
     pub mac_address: Option<net_util::MacAddress>,
+    pub net_vq_pairs: Option<u16>,
     pub vhost_net: bool,
     pub tap_fd: Vec<RawFd>,
     pub cid: Option<u64>,
@@ -189,12 +190,10 @@ pub struct Config {
     #[cfg(feature = "gpu")]
     pub gpu_parameters: Option<GpuParameters>,
     pub software_tpm: bool,
-    pub cras_audio: bool,
-    pub cras_capture: bool,
-    pub null_audio: bool,
     pub display_window_keyboard: bool,
     pub display_window_mouse: bool,
-    pub serial_parameters: BTreeMap<u8, SerialParameters>,
+    pub ac97_parameters: Vec<Ac97Parameters>,
+    pub serial_parameters: BTreeMap<(SerialHardware, u8), SerialParameters>,
     pub syslog_tag: Option<String>,
     pub virtio_single_touch: Option<TouchDeviceOption>,
     pub virtio_trackpad: Option<TouchDeviceOption>,
@@ -202,7 +201,7 @@ pub struct Config {
     pub virtio_keyboard: Option<PathBuf>,
     pub virtio_input_evdevs: Vec<PathBuf>,
     pub split_irqchip: bool,
-    pub vfio: Option<PathBuf>,
+    pub vfio: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -225,6 +224,7 @@ impl Default for Config {
             host_ip: None,
             netmask: None,
             mac_address: None,
+            net_vq_pairs: None,
             vhost_net: false,
             tap_fd: Vec::new(),
             cid: None,
@@ -240,9 +240,7 @@ impl Default for Config {
             sandbox: !cfg!(feature = "default-no-sandbox"),
             seccomp_policy_dir: PathBuf::from(SECCOMP_POLICY_DIR),
             seccomp_log_failures: false,
-            cras_audio: false,
-            cras_capture: false,
-            null_audio: false,
+            ac97_parameters: Vec::new(),
             serial_parameters: BTreeMap::new(),
             syslog_tag: None,
             virtio_single_touch: None,
@@ -251,7 +249,7 @@ impl Default for Config {
             virtio_keyboard: None,
             virtio_input_evdevs: Vec::new(),
             split_irqchip: false,
-            vfio: None,
+            vfio: Vec::new(),
         }
     }
 }
