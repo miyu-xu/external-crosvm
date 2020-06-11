@@ -11,6 +11,7 @@ rust_test_host {
     ],
     relative_install_path: "kvm_tests",
     test_suites: ["general-tests"],
+    test_per_src: true,
     auto_gen_config: true,
     rlibs: [
         "libdata_model",

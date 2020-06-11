@@ -29,6 +29,7 @@ rust_test_host {
     ],
     relative_install_path: "msg_socket_tests",
     test_suites: ["general-tests"],
+    test_per_src: true,
     auto_gen_config: true,
     rlibs: [
         "libcros_async",

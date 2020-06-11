@@ -11,6 +11,7 @@ rust_test_host {
     relative_install_path: "bit_field_tests",
     test_suites: ["general-tests"],
     auto_gen_config: true,
+    test_per_src: true,
     rlibs: [
         "libbit_field",
     ],
