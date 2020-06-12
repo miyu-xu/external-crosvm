@@ -1,0 +1,8 @@
+Presubmit-Verified+1: Treehugger Robot <treehugger-gerrit@google.com>
+Lint+1: Lint 🤖 <android-build-prod-ayeaye@system.gserviceaccount.com>
+Code-Review+2: Alistair Delva <adelva@google.com>
+Submitted-by: Ivan Lozano <ivanlozano@google.com>
+Submitted-at: Fri, 12 Jun 2020 16:12:25 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1331015
+Project: platform/external/crosvm
+Branch: refs/heads/master
