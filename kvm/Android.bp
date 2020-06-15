@@ -4,7 +4,7 @@ rust_defaults {
     name: "kvm_tests_defaults",
     defaults: ["crosvm_defaults"],
     crate_name: "kvm",
-    relative_install_path: "kvm_tests",
+    relative_install_path: "hack_kvm_tests",
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rlibs: [
@@ -44,7 +44,7 @@ rust_test_host {
     defaults: ["crosvm_defaults"],
     crate_name: "kvm",
     srcs: ["src/lib.rs"],
-    relative_install_path: "kvm_tests",
+    relative_install_path: "hack_kvm_tests",
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rlibs: [
