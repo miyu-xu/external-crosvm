@@ -1,0 +1,11 @@
+Verified+1: Luca Stefani <luca.stefani.ge1@gmail.com>
+Code-Review+1: Luca Stefani <luca.stefani.ge1@gmail.com>
+Code-Review+2: Alistair Delva <adelva@google.com>
+Code-Review+2: Stephen Barber <smbarber@google.com>
+Autosubmit+1: Alistair Delva <adelva@google.com>
+Presubmit-Verified+1: Treehugger Robot <treehugger-gerrit@google.com>
+Submitted-by: Treehugger Robot <treehugger-gerrit@google.com>
+Submitted-at: Mon, 29 Jun 2020 19:40:29 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1351923
+Project: platform/external/crosvm
+Branch: refs/heads/master
