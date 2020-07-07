@@ -27,6 +27,14 @@ rust_library {
     proc_macros: [
         "libremain",
     ],
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_arm64: {
+            enabled: false,
+        },
+    },
 }
 
 rust_test_host {

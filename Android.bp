@@ -65,6 +65,16 @@ rust_binary {
                 "-L device/google/cuttlefish_vmm/x86_64-linux-gnu/bin/",
             ],
         },
+        android_x86_64: {
+            rlibs: [
+                "libx86_64_rust",
+            ],
+        },
+        android_arm64: {
+            rlibs: [
+                "libaarch64",
+            ],
+        },
         darwin: {
             enabled: false,
         },
@@ -108,7 +118,6 @@ rust_binary {
         "libsys_util",
         "libvhost",
         "libvm_control",
-        "libx86_64_rust",
     ],
     proc_macros: [
         "libenumn",
@@ -222,6 +231,17 @@ rust_library {
             rlibs: [
                 "libaudio_streams",
                 "liblibcras",
+                "libx86_64_rust",
+            ],
+        },
+        android_x86_64: {
+            rlibs: [
+                "libx86_64_rust",
+            ],
+        },
+        android_arm64: {
+            rlibs: [
+                "libaarch64",
             ],
         },
     },
@@ -252,7 +272,6 @@ rust_library {
         "libsys_util",
         "libvhost",
         "libvm_control",
-        "libx86_64_rust",
     ],
     proc_macros: [
         "libenumn",
