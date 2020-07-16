@@ -30,7 +30,7 @@ rust_defaults {
     },
 }
 
-rust_host {
+rust_binary {
     name: "crosvm",
     defaults: ["crosvm_defaults"],
     host_supported: true,
