@@ -22,6 +22,8 @@
 //! }
 //! ```
 
+#[cfg(target_os = "android")]
+use crate::android::liblog::{android_log, log_id_t, LogPriority};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt::{self, Display};
@@ -154,6 +156,7 @@ fn get_proc_name() -> Option<String> {
 // TODO(zachr): Once https://android-review.googlesource.com/470998 lands, there won't be any
 // libraries in use that hard depend on libc's syslogger. Remove this and go back to making the
 // connection directly once minjail is ready.
+#[cfg(target_os = "linux")]
 fn openlog_and_get_socket() -> Result<UnixDatagram, Error> {
     // closelog first in case there was already a file descriptor open.  Safe because it takes no
     // arguments and just closes an open file descriptor.  Does nothing if the file descriptor
@@ -195,10 +198,13 @@ struct State {
 
 impl State {
     fn new() -> Result<State, Error> {
-        let s = openlog_and_get_socket()?;
+        #[cfg(target_os = "android")]
+        let s = None;
+        #[cfg(target_os = "linux")]
+        let s = Some(openlog_and_get_socket()?);
         Ok(State {
             stderr: true,
-            socket: Some(s),
+            socket: s,
             file: None,
             proc_name: get_proc_name(),
         })
@@ -283,6 +289,7 @@ pub fn set_proc_name<T: Into<String>>(proc_name: T) {
 ///
 /// # Arguments
 /// * `enable` - `true` to enable echoing to syslog, `false` to disable echoing to syslog.
+#[cfg(target_os = "linux")]
 pub fn echo_syslog(enable: bool) -> Result<(), Error> {
     let state_ptr = unsafe { STATE };
     if state_ptr.is_null() {
@@ -465,6 +472,30 @@ pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: f
             let _ = stderr().write_all(&buf[..*len]);
         }
     }
+
+    #[cfg(target_os = "android")]
+    {
+        let priority = match pri {
+            Emergency => LogPriority::ERROR,
+            Alert => LogPriority::ERROR,
+            Critical => LogPriority::ERROR,
+            Error => LogPriority::ERROR,
+            Warning => LogPriority::WARN,
+            Notice => LogPriority::INFO,
+            Info => LogPriority::DEBUG,
+            Debug => LogPriority::VERBOSE,
+        };
+        let tag = "crosvm";
+        let message = std::fmt::format(args);
+        android_log(
+            log_id_t::SYSTEM,
+            priority,
+            tag,
+            file_line.map(|(file, _)| file),
+            file_line.map(|(_, line)| line),
+            &message,
+        );
+    };
 }
 
 /// A macro for logging at an arbitrary priority level.

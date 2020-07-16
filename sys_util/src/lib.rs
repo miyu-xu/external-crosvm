@@ -6,6 +6,8 @@
 
 pub mod affinity;
 mod alloc;
+#[cfg(target_os = "android")]
+mod android;
 #[macro_use]
 pub mod handle_eintr;
 #[macro_use]

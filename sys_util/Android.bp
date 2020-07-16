@@ -18,6 +18,14 @@ rust_library {
         "libpoll_token_derive",
     ],
     shared_libs: ["libcap"],  // specified in src/capabilities.rs
+
+    target: {
+        android64: {
+            rustlibs: [
+                "libandroid_log_sys",
+            ],
+        },
+    },
 }
 
 rust_defaults {
