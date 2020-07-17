@@ -20,7 +20,7 @@ use std::sync::Arc;
 use libc::{EINVAL, EIO, ENODEV};
 
 use kvm::{IrqRoute, IrqSource, Vm};
-use msg_socket::{MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
+use msg_socket::{MsgError, MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
 use resources::{Alloc, GpuMemoryDesc, MmioType, SystemAllocator};
 use sync::Mutex;
 use sys_util::{
@@ -58,13 +58,16 @@ impl MsgOnSocket for MaybeOwnedFd {
         1usize
     }
     unsafe fn read_from_buffer(buffer: &[u8], fds: &[RawFd]) -> MsgResult<(Self, usize)> {
-        let (fd, size) = RawFd::read_from_buffer(buffer, fds)?;
-        let file = File::from_raw_fd(fd);
+        let (file, size) = File::read_from_buffer(buffer, fds)?;
         Ok((MaybeOwnedFd::Owned(file), size))
     }
-    fn write_to_buffer(&self, buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
-        let fd = self.as_raw_fd();
-        fd.write_to_buffer(buffer, fds)
+    fn write_to_buffer(&self, _buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
+        if fds.is_empty() {
+            return Err(MsgError::WrongFdBufferSize);
+        }
+
+        fds[0] = self.as_raw_fd();
+        Ok(1)
     }
 }
 
@@ -391,7 +394,7 @@ impl VmMemoryRequest {
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
-            UnregisterMemory(slot) => match vm.remove_mmio_memory(slot) {
+            UnregisterMemory(slot) => match vm.remove_memory_region(slot) {
                 Ok(_) => VmMemoryResponse::Ok,
                 Err(e) => VmMemoryResponse::Err(e),
             },
@@ -439,7 +442,7 @@ impl VmMemoryRequest {
                     Ok(v) => v,
                     Err(_e) => return VmMemoryResponse::Err(SysError::new(EINVAL)),
                 };
-                match vm.add_mmio_memory(GuestAddress(gpa), mmap, false, false) {
+                match vm.add_memory_region(GuestAddress(gpa), Box::new(mmap), false, false) {
                     Ok(_) => VmMemoryResponse::Ok,
                     Err(e) => VmMemoryResponse::Err(e),
                 }
@@ -571,19 +574,10 @@ impl VmMsyncRequest {
     pub fn execute(&self, vm: &mut Vm) -> VmMsyncResponse {
         use self::VmMsyncRequest::*;
         match *self {
-            MsyncArena { slot, offset, size } => {
-                if let Some(arena) = vm.get_mmap_arena(slot) {
-                    match arena.msync(offset, size) {
-                        Ok(()) => VmMsyncResponse::Ok,
-                        Err(e) => match e {
-                            MmapError::SystemCallFailed(errno) => VmMsyncResponse::Err(errno),
-                            _ => VmMsyncResponse::Err(SysError::new(EINVAL)),
-                        },
-                    }
-                } else {
-                    VmMsyncResponse::Err(SysError::new(EINVAL))
-                }
-            }
+            MsyncArena { slot, offset, size } => match vm.mysnc_memory_region(slot, offset, size) {
+                Ok(()) => VmMsyncResponse::Ok,
+                Err(e) => VmMsyncResponse::Err(e),
+            },
         }
     }
 }
@@ -658,7 +652,7 @@ fn register_memory(
         }
     };
 
-    let slot = vm.add_mmio_memory(GuestAddress(addr), mmap, false, false)?;
+    let slot = vm.add_memory_region(GuestAddress(addr), Box::new(mmap), false, false)?;
     Ok((addr >> 12, slot))
 }
 

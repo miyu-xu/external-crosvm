@@ -33,8 +33,8 @@ use super::protocol::{
 };
 pub use crate::virtio::gpu::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
-    VIRTIO_GPU_F_RESOURCE_UUID, VIRTIO_GPU_F_VIRGL, VIRTIO_GPU_F_VULKAN,
+    Backend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_RESOURCE_UUID,
+    VIRTIO_GPU_F_VIRGL, VIRTIO_GPU_F_VULKAN,
 };
 use crate::virtio::resource_bridge::{PlaneInfo, ResourceInfo, ResourceResponse};
 
@@ -246,7 +246,7 @@ impl Backend for Virtio3DBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
@@ -256,31 +256,14 @@ impl Backend for Virtio3DBackend {
         _ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
         let mut renderer_flags = renderer_flags;
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    // If X11 is being used, that's an indication that the renderer should also be
-                    // using glx. Otherwise, we are likely in an enviroment in which GBM will work
-                    // for doing allocations of buffers we wish to display. TODO(zachr): this is a
-                    // heuristic (or terrible hack depending on your POV). We should do something
-                    // either smarter or more configurable.
-                    if display.is_x() {
-                        renderer_flags = RendererFlags::new().use_glx(true);
-                    }
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
+        if display.is_x() {
+            // If X11 is being used, that's an indication that the renderer should also be
+            // using glx. Otherwise, we are likely in an enviroment in which GBM will work
+            // for doing allocations of buffers we wish to display. TODO(zachr): this is a
+            // heuristic (or terrible hack depending on your POV). We should do something
+            // either smarter or more configurable.
+            renderer_flags = RendererFlags::new().use_glx(true);
         }
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
 
         if cfg!(debug_assertions) {
             let ret = unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) };
@@ -845,7 +828,7 @@ impl Backend for Virtio3DBackend {
             return GpuResponse::ErrUnspec;
         }
 
-        let map_info = match self.renderer.resource_map_info(resource_id) {
+        let map_info = match resource.gpu_resource.map_info() {
             Ok(map_info) => map_info,
             Err(e) => {
                 error!("failed to get map info: {}", e);

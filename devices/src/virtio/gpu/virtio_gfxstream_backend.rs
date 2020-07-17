@@ -17,7 +17,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
-use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use msg_socket::{MsgReceiver, MsgSender};
@@ -34,7 +33,7 @@ use vm_control::{
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
+    Backend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
 };
 use crate::virtio::resource_bridge::ResourceResponse;
 
@@ -381,7 +380,7 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
@@ -390,25 +389,6 @@ impl Backend for VirtioGfxStreamBackend {
         pci_bar: Alloc,
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
-        }
-
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
-
         Some(Box::new(VirtioGfxStreamBackend::new(
             display,
             display_width,
@@ -588,7 +568,7 @@ impl Backend for VirtioGfxStreamBackend {
         let mut backing_iovecs: Vec<iovec> = Vec::new();
 
         for (addr, len) in vecs {
-            let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+            let slice = mem.get_slice_at_addr(addr, len).unwrap();
             backing_iovecs.push(iovec {
                 iov_base: slice.as_ptr() as *mut c_void,
                 iov_len: len as usize,

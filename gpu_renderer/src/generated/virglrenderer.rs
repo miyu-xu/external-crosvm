@@ -316,12 +316,12 @@ pub struct virgl_renderer_resource_create_blob_args {
     pub blob_flags: u32,
     pub blob_id: u64,
     pub size: u64,
-    pub iovecs: *mut iovec,
+    pub iovecs: *const iovec,
     pub num_iovs: u32,
 }
 extern "C" {
     pub fn virgl_renderer_resource_create_blob(
-        args: *mut virgl_renderer_resource_create_blob_args,
+        args: *const virgl_renderer_resource_create_blob_args,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {

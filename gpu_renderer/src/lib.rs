@@ -13,7 +13,6 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::fmt::{self, Display};
 use std::fs::File;
-use std::marker::PhantomData;
 use std::mem::{size_of, transmute};
 use std::os::raw::{c_char, c_void};
 use std::os::unix::io::FromRawFd;
@@ -24,8 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use libc::close;
 
-use data_model::{VolatileMemory, VolatileSlice};
-use sys_util::{debug, GuestAddress, GuestMemory};
+use data_model::VolatileSlice;
+use sys_util::{GuestAddress, GuestMemory};
 
 use crate::generated::p_defines::{
     PIPE_BIND_RENDER_TARGET, PIPE_BIND_SAMPLER_VIEW, PIPE_TEXTURE_1D, PIPE_TEXTURE_2D,
@@ -212,6 +211,18 @@ impl RendererFlags {
     pub fn use_gles(self, v: bool) -> RendererFlags {
         self.set_flag(VIRGL_RENDERER_USE_GLES, v)
     }
+
+    #[cfg(feature = "gfxstream")]
+    pub fn use_syncfd(self, v: bool) -> RendererFlags {
+        const GFXSTREAM_RENDERER_FLAGS_NO_SYNCFD_BIT: u32 = 1 << 20;
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_NO_SYNCFD_BIT, !v)
+    }
+
+    #[cfg(feature = "gfxstream")]
+    pub fn support_vulkan(self, v: bool) -> RendererFlags {
+        const GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT: u32 = 1 << 5;
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT, !v)
+    }
 }
 
 impl From<RendererFlags> for i32 {
@@ -222,7 +233,6 @@ impl From<RendererFlags> for i32 {
 
 /// The global renderer handle used to query capability sets, and create resources and contexts.
 pub struct Renderer {
-    no_sync_send: PhantomData<*mut ()>,
     fence_state: Rc<RefCell<FenceState>>,
 }
 
@@ -266,10 +276,7 @@ impl Renderer {
         };
         ret_to_res(ret)?;
 
-        Ok(Renderer {
-            no_sync_send: PhantomData,
-            fence_state,
-        })
+        Ok(Renderer { fence_state })
     }
 
     /// Gets the version and size for the given capability set ID.
@@ -309,10 +316,7 @@ impl Renderer {
             )
         };
         ret_to_res(ret)?;
-        Ok(Context {
-            id,
-            no_sync_send: PhantomData,
-        })
+        Ok(Context { id })
     }
 
     /// Creates a resource with the given arguments.
@@ -328,7 +332,6 @@ impl Renderer {
             id: args.handle,
             backing_iovecs: Vec::new(),
             backing_mem: None,
-            no_sync_send: PhantomData,
         })
     }
 
@@ -421,7 +424,7 @@ impl Renderer {
         {
             if vecs
                 .iter()
-                .any(|&(addr, len)| mem.get_slice(addr.offset(), len as u64).is_err())
+                .any(|&(addr, len)| mem.get_slice_at_addr(addr, len).is_err())
             {
                 return Err(Error::InvalidIovec);
             }
@@ -429,32 +432,31 @@ impl Renderer {
             let mut iovecs = Vec::new();
             for &(addr, len) in vecs {
                 // Unwrap will not panic because we already checked the slices.
-                let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+                let slice = mem.get_slice_at_addr(addr, len).unwrap();
                 iovecs.push(VirglVec {
-                    base: slice.as_ptr() as *mut c_void,
+                    base: slice.as_mut_ptr() as *mut c_void,
                     len,
                 });
             }
 
-            let mut resource_create_args = virgl_renderer_resource_create_blob_args {
+            let resource_create_args = virgl_renderer_resource_create_blob_args {
                 res_handle: resource_id,
                 ctx_id,
                 blob_mem,
                 blob_flags,
                 blob_id,
                 size,
-                iovecs: iovecs.as_mut_ptr() as *mut iovec,
+                iovecs: iovecs.as_mut_ptr() as *const iovec,
                 num_iovs: iovecs.len() as u32,
             };
 
-            let ret = unsafe { virgl_renderer_resource_create_blob(&mut resource_create_args) };
+            let ret = unsafe { virgl_renderer_resource_create_blob(&resource_create_args) };
             ret_to_res(ret)?;
 
             Ok(Resource {
                 id: resource_id,
                 backing_iovecs: iovecs,
                 backing_mem: None,
-                no_sync_send: PhantomData,
             })
         }
         #[cfg(not(feature = "virtio-gpu-next"))]
@@ -495,14 +497,13 @@ impl Renderer {
             vsnprintf(raw, len.into(), fmt, &mut varargs);
             c_str = CString::from_raw(raw);
         }
-        debug!("{}", c_str.to_string_lossy());
+        sys_util::debug!("{}", c_str.to_string_lossy());
     }
 }
 
 /// A context in which resources can be attached/detached and commands can be submitted.
 pub struct Context {
     id: u32,
-    no_sync_send: PhantomData<*mut ()>,
 }
 
 impl Context {
@@ -559,7 +560,6 @@ pub struct Resource {
     id: u32,
     backing_iovecs: Vec<VirglVec>,
     backing_mem: Option<GuestMemory>,
-    no_sync_send: PhantomData<*mut ()>,
 }
 
 impl Resource {
@@ -611,6 +611,21 @@ impl Resource {
         Ok((query, dmabuf))
     }
 
+    #[allow(unused_variables)]
+    pub fn map_info(&self) -> Result<u32> {
+        #[cfg(feature = "virtio-gpu-next")]
+        {
+            let mut map_info = 0;
+            let ret =
+                unsafe { virgl_renderer_resource_get_map_info(self.id as u32, &mut map_info) };
+            ret_to_res(ret)?;
+
+            Ok(map_info)
+        }
+        #[cfg(not(feature = "virtio-gpu-next"))]
+        Err(Error::Unsupported)
+    }
+
     /// Attaches a scatter-gather mapping of guest memory to this resource which used for transfers.
     pub fn attach_backing(
         &mut self,
@@ -619,7 +634,7 @@ impl Resource {
     ) -> Result<()> {
         if iovecs
             .iter()
-            .any(|&(addr, len)| mem.get_slice(addr.offset(), len as u64).is_err())
+            .any(|&(addr, len)| mem.get_slice_at_addr(addr, len).is_err())
         {
             return Err(Error::InvalidIovec);
         }
@@ -627,9 +642,9 @@ impl Resource {
         self.backing_mem = Some(mem.clone());
         for &(addr, len) in iovecs {
             // Unwrap will not panic because we already checked the slices.
-            let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+            let slice = mem.get_slice_at_addr(addr, len).unwrap();
             self.backing_iovecs.push(VirglVec {
-                base: slice.as_ptr() as *mut c_void,
+                base: slice.as_mut_ptr() as *mut c_void,
                 len,
             });
         }
