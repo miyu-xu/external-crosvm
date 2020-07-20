@@ -17,24 +17,19 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
-use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
 use sync::Mutex;
-use sys_util::{
-    error, ExternallyMappedHostMemory, ExternallyMappedHostMemoryInfo, GuestAddress, GuestMemory,
-};
-use vm_control::{
-    ExternallyMappedHostMemoryRequests, VmMemoryControlRequestSocket, VmMemoryRequest,
-    VmMemoryResponse,
-};
+use sys_util::{error, ExternalMapping, ExternalMappingResult, GuestAddress, GuestMemory};
+use vm_control::{VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
+    Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    VIRTIO_GPU_F_VIRGL,
 };
 use crate::virtio::resource_bridge::ResourceResponse;
 
@@ -155,11 +150,6 @@ extern "C" {
         iovec: *mut iovec,
         iovec_cnt: c_uint,
     ) -> c_int;
-    fn pipe_virgl_renderer_submit_cmd(
-        commands: *mut c_void,
-        ctx_id: i32,
-        dword_count: i32,
-    ) -> c_int;
     fn pipe_virgl_renderer_resource_attach_iov(
         res_handle: c_int,
         iov: *mut iovec,
@@ -247,12 +237,7 @@ pub struct VirtioGfxStreamBackend {
     gpu_device_socket: VmMemoryControlRequestSocket,
     pci_bar: Alloc,
 
-    ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
-}
-
-struct VirtioGfxStreamBackendHostMemory {
-    hva: u64,
-    size: u64,
+    map_request: Arc<Mutex<Option<ExternalMapping>>>,
 }
 
 fn align_to_page(raw_hva: u64) -> u64 {
@@ -263,35 +248,18 @@ fn align_to_page_size(size: u64) -> u64 {
     PAGE_SIZE_FOR_BLOB * ((size + PAGE_SIZE_FOR_BLOB - 1) / PAGE_SIZE_FOR_BLOB)
 }
 
-impl VirtioGfxStreamBackendHostMemory {
-    pub fn new(resource_id: u32) -> VirtioGfxStreamBackendHostMemory {
-        let raw_hva = unsafe { stream_renderer_resource_get_hva(resource_id) };
-        let raw_hva_size = unsafe { stream_renderer_resource_get_hva_size(resource_id) };
+fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
+    let raw_hva = unsafe { stream_renderer_resource_get_hva(resource_id) };
+    let raw_hva_size = unsafe { stream_renderer_resource_get_hva_size(resource_id) };
 
-        let aligned_hva = align_to_page(raw_hva);
-        let aligned_hva_size = align_to_page_size(raw_hva_size);
-
-        VirtioGfxStreamBackendHostMemory {
-            hva: aligned_hva,
-            size: aligned_hva_size,
-        }
-    }
+    let aligned_hva = align_to_page(raw_hva);
+    let aligned_hva_size = align_to_page_size(raw_hva_size);
+    Ok((aligned_hva, aligned_hva_size as usize))
 }
 
-impl ExternallyMappedHostMemoryInfo for VirtioGfxStreamBackendHostMemory {
-    fn as_ptr(&self) -> *mut u8 {
-        self.hva as *mut u8
-    }
-    fn size(&self) -> u64 {
-        self.size
-    }
-}
-
-impl Drop for VirtioGfxStreamBackendHostMemory {
-    fn drop(&mut self) {
-        // no-op: No further cleanup considered outside of what happens in
-        // resource unmap
-    }
+fn unmap_func(_resource_id: u32) -> () {
+    // no-op: No further cleanup considered outside of what happens in
+    // resource unmap
 }
 
 impl VirtioGfxStreamBackend {
@@ -302,7 +270,7 @@ impl VirtioGfxStreamBackend {
         renderer_flags: RendererFlags,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
-        ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
     ) -> VirtioGfxStreamBackend {
         let fence_state = Rc::new(RefCell::new(FenceState { latest_fence: 0 }));
         let cookie: *mut VirglCookie = Box::into_raw(Box::new(VirglCookie {
@@ -349,7 +317,7 @@ impl VirtioGfxStreamBackend {
             fence_state,
             gpu_device_socket,
             pci_bar,
-            ext_mapped_hostmem_requests,
+            map_request,
         }
     }
 
@@ -381,34 +349,16 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
         _event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
-        ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        _external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
-        }
-
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
-
         Some(Box::new(VirtioGfxStreamBackend::new(
             display,
             display_width,
@@ -416,7 +366,7 @@ impl Backend for VirtioGfxStreamBackend {
             renderer_flags,
             gpu_device_socket,
             pci_bar,
-            ext_mapped_hostmem_requests,
+            map_request,
         )))
     }
 
@@ -491,7 +441,12 @@ impl Backend for VirtioGfxStreamBackend {
     }
 
     /// Sets the given resource id as the source of scanout to the display.
-    fn set_scanout(&mut self, _scanout_id: u32, _resource_id: u32) -> GpuResponse {
+    fn set_scanout(
+        &mut self,
+        _scanout_id: u32,
+        _resource_id: u32,
+        _scanout_data: Option<VirtioScanoutBlobData>,
+    ) -> GpuResponse {
         GpuResponse::OkNoData
     }
 
@@ -588,7 +543,7 @@ impl Backend for VirtioGfxStreamBackend {
         let mut backing_iovecs: Vec<iovec> = Vec::new();
 
         for (addr, len) in vecs {
-            let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+            let slice = mem.get_slice_at_addr(addr, len).unwrap();
             backing_iovecs.push(iovec {
                 iov_base: slice.as_ptr() as *mut c_void,
                 iov_len: len as usize,
@@ -817,27 +772,9 @@ impl Backend for VirtioGfxStreamBackend {
         GpuResponse::OkNoData
     }
 
-    fn submit_command(&mut self, ctx_id: u32, commands: &mut [u8]) -> GpuResponse {
-        if commands.len() % std::mem::size_of::<u32>() != 0 {
-            error!(
-                "context {} got command with size {} which is not u32 multiple",
-                ctx_id,
-                commands.len()
-            );
-            return GpuResponse::ErrUnspec;
-        }
-
-        let dword_count = commands.len() / std::mem::size_of::<u32>();
-
-        unsafe {
-            pipe_virgl_renderer_submit_cmd(
-                commands.as_mut_ptr() as *mut c_void,
-                ctx_id as i32,
-                dword_count as i32,
-            );
-        }
-
-        GpuResponse::OkNoData
+    // Not considered for gfxstream
+    fn submit_command(&mut self, _ctx_id: u32, _commands: &mut [u8]) -> GpuResponse {
+        GpuResponse::ErrUnspec
     }
 
     // Not considered for gfxstream
@@ -887,21 +824,22 @@ impl Backend for VirtioGfxStreamBackend {
             }
         };
 
-        let meminfo = Box::new(VirtioGfxStreamBackendHostMemory::new(resource_id));
-        let mem = unsafe { ExternallyMappedHostMemory::new(meminfo) };
-
-        {
-            // scope for lock
-            let mut locked_reqs = self.ext_mapped_hostmem_requests.lock();
-            match locked_reqs.push(mem.unwrap()) {
-                Ok(_) => (),
-                _ => return GpuResponse::ErrOutOfMemory,
-            };
+        let map_result = ExternalMapping::new(resource_id, map_func, unmap_func);
+        if map_result.is_err() {
+            return GpuResponse::ErrUnspec;
         }
 
-        let request =
-            VmMemoryRequest::RegisterPendingHostPointerAtPciBarOffset(self.pci_bar, offset);
+        let mapping = map_result.unwrap();
+        {
+            // scope for lock
+            let mut map_req = self.map_request.lock();
+            if map_req.is_some() {
+                return GpuResponse::ErrUnspec;
+            }
+            *map_req = Some(mapping);
+        }
 
+        let request = VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset);
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
             Err(e) => {
@@ -965,8 +903,7 @@ impl Backend for VirtioGfxStreamBackend {
             return GpuResponse::OkNoData;
         }
 
-        let request = VmMemoryRequest::UnregisterHostPointerMemory(slot);
-
+        let request = VmMemoryRequest::UnregisterMemory(slot);
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
             Err(e) => {
