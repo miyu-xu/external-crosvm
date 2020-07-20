@@ -20,11 +20,15 @@ use std::sync::Arc;
 use libc::{EINVAL, EIO, ENODEV};
 
 use kvm::{IrqRoute, IrqSource, Vm};
-use msg_socket::{MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
+use msg_socket::{MsgError, MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
 use resources::{Alloc, GpuMemoryDesc, MmioType, SystemAllocator};
 use sync::Mutex;
 use sys_util::{
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     error, Error as SysError, EventFd, ExternallyMappedHostMemory, GuestAddress, MemoryMapping,
+=======
+    error, Error as SysError, EventFd, ExternalMapping, GuestAddress, MappedRegion, MemoryMapping,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
     MmapError, Result,
 };
 
@@ -58,13 +62,16 @@ impl MsgOnSocket for MaybeOwnedFd {
         1usize
     }
     unsafe fn read_from_buffer(buffer: &[u8], fds: &[RawFd]) -> MsgResult<(Self, usize)> {
-        let (fd, size) = RawFd::read_from_buffer(buffer, fds)?;
-        let file = File::from_raw_fd(fd);
+        let (file, size) = File::read_from_buffer(buffer, fds)?;
         Ok((MaybeOwnedFd::Owned(file), size))
     }
-    fn write_to_buffer(&self, buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
-        let fd = self.as_raw_fd();
-        fd.write_to_buffer(buffer, fds)
+    fn write_to_buffer(&self, _buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
+        if fds.is_empty() {
+            return Err(MsgError::WrongFdBufferSize);
+        }
+
+        fds[0] = self.as_raw_fd();
+        Ok(1)
     }
 }
 
@@ -323,10 +330,16 @@ pub enum VmMemoryRequest {
     /// Similiar to `VmMemoryRequest::RegisterMemory`, but doesn't allocate new address space.
     /// Useful for cases where the address space is already allocated (PCI regions).
     RegisterFdAtPciBarOffset(Alloc, MaybeOwnedFd, usize, u64),
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     /// Similar to RegisterFdAtPciBarOffset, but is for buffers in the current address space and
     /// requires that ExternallyMappedHostMemoryRequests has exactly 1 pending request
     RegisterPendingHostPointerAtPciBarOffset(Alloc, u64),
     /// Unregister the given memory slot that was previously registered with `RegisterMemory`.
+=======
+    /// Similar to RegisterFdAtPciBarOffset, but is for buffers in the current address space.
+    RegisterHostPointerAtPciBarOffset(Alloc, u64),
+    /// Unregister the given memory slot that was previously registered with `RegisterMemory*`.
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
     UnregisterMemory(u32),
     /// Unregister the ExternallyMappedHostMemory that was previously registered with
     /// `RegisterHostPointerAtPciBarOffset`.
@@ -361,7 +374,11 @@ impl VmMemoryRequest {
         &self,
         vm: &mut Vm,
         sys_allocator: &mut SystemAllocator,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         non_socket_expr_reqs: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+=======
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match *self {
@@ -377,6 +394,7 @@ impl VmMemoryRequest {
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
             RegisterPendingHostPointerAtPciBarOffset(alloc, offset) => {
                 let mut locked_reqs = non_socket_expr_reqs.lock();
                 let request_mem = match locked_reqs.pop() {
@@ -392,12 +410,27 @@ impl VmMemoryRequest {
                 }
             }
             UnregisterMemory(slot) => match vm.remove_mmio_memory(slot) {
+=======
+            UnregisterMemory(slot) => match vm.remove_memory_region(slot) {
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
                 Ok(_) => VmMemoryResponse::Ok,
                 Err(e) => VmMemoryResponse::Err(e),
             },
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
             UnregisterHostPointerMemory(slot) => {
                 match vm.remove_externally_mapped_host_memory(slot) {
                     Ok(_) => VmMemoryResponse::Ok,
+=======
+            RegisterHostPointerAtPciBarOffset(alloc, offset) => {
+                let mem = map_request
+                    .lock()
+                    .take()
+                    .ok_or(VmMemoryResponse::Err(SysError::new(EINVAL)))
+                    .unwrap();
+
+                match register_memory_hva(vm, sys_allocator, Box::new(mem), (alloc, offset)) {
+                    Ok((pfn, slot)) => VmMemoryResponse::RegisterMemory { pfn, slot },
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
@@ -439,7 +472,7 @@ impl VmMemoryRequest {
                     Ok(v) => v,
                     Err(_e) => return VmMemoryResponse::Err(SysError::new(EINVAL)),
                 };
-                match vm.add_mmio_memory(GuestAddress(gpa), mmap, false, false) {
+                match vm.add_memory_region(GuestAddress(gpa), Box::new(mmap), false, false) {
                     Ok(_) => VmMemoryResponse::Ok,
                     Err(e) => VmMemoryResponse::Err(e),
                 }
@@ -571,19 +604,10 @@ impl VmMsyncRequest {
     pub fn execute(&self, vm: &mut Vm) -> VmMsyncResponse {
         use self::VmMsyncRequest::*;
         match *self {
-            MsyncArena { slot, offset, size } => {
-                if let Some(arena) = vm.get_mmap_arena(slot) {
-                    match arena.msync(offset, size) {
-                        Ok(()) => VmMsyncResponse::Ok,
-                        Err(e) => match e {
-                            MmapError::SystemCallFailed(errno) => VmMsyncResponse::Err(errno),
-                            _ => VmMsyncResponse::Err(SysError::new(EINVAL)),
-                        },
-                    }
-                } else {
-                    VmMsyncResponse::Err(SysError::new(EINVAL))
-                }
-            }
+            MsyncArena { slot, offset, size } => match vm.mysnc_memory_region(slot, offset, size) {
+                Ok(()) => VmMsyncResponse::Ok,
+                Err(e) => VmMsyncResponse::Err(e),
+            },
         }
     }
 }
@@ -658,9 +682,13 @@ fn register_memory(
         }
     };
 
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     let slot = vm.add_mmio_memory(GuestAddress(addr), mmap, false, false)?;
     Ok((addr >> 12, slot))
 }
+=======
+    let slot = vm.add_memory_region(GuestAddress(addr), Box::new(mmap), false, false)?;
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
 
 fn register_memory_hva(
     vm: &mut Vm,
@@ -674,6 +702,21 @@ fn register_memory_hva(
         .map_err(|_e| SysError::new(EINVAL))?;
 
     let slot = vm.add_externally_mapped_host_memory(GuestAddress(addr), mem, false)?;
+    Ok((addr >> 12, slot))
+}
+
+fn register_memory_hva(
+    vm: &mut Vm,
+    allocator: &mut SystemAllocator,
+    mem: Box<dyn MappedRegion>,
+    pci_allocation: (Alloc, u64),
+) -> Result<(u64, u32)> {
+    let addr = allocator
+        .mmio_allocator(MmioType::High)
+        .address_from_pci_offset(pci_allocation.0, pci_allocation.1, mem.size() as u64)
+        .map_err(|_e| SysError::new(EINVAL))?;
+
+    let slot = vm.add_memory_region(GuestAddress(addr), mem, false, false)?;
     Ok((addr >> 12, slot))
 }
 

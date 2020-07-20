@@ -17,12 +17,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
-use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
 use sync::Mutex;
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
 use sys_util::{
     error, ExternallyMappedHostMemory, ExternallyMappedHostMemoryInfo, GuestAddress, GuestMemory,
 };
@@ -30,11 +30,20 @@ use vm_control::{
     ExternallyMappedHostMemoryRequests, VmMemoryControlRequestSocket, VmMemoryRequest,
     VmMemoryResponse,
 };
+=======
+use sys_util::{error, ExternalMapping, ExternalMappingResult, GuestAddress, GuestMemory};
+use vm_control::{VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
+=======
+    Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    VIRTIO_GPU_F_VIRGL,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
 };
 use crate::virtio::resource_bridge::ResourceResponse;
 
@@ -42,6 +51,36 @@ use crate::virtio::resource_bridge::ResourceResponse;
 const PAGE_SIZE_FOR_BLOB: u64 = 4096;
 const PAGE_MASK_FOR_BLOB: u64 = !(0xfff);
 
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
+=======
+/// Errors for gfxstream-specific usage
+#[derive(Debug)]
+pub enum GfxStreamError {
+    /// Invalid size used for a command.
+    InvalidCommandSize(usize),
+    /// Unsupported behavior
+    Unsupported,
+}
+
+impl Display for GfxStreamError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::GfxStreamError::*;
+
+        match self {
+            InvalidCommandSize(size) => write!(
+                f,
+                "gfxstream: invalid command size: {} (expected u32 multiple)",
+                size
+            ),
+            Unsupported => write!(f, "gfxstream: unsupported operation"),
+        }
+    }
+}
+
+/// The result of an operation for gfxstream-specific ops.
+pub type GfxStreamResult<T> = std::result::Result<T, GfxStreamError>;
+
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
 // C definitions related to gfxstream
 // In gfxstream, only write_fence is used
 // (for synchronization of commands delivered)
@@ -247,6 +286,7 @@ pub struct VirtioGfxStreamBackend {
     gpu_device_socket: VmMemoryControlRequestSocket,
     pci_bar: Alloc,
 
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
 }
 
@@ -292,6 +332,31 @@ impl Drop for VirtioGfxStreamBackendHostMemory {
         // no-op: No further cleanup considered outside of what happens in
         // resource unmap
     }
+=======
+    map_request: Arc<Mutex<Option<ExternalMapping>>>,
+}
+
+fn align_to_page(raw_hva: u64) -> u64 {
+    raw_hva & PAGE_MASK_FOR_BLOB
+}
+
+fn align_to_page_size(size: u64) -> u64 {
+    PAGE_SIZE_FOR_BLOB * ((size + PAGE_SIZE_FOR_BLOB - 1) / PAGE_SIZE_FOR_BLOB)
+}
+
+fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
+    let raw_hva = unsafe { stream_renderer_resource_get_hva(resource_id) };
+    let raw_hva_size = unsafe { stream_renderer_resource_get_hva_size(resource_id) };
+
+    let aligned_hva = align_to_page(raw_hva);
+    let aligned_hva_size = align_to_page_size(raw_hva_size);
+    Ok((aligned_hva, aligned_hva_size as usize))
+}
+
+fn unmap_func(_resource_id: u32) -> () {
+    // no-op: No further cleanup considered outside of what happens in
+    // resource unmap
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
 }
 
 impl VirtioGfxStreamBackend {
@@ -302,7 +367,11 @@ impl VirtioGfxStreamBackend {
         renderer_flags: RendererFlags,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+=======
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
     ) -> VirtioGfxStreamBackend {
         let fence_state = Rc::new(RefCell::new(FenceState { latest_fence: 0 }));
         let cookie: *mut VirglCookie = Box::into_raw(Box::new(VirglCookie {
@@ -349,7 +418,11 @@ impl VirtioGfxStreamBackend {
             fence_state,
             gpu_device_socket,
             pci_bar,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
             ext_mapped_hostmem_requests,
+=======
+            map_request,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
         }
     }
 
@@ -381,34 +454,20 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
         _event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+=======
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        _external_blob: bool,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
     ) -> Option<Box<dyn Backend>> {
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
-        }
-
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
-
         Some(Box::new(VirtioGfxStreamBackend::new(
             display,
             display_width,
@@ -416,7 +475,11 @@ impl Backend for VirtioGfxStreamBackend {
             renderer_flags,
             gpu_device_socket,
             pci_bar,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
             ext_mapped_hostmem_requests,
+=======
+            map_request,
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
         )))
     }
 
@@ -491,7 +554,12 @@ impl Backend for VirtioGfxStreamBackend {
     }
 
     /// Sets the given resource id as the source of scanout to the display.
-    fn set_scanout(&mut self, _scanout_id: u32, _resource_id: u32) -> GpuResponse {
+    fn set_scanout(
+        &mut self,
+        _scanout_id: u32,
+        _resource_id: u32,
+        _scanout_data: Option<VirtioScanoutBlobData>,
+    ) -> GpuResponse {
         GpuResponse::OkNoData
     }
 
@@ -588,7 +656,7 @@ impl Backend for VirtioGfxStreamBackend {
         let mut backing_iovecs: Vec<iovec> = Vec::new();
 
         for (addr, len) in vecs {
-            let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+            let slice = mem.get_slice_at_addr(addr, len).unwrap();
             backing_iovecs.push(iovec {
                 iov_base: slice.as_ptr() as *mut c_void,
                 iov_len: len as usize,
@@ -887,6 +955,7 @@ impl Backend for VirtioGfxStreamBackend {
             }
         };
 
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         let meminfo = Box::new(VirtioGfxStreamBackendHostMemory::new(resource_id));
         let mem = unsafe { ExternallyMappedHostMemory::new(meminfo) };
 
@@ -967,6 +1036,88 @@ impl Backend for VirtioGfxStreamBackend {
 
         let request = VmMemoryRequest::UnregisterHostPointerMemory(slot);
 
+=======
+        let map_result = ExternalMapping::new(resource_id, map_func, unmap_func);
+        if map_result.is_err() {
+            return GpuResponse::ErrUnspec;
+        }
+
+        let mapping = map_result.unwrap();
+        {
+            // scope for lock
+            let mut map_req = self.map_request.lock();
+            if map_req.is_some() {
+                return GpuResponse::ErrUnspec;
+            }
+            *map_req = Some(mapping);
+        }
+
+        let request = VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset);
+        match self.gpu_device_socket.send(&request) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("failed to send map request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        }
+
+        let response = match self.gpu_device_socket.recv() {
+            Ok(response) => response,
+            Err(e) => {
+                error!("failed to receive data from map request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        match response {
+            VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
+                self.resource_set_mappable(resource_id, false /* not mappable */);
+                unsafe {
+                    stream_renderer_resource_set_hv_slot(resource_id, slot);
+                }
+                // 0x02 for uncached type in map info
+                GpuResponse::OkMapInfo { map_info: 0x02 }
+            }
+            VmMemoryResponse::Err(e) => {
+                error!("received an error on mapping memory: {}", e);
+                GpuResponse::ErrUnspec
+            }
+            _ => {
+                error!("recieved an unexpected response while mapping memory");
+                GpuResponse::ErrUnspec
+            }
+        }
+    }
+
+    fn resource_unmap_blob(&mut self, resource_id: u32) -> GpuResponse {
+        match self.resources.get_mut(&resource_id) {
+            Some(resource) => {
+                if resource.mappable {
+                    error!("resource {} already not mapped!", resource_id);
+                    return GpuResponse::ErrUnspec;
+                }
+            }
+            None => {
+                return GpuResponse::ErrInvalidResourceId;
+            }
+        };
+
+        let hva = unsafe { stream_renderer_resource_get_hva(resource_id) };
+
+        // Ignore null hva for the resource.
+        if 0 == hva {
+            return GpuResponse::OkNoData;
+        }
+
+        let slot = unsafe { stream_renderer_resource_get_hv_slot(resource_id) };
+
+        // Ignore invalid slot for the resource.
+        if 0xffffffff == slot {
+            return GpuResponse::OkNoData;
+        }
+
+        let request = VmMemoryRequest::UnregisterMemory(slot);
+>>>>>>> BRANCH (d37254 devices: gpu: non-exportable virglrenderer_map(..))
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
             Err(e) => {
