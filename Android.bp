@@ -11,6 +11,9 @@ rust_defaults {
             enabled: true,
         },
     },
+    flags: [
+        "-L device/google/cuttlefish_vmm/x86_64-linux-gnu/bin/",
+    ],
 }
 
 rust_binary_host {
@@ -22,7 +25,7 @@ rust_binary_host {
     target: {
         linux_glibc_x86_64: {
             relative_install_path: "x86_64-linux-gnu",
-            rlibs: ["libx86_64_rust"],
+            rustlibs: ["libx86_64_rust"],
         },
         darwin: {
             enabled: false,
@@ -44,14 +47,14 @@ rust_binary_host {
     flags: [
         "-C overflow-checks=y",
         "-C panic=abort",
-        "-L device/google/cuttlefish_vmm/x86_64-linux-gnu/bin/",
     ],
     ld_flags: [
         "-Wl,--rpath,\\$$ORIGIN",
         "-Wl,--rpath,\\$$ORIGIN/../../lib64",
     ],
 
-    rlibs: [
+    edition: "2018",
+    rustlibs: [
         "libacpi_tables",
         "libarch",
         "libassertions",
@@ -97,7 +100,7 @@ rust_binary_host {
     ],
 }
 
-rust_library_host_rlib {
+rust_library_host {
     name: "libcrosvm",
     defaults: ["crosvm_defaults"],
     crate_name: "crosvm",
@@ -107,7 +110,8 @@ rust_library_host_rlib {
         "gpu",
     ],
     flags: ["-A unused-parens"],
-    rlibs: [
+    edition: "2018",
+    rustlibs: [
         "libacpi_tables",
         "libarch",
         "libassertions",
