@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "0f55981d_483d4b69",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-21T07:07:37Z",
+      "side": 1,
+      "message": "Note: I\u0027m burning down the upstream diff (Parent 2 -\u003e PS), then once this has been runtime-verified I\u0027ll re-do the merge and squash the virtio-gpu changes. Gerrit can\u0027t handle a merge with cherry-picks on Parent 1.",
+      "revId": "63f9f11fd29992f07fa4fec71676c1a748ae1cda",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
