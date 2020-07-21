@@ -10,6 +10,7 @@ rust_test_host {
     edition: "2018",
     features: [
         "gfxstream",
+        "virtio-gpu-next",
     ],
     rustlibs: [
         "libdata_model",
