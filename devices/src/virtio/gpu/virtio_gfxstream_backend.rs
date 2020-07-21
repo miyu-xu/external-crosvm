@@ -17,7 +17,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
-use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use msg_socket::{MsgReceiver, MsgSender};
@@ -33,9 +32,13 @@ use vm_control::{
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
 use crate::virtio::gpu::{
     Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB, VIRTIO_GPU_F_VIRGL,
 };
+=======
+use crate::virtio::gpu::{Backend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_VIRGL};
+>>>>>>> BRANCH (39a435 cros_async: Expose MemRegion to users)
 use crate::virtio::resource_bridge::ResourceResponse;
 
 // Page size definition for use with resource_create_blob and related functions.
@@ -300,9 +303,14 @@ impl VirtioGfxStreamBackend {
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+=======
+        _gpu_device_socket: VmMemoryControlRequestSocket,
+        _pci_bar: Alloc,
+>>>>>>> BRANCH (39a435 cros_async: Expose MemRegion to users)
     ) -> VirtioGfxStreamBackend {
         let fence_state = Rc::new(RefCell::new(FenceState { latest_fence: 0 }));
         let cookie: *mut VirglCookie = Box::into_raw(Box::new(VirglCookie {
@@ -381,7 +389,7 @@ impl Backend for VirtioGfxStreamBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
@@ -390,25 +398,6 @@ impl Backend for VirtioGfxStreamBackend {
         pci_bar: Alloc,
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
-        }
-
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
-
         Some(Box::new(VirtioGfxStreamBackend::new(
             display,
             display_width,
@@ -588,7 +577,7 @@ impl Backend for VirtioGfxStreamBackend {
         let mut backing_iovecs: Vec<iovec> = Vec::new();
 
         for (addr, len) in vecs {
-            let slice = mem.get_slice(addr.offset(), len as u64).unwrap();
+            let slice = mem.get_slice_at_addr(addr, len).unwrap();
             backing_iovecs.push(iovec {
                 iov_base: slice.as_ptr() as *mut c_void,
                 iov_len: len as usize,

@@ -316,12 +316,20 @@ pub struct virgl_renderer_resource_create_blob_args {
     pub blob_flags: u32,
     pub blob_id: u64,
     pub size: u64,
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
     pub iovecs: *mut iovec,
+=======
+    pub iovecs: *const iovec,
+>>>>>>> BRANCH (39a435 cros_async: Expose MemRegion to users)
     pub num_iovs: u32,
 }
 extern "C" {
     pub fn virgl_renderer_resource_create_blob(
+<<<<<<< HEAD   (fdd0b3 Fix path to minijail-sys)
         args: *mut virgl_renderer_resource_create_blob_args,
+=======
+        args: *const virgl_renderer_resource_create_blob_args,
+>>>>>>> BRANCH (39a435 cros_async: Expose MemRegion to users)
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
