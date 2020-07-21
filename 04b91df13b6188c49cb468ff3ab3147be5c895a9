@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "ba75bab2_f27da9da",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-21T16:34:43Z",
+      "side": 1,
+      "message": "When I tried this, crosvm failed to link because libfdt was missing. We figured out it\u0027s because the link is \"leaking through\" to the host, and I didn\u0027t have it installed on my host. Suggest we don\u0027t land this until we can restore hermetic builds (the old makefiles don\u0027t seem to have this problem).",
+      "revId": "04b91df13b6188c49cb468ff3ab3147be5c895a9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
