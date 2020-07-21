@@ -6,6 +6,7 @@ rust_library_host_rlib {
     crate_name: "gpu_renderer",
     features: [
         "gfxstream",
+        "virtio-gpu-next",
     ],
     srcs: ["src/lib.rs"],
     rlibs: [
