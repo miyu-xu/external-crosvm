@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "deca9173_23ed1afd",
+        "filename": "Cargo.toml",
+        "patchSetId": 6
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-07-21T16:49:12Z",
+      "side": 1,
+      "message": "These paths look wrong.",
+      "revId": "875155d5a375d3a069f7f32b8ece4086b11cc059",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
