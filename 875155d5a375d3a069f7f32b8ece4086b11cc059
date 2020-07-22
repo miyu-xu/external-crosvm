@@ -16,6 +16,24 @@
       "revId": "875155d5a375d3a069f7f32b8ece4086b11cc059",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "4544d5bd_78801c02",
+        "filename": "Cargo.toml",
+        "patchSetId": 6
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-22T00:34:13Z",
+      "side": 1,
+      "message": "Indeed. Tested with cargo and it passed now. I removed libvda for now because it\u0027s \"optional\", but the cargo sanity check will fail if it\u0027s missing, and we don\u0027t need video encoder/decoder support right now.",
+      "parentUuid": "deca9173_23ed1afd",
+      "revId": "875155d5a375d3a069f7f32b8ece4086b11cc059",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
