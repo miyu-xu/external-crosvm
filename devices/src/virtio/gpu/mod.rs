@@ -69,6 +69,10 @@ pub struct GpuParameters {
     pub renderer_use_gles: bool,
     pub renderer_use_glx: bool,
     pub renderer_use_surfaceless: bool,
+    #[cfg(feature = "gfxstream")]
+    pub gfxstream_use_syncfd: bool,
+    #[cfg(feature = "gfxstream")]
+    pub gfxstream_support_vulkan: bool,
     pub mode: GpuMode,
 }
 
@@ -90,6 +94,10 @@ impl Default for GpuParameters {
             renderer_use_gles: true,
             renderer_use_glx: false,
             renderer_use_surfaceless: true,
+            #[cfg(feature = "gfxstream")]
+            gfxstream_use_syncfd: true,
+            #[cfg(feature = "gfxstream")]
+            gfxstream_support_vulkan: true,
             mode: GpuMode::Mode3D,
         }
     }
@@ -113,7 +121,7 @@ trait Backend {
 
     /// Constructs a backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
@@ -350,9 +358,28 @@ impl BackendKind {
         pci_bar: Alloc,
         ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
     ) -> Option<Box<dyn Backend>> {
+        let mut display_opt = None;
+        for display in possible_displays {
+            match display.build() {
+                Ok(c) => {
+                    display_opt = Some(c);
+                    break;
+                }
+                Err(e) => error!("failed to open display: {}", e),
+            };
+        }
+
+        let display = match display_opt {
+            Some(d) => d,
+            None => {
+                error!("failed to open any displays");
+                return None;
+            }
+        };
+
         match self {
             BackendKind::Virtio2D => Virtio2DBackend::build(
-                possible_displays,
+                display,
                 display_width,
                 display_height,
                 renderer_flags,
@@ -362,7 +389,7 @@ impl BackendKind {
                 ext_mapped_hostmem_requests,
             ),
             BackendKind::Virtio3D => Virtio3DBackend::build(
-                possible_displays,
+                display,
                 display_width,
                 display_height,
                 renderer_flags,
@@ -373,7 +400,7 @@ impl BackendKind {
             ),
             #[cfg(feature = "gfxstream")]
             BackendKind::VirtioGfxStream => VirtioGfxStreamBackend::build(
-                possible_displays,
+                display,
                 display_width,
                 display_height,
                 renderer_flags,
@@ -987,13 +1014,6 @@ impl DisplayBackend {
             DisplayBackend::Stub => GpuDisplay::open_stub(),
         }
     }
-
-    fn is_x(&self) -> bool {
-        match self {
-            DisplayBackend::X(_) => true,
-            _ => false,
-        }
-    }
 }
 
 pub struct Gpu {
@@ -1030,6 +1050,10 @@ impl Gpu {
             .use_gles(gpu_parameters.renderer_use_gles)
             .use_glx(gpu_parameters.renderer_use_glx)
             .use_surfaceless(gpu_parameters.renderer_use_surfaceless);
+        #[cfg(feature = "gfxstream")]
+        let renderer_flags = renderer_flags
+            .use_syncfd(gpu_parameters.gfxstream_use_syncfd)
+            .support_vulkan(gpu_parameters.gfxstream_support_vulkan);
 
         let backend_kind = match gpu_parameters.mode {
             GpuMode::Mode2D => BackendKind::Virtio2D,
