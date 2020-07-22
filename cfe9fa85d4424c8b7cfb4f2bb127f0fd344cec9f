@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "7cbb0a05_de062cd7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 8
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-22T20:46:08Z",
+      "side": 1,
+      "message": "I noticed some warning suppression was disabled in PS8, I assume this was checked?",
+      "revId": "cfe9fa85d4424c8b7cfb4f2bb127f0fd344cec9f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
