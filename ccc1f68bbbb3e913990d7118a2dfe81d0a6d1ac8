@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "11b67284_33662edd",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 9
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1416371
+      },
+      "writtenOn": "2020-07-22T23:41:59Z",
+      "side": 1,
+      "message": "I updated the change with the modifications I suggested in the bug to verify that was the issue. It builds like this on my machine without libfdt-dev installed.",
+      "revId": "ccc1f68bbbb3e913990d7118a2dfe81d0a6d1ac8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
