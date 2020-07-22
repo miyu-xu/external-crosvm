@@ -16,6 +16,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "7b034b11_9586e2f0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-22T23:53:46Z",
+      "side": 1,
+      "message": "If sym links are not acceptable, you can try depending on the include OUT_DIR approach.\nIvan, could you review this CL and suggest a way to use OUT_DIR?\nThanks.",
+      "parentUuid": "7d9a9092_ded712ce",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
