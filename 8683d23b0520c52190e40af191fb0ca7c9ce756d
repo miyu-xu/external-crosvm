@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "1a0f47ef_bc9a4e9b",
+        "filename": "cros_async/Android.bp",
+        "patchSetId": 10
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2020-07-23T01:55:35Z",
+      "side": 0,
+      "message": "This CL has a few of these hand-added flags removed.  Are they no longer needed because the code has changed or because we\u0027ve changed how we handle these errors?",
+      "revId": "8683d23b0520c52190e40af191fb0ca7c9ce756d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
