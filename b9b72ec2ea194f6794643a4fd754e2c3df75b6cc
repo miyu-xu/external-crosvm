@@ -34,6 +34,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "eef0b971_75883099",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1115178
+      },
+      "writtenOn": "2020-07-23T12:48:09Z",
+      "side": 1,
+      "message": "With the CLs that landed earlier this week, the approach using include! with the genrule output file should work now, e.g.:\n\n    include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\"));\n\nSoong will now copy genrule outputs to an OUT_DIR for the dependent module and set the environment flag accordingly.",
+      "parentUuid": "7b034b11_9586e2f0",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
