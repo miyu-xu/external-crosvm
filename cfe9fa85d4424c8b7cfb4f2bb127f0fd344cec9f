@@ -16,6 +16,24 @@
       "revId": "cfe9fa85d4424c8b7cfb4f2bb127f0fd344cec9f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "41504c4d_4f327bb3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 8
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-07-23T09:24:43Z",
+      "side": 1,
+      "message": "It builds without them, so I assume they are no longer needed.",
+      "parentUuid": "7cbb0a05_de062cd7",
+      "revId": "cfe9fa85d4424c8b7cfb4f2bb127f0fd344cec9f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }

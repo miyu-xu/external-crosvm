@@ -16,6 +16,24 @@
       "revId": "8683d23b0520c52190e40af191fb0ca7c9ce756d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "c9a24fcd_6016319e",
+        "filename": "cros_async/Android.bp",
+        "patchSetId": 10
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-07-23T09:24:43Z",
+      "side": 0,
+      "message": "I don\u0027t know what changed, but it builds without them so I assume they are no longer needed.",
+      "parentUuid": "1a0f47ef_bc9a4e9b",
+      "revId": "8683d23b0520c52190e40af191fb0ca7c9ce756d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
