@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "655c1da2_c867f624",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2020-07-24T15:34:43Z",
+      "side": 1,
+      "message": "You need to wrap this include! in a \"pub mod plugin\" block since other code assumes that\u0027s the module name.",
+      "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "031b256b_dadc3ee5",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2020-07-24T15:34:43Z",
+      "side": 1,
+      "message": "Same as above.",
+      "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
