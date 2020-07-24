@@ -70,6 +70,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "9c31e4a1_b0a1e88b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1115178
+      },
+      "writtenOn": "2020-07-24T12:45:37Z",
+      "side": 1,
+      "message": "Hrmm seems like this is a known issue, there may be a work around.\nhttps://github.com/rust-lang/rust/issues/47995\nhttps://github.com/rust-lang/rust/issues/18810\nhttps://github.com/rust-lang/rfcs/issues/752",
+      "parentUuid": "8fd132e7_ac3acbc8",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
