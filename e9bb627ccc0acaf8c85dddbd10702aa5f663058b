@@ -16,6 +16,23 @@
       "revId": "e9bb627ccc0acaf8c85dddbd10702aa5f663058b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "1e4278e7_43d70fba",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-24T21:03:18Z",
+      "side": 1,
+      "message": "I\u0027d vote for option 1 to unblock us, then work upstream to support something like an include path.",
+      "revId": "e9bb627ccc0acaf8c85dddbd10702aa5f663058b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
