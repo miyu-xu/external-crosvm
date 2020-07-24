@@ -106,6 +106,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5202ce5f_3788fe32",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T18:57:47Z",
+      "side": 1,
+      "message": "I will follow up issues of the include approach in c/1372267.",
+      "parentUuid": "d47af9da_97cf5b75",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
