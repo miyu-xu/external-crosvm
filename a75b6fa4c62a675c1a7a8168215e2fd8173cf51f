@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "387f8803_db16b4d9",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1115178
+      },
+      "writtenOn": "2020-07-24T18:59:37Z",
+      "side": 1,
+      "message": "is this a typo?",
+      "range": {
+        "startLine": 6,
+        "startChar": 14,
+        "endLine": 6,
+        "endChar": 15
+      },
+      "revId": "a75b6fa4c62a675c1a7a8168215e2fd8173cf51f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
