@@ -22,6 +22,30 @@
       "revId": "a75b6fa4c62a675c1a7a8168215e2fd8173cf51f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "59e9fb38_4d273e10",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T19:01:42Z",
+      "side": 1,
+      "message": "Done, Fixed.",
+      "parentUuid": "387f8803_db16b4d9",
+      "range": {
+        "startLine": 6,
+        "startChar": 14,
+        "endLine": 6,
+        "endChar": 15
+      },
+      "revId": "a75b6fa4c62a675c1a7a8168215e2fd8173cf51f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
