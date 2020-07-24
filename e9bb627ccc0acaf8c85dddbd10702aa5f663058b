@@ -33,6 +33,24 @@
       "revId": "e9bb627ccc0acaf8c85dddbd10702aa5f663058b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "d6d96916_0f4f71dc",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T23:41:13Z",
+      "side": 1,
+      "message": "Please review c/1372537. It checks in generated .rs file and diff it with build-time generated version to keep them in sync.",
+      "parentUuid": "1e4278e7_43d70fba",
+      "revId": "e9bb627ccc0acaf8c85dddbd10702aa5f663058b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
