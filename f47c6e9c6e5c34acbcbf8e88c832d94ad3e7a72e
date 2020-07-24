@@ -69,6 +69,24 @@
       "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "105c893c_b162af4a",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2020-07-24T19:07:17Z",
+      "side": 1,
+      "message": "Right, which is why in the other CL I suggested using a genrule to use sed or something to do that.  That should compile at the very least.",
+      "parentUuid": "71d1be5b_725c5657",
+      "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
