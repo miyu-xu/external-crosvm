@@ -88,6 +88,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "d47af9da_97cf5b75",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2020-07-24T15:37:04Z",
+      "side": 1,
+      "message": "I didn\u0027t try the workarounds mentioned there, but by manually editing the generated cdisk_spec.rs to comment out the lines it complaints about (the #1 and //! lines near the top) and making a small fix I mentioned in the other CL, I got it to compile.  You can presumably write a genrule that calls sed to do that automatically.",
+      "parentUuid": "9c31e4a1_b0a1e88b",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
