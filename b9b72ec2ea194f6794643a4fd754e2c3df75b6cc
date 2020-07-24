@@ -52,6 +52,24 @@
       "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "8fd132e7_ac3acbc8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T01:59:04Z",
+      "side": 1,
+      "message": "I tried to use include! with OUT_DIR, see c/1372267.\nIt has compilation errors, because the generated file\ncannot be compiled as included source code.\nNot sure if protoc-gen-rust has some option to generate\nfiles that can be included. If not, symlink and implicit\nimport of the generated mod like this CL would be a solution.",
+      "parentUuid": "eef0b971_75883099",
+      "revId": "b9b72ec2ea194f6794643a4fd754e2c3df75b6cc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
