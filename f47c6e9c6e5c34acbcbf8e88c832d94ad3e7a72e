@@ -19,6 +19,24 @@
     },
     {
       "key": {
+        "uuid": "bc7dc2d8_e8a1f526",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T18:56:55Z",
+      "side": 1,
+      "message": "same as the next include. plugin.rs is generated but not \"plugin\" is not enabled.",
+      "parentUuid": "655c1da2_c867f624",
+      "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "031b256b_dadc3ee5",
         "filename": "protos/src/lib.rs",
         "patchSetId": 1
@@ -30,6 +48,24 @@
       "writtenOn": "2020-07-24T15:34:43Z",
       "side": 1,
       "message": "Same as above.",
+      "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "71d1be5b_725c5657",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T18:56:55Z",
+      "side": 1,
+      "message": "Yes, i tried in the new patchset, and it still has the warnings,\nunless we manually remove the #! and //! comments in the generated file.",
+      "parentUuid": "031b256b_dadc3ee5",
       "revId": "f47c6e9c6e5c34acbcbf8e88c832d94ad3e7a72e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
