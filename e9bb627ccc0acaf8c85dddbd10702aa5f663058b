@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "3a187aaa_4102dd04",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-24T20:30:52Z",
+      "side": 1,
+      "message": "Copied Ivan\u0027s comment from the other CL and added a few more links to this known problem:\nhttps://github.com/rust-lang/rust/issues/47995\nhttps://github.com/rust-lang/rfcs/issues/752\nhttps://github.com/lalrpop/lalrpop/pull/85\nhttps://github.com/stepancheg/rust-protobuf/issues/324\nhttps://github.com/rust-lang/rust/issues/18810\nhttps://github.com/rust-lang/rust/issues/18849\n\nMy conclusions so far are:\n* This is not a protobuf codegen specific issue. We need a solution for all rust code generators.\n* We cannot just remove all those \"inner comments\" to compile. They could affect output code and at least some warning or error messages.\n* The best solution is to enhance rustc to allow something like -I or accept the #[path \u003d concat!(env!(\"OUT_DIR\"), \"/plugin.rs\")] syntax.\n* The best workaround I found is to add another extension crate to support some new syntax, but it does not seem to be popular yet.\n* The problem is there for a long time, meaning that changing rustc won\u0027t happen soon, and people have lived with various workarounds.\n* Other workarounds I have seen and tested:\n(1) Run code generator as a dev-step and check-in the output code in the source directory as a .rs file to be imported by rustc implicitly.\n(2) Use #[path \u003d \"....\"] and embed the long output directory path in the source file to include generated file.\n(3) As shown in c/1320163, in the source tree add a symbolic link to the generated file in output directory and let rustc import it implicitly.\n\n\n",
+      "revId": "e9bb627ccc0acaf8c85dddbd10702aa5f663058b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
