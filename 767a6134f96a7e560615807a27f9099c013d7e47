@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "3ed9fb6c_24a63ebb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 12
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-27T18:14:56Z",
+      "side": 1,
+      "message": "These .bp files were generated with the pending change c/1371530 for cargo2android.py.\n",
+      "revId": "767a6134f96a7e560615807a27f9099c013d7e47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
