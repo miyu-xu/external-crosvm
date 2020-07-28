@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "67eed0a8_62cd2d8c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-07-28T17:37:45Z",
+      "side": 1,
+      "message": "Please review the update. I also fixed some comment bugs in the upstream Android.bp (audio is now a feature too and we enable it).",
+      "revId": "ff4b494428ab1452517a35541b085ce315e8b2a9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
