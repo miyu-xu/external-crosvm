@@ -16,6 +16,29 @@
       "revId": "ff4b494428ab1452517a35541b085ce315e8b2a9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "286723f8_1c052fea",
+        "filename": "gpu_renderer/Android.bp",
+        "patchSetId": 5
+      },
+      "lineNbr": 30,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-28T17:48:14Z",
+      "side": 1,
+      "message": "Missed virtio-gpu-next here?",
+      "range": {
+        "startLine": 30,
+        "startChar": 0,
+        "endLine": 30,
+        "endChar": 6
+      },
+      "revId": "ff4b494428ab1452517a35541b085ce315e8b2a9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
