@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "002c59bf_2f2cbfd2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-07-31T23:07:05Z",
+      "side": 1,
+      "message": "Wasn\u0027t this static link required to build in TH test sandbox?\n",
+      "revId": "39c6c2d45b00c6fbfc8cd8309ffcac878d96243f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
