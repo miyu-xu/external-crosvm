@@ -16,6 +16,24 @@
       "revId": "39c6c2d45b00c6fbfc8cd8309ffcac878d96243f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "b9c27e61_a8077607",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-03T00:08:35Z",
+      "side": 1,
+      "message": "That was true until aosp/1382604 landed.",
+      "parentUuid": "002c59bf_2f2cbfd2",
+      "revId": "39c6c2d45b00c6fbfc8cd8309ffcac878d96243f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
