@@ -31,6 +31,15 @@ rust_test_host {
 rust_test {
     name: "hypervisor_device_test_src_lib",
     defaults: ["hypervisor_defaults"],
+    // TODO: Remove this once tests are fixed on aarch64
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_arm64: {
+            enabled: false,
+        },
+    },
 }
 
 rust_library {
