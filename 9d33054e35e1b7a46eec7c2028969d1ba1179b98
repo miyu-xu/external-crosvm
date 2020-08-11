@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "d7168235_b4d1d922",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1466604
+      },
+      "writtenOn": "2020-08-11T04:52:41Z",
+      "side": 1,
+      "message": "Alistair, should I merge this or wait for the next upstream merge into the android master branch? I can imagine this individual commit could conflict with the merge when it does happen.",
+      "revId": "9d33054e35e1b7a46eec7c2028969d1ba1179b98",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
