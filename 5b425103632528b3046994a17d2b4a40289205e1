@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "2a199659_be8b6355",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-12T16:35:41Z",
+      "side": 1,
+      "message": "I\u0027m guessing this hunk can be dropped.",
+      "range": {
+        "startLine": 39,
+        "startChar": 0,
+        "endLine": 41,
+        "endChar": 41
+      },
+      "revId": "5b425103632528b3046994a17d2b4a40289205e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
