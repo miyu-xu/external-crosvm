@@ -46,6 +46,30 @@
       "revId": "5b425103632528b3046994a17d2b4a40289205e1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "a296d2ec_3c404639",
+        "filename": "devices/src/virtio/gpu/virtio_gfxstream_backend.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-08-12T17:48:53Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "561b765f_cfc549af",
+      "range": {
+        "startLine": 39,
+        "startChar": 0,
+        "endLine": 41,
+        "endChar": 41
+      },
+      "revId": "5b425103632528b3046994a17d2b4a40289205e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
