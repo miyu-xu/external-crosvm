@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "c143ffa3_79ab1777",
+        "filename": "cros_async/Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-08-12T18:27:55Z",
+      "side": 1,
+      "message": "Does crosvm only work with that version?\nAndroid is using pin-utils 0.1.0 now.",
+      "range": {
+        "startLine": 11,
+        "startChar": 13,
+        "endLine": 11,
+        "endChar": 26
+      },
+      "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
