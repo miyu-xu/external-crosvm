@@ -14,13 +14,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
+use base::{error, ExternalMapping};
 use data_model::*;
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use resources::Alloc;
 use sync::Mutex;
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 use sys_util::{error, ExternalMapping, GuestAddress, GuestMemory};
+=======
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 use vm_control::VmMemoryControlRequestSocket;
+use vm_memory::{GuestAddress, GuestMemory};
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};

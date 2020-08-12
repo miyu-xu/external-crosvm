@@ -10,20 +10,28 @@
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
-use std::mem::transmute;
+use std::fmt::{self, Display};
+use std::mem::{size_of, transmute};
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
 use std::panic;
+use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
+use base::{error, ExternalMapping, ExternalMappingError, ExternalMappingResult};
 use gpu_display::*;
 use gpu_renderer::RendererFlags;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
 use sync::Mutex;
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 use sys_util::{error, ExternalMapping, ExternalMappingResult, GuestAddress, GuestMemory};
 use vm_control::{VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
+=======
+use vm_control::{VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
+use vm_memory::{GuestAddress, GuestMemory};
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
 use super::protocol::GpuResponse;
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
@@ -33,9 +41,35 @@ use crate::virtio::gpu::{
 };
 use crate::virtio::resource_bridge::ResourceResponse;
 
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 // Page size definition for use with resource_create_blob and related functions.
 const PAGE_SIZE_FOR_BLOB: u64 = 4096;
 const PAGE_MASK_FOR_BLOB: u64 = !(0xfff);
+=======
+/// Errors for gfxstream-specific usage
+#[derive(Debug)]
+pub enum GfxStreamError {
+    /// Invalid size used for a command.
+    InvalidCommandSize(usize),
+}
+
+impl Display for GfxStreamError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::GfxStreamError::*;
+
+        match self {
+            InvalidCommandSize(size) => write!(
+                f,
+                "gfxstream: invalid command size: {} (expected u32 multiple)",
+                size
+            ),
+        }
+    }
+}
+
+/// The result of an operation for gfxstream-specific ops.
+pub type GfxStreamResult<T> = std::result::Result<T, GfxStreamError>;
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
 // C definitions related to gfxstream
 // In gfxstream, only write_fence is used
@@ -180,10 +214,19 @@ extern "C" {
     );
 
     fn stream_renderer_resource_create_v2(res_handle: u32, hostmemId: u64);
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
     fn stream_renderer_resource_get_hva(res_handle: u32) -> u64;
     fn stream_renderer_resource_get_hva_size(res_handle: u32) -> u64;
     fn stream_renderer_resource_set_hv_slot(res_handle: u32, slot: u32);
     fn stream_renderer_resource_get_hv_slot(res_handle: u32) -> u32;
+=======
+    fn stream_renderer_resource_map(
+        res_handle: u32,
+        map: *mut *mut c_void,
+        out_size: *mut u64,
+    ) -> c_int;
+    fn stream_renderer_resource_unmap(res_handle: u32) -> c_int;
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 }
 
 // Fence state stuff (begin)
@@ -224,6 +267,11 @@ struct VirtioGfxStreamResource {
     mappable: bool,
 }
 
+struct VirtioGfxStreamResource {
+    guest_memory_backing: Option<Vec<iovec>>,
+    kvm_slot: Option<u32>,
+}
+
 pub struct VirtioGfxStreamBackend {
     base: VirtioBackend,
 
@@ -245,6 +293,7 @@ pub struct VirtioGfxStreamBackend {
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
 }
 
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 fn align_to_page(raw_hva: u64) -> u64 {
     raw_hva & PAGE_MASK_FOR_BLOB
 }
@@ -265,6 +314,23 @@ fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
 fn unmap_func(_resource_id: u32) -> () {
     // no-op: No further cleanup considered outside of what happens in
     // resource unmap
+=======
+fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
+    let mut map: *mut c_void = null_mut();
+    let map_ptr: *mut *mut c_void = &mut map;
+    let mut size: u64 = 0;
+
+    // Safe because the Stream renderer wraps and validates use of vkMapMemory.
+    let ret = unsafe { stream_renderer_resource_map(resource_id, map_ptr, &mut size) };
+    if ret != 0 {
+        return Err(ExternalMappingError::LibraryError(ret));
+    }
+    Ok((map as u64, size as usize))
+}
+
+fn unmap_func(resource_id: u32) -> () {
+    unsafe { stream_renderer_resource_unmap(resource_id) };
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 }
 
 impl VirtioGfxStreamBackend {
@@ -323,6 +389,7 @@ impl VirtioGfxStreamBackend {
             gpu_device_socket,
             pci_bar,
             map_request,
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         }
     }
 
@@ -337,7 +404,27 @@ impl VirtioGfxStreamBackend {
                     mappable, resource_id
                 );
             }
+=======
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
         }
+    }
+
+    fn submit_command_impl(&mut self, ctx_id: u32, commands: &mut [u8]) -> GfxStreamResult<()> {
+        if commands.len() % size_of::<u32>() != 0 {
+            return Err(GfxStreamError::InvalidCommandSize(commands.len()));
+        }
+
+        let dword_count = commands.len() / size_of::<u32>();
+
+        unsafe {
+            pipe_virgl_renderer_submit_cmd(
+                commands.as_mut_ptr() as *mut c_void,
+                ctx_id as i32,
+                dword_count as i32,
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -536,6 +623,7 @@ impl Backend for VirtioGfxStreamBackend {
         mem: &GuestMemory,
         vecs: Vec<(GuestAddress, usize)>,
     ) -> GpuResponse {
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         match self.resources.get_mut(&id) {
             Some(resource) => {
                 resource.guest_memory_backing = Some(mem.clone());
@@ -544,6 +632,12 @@ impl Backend for VirtioGfxStreamBackend {
                 return GpuResponse::ErrInvalidResourceId;
             }
         }
+=======
+        let resource = match self.resources.get_mut(&id) {
+            Some(resource) => resource,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
         let mut backing_iovecs: Vec<iovec> = Vec::new();
 
@@ -562,11 +656,14 @@ impl Backend for VirtioGfxStreamBackend {
                 backing_iovecs.len() as i32,
             );
         }
+
+        resource.guest_memory_backing = Some(backing_iovecs);
         GpuResponse::OkNoData
     }
 
     /// Detaches any backing memory from the given resource, if there is any.
     fn detach_backing(&mut self, id: u32) -> GpuResponse {
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         match self.resources.get_mut(&id) {
             Some(resource) => {
                 resource.guest_memory_backing = None;
@@ -575,6 +672,12 @@ impl Backend for VirtioGfxStreamBackend {
                 return GpuResponse::ErrInvalidResourceId;
             }
         }
+=======
+        let resource = match self.resources.get_mut(&id) {
+            Some(resource) => resource,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
         unsafe {
             pipe_virgl_renderer_resource_detach_iov(
@@ -583,6 +686,8 @@ impl Backend for VirtioGfxStreamBackend {
                 std::ptr::null_mut(),
             );
         }
+
+        resource.guest_memory_backing = None;
         GpuResponse::OkNoData
     }
 
@@ -664,7 +769,11 @@ impl Backend for VirtioGfxStreamBackend {
             Entry::Vacant(entry) => {
                 entry.insert(VirtioGfxStreamResource {
                     guest_memory_backing: None, /* no guest memory attached yet */
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
                     mappable: false,            /* not mappable */
+=======
+                    kvm_slot: None,
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
                 });
             }
             Entry::Occupied(_) => {
@@ -778,6 +887,7 @@ impl Backend for VirtioGfxStreamBackend {
     }
 
     fn submit_command(&mut self, ctx_id: u32, commands: &mut [u8]) -> GpuResponse {
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         if commands.len() % std::mem::size_of::<u32>() != 0 {
             error!(
                 "context {} got command with size {} which is not u32 multiple",
@@ -798,6 +908,15 @@ impl Backend for VirtioGfxStreamBackend {
         }
 
         GpuResponse::OkNoData
+=======
+        match self.submit_command_impl(ctx_id, commands) {
+            Ok(_) => GpuResponse::OkNoData,
+            Err(e) => {
+                error!("submit_command error: {}", e);
+                GpuResponse::ErrUnspec
+            }
+        }
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
     }
 
     // Not considered for gfxstream
@@ -818,6 +937,7 @@ impl Backend for VirtioGfxStreamBackend {
             Entry::Vacant(entry) => {
                 entry.insert(VirtioGfxStreamResource {
                     guest_memory_backing: None, /* no guest memory attached yet */
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
                     mappable: true,             /* is mappable */
                 });
             }
@@ -946,6 +1066,108 @@ impl Backend for VirtioGfxStreamBackend {
         match response {
             VmMemoryResponse::Ok => {
                 self.resource_set_mappable(resource_id, true /* mappable */);
+=======
+                    kvm_slot: None,
+                });
+            }
+            Entry::Occupied(_) => {
+                return GpuResponse::ErrInvalidResourceId;
+            }
+        }
+
+        unsafe {
+            stream_renderer_resource_create_v2(resource_id, blob_id);
+        }
+        GpuResponse::OkNoData
+    }
+
+    fn resource_map_blob(&mut self, resource_id: u32, offset: u64) -> GpuResponse {
+        let resource = match self.resources.get_mut(&resource_id) {
+            Some(resource) => resource,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+
+        let map_result = unsafe { ExternalMapping::new(resource_id, map_func, unmap_func) };
+        if map_result.is_err() {
+            return GpuResponse::ErrUnspec;
+        }
+
+        let mapping = map_result.unwrap();
+        {
+            // scope for lock
+            let mut map_req = self.map_request.lock();
+            if map_req.is_some() {
+                return GpuResponse::ErrUnspec;
+            }
+            *map_req = Some(mapping);
+        }
+
+        let request = VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset);
+        match self.gpu_device_socket.send(&request) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("failed to send map request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        }
+
+        let response = match self.gpu_device_socket.recv() {
+            Ok(response) => response,
+            Err(e) => {
+                error!("failed to receive data from map request: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        match response {
+            VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
+                // 0x02 for uncached type in map info
+                resource.kvm_slot = Some(slot);
+                GpuResponse::OkMapInfo { map_info: 0x02 }
+            }
+            VmMemoryResponse::Err(e) => {
+                error!("received an error on mapping memory: {}", e);
+                GpuResponse::ErrUnspec
+            }
+            _ => {
+                error!("recieved an unexpected response while mapping memory");
+                GpuResponse::ErrUnspec
+            }
+        }
+    }
+
+    fn resource_unmap_blob(&mut self, resource_id: u32) -> GpuResponse {
+        let resource = match self.resources.get_mut(&resource_id) {
+            Some(r) => r,
+            None => return GpuResponse::ErrInvalidResourceId,
+        };
+
+        let kvm_slot = match resource.kvm_slot {
+            Some(kvm_slot) => kvm_slot,
+            None => return GpuResponse::ErrUnspec,
+        };
+
+        let request = VmMemoryRequest::UnregisterMemory(kvm_slot);
+        match self.gpu_device_socket.send(&request) {
+            Ok(_) => (),
+            Err(e) => {
+                error!("failed to send request on unmapping memory: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        }
+
+        let response = match self.gpu_device_socket.recv() {
+            Ok(response) => response,
+            Err(e) => {
+                error!("failed to receive data on unmapping memory: {}", e);
+                return GpuResponse::ErrUnspec;
+            }
+        };
+
+        match response {
+            VmMemoryResponse::Ok => {
+                resource.kvm_slot = None;
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
                 GpuResponse::OkNoData
             }
             VmMemoryResponse::Err(e) => {
