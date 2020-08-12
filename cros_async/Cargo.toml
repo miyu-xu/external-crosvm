@@ -7,8 +7,14 @@ edition = "2018"
 [dependencies]
 io_uring = { path = "../io_uring" }
 libc = "*"
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 paste = "^1"
 sys_util = { path = "../sys_util" }
+=======
+paste = "*"
+pin-utils = "0.1.0-alpha.4"
+base = { path = "../base" }
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 syscall_defines = { path = "../syscall_defines" }
 
 [dependencies.futures]
@@ -18,3 +24,4 @@ features = ["alloc"]
 
 [dev-dependencies]
 tempfile = { path = "../tempfile" }
+vm_memory = { path = "../vm_memory" }

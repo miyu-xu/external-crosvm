@@ -20,12 +20,17 @@ use std::ptr::null_mut;
 use std::rc::Rc;
 use std::result;
 use std::sync::atomic::{AtomicBool, Ordering};
+use base::{ExternalMapping, ExternalMappingError, ExternalMappingResult};
 
 use libc::close;
 
 use data_model::VolatileSlice;
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 use sys_util::{ExternalMapping, ExternalMappingError, ExternalMappingResult, GuestAddress, GuestMemory,
 };
+=======
+use vm_memory::{GuestAddress, GuestMemory};
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
 use crate::generated::p_defines::{
     PIPE_BIND_RENDER_TARGET, PIPE_BIND_SAMPLER_VIEW, PIPE_TEXTURE_1D, PIPE_TEXTURE_2D,
@@ -490,7 +495,7 @@ impl Renderer {
             vsnprintf(raw, len.into(), fmt, &mut varargs);
             c_str = CString::from_raw(raw);
         }
-        sys_util::debug!("{}", c_str.to_string_lossy());
+        base::debug!("{}", c_str.to_string_lossy());
     }
 }
 
@@ -555,6 +560,7 @@ fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
         let mut map: *mut c_void = null_mut();
         let map_ptr: *mut *mut c_void = &mut map;
         let mut size: u64 = 0;
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         let ret = unsafe { virgl_renderer_resource_map(resource_id as u32, map_ptr, &mut size) };
         if ret != 0 {
             return Err(ExternalMappingError::LibraryError(ret));
@@ -577,6 +583,31 @@ fn unmap_func(resource_id: u32) -> () {
             // little performance loss during normal VM operation.
             virgl_renderer_force_ctx_0();
             virgl_renderer_resource_unmap(resource_id as u32);
+=======
+        // Safe because virglrenderer wraps and validates use of GL/VK.
+        let ret = unsafe { virgl_renderer_resource_map(resource_id, map_ptr, &mut size) };
+        if ret != 0 {
+            return Err(ExternalMappingError::LibraryError(ret));
+        }
+
+        Ok((map as u64, size as usize))
+    }
+    #[cfg(not(feature = "virtio-gpu-next"))]
+    Err(ExternalMappingError::Unsupported)
+}
+
+#[allow(unused_variables)]
+fn unmap_func(resource_id: u32) -> () {
+    #[cfg(feature = "virtio-gpu-next")]
+    {
+        unsafe {
+            // Usually, process_gpu_command forces ctx0 when processing a virtio-gpu command.
+            // During VM shutdown, the KVM thread releases mappings without virtio-gpu being
+            // involved, so force ctx0 here. It's a no-op when the ctx is already 0, so there's
+            // little performance loss during normal VM operation.
+            virgl_renderer_force_ctx_0();
+            virgl_renderer_resource_unmap(resource_id);
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
         }
     }
 }
@@ -654,7 +685,11 @@ impl Resource {
 
     /// Maps the associated resource using glMapBufferRange.
     pub fn map(&self) -> Result<ExternalMapping> {
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
         let map_result = ExternalMapping::new(self.id, map_func, unmap_func);
+=======
+        let map_result = unsafe { ExternalMapping::new(self.id, map_func, unmap_func) };
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
         match map_result {
             Ok(mapping) => Ok(mapping),
             Err(e) => Err(Error::MappingFailed(e)),

@@ -23,10 +23,16 @@ use std::time::Duration;
 
 use data_model::*;
 
+<<<<<<< HEAD   (de7236 Move libwayland_client dep to shared_libs)
 use sync::Mutex;
 use sys_util::{
     debug, error, warn, EventFd, ExternalMapping, GuestAddress, GuestMemory, PollContext, PollToken,
 };
+=======
+use base::{debug, error, warn, EventFd, ExternalMapping, PollContext, PollToken};
+use sync::Mutex;
+use vm_memory::{GuestAddress, GuestMemory};
+>>>>>>> BRANCH (ba3269 devices: fs: Initialize security context on creation)
 
 use gpu_buffer::Format;
 pub use gpu_display::EventDevice;
