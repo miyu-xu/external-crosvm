@@ -2,6 +2,23 @@
   "comments": [
     {
       "key": {
+        "uuid": "1ad888b3_4715fc13",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-13T20:11:53Z",
+      "side": 1,
+      "message": "error: external/crosvm/disk/Android.bp:26:1: \"libdisk\" depends on undefined module \"libasync_trait\"\nerror: external/crosvm/disk/Android.bp:4:1: \"disk_host_test_src_disk\" depends on undefined module \"libasync_trait\"",
+      "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "c143ffa3_79ab1777",
         "filename": "cros_async/Cargo.toml",
         "patchSetId": 2
