@@ -22,6 +22,30 @@
       "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "7e941301_f00f615a",
+        "filename": "cros_async/Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-08-13T17:11:50Z",
+      "side": 1,
+      "message": "It looks like this was used since this crate was created: https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/1955045/16/cros_async/Cargo.toml\n\nAny idea why the Android fork changed this?",
+      "parentUuid": "c143ffa3_79ab1777",
+      "range": {
+        "startLine": 11,
+        "startChar": 13,
+        "endLine": 11,
+        "endChar": 26
+      },
+      "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
