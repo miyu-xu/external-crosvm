@@ -63,6 +63,30 @@
       "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "56d02c35_0b37ba8d",
+        "filename": "cros_async/Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-08-16T09:41:05Z",
+      "side": 1,
+      "message": "Resolved on chat:\n\n\"the .rs files were generated from protoc, by the genrule modules in .bp file, when you make or \u0027mm\u0027 in the protos directory, those files will be regenerated and compared with the saved version\n\nIf the diff reported any difference, the diff output should be verified, then the saved version should be replaced by the new generated version. If your make did not stop there, there was no difference.\"",
+      "parentUuid": "7e941301_f00f615a",
+      "range": {
+        "startLine": 11,
+        "startChar": 13,
+        "endLine": 11,
+        "endChar": 26
+      },
+      "revId": "5d1e8e6f23a5fe6cd8afd84834c78cad236ec314",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
