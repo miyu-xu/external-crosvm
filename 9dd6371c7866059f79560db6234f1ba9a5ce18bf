@@ -69,6 +69,23 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "931ed30e_470e97c0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-19T18:00:23Z",
+      "side": 1,
+      "message": "Another thing: shall we make this a \"vendor: true\" component on the target side, for now, so that it is installed to /vendor instead of /system? That would be less disruptive to GSI and CSI, we can always change it back later when we are ready?",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
