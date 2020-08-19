@@ -16,6 +16,24 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "795d6a5f_cd4e6735",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1139038
+      },
+      "writtenOn": "2020-08-19T09:54:08Z",
+      "side": 1,
+      "message": "This is a hefty CL with a mixture of automated and manual changes. It might be easier to review if you 1) prepare the ARM targets without x86 libraries 2) do the fully auto-generated changes 3) do any auto-generated changes that needed manual fixups, explicitly calling out what was manual.",
+      "parentUuid": "9d7a49c8_899a7f47",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
