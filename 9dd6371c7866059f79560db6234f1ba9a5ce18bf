@@ -51,6 +51,24 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "245466c7_bca48dca",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-19T17:56:47Z",
+      "side": 1,
+      "message": "I\u0027d prefer to leave the x86 libraries in case, because we can enable this on cuttlefish to add CI coverage of Andrew\u0027s changes which will prevent them from breaking later. The x86_64 build seems to be fine, except for the issue I noted in another comment.",
+      "parentUuid": "795d6a5f_cd4e6735",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
