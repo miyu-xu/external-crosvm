@@ -34,6 +34,23 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "ce30facf_a84fddfb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-19T17:55:49Z",
+      "side": 1,
+      "message": "I tried this with aosp_cf_x86_64_phone-userdebug (and added \"crosvm.experimental\" to PRODUCT_PACKAGES). It did add the binary and I saw it appear in /system/bin.\n\nFor some reason, the dependencies of a rust binary in PRODUCT_PACKAGES don\u0027t go through the install process. I guess this isn\u0027t a bug in this change but in the toolchain integration, somewhere. Here\u0027s an example:\n\n$ readelf -a out/target/product/vsoc_x86_64/system/bin/crosvm.experimental  | grep NEEDED\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so]\n 0x0000000000000001 (NEEDED)             Shared library: [libdl.so]\n 0x0000000000000001 (NEEDED)             Shared library: [libfdt.so] \u003c-- it did link libfdt.so\n\n$ find out -name libfdt.so\nout/soong/.intermediates/external/dtc/libfdt/libfdt/linux_glibc_x86_64_shared/libfdt.so\nout/soong/.intermediates/external/dtc/libfdt/libfdt/android_x86_64_silvermont_shared/unstripped/libfdt.so\nout/soong/.intermediates/external/dtc/libfdt/libfdt/android_x86_64_silvermont_shared/libfdt.so\nout/soong/host/linux-x86/lib64/libfdt.so\n\nAnd you can see the \"android_x86_64_silvermont_shared\" copy of it, however it was not installed to $PRODUCT_OUT. This breaks crosvm.experimental at runtime:\n\nvsoc_x86_64:/ # crosvm.experimental                                                                                                                                                                                                                                                                                                                                      \nCANNOT LINK EXECUTABLE \"crosvm.experimental\": library \"libfdt.so\" not found: needed by main executable\n",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
