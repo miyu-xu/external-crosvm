@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "7e429a9c_daac5628",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 5
+      },
+      "lineNbr": 59,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-24T18:03:51Z",
+      "side": 1,
+      "message": "Yeah. I\u0027m not even sure if adding Google\u0027s copyright to a generated file makes sense..",
+      "parentUuid": "dd72b839_dd274840",
+      "range": {
+        "startLine": 59,
+        "startChar": 19,
+        "endLine": 59,
+        "endChar": 23
+      },
+      "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "c372f784_dfa16742",
         "filename": "seccomp/gen_android.sh",
         "patchSetId": 5
@@ -36,6 +60,24 @@
       "writtenOn": "2020-08-24T17:06:27Z",
       "side": 1,
       "message": "Is this needed or should it be removed entirely?",
+      "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "8bf33927_37da34c2",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 5
+      },
+      "lineNbr": 131,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-24T18:03:51Z",
+      "side": 1,
+      "message": "Removed! Thanks for spotting.",
+      "parentUuid": "c372f784_dfa16742",
       "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
