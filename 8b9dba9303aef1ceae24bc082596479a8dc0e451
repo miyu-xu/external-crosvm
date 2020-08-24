@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "953760eb_08ef6b32",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-24T18:04:40Z",
+      "side": 1,
+      "message": "Dan, I hope I\u0027m not abusing genrule too much?",
+      "revId": "8b9dba9303aef1ceae24bc082596479a8dc0e451",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
