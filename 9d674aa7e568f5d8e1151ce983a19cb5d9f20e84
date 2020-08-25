@@ -49,6 +49,30 @@
     },
     {
       "key": {
+        "uuid": "84823c3e_bc7b9985",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 5
+      },
+      "lineNbr": 59,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T23:43:13Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "7e429a9c_daac5628",
+      "range": {
+        "startLine": 59,
+        "startChar": 19,
+        "endLine": 59,
+        "endChar": 23
+      },
+      "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "c372f784_dfa16742",
         "filename": "seccomp/gen_android.sh",
         "patchSetId": 5
@@ -81,6 +105,24 @@
       "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "ced4f4fa_1fbd6476",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 5
+      },
+      "lineNbr": 131,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T23:43:13Z",
+      "side": 1,
+      "message": "Will fix in a follow-up.",
+      "parentUuid": "8bf33927_37da34c2",
+      "revId": "9d674aa7e568f5d8e1151ce983a19cb5d9f20e84",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
