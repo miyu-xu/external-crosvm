@@ -176,6 +176,24 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "b2432043_d2fb76eb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T14:47:25Z",
+      "side": 1,
+      "message": "Anyway, I\u0027m fine with adding a workaround like aosp/1403327 and tagging it with a comment referring to b/165161105. Looks like we just need to add a fake dep on libfdt to the final \"crosvm\" rust_binary {} to work around this bug.",
+      "parentUuid": "5974e3fc_e1d63058",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
