@@ -140,6 +140,42 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "2c63b527_ca6173e3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T14:43:19Z",
+      "side": 1,
+      "message": "I thought about this some more, and I think you are right. We will have to install seccomp policy files as well, and moving forwards, integrate more heavily with the system image, so it\u0027s right to install this to the system partition.",
+      "parentUuid": "d4b5270c_a82c82e6",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "5974e3fc_e1d63058",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T14:43:19Z",
+      "side": 1,
+      "message": "My guess would be that \"sdk_phone_x86_64-eng\" pulls in libfdt.so for some other reason, so it happens to work? You should be able to reproduce this with:\n\n$ rm -rf out\n$ mmma external/crosvm\n\nIf you have out/target/product/emulator_x86_64/system/bin/crosvm but no out/target/product/emulator_x86_64/system/lib64/libfdt.so, you\u0027ve reproed it..",
+      "parentUuid": "bc187bdd_f0689bf1",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
