@@ -212,6 +212,24 @@
       "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "5527b935_a73a0e4b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-25T15:29:47Z",
+      "side": 1,
+      "message": "Okay, maybe this has been fixed since I tested it? We can land this and debug it if it comes up again. The workaround for CF can be to explicitly add libfdt.so to PRODUCT_PACKAGES for now.",
+      "parentUuid": "9d468d95_d962bd1a",
+      "revId": "9dd6371c7866059f79560db6234f1ba9a5ce18bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
