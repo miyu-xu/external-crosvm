@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "655c68f5_7e7ff895",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-08-26T21:42:21Z",
+      "side": 1,
+      "message": "Is there a way to access the rust_protobuf generated file and compare it with the saved version?\nRust protobuf-codegen could be upgraded anytime. It\u0027s useful to catch any interface changes.\n",
+      "revId": "e6450a32174c5eb1b9adb982853af4fb9c1ff942",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
