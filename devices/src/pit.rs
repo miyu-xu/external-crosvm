@@ -10,20 +10,21 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use base::{error, warn, Error as SysError, EventFd, Fd, PollContext, PollToken};
 use bit_field::BitField1;
 use bit_field::*;
+use hypervisor::{PitChannelState, PitRWMode, PitRWState, PitState};
 use sync::Mutex;
-use sys_util::{error, warn, Error as SysError, EventFd, Fd, PollContext, PollToken};
 
 #[cfg(not(test))]
-use sys_util::Clock;
+use base::Clock;
 #[cfg(test)]
-use sys_util::FakeClock as Clock;
+use base::FakeClock as Clock;
 
 #[cfg(test)]
-use sys_util::FakeTimerFd as TimerFd;
+use base::FakeTimerFd as TimerFd;
 #[cfg(not(test))]
-use sys_util::TimerFd;
+use base::TimerFd;
 
 use crate::BusDevice;
 
@@ -215,6 +216,8 @@ impl BusDevice for Pit {
     }
 
     fn write(&mut self, offset: u64, data: &[u8]) {
+        self.ensure_started();
+
         if data.len() != 1 {
             warn!("Bad write size for Pit: {}", data.len());
             return;
@@ -230,6 +233,8 @@ impl BusDevice for Pit {
     }
 
     fn read(&mut self, offset: u64, data: &mut [u8]) {
+        self.ensure_started();
+
         if data.len() != 1 {
             warn!("Bad read size for Pit: {}", data.len());
             return;
@@ -270,23 +275,40 @@ impl Pit {
         // (c) if we have the wrong number of counters, something is very wrong with the PIT and it
         // may not make sense to continue operation.
         assert_eq!(counters.len(), NUM_OF_COUNTERS);
-        let (self_kill_evt, kill_evt) = EventFd::new()
-            .and_then(|e| Ok((e.try_clone()?, e)))
-            .map_err(PitError::CreateEventFd)?;
-        let mut worker = Worker {
-            pit_counter: counters[0].clone(),
-            fd: Fd(counters[0].lock().timer.as_raw_fd()),
-        };
-        let evt = kill_evt.try_clone().map_err(PitError::CloneEventFd)?;
-        let worker_thread = thread::Builder::new()
-            .name("pit counter worker".to_string())
-            .spawn(move || worker.run(evt))
-            .map_err(PitError::SpawnThread)?;
+
+        let kill_evt = EventFd::new().map_err(PitError::CreateEventFd)?;
+
         Ok(Pit {
             counters,
-            worker_thread: Some(worker_thread),
-            kill_evt: self_kill_evt,
+            worker_thread: None,
+            kill_evt,
         })
+    }
+
+    fn ensure_started(&mut self) {
+        if self.worker_thread.is_some() {
+            return;
+        }
+        if let Err(e) = self.start() {
+            error!("failed to start PIT: {}", e);
+        }
+    }
+
+    fn start(&mut self) -> PitResult<()> {
+        let mut worker = Worker {
+            pit_counter: self.counters[0].clone(),
+            fd: Fd(self.counters[0].lock().timer.as_raw_fd()),
+        };
+        let evt = self.kill_evt.try_clone().map_err(PitError::CloneEventFd)?;
+
+        self.worker_thread = Some(
+            thread::Builder::new()
+                .name("pit counter worker".to_string())
+                .spawn(move || worker.run(evt))
+                .map_err(PitError::SpawnThread)?,
+        );
+
+        Ok(())
     }
 
     fn command_write(&mut self, control_word: u8) {
@@ -312,6 +334,29 @@ impl Pit {
                 .lock()
                 .store_command(control_word);
         }
+    }
+
+    pub fn get_pit_state(&self) -> PitState {
+        PitState {
+            channels: [
+                self.counters[0].lock().get_channel_state(),
+                self.counters[1].lock().get_channel_state(),
+                self.counters[2].lock().get_channel_state(),
+            ],
+            flags: 0,
+        }
+    }
+
+    pub fn set_pit_state(&mut self, state: &PitState) {
+        self.counters[0]
+            .lock()
+            .set_channel_state(&state.channels[0]);
+        self.counters[1]
+            .lock()
+            .set_channel_state(&state.channels[1]);
+        self.counters[2]
+            .lock()
+            .set_channel_state(&state.channels[2]);
     }
 }
 
@@ -380,6 +425,21 @@ fn adjust_count(count: u32) -> u32 {
     }
 }
 
+/// Get the current monotonic time of host in nanoseconds
+fn get_monotonic_time() -> u64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // Safe because time struct is local to this function and we check the returncode
+    let ret = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) };
+    if ret != 0 {
+        0
+    } else {
+        time.tv_sec as u64 * 1_000_000_000u64 + time.tv_nsec as u64
+    }
+}
+
 impl PitCounter {
     fn new(
         counter_id: usize,
@@ -412,6 +472,119 @@ impl PitCounter {
             timer_valid: false,
             timer,
         })
+    }
+
+    fn get_channel_state(&self) -> PitChannelState {
+        // Crosvm Pit stores start as an Instant. We do our best to convert to the host's
+        // monotonic clock by taking the current monotonic time and subtracting the elapsed
+        // time since self.start.
+        let load_time = match &self.start {
+            Some(t) => get_monotonic_time() - t.elapsed().as_nanos() as u64,
+            None => 0,
+        };
+
+        let mut state = PitChannelState {
+            count: self.count,
+            latched_count: self.latched_value,
+            status_latched: self.status_latched,
+            status: self.status,
+            reload_value: self.reload_value,
+            mode: (self.command & CommandBit::CommandMode as u8) >> 1,
+            bcd: false,
+            gate: self.gate,
+            count_load_time: load_time,
+            rw_mode: PitRWMode::None,
+            read_state: PitRWState::None,
+            write_state: PitRWState::None,
+            count_latched: PitRWState::None,
+        };
+
+        match self.get_access_mode() {
+            Some(CommandAccess::CommandRWLeast) => {
+                // If access mode is least, RWStates are always LSB
+                state.rw_mode = PitRWMode::Least;
+                state.read_state = PitRWState::LSB;
+                state.write_state = PitRWState::LSB;
+            }
+            Some(CommandAccess::CommandRWMost) => {
+                // If access mode is most, RWStates are always MSB
+                state.rw_mode = PitRWMode::Most;
+                state.read_state = PitRWState::MSB;
+                state.write_state = PitRWState::MSB;
+            }
+            Some(CommandAccess::CommandRWBoth) => {
+                state.rw_mode = PitRWMode::Both;
+                // read_state depends on whether or not we've read the low byte already
+                state.read_state = if self.read_low_byte {
+                    PitRWState::Word1
+                } else {
+                    PitRWState::Word0
+                };
+                // write_state depends on whether or not we've written the low byte already
+                state.write_state = if self.wrote_low_byte {
+                    PitRWState::Word1
+                } else {
+                    PitRWState::Word0
+                };
+            }
+            _ => {}
+        };
+
+        // Count_latched should be PitRWSTate::None unless we're latched
+        if self.latched {
+            state.count_latched = state.read_state;
+        }
+
+        state
+    }
+
+    fn set_channel_state(&mut self, state: &PitChannelState) {
+        self.count = state.count;
+        self.latched_value = state.latched_count;
+        self.status_latched = state.status_latched;
+        self.status = state.status;
+        self.reload_value = state.reload_value;
+
+        // the command consists of:
+        //  - 1 bcd bit, which we don't care about because we don't support non-binary mode
+        //  - 3 mode bits
+        //  - 2 access mode bits
+        //  - 2 counter select bits, which aren't used by the counter/channel itself
+        self.command = (state.mode << 1) | ((state.rw_mode as u8) << 4);
+        self.gate = state.gate;
+        self.latched = match state.count_latched {
+            PitRWState::None => false,
+            _ => true,
+        };
+
+        match state.read_state {
+            PitRWState::Word1 => {
+                self.read_low_byte = true;
+            }
+            _ => {
+                self.read_low_byte = false;
+            }
+        }
+
+        match state.write_state {
+            PitRWState::Word1 => {
+                self.wrote_low_byte = true;
+            }
+            _ => {
+                self.wrote_low_byte = false;
+            }
+        }
+
+        // To convert the count_load_time to an instant we have to convert it to a
+        // duration by comparing it to get_monotonic_time.  Then subtract that duration from
+        // a "now" instant.
+        self.start = self
+            .clock
+            .lock()
+            .now()
+            .checked_sub(std::time::Duration::from_nanos(
+                get_monotonic_time() - state.count_load_time,
+            ));
     }
 
     fn get_access_mode(&self) -> Option<CommandAccess> {

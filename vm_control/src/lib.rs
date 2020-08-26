@@ -19,14 +19,17 @@ use std::sync::Arc;
 
 use libc::{EINVAL, EIO, ENODEV};
 
-use kvm::{IrqRoute, IrqSource, Vm};
-use msg_socket::{MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
+use base::{
+    error, Error as SysError, EventFd, ExternalMapping, MappedRegion, MemoryMapping, MmapError,
+    Result,
+};
+use hypervisor::{IrqRoute, IrqSource, Vm};
+use msg_socket::{MsgError, MsgOnSocket, MsgReceiver, MsgResult, MsgSender, MsgSocket};
 use resources::{Alloc, GpuMemoryDesc, MmioType, SystemAllocator};
 use sync::Mutex;
-use sys_util::{
-    error, Error as SysError, EventFd, ExternallyMappedHostMemory, GuestAddress, MemoryMapping,
-    MmapError, Result,
-};
+use vm_memory::GuestAddress;
+
+pub use hypervisor::MemSlot;
 
 /// A file descriptor either borrowed or owned by this.
 #[derive(Debug)]
@@ -58,13 +61,16 @@ impl MsgOnSocket for MaybeOwnedFd {
         1usize
     }
     unsafe fn read_from_buffer(buffer: &[u8], fds: &[RawFd]) -> MsgResult<(Self, usize)> {
-        let (fd, size) = RawFd::read_from_buffer(buffer, fds)?;
-        let file = File::from_raw_fd(fd);
+        let (file, size) = File::read_from_buffer(buffer, fds)?;
         Ok((MaybeOwnedFd::Owned(file), size))
     }
-    fn write_to_buffer(&self, buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
-        let fd = self.as_raw_fd();
-        fd.write_to_buffer(buffer, fds)
+    fn write_to_buffer(&self, _buffer: &mut [u8], fds: &mut [RawFd]) -> MsgResult<usize> {
+        if fds.is_empty() {
+            return Err(MsgError::WrongFdBufferSize);
+        }
+
+        fds[0] = self.as_raw_fd();
+        Ok(1)
     }
 }
 
@@ -256,65 +262,6 @@ impl Display for UsbControlResult {
     }
 }
 
-#[derive(Debug)]
-pub enum ExternallyMappedHostMemoryError {
-    /// A request is already pending so we shouldn't try to add another one.
-    PendingRequestExists,
-    /// No request was pending when there should have been one (on receive of
-    /// RegisterPendingHostPointerAtPciBarOffset)
-    NoPendingRequest,
-    /// Too many requests are in flight so we can't disambiguate requestors
-    TooManyPendingRequests,
-}
-
-/// Not everything can be completely communicated over MsgOnSocket;
-/// ExternallyMappedHostMemoryRequests holds Rust objects with ownership/lifetime data.  It is
-/// intended for there to be only one producer and consumer of ExternallyMappedHostMemoryRequests
-/// at a time, in parallel to how VmMemoryControlRequestSocket works one request in flight at a
-/// time.  Once a pending device memory mapping request is pushed into
-/// ExternallyMappedHostMemoryRequests, the user follows up with traffic to
-/// VmMemoryControlRequestSocket which will examine the contents of
-/// ExternallyMappedHostMemoryRequests, process, and send back a response.
-pub struct ExternallyMappedHostMemoryRequests {
-    ext_mapped_hostmem_requests: Vec<ExternallyMappedHostMemory>,
-}
-
-impl ExternallyMappedHostMemoryRequests {
-    pub fn new() -> ExternallyMappedHostMemoryRequests {
-        ExternallyMappedHostMemoryRequests {
-            ext_mapped_hostmem_requests: Vec::new(),
-        }
-    }
-
-    pub fn push(
-        &mut self,
-        mapping: ExternallyMappedHostMemory,
-    ) -> std::result::Result<(), ExternallyMappedHostMemoryError> {
-        if 0 != self.ext_mapped_hostmem_requests.len() {
-            error!("already a pending memory mapping request!");
-            return Err(ExternallyMappedHostMemoryError::PendingRequestExists);
-        }
-
-        Ok(self.ext_mapped_hostmem_requests.push(mapping))
-    }
-
-    pub fn pop(
-        &mut self,
-    ) -> std::result::Result<ExternallyMappedHostMemory, ExternallyMappedHostMemoryError> {
-        if 0 == self.ext_mapped_hostmem_requests.len() {
-            error!("no pending device memory mapping request found!");
-            return Err(ExternallyMappedHostMemoryError::NoPendingRequest);
-        }
-
-        if 1 != self.ext_mapped_hostmem_requests.len() {
-            error!("too many pending device memory mapping requests!");
-            return Err(ExternallyMappedHostMemoryError::TooManyPendingRequests);
-        }
-
-        Ok(self.ext_mapped_hostmem_requests.remove(0))
-    }
-}
-
 #[derive(MsgOnSocket, Debug)]
 pub enum VmMemoryRequest {
     /// Register shared memory represented by the given fd into guest address space. The response
@@ -323,14 +270,10 @@ pub enum VmMemoryRequest {
     /// Similiar to `VmMemoryRequest::RegisterMemory`, but doesn't allocate new address space.
     /// Useful for cases where the address space is already allocated (PCI regions).
     RegisterFdAtPciBarOffset(Alloc, MaybeOwnedFd, usize, u64),
-    /// Similar to RegisterFdAtPciBarOffset, but is for buffers in the current address space and
-    /// requires that ExternallyMappedHostMemoryRequests has exactly 1 pending request
-    RegisterPendingHostPointerAtPciBarOffset(Alloc, u64),
-    /// Unregister the given memory slot that was previously registered with `RegisterMemory`.
-    UnregisterMemory(u32),
-    /// Unregister the ExternallyMappedHostMemory that was previously registered with
-    /// `RegisterHostPointerAtPciBarOffset`.
-    UnregisterHostPointerMemory(u32),
+    /// Similar to RegisterFdAtPciBarOffset, but is for buffers in the current address space.
+    RegisterHostPointerAtPciBarOffset(Alloc, u64),
+    /// Unregister the given memory slot that was previously registered with `RegisterMemory*`.
+    UnregisterMemory(MemSlot),
     /// Allocate GPU buffer of a given size/format and register the memory into guest address space.
     /// The response variant is `VmResponse::AllocateAndRegisterGpuMemory`
     AllocateAndRegisterGpuMemory {
@@ -338,7 +281,7 @@ pub enum VmMemoryRequest {
         height: u32,
         format: u32,
     },
-    /// Register mmaped memory into kvm's EPT.
+    /// Register mmaped memory into the hypervisor's EPT.
     RegisterMmapMemory {
         fd: MaybeOwnedFd,
         size: usize,
@@ -359,9 +302,9 @@ impl VmMemoryRequest {
     /// that received this `VmMemoryResponse`.
     pub fn execute(
         &self,
-        vm: &mut Vm,
+        vm: &mut impl Vm,
         sys_allocator: &mut SystemAllocator,
-        non_socket_expr_reqs: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match *self {
@@ -377,27 +320,19 @@ impl VmMemoryRequest {
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
-            RegisterPendingHostPointerAtPciBarOffset(alloc, offset) => {
-                let mut locked_reqs = non_socket_expr_reqs.lock();
-                let request_mem = match locked_reqs.pop() {
-                    Ok(mem) => mem,
-                    Err(_) => {
-                        return VmMemoryResponse::Err(SysError::new(EINVAL));
-                    }
-                };
-
-                match register_memory_hva(vm, sys_allocator, request_mem, (alloc, offset)) {
-                    Ok((pfn, slot)) => VmMemoryResponse::RegisterMemory { pfn, slot },
-                    Err(e) => VmMemoryResponse::Err(e),
-                }
-            }
-            UnregisterMemory(slot) => match vm.remove_mmio_memory(slot) {
+            UnregisterMemory(slot) => match vm.remove_memory_region(slot) {
                 Ok(_) => VmMemoryResponse::Ok,
                 Err(e) => VmMemoryResponse::Err(e),
             },
-            UnregisterHostPointerMemory(slot) => {
-                match vm.remove_externally_mapped_host_memory(slot) {
-                    Ok(_) => VmMemoryResponse::Ok,
+            RegisterHostPointerAtPciBarOffset(alloc, offset) => {
+                let mem = map_request
+                    .lock()
+                    .take()
+                    .ok_or(VmMemoryResponse::Err(SysError::new(EINVAL)))
+                    .unwrap();
+
+                match register_memory_hva(vm, sys_allocator, Box::new(mem), (alloc, offset)) {
+                    Ok((pfn, slot)) => VmMemoryResponse::RegisterMemory { pfn, slot },
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
@@ -439,7 +374,7 @@ impl VmMemoryRequest {
                     Ok(v) => v,
                     Err(_e) => return VmMemoryResponse::Err(SysError::new(EINVAL)),
                 };
-                match vm.add_mmio_memory(GuestAddress(gpa), mmap, false, false) {
+                match vm.add_memory_region(GuestAddress(gpa), Box::new(mmap), false, false) {
                     Ok(_) => VmMemoryResponse::Ok,
                     Err(e) => VmMemoryResponse::Err(e),
                 }
@@ -454,14 +389,14 @@ pub enum VmMemoryResponse {
     /// number `pfn` and memory slot number `slot`.
     RegisterMemory {
         pfn: u64,
-        slot: u32,
+        slot: MemSlot,
     },
     /// The request to allocate and register GPU memory into guest address space was successfully
     /// done at page frame number `pfn` and memory slot number `slot` for buffer with `desc`.
     AllocateAndRegisterGpuMemory {
         fd: MaybeOwnedFd,
         pfn: u64,
-        slot: u32,
+        slot: MemSlot,
         desc: GpuMemoryDesc,
     },
     Ok,
@@ -472,7 +407,7 @@ pub enum VmMemoryResponse {
 pub enum VmIrqRequest {
     /// Allocate one gsi, and associate gsi to irqfd with register_irqfd()
     AllocateOneMsi { irqfd: MaybeOwnedFd },
-    /// Add one msi route entry into kvm
+    /// Add one msi route entry into the IRQ chip.
     AddMsiRoute {
         gsi: u32,
         msi_address: u64,
@@ -480,16 +415,27 @@ pub enum VmIrqRequest {
     },
 }
 
+/// Data to set up an IRQ event or IRQ route on the IRQ chip.
+/// VmIrqRequest::execute can't take an `IrqChip` argument, because of a dependency cycle between
+/// devices and vm_control, so it takes a Fn that processes an `IrqSetup`.
+pub enum IrqSetup<'a> {
+    Event(u32, &'a EventFd),
+    Route(IrqRoute),
+}
+
 impl VmIrqRequest {
     /// Executes this request on the given Vm.
     ///
     /// # Arguments
-    /// * `vm` - The `Vm` to perform the request on.
+    /// * `set_up_irq` - A function that applies an `IrqSetup` to an IRQ chip.
     ///
     /// This does not return a result, instead encapsulating the success or failure in a
     /// `VmIrqResponse` with the intended purpose of sending the response back over the socket
     /// that received this `VmIrqResponse`.
-    pub fn execute(&self, vm: &mut Vm, sys_allocator: &mut SystemAllocator) -> VmIrqResponse {
+    pub fn execute<F>(&self, set_up_irq: F, sys_allocator: &mut SystemAllocator) -> VmIrqResponse
+    where
+        F: FnOnce(IrqSetup) -> Result<()>,
+    {
         use self::VmIrqRequest::*;
         match *self {
             AllocateOneMsi { ref irqfd } => {
@@ -503,7 +449,8 @@ impl VmIrqRequest {
                     // kernel which doesn't care about ownership and deals with incorrect FDs, in
                     // the case of bugs on our part.
                     let evt = unsafe { ManuallyDrop::new(EventFd::from_raw_fd(irqfd.as_raw_fd())) };
-                    match vm.register_irqfd(&evt, irq_num) {
+
+                    match set_up_irq(IrqSetup::Event(irq_num, &evt)) {
                         Ok(_) => VmIrqResponse::AllocateOneMsi { gsi: irq_num },
                         Err(e) => VmIrqResponse::Err(e),
                     }
@@ -523,8 +470,7 @@ impl VmIrqRequest {
                         data: msi_data,
                     },
                 };
-
-                match vm.add_irq_route_entry(route) {
+                match set_up_irq(IrqSetup::Route(route)) {
                     Ok(_) => VmIrqResponse::Ok,
                     Err(e) => VmIrqResponse::Err(e),
                 }
@@ -547,7 +493,7 @@ pub enum VmMsyncRequest {
     /// `offset` is the offset of the mapping to sync within the arena.
     /// `size` is the size of the mapping to sync within the arena.
     MsyncArena {
-        slot: u32,
+        slot: MemSlot,
         offset: usize,
         size: usize,
     },
@@ -568,22 +514,13 @@ impl VmMsyncRequest {
     /// This does not return a result, instead encapsulating the success or failure in a
     /// `VmMsyncResponse` with the intended purpose of sending the response back over the socket
     /// that received this `VmMsyncResponse`.
-    pub fn execute(&self, vm: &mut Vm) -> VmMsyncResponse {
+    pub fn execute(&self, vm: &mut impl Vm) -> VmMsyncResponse {
         use self::VmMsyncRequest::*;
         match *self {
-            MsyncArena { slot, offset, size } => {
-                if let Some(arena) = vm.get_mmap_arena(slot) {
-                    match arena.msync(offset, size) {
-                        Ok(()) => VmMsyncResponse::Ok,
-                        Err(e) => match e {
-                            MmapError::SystemCallFailed(errno) => VmMsyncResponse::Err(errno),
-                            _ => VmMsyncResponse::Err(SysError::new(EINVAL)),
-                        },
-                    }
-                } else {
-                    VmMsyncResponse::Err(SysError::new(EINVAL))
-                }
-            }
+            MsyncArena { slot, offset, size } => match vm.msync_memory_region(slot, offset, size) {
+                Ok(()) => VmMsyncResponse::Ok,
+                Err(e) => VmMsyncResponse::Err(e),
+            },
         }
     }
 }
@@ -632,12 +569,12 @@ pub enum VmRequest {
 }
 
 fn register_memory(
-    vm: &mut Vm,
+    vm: &mut impl Vm,
     allocator: &mut SystemAllocator,
     fd: &dyn AsRawFd,
     size: usize,
     pci_allocation: Option<(Alloc, u64)>,
-) -> Result<(u64, u32)> {
+) -> Result<(u64, MemSlot)> {
     let mmap = match MemoryMapping::from_fd(fd, size) {
         Ok(v) => v,
         Err(MmapError::SystemCallFailed(e)) => return Err(e),
@@ -658,22 +595,23 @@ fn register_memory(
         }
     };
 
-    let slot = vm.add_mmio_memory(GuestAddress(addr), mmap, false, false)?;
+    let slot = vm.add_memory_region(GuestAddress(addr), Box::new(mmap), false, false)?;
+
     Ok((addr >> 12, slot))
 }
 
 fn register_memory_hva(
-    vm: &mut Vm,
+    vm: &mut impl Vm,
     allocator: &mut SystemAllocator,
-    mem: ExternallyMappedHostMemory,
+    mem: Box<dyn MappedRegion>,
     pci_allocation: (Alloc, u64),
-) -> Result<(u64, u32)> {
+) -> Result<(u64, MemSlot)> {
     let addr = allocator
         .mmio_allocator(MmioType::High)
         .address_from_pci_offset(pci_allocation.0, pci_allocation.1, mem.size() as u64)
         .map_err(|_e| SysError::new(EINVAL))?;
 
-    let slot = vm.add_externally_mapped_host_memory(GuestAddress(addr), mem, false)?;
+    let slot = vm.add_memory_region(GuestAddress(addr), mem, false, false)?;
     Ok((addr >> 12, slot))
 }
 

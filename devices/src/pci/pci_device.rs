@@ -5,9 +5,9 @@
 use std::fmt::{self, Display};
 use std::os::unix::io::RawFd;
 
-use kvm::Datamatch;
+use base::EventFd;
+use hypervisor::Datamatch;
 use resources::{Error as SystemAllocatorFaliure, SystemAllocator};
-use sys_util::EventFd;
 
 use crate::pci::pci_configuration;
 use crate::pci::{PciAddress, PciInterruptPin};
@@ -22,6 +22,7 @@ pub enum Error {
     /// Registering an IO BAR failed.
     IoRegistrationFailed(u64, pci_configuration::Error),
     /// Create cras client failed.
+    #[cfg(feature = "audio")]
     CreateCrasClientFailed(libcras::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
@@ -32,6 +33,7 @@ impl Display for Error {
 
         match self {
             CapabilitiesSetup(e) => write!(f, "failed to add capability {}", e),
+            #[cfg(feature = "audio")]
             CreateCrasClientFailed(e) => write!(f, "failed to create CRAS Client: {}", e),
             IoAllocationFailed(size, e) => write!(
                 f,

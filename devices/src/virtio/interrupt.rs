@@ -4,10 +4,10 @@
 
 use super::{INTERRUPT_STATUS_CONFIG_CHANGED, INTERRUPT_STATUS_USED_RING, VIRTIO_MSI_NO_VECTOR};
 use crate::pci::MsixConfig;
+use base::EventFd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use sync::Mutex;
-use sys_util::EventFd;
 
 pub struct Interrupt {
     interrupt_status: Arc<AtomicUsize>,
@@ -72,9 +72,15 @@ impl Interrupt {
         self.signal(self.config_msix_vector, INTERRUPT_STATUS_CONFIG_CHANGED)
     }
 
-    /// Handle interrupt resampling event
+    /// Handle interrupt resampling event, reading the value from the event and doing the resample.
     pub fn interrupt_resample(&self) {
         let _ = self.interrupt_resample_evt.read();
+        self.do_interrupt_resample();
+    }
+
+    /// Read the status and write to the interrupt event. Don't read the resample event, assume the
+    /// resample has been requested.
+    pub fn do_interrupt_resample(&self) {
         if self.interrupt_status.load(Ordering::SeqCst) != 0 {
             self.interrupt_evt.write(1).unwrap();
         }

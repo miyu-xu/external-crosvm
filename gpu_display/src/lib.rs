@@ -8,8 +8,8 @@ use std::fmt::{self, Display};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 
+use base::Error as SysError;
 use data_model::VolatileSlice;
-use sys_util::Error as SysError;
 
 mod event_device;
 mod gpu_display_stub;
@@ -107,7 +107,7 @@ impl<'a> GpuDisplayFramebuffer<'a> {
             .checked_add(width_bytes)?;
         let slice = self
             .framebuffer
-            .sub_slice(byte_offset as u64, count as u64)
+            .sub_slice(byte_offset as usize, count as usize)
             .unwrap();
 
         Some(GpuDisplayFramebuffer { slice, ..*self })
@@ -171,6 +171,7 @@ trait DisplayT: AsRawFd {
 /// descriptor. When the connection is readable, `dispatch_events` can be called to process it.
 pub struct GpuDisplay {
     inner: Box<dyn DisplayT>,
+    is_x: bool,
 }
 
 impl GpuDisplay {
@@ -183,7 +184,7 @@ impl GpuDisplay {
                 None => gpu_display_x::DisplayX::open_display(None)?,
             };
             let inner = Box::new(display);
-            Ok(GpuDisplay { inner })
+            Ok(GpuDisplay { inner, is_x: true })
         }
         #[cfg(not(feature = "x"))]
         Err(GpuDisplayError::Unsupported)
@@ -198,13 +199,18 @@ impl GpuDisplay {
             None => gpu_display_wl::DisplayWl::new(None)?,
         };
         let inner = Box::new(display);
-        Ok(GpuDisplay { inner })
+        Ok(GpuDisplay { inner, is_x: false })
     }
 
     pub fn open_stub() -> Result<GpuDisplay, GpuDisplayError> {
         let display = gpu_display_stub::DisplayStub::new()?;
         let inner = Box::new(display);
-        Ok(GpuDisplay { inner })
+        Ok(GpuDisplay { inner, is_x: false })
+    }
+
+    /// Return whether this display is an X display
+    pub fn is_x(&self) -> bool {
+        self.is_x
     }
 
     /// Imports a dmabuf to the compositor for use as a surface buffer and returns a handle to it.

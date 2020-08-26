@@ -17,7 +17,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{IoSlice, Read, Write};
 use std::mem::{size_of, swap};
 use std::os::raw::{c_int, c_void};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
@@ -33,7 +33,7 @@ use libc::{E2BIG, EINVAL, ENOENT, ENOTCONN, EPROTO};
 
 use protobuf::{parse_from_bytes, Message, ProtobufEnum, RepeatedField};
 
-use sys_util::ScmSocket;
+use base::ScmSocket;
 
 use kvm::dirty_log_bitmap_size;
 
@@ -290,7 +290,7 @@ impl crosvm {
             .write_to_vec(&mut self.request_buffer)
             .map_err(proto_error_to_int)?;
         self.socket
-            .send_with_fds(self.request_buffer.as_slice(), fds)
+            .send_with_fds(&[IoSlice::new(self.request_buffer.as_slice())], fds)
             .map_err(|e| -e.errno())?;
 
         let mut datagram_fds = [0; MAX_DATAGRAM_FD];

@@ -4,8 +4,8 @@
 
 //! Crate for displaying simple surfaces and GPU buffers over wayland.
 
+extern crate base;
 extern crate data_model;
-extern crate sys_util;
 
 #[path = "dwl.rs"]
 mod dwl;
@@ -21,8 +21,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::ptr::{null, null_mut};
 
+use base::{round_up_to_page_size, MemoryMapping, SharedMemory};
 use data_model::VolatileMemory;
-use sys_util::{round_up_to_page_size, MemoryMapping, SharedMemory};
 
 const BUFFER_COUNT: usize = 3;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -255,10 +255,7 @@ impl DisplayT for DisplayWl {
         let buffer_index = (surface.buffer_index.get() + 1) % BUFFER_COUNT;
         let framebuffer = surface
             .buffer_mem
-            .get_slice(
-                (buffer_index * surface.buffer_size) as u64,
-                surface.buffer_size as u64,
-            )
+            .get_slice(buffer_index * surface.buffer_size, surface.buffer_size)
             .ok()?;
         Some(GpuDisplayFramebuffer::new(
             framebuffer,

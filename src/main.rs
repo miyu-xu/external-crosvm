@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Runs a virtual machine under KVM
+//! Runs a virtual machine
 
 pub mod panic_hook;
 
@@ -18,20 +18,22 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use arch::{set_default_serial_parameters, Pstore, SerialHardware, SerialParameters, SerialType};
+#[cfg(feature = "audio")]
 use audio_streams::StreamEffect;
+use base::{
+    debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
+    validate_raw_fd, warn,
+};
 use crosvm::{
     argument::{self, print_help, set_arguments, Argument},
     linux, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::{GpuMode, GpuParameters};
+#[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
-use sys_util::{
-    debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
-    validate_raw_fd, warn,
-};
 use vm_control::{
     BalloonControlCommand, DiskControlCommand, MaybeOwnedFd, UsbControlCommand, UsbControlResult,
     VmControlRequestSocket, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
@@ -117,6 +119,10 @@ fn parse_cpu_set(s: &str) -> argument::Result<Vec<usize>> {
 #[cfg(feature = "gpu")]
 fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut gpu_params: GpuParameters = Default::default();
+    #[cfg(feature = "gfxstream")]
+    let mut vulkan_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut syncfd_specified = false;
 
     if let Some(s) = s {
         let opts = s
@@ -217,6 +223,46 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                         });
                     }
                 },
+                #[cfg(feature = "gfxstream")]
+                "syncfd" => {
+                    syncfd_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_use_syncfd = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_use_syncfd = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'syncfd' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "vulkan" => {
+                    vulkan_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_support_vulkan = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_support_vulkan = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'vulkan' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
                 "width" => {
                     gpu_params.display_width =
                         v.parse::<u32>()
@@ -248,9 +294,25 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
         }
     }
 
+    #[cfg(feature = "gfxstream")]
+    {
+        if vulkan_specified || syncfd_specified {
+            match gpu_params.mode {
+                GpuMode::ModeGfxStream => {}
+                _ => {
+                    return Err(argument::Error::UnknownArgument(
+                        "gpu parameter vulkan and syncfd are only supported for gfxstream backend"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
     Ok(gpu_params)
 }
 
+#[cfg(feature = "audio")]
 fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
     let mut ac97_params: Ac97Parameters = Default::default();
 
@@ -557,6 +619,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                         })?,
                 )
         }
+        #[cfg(feature = "audio")]
         "ac97" => {
             let ac97_params = parse_ac97_options(value.unwrap())?;
             cfg.ac97_parameters.push(ac97_params);
@@ -714,7 +777,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 path: disk_path,
                 read_only: !name.starts_with("rw"),
                 sparse: false,
-                block_size: sys_util::pagesize() as u32,
+                block_size: base::pagesize() as u32,
             });
         }
         "pstore" => {
@@ -1019,6 +1082,16 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                             })?;
                         shared_dir.cfg.writeback = writeback;
                     }
+                    "rewrite-security-xattrs" => {
+                        let rewrite_security_xattrs =
+                            value.parse().map_err(|_| argument::Error::InvalidValue {
+                                value: value.to_owned(),
+                                expected: String::from(
+                                    "`rewrite-security-xattrs` must be a boolean",
+                                ),
+                            })?;
+                        shared_dir.cfg.rewrite_security_xattrs = rewrite_security_xattrs;
+                    }
                     _ => {
                         return Err(argument::Error::InvalidValue {
                             value: kind.to_owned(),
@@ -1226,6 +1299,29 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
 
             cfg.vfio.push(vfio_path);
         }
+        "video-decoder" => {
+            cfg.video_dec = true;
+        }
+        "video-encoder" => {
+            cfg.video_enc = true;
+        }
+        "acpi-table" => {
+            let acpi_table = PathBuf::from(value.unwrap());
+            if !acpi_table.exists() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("the acpi-table path does not exist"),
+                });
+            }
+            if !acpi_table.is_file() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("the acpi-table path should be a file"),
+                });
+            }
+
+            cfg.acpi_tables.push(acpi_table);
+        }
 
         "help" => return Err(argument::Error::PrintHelp),
         _ => unreachable!(),
@@ -1310,6 +1406,7 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
           Argument::value("netmask", "NETMASK", "Netmask for VM subnet."),
           Argument::value("mac", "MAC", "MAC address for VM."),
           Argument::value("net-vq-pairs", "N", "virtio net virtual queue paris. (default: 1)"),
+          #[cfg(feature = "audio")]
           Argument::value("ac97",
                           "[backend=BACKEND,capture=true,capture_effect=EFFECT]",
                           "Comma separated key=value pairs for setting up Ac97 devices. Can be given more than once .
@@ -1384,6 +1481,8 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   egl[=true|=false] - If the virtio-gpu backend should use a EGL context for rendering.
                                   glx[=true|=false] - If the virtio-gpu backend should use a GLX context for rendering.
                                   surfaceless[=true|=false] - If the virtio-gpu backend should use a surfaceless context for rendering.
+                                  syncfd[=true|=false] - If the gfxstream backend should support EGL_ANDROID_native_fence_sync
+                                  vulkan[=true|=false] - If the gfxstream backend should support vulkan
                                   "),
           #[cfg(feature = "tpm")]
           Argument::flag("software-tpm", "enable a software emulated trusted platform module device"),
@@ -1396,6 +1495,11 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
           Argument::flag("split-irqchip", "(EXPERIMENTAL) enable split-irqchip support"),
           Argument::value("bios", "PATH", "Path to BIOS/firmware ROM"),
           Argument::value("vfio", "PATH", "Path to sysfs of pass through or mdev device"),
+          #[cfg(feature = "video-decoder")]
+          Argument::flag("video-decoder", "(EXPERIMENTAL) enable virtio-video decoder device"),
+          #[cfg(feature = "video-encoder")]
+          Argument::flag("video-encoder", "(EXPERIMENTAL) enable virtio-video encoder device"),
+          Argument::value("acpi-table", "PATH", "Path to user provided ACPI table"),
           Argument::short_flag('h', "help", "Print help message.")];
 
     let mut cfg = Config::default();
@@ -1667,7 +1771,7 @@ enum ModifyUsbError {
     ArgMissing(&'static str),
     ArgParse(&'static str, String),
     ArgParseInt(&'static str, String, ParseIntError),
-    FailedFdValidate(sys_util::Error),
+    FailedFdValidate(base::Error),
     PathDoesNotExist(PathBuf),
     SocketFailed,
     UnexpectedResponse(VmResponse),
@@ -1983,28 +2087,33 @@ mod tests {
         parse_cpu_set("0,1,2,").expect_err("parse should have failed");
     }
 
+    #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_vaild() {
         parse_ac97_options("backend=cras").expect("parse should have succeded");
     }
 
+    #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_null_vaild() {
         parse_ac97_options("backend=null").expect("parse should have succeded");
     }
 
+    #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_dup_effect_vaild() {
         parse_ac97_options("backend=cras,capture=true,capture_effects=aec|aec")
             .expect("parse should have succeded");
     }
 
+    #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_effect_invaild() {
         parse_ac97_options("backend=cras,capture=true,capture_effects=abc")
             .expect_err("parse should have failed");
     }
 
+    #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_effect_vaild() {
         parse_ac97_options("backend=cras,capture=true,capture_effects=aec")
@@ -2248,5 +2357,73 @@ mod tests {
             config.virtio_single_touch.unwrap().get_size(),
             (touch_width, touch_height)
         );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_vulkan_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,vulkan=true"))
+                .unwrap()
+                .gfxstream_support_vulkan
+        );
+        assert!(
+            parse_gpu_options(Some("vulkan=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_support_vulkan
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,vulkan=false"))
+                .unwrap()
+                .gfxstream_support_vulkan
+        );
+        assert!(
+            !parse_gpu_options(Some("vulkan=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_support_vulkan
+        );
+        assert!(parse_gpu_options(Some("backend=gfxstream,vulkan=invalid_value")).is_err());
+        assert!(parse_gpu_options(Some("vulkan=invalid_value,backend=gfxstream")).is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_vulkan_specified() {
+        assert!(parse_gpu_options(Some("backend=3d,vulkan=true")).is_err());
+        assert!(parse_gpu_options(Some("vulkan=true,backend=3d")).is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_syncfd_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,syncfd=true"))
+                .unwrap()
+                .gfxstream_use_syncfd
+        );
+        assert!(
+            parse_gpu_options(Some("syncfd=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_use_syncfd
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,syncfd=false"))
+                .unwrap()
+                .gfxstream_use_syncfd
+        );
+        assert!(
+            !parse_gpu_options(Some("syncfd=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_use_syncfd
+        );
+        assert!(parse_gpu_options(Some("backend=gfxstream,syncfd=invalid_value")).is_err());
+        assert!(parse_gpu_options(Some("syncfd=invalid_value,backend=gfxstream")).is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_syncfd_specified() {
+        assert!(parse_gpu_options(Some("backend=3d,syncfd=true")).is_err());
+        assert!(parse_gpu_options(Some("syncfd=true,backend=3d")).is_err());
     }
 }

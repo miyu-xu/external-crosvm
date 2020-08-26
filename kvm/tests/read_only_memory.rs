@@ -4,9 +4,10 @@
 
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 
+use base::{MemoryMapping, SharedMemory};
 use kvm::*;
 use kvm_sys::kvm_regs;
-use sys_util::{GuestAddress, GuestMemory, MemoryMapping, SharedMemory};
+use vm_memory::{GuestAddress, GuestMemory};
 
 #[test]
 fn test_run() {
@@ -45,9 +46,12 @@ fn test_run() {
     vcpu_regs.rax = 0x66;
     vcpu_regs.rbx = 0;
     vcpu.set_regs(&vcpu_regs).expect("set regs failed");
-    vm.add_mmio_memory(
+    vm.add_memory_region(
         GuestAddress(0),
-        MemoryMapping::from_fd(&mem, mem_size as usize).expect("failed to create memory mapping"),
+        Box::new(
+            MemoryMapping::from_fd(&mem, mem_size as usize)
+                .expect("failed to create memory mapping"),
+        ),
         false,
         false,
     )
@@ -63,9 +67,9 @@ fn test_run() {
     mmap_ro
         .write_obj(vcpu_regs.rax as u8, 0)
         .expect("failed writing data to ro memory");
-    vm.add_mmio_memory(
+    vm.add_memory_region(
         GuestAddress(vcpu_sregs.es.base),
-        MemoryMapping::from_fd(&mem_ro, 0x1000).expect("failed to create memory mapping"),
+        Box::new(MemoryMapping::from_fd(&mem_ro, 0x1000).expect("failed to create memory mapping")),
         true,
         false,
     )

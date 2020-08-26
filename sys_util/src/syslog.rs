@@ -12,14 +12,12 @@
 //! ```
 //! use sys_util::{error, syslog, warn};
 //!
-//! fn main() {
-//!     if let Err(e) = syslog::init() {
-//!         println!("failed to initiailize syslog: {}", e);
-//!         return;
-//!     }
-//!     warn!("this is your {} warning", "final");
-//!     error!("something went horribly wrong: {}", "out of RAMs");
+//! if let Err(e) = syslog::init() {
+//!     println!("failed to initiailize syslog: {}", e);
+//!     return;
 //! }
+//! warn!("this is your {} warning", "final");
+//! error!("something went horribly wrong: {}", "out of RAMs");
 //! ```
 
 use std::env;
@@ -396,16 +394,14 @@ fn get_localtime() -> tm {
 ///
 /// ```
 /// # use sys_util::syslog;
-/// # fn main() {
-/// #   if let Err(e) = syslog::init() {
-/// #       println!("failed to initiailize syslog: {}", e);
-/// #       return;
-/// #   }
+/// # if let Err(e) = syslog::init() {
+/// #     println!("failed to initiailize syslog: {}", e);
+/// #     return;
+/// # }
 /// syslog::log(syslog::Priority::Error,
 ///             syslog::Facility::User,
 ///             Some((file!(), line!())),
 ///             format_args!("hello syslog"));
-/// # }
 /// ```
 pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: fmt::Arguments) {
     const MONTHS: [&str; 12] = [
@@ -439,7 +435,7 @@ pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: f
                 }
             })
             .and_then(|()| write!(&mut buf_cursor, "{}", args))
-            .and_then(|()| Ok(buf_cursor.position() as usize))
+            .map(|()| buf_cursor.position() as usize)
         };
 
         if let Ok(len) = &res {
@@ -455,7 +451,7 @@ pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: f
             Ok(())
         }
         .and_then(|()| writeln!(&mut buf_cursor, "{}", args))
-        .and_then(|()| Ok(buf_cursor.position() as usize))
+        .map(|()| buf_cursor.position() as usize)
     };
     if let Ok(len) = &res {
         if let Some(file) = &mut state.file {
@@ -567,7 +563,7 @@ mod tests {
         init().unwrap();
         let mut fds = Vec::new();
         push_fds(&mut fds);
-        assert!(fds.len() >= 1);
+        assert!(!fds.is_empty());
         for fd in fds {
             assert!(fd >= 0);
         }
@@ -617,7 +613,7 @@ mod tests {
         let syslog_file = file.try_clone().expect("error cloning shared memory file");
         echo_file(Some(syslog_file));
 
-        const TEST_STR: &'static str = "hello shared memory file";
+        const TEST_STR: &str = "hello shared memory file";
         log(
             Priority::Error,
             Facility::User,
@@ -653,7 +649,7 @@ mod tests {
         }
 
         syslogger
-            .write(&['\n' as u8])
+            .write(&[b'\n'])
             .expect("error writing newline char");
     }
 

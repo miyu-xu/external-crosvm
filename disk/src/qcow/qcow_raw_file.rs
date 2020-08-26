@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 
-use data_model::VolatileMemory;
-use sys_util::{FileReadWriteAtVolatile, WriteZeroes};
+use base::{FileReadWriteAtVolatile, WriteZeroes};
+use data_model::VolatileSlice;
 
 /// A qcow file. Allows reading/writing clusters and appending clusters.
 #[derive(Debug)]
@@ -149,10 +149,13 @@ impl QcowRawFile {
 
     /// Writes
     pub fn write_cluster(&mut self, address: u64, mut initial_data: Vec<u8>) -> io::Result<()> {
-        let raw_slice = initial_data.as_mut_slice();
-        let volatile_slice = raw_slice
-            .get_slice(0, self.cluster_size)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
+        if (initial_data.len() as u64) < self.cluster_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "`initial_data` is too small",
+            ));
+        }
+        let volatile_slice = VolatileSlice::new(&mut initial_data[..self.cluster_size as usize]);
         self.file.write_all_at_volatile(volatile_slice, address)
     }
 }
