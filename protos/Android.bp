@@ -6,13 +6,13 @@ rust_library {
     crate_name: "protos",
     srcs: [
         "src/lib.rs",
+        ":libcdisk_spec_proto",
     ],
     features: [
         "composite-disk",
     ],
     rustlibs: [
         "libprotobuf",
-        "libcdisk_spec_proto",
     ],
 }
 
