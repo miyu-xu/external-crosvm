@@ -16,6 +16,24 @@
       "revId": "e6450a32174c5eb1b9adb982853af4fb9c1ff942",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "8b233eea_738d0203",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1115178
+      },
+      "writtenOn": "2020-08-27T12:48:50Z",
+      "side": 1,
+      "message": "No there\u0027s no way to do that. Checking build-time generated source against checked-in versions is something we decided against as it\u0027ll block and complicate upgrades to our source generators. \n\nIdeally testing should catch any issues that arise from interface changes, but if there\u0027s a concern that the generated source might change in problematic ways, then it should probably just be checked into the tree and used directly.",
+      "parentUuid": "655c68f5_7e7ff895",
+      "revId": "e6450a32174c5eb1b9adb982853af4fb9c1ff942",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
