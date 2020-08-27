@@ -5,8 +5,25 @@
 #![allow(unknown_lints)]
 #![allow(clippy::all)]
 
+<<<<<<< HEAD   (c95651 Allow building for device as well as host.)
 #![allow(unused_attributes)]
 #![rustfmt::skip]
+=======
+/// Converts protobuf representation of CpuId data into KVM format.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub fn cpuid_proto_to_kvm(entry: &CpuidEntry) -> kvm_sys::kvm_cpuid_entry2 {
+    // Safe: C structures are expected to be zero-initialized.
+    let mut e: kvm_sys::kvm_cpuid_entry2 = unsafe { std::mem::zeroed() };
+    e.function = entry.function;
+    if entry.has_index {
+        e.flags = kvm_sys::KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+    }
+    e.index = entry.index;
+    e.eax = entry.eax;
+    e.ebx = entry.ebx;
+    e.ecx = entry.ecx;
+    e.edx = entry.edx;
+>>>>>>> BRANCH (ca3817 msg_socket: Fixed bug with all skipped fields in struct)
 
 #![allow(box_pointers)]
 #![allow(dead_code)]
@@ -38,11 +55,25 @@ pub struct CpuidEntry {
     pub cached_size: ::protobuf::CachedSize,
 }
 
+<<<<<<< HEAD   (c95651 Allow building for device as well as host.)
 impl<'a> ::std::default::Default for &'a CpuidEntry {
     fn default() -> &'a CpuidEntry {
         <CpuidEntry as ::protobuf::Message>::default_instance()
     }
 }
+=======
+/// Converts KVM representation of CpuId data into protobuf format.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub fn cpuid_kvm_to_proto(entry: &kvm_sys::kvm_cpuid_entry2) -> CpuidEntry {
+    let mut e = CpuidEntry::new();
+    e.function = entry.function;
+    e.has_index = entry.flags & kvm_sys::KVM_CPUID_FLAG_SIGNIFCANT_INDEX != 0;
+    e.index = entry.index;
+    e.eax = entry.eax;
+    e.ebx = entry.ebx;
+    e.ecx = entry.ecx;
+    e.edx = entry.edx;
+>>>>>>> BRANCH (ca3817 msg_socket: Fixed bug with all skipped fields in struct)
 
 impl CpuidEntry {
     pub fn new() -> CpuidEntry {
