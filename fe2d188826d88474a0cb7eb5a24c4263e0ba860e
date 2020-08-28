@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "64f73bb1_940824e7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-28T22:15:36Z",
+      "side": 1,
+      "message": "GPU is still off by default, this just allows it to be enabled with --gpu\u003d\u003csomething\u003e.",
+      "revId": "fe2d188826d88474a0cb7eb5a24c4263e0ba860e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    }
+  ]
+}
