@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "ded3a090_ea34ec17",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-08-28T18:28:41Z",
+      "side": 1,
+      "message": "Maybe introduce a function to do this instead?\n\ncargo2android() {\n  cargo2android.py --run --device --tests --dependencies \\\n                   --global_defaults\u003dcrosvm_defaults --add_workspace $@\n  rm -rf cargo.out target.tmp\n}\n\n?",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 26
+      },
+      "revId": "b7e468bddedb0c6da356d98ec94c56e791c83cb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
