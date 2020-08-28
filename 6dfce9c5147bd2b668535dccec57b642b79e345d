@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "ce8cda6c_4576756c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1416371
+      },
+      "writtenOn": "2020-08-28T21:59:08Z",
+      "side": 1,
+      "message": "We\u0027re trying to discourage the direct use of generated code unless:\n* It can\u0027t be done without direct usage\n* It allows us to avoid modifying upstream code/carrying patches.\n\nIn this case, your modification does not make us identical to upstream again, and causes us to use include! again.\n\nWhat\u0027s the motivation here? If it\u0027s optimization, setting visibility to package and linking as an rlib should be equivalently powerful.",
+      "revId": "6dfce9c5147bd2b668535dccec57b642b79e345d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
