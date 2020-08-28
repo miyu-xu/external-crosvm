@@ -2,6 +2,29 @@
   "comments": [
     {
       "key": {
+        "uuid": "71890a55_36fe61a9",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-08-28T20:34:10Z",
+      "side": 1,
+      "message": "My personal hack has used this algorithm you could try:\n(1) Find all crosvm/*/Android.bp and regenerate them in parallel.\n(2) Find all crosvm/*/*/Android.bp and regenerate them in parallel.\n(3) In (1) and (2), grep the first line in Android.bp and run with the same arguments or more. Some directory might have used different flags.\n\nBecause of the --add_workspace flag, all sibling directories can be processed at the same time, but not to mix (1) and (2).\nI only do (1) and (2) because some directories have Cargo.toml but not Android.bp yet.",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 47
+      },
+      "revId": "b7e468bddedb0c6da356d98ec94c56e791c83cb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "ded3a090_ea34ec17",
         "filename": "all2android.sh",
         "patchSetId": 1
