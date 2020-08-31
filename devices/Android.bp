@@ -93,9 +93,25 @@ rust_library {
     srcs: ["src/lib.rs"],
     edition: "2018",
     target: { // added manually
-        host: {
+        linux_glibc: {
             features: [
                 "gfxstream",
+            ],
+        },
+        linux_bionic_arm64: {
+            features: [
+                "audio",
+                "gpu",
+                "gpu_buffer",
+                "gpu_display",
+                "gpu_renderer",
+            ],
+            rustlibs: [
+                "libaudio_streams",
+                "libgpu_buffer",
+                "libgpu_display",
+                "libgpu_renderer",
+                "liblibcras",
             ],
         },
     },
