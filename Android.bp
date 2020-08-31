@@ -27,6 +27,9 @@ rust_defaults {
             compile_multilib: "64",
             enabled: true,
         },
+        linux_bionic_arm64: {
+            enabled: true,
+        },
     },
 }
 
@@ -38,12 +41,23 @@ rust_binary {
     srcs: ["src/main.rs"],
 
     target: {
-        host: {
+        linux_glibc: {
             features: [
                 "gfxstream",
             ],
             flags: [
                 "-C panic=abort",
+            ],
+        },
+        linux_bionic_arm64: {
+            relative_install_path: "aarch64-linux-gnu",
+            rustlibs: [
+                "libaudio_streams",
+                "liblibcras",
+            ],
+            features: [
+                "audio",
+                "gpu",
             ],
         },
         linux_glibc_x86_64: {
@@ -267,9 +281,19 @@ rust_library {
     srcs: ["src/crosvm.rs"],
     edition: "2018",
     target: {
-        host: {
+        linux_glibc: {
             features: [
                 "gfxstream",
+            ],
+        },
+        linux_bionic_arm64: {
+            features: [
+                "audio",
+                "gpu",
+            ],
+            rustlibs: [
+                "libaudio_streams",
+                "liblibcras",
             ],
         },
     },

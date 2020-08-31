@@ -24,6 +24,11 @@ rust_library {
                 "libandroid_log_sys",
             ],
         },
+        linux_bionic_arm64: {
+            rustlibs: [
+                "libandroid_log_sys",
+            ],
+        },
     },
 }
 
