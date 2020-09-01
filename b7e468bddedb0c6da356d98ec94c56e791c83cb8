@@ -25,6 +25,30 @@
     },
     {
       "key": {
+        "uuid": "c394a164_9580d6d3",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-01T13:04:22Z",
+      "side": 1,
+      "message": "I\u0027m intentionally looking for Cargo.toml rather than Android.bp because there might be new crates added in an update, and I\u0027d like to see that and choose manually whether I want to keep the resulting Android.bp or not.\n\nLooking for the first line in Android.bp to choose the arguments to cargo2android.py is clever, but in the cases I\u0027ve used this so far I\u0027ve wanted to apply consistent arguments everywhere (modulo the --no-subdir flag) which might be different to what it had before (e.g. adding --device).\n\nWorking in parallel would be faster I guess, but I\u0027m worried it would make it harder to understand any errors. Given that this isn\u0027t run very often I\u0027m not sure it\u0027s worth the hassle.",
+      "parentUuid": "71890a55_36fe61a9",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 47
+      },
+      "revId": "b7e468bddedb0c6da356d98ec94c56e791c83cb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "ded3a090_ea34ec17",
         "filename": "all2android.sh",
         "patchSetId": 1
@@ -45,6 +69,30 @@
       "revId": "b7e468bddedb0c6da356d98ec94c56e791c83cb8",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "7a87efd3_2aebe2d9",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-01T13:04:22Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ded3a090_ea34ec17",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 26
+      },
+      "revId": "b7e468bddedb0c6da356d98ec94c56e791c83cb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
