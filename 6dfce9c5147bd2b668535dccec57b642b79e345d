@@ -16,6 +16,24 @@
       "revId": "6dfce9c5147bd2b668535dccec57b642b79e345d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "a899bc3e_baf0e5eb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-09-01T00:52:43Z",
+      "side": 1,
+      "message": "\"include!\" macro is used by upstream crosvm:\nhttps://chromium.googlesource.com/chromiumos/platform/crosvm/+/refs/heads/master/protos/src/lib.rs\nIt has already wrapped generated code inside a \"generated\" module, and again in a \"protos\" library. This CL will make the module relations and number of libraries closer to upstream.\n\nThe forced wrapper libcdisk_spec_proto is redundant and farther from the convention used by crosvm and protobuf-codegen. Maybe automatically generating a library for each .proto file has its advantage in some use case, but it\u0027s not what crosvm uses here. We should support both cases. For crosvm, it has already its own library \"protos\", which can include generated source code from 1 or more .proto structures.\n\nMaybe I should have emphasized more on the advantages of source code/module structure than optimization in the commit message.",
+      "parentUuid": "ce8cda6c_4576756c",
+      "revId": "6dfce9c5147bd2b668535dccec57b642b79e345d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
