@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "9a5b3bf4_72d1b387",
+        "filename": "devices/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 72,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-01T09:30:04Z",
+      "side": 1,
+      "message": "There\u0027s not much point having an \u0027android\u0027 target within a \u0027rust_test_host\u0027 rule.",
+      "revId": "8757c760f4e090591a82566c7eef7eb48067938e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    }
+  ]
+}
