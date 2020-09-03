@@ -1368,7 +1368,10 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     Ok(())
 }
 
-fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
+fn run_vm<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+ {
     let arguments =
         &[Argument::positional("KERNEL", "bzImage of kernel to run"),
           Argument::value("android-fstab", "PATH", "Path to Android fstab"),
@@ -1543,10 +1546,13 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
     }
 }
 
-fn handle_request(
+fn handle_request<I>(
     request: &VmRequest,
-    args: std::env::Args,
-) -> std::result::Result<VmResponse, ()> {
+    args: I,
+) -> std::result::Result<VmResponse, ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     let mut return_result = Err(());
     for socket_path in args {
         match UnixSeqpacket::connect(&socket_path) {
@@ -1582,13 +1588,19 @@ fn handle_request(
     return_result
 }
 
-fn vms_request(request: &VmRequest, args: std::env::Args) -> std::result::Result<(), ()> {
+fn vms_request<I>(request: &VmRequest, args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     let response = handle_request(request, args)?;
     info!("request response was {}", response);
     Ok(())
 }
 
-fn stop_vms(args: std::env::Args) -> std::result::Result<(), ()> {
+fn stop_vms<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() == 0 {
         print_help("crosvm stop", "VM_SOCKET...", &[]);
         println!("Stops the crosvm instance listening on each `VM_SOCKET` given.");
@@ -1597,7 +1609,10 @@ fn stop_vms(args: std::env::Args) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Exit, args)
 }
 
-fn suspend_vms(args: std::env::Args) -> std::result::Result<(), ()> {
+fn suspend_vms<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() == 0 {
         print_help("crosvm suspend", "VM_SOCKET...", &[]);
         println!("Suspends the crosvm instance listening on each `VM_SOCKET` given.");
@@ -1606,7 +1621,10 @@ fn suspend_vms(args: std::env::Args) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Suspend, args)
 }
 
-fn resume_vms(args: std::env::Args) -> std::result::Result<(), ()> {
+fn resume_vms<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() == 0 {
         print_help("crosvm resume", "VM_SOCKET...", &[]);
         println!("Resumes the crosvm instance listening on each `VM_SOCKET` given.");
@@ -1615,7 +1633,10 @@ fn resume_vms(args: std::env::Args) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Resume, args)
 }
 
-fn balloon_vms(mut args: std::env::Args) -> std::result::Result<(), ()> {
+fn balloon_vms<I>(mut args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+ {
     if args.len() < 2 {
         print_help("crosvm balloon", "SIZE VM_SOCKET...", &[]);
         println!("Set the ballon size of the crosvm instance to `SIZE` bytes.");
@@ -1633,7 +1654,10 @@ fn balloon_vms(mut args: std::env::Args) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::BalloonCommand(command), args)
 }
 
-fn balloon_stats(args: std::env::Args) -> std::result::Result<(), ()> {
+fn balloon_stats<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() != 1 {
         print_help("crosvm balloon_stats", "VM_SOCKET", &[]);
         println!("Prints virtio balloon statistics for a `VM_SOCKET`.");
@@ -1646,7 +1670,10 @@ fn balloon_stats(args: std::env::Args) -> std::result::Result<(), ()> {
     Ok(())
 }
 
-fn create_qcow2(args: std::env::Args) -> std::result::Result<(), ()> {
+fn create_qcow2<I>(args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     let arguments = [
         Argument::positional("PATH", "where to create the qcow2 image"),
         Argument::positional("[SIZE]", "the expanded size of the image"),
@@ -1725,7 +1752,10 @@ with a '--backing_file'."
     Ok(())
 }
 
-fn disk_cmd(mut args: std::env::Args) -> std::result::Result<(), ()> {
+fn disk_cmd<I>(mut args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() < 2 {
         print_help("crosvm disk", "SUBCOMMAND VM_SOCKET...", &[]);
         println!("Manage attached virtual disk devices.");
@@ -1850,7 +1880,10 @@ fn raw_fd_from_path(path: &Path) -> ModifyUsbResult<RawFd> {
     validate_raw_fd(raw_fd).map_err(ModifyUsbError::FailedFdValidate)
 }
 
-fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
+fn usb_attach<I>(mut args: I) -> ModifyUsbResult<UsbControlResult>
+where
+    I: ExactSizeIterator<Item = String>
+{
     let val = args
         .next()
         .ok_or(ModifyUsbError::ArgMissing("BUS_ID_ADDR_BUS_NUM_DEV_NUM"))?;
@@ -1889,7 +1922,10 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
     }
 }
 
-fn usb_detach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
+fn usb_detach<I>(mut args: I) -> ModifyUsbResult<UsbControlResult>
+where
+    I: ExactSizeIterator<Item = String>
+{
     let port: u8 = args
         .next()
         .map_or(Err(ModifyUsbError::ArgMissing("PORT")), |p| {
@@ -1904,7 +1940,10 @@ fn usb_detach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
     }
 }
 
-fn usb_list(args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
+fn usb_list<I>(args: I) -> ModifyUsbResult<UsbControlResult>
+where
+    I: ExactSizeIterator<Item = String>
+{
     let mut ports: [u8; USB_CONTROL_MAX_PORTS] = Default::default();
     for (index, port) in ports.iter_mut().enumerate() {
         *port = index as u8
@@ -1917,7 +1956,10 @@ fn usb_list(args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
     }
 }
 
-fn modify_usb(mut args: std::env::Args) -> std::result::Result<(), ()> {
+fn modify_usb<I>(mut args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>,
+{
     if args.len() < 2 {
         print_help("crosvm usb",
                    "[attach BUS_ID:ADDR:VENDOR_ID:PRODUCT_ID [USB_DEVICE_PATH|-] | detach PORT | list] VM_SOCKET...", &[]);
@@ -1967,22 +2009,11 @@ fn pkg_version() -> std::result::Result<(), ()> {
     Ok(())
 }
 
-fn crosvm_main() -> std::result::Result<(), ()> {
-    if let Err(e) = syslog::init() {
-        println!("failed to initialize syslog: {}", e);
-        return Err(());
-    }
-
-    panic_hook::set_panic_hook();
-
-    let mut args = std::env::args();
-    if args.next().is_none() {
-        error!("expected executable name");
-        return Err(());
-    }
-
-    // Past this point, usage of exit is in danger of leaking zombie processes.
-    let ret = match args.next().as_ref().map(|a| a.as_ref()) {
+fn crosvm_cmd<I>(mut args: I) -> std::result::Result<(), ()>
+where
+    I: ExactSizeIterator<Item = String>
+{
+    match args.next().as_ref().map(|a| a.as_ref()) {
         None => {
             print_usage();
             Ok(())
@@ -2002,7 +2033,54 @@ fn crosvm_main() -> std::result::Result<(), ()> {
             print_usage();
             Err(())
         }
-    };
+    }
+}
+
+fn crosvm_main() -> std::result::Result<(), ()> {
+    if let Err(e) = syslog::init() {
+        println!("failed to initialize syslog: {}", e);
+        return Err(());
+    }
+
+    panic_hook::set_panic_hook();
+
+    let mut args_original = std::env::args();
+    if args_original.next().is_none() {
+        error!("expected executable name");
+        return Err(());
+    }
+
+    let mut args_constant : Vec<String> = vec![
+        "run".to_string(),
+        "--gpu=gfxstream,width=720,height=1280,egl=true,surfaceless=true,glx=false,gles=true".to_string(),
+        "--wayland-sock=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/frames.sock".to_string(),
+        "--initrd=/usr/local/google/home/natsu/cuttlefish_assembly/ramdisk.img.concat".to_string(),
+        "--mem=2048".to_string(),
+        "--cpus=2".to_string(),
+        "--params=androidboot.console=hvc1  printk.devkmsg=on firmware_class.path=/vendor/etc/ init=/init androidboot.hardware=cutf_cvm androidboot.fstab_suffix=f2fs buildvariant=userdebug androidboot.hardware.gralloc=minigbm androidboot.hardware.hwcomposer=drm_minigbm androidboot.hardware.egl=angle androidboot.hardware.vulkan=ranchu androidboot.hardware.gltransport=virtio-gpu-asg androidboot.boot_devices=pci0000:00/0000:00:04.0 androidboot.serialno=CUTTLEFISHCVD011 androidboot.lcd_density=160 androidboot.setupwizard_mode=DISABLED androidboot.slot_suffix=_a loop.max_part=7 audit=1 androidboot.force_normal_boot=1 androidboot.vsock_tombstone_port=6600 androidboot.cuttlefish_config_server_port=6800 androidboot.vsock_keymaster_port=7200 androidboot.vsock_gatekeeper_port=7300 androidboot.wifi_mac_address=40:1:2:3:4:1 androidboot.verifiedbootstate=orange".to_string(),
+        "--rwdisk=/usr/local/google/home/natsu/cuttlefish_runtime.1/overlay.img".to_string(),
+        "--rwdisk=/usr/local/google/home/natsu/cuttlefish_runtime.1/sdcard.img".to_string(),
+        "--socket=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/crosvm_control.sock".to_string(),
+        "--single-touch=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/touch.sock:720:1280".to_string(),
+        "--keyboard=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/keyboard.sock".to_string(),
+        "--rw-pmem-device=/usr/local/google/home/natsu/cuttlefish_runtime.1/access-kregistry".to_string(),
+        "--pstore=path=/usr/local/google/home/natsu/cuttlefish_runtime.1/pstore,size=2097152".to_string(),
+        "--disable-sandbox".to_string(),
+        "--cid=3".to_string(),
+        "--serial=hardware=serial,num=1,type=file,path=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/kernel-log-pipe,earlycon=true".to_string(),
+        "--serial=hardware=virtio-console,num=1,type=file,path=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/kernel-log-pipe,console=true".to_string(),
+        "--serial=hardware=virtio-console,num=2,type=file,path=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/console-out-pipe,input=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/console-in-pipe".to_string(),
+        "--serial=hardware=virtio-console,num=3,type=file,path=/usr/local/google/home/natsu/cuttlefish_runtime.1/internal/logcat-pipe".to_string(),
+        "/usr/local/google/home/natsu/cuttlefish_assembly/kernel".to_string(),
+    ];
+
+    // Past this point, usage of exit is in danger of leaking zombie processes.
+    let ret =
+        if args_original.len() == 0 {
+            crosvm_cmd(args_constant.iter().cloned())
+        } else {
+            crosvm_cmd(args_original)
+        };
 
     // Reap exit status from any child device processes. At this point, all devices should have been
     // dropped in the main process and told to shutdown. Try over a period of 100ms, since it may
