@@ -22,6 +22,7 @@ pub mod usb;
 mod utils;
 pub mod vfio;
 pub mod virtio;
+pub mod vm_memshare;
 
 pub use self::acpi::ACPIPMResource;
 pub use self::bus::Error as BusError;
@@ -46,3 +47,4 @@ pub use self::usb::host_backend::host_backend_device_provider::HostBackendDevice
 pub use self::usb::xhci::xhci_controller::XhciController;
 pub use self::vfio::{VfioContainer, VfioDevice};
 pub use self::virtio::VirtioPciDevice;
+pub use self::vm_memshare::VmMemShareDevice;

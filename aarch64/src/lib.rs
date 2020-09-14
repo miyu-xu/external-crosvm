@@ -93,6 +93,9 @@ const AARCH64_RTC_SIZE: u64 = 0x1000;
 // The RTC device gets the second interrupt line
 const AARCH64_RTC_IRQ: u32 = 1;
 
+const AARCH64_MEMSHARE_ADDR: u64 = 0x3000;
+const AARCH64_MEMSHARE_SIZE: u64 = 0x1000;
+
 // PCI MMIO configuration region base address.
 const AARCH64_PCI_CFG_BASE: u64 = 0x10000;
 // PCI MMIO configuration region size.
@@ -441,6 +444,10 @@ impl AArch64 {
         let rtc = Arc::new(Mutex::new(devices::pl030::Pl030::new(rtc_evt)));
         bus.insert(rtc, AARCH64_RTC_ADDR, AARCH64_RTC_SIZE, false)
             .expect("failed to add rtc device");
+
+        let memshare = Arc::new(Mutex::new(devices::vm_memshare::VmMemShareDevice::new()));
+        bus.insert(memshare, AARCH64_MEMSHARE_ADDR, AARCH64_MEMSHARE_SIZE, false)
+            .expect("failed to add memshare device");
 
         Ok(())
     }

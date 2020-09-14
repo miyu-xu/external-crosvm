@@ -30,6 +30,9 @@ use crate::AARCH64_RTC_IRQ;
 use crate::AARCH64_RTC_SIZE;
 use devices::pl030::PL030_AMBA_ID;
 
+use crate::AARCH64_MEMSHARE_ADDR;
+use crate::AARCH64_MEMSHARE_SIZE;
+
 // These are serial device related constants.
 use crate::AARCH64_SERIAL_1_3_IRQ;
 use crate::AARCH64_SERIAL_2_4_IRQ;
@@ -342,6 +345,17 @@ fn create_rtc_node(fdt: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+fn create_memshare_node(fdt: &mut Vec<u8>) -> Result<()> {
+    let rtc_name = format!("memshare@{:x}", AARCH64_MEMSHARE_ADDR);
+    let reg = generate_prop64(&[AARCH64_MEMSHARE_ADDR, AARCH64_MEMSHARE_SIZE]);
+
+    begin_node(fdt, &rtc_name)?;
+    property_string(fdt, "compatible", "vm-memshare")?;
+    property(fdt, "reg", &reg)?;
+    end_node(fdt)?;
+    Ok(())
+}
+
 /// Creates a flattened device tree containing all of the parameters for the
 /// kernel and loads it into the guest memory at the specified offset.
 ///
@@ -396,6 +410,7 @@ pub fn create_fdt(
     create_psci_node(&mut fdt)?;
     create_pci_nodes(&mut fdt, pci_irqs, pci_device_base, pci_device_size)?;
     create_rtc_node(&mut fdt)?;
+    create_memshare_node(&mut fdt);
     // End giant node
     end_node(&mut fdt)?;
 
