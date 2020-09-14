@@ -16,6 +16,23 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "475ae312_a99d96ef",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-09-14T15:04:45Z",
+      "side": 1,
+      "message": "Frank: FYI, when your Android.bp build for gfxstream lands, we need to re-enable it in crosvm too.",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
