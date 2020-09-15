@@ -2,6 +2,23 @@
   "comments": [
     {
       "key": {
+        "uuid": "cb46c7d8_af2653e1",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "What is this target used for?",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
         "uuid": "d7c2b456_c7bdd77e",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 2
@@ -51,6 +68,120 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "3a123cfc_3d1fdd76",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 63,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "Why is this \u0027gnu\u0027 rather than \u0027bionic\u0027?",
+      "range": {
+        "startLine": 63,
+        "startChar": 50,
+        "endLine": 63,
+        "endChar": 53
+      },
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "df0c21fc_d6b5e83c",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "These rustlibs are already included below for the rust_binary in general, no need to add them here again.",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "dd7d0e7b_ec6889b6",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 70,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "These two features are already enabled below for the rust_binary in general, no need to enable them specifically for this target.",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "7af2bdc3_ed04432a",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 307,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "No need to duplicate these features and rustlibs, they are included for all targets already.",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "c41cb31a_0b049f76",
+        "filename": "devices/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 115,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "No need to add these features and rustlibs, they are included for all targets already just below.",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "a8922418_54b6d4a5",
+        "filename": "sys_util/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-09-15T15:20:49Z",
+      "side": 1,
+      "message": "Why?",
+      "range": {
+        "startLine": 28,
+        "startChar": 15,
+        "endLine": 29,
+        "endChar": 39
+      },
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": true
     }
   ]
 }
