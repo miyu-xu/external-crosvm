@@ -19,6 +19,24 @@
     },
     {
       "key": {
+        "uuid": "8bd3a159_3bb8bef4",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "This target is for Linux/ARM64 hosts. We are running cuttefish VM on both x86 and arm hosts. For x86, we are building the host tools like crosvm natively using Android build system, but for arm64, we have been building the tools outside of the Android build system, dropped the built artifacts as prebuilts, and used the prebuilts. This CL is an attempt to build the host (arm64) tools using Android build system.",
+      "parentUuid": "cb46c7d8_af2653e1",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "d7c2b456_c7bdd77e",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 2
@@ -94,6 +112,30 @@
     },
     {
       "key": {
+        "uuid": "057af25c_1a72fdd9",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 63,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "Fixed.",
+      "parentUuid": "3a123cfc_3d1fdd76",
+      "range": {
+        "startLine": 63,
+        "startChar": 50,
+        "endLine": 63,
+        "endChar": 53
+      },
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "df0c21fc_d6b5e83c",
         "filename": "Android.bp",
         "patchSetId": 2
@@ -108,6 +150,24 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "f4dcf7fc_b8290baf",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "I should have noticed the duplication just a few lines below. Thanks for catching this. Done",
+      "parentUuid": "df0c21fc_d6b5e83c",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     },
     {
       "key": {
@@ -128,6 +188,24 @@
     },
     {
       "key": {
+        "uuid": "1dda9e57_c31a1f75",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 70,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "dd7d0e7b_ec6889b6",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "7af2bdc3_ed04432a",
         "filename": "Android.bp",
         "patchSetId": 2
@@ -145,6 +223,24 @@
     },
     {
       "key": {
+        "uuid": "66f272e2_2e00ecad",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 307,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "7af2bdc3_ed04432a",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
+    },
+    {
+      "key": {
         "uuid": "c41cb31a_0b049f76",
         "filename": "devices/Android.bp",
         "patchSetId": 2
@@ -159,6 +255,24 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "036e1a34_3951ae5a",
+        "filename": "devices/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 115,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c41cb31a_0b049f76",
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     },
     {
       "key": {
@@ -182,6 +296,30 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "83247944_d05ec9a2",
+        "filename": "sys_util/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T08:49:31Z",
+      "side": 1,
+      "message": "It\u0027s because rustc doesn\u0027t yet support a Linux-based target using Bionic as lib. Following is the arm64/linux targets that are currently supported.\n\n$ prebuilts/rust/linux-x86/1.45.2/bin/rustc --print target-list | grep aarch64 | grep linux\naarch64-linux-android\naarch64-unknown-linux-gnu\naarch64-unknown-linux-musl\n\nYou might wonder why we don\u0027t use glibc (aarch64-unknown-linux-gnu). It was once attempted, but the amount of work required was too big. Please visit go/android-build-linux-cross for some more.",
+      "parentUuid": "a8922418_54b6d4a5",
+      "range": {
+        "startLine": 28,
+        "startChar": 15,
+        "endLine": 29,
+        "endChar": 39
+      },
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
