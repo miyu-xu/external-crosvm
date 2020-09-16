@@ -344,6 +344,30 @@
       "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "905ec3ee_ba738451",
+        "filename": "sys_util/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2020-09-16T11:45:46Z",
+      "side": 1,
+      "message": "True, it\u0027s not ideal. The reason was actually not about technical difficulty but about amount of efforts to build, deliver, and maintain the prebuilt ARM/glibc. Also, we are heading towards \"Bionic everywhere\" (even for x86 hosts), so investing more on glibc was considered a kind of waste.",
+      "parentUuid": "3694fa0c_77b02848",
+      "range": {
+        "startLine": 28,
+        "startChar": 15,
+        "endLine": 29,
+        "endChar": 39
+      },
+      "revId": "09f030c333560697f0669a24b0ea4e7f2ae118ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889",
+      "unresolved": false
     }
   ]
 }
