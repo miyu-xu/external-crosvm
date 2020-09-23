@@ -9,11 +9,13 @@ rust_defaults {
     test_suites: ["general-tests"],
     auto_gen_config: true,
     edition: "2018",
+    rlibs: [
+        "libbitflags",
+    ],
     rustlibs: [
         "libacpi_tables",
         "libbase_rust",
         "libbit_field",
-        "libbitflags",
         "libcros_async",
         "libdata_model",
         "libdisk",
@@ -106,12 +108,14 @@ rust_library {
         "gpu_display",
         "gpu_renderer",
     ],
+    rlibs: [
+        "libbitflags",
+    ],
     rustlibs: [
         "libacpi_tables",
         "libaudio_streams",
         "libbase_rust",
         "libbit_field",
-        "libbitflags",
         "libcros_async",
         "libdata_model",
         "libdisk",

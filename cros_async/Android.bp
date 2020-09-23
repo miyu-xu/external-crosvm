@@ -8,12 +8,14 @@ rust_defaults {
     test_suites: ["general-tests"],
     auto_gen_config: true,
     edition: "2018",
+    rlibs: [
+        "libpin_utils",
+    ],
     rustlibs: [
         "libbase_rust",
         "libfutures",
         "libio_uring",
         "liblibc",
-        "libpin_utils",
         "libsyscall_defines",
         "libtempfile",
         "libvm_memory",
@@ -40,12 +42,14 @@ rust_library {
     crate_name: "cros_async",
     srcs: ["src/lib.rs"],
     edition: "2018",
+    rlibs: [
+        "libpin_utils",
+    ],
     rustlibs: [
         "libbase_rust",
         "libfutures",
         "libio_uring",
         "liblibc",
-        "libpin_utils",
         "libsyscall_defines",
     ],
     proc_macros: [
