@@ -54,6 +54,7 @@ use vm_control::VmMemoryControlRequestSocket;
 
 pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
 pub const DEFAULT_DISPLAY_HEIGHT: u32 = 1024;
+pub const DEFAULT_GPU_BAR_SIZE: u64 = 1 << 33;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum GpuMode {
@@ -76,6 +77,7 @@ pub struct GpuParameters {
     #[cfg(feature = "gfxstream")]
     pub gfxstream_support_vulkan: bool,
     pub mode: GpuMode,
+    pub memory: u64,
 }
 
 // First queue is for virtio gpu commands. Second queue is for cursor commands, which we expect
@@ -85,7 +87,6 @@ const FENCE_POLL_MS: u64 = 1;
 
 const GPU_BAR_NUM: u8 = 4;
 const GPU_BAR_OFFSET: u64 = 0;
-const GPU_BAR_SIZE: u64 = 1 << 33;
 
 impl Default for GpuParameters {
     fn default() -> Self {
@@ -101,6 +102,7 @@ impl Default for GpuParameters {
             #[cfg(feature = "gfxstream")]
             gfxstream_support_vulkan: true,
             mode: GpuMode::Mode3D,
+            memory: DEFAULT_GPU_BAR_SIZE,
         }
     }
 }
@@ -1089,6 +1091,7 @@ pub struct Gpu {
     display_height: u32,
     renderer_flags: RendererFlags,
     pci_bar: Option<Alloc>,
+    pci_bar_size: u64,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
     external_blob: bool,
     backend_kind: BackendKind,
@@ -1137,6 +1140,7 @@ impl Gpu {
             display_height: gpu_parameters.display_height,
             renderer_flags,
             pci_bar: None,
+            pci_bar_size: gpu_parameters.memory,
             map_request,
             external_blob,
             backend_kind,
@@ -1320,7 +1324,7 @@ impl VirtioDevice for Gpu {
         });
         vec![PciBarConfiguration::new(
             GPU_BAR_NUM as usize,
-            GPU_BAR_SIZE,
+            self.pci_bar_size,
             PciBarRegionType::Memory64BitRegion,
             PciBarPrefetchable::NotPrefetchable,
         )]
@@ -1331,7 +1335,7 @@ impl VirtioDevice for Gpu {
             PciCapabilityType::SharedMemoryConfig,
             GPU_BAR_NUM,
             GPU_BAR_OFFSET,
-            GPU_BAR_SIZE,
+            self.pci_bar_size,
             VIRTIO_GPU_SHM_ID_HOST_VISIBLE,
         ))]
     }

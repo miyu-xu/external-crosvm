@@ -283,6 +283,24 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                 ),
                             })?;
                 }
+                "mem" => {
+                    gpu_params.memory =
+                        v.parse::<u64>()
+                            .map_err(|_| argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'mem' must be a valid integer",
+                                ),
+                            })
+                        .and_then(|mem|
+                            mem.checked_mul(1024 * 1024)
+                               .ok_or(argument::Error::InvalidValue {
+                                    value: v.to_string(),
+                                    expected: String::from(
+                                        "gpu parameter 'mem' value is too large")
+                                   })
+                            )?;
+                }
                 "" => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(format!(
@@ -1478,6 +1496,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   backend=(2d|3d|gfxstream) - Which backend to use for virtio-gpu (determining rendering protocol)
                                   width=INT - The width of the virtual display connected to the virtio-gpu.
                                   height=INT - The height of the virtual display connected to the virtio-gpu.
+                                  mem=INT - The amount of memory for the GPU PCI bar in MiB (default: 8192).
                                   egl[=true|=false] - If the virtio-gpu backend should use a EGL context for rendering.
                                   glx[=true|=false] - If the virtio-gpu backend should use a GLX context for rendering.
                                   surfaceless[=true|=false] - If the virtio-gpu backend should use a surfaceless context for rendering.
