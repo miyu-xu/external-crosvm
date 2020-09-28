@@ -4,7 +4,7 @@
 
 use base::pagesize;
 
-use crate::address_allocator::AddressAllocator;
+use crate::address_allocator::{AddressAllocator, AddressAllocatorSet};
 use crate::gpu_allocator::{self, GpuMemoryAllocator};
 use crate::{Alloc, Error, Result};
 
@@ -126,6 +126,15 @@ impl SystemAllocator {
             MmioType::Low => &mut self.low_mmio_address_space,
             MmioType::High => &mut self.high_mmio_address_space,
         }
+    }
+
+    /// Gets a set of allocators to be used for MMIO allocation.
+    /// The set of allocators will try the low and high MMIO allocators, in that order.
+    pub fn mmio_allocator_any(&mut self) -> AddressAllocatorSet {
+        AddressAllocatorSet::new(vec![
+            &mut self.low_mmio_address_space,
+            &mut self.high_mmio_address_space,
+        ])
     }
 
     /// Gets an allocator to be used for GPU memory.
