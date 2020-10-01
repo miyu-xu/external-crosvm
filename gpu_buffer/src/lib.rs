@@ -30,7 +30,7 @@
 //! # }
 //! ```
 
-mod drm_formats;
+pub mod drm_formats;
 mod raw;
 pub mod rendernode;
 
@@ -50,7 +50,7 @@ use crate::raw::*;
 #[derive(Debug)]
 pub enum Error {
     GbmFailed,
-    ExportFailed(sys_util::Error),
+    ExportFailed(base::Error),
     MapFailed,
     UnknownFormat(Format),
     CheckedArithmetic {
@@ -461,7 +461,6 @@ impl AsRawFd for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use data_model::VolatileMemory;
     use std::fmt::Write;
 
     #[test]

@@ -12,8 +12,8 @@
 //! Each `WlVfd` represents one virtual file descriptor created by either the guest or the host.
 //! Virtual file descriptors contain actual file descriptors, either a shared memory file descriptor
 //! or a unix domain socket to the wayland server. In the shared memory case, there is also an
-//! associated slot that indicates which KVM memory slot the memory is installed into, as well as a
-//! page frame number that the guest can access the memory from.
+//! associated slot that indicates which hypervisor memory slot the memory is installed into, as
+//! well as a page frame number that the guest can access the memory from.
 //!
 //! The types starting with `Ctrl` are structures representing the virtio wayland protocol "on the
 //! wire." They are decoded and executed in the `execute` function and encoded as some variant of
@@ -48,29 +48,32 @@ use std::thread;
 use std::time::Duration;
 
 #[cfg(feature = "wl-dmabuf")]
-use libc::{dup, EBADF, EINVAL};
+use libc::{EBADF, EINVAL};
 
 use data_model::VolatileMemoryError;
 use data_model::*;
 
+#[cfg(feature = "wl-dmabuf")]
+use base::ioctl_iow_nr;
+use base::{
+    error, pipe, round_up_to_page_size, warn, Error, EventFd, FileFlags, PollContext, PollToken,
+    Result, ScmSocket, SharedMemory,
+};
 use msg_socket::{MsgError, MsgReceiver, MsgSender};
 #[cfg(feature = "wl-dmabuf")]
 use resources::GpuMemoryDesc;
-#[cfg(feature = "wl-dmabuf")]
-use sys_util::ioctl_iow_nr;
-use sys_util::{
-    error, pipe, round_up_to_page_size, warn, Error, EventFd, FileFlags, GuestMemory,
-    GuestMemoryError, PollContext, PollToken, Result, ScmSocket, SharedMemory,
-};
+use vm_memory::{GuestMemory, GuestMemoryError};
 
 #[cfg(feature = "wl-dmabuf")]
-use sys_util::ioctl_with_ref;
+use base::ioctl_with_ref;
 
 use super::resource_bridge::*;
 use super::{
     DescriptorChain, Interrupt, Queue, Reader, VirtioDevice, Writer, TYPE_WL, VIRTIO_F_VERSION_1,
 };
-use vm_control::{MaybeOwnedFd, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{
+    MaybeOwnedFd, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+};
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -519,7 +522,7 @@ struct WlVfd {
     guest_shared_memory: Option<(u64 /* size */, File)>,
     remote_pipe: Option<File>,
     local_pipe: Option<(u32 /* flags */, File)>,
-    slot: Option<(u32 /* slot */, u64 /* pfn */, VmRequester)>,
+    slot: Option<(MemSlot, u64 /* pfn */, VmRequester)>,
     #[cfg(feature = "wl-dmabuf")]
     is_dmabuf: bool,
 }
@@ -587,15 +590,13 @@ impl WlVfd {
             })?;
         match allocate_and_register_gpu_memory_response {
             VmMemoryResponse::AllocateAndRegisterGpuMemory {
-                fd,
+                fd: MaybeOwnedFd::Owned(file),
                 pfn,
                 slot,
                 desc,
             } => {
                 let mut vfd = WlVfd::default();
-                // Duplicate FD for shared memory instance.
-                let raw_fd = unsafe { File::from_raw_fd(dup(fd.as_raw_fd())) };
-                let vfd_shm = SharedMemory::from_raw_fd(raw_fd).map_err(WlError::NewAlloc)?;
+                let vfd_shm = SharedMemory::from_file(file).map_err(WlError::NewAlloc)?;
                 vfd.guest_shared_memory = Some((vfd_shm.size(), vfd_shm.into()));
                 vfd.slot = Some((slot, pfn, vm));
                 vfd.is_dmabuf = true;
@@ -732,12 +733,10 @@ impl WlVfd {
     fn send(&mut self, fds: &[RawFd], data: &mut Reader) -> WlResult<WlResp> {
         if let Some(socket) = &self.socket {
             socket
-                .send_with_fds(
-                    data.get_iovec(usize::max_value())
-                        .map_err(WlError::ParseDesc)?,
-                    fds,
-                )
+                .send_with_fds(data.get_remaining(), fds)
                 .map_err(WlError::SendVfd)?;
+            // All remaining data in `data` is now considered consumed.
+            data.consume(::std::usize::MAX);
             Ok(WlResp::Ok)
         } else if let Some((_, local_pipe)) = &mut self.local_pipe {
             // Impossible to send fds over a simple pipe.

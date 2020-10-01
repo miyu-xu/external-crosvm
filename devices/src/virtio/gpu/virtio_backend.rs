@@ -8,9 +8,10 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use super::protocol::GpuResponse;
+use base::error;
 use data_model::*;
 use gpu_display::*;
-use sys_util::{error, GuestMemory};
+use vm_memory::GuestMemory;
 
 pub trait VirtioResource {
     fn width(&self) -> u32;
@@ -124,9 +125,9 @@ impl VirtioBackend {
     ) -> GpuResponse {
         let mut response = GpuResponse::OkNoData;
 
-        if let Some(scannout_resource_id) = self.scanout_resource_id {
-            if scannout_resource_id.get() == resource_id {
-                response = self.flush_scannout_resource_to_surface(resource);
+        if let Some(scanout_resource_id) = self.scanout_resource_id {
+            if scanout_resource_id.get() == resource_id {
+                response = self.flush_scanout_resource_to_surface(resource);
             }
         }
 
@@ -143,7 +144,7 @@ impl VirtioBackend {
         response
     }
 
-    pub fn flush_scannout_resource_to_surface(
+    pub fn flush_scanout_resource_to_surface(
         &mut self,
         resource: &mut dyn VirtioResource,
     ) -> GpuResponse {

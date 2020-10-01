@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use libc::c_ulong;
+use base::IoctlNr;
 use remain::sorted;
 use std::fmt::{self, Display};
 use std::io;
@@ -16,7 +16,7 @@ pub enum Error {
     FdCloneFailed(io::Error),
     InvalidActualLength(num::TryFromIntError),
     InvalidBufferLength(num::TryFromIntError),
-    IoctlFailed(c_ulong, sys_util::Error),
+    IoctlFailed(IoctlNr, base::Error),
     NoDevice,
     NoSuchDescriptor,
     RcGetMutFailed,

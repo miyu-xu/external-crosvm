@@ -8,7 +8,7 @@ mod vcpu;
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::result;
@@ -26,15 +26,15 @@ use libc::{
 use protobuf::ProtobufError;
 use remain::sorted;
 
-use io_jail::{self, Minijail};
-use kvm::{Cap, Datamatch, IoeventAddress, Kvm, Vcpu, VcpuExit, Vm};
-use net_util::{Error as TapError, Tap, TapT};
-use sys_util::{
+use base::{
     block_signal, clear_signal, drop_capabilities, error, getegid, geteuid, info, pipe,
-    register_rt_signal_handler, validate_raw_fd, warn, Error as SysError, EventFd, GuestMemory,
-    Killable, MmapError, PollContext, PollToken, Result as SysResult, SignalFd, SignalFdError,
-    SIGRTMIN,
+    register_rt_signal_handler, validate_raw_fd, warn, Error as SysError, EventFd, Killable,
+    MmapError, PollContext, PollToken, Result as SysResult, SignalFd, SignalFdError, SIGRTMIN,
 };
+use kvm::{Cap, Datamatch, IoeventAddress, Kvm, Vcpu, VcpuExit, Vm};
+use minijail::{self, Minijail};
+use net_util::{Error as TapError, Tap, TapT};
+use vm_memory::GuestMemory;
 
 use self::process::*;
 use self::vcpu::*;
@@ -50,7 +50,7 @@ pub enum Error {
     CloneVcpuPipe(io::Error),
     CreateEventFd(SysError),
     CreateIrqChip(SysError),
-    CreateJail(io_jail::Error),
+    CreateJail(minijail::Error),
     CreateKvm(SysError),
     CreateMainSocket(SysError),
     CreatePIT(SysError),
@@ -64,21 +64,21 @@ pub enum Error {
     DecodeRequest(ProtobufError),
     DropCapabilities(SysError),
     EncodeResponse(ProtobufError),
-    Mount(io_jail::Error),
-    MountDev(io_jail::Error),
-    MountLib(io_jail::Error),
-    MountLib64(io_jail::Error),
-    MountPlugin(io_jail::Error),
-    MountPluginLib(io_jail::Error),
-    MountProc(io_jail::Error),
-    MountRoot(io_jail::Error),
+    Mount(minijail::Error),
+    MountDev(minijail::Error),
+    MountLib(minijail::Error),
+    MountLib64(minijail::Error),
+    MountPlugin(minijail::Error),
+    MountPluginLib(minijail::Error),
+    MountProc(minijail::Error),
+    MountRoot(minijail::Error),
     NoRootDir,
-    ParsePivotRoot(io_jail::Error),
-    ParseSeccomp(io_jail::Error),
+    ParsePivotRoot(minijail::Error),
+    ParseSeccomp(minijail::Error),
     PluginFailed(i32),
     PluginKill(SysError),
     PluginKilled(i32),
-    PluginRunJail(io_jail::Error),
+    PluginRunJail(minijail::Error),
     PluginSocketHup,
     PluginSocketPoll(SysError),
     PluginSocketRecv(SysError),
@@ -90,8 +90,8 @@ pub enum Error {
     PollContextAdd(SysError),
     RootNotAbsolute,
     RootNotDir,
-    SetGidMap(io_jail::Error),
-    SetUidMap(io_jail::Error),
+    SetGidMap(minijail::Error),
+    SetUidMap(minijail::Error),
     SigChild {
         pid: u32,
         signo: u32,
@@ -180,10 +180,6 @@ impl Display for Error {
 }
 
 type Result<T> = result::Result<T, Error>;
-
-fn downcast_file<F: IntoRawFd>(f: F) -> File {
-    unsafe { File::from_raw_fd(f.into_raw_fd()) }
-}
 
 fn new_seqpacket_pair() -> SysResult<(UnixDatagram, UnixDatagram)> {
     let mut fds = [0, 0];
@@ -388,7 +384,7 @@ impl PluginObject {
                 8 => vm.unregister_ioevent(&evt, addr, Datamatch::U64(Some(datamatch as u64))),
                 _ => Err(SysError::new(EINVAL)),
             },
-            PluginObject::Memory { slot, .. } => vm.remove_mmio_memory(slot).and(Ok(())),
+            PluginObject::Memory { slot, .. } => vm.remove_memory_region(slot).and(Ok(())),
             PluginObject::IrqEvent { irq_id, evt } => vm.unregister_irqfd(&evt, irq_id),
         }
     }
@@ -458,6 +454,11 @@ pub fn run_vcpus(
                         // because we will be using first RT signal to kick the VCPU.
                         vcpu.set_signal_mask(&[])
                             .expect("failed to set up KVM VCPU signal mask");
+                    }
+
+                    #[cfg(feature = "chromeos")]
+                    if let Err(e) = base::sched::enable_core_scheduling() {
+                        error!("Failed to enable core scheduling: {}", e);
                     }
 
                     let vcpu = vcpu
@@ -688,7 +689,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         Some(Executable::Plugin(ref plugin_path)) => plugin_path.as_path(),
         _ => panic!("Executable was not a plugin"),
     };
-    let vcpu_count = cfg.vcpu_count.unwrap_or(1);
+    let vcpu_count = cfg.vcpu_count.unwrap_or(1) as u32;
     let mem = GuestMemory::new(&[]).unwrap();
     let kvm = Kvm::new().map_err(Error::CreateKvm)?;
     let mut vm = Vm::new(&kvm, mem).map_err(Error::CreateVm)?;

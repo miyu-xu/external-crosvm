@@ -7,11 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use sync::Mutex;
 
+use base::{warn, EventFd, Result};
 use data_model::{DataInit, Le32};
-use kvm::Datamatch;
+use hypervisor::Datamatch;
 use libc::ERANGE;
 use resources::{Alloc, MmioType, SystemAllocator};
-use sys_util::{warn, EventFd, GuestMemory, Result};
+use vm_memory::GuestMemory;
 
 use super::*;
 use crate::pci::{
@@ -42,7 +43,8 @@ struct VirtioPciCap {
     cap_len: u8,      // Generic PCI field: capability length
     cfg_type: u8,     // Identifies the structure.
     bar: u8,          // Where to find it.
-    padding: [u8; 3], // Pad to full dword.
+    id: u8,           // Multiple capabilities of the same type
+    padding: [u8; 2], // Pad to full dword.
     offset: Le32,     // Offset within bar.
     length: Le32,     // Length of the structure, in bytes.
 }
@@ -67,7 +69,8 @@ impl VirtioPciCap {
             cap_len: std::mem::size_of::<VirtioPciCap>() as u8,
             cfg_type: cfg_type as u8,
             bar,
-            padding: [0; 3],
+            id: 0,
+            padding: [0; 2],
             offset: Le32::from(offset),
             length: Le32::from(length),
         }
@@ -109,7 +112,8 @@ impl VirtioPciNotifyCap {
                 cap_len: std::mem::size_of::<VirtioPciNotifyCap>() as u8,
                 cfg_type: cfg_type as u8,
                 bar,
-                padding: [0; 3],
+                id: 0,
+                padding: [0; 2],
                 offset: Le32::from(offset),
                 length: Le32::from(length),
             },
@@ -124,7 +128,6 @@ pub struct VirtioPciShmCap {
     cap: VirtioPciCap,
     offset_hi: Le32, // Most sig 32 bits of offset
     length_hi: Le32, // Most sig 32 bits of length
-    shmid: u8,       // To distinguish shm chunks
 }
 // It is safe to implement DataInit; all members are simple numbers and any value is valid.
 unsafe impl DataInit for VirtioPciShmCap {}
@@ -148,13 +151,13 @@ impl VirtioPciShmCap {
                 cap_len: std::mem::size_of::<VirtioPciShmCap>() as u8,
                 cfg_type: cfg_type as u8,
                 bar,
-                padding: [0; 3],
+                id: shmid,
+                padding: [0; 2],
                 offset: Le32::from(offset as u32),
                 length: Le32::from(length as u32),
             },
             offset_hi: Le32::from((offset >> 32) as u32),
             length_hi: Le32::from((length >> 32) as u32),
-            shmid,
         }
     }
 }
@@ -236,7 +239,7 @@ impl VirtioPciDevice {
         let num_queues = device.queue_max_sizes().len();
 
         // One MSI-X vector per queue plus one for configuration changes.
-        let msix_num = u16::try_from(num_queues + 1).map_err(|_| sys_util::Error::new(ERANGE))?;
+        let msix_num = u16::try_from(num_queues + 1).map_err(|_| base::Error::new(ERANGE))?;
         let msix_config = Arc::new(Mutex::new(MsixConfig::new(
             msix_num,
             Arc::new(msi_device_socket),
@@ -292,7 +295,11 @@ impl VirtioPciDevice {
 
     fn are_queues_valid(&self) -> bool {
         if let Some(mem) = self.mem.as_ref() {
-            self.queues.iter().all(|q| q.is_valid(mem))
+            // All queues marked as ready must be valid.
+            self.queues
+                .iter()
+                .filter(|q| q.ready)
+                .all(|q| q.is_valid(mem))
         } else {
             false
         }
@@ -439,7 +446,7 @@ impl PciDevice for VirtioPciDevice {
             .set_size(CAPABILITY_BAR_SIZE);
         let settings_bar = self
             .config_regs
-            .add_pci_bar(&config)
+            .add_pci_bar(config)
             .map_err(|e| PciDeviceError::IoRegistrationFailed(settings_config_addr, e))?
             as u8;
         ranges.push((settings_config_addr, CAPABILITY_BAR_SIZE));
@@ -479,7 +486,7 @@ impl PciDevice for VirtioPciDevice {
             let config = config.set_address(device_addr);
             let _device_bar = self
                 .config_regs
-                .add_pci_bar(&config)
+                .add_pci_bar(config)
                 .map_err(|e| PciDeviceError::IoRegistrationFailed(device_addr, e))?;
             ranges.push((device_addr, config.get_size()));
         }

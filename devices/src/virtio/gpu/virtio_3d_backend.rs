@@ -15,11 +15,12 @@ use std::usize;
 
 use libc::EINVAL;
 
+use base::{error, warn, Error, ExternalMapping};
 use data_model::*;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
 use sync::Mutex;
-use sys_util::{error, warn, Error, GuestAddress, GuestMemory};
+use vm_memory::{GuestAddress, GuestMemory};
 
 use gpu_display::*;
 use gpu_renderer::{
@@ -33,14 +34,13 @@ use super::protocol::{
 };
 pub use crate::virtio::gpu::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, DisplayBackend, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
     VIRTIO_GPU_F_RESOURCE_UUID, VIRTIO_GPU_F_VIRGL, VIRTIO_GPU_F_VULKAN,
 };
 use crate::virtio::resource_bridge::{PlaneInfo, ResourceInfo, ResourceResponse};
 
 use vm_control::{
-    ExternallyMappedHostMemoryRequests, MaybeOwnedFd, VmMemoryControlRequestSocket,
-    VmMemoryRequest, VmMemoryResponse,
+    MaybeOwnedFd, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
 };
 
 struct Virtio3DResource {
@@ -48,9 +48,10 @@ struct Virtio3DResource {
     height: u32,
     gpu_resource: GpuRendererResource,
     display_import: Option<(Rc<RefCell<GpuDisplay>>, u32)>,
-    kvm_slot: Option<u32>,
+    slot: Option<MemSlot>,
     size: u64,
     blob_flags: u32,
+    scanout_data: Option<VirtioScanoutBlobData>,
 }
 
 impl Virtio3DResource {
@@ -60,11 +61,12 @@ impl Virtio3DResource {
             height,
             gpu_resource,
             display_import: None,
-            kvm_slot: None,
+            slot: None,
             blob_flags: 0,
             // The size of the host resource isn't really zero, but it's undefined by
             // virtio_gpu_resource_create_3d
             size: 0,
+            scanout_data: None,
         }
     }
 
@@ -80,9 +82,10 @@ impl Virtio3DResource {
             height,
             gpu_resource,
             display_import: None,
-            kvm_slot: None,
+            slot: None,
             blob_flags,
             size,
+            scanout_data: None,
         }
     }
 
@@ -116,14 +119,31 @@ impl VirtioResource for Virtio3DResource {
             }
         };
 
+        let (width, height, format, stride, offset) = match self.scanout_data {
+            Some(data) => (
+                data.width,
+                data.height,
+                data.drm_format.into(),
+                data.strides[0],
+                data.offsets[0],
+            ),
+            None => (
+                self.width,
+                self.height,
+                query.out_fourcc,
+                query.out_strides[0],
+                query.out_offsets[0],
+            ),
+        };
+
         match display.borrow_mut().import_dmabuf(
             dmabuf.as_raw_fd(),
-            query.out_offsets[0],
-            query.out_strides[0],
+            offset,
+            stride,
             query.out_modifier,
-            self.width,
-            self.height,
-            query.out_fourcc,
+            width,
+            height,
+            format,
         ) {
             Ok(import_id) => {
                 self.display_import = Some((display.clone(), import_id));
@@ -193,6 +213,8 @@ pub struct Virtio3DBackend {
     contexts: Map<u32, RendererContext>,
     gpu_device_socket: VmMemoryControlRequestSocket,
     pci_bar: Alloc,
+    map_request: Arc<Mutex<Option<ExternalMapping>>>,
+    external_blob: bool,
 }
 
 impl Virtio3DBackend {
@@ -208,6 +230,8 @@ impl Virtio3DBackend {
         renderer: Renderer,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        external_blob: bool,
     ) -> Virtio3DBackend {
         Virtio3DBackend {
             base: VirtioBackend {
@@ -225,6 +249,8 @@ impl Virtio3DBackend {
             contexts: Default::default(),
             gpu_device_socket,
             pci_bar,
+            map_request,
+            external_blob,
         }
     }
 }
@@ -246,41 +272,25 @@ impl Backend for Virtio3DBackend {
 
     /// Returns the underlying Backend.
     fn build(
-        possible_displays: &[DisplayBackend],
+        display: GpuDisplay,
         display_width: u32,
         display_height: u32,
         renderer_flags: RendererFlags,
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
-        _ext_mapped_hostmem_requests: Arc<Mutex<ExternallyMappedHostMemoryRequests>>,
+        map_request: Arc<Mutex<Option<ExternalMapping>>>,
+        external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
         let mut renderer_flags = renderer_flags;
-        let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
-                Ok(c) => {
-                    // If X11 is being used, that's an indication that the renderer should also be
-                    // using glx. Otherwise, we are likely in an enviroment in which GBM will work
-                    // for doing allocations of buffers we wish to display. TODO(zachr): this is a
-                    // heuristic (or terrible hack depending on your POV). We should do something
-                    // either smarter or more configurable.
-                    if display.is_x() {
-                        renderer_flags = RendererFlags::new().use_glx(true);
-                    }
-                    display_opt = Some(c);
-                    break;
-                }
-                Err(e) => error!("failed to open display: {}", e),
-            };
+        if display.is_x() {
+            // If X11 is being used, that's an indication that the renderer should also be
+            // using glx. Otherwise, we are likely in an enviroment in which GBM will work
+            // for doing allocations of buffers we wish to display. TODO(zachr): this is a
+            // heuristic (or terrible hack depending on your POV). We should do something
+            // either smarter or more configurable.
+            renderer_flags = RendererFlags::new().use_glx(true);
         }
-        let display = match display_opt {
-            Some(d) => d,
-            None => {
-                error!("failed to open any displays");
-                return None;
-            }
-        };
 
         if cfg!(debug_assertions) {
             let ret = unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) };
@@ -289,6 +299,7 @@ impl Backend for Virtio3DBackend {
             }
         }
 
+        renderer_flags.use_external_blob(external_blob);
         let renderer = match Renderer::init(renderer_flags) {
             Ok(r) => r,
             Err(e) => {
@@ -304,6 +315,8 @@ impl Backend for Virtio3DBackend {
             renderer,
             gpu_device_socket,
             pci_bar,
+            map_request,
+            external_blob,
         );
 
         for event_device in event_devices {
@@ -408,8 +421,17 @@ impl Backend for Virtio3DBackend {
     }
 
     /// Sets the given resource id as the source of scanout to the display.
-    fn set_scanout(&mut self, _scanout_id: u32, resource_id: u32) -> GpuResponse {
+    fn set_scanout(
+        &mut self,
+        _scanout_id: u32,
+        resource_id: u32,
+        scanout_data: Option<VirtioScanoutBlobData>,
+    ) -> GpuResponse {
         if resource_id == 0 || self.resources.get_mut(&resource_id).is_some() {
+            match self.resources.get_mut(&resource_id) {
+                Some(resource) => resource.scanout_data = scanout_data,
+                None => (),
+            }
             self.base.set_scanout(resource_id)
         } else {
             GpuResponse::ErrInvalidResourceId
@@ -845,7 +867,7 @@ impl Backend for Virtio3DBackend {
             return GpuResponse::ErrUnspec;
         }
 
-        let map_info = match self.renderer.resource_map_info(resource_id) {
+        let map_info = match resource.gpu_resource.map_info() {
             Ok(map_info) => map_info,
             Err(e) => {
                 error!("failed to get map info: {}", e);
@@ -853,20 +875,36 @@ impl Backend for Virtio3DBackend {
             }
         };
 
-        let dma_buf_fd = match resource.gpu_resource.export() {
-            Ok(export) => export.1,
-            Err(e) => {
-                error!("failed to export plane fd: {}", e);
-                return GpuResponse::ErrUnspec;
+        let export = resource.gpu_resource.export();
+        let request = match export {
+            Ok(ref export) => VmMemoryRequest::RegisterFdAtPciBarOffset(
+                self.pci_bar,
+                MaybeOwnedFd::Borrowed(export.1.as_raw_fd()),
+                resource.size as usize,
+                offset,
+            ),
+            Err(_) => {
+                if self.external_blob {
+                    return GpuResponse::ErrUnspec;
+                }
+
+                let mapping = match resource.gpu_resource.map() {
+                    Ok(mapping) => mapping,
+                    Err(_) => {
+                        return GpuResponse::ErrUnspec;
+                    }
+                };
+
+                {
+                    let mut map_req = self.map_request.lock();
+                    if map_req.is_some() {
+                        return GpuResponse::ErrUnspec;
+                    }
+                    *map_req = Some(mapping);
+                }
+                VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset)
             }
         };
-
-        let request = VmMemoryRequest::RegisterFdAtPciBarOffset(
-            self.pci_bar,
-            MaybeOwnedFd::Borrowed(dma_buf_fd.as_raw_fd()),
-            resource.size as usize,
-            offset,
-        );
 
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
@@ -886,7 +924,7 @@ impl Backend for Virtio3DBackend {
 
         match response {
             VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
-                resource.kvm_slot = Some(slot);
+                resource.slot = Some(slot);
                 GpuResponse::OkMapInfo { map_info }
             }
             VmMemoryResponse::Err(e) => {
@@ -906,12 +944,12 @@ impl Backend for Virtio3DBackend {
             None => return GpuResponse::ErrInvalidResourceId,
         };
 
-        let kvm_slot = match resource.kvm_slot {
-            Some(kvm_slot) => kvm_slot,
+        let slot = match resource.slot {
+            Some(slot) => slot,
             None => return GpuResponse::ErrUnspec,
         };
 
-        let request = VmMemoryRequest::UnregisterMemory(kvm_slot);
+        let request = VmMemoryRequest::UnregisterMemory(slot);
         match self.gpu_device_socket.send(&request) {
             Ok(_) => (),
             Err(e) => {
@@ -930,7 +968,7 @@ impl Backend for Virtio3DBackend {
 
         match response {
             VmMemoryResponse::Ok => {
-                resource.kvm_slot = None;
+                resource.slot = None;
                 GpuResponse::OkNoData
             }
             VmMemoryResponse::Err(e) => {
