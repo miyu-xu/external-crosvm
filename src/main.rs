@@ -164,6 +164,8 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut vulkan_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut angle_specified = false;
 
     if let Some(s) = s {
         let opts = s
@@ -285,6 +287,26 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                 }
                 #[cfg(feature = "gfxstream")]
+                "angle" => {
+                    angle_specified = true;
+                    match v {
+                       "true" | "" => {
+                            gpu_params.gfxstream_use_guest_angle = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_use_guest_angle = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'angle' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
                 "vulkan" => {
                     vulkan_specified = true;
                     match v {
@@ -337,7 +359,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
 
     #[cfg(feature = "gfxstream")]
     {
-        if vulkan_specified || syncfd_specified {
+        if vulkan_specified || syncfd_specified || angle_specified {
             match gpu_params.mode {
                 GpuMode::ModeGfxStream => {}
                 _ => {
