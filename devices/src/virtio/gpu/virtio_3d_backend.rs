@@ -828,6 +828,19 @@ impl Backend for Virtio3DBackend {
         }
     }
 
+    /// Submits a command buffer to the given rendering context, but doesn't sent back a response.
+    fn submit_command_no_notify(&mut self, ctx_id: u32, commands: &mut [u8]) {
+        match self.contexts.get_mut(&ctx_id) {
+            Some(ctx) => match ctx.submit(&mut commands[..]) {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("failed to submit command buffer: {}", e);
+                }
+            },
+            None => {}
+        }
+    }
+
     fn resource_create_blob(
         &mut self,
         resource_id: u32,
