@@ -9,7 +9,7 @@ use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::atomic::{fence, Ordering};
 
-use base::error;
+use base::{debug,error};
 use cros_async::{AsyncError, U64Source};
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::{GuestAddress, GuestMemory};
@@ -456,7 +456,7 @@ impl Queue {
     }
 
     // Check Whether guest enable interrupt injection or not.
-    fn available_interrupt_enabled(&self, mem: &GuestMemory) -> bool {
+    pub fn available_interrupt_enabled(&self, mem: &GuestMemory) -> bool {
         if self.features & ((1u64) << VIRTIO_RING_F_EVENT_IDX) != 0 {
             let used_event_off = self
                 .avail_ring
@@ -482,11 +482,52 @@ impl Queue {
         }
     }
 
+    // Check Whether guest enable interrupt injection or not.
+    pub fn available_interrupt_enabled_debug(&self, mem: &GuestMemory) -> bool {
+        if self.features & ((1u64) << VIRTIO_RING_F_EVENT_IDX) != 0 {
+            let used_event_off = self
+                .avail_ring
+                .unchecked_add((4 + 2 * self.actual_size()).into());
+            let used_event: u16 = mem.read_obj_from_addr(used_event_off).unwrap();
+            // if used_event >= self.last_used, driver handle interrupt quickly enough, new
+            // interrupt could be injected.
+            // if used_event < self.last_used, driver hasn't finished the last interrupt,
+            // so no need to inject new interrupt.
+            if self.next_used - Wrapping(used_event) - Wrapping(1) < self.next_used - self.last_used
+            {
+                debug!("has event idx. avail interrupt is enabled");
+                true
+            } else {
+                debug!("has event idx. avail interrupt is disabled");
+                false
+            }
+        } else {
+            let avail_flags: u16 = mem.read_obj_from_addr(self.avail_ring).unwrap();
+            if avail_flags & VIRTQ_AVAIL_F_NO_INTERRUPT == VIRTQ_AVAIL_F_NO_INTERRUPT {
+                debug!("no event idx. avail interrupt is disabled via VIRTQ_AVAIL_F_NO_INTERRUPT");
+                false
+            } else {
+                debug!("no event idx. avail interrupt is enabled");
+                true
+            }
+        }
+    }
+
     /// inject interrupt into guest on this queue
     /// return true: interrupt is injected into guest for this queue
     ///        false: interrupt isn't injected
     pub fn trigger_interrupt(&mut self, mem: &GuestMemory, interrupt: &Interrupt) -> bool {
         if self.available_interrupt_enabled(mem) {
+            self.last_used = self.next_used;
+            interrupt.signal_used_queue(self.vector);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn trigger_interrupt_debug(&mut self, mem: &GuestMemory, interrupt: &Interrupt) -> bool {
+        if self.available_interrupt_enabled_debug(mem) {
             self.last_used = self.next_used;
             interrupt.signal_used_queue(self.vector);
             true

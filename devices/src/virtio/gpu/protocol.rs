@@ -53,6 +53,7 @@ pub const VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D: u32 = 0x206;
 pub const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x207;
 pub const VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB: u32 = 0x208;
 pub const VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB: u32 = 0x209;
+pub const VIRTIO_GPU_CMD_SUBMIT_3D_NO_NOTIFY: u32 = 0x20a;
 
 /* cursor commands */
 pub const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x300;
@@ -117,6 +118,7 @@ pub fn virtio_gpu_cmd_str(cmd: u32) -> &'static str {
         VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D => "VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D",
         VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D => "VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D",
         VIRTIO_GPU_CMD_SUBMIT_3D => "VIRTIO_GPU_CMD_SUBMIT_3D",
+        VIRTIO_GPU_CMD_SUBMIT_3D_NO_NOTIFY => "VIRTIO_GPU_CMD_SUBMIT_3D_NO_NOTIFY",
         VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB => "VIRTIO_GPU_RESOURCE_MAP_BLOB",
         VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB => "VIRTIO_GPU_RESOURCE_UNMAP_BLOB",
         VIRTIO_GPU_CMD_UPDATE_CURSOR => "VIRTIO_GPU_CMD_UPDATE_CURSOR",
@@ -422,6 +424,15 @@ pub struct virtio_gpu_cmd_submit {
     pub padding: Le32,
 }
 
+/* VIRTIO_GPU_CMD_SUBMIT_3D_NO_NOTIFY */
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+pub struct virtio_gpu_cmd_submit_no_notify {
+    pub hdr: virtio_gpu_ctrl_hdr,
+    pub size: Le32,
+    pub padding: Le32,
+}
+
 unsafe impl DataInit for virtio_gpu_cmd_submit {}
 
 pub const VIRTIO_GPU_CAPSET_VIRGL: u32 = 1;
@@ -615,6 +626,7 @@ pub enum GpuCommand {
     TransferToHost3d(virtio_gpu_transfer_host_3d),
     TransferFromHost3d(virtio_gpu_transfer_host_3d),
     CmdSubmit3d(virtio_gpu_cmd_submit),
+    CmdSubmit3dNoNotify(virtio_gpu_cmd_submit),
     ResourceCreateBlob(virtio_gpu_resource_create_blob),
     ResourceMapBlob(virtio_gpu_resource_map_blob),
     ResourceUnmapBlob(virtio_gpu_resource_unmap_blob),
@@ -686,6 +698,7 @@ impl fmt::Debug for GpuCommand {
             TransferToHost3d(_info) => f.debug_struct("TransferToHost3d").finish(),
             TransferFromHost3d(_info) => f.debug_struct("TransferFromHost3d").finish(),
             CmdSubmit3d(_info) => f.debug_struct("CmdSubmit3d").finish(),
+            CmdSubmit3dNoNotify(_info) => f.debug_struct("CmdSubmit3dNoNotify").finish(),
             ResourceCreateBlob(_info) => f.debug_struct("ResourceCreateBlob").finish(),
             ResourceMapBlob(_info) => f.debug_struct("ResourceMapBlob").finish(),
             ResourceUnmapBlob(_info) => f.debug_struct("ResourceUnmapBlob").finish(),
@@ -721,6 +734,7 @@ impl GpuCommand {
             VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D => TransferToHost3d(cmd.read_obj()?),
             VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D => TransferFromHost3d(cmd.read_obj()?),
             VIRTIO_GPU_CMD_SUBMIT_3D => CmdSubmit3d(cmd.read_obj()?),
+            VIRTIO_GPU_CMD_SUBMIT_3D_NO_NOTIFY => CmdSubmit3dNoNotify(cmd.read_obj()?),
             VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB => ResourceCreateBlob(cmd.read_obj()?),
             VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB => ResourceMapBlob(cmd.read_obj()?),
             VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB => ResourceUnmapBlob(cmd.read_obj()?),
@@ -754,6 +768,7 @@ impl GpuCommand {
             TransferToHost3d(info) => &info.hdr,
             TransferFromHost3d(info) => &info.hdr,
             CmdSubmit3d(info) => &info.hdr,
+            CmdSubmit3dNoNotify(info) => &info.hdr,
             ResourceCreateBlob(info) => &info.hdr,
             ResourceMapBlob(info) => &info.hdr,
             ResourceUnmapBlob(info) => &info.hdr,
