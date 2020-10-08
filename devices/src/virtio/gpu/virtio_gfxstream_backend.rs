@@ -808,6 +808,10 @@ impl Backend for VirtioGfxStreamBackend {
         }
     }
 
+    fn submit_command_no_notify(&mut self, ctx_id: u32, commands: &mut [u8]) -> GpuResponse {
+        self.submit_command_impl(ctx_id, commands);
+    }
+
     // Not considered for gfxstream
     fn force_ctx_0(&mut self) {}
 

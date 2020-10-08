@@ -311,6 +311,9 @@ trait Backend {
         GpuResponse::ErrUnspec
     }
 
+    /// Submits a command buffer without a response.
+    fn submit_command_no_notify(&mut self, _ctx_id: u32, _commands: &mut [u8])  { }
+
     fn resource_create_blob(
         &mut self,
         _resource_id: u32,
@@ -491,35 +494,35 @@ impl Frontend {
         mem: &GuestMemory,
         cmd: GpuCommand,
         reader: &mut Reader,
-    ) -> GpuResponse {
+    ) -> Option<GpuResponse> {
         self.backend.force_ctx_0();
 
         match cmd {
             GpuCommand::GetDisplayInfo(_) => {
-                GpuResponse::OkDisplayInfo(self.backend.display_info().to_vec())
+                Some(GpuResponse::OkDisplayInfo(self.backend.display_info().to_vec()))
             }
-            GpuCommand::ResourceCreate2d(info) => self.backend.create_resource_2d(
+            GpuCommand::ResourceCreate2d(info) => Some(self.backend.create_resource_2d(
                 info.resource_id.to_native(),
                 info.width.to_native(),
                 info.height.to_native(),
                 info.format.to_native(),
-            ),
+            )),
             GpuCommand::ResourceUnref(info) => {
-                self.backend.unref_resource(info.resource_id.to_native())
+                Some(self.backend.unref_resource(info.resource_id.to_native()))
             }
-            GpuCommand::SetScanout(info) => self.backend.set_scanout(
+            GpuCommand::SetScanout(info) => Some(self.backend.set_scanout(
                 info.scanout_id.to_native(),
                 info.resource_id.to_native(),
                 None,
-            ),
-            GpuCommand::ResourceFlush(info) => self.backend.flush_resource(
+            )),
+            GpuCommand::ResourceFlush(info) => Some(self.backend.flush_resource(
                 info.resource_id.to_native(),
                 info.r.x.to_native(),
                 info.r.y.to_native(),
                 info.r.width.to_native(),
                 info.r.height.to_native(),
-            ),
-            GpuCommand::TransferToHost2d(info) => self.backend.transfer_to_resource_2d(
+            )),
+            GpuCommand::TransferToHost2d(info) => Some(self.backend.transfer_to_resource_2d(
                 info.resource_id.to_native(),
                 info.r.x.to_native(),
                 info.r.y.to_native(),
@@ -527,7 +530,7 @@ impl Frontend {
                 info.r.height.to_native(),
                 info.offset.to_native(),
                 mem,
-            ),
+            )),
             GpuCommand::ResourceAttachBacking(info) => {
                 let available_bytes = reader.available_bytes();
                 if available_bytes != 0 {
@@ -540,49 +543,49 @@ impl Frontend {
                                 let len = entry.length.to_native() as usize;
                                 vecs.push((addr, len))
                             }
-                            Err(_) => return GpuResponse::ErrUnspec,
+                            Err(_) => return Some(GpuResponse::ErrUnspec),
                         }
                     }
-                    self.backend
-                        .attach_backing(info.resource_id.to_native(), mem, vecs)
+                    Some(self.backend
+                        .attach_backing(info.resource_id.to_native(), mem, vecs))
                 } else {
                     error!("missing data for command {:?}", cmd);
-                    GpuResponse::ErrUnspec
+                    Some(GpuResponse::ErrUnspec)
                 }
             }
             GpuCommand::ResourceDetachBacking(info) => {
-                self.backend.detach_backing(info.resource_id.to_native())
+                Some(self.backend.detach_backing(info.resource_id.to_native()))
             }
-            GpuCommand::UpdateCursor(info) => self.backend.update_cursor(
+            GpuCommand::UpdateCursor(info) => Some(self.backend.update_cursor(
                 info.resource_id.to_native(),
                 info.pos.x.into(),
                 info.pos.y.into(),
-            ),
-            GpuCommand::MoveCursor(info) => self
+            )),
+            GpuCommand::MoveCursor(info) => Some(self
                 .backend
-                .move_cursor(info.pos.x.into(), info.pos.y.into()),
+                .move_cursor(info.pos.x.into(), info.pos.y.into())),
             GpuCommand::ResourceAssignUuid(info) => {
                 let resource_id = info.resource_id.to_native();
-                self.backend.resource_assign_uuid(resource_id)
+                Some(self.backend.resource_assign_uuid(resource_id))
             }
             GpuCommand::GetCapsetInfo(info) => {
-                self.backend.get_capset_info(info.capset_index.to_native())
+                Some(self.backend.get_capset_info(info.capset_index.to_native()))
             }
-            GpuCommand::GetCapset(info) => self
+            GpuCommand::GetCapset(info) => Some(self
                 .backend
-                .get_capset(info.capset_id.to_native(), info.capset_version.to_native()),
-            GpuCommand::CtxCreate(info) => self
+                .get_capset(info.capset_id.to_native(), info.capset_version.to_native())),
+            GpuCommand::CtxCreate(info) => Some(self
                 .backend
-                .create_renderer_context(info.hdr.ctx_id.to_native()),
-            GpuCommand::CtxDestroy(info) => self
+                .create_renderer_context(info.hdr.ctx_id.to_native())),
+            GpuCommand::CtxDestroy(info) => Some(self
                 .backend
-                .destroy_renderer_context(info.hdr.ctx_id.to_native()),
-            GpuCommand::CtxAttachResource(info) => self
+                .destroy_renderer_context(info.hdr.ctx_id.to_native())),
+            GpuCommand::CtxAttachResource(info) => Some(self
                 .backend
-                .context_attach_resource(info.hdr.ctx_id.to_native(), info.resource_id.to_native()),
-            GpuCommand::CtxDetachResource(info) => self
+                .context_attach_resource(info.hdr.ctx_id.to_native(), info.resource_id.to_native())),
+            GpuCommand::CtxDetachResource(info) => Some(self
                 .backend
-                .context_detach_resource(info.hdr.ctx_id.to_native(), info.resource_id.to_native()),
+                .context_detach_resource(info.hdr.ctx_id.to_native(), info.resource_id.to_native())),
             GpuCommand::ResourceCreate3d(info) => {
                 let id = info.resource_id.to_native();
                 let target = info.target.to_native();
@@ -595,10 +598,10 @@ impl Frontend {
                 let last_level = info.last_level.to_native();
                 let nr_samples = info.nr_samples.to_native();
                 let flags = info.flags.to_native();
-                self.backend.resource_create_3d(
+                Some(self.backend.resource_create_3d(
                     id, target, format, bind, width, height, depth, array_size, last_level,
                     nr_samples, flags,
-                )
+                ))
             }
             GpuCommand::TransferToHost3d(info) => {
                 let ctx_id = info.hdr.ctx_id.to_native();
@@ -613,7 +616,7 @@ impl Frontend {
                 let stride = info.stride.to_native();
                 let layer_stride = info.layer_stride.to_native();
                 let offset = info.offset.to_native();
-                self.backend.transfer_to_resource_3d(
+                Some(self.backend.transfer_to_resource_3d(
                     ctx_id,
                     res_id,
                     x,
@@ -626,7 +629,7 @@ impl Frontend {
                     stride,
                     layer_stride,
                     offset,
-                )
+                ))
             }
             GpuCommand::TransferFromHost3d(info) => {
                 let ctx_id = info.hdr.ctx_id.to_native();
@@ -641,7 +644,7 @@ impl Frontend {
                 let stride = info.stride.to_native();
                 let layer_stride = info.layer_stride.to_native();
                 let offset = info.offset.to_native();
-                self.backend.transfer_from_resource_3d(
+                Some(self.backend.transfer_from_resource_3d(
                     ctx_id,
                     res_id,
                     x,
@@ -654,23 +657,33 @@ impl Frontend {
                     stride,
                     layer_stride,
                     offset,
-                )
+                ))
             }
             GpuCommand::CmdSubmit3d(info) => {
                 if reader.available_bytes() != 0 {
                     let cmd_size = info.size.to_native() as usize;
                     let mut cmd_buf = vec![0; cmd_size];
                     if reader.read_exact(&mut cmd_buf[..]).is_ok() {
-                        self.backend
-                            .submit_command(info.hdr.ctx_id.to_native(), &mut cmd_buf[..])
+                        Some(self.backend
+                            .submit_command(info.hdr.ctx_id.to_native(), &mut cmd_buf[..]))
                     } else {
-                        GpuResponse::ErrInvalidParameter
+                        Some(GpuResponse::ErrInvalidParameter)
                     }
                 } else {
                     // Silently accept empty command buffers to allow for
                     // benchmarking.
-                    GpuResponse::OkNoData
+                    Some(GpuResponse::OkNoData)
                 }
+            }
+            GpuCommand::CmdSubmit3dNoNotify(info) => {
+                if reader.available_bytes() != 0 {
+                    let cmd_size = info.size.to_native() as usize;
+                    let mut cmd_buf = vec![0; cmd_size];
+                    if reader.read_exact(&mut cmd_buf[..]).is_ok() {
+                        self.backend.submit_command_no_notify(info.hdr.ctx_id.to_native(), &mut cmd_buf[..]);
+                    }
+                }
+                None
             }
             GpuCommand::ResourceCreateBlob(info) => {
                 let resource_id = info.resource_id.to_native();
@@ -683,7 +696,7 @@ impl Frontend {
                 if entry_count > VIRTIO_GPU_MAX_IOVEC_ENTRIES
                     || (reader.available_bytes() == 0 && entry_count > 0)
                 {
-                    return GpuResponse::ErrUnspec;
+                    return Some(GpuResponse::ErrUnspec);
                 }
 
                 let mut vecs = Vec::with_capacity(entry_count as usize);
@@ -694,11 +707,11 @@ impl Frontend {
                             let len = entry.length.to_native() as usize;
                             vecs.push((addr, len))
                         }
-                        Err(_) => return GpuResponse::ErrUnspec,
+                        Err(_) => return Some(GpuResponse::ErrUnspec),
                     }
                 }
 
-                self.backend.resource_create_blob(
+                Some(self.backend.resource_create_blob(
                     resource_id,
                     ctx_id,
                     blob_mem,
@@ -707,7 +720,7 @@ impl Frontend {
                     size,
                     vecs,
                     mem,
-                )
+                ))
             }
             GpuCommand::SetScanoutBlob(info) => {
                 let scanout_id = info.scanout_id.to_native();
@@ -725,7 +738,7 @@ impl Frontend {
                     VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM => Format::new(b'A', b'R', b'2', b'4'),
                     _ => {
                         error!("unrecognized virtio-gpu format {}", virtio_gpu_format);
-                        return GpuResponse::ErrUnspec;
+                        return Some(GpuResponse::ErrUnspec);
                     }
                 };
 
@@ -742,17 +755,17 @@ impl Frontend {
                     offsets,
                 };
 
-                self.backend
-                    .set_scanout(scanout_id, resource_id, Some(scanout))
+                Some(self.backend
+                    .set_scanout(scanout_id, resource_id, Some(scanout)))
             }
             GpuCommand::ResourceMapBlob(info) => {
                 let resource_id = info.resource_id.to_native();
                 let offset = info.offset.to_native();
-                self.backend.resource_map_blob(resource_id, offset)
+                Some(self.backend.resource_map_blob(resource_id, offset))
             }
             GpuCommand::ResourceUnmapBlob(info) => {
                 let resource_id = info.resource_id.to_native();
-                self.backend.resource_unmap_blob(resource_id)
+                Some(self.backend.resource_unmap_blob(resource_id))
             }
         }
     }
@@ -770,11 +783,15 @@ impl Frontend {
                     Writer::new(mem.clone(), desc.clone()),
                 ) {
                     (Ok(mut reader), Ok(mut writer)) => {
-                        if let Some(ret_desc) =
-                            self.process_descriptor(mem, desc.index, &mut reader, &mut writer)
-                        {
-                            queue.add_used(&mem, ret_desc.index, ret_desc.len);
-                            signal_used = true;
+                        match self.process_descriptor(mem, desc.index, &mut reader, &mut writer) {
+                            Some(ret_desc) => {
+                                queue.add_used(&mem, ret_desc.index, ret_desc.len);
+                                signal_used = true;
+                            }
+                            _ => {
+                                debug!("ctrl queue processed a no-notify command");
+                                signal_used = false;
+                            }
                         }
                     }
                     (_, Err(e)) | (Err(e), _) => {
@@ -810,14 +827,25 @@ impl Frontend {
         let mut resp = GpuResponse::ErrUnspec;
         let mut gpu_cmd = None;
         let mut len = 0;
+        let mut no_notify = false;
         match GpuCommand::decode(reader) {
             Ok(cmd) => {
-                resp = self.process_gpu_command(mem, cmd, reader);
+                match self.process_gpu_command(mem, cmd, reader) {
+                    Some(r) => {
+                        resp = r;
+                    }
+                    _  => { no_notify = true; }
+                }
                 gpu_cmd = Some(cmd);
             }
             Err(e) => debug!("descriptor decode error: {}", e),
         }
-        if resp.is_err() {
+
+        if no_notify {
+            debug!("Processed a no-notify command");
+        }
+
+        if resp.is_err() && (!no_notify) {
             debug!("{:?} -> {:?}", gpu_cmd, resp);
         }
 
@@ -854,15 +882,22 @@ impl Frontend {
                     len,
                 });
 
+                debug!("Return None for now, has a fence descriptor.");
                 return None;
             }
 
             // No fence, respond now.
         }
-        Some(ReturnDescriptor {
-            index: desc_index,
-            len,
-        })
+
+        if no_notify {
+            debug!("Return None for now, no notify");
+            None
+        } else {
+            Some(ReturnDescriptor {
+                index: desc_index,
+                len,
+            })
+        }
     }
 
     fn return_cursor(&mut self) -> Option<ReturnDescriptor> {
@@ -962,6 +997,7 @@ impl Worker {
             };
             let mut signal_used_cursor = false;
             let mut signal_used_ctrl = false;
+            let mut no_notify_cmd = false;
             let mut ctrl_available = false;
 
             // Clear the old values and re-initialize with false.
@@ -1015,15 +1051,25 @@ impl Worker {
                 signal_used_cursor = true;
             }
 
-            if ctrl_available && self.state.process_queue(&self.mem, &mut self.ctrl_queue) {
-                signal_used_ctrl = true;
+            if ctrl_available {
+                if self.state.process_queue(&self.mem, &mut self.ctrl_queue) {
+                    signal_used_ctrl = true;
+                } else {
+                    debug!("Processed some no-notify command, not signaling");
+                    signal_used_ctrl = false;
+                    no_notify_cmd = true;
+                }
             }
 
+            // TODO: Remove fencing from no-notify submits
             self.state.fence_poll();
 
             while let Some(desc) = self.state.return_ctrl() {
                 self.ctrl_queue.add_used(&self.mem, desc.index, desc.len);
                 signal_used_ctrl = true;
+                if no_notify_cmd {
+                    debug!("Notifying guest anyway because of fence poll, probably.");
+                }
             }
 
             // Process the entire control queue before the resource bridge in case a resource is
@@ -1042,6 +1088,8 @@ impl Worker {
 
             if signal_used_ctrl {
                 self.interrupt.signal_used_queue(self.ctrl_queue.vector);
+            } else {
+                debug!("Not signaling used queue");
             }
 
             if signal_used_cursor {
