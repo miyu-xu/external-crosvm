@@ -72,6 +72,8 @@ pub struct GpuParameters {
     pub renderer_use_glx: bool,
     pub renderer_use_surfaceless: bool,
     #[cfg(feature = "gfxstream")]
+    pub gfxstream_use_guest_angle: bool,
+    #[cfg(feature = "gfxstream")]
     pub gfxstream_use_syncfd: bool,
     #[cfg(feature = "gfxstream")]
     pub gfxstream_support_vulkan: bool,
@@ -98,6 +100,8 @@ impl Default for GpuParameters {
             renderer_use_gles: true,
             renderer_use_glx: false,
             renderer_use_surfaceless: true,
+            #[cfg(feature = "gfxstream")]
+            gfxstream_use_guest_angle: false,
             #[cfg(feature = "gfxstream")]
             gfxstream_use_syncfd: true,
             #[cfg(feature = "gfxstream")]
@@ -1137,6 +1141,7 @@ impl Gpu {
             .use_surfaceless(gpu_parameters.renderer_use_surfaceless);
         #[cfg(feature = "gfxstream")]
         let renderer_flags = renderer_flags
+            .use_guest_angle(gpu_parameters.gfxstream_use_guest_angle)
             .use_syncfd(gpu_parameters.gfxstream_use_syncfd)
             .support_vulkan(gpu_parameters.gfxstream_support_vulkan);
 
