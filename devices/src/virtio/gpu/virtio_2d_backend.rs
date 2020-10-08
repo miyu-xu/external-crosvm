@@ -25,7 +25,7 @@ use vm_memory::{GuestAddress, GuestMemory};
 
 use super::protocol::{GpuResponse::*, VirtioGpuResult};
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
-use crate::virtio::gpu::{Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1};
+use crate::virtio::gpu::{Backend, GpuDisplayParameters, VirtioScanoutBlobData, VIRTIO_F_VERSION_1};
 use crate::virtio::resource_bridge::ResourceResponse;
 
 #[derive(Debug)]
@@ -388,18 +388,9 @@ pub struct Virtio2DBackend {
 }
 
 impl Virtio2DBackend {
-    pub fn new(display: GpuDisplay, display_width: u32, display_height: u32) -> Virtio2DBackend {
+    pub fn new(display: GpuDisplay, display_params: Vec<GpuDisplayParameters>) -> Virtio2DBackend {
         Virtio2DBackend {
-            base: VirtioBackend {
-                display: Rc::new(RefCell::new(display)),
-                display_width,
-                display_height,
-                event_devices: Default::default(),
-                scanout_resource_id: None,
-                scanout_surface_id: None,
-                cursor_resource_id: None,
-                cursor_surface_id: None,
-            },
+            base: VirtioBackend::new(Rc::new(RefCell::new(display)), display_params),
             resources: Default::default(),
             latest_created_fence_id: 0,
         }
@@ -420,8 +411,7 @@ impl Backend for Virtio2DBackend {
     /// Returns the underlying Backend.
     fn build(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         _renderer_flags: RendererFlags,
         _event_devices: Vec<EventDevice>,
         _gpu_device_socket: VmMemoryControlRequestSocket,
@@ -431,8 +421,7 @@ impl Backend for Virtio2DBackend {
     ) -> Option<Box<dyn Backend>> {
         Some(Box::new(Virtio2DBackend::new(
             display,
-            display_width,
-            display_height,
+            display_params,
         )))
     }
 
@@ -446,7 +435,7 @@ impl Backend for Virtio2DBackend {
     }
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
-    fn display_info(&self) -> [(u32, u32); 1] {
+    fn display_info(&self) -> Vec<(u32, u32)> {
         self.base.display_info()
     }
 
@@ -517,12 +506,12 @@ impl Backend for Virtio2DBackend {
     /// Sets the given resource id as the source of scanout to the display.
     fn set_scanout(
         &mut self,
-        _scanout_id: u32,
+        scanout_id: u32,
         resource_id: u32,
         _scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
         if resource_id == 0 || self.resources.get_mut(&resource_id).is_some() {
-            self.base.set_scanout(resource_id)
+            self.base.set_scanout(scanout_id, resource_id)
         } else {
             Err(ErrInvalidResourceId)
         }
@@ -582,14 +571,15 @@ impl Backend for Virtio2DBackend {
     }
 
     /// Updates the cursor's memory to the given id, and sets its position to the given coordinates.
-    fn update_cursor(&mut self, id: u32, x: u32, y: u32) -> VirtioGpuResult {
-        let resource = self.resources.get_mut(&id).map(|r| r.as_mut());
-        self.base.update_cursor(id, x, y, resource)
+    fn update_cursor(&mut self, resource_id: u32, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+        let resource = self.resources.get_mut(&resource_id).map(|r| r.as_mut());
+
+        self.base.update_cursor(resource_id, scanout_id, x, y, resource)
     }
 
     /// Moves the cursor's position to the given coordinates.
-    fn move_cursor(&mut self, x: u32, y: u32) -> VirtioGpuResult {
-        self.base.move_cursor(x, y)
+    fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+        self.base.move_cursor(scanout_id, x, y)
     }
 
     /// Gets the renderer's capset information associated with `index`.

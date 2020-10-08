@@ -63,10 +63,17 @@ pub enum GpuMode {
     ModeGfxStream,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct GpuDisplayParameters {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug)]
 pub struct GpuParameters {
     pub display_width: u32,
     pub display_height: u32,
+    pub displays: Vec<GpuDisplayParameters>,
     pub renderer_use_egl: bool,
     pub renderer_use_gles: bool,
     pub renderer_use_glx: bool,
@@ -94,6 +101,12 @@ impl Default for GpuParameters {
         GpuParameters {
             display_width: DEFAULT_DISPLAY_WIDTH,
             display_height: DEFAULT_DISPLAY_HEIGHT,
+            displays: vec![
+                GpuDisplayParameters{
+                    width: DEFAULT_DISPLAY_WIDTH,
+                    height: DEFAULT_DISPLAY_HEIGHT,
+                }
+            ],
             renderer_use_egl: true,
             renderer_use_gles: true,
             renderer_use_glx: false,
@@ -137,8 +150,7 @@ trait Backend {
     /// Constructs a backend.
     fn build(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         renderer_flags: RendererFlags,
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
@@ -172,7 +184,7 @@ trait Backend {
     fn export_resource(&mut self, id: u32) -> ResourceResponse;
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
-    fn display_info(&self) -> [(u32, u32); 1];
+    fn display_info(&self) -> Vec<(u32, u32)>;
 
     /// Creates a 2D resource with the given properties and associates it with the given id.
     fn create_resource_2d(
@@ -189,7 +201,7 @@ trait Backend {
     /// Sets the given resource id as the source of scanout to the display, with optional blob data.
     fn set_scanout(
         &mut self,
-        _scanout_id: u32,
+        scanout_id: u32,
         resource_id: u32,
         scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult;
@@ -234,10 +246,10 @@ trait Backend {
     }
 
     /// Updates the cursor's memory to the given id, and sets its position to the given coordinates.
-    fn update_cursor(&mut self, id: u32, x: u32, y: u32) -> VirtioGpuResult;
+    fn update_cursor(&mut self, resource_id: u32, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult;
 
     /// Moves the cursor's position to the given coordinates.
-    fn move_cursor(&mut self, x: u32, y: u32) -> VirtioGpuResult;
+    fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult;
 
     /// Gets the renderer's capset information associated with `index`.
     fn get_capset_info(&self, index: u32) -> VirtioGpuResult;
@@ -383,9 +395,8 @@ impl BackendKind {
     /// Initializes the backend.
     fn build(
         &self,
-        possible_displays: &[DisplayBackend],
-        display_width: u32,
-        display_height: u32,
+        possible_display_backends: &[DisplayBackend],
+        display_params: Vec<GpuDisplayParameters>,
         renderer_flags: RendererFlags,
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
@@ -394,8 +405,8 @@ impl BackendKind {
         external_blob: bool,
     ) -> Option<Box<dyn Backend>> {
         let mut display_opt = None;
-        for display in possible_displays {
-            match display.build() {
+        for display_backend in possible_display_backends {
+            match display_backend.build() {
                 Ok(c) => {
                     display_opt = Some(c);
                     break;
@@ -415,8 +426,7 @@ impl BackendKind {
         match self {
             BackendKind::Virtio2D => Virtio2DBackend::build(
                 display,
-                display_width,
-                display_height,
+                display_params,
                 renderer_flags,
                 event_devices,
                 gpu_device_socket,
@@ -426,8 +436,7 @@ impl BackendKind {
             ),
             BackendKind::Virtio3D => Virtio3DBackend::build(
                 display,
-                display_width,
-                display_height,
+                display_params,
                 renderer_flags,
                 event_devices,
                 gpu_device_socket,
@@ -438,8 +447,7 @@ impl BackendKind {
             #[cfg(feature = "gfxstream")]
             BackendKind::VirtioGfxStream => VirtioGfxStreamBackend::build(
                 display,
-                display_width,
-                display_height,
+                display_params,
                 renderer_flags,
                 event_devices,
                 gpu_device_socket,
@@ -572,12 +580,15 @@ impl Frontend {
             }
             GpuCommand::UpdateCursor(info) => self.backend.update_cursor(
                 info.resource_id.to_native(),
+                info.pos.scanout_id.to_native(),
                 info.pos.x.into(),
                 info.pos.y.into(),
             ),
-            GpuCommand::MoveCursor(info) => self
-                .backend
-                .move_cursor(info.pos.x.into(), info.pos.y.into()),
+            GpuCommand::MoveCursor(info) => self.backend.move_cursor(
+                info.pos.scanout_id.to_native(),
+                info.pos.x.into(),
+                info.pos.y.into()
+            ),
             GpuCommand::ResourceAssignUuid(info) => {
                 let resource_id = info.resource_id.to_native();
                 self.backend.resource_assign_uuid(resource_id)
@@ -1107,10 +1118,8 @@ pub struct Gpu {
     kill_evt: Option<Event>,
     config_event: bool,
     worker_thread: Option<thread::JoinHandle<()>>,
-    num_scanouts: NonZeroU8,
     display_backends: Vec<DisplayBackend>,
-    display_width: u32,
-    display_height: u32,
+    display_params: Vec<GpuDisplayParameters>,
     renderer_flags: RendererFlags,
     pci_bar: Option<Alloc>,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
@@ -1122,7 +1131,6 @@ impl Gpu {
     pub fn new(
         exit_evt: Event,
         gpu_device_socket: Option<VmMemoryControlRequestSocket>,
-        num_scanouts: NonZeroU8,
         resource_bridges: Vec<ResourceResponseSocket>,
         display_backends: Vec<DisplayBackend>,
         gpu_parameters: &GpuParameters,
@@ -1150,15 +1158,13 @@ impl Gpu {
         Gpu {
             exit_evt,
             gpu_device_socket,
-            num_scanouts,
             resource_bridges,
             event_devices,
             config_event: false,
             kill_evt: None,
             worker_thread: None,
             display_backends,
-            display_width: gpu_parameters.display_width,
-            display_height: gpu_parameters.display_height,
+            display_params: gpu_parameters.displays.clone(),
             renderer_flags,
             pci_bar: None,
             map_request,
@@ -1175,7 +1181,7 @@ impl Gpu {
         virtio_gpu_config {
             events_read: Le32::from(events_read),
             events_clear: Le32::from(0),
-            num_scanouts: Le32::from(self.num_scanouts.get() as u32),
+            num_scanouts: Le32::from(self.display_params.len() as u32),
             num_capsets: Le32::from(self.backend_kind.capsets()),
         }
     }
@@ -1279,8 +1285,7 @@ impl VirtioDevice for Gpu {
         let cursor_queue = queues.remove(0);
         let cursor_evt = queue_evts.remove(0);
         let display_backends = self.display_backends.clone();
-        let display_width = self.display_width;
-        let display_height = self.display_height;
+        let display_params = self.display_params.clone();
         let renderer_flags = self.renderer_flags;
         let event_devices = self.event_devices.split_off(0);
         let map_request = Arc::clone(&self.map_request);
@@ -1294,8 +1299,7 @@ impl VirtioDevice for Gpu {
                     .spawn(move || {
                         let backend = match backend_kind.build(
                             &display_backends,
-                            display_width,
-                            display_height,
+                            display_params,
                             renderer_flags,
                             event_devices,
                             gpu_device_socket,

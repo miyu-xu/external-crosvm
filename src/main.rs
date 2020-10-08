@@ -31,7 +31,7 @@ use crosvm::{
     linux, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
 };
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{GpuMode, GpuParameters};
+use devices::virtio::gpu::{GpuMode, GpuDisplayParameters, GpuParameters};
 #[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
@@ -324,6 +324,35 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                 }
                 "cache-path" => gpu_params.cache_path = Some(v.to_string()),
                 "cache-size" => gpu_params.cache_size = Some(v.to_string()),
+                "display" => {
+                    let display_opts = v
+                        .split('x')
+                        .map(|s| s.parse::<u32>())
+                        .collect::<Result< Vec<u32>, std::num::ParseIntError>>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'display' must be a valid pair of integer dimensions",
+                            ),
+                        })?;
+
+                    if display_opts.len() != 2 {
+                        return Err(argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'display' must be a valid pair of integer dimensions",
+                            ),
+                        });
+                    }
+
+                    let display_width = display_opts[0];
+                    let display_height = display_opts[1];
+
+                    gpu_params.displays.push(GpuDisplayParameters{
+                        width: display_width,
+                        height: display_height,
+                    });
+                }
                 "" => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(format!(
