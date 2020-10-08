@@ -52,6 +52,8 @@ use crate::pci::{
 
 use vm_control::VmMemoryControlRequestSocket;
 
+use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
+
 pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
 pub const DEFAULT_DISPLAY_HEIGHT: u32 = 1024;
 
@@ -355,12 +357,13 @@ impl BackendKind {
 
     /// Returns the bitset of virtio features provided by the Backend.
     fn features(&self) -> u64 {
-        match self {
+        let gfxFeatures = match self {
             BackendKind::Virtio2D => Virtio2DBackend::features(),
             BackendKind::Virtio3D => Virtio3DBackend::features(),
             #[cfg(feature = "gfxstream")]
             BackendKind::VirtioGfxStream => VirtioGfxStreamBackend::features(),
-        }
+        };
+        gfxFeatures | (1 << VIRTIO_RING_F_EVENT_IDX)
     }
 
     /// Initializes the backend.
@@ -764,6 +767,7 @@ impl Frontend {
     fn process_queue(&mut self, mem: &GuestMemory, queue: &mut Queue) -> bool {
         let mut signal_used = false;
         while let Some(desc) = queue.pop(mem) {
+            queue.set_notify(&mem, false);
             if Frontend::validate_desc(&desc) {
                 match (
                     Reader::new(mem.clone(), desc.clone()),
@@ -795,6 +799,7 @@ impl Frontend {
                 queue.add_used(&mem, desc.index, 0);
                 signal_used = true;
             }
+            queue.set_notify(&mem, true);
         }
 
         signal_used
@@ -1015,7 +1020,7 @@ impl Worker {
                 signal_used_cursor = true;
             }
 
-            if ctrl_available && self.state.process_queue(&self.mem, &mut self.ctrl_queue) {
+            if ctrl_available  && self.state.process_queue(&self.mem, &mut self.ctrl_queue) {
                 signal_used_ctrl = true;
             }
 
@@ -1041,7 +1046,7 @@ impl Worker {
             }
 
             if signal_used_ctrl {
-                self.interrupt.signal_used_queue(self.ctrl_queue.vector);
+                self.ctrl_queue.trigger_interrupt(&self.mem, &self.interrupt);
             }
 
             if signal_used_cursor {
