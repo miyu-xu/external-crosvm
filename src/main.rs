@@ -31,7 +31,7 @@ use crosvm::{
     linux, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
 };
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{GpuMode, GpuParameters};
+use devices::virtio::gpu::{DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT, GpuMode, GpuDisplayParameters, GpuParameters};
 #[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
@@ -162,6 +162,11 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut vulkan_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
+
+    let mut deprecated_display_w : Option<u32> = None;
+    let mut deprecated_display_h : Option<u32> = None;
+
+    let mut had_explicit_display_argument = false;
 
     if let Some(s) = s {
         let opts = s
@@ -303,7 +308,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                 }
                 "width" => {
-                    gpu_params.display_width =
+                    let width =
                         v.parse::<u32>()
                             .map_err(|_| argument::Error::InvalidValue {
                                 value: v.to_string(),
@@ -311,9 +316,11 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                     "gpu parameter 'width' must be a valid integer",
                                 ),
                             })?;
+                    deprecated_display_w = Some(width);
+                    had_explicit_display_argument = true;
                 }
                 "height" => {
-                    gpu_params.display_height =
+                    let height =
                         v.parse::<u32>()
                             .map_err(|_| argument::Error::InvalidValue {
                                 value: v.to_string(),
@@ -321,9 +328,42 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                     "gpu parameter 'height' must be a valid integer",
                                 ),
                             })?;
+                    deprecated_display_h = Some(height);
+                    had_explicit_display_argument = true;
                 }
                 "cache-path" => gpu_params.cache_path = Some(v.to_string()),
                 "cache-size" => gpu_params.cache_size = Some(v.to_string()),
+                "display" => {
+                    let display_opts = v
+                        .split('x')
+                        .map(|s| s.parse::<u32>())
+                        .collect::<Result< Vec<u32>, std::num::ParseIntError>>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'display' must be a valid pair of integer dimensions",
+                            ),
+                        })?;
+
+                    if display_opts.len() != 2 {
+                        return Err(argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'display' must be a valid pair of integer dimensions",
+                            ),
+                        });
+                    }
+
+                    let display_width = display_opts[0];
+                    let display_height = display_opts[1];
+
+                    gpu_params.displays.push(GpuDisplayParameters{
+                        width: display_width,
+                        height: display_height,
+                    });
+
+                    had_explicit_display_argument = true;
+                }
                 "" => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(format!(
@@ -333,6 +373,20 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                 }
             }
         }
+    }
+
+    if deprecated_display_w.is_some() && deprecated_display_h.is_some() {
+        gpu_params.displays.push(GpuDisplayParameters{
+            width: deprecated_display_w.unwrap(),
+            height: deprecated_display_h.unwrap(),
+        });
+    }
+
+    if !had_explicit_display_argument {
+        gpu_params.displays.push(GpuDisplayParameters{
+            width: DEFAULT_DISPLAY_WIDTH,
+            height: DEFAULT_DISPLAY_HEIGHT,
+        });
     }
 
     #[cfg(feature = "gfxstream")]
@@ -1413,9 +1467,15 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = cfg.gpu_parameters.as_ref() {
-            let (width, height) = (gpu_parameters.display_width, gpu_parameters.display_height);
+            let mut display_w = DEFAULT_DISPLAY_WIDTH;
+            let mut display_h = DEFAULT_DISPLAY_HEIGHT;
+
+            if !gpu_parameters.displays.is_empty() {
+                display_w = gpu_parameters.displays[0].width;
+                display_h = gpu_parameters.displays[0].height;
+            }
             if let Some(virtio_single_touch) = cfg.virtio_single_touch.as_mut() {
-                virtio_single_touch.set_default_size(width, height);
+                virtio_single_touch.set_default_size(display_w, display_h);
             }
         }
     }

@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
 use std::mem::{size_of, transmute};
+use std::num::NonZeroU32;
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_void};
 use std::panic;
 use std::ptr::null_mut;
@@ -30,7 +31,7 @@ use vm_memory::{GuestAddress, GuestMemory};
 use super::protocol::{GpuResponse::*, VirtioGpuResult};
 pub use super::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    Backend, GpuDisplayParameters, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
     VIRTIO_GPU_F_VIRGL,
 };
 use crate::virtio::resource_bridge::ResourceResponse;
@@ -266,8 +267,7 @@ fn unmap_func(resource_id: u32) {
 impl VirtioGfxStreamBackend {
     pub fn new(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         renderer_flags: RendererFlags,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
@@ -279,6 +279,10 @@ impl VirtioGfxStreamBackend {
         }));
 
         let display_rc_refcell = Rc::new(RefCell::new(display));
+
+        // TODO
+        let display_width : u32 = display_params[0].width;
+        let display_height : u32 = display_params[0].height;
 
         let scanout_surface = match (display_rc_refcell.borrow_mut()).create_surface(
             None,
@@ -292,6 +296,8 @@ impl VirtioGfxStreamBackend {
             }
         };
 
+
+
         unsafe {
             gfxstream_backend_init(
                 display_width,
@@ -304,16 +310,7 @@ impl VirtioGfxStreamBackend {
         }
 
         VirtioGfxStreamBackend {
-            base: VirtioBackend {
-                display: Rc::clone(&display_rc_refcell),
-                display_width,
-                display_height,
-                event_devices: Default::default(),
-                scanout_resource_id: None,
-                scanout_surface_id: Some(scanout_surface),
-                cursor_resource_id: None,
-                cursor_surface_id: None,
-            },
+            base: VirtioBackend::new(Rc::clone(&display_rc_refcell), display_params),
             resources: Default::default(),
             fence_state,
             gpu_device_socket,
@@ -354,8 +351,7 @@ impl Backend for VirtioGfxStreamBackend {
     /// Returns the underlying Backend.
     fn build(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         renderer_flags: RendererFlags,
         _event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
@@ -365,8 +361,7 @@ impl Backend for VirtioGfxStreamBackend {
     ) -> Option<Box<dyn Backend>> {
         Some(Box::new(VirtioGfxStreamBackend::new(
             display,
-            display_width,
-            display_height,
+            display_params,
             renderer_flags,
             gpu_device_socket,
             pci_bar,
@@ -385,7 +380,7 @@ impl Backend for VirtioGfxStreamBackend {
     }
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
-    fn display_info(&self) -> [(u32, u32); 1] {
+    fn display_info(&self) -> Vec<(u32, u32)> {
         self.base.display_info()
     }
 
@@ -447,11 +442,11 @@ impl Backend for VirtioGfxStreamBackend {
     /// Sets the given resource id as the source of scanout to the display.
     fn set_scanout(
         &mut self,
-        _scanout_id: u32,
-        _resource_id: u32,
+        scanout_id: u32,
+        resource_id: u32,
         _scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
-        Ok(OkNoData)
+        self.base.set_scanout(scanout_id, resource_id)
     }
 
     /// Flushes the given rectangle of pixels of the given resource to the display.
@@ -463,50 +458,66 @@ impl Backend for VirtioGfxStreamBackend {
         _width: u32,
         _height: u32,
     ) -> VirtioGpuResult {
+        /*
         // For now, always update the whole display.
-        let mut display_ref = self.base.display.borrow_mut();
+        let scanout_ids = self.base.get_scanouts_for_resource(id);
+        for scanout_id in scanout_ids {
+            let scanout_surface_id = match self.base.get_or_create_scanout_surface_id(scanout_id) {
+                Some(id) => id,
+                _ => {
+                    error!("No surface available for scanout!");
+                    return Err(ErrInvalidResourceId);
+                }
+            };
 
-        let scanout_surface_id = match self.base.scanout_surface_id {
-            Some(id) => id,
-            _ => {
-                error!("No scanout surface created for backend!");
-                return Err(ErrInvalidResourceId);
-            }
-        };
+            let scanout_dimensions = match self.base.get_scanout_dimensions(scanout_id) {
+                Some(d) => d,
+                None => {
+                    error!("Unknown scanout surface dimensions!");
+                    return Err(ErrUnspec);
+                },
+            };
 
-        let fb = match display_ref.framebuffer_region(
-            scanout_surface_id,
-            0,
-            0,
-            self.base.display_width,
-            self.base.display_height,
-        ) {
-            Some(fb) => fb,
-            None => {
-                panic!(
-                    "failed to access framebuffer for surface {}",
-                    scanout_surface_id
+            let scanout_width = scanout_dimensions.0;
+            let scanout_height = scanout_dimensions.1;
+
+            let mut display_ref = self.base.display.borrow_mut();
+
+            let fb = match display_ref.framebuffer_region(
+                scanout_surface_id,
+                0,
+                0,
+                scanout_width,
+                scanout_height,
+            ) {
+                Some(fb) => fb,
+                None => {
+                    panic!(
+                        "failed to access framebuffer for surface {}",
+                        scanout_surface_id
+                    );
+                }
+            };
+
+            let fb_volatile_slice = fb.as_volatile_slice();
+            let fb_begin = fb_volatile_slice.as_ptr() as *mut c_uchar;
+            let fb_bytes = fb_volatile_slice.size() as usize;
+
+            unsafe {
+                stream_renderer_flush_resource_and_readback(
+                    id,
+                    0,
+                    0,
+                    scanout_width,
+                    scanout_height,
+                    fb_begin,
+                    fb_bytes as u32,
                 );
             }
-        };
 
-        let fb_volatile_slice = fb.as_volatile_slice();
-        let fb_begin = fb_volatile_slice.as_ptr() as *mut c_uchar;
-        let fb_bytes = fb_volatile_slice.size() as usize;
-
-        unsafe {
-            stream_renderer_flush_resource_and_readback(
-                id,
-                0,
-                0,
-                self.base.display_width,
-                self.base.display_height,
-                fb_begin,
-                fb_bytes as u32,
-            );
+            display_ref.flip(scanout_surface_id);
         }
-
-        display_ref.flip(scanout_surface_id);
+        */
 
         Ok(OkNoData)
     }
@@ -581,12 +592,13 @@ impl Backend for VirtioGfxStreamBackend {
         Ok(OkNoData)
     }
 
-    fn update_cursor(&mut self, _id: u32, _x: u32, _y: u32) -> VirtioGpuResult {
+
+    fn update_cursor(&mut self, _resource_id: u32, _scanout_id: u32, _x: u32, _y: u32) -> VirtioGpuResult {
         // Not considered for gfxstream
         Ok(OkNoData)
     }
 
-    fn move_cursor(&mut self, _x: u32, _y: u32) -> VirtioGpuResult {
+    fn move_cursor(&mut self, _scanout_id: u32, _x: u32, _y: u32) -> VirtioGpuResult {
         // Not considered for gfxstream
         Ok(OkNoData)
     }

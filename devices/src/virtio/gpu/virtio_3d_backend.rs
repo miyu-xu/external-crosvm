@@ -32,7 +32,7 @@ use super::protocol::{
 };
 pub use crate::virtio::gpu::virtio_backend::{VirtioBackend, VirtioResource};
 use crate::virtio::gpu::{
-    Backend, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
+    Backend, GpuDisplayParameters, VirtioScanoutBlobData, VIRTIO_F_VERSION_1, VIRTIO_GPU_F_RESOURCE_BLOB,
     VIRTIO_GPU_F_RESOURCE_UUID, VIRTIO_GPU_F_VIRGL, VIRTIO_GPU_F_VULKAN,
 };
 use crate::virtio::resource_bridge::{PlaneInfo, ResourceInfo, ResourceResponse};
@@ -240,8 +240,7 @@ impl Virtio3DBackend {
     /// data is copied as needed.
     pub fn new(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         renderer: Renderer,
         gpu_device_socket: VmMemoryControlRequestSocket,
         pci_bar: Alloc,
@@ -249,16 +248,7 @@ impl Virtio3DBackend {
         external_blob: bool,
     ) -> Virtio3DBackend {
         Virtio3DBackend {
-            base: VirtioBackend {
-                display: Rc::new(RefCell::new(display)),
-                display_width,
-                display_height,
-                event_devices: Default::default(),
-                scanout_resource_id: None,
-                scanout_surface_id: None,
-                cursor_resource_id: None,
-                cursor_surface_id: None,
-            },
+            base: VirtioBackend::new(Rc::new(RefCell::new(display)), display_params),
             renderer,
             resources: Default::default(),
             contexts: Default::default(),
@@ -288,8 +278,7 @@ impl Backend for Virtio3DBackend {
     /// Returns the underlying Backend.
     fn build(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         renderer_flags: RendererFlags,
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
@@ -325,8 +314,7 @@ impl Backend for Virtio3DBackend {
 
         let mut backend_3d = Virtio3DBackend::new(
             display,
-            display_width,
-            display_height,
+            display_params,
             renderer,
             gpu_device_socket,
             pci_bar,
@@ -355,7 +343,7 @@ impl Backend for Virtio3DBackend {
     }
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
-    fn display_info(&self) -> [(u32, u32); 1] {
+    fn display_info(&self) -> Vec<(u32, u32)> {
         self.base.display_info()
     }
 
@@ -459,7 +447,7 @@ impl Backend for Virtio3DBackend {
     /// Sets the given resource id as the source of scanout to the display.
     fn set_scanout(
         &mut self,
-        _scanout_id: u32,
+        scanout_id: u32,
         resource_id: u32,
         scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
@@ -468,7 +456,7 @@ impl Backend for Virtio3DBackend {
                 Some(resource) => resource.scanout_data = scanout_data,
                 None => (),
             }
-            self.base.set_scanout(resource_id)
+            self.base.set_scanout(scanout_id, resource_id)
         } else {
             Err(ErrInvalidResourceId)
         }
@@ -529,14 +517,15 @@ impl Backend for Virtio3DBackend {
     }
 
     /// Updates the cursor's memory to the given id, and sets its position to the given coordinates.
-    fn update_cursor(&mut self, id: u32, x: u32, y: u32) -> VirtioGpuResult {
-        let resource = self.resources.get_mut(&id).map(|r| r.as_mut());
-        self.base.update_cursor(id, x, y, resource)
+    fn update_cursor(&mut self, resource_id: u32, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+        let resource = self.resources.get_mut(&resource_id).map(|r| r.as_mut());
+
+        self.base.update_cursor(resource_id, scanout_id, x, y, resource)
     }
 
     /// Moves the cursor's position to the given coordinates.
-    fn move_cursor(&mut self, x: u32, y: u32) -> VirtioGpuResult {
-        self.base.move_cursor(x, y)
+    fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+        self.base.move_cursor(scanout_id, x, y)
     }
 
     /// Returns a uuid for the resource.
@@ -799,8 +788,8 @@ impl Backend for Virtio3DBackend {
                 )?;
 
                 let virtio_gpu_resource = Virtio3DResource::blob_new(
-                    self.base.display_width,
-                    self.base.display_height,
+                    0,
+                    0,
                     resource,
                     blob_flags,
                     size,

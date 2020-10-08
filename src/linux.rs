@@ -35,6 +35,7 @@ use base::net::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListene
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
 use devices::virtio::{self, Console, VirtioDevice};
+use devices::virtio::gpu::{DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT};
 #[cfg(feature = "audio")]
 use devices::Ac97Dev;
 use devices::{
@@ -706,7 +707,6 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEvent)?,
         Some(gpu_device_socket),
-        NonZeroU8::new(1).unwrap(), // number of scanouts
         gpu_sockets,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
@@ -1279,6 +1279,13 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
+            let mut gpu_display_w = DEFAULT_DISPLAY_WIDTH;
+            let mut gpu_display_h = DEFAULT_DISPLAY_HEIGHT;
+            if !gpu_parameters.displays.is_empty() {
+                gpu_display_w = gpu_parameters.displays[0].width;
+                gpu_display_h = gpu_parameters.displays[0].height;
+            }
+
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
@@ -1287,7 +1294,7 @@ fn create_virtio_devices(
                     .virtio_single_touch
                     .as_ref()
                     .map(|single_touch_spec| single_touch_spec.get_size())
-                    .unwrap_or((gpu_parameters.display_width, gpu_parameters.display_height));
+                    .unwrap_or((gpu_display_w, gpu_display_h));
                 let dev = virtio::new_single_touch(
                     virtio_dev_socket,
                     single_touch_width,
