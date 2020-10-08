@@ -1,0 +1,30 @@
+{
+  "comments": [
+    {
+      "robotId": "ayeaye",
+      "robotRunId": "AR00000000000005424211",
+      "url": "https://android-build.googleplex.com/builds/treetop/android-review/1454997?revision\u003d2",
+      "fixSuggestions": [],
+      "key": {
+        "uuid": "74b2d821_3f3c5b12",
+        "filename": "src/main.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 2096,
+      "author": {
+        "id": 1757831
+      },
+      "writtenOn": "2020-10-08T18:12:03Z",
+      "side": 1,
+      "message": "Prefer to use inclusive terms like \u0027primary/secondary\u0027 or \u0027manager/worker\u0027; see https://source.android.com/setup/contribute/respectful-code for more details. In the case of a false positive add BYPASS_INCLUSIVE_LANGUAGE_REASON\u003dmy_reason_here to your commit message to disable this check.",
+      "range": {
+        "startLine": 2096,
+        "startChar": 36,
+        "endLine": 2096,
+        "endChar": 42
+      },
+      "revId": "f64efb38622d13e4d63ec9110c7d194213d0631f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
