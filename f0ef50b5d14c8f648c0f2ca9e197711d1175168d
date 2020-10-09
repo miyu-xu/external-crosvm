@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dfea1f31_0cf7b731",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-10-09T14:13:58Z",
+      "side": 1,
+      "message": "I don\u0027t really know enough about the Android build system or shell style to know whether this is good, but the general idea seems reasonable.",
+      "revId": "f0ef50b5d14c8f648c0f2ca9e197711d1175168d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd3cf2be_045e2e29",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 165,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2020-10-09T14:13:58Z",
+      "side": 1,
+      "message": "Why is this indented further than the lines below it?",
+      "range": {
+        "startLine": 165,
+        "startChar": 2,
+        "endLine": 165,
+        "endChar": 3
+      },
+      "revId": "f0ef50b5d14c8f648c0f2ca9e197711d1175168d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
