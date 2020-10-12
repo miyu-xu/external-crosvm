@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "4c612bf8_450b5a48",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-10-12T18:27:55Z",
+      "side": 1,
+      "message": "Neither do I, really. However, I\u0027d like to get all of the crosvm features working correctly under Android now, and if somebody would like to clean this up for e.g. the apex later, that\u0027s fine with me.",
+      "parentUuid": "dfea1f31_0cf7b731",
+      "revId": "f0ef50b5d14c8f648c0f2ca9e197711d1175168d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "bd3cf2be_045e2e29",
@@ -31,6 +49,30 @@
       "writtenOn": "2020-10-09T14:13:58Z",
       "side": 1,
       "message": "Why is this indented further than the lines below it?",
+      "range": {
+        "startLine": 165,
+        "startChar": 2,
+        "endLine": 165,
+        "endChar": 3
+      },
+      "revId": "f0ef50b5d14c8f648c0f2ca9e197711d1175168d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b8f7aadb_45796e40",
+        "filename": "seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 165,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-10-12T18:27:55Z",
+      "side": 1,
+      "message": "Good catch. Fixed.",
+      "parentUuid": "bd3cf2be_045e2e29",
       "range": {
         "startLine": 165,
         "startChar": 2,
