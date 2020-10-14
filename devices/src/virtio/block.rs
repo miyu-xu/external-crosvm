@@ -527,7 +527,7 @@ impl Block {
         }
 
         let mut avail_features: u64 = 1 << VIRTIO_BLK_F_FLUSH;
-        avail_features |= 1 << VIRTIO_RING_F_EVENT_IDX;
+        //avail_features |= 1 << VIRTIO_RING_F_EVENT_IDX;
         if read_only {
             avail_features |= 1 << VIRTIO_BLK_F_RO;
         } else {
