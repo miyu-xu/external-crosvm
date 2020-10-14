@@ -305,7 +305,6 @@ impl Worker {
         let disk_size = self.disk_size.lock();
 
         while let Some(avail_desc) = queue.pop(&self.mem) {
-            queue.set_notify(&self.mem, false);
             let desc_index = avail_desc.index;
 
             let len = match Worker::process_one_request(
@@ -327,7 +326,6 @@ impl Worker {
 
             queue.add_used(&self.mem, desc_index, len as u32);
             queue.trigger_interrupt(&self.mem, &self.interrupt);
-            queue.set_notify(&self.mem, true);
         }
     }
 
