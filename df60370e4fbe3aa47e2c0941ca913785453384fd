@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ecbe80d4_da88264d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1052399
+      },
+      "writtenOn": "2020-10-15T05:44:15Z",
+      "side": 1,
+      "message": "The only failed test robolectric_nexuslauncher_test is unrelated and due to b/169792793.\n\n",
+      "revId": "df60370e4fbe3aa47e2c0941ca913785453384fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
