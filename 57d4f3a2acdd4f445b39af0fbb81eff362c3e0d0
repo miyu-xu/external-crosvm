@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "522eeb1f_8e01beaa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-10-21T15:43:50Z",
+      "side": 1,
+      "message": "Resolved some conflicts around the backport of Cody\u0027s virtio-console change.",
+      "revId": "57d4f3a2acdd4f445b39af0fbb81eff362c3e0d0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
