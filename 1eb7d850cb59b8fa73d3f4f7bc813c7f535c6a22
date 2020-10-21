@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9859242b_ca3fa66b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-10-21T22:01:31Z",
+      "side": 1,
+      "message": "Can you upload this on chromium gerrit?",
+      "revId": "1eb7d850cb59b8fa73d3f4f7bc813c7f535c6a22",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
