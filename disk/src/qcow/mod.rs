@@ -1251,7 +1251,7 @@ impl QcowFile {
     }
 
     // Deallocate the storage for the cluster starting at `address`.
-    // Any future reads of this cluster will return all zeroes.
+    // Any future reads of this cluster will return all zeroes (or the backing file, if in use).
     fn deallocate_cluster(&mut self, address: u64) -> std::io::Result<()> {
         if address >= self.virtual_size() as u64 {
             return Err(std::io::Error::from_raw_os_error(EINVAL));
@@ -1323,7 +1323,7 @@ impl QcowFile {
     }
 
     // Deallocate the storage for `length` bytes starting at `address`.
-    // Any future reads of this range will return all zeroes.
+    // Any future reads of this range will return all zeroes (or the backing file, if in use).
     fn deallocate_bytes(&mut self, address: u64, length: usize) -> std::io::Result<()> {
         let write_count: usize = self.limit_range_file(address, length);
 
@@ -1346,6 +1346,26 @@ impl QcowFile {
                         .write_zeroes_all_at(offset, count)?;
                 }
             }
+
+            nwritten += count;
+        }
+        Ok(())
+    }
+
+    // Fill a range of `length` bytes starting at `address` with zeroes.
+    // This will allocate all of the affected clusters if they are not yet allocated.
+    fn zero_bytes(&mut self, address: u64, length: usize) -> std::io::Result<()> {
+        let write_count: usize = self.limit_range_file(address, length);
+
+        let mut nwritten: usize = 0;
+        while nwritten < write_count {
+            let curr_addr = address + nwritten as u64;
+            let offset = self.file_offset_write(curr_addr)?;
+            let count = self.limit_range_cluster(curr_addr, write_count - nwritten);
+
+            self.raw_file
+                .file_mut()
+                .write_zeroes_all_at(offset, count)?;
 
             nwritten += count;
         }
@@ -1705,7 +1725,14 @@ impl PunchHole for QcowFile {
 
 impl WriteZeroesAt for QcowFile {
     fn write_zeroes_at(&mut self, offset: u64, length: usize) -> io::Result<usize> {
-        self.punch_hole(offset, length as u64)?;
+        if self.backing_file.is_none() {
+            self.punch_hole(offset, length as u64)?;
+        } else {
+            // Clusters can't be deallocated to implement write_zeroes if there is a backing file,
+            // since deallocating the cluster will make this cluster read from the backing file
+            // instead of returning zeroes.
+            self.zero_bytes(offset, length)?;
+        }
         Ok(length)
     }
 }
