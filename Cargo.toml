@@ -69,13 +69,13 @@ libcras = "*"
 minijail = "*" # provided by ebuild
 msg_socket = { path = "msg_socket" }
 net_util = { path = "net_util" }
-p9 = { path = "p9" }
 protobuf = { version = "2.3", optional = true }
 protos = { path = "protos", optional = true }
 rand_ish = { path = "rand_ish" }
 remain = "*"
 resources = { path = "resources" }
 sync = { path = "sync" }
+tempfile = "*"
 vhost = { path = "vhost" }
 vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
@@ -95,9 +95,17 @@ assertions = { path = "assertions" }
 audio_streams = { path = "../adhd/audio_streams" } # ignored by ebuild
 base = { path = "base" }
 data_model = { path = "data_model" }
+<<<<<<< HEAD   (4f07e0 Merge changes I2b7393ea,I29a493c0,If90c0d90,I5387b1e0)
 libcras = { path = "../adhd/cras/client/libcras" } # ignored by ebuild
 minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
+=======
+libcras = { path = "../../third_party/adhd/cras/client/libcras" } # ignored by ebuild
+libvda = { path = "../../platform2/arc/vm/libvda/rust" } # ignored by ebuild
+minijail = { path = "../../aosp/external/minijail/rust/minijail" } # ignored by ebuild
+p9 = { path = "../../platform2/vm_tools/p9" } # ignored by ebuild
+>>>>>>> BRANCH (ab0475 build_test: misc options, improvements, amd bug fixes)
 sync = { path = "sync" }
 syscall_defines = { path = "syscall_defines" }
 sys_util = { path = "sys_util" }
 tempfile = { path = "tempfile" }
+wire_format_derive = { path = "../../platform2/vm_tools/p9/wire_format_derive" } # ignored by ebuild
