@@ -1,0 +1,11 @@
+Code-Review+2: Andrew Walbran <qwandor@google.com>
+Code-Review+2: Cody Schuffelen <schuffelen@google.com>
+Lint+1: Lint 🤖 <ayeaye-gerrit@google.com>
+Autosubmit+1: Alistair Delva <adelva@google.com>
+Presubmit-Ready+1: Alistair Delva <adelva@google.com>
+Bypass-Presubmit+1: Alistair Delva <adelva@google.com>
+Submitted-by: Alistair Delva <adelva@google.com>
+Submitted-at: Thu, 22 Oct 2020 17:18:22 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1469682
+Project: platform/external/crosvm
+Branch: refs/heads/master
