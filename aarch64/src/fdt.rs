@@ -13,6 +13,7 @@ use arch::fdt::{
 use arch::SERIAL_ADDR;
 use devices::{PciAddress, PciInterruptPin};
 use vm_memory::{GuestAddress, GuestMemory};
+use base::warn;
 
 // This is the start of DRAM in the physical address space.
 use crate::AARCH64_PHYS_MEM_START;
@@ -404,6 +405,7 @@ pub fn create_fdt(
     let mut fdt_final = vec![0; fdt_max_size];
     finish_fdt(&mut fdt, &mut fdt_final, fdt_max_size)?;
 
+    warn!("{:x} is the fdt address", AARCH64_PHYS_MEM_START + fdt_load_offset);
     let fdt_address = GuestAddress(AARCH64_PHYS_MEM_START + fdt_load_offset);
     let written = guest_mem
         .write_at_addr(fdt_final.as_slice(), fdt_address)
