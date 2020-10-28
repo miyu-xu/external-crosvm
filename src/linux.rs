@@ -1698,6 +1698,7 @@ where
             );
 
             start_barrier.wait();
+            let mut loop_count = 0;
 
             let (vcpu, vcpu_run_handle) = match runnable_vcpu {
                 Ok(v) => v,
@@ -1709,6 +1710,8 @@ where
 
             loop {
                 let mut interrupted_by_signal = false;
+                loop_count = loop_count + 1;
+                warn!("loop iter is at {} for vcpu {}", loop_count, cpu_id);
                 match vcpu.run(&vcpu_run_handle) {
                     Ok(VcpuExit::IoIn { port, mut size }) => {
                         let mut data = [0; 8];
