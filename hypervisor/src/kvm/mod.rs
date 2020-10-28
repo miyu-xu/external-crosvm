@@ -30,7 +30,7 @@ use libc::{
 use base::{
     block_signal, errno_result, error, ioctl, ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val,
     pagesize, signal, unblock_signal, AsRawDescriptor, Error, Event, FromRawDescriptor,
-    MappedRegion, MemoryMapping, MmapError, RawDescriptor, Result, SafeDescriptor,
+    MappedRegion, MemoryMapping, MmapError, RawDescriptor, Result, SafeDescriptor, warn
 };
 use data_model::vec_with_array_field;
 use kvm_sys::*;
@@ -603,6 +603,21 @@ pub(super) struct VcpuThread {
 
 thread_local!(static VCPU_THREAD: RefCell<Option<VcpuThread>> = RefCell::new(None));
 
+#[derive(Debug, Default, Copy, Clone)]
+#[repr(C)]
+pub struct debug_guest {
+    pub control : __u32,
+    pub pad : __u32,
+    pub dummy1 : __u64,
+    pub dummy2 : __u64,
+    pub dummy3 : __u64,
+    pub dummy4 : __u64,
+    pub dummy5 : __u64,
+    pub dummy6 : __u64,
+    pub dummy7 : __u64,
+    pub dummy8 : __u64,
+}
+
 impl Vcpu for KvmVcpu {
     fn try_clone(&self) -> Result<Self> {
         let vm = self.vm.try_clone()?;
@@ -820,6 +835,20 @@ impl Vcpu for KvmVcpu {
         }
 
         // Safe because we know that our file is a VCPU fd and we verify the return result.
+
+        let input = debug_guest {
+            control : KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP,
+            pad : 0,
+            dummy1:0,
+            dummy2:0,
+            dummy3:0,
+            dummy4:0,
+            dummy5:0,
+            dummy6:0,
+            dummy7:0,
+            dummy8:0,
+        };
+        let retttt = unsafe {ioctl_with_ref(self, KVM_SET_GUEST_DEBUG(), &input)};
         let ret = unsafe { ioctl(self, KVM_RUN()) };
         if ret != 0 {
             return errno_result();
@@ -900,7 +929,31 @@ impl Vcpu for KvmVcpu {
             KVM_EXIT_UNKNOWN => Ok(VcpuExit::Unknown),
             KVM_EXIT_EXCEPTION => Ok(VcpuExit::Exception),
             KVM_EXIT_HYPERCALL => Ok(VcpuExit::Hypercall),
-            KVM_EXIT_DEBUG => Ok(VcpuExit::Debug),
+            KVM_EXIT_DEBUG => {
+                let mut data: u64 = 0;
+                let data_ref: *mut u64 = &mut data;
+                let onereg = kvm_one_reg {
+                    id: 0x6030000000100040 as u64,
+                    addr: data_ref as u64,
+                };
+                let ret = unsafe { ioctl_with_ref(self, KVM_GET_ONE_REG(), &onereg) };
+                if ret < 0 {
+                    warn!("meh");
+                } else {
+                    warn!("PC {:p} is {:X}",&(self.vcpu), data);
+                }
+                let onereg1 = kvm_one_reg {
+                    id: 0x6030000000100000 as u64,
+                    addr: data_ref as u64,
+                };
+                let ret1 = unsafe { ioctl_with_ref(self, KVM_GET_ONE_REG(), &onereg1) };
+                if ret1 < 0 {
+                    warn!("meh");
+                } else {
+                    warn!("X0 is {:X}", data);
+                }
+                Ok(VcpuExit::Debug)
+            }
             KVM_EXIT_HLT => Ok(VcpuExit::Hlt),
             KVM_EXIT_IRQ_WINDOW_OPEN => Ok(VcpuExit::IrqWindowOpen),
             KVM_EXIT_SHUTDOWN => Ok(VcpuExit::Shutdown),
