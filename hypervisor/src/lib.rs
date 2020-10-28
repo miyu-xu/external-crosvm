@@ -204,7 +204,7 @@ pub trait Vcpu: Send + Sized {
     /// Note that the state of the VCPU and associated VM must be setup first for this to do
     /// anything useful. The given `run_handle` must be the same as the one returned by
     /// `take_run_handle` for this `Vcpu`.
-    fn run(&self, run_handle: &VcpuRunHandle) -> Result<VcpuExit>;
+    fn run(&self, run_handle: &VcpuRunHandle,  has_bios: bool) -> Result<VcpuExit>;
 
     /// Sets the bit that requests an immediate exit.
     fn set_immediate_exit(&self, exit: bool);

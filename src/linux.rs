@@ -1709,7 +1709,7 @@ where
 
             loop {
                 let mut interrupted_by_signal = false;
-                match vcpu.run(&vcpu_run_handle) {
+                match vcpu.run(&vcpu_run_handle, has_bios) {
                     Ok(VcpuExit::IoIn { port, mut size }) => {
                         let mut data = [0; 8];
                         if size > data.len() {
