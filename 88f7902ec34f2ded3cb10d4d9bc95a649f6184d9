@@ -1,0 +1,10 @@
+Lint+1: Lint 🤖 <ayeaye-gerrit@google.com>
+Code-Review+1: Lingfeng Yang <lfy@google.com>
+Code-Review+2: Jason Macnak <natsu@google.com>
+Verified+1: Jason Macnak <natsu@google.com>
+Presubmit-Verified+1: Treehugger Robot <treehugger-gerrit@google.com>
+Submitted-by: Lingfeng Yang <lfy@google.com>
+Submitted-at: Fri, 20 Nov 2020 04:10:20 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1487681
+Project: platform/external/crosvm
+Branch: refs/heads/master
