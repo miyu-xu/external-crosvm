@@ -4,7 +4,7 @@
 
 use std::os::unix::io::RawFd;
 
-use base::EventFd;
+use base::Event;
 use vm_memory::GuestMemory;
 
 use super::*;
@@ -36,9 +36,9 @@ pub trait VirtioDevice: Send {
     /// The maximum size of each queue that this device supports.
     fn queue_max_sizes(&self) -> &[u16];
 
-    /// The set of feature bits that this device supports.
+    /// The set of feature bits that this device supports in addition to the base features.
     fn features(&self) -> u64 {
-        1 << VIRTIO_F_VERSION_1
+        0
     }
 
     /// Acknowledges that this set of features should be enabled.
@@ -64,7 +64,7 @@ pub trait VirtioDevice: Send {
         mem: GuestMemory,
         interrupt: Interrupt,
         queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     );
 
     /// Optionally deactivates this device. If the reset method is

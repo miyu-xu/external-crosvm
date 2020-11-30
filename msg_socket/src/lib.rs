@@ -4,12 +4,10 @@
 
 mod msg_on_socket;
 
+use base::{handle_eintr, net::UnixSeqpacket, Error as SysError, ScmSocket, UnsyncMarker};
 use std::io::{IoSlice, Result};
 use std::marker::PhantomData;
 use std::os::unix::io::{AsRawFd, RawFd};
-
-use base::{handle_eintr, net::UnixSeqpacket, Error as SysError, ScmSocket};
-use cros_async::PollOrRing;
 
 pub use crate::msg_on_socket::*;
 pub use msg_on_socket_derive::*;
@@ -29,6 +27,7 @@ pub struct MsgSocket<I: MsgOnSocket, O: MsgOnSocket> {
     sock: UnixSeqpacket,
     _i: PhantomData<I>,
     _o: PhantomData<O>,
+    _unsync_marker: UnsyncMarker,
 }
 
 impl<I: MsgOnSocket, O: MsgOnSocket> MsgSocket<I, O> {
@@ -38,6 +37,7 @@ impl<I: MsgOnSocket, O: MsgOnSocket> MsgSocket<I, O> {
             sock: s,
             _i: PhantomData,
             _o: PhantomData,
+            _unsync_marker: PhantomData,
         }
     }
 
@@ -164,11 +164,11 @@ pub trait MsgReceiver: AsRef<UnixSeqpacket> {
             }
         };
 
-        if let Some(fixed_size) = Self::M::fixed_size() {
-            if msg_buffer.len() == 0 && fixed_size != 0 {
-                return Err(MsgError::RecvZero);
-            }
+        if msg_buffer.len() == 0 && Self::M::fixed_size() != Some(0) {
+            return Err(MsgError::RecvZero);
+        }
 
+        if let Some(fixed_size) = Self::M::fixed_size() {
             if fixed_size != msg_buffer.len() {
                 return Err(MsgError::BadRecvSize {
                     expected: fixed_size,
@@ -211,7 +211,7 @@ impl<'a, I: MsgOnSocket, O: MsgOnSocket> AsyncReceiver<'a, I, O> {
     }
 
     pub async fn next(&mut self) -> MsgResult<O> {
-        let p = PollOrRing::new(self.inner).unwrap();
+        let p = cros_async::new(self.inner).unwrap();
         p.wait_readable().await.unwrap();
         self.inner.recv()
     }

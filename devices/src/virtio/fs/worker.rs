@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use base::{error, EventFd, PollContext, PollToken};
+use base::{error, Event, PollContext, PollToken};
 use vm_memory::GuestMemory;
 
 use crate::virtio::fs::filesystem::FileSystem;
@@ -37,9 +37,9 @@ impl<F: FileSystem + Sync> Worker<F> {
     fn process_queue(&mut self) -> Result<()> {
         let mut needs_interrupt = false;
         while let Some(avail_desc) = self.queue.pop(&self.mem) {
-            let reader = Reader::new(&self.mem, avail_desc.clone())
+            let reader = Reader::new(self.mem.clone(), avail_desc.clone())
                 .map_err(Error::InvalidDescriptorChain)?;
-            let writer = Writer::new(&self.mem, avail_desc.clone())
+            let writer = Writer::new(self.mem.clone(), avail_desc.clone())
                 .map_err(Error::InvalidDescriptorChain)?;
 
             let total = self.server.handle_message(reader, writer)?;
@@ -59,8 +59,8 @@ impl<F: FileSystem + Sync> Worker<F> {
 
     pub fn run(
         &mut self,
-        queue_evt: EventFd,
-        kill_evt: EventFd,
+        queue_evt: Event,
+        kill_evt: Event,
         watch_resample_event: bool,
     ) -> Result<()> {
         #[derive(PollToken)]
@@ -88,7 +88,7 @@ impl<F: FileSystem + Sync> Worker<F> {
             for event in events.iter_readable() {
                 match event.token() {
                     Token::QueueReady => {
-                        queue_evt.read().map_err(Error::ReadQueueEventFd)?;
+                        queue_evt.read().map_err(Error::ReadQueueEvent)?;
                         if let Err(e) = self.process_queue() {
                             error!("virtio-fs transport error: {}", e);
                             return Err(e);

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::atomic::{fence, Ordering};
 
 use base::error;
-use cros_async::{AsyncError, U64Source};
+use cros_async::{AsyncError, EventAsync};
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::{GuestAddress, GuestMemory};
 
@@ -389,7 +389,7 @@ impl Queue {
     pub async fn next_async<F: AsRawFd + Unpin>(
         &mut self,
         mem: &GuestMemory,
-        eventfd: &mut U64Source<F>,
+        eventfd: &mut EventAsync<F>,
     ) -> std::result::Result<DescriptorChain, AsyncError> {
         loop {
             // Check if there are more descriptors available.
@@ -505,13 +505,13 @@ impl Queue {
 /// re-enabled on drop.
 pub struct NotifyGuard {
     queue: Rc<RefCell<Queue>>,
-    mem: Rc<GuestMemory>,
+    mem: GuestMemory,
 }
 
 impl NotifyGuard {
     /// Disable notifications for the lifetime of the returned guard. Useful when the caller is
     /// processing a descriptor and doesn't need notifications of further messages from the guest.
-    pub fn new(queue: Rc<RefCell<Queue>>, mem: Rc<GuestMemory>) -> Self {
+    pub fn new(queue: Rc<RefCell<Queue>>, mem: GuestMemory) -> Self {
         // Disable notification until we're done processing the next request.
         queue.borrow_mut().set_notify(&mem, false);
         NotifyGuard { queue, mem }
@@ -527,7 +527,7 @@ impl Drop for NotifyGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base::EventFd;
+    use base::Event;
     use data_model::{DataInit, Le16, Le32, Le64};
     use std::convert::TryInto;
     use std::sync::atomic::AtomicUsize;
@@ -641,8 +641,8 @@ mod tests {
 
         let interrupt = Interrupt::new(
             Arc::new(AtomicUsize::new(0)),
-            EventFd::new().unwrap(),
-            EventFd::new().unwrap(),
+            Event::new().unwrap(),
+            Event::new().unwrap(),
             None,
             10,
         );
@@ -717,8 +717,8 @@ mod tests {
 
         let interrupt = Interrupt::new(
             Arc::new(AtomicUsize::new(0)),
-            EventFd::new().unwrap(),
-            EventFd::new().unwrap(),
+            Event::new().unwrap(),
+            Event::new().unwrap(),
             None,
             10,
         );

@@ -11,6 +11,7 @@ rust_defaults {
     edition: "2018",
     rustlibs: [
         "libacpi_tables",
+        "libaudio_streams",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -20,6 +21,7 @@ rust_defaults {
         "libhypervisor",
         "libkvm_sys",
         "liblibc",
+        "liblibcras",
         "liblinux_input_sys",
         "libminijail_rust",
         "libmsg_socket",
@@ -48,13 +50,14 @@ rust_defaults {
 rust_test_host {
     name: "devices_host_test_src_lib",
     defaults: ["devices_defaults"],
+    shared_libs: ["libgfxstream_backend",],
     features: [  // added manually
         "audio",
-        "gfxstream",
         "gpu",
         "gpu_buffer",
         "gpu_display",
         "gpu_renderer",
+        "gfxstream",
     ],
     rustlibs: [
         "libaudio_streams",  // moved manually
@@ -92,20 +95,15 @@ rust_library {
     crate_name: "devices",
     srcs: ["src/lib.rs"],
     edition: "2018",
-    target: { // added manually
-        linux_glibc: {
-            features: [
-                "gfxstream",
-            ],
-        },
-    },
     features: [
         "audio",
         "gpu",
         "gpu_buffer",
         "gpu_display",
         "gpu_renderer",
+        "gfxstream",
     ],
+    shared_libs: ["libgfxstream_backend",],
     rustlibs: [
         "libacpi_tables",
         "libaudio_streams",
@@ -152,6 +150,8 @@ rust_library {
 //   ../../adhd/cras/client/libcras/src/libcras.rs
 //   ../../minijail/rust/minijail-sys/lib.rs
 //   ../../minijail/rust/minijail/src/lib.rs
+//   ../../vm_tools/p9/src/lib.rs
+//   ../../vm_tools/p9/wire_format_derive/wire_format_derive.rs
 //   ../acpi_tables/src/lib.rs
 //   ../assertions/src/lib.rs
 //   ../base/src/lib.rs
@@ -170,8 +170,6 @@ rust_library {
 //   ../msg_socket/src/lib.rs
 //   ../net_sys/src/lib.rs
 //   ../net_util/src/lib.rs
-//   ../p9/src/lib.rs
-//   ../p9/wire_format_derive/wire_format_derive.rs
 //   ../rand_ish/src/lib.rs
 //   ../resources/src/lib.rs
 //   ../sync/src/lib.rs
@@ -186,30 +184,41 @@ rust_library {
 //   ../virtio_sys/src/lib.rs
 //   ../vm_control/src/lib.rs
 //   ../vm_memory/src/lib.rs
-//   async-trait-0.1.36
+//   async-trait-0.1.42
 //   bitflags-1.2.1 "default"
-//   futures-0.3.5 "alloc,async-await,default,executor,futures-executor,std"
-//   futures-channel-0.3.5 "alloc,futures-sink,sink,std"
-//   futures-core-0.3.5 "alloc,std"
-//   futures-executor-0.3.5 "std"
-//   futures-io-0.3.5 "std"
-//   futures-macro-0.3.5
-//   futures-sink-0.3.5 "alloc,std"
-//   futures-task-0.3.5 "alloc,once_cell,std"
-//   futures-util-0.3.5 "alloc,async-await,async-await-macro,channel,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,proc-macro-hack,proc-macro-nested,sink,slab,std"
-//   libc-0.2.74 "default,std"
-//   memchr-2.3.3 "default,std"
-//   once_cell-1.4.0 "std"
-//   paste-1.0.0
-//   pin-project-0.4.23
-//   pin-project-internal-0.4.23
+//   cfg-if-0.1.10
+//   downcast-rs-1.2.0 "default,std"
+//   futures-0.3.8 "alloc,async-await,default,executor,futures-executor,std"
+//   futures-channel-0.3.8 "alloc,futures-sink,sink,std"
+//   futures-core-0.3.8 "alloc,std"
+//   futures-executor-0.3.8 "std"
+//   futures-io-0.3.8 "std"
+//   futures-macro-0.3.8
+//   futures-sink-0.3.8 "alloc,std"
+//   futures-task-0.3.8 "alloc,once_cell,std"
+//   futures-util-0.3.8 "alloc,async-await,async-await-macro,channel,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,proc-macro-hack,proc-macro-nested,sink,slab,std"
+//   getrandom-0.1.15 "std"
+//   libc-0.2.80 "default,std"
+//   memchr-2.3.4 "default,std"
+//   once_cell-1.5.2 "alloc,std"
+//   paste-1.0.3
+//   pin-project-1.0.2
+//   pin-project-internal-1.0.2
 //   pin-utils-0.1.0
-//   pkg-config-0.3.18
-//   proc-macro-hack-0.5.18
+//   pkg-config-0.3.19
+//   ppv-lite86-0.2.10 "simd,std"
+//   proc-macro-hack-0.5.19
 //   proc-macro-nested-0.1.6
-//   proc-macro2-1.0.19 "default,proc-macro"
+//   proc-macro2-1.0.24 "default,proc-macro"
 //   quote-1.0.7 "default,proc-macro"
+//   rand-0.7.3 "alloc,default,getrandom,getrandom_package,libc,std"
+//   rand_chacha-0.2.2 "std"
+//   rand_core-0.5.1 "alloc,getrandom,std"
 //   remain-0.2.2
+//   remove_dir_all-0.5.3
 //   slab-0.4.2
-//   syn-1.0.37 "clone-impls,default,derive,full,parsing,printing,proc-macro,quote,visit-mut"
+//   syn-1.0.50 "clone-impls,default,derive,full,parsing,printing,proc-macro,quote,visit-mut"
+//   tempfile-3.1.0
+//   thiserror-1.0.22
+//   thiserror-impl-1.0.22
 //   unicode-xid-0.2.1 "default"

@@ -20,7 +20,7 @@ pub struct ReadVec<'a, R: IoSource + ?Sized> {
     state: UringFutState<(u64, Rc<VecIoWrapper>), Rc<VecIoWrapper>>,
 }
 
-impl<'a, R: IoSource + ?Sized + Unpin> ReadVec<'a, R> {
+impl<'a, R: IoSource + ?Sized> ReadVec<'a, R> {
     pub(crate) fn new(reader: &'a R, file_offset: u64, vec: Vec<u8>) -> Self {
         ReadVec {
             reader,
@@ -29,7 +29,7 @@ impl<'a, R: IoSource + ?Sized + Unpin> ReadVec<'a, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for ReadVec<'_, R> {
+impl<R: IoSource + ?Sized> Future for ReadVec<'_, R> {
     type Output = Result<(u32, Vec<u8>)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -37,7 +37,7 @@ impl<R: IoSource + ?Sized + Unpin> Future for ReadVec<'_, R> {
         let (new_state, ret) = match state.advance(
             |(file_offset, wrapped_vec)| {
                 Ok((
-                    Pin::new(&self.reader).read_to_mem(
+                    self.reader.read_to_mem(
                         file_offset,
                         Rc::<VecIoWrapper>::clone(&wrapped_vec),
                         &[MemRegion {
@@ -48,7 +48,7 @@ impl<R: IoSource + ?Sized + Unpin> Future for ReadVec<'_, R> {
                     wrapped_vec,
                 ))
             },
-            |op| Pin::new(&self.reader).poll_complete(cx, op),
+            |op| self.reader.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -81,7 +81,7 @@ mod tests {
 
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::ReadAsync;
     use crate::UringSource;
 
     #[test]
@@ -143,10 +143,10 @@ mod tests {
     }
 
     #[test]
-    fn eventfd() {
-        use base::EventFd;
+    fn event() {
+        use base::Event;
 
-        async fn write_event(ev: EventFd, wait: EventFd) {
+        async fn write_event(ev: Event, wait: Event) {
             let wait = UringSource::new(wait).unwrap();
             ev.write(55).unwrap();
             read_u64(&wait).await;
@@ -156,7 +156,7 @@ mod tests {
             read_u64(&wait).await;
         }
 
-        async fn read_events(ev: EventFd, signal: EventFd) {
+        async fn read_events(ev: Event, signal: Event) {
             let source = UringSource::new(ev).unwrap();
             assert_eq!(read_u64(&source).await, 55);
             signal.write(1).unwrap();
@@ -166,13 +166,10 @@ mod tests {
             signal.write(1).unwrap();
         }
 
-        let eventfd = EventFd::new().unwrap();
-        let signal_wait = EventFd::new().unwrap();
-        let write_task = write_event(
-            eventfd.try_clone().unwrap(),
-            signal_wait.try_clone().unwrap(),
-        );
-        let read_task = read_events(eventfd, signal_wait);
+        let event = Event::new().unwrap();
+        let signal_wait = Event::new().unwrap();
+        let write_task = write_event(event.try_clone().unwrap(), signal_wait.try_clone().unwrap());
+        let read_task = read_events(event, signal_wait);
         let joined = futures::future::join(read_task, write_task);
         pin_mut!(joined);
         crate::run_one_uring(joined).unwrap();

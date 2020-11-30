@@ -19,7 +19,7 @@ pub struct Fsync<'a, R: IoSource + ?Sized> {
     state: UringFutState<(), ()>,
 }
 
-impl<'a, R: IoSource + ?Sized + Unpin> Fsync<'a, R> {
+impl<'a, R: IoSource + ?Sized> Fsync<'a, R> {
     pub(crate) fn new(reader: &'a R) -> Self {
         Fsync {
             reader,
@@ -28,14 +28,14 @@ impl<'a, R: IoSource + ?Sized + Unpin> Fsync<'a, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for Fsync<'_, R> {
+impl<R: IoSource + ?Sized> Future for Fsync<'_, R> {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let state = std::mem::replace(&mut self.state, UringFutState::Processing);
         let (new_state, ret) = match state.advance(
-            |()| Ok((Pin::new(&self.reader).fsync()?, ())),
-            |op| Pin::new(&self.reader).poll_complete(cx, op),
+            |()| Ok((self.reader.fsync()?, ())),
+            |op| self.reader.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -55,26 +55,15 @@ impl<R: IoSource + ?Sized + Unpin> Future for Fsync<'_, R> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
-    use std::path::PathBuf;
-
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::WriteAsync;
     use crate::UringSource;
 
     #[test]
     fn fsync() {
         async fn go() {
-            let dir = tempfile::TempDir::new().unwrap();
-            let mut file_path = PathBuf::from(dir.path());
-            file_path.push("test");
-
-            let f = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(&file_path)
-                .unwrap();
+            let f = tempfile::tempfile().unwrap();
             let source = UringSource::new(f).unwrap();
             source.fsync().await.unwrap();
         }

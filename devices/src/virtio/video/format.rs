@@ -5,6 +5,7 @@
 //! Data structures that represent video format information in virtio video devices.
 
 use std::convert::{From, Into, TryFrom};
+use std::fmt::{self, Display};
 use std::io;
 
 use base::error;
@@ -147,6 +148,20 @@ pub enum Format {
 }
 impl_try_from_le32_for_enumn!(Format, "format");
 
+impl Display for Format {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Format::*;
+        match self {
+            NV12 => write!(f, "NV12"),
+            YUV420 => write!(f, "YUV420"),
+            H264 => write!(f, "H264"),
+            HEVC => write!(f, "HEVC"),
+            VP8 => write!(f, "VP8"),
+            VP9 => write!(f, "VP9"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Crop {
     pub left: u32,
@@ -213,5 +228,48 @@ impl Response for FormatDesc {
             num_frames: Le32::from(self.frame_formats.len() as u32),
         })?;
         self.frame_formats.iter().map(|ff| ff.write(w)).collect()
+    }
+}
+
+fn clamp_size(size: u32, min: u32, step: u32) -> u32 {
+    match step {
+        0 | 1 => size,
+        _ => {
+            let step_mod = (size - min) % step;
+            if step_mod == 0 {
+                size
+            } else {
+                size - step_mod + step
+            }
+        }
+    }
+}
+
+/// Parses a slice of valid frame formats and the desired resolution
+/// and returns the closest available resolution.
+pub fn find_closest_resolution(
+    frame_formats: &[FrameFormat],
+    desired_width: u32,
+    desired_height: u32,
+) -> (u32, u32) {
+    for FrameFormat { width, height, .. } in frame_formats.iter() {
+        if desired_width < width.min || desired_width > width.max {
+            continue;
+        }
+        if desired_height < height.min || desired_height > height.max {
+            continue;
+        }
+        let allowed_width = clamp_size(desired_width, width.min, width.step);
+        let allowed_height = clamp_size(desired_height, height.min, height.step);
+        return (allowed_width, allowed_height);
+    }
+
+    // Return the resolution with maximum surface if nothing better is found.
+    match frame_formats
+        .iter()
+        .max_by_key(|format| format.width.max * format.height.max)
+    {
+        None => (0, 0),
+        Some(format) => (format.width.max, format.height.max),
     }
 }

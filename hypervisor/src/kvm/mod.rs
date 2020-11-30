@@ -16,11 +16,11 @@ use std::cell::RefCell;
 use std::cmp::{min, Ordering};
 use std::collections::{BTreeMap, BinaryHeap};
 use std::convert::TryFrom;
-use std::mem::size_of;
-use std::ops::{Deref, DerefMut};
+use std::mem::{size_of, ManuallyDrop};
 use std::os::raw::{c_char, c_int, c_ulong, c_void};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::ptr::copy_nonoverlapping;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use libc::{
@@ -29,8 +29,9 @@ use libc::{
 
 use base::{
     block_signal, errno_result, error, ioctl, ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val,
-    pagesize, signal, unblock_signal, AsRawDescriptor, Error, EventFd, FromRawDescriptor,
-    MappedRegion, MemoryMapping, MmapError, RawDescriptor, Result, SafeDescriptor,
+    pagesize, signal, unblock_signal, AsRawDescriptor, Error, Event, FromRawDescriptor,
+    MappedRegion, MemoryMapping, MemoryMappingBuilder, MmapError, RawDescriptor, Result,
+    SafeDescriptor,
 };
 use data_model::vec_with_array_field;
 use kvm_sys::*;
@@ -39,7 +40,7 @@ use vm_memory::{GuestAddress, GuestMemory};
 
 use crate::{
     ClockState, Datamatch, DeviceKind, Hypervisor, HypervisorCap, IoEventAddress, IrqRoute,
-    IrqSource, MPState, MemSlot, RunnableVcpu, Vcpu, VcpuExit, Vm, VmCap,
+    IrqSource, MPState, MemSlot, Vcpu, VcpuExit, VcpuRunHandle, Vm, VmCap,
 };
 
 // Wrapper around KVM_SET_USER_MEMORY_REGION ioctl, which creates, modifies, or deletes a mapping
@@ -226,13 +227,16 @@ impl KvmVm {
         // the value of the fd and we own the fd.
         let vcpu = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
 
-        let run_mmap =
-            MemoryMapping::from_fd(&vcpu, run_mmap_size).map_err(|_| Error::new(ENOSPC))?;
+        let run_mmap = MemoryMappingBuilder::new(run_mmap_size)
+            .from_descriptor(&vcpu)
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
 
         Ok(KvmVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             run_mmap,
+            vcpu_run_handle_fingerprint: Default::default(),
         })
     }
 
@@ -270,8 +274,8 @@ impl KvmVm {
     pub fn register_irqfd(
         &self,
         gsi: u32,
-        evt: &EventFd,
-        resample_evt: Option<&EventFd>,
+        evt: &Event,
+        resample_evt: Option<&Event>,
     ) -> Result<()> {
         let mut irqfd = kvm_irqfd {
             fd: evt.as_raw_fd() as u32,
@@ -299,7 +303,7 @@ impl KvmVm {
     ///
     /// The `evt` and `gsi` pair must be the same as the ones passed into
     /// `register_irqfd`.
-    pub fn unregister_irqfd(&self, gsi: u32, evt: &EventFd) -> Result<()> {
+    pub fn unregister_irqfd(&self, gsi: u32, evt: &Event) -> Result<()> {
         let irqfd = kvm_irqfd {
             fd: evt.as_raw_fd() as u32,
             gsi,
@@ -340,7 +344,7 @@ impl KvmVm {
 
     fn ioeventfd(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoEventAddress,
         datamatch: Datamatch,
         deassign: bool,
@@ -550,7 +554,7 @@ impl Vm for KvmVm {
 
     fn register_ioevent(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoEventAddress,
         datamatch: Datamatch,
     ) -> Result<()> {
@@ -559,7 +563,7 @@ impl Vm for KvmVm {
 
     fn unregister_ioevent(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoEventAddress,
         datamatch: Datamatch,
     ) -> Result<()> {
@@ -592,6 +596,7 @@ pub struct KvmVcpu {
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     run_mmap: MemoryMapping,
+    vcpu_run_handle_fingerprint: Arc<AtomicU64>,
 }
 
 pub(super) struct VcpuThread {
@@ -602,19 +607,57 @@ pub(super) struct VcpuThread {
 thread_local!(static VCPU_THREAD: RefCell<Option<VcpuThread>> = RefCell::new(None));
 
 impl Vcpu for KvmVcpu {
-    type Runnable = RunnableKvmVcpu;
-
     fn try_clone(&self) -> Result<Self> {
         let vm = self.vm.try_clone()?;
         let vcpu = self.vcpu.try_clone()?;
-        let run_mmap =
-            MemoryMapping::from_fd(&vcpu, self.run_mmap.size()).map_err(|_| Error::new(ENOSPC))?;
+        let run_mmap = MemoryMappingBuilder::new(self.run_mmap.size())
+            .from_descriptor(&vcpu)
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
+        let vcpu_run_handle_fingerprint = self.vcpu_run_handle_fingerprint.clone();
 
-        Ok(KvmVcpu { vm, vcpu, run_mmap })
+        Ok(KvmVcpu {
+            vm,
+            vcpu,
+            run_mmap,
+            vcpu_run_handle_fingerprint,
+        })
+    }
+
+    fn as_vcpu(&self) -> &dyn Vcpu {
+        self
     }
 
     #[allow(clippy::cast_ptr_alignment)]
-    fn to_runnable(self, signal_num: Option<c_int>) -> Result<Self::Runnable> {
+    fn take_run_handle(&self, signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
+        fn vcpu_run_handle_drop() {
+            VCPU_THREAD.with(|v| {
+                // This assumes that a failure in `BlockedSignal::new` means the signal is already
+                // blocked and there it should not be unblocked on exit.
+                let _blocked_signal = &(*v.borrow())
+                    .as_ref()
+                    .and_then(|state| state.signal_num)
+                    .map(BlockedSignal::new);
+
+                *v.borrow_mut() = None;
+            });
+        }
+
+        // Prevent `vcpu_run_handle_drop` from being called until we actually setup the signal
+        // blocking. The handle needs to be made now so that we can use the fingerprint.
+        let vcpu_run_handle = ManuallyDrop::new(VcpuRunHandle::new(vcpu_run_handle_drop));
+
+        // AcqRel ordering is sufficient to ensure only one thread gets to set its fingerprint to
+        // this Vcpu and subsequent `run` calls will see the fingerprint.
+        if self.vcpu_run_handle_fingerprint.compare_and_swap(
+            0,
+            vcpu_run_handle.fingerprint().as_u64(),
+            std::sync::atomic::Ordering::AcqRel,
+        ) != 0
+        {
+            return Err(Error::new(EBUSY));
+        }
+
         // Block signal while we add -- if a signal fires (very unlikely,
         // as this means something is trying to pause the vcpu before it has
         // even started) it'll try to grab the read lock while this write
@@ -634,10 +677,7 @@ impl Vcpu for KvmVcpu {
             }
         })?;
 
-        Ok(RunnableKvmVcpu {
-            vcpu: self,
-            phantom: Default::default(),
-        })
+        Ok(ManuallyDrop::into_inner(vcpu_run_handle))
     }
 
     #[allow(clippy::cast_ptr_alignment)]
@@ -657,6 +697,13 @@ impl Vcpu for KvmVcpu {
                 };
             }
         });
+    }
+
+    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
+        extern "C" fn f() {
+            KvmVcpu::set_local_immediate_exit(true);
+        }
+        f
     }
 
     fn handle_io_events(&self, _addr: IoEventAddress) -> Result<()> {
@@ -774,68 +821,20 @@ impl Vcpu for KvmVcpu {
             errno_result()
         }
     }
-}
-
-impl KvmVcpu {
-    /// Gets the vcpu's current "multiprocessing state".
-    ///
-    /// See the documentation for KVM_GET_MP_STATE. This call can only succeed after
-    /// a call to `Vm::create_irq_chip`.
-    ///
-    /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
-    /// to run crosvm on s390.
-    pub fn get_mp_state(&self) -> Result<kvm_mp_state> {
-        // Safe because we know that our file is a VCPU fd, we know the kernel will only
-        // write correct amount of memory to our pointer, and we verify the return result.
-        let mut state: kvm_mp_state = unsafe { std::mem::zeroed() };
-        let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_MP_STATE(), &mut state) };
-        if ret < 0 {
-            return errno_result();
-        }
-        Ok(state)
-    }
-
-    /// Sets the vcpu's current "multiprocessing state".
-    ///
-    /// See the documentation for KVM_SET_MP_STATE. This call can only succeed after
-    /// a call to `Vm::create_irq_chip`.
-    ///
-    /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
-    /// to run crosvm on s390.
-    pub fn set_mp_state(&self, state: &kvm_mp_state) -> Result<()> {
-        let ret = unsafe {
-            // The ioctl is safe because the kernel will only read from the kvm_mp_state struct.
-            ioctl_with_ref(self, KVM_SET_MP_STATE(), state)
-        };
-        if ret < 0 {
-            return errno_result();
-        }
-        Ok(())
-    }
-}
-
-impl AsRawFd for KvmVcpu {
-    fn as_raw_fd(&self) -> RawFd {
-        self.vcpu.as_raw_descriptor()
-    }
-}
-
-/// A KvmVcpu that has a thread and can be run.
-pub struct RunnableKvmVcpu {
-    vcpu: KvmVcpu,
-
-    // vcpus must stay on the same thread once they start.
-    // Add the PhantomData pointer to ensure RunnableKvmVcpu is not `Send`.
-    phantom: std::marker::PhantomData<*mut u8>,
-}
-
-impl RunnableVcpu for RunnableKvmVcpu {
-    type Vcpu = KvmVcpu;
 
     #[allow(clippy::cast_ptr_alignment)]
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
-    fn run(&self) -> Result<VcpuExit> {
+    fn run(&self, run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
+        // Acquire is used to ensure this check is ordered after the `compare_and_swap` in `run`.
+        if self
+            .vcpu_run_handle_fingerprint
+            .load(std::sync::atomic::Ordering::Acquire)
+            != run_handle.fingerprint().as_u64()
+        {
+            panic!("invalid VcpuRunHandle used to run Vcpu");
+        }
+
         // Safe because we know that our file is a VCPU fd and we verify the return result.
         let ret = unsafe { ioctl(self, KVM_RUN()) };
         if ret != 0 {
@@ -959,38 +958,47 @@ impl RunnableVcpu for RunnableKvmVcpu {
     }
 }
 
-impl AsRawFd for RunnableKvmVcpu {
+impl KvmVcpu {
+    /// Gets the vcpu's current "multiprocessing state".
+    ///
+    /// See the documentation for KVM_GET_MP_STATE. This call can only succeed after
+    /// a call to `Vm::create_irq_chip`.
+    ///
+    /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
+    /// to run crosvm on s390.
+    pub fn get_mp_state(&self) -> Result<kvm_mp_state> {
+        // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
+        // correct amount of memory to our pointer, and we verify the return result.
+        let mut state: kvm_mp_state = unsafe { std::mem::zeroed() };
+        let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_MP_STATE(), &mut state) };
+        if ret < 0 {
+            return errno_result();
+        }
+        Ok(state)
+    }
+
+    /// Sets the vcpu's current "multiprocessing state".
+    ///
+    /// See the documentation for KVM_SET_MP_STATE. This call can only succeed after
+    /// a call to `Vm::create_irq_chip`.
+    ///
+    /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
+    /// to run crosvm on s390.
+    pub fn set_mp_state(&self, state: &kvm_mp_state) -> Result<()> {
+        let ret = unsafe {
+            // The ioctl is safe because the kernel will only read from the kvm_mp_state struct.
+            ioctl_with_ref(self, KVM_SET_MP_STATE(), state)
+        };
+        if ret < 0 {
+            return errno_result();
+        }
+        Ok(())
+    }
+}
+
+impl AsRawFd for KvmVcpu {
     fn as_raw_fd(&self) -> RawFd {
-        self.vcpu.vcpu.as_raw_descriptor()
-    }
-}
-
-impl Deref for RunnableKvmVcpu {
-    type Target = <Self as RunnableVcpu>::Vcpu;
-
-    fn deref(&self) -> &Self::Target {
-        &self.vcpu
-    }
-}
-
-impl DerefMut for RunnableKvmVcpu {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.vcpu
-    }
-}
-
-impl Drop for RunnableKvmVcpu {
-    fn drop(&mut self) {
-        VCPU_THREAD.with(|v| {
-            // This assumes that a failure in `BlockedSignal::new` means the signal is already
-            // blocked and there it should not be unblocked on exit.
-            let _blocked_signal = &(*v.borrow())
-                .as_ref()
-                .and_then(|state| state.signal_num)
-                .map(BlockedSignal::new);
-
-            *v.borrow_mut() = None;
-        });
+        self.vcpu.as_raw_descriptor()
     }
 }
 
@@ -1101,7 +1109,7 @@ impl From<&MPState> for kvm_mp_state {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base::{pagesize, MemoryMapping, MemoryMappingArena};
+    use base::{pagesize, MemoryMappingArena, MemoryMappingBuilder};
     use std::os::unix::io::FromRawFd;
     use std::thread;
     use vm_memory::GuestAddress;
@@ -1191,10 +1199,10 @@ mod tests {
             GuestMemory::new(&[(GuestAddress(0), 0x1000), (GuestAddress(0x5000), 0x5000)]).unwrap();
         let mut vm = KvmVm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
             .unwrap();
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x10000), Box::new(mem), false, false)
             .unwrap();
     }
@@ -1205,7 +1213,7 @@ mod tests {
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
         let mut vm = KvmVm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), true, false)
             .unwrap();
     }
@@ -1216,7 +1224,7 @@ mod tests {
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
         let mut vm = KvmVm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         let mem_ptr = mem.as_ptr();
         let slot = vm
             .add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
@@ -1240,7 +1248,7 @@ mod tests {
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let mut vm = KvmVm::new(&kvm, gm).unwrap();
         let mem_size = 0x2000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         assert!(vm
             .add_memory_region(GuestAddress(0x2000), Box::new(mem), false, false)
             .is_err());
@@ -1267,9 +1275,9 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        let evtfd1 = EventFd::new().unwrap();
-        let evtfd2 = EventFd::new().unwrap();
-        let evtfd3 = EventFd::new().unwrap();
+        let evtfd1 = Event::new().unwrap();
+        let evtfd2 = Event::new().unwrap();
+        let evtfd3 = Event::new().unwrap();
         vm.create_irq_chip().unwrap();
         vm.register_irqfd(4, &evtfd1, None).unwrap();
         vm.register_irqfd(8, &evtfd2, None).unwrap();
@@ -1282,9 +1290,9 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        let evtfd1 = EventFd::new().unwrap();
-        let evtfd2 = EventFd::new().unwrap();
-        let evtfd3 = EventFd::new().unwrap();
+        let evtfd1 = Event::new().unwrap();
+        let evtfd2 = Event::new().unwrap();
+        let evtfd3 = Event::new().unwrap();
         vm.create_irq_chip().unwrap();
         vm.register_irqfd(4, &evtfd1, None).unwrap();
         vm.register_irqfd(8, &evtfd2, None).unwrap();
@@ -1299,13 +1307,13 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        let evtfd1 = EventFd::new().unwrap();
-        let evtfd2 = EventFd::new().unwrap();
+        let evtfd1 = Event::new().unwrap();
+        let evtfd2 = Event::new().unwrap();
         vm.create_irq_chip().unwrap();
         vm.register_irqfd(4, &evtfd1, Some(&evtfd2)).unwrap();
         vm.unregister_irqfd(4, &evtfd1).unwrap();
         // Ensures the ioctl is actually reading the resamplefd.
-        vm.register_irqfd(4, &evtfd1, Some(unsafe { &EventFd::from_raw_fd(-1) }))
+        vm.register_irqfd(4, &evtfd1, Some(unsafe { &Event::from_raw_fd(-1) }))
             .unwrap_err();
     }
 
@@ -1332,7 +1340,7 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        let evtfd = EventFd::new().unwrap();
+        let evtfd = Event::new().unwrap();
         vm.register_ioevent(&evtfd, IoEventAddress::Pio(0xf4), Datamatch::AnyLength)
             .unwrap();
         vm.register_ioevent(&evtfd, IoEventAddress::Mmio(0x1000), Datamatch::AnyLength)
@@ -1368,7 +1376,7 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        let evtfd = EventFd::new().unwrap();
+        let evtfd = Event::new().unwrap();
         vm.register_ioevent(&evtfd, IoEventAddress::Pio(0xf4), Datamatch::AnyLength)
             .unwrap();
         vm.register_ioevent(&evtfd, IoEventAddress::Mmio(0x1000), Datamatch::AnyLength)

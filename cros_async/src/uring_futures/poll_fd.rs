@@ -19,7 +19,7 @@ pub struct PollFd<'a, R: IoSource + ?Sized> {
     state: UringFutState<(), ()>,
 }
 
-impl<'a, R: IoSource + ?Sized + Unpin> PollFd<'a, R> {
+impl<'a, R: IoSource + ?Sized> PollFd<'a, R> {
     pub(crate) fn new(reader: &'a R) -> Self {
         PollFd {
             reader,
@@ -28,14 +28,14 @@ impl<'a, R: IoSource + ?Sized + Unpin> PollFd<'a, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for PollFd<'_, R> {
+impl<R: IoSource + ?Sized> Future for PollFd<'_, R> {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let state = std::mem::replace(&mut self.state, UringFutState::Processing);
         let (new_state, ret) = match state.advance(
-            |()| Ok((Pin::new(&self.reader).wait_readable()?, ())),
-            |op| Pin::new(&self.reader).poll_complete(cx, op),
+            |()| Ok((self.reader.wait_readable()?, ())),
+            |op| self.reader.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -59,7 +59,7 @@ mod tests {
 
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::ReadAsync;
     use crate::UringSource;
 
     #[test]

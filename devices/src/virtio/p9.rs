@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::result;
 use std::thread;
 
-use base::{error, warn, Error as SysError, EventFd, PollContext, PollToken};
-use virtio_sys::vhost::VIRTIO_F_VERSION_1;
+use base::{error, warn, Error as SysError, Event, PollContext, PollToken};
 use vm_memory::GuestMemory;
 
 use super::{
@@ -35,8 +34,8 @@ pub enum P9Error {
     CreatePollContext(SysError),
     /// Error while polling for events.
     PollError(SysError),
-    /// Error while reading from the virtio queue's EventFd.
-    ReadQueueEventFd(SysError),
+    /// Error while reading from the virtio queue's Event.
+    ReadQueueEvent(SysError),
     /// A request is missing readable descriptors.
     NoReadableDescriptors,
     /// A request is missing writable descriptors.
@@ -69,7 +68,7 @@ impl Display for P9Error {
             ),
             CreatePollContext(err) => write!(f, "failed to create PollContext: {}", err),
             PollError(err) => write!(f, "failed to poll events: {}", err),
-            ReadQueueEventFd(err) => write!(f, "failed to read from virtio queue EventFd: {}", err),
+            ReadQueueEvent(err) => write!(f, "failed to read from virtio queue Event: {}", err),
             NoReadableDescriptors => write!(f, "request does not have any readable descriptors"),
             NoWritableDescriptors => write!(f, "request does not have any writable descriptors"),
             SignalUsedQueue(err) => write!(f, "failed to signal used queue: {}", err),
@@ -93,9 +92,9 @@ struct Worker {
 impl Worker {
     fn process_queue(&mut self) -> P9Result<()> {
         while let Some(avail_desc) = self.queue.pop(&self.mem) {
-            let mut reader = Reader::new(&self.mem, avail_desc.clone())
+            let mut reader = Reader::new(self.mem.clone(), avail_desc.clone())
                 .map_err(P9Error::InvalidDescriptorChain)?;
-            let mut writer = Writer::new(&self.mem, avail_desc.clone())
+            let mut writer = Writer::new(self.mem.clone(), avail_desc.clone())
                 .map_err(P9Error::InvalidDescriptorChain)?;
 
             self.server
@@ -111,7 +110,7 @@ impl Worker {
         Ok(())
     }
 
-    fn run(&mut self, queue_evt: EventFd, kill_evt: EventFd) -> P9Result<()> {
+    fn run(&mut self, queue_evt: Event, kill_evt: Event) -> P9Result<()> {
         #[derive(PollToken)]
         enum Token {
             // A request is ready on the queue.
@@ -134,7 +133,7 @@ impl Worker {
             for event in events.iter_readable() {
                 match event.token() {
                     Token::QueueReady => {
-                        queue_evt.read().map_err(P9Error::ReadQueueEventFd)?;
+                        queue_evt.read().map_err(P9Error::ReadQueueEvent)?;
                         self.process_queue()?;
                     }
                     Token::InterruptResample => {
@@ -151,14 +150,18 @@ impl Worker {
 pub struct P9 {
     config: Vec<u8>,
     server: Option<p9::Server>,
-    kill_evt: Option<EventFd>,
+    kill_evt: Option<Event>,
     avail_features: u64,
     acked_features: u64,
     worker: Option<thread::JoinHandle<P9Result<()>>>,
 }
 
 impl P9 {
-    pub fn new<P: AsRef<Path>>(root: P, tag: &str) -> P9Result<P9> {
+    pub fn new<P: AsRef<Path> + Into<Box<Path>>>(
+        base_features: u64,
+        root: P,
+        tag: &str,
+    ) -> P9Result<P9> {
         if tag.len() > ::std::u16::MAX as usize {
             return Err(P9Error::TagTooLong(tag.len()));
         }
@@ -176,9 +179,13 @@ impl P9 {
 
         Ok(P9 {
             config: cfg,
-            server: Some(p9::Server::new(root)),
+            server: Some(p9::Server::new(
+                root,
+                Default::default(),
+                Default::default(),
+            )),
             kill_evt: None,
-            avail_features: 1 << VIRTIO_9P_MOUNT_TAG | 1 << VIRTIO_F_VERSION_1,
+            avail_features: base_features | 1 << VIRTIO_9P_MOUNT_TAG,
             acked_features: 0,
             worker: None,
         })
@@ -225,16 +232,16 @@ impl VirtioDevice for P9 {
         guest_mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Event>,
     ) {
         if queues.len() != 1 || queue_evts.len() != 1 {
             return;
         }
 
-        let (self_kill_evt, kill_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(e) => {
-                error!("failed creating kill EventFd pair: {}", e);
+                error!("failed creating kill Event pair: {}", e);
                 return;
             }
         };

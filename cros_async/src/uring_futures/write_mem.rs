@@ -20,9 +20,9 @@ pub struct WriteMem<'a, 'b, W: IoSource + ?Sized> {
     state: UringFutState<(u64, Rc<dyn BackingMemory>, &'b [MemRegion]), Rc<dyn BackingMemory>>,
 }
 
-impl<'a, 'b, R: IoSource + ?Sized + Unpin> WriteMem<'a, 'b, R> {
+impl<'a, 'b, W: IoSource + ?Sized> WriteMem<'a, 'b, W> {
     pub(crate) fn new(
-        writer: &'a R,
+        writer: &'a W,
         file_offset: u64,
         mem: Rc<dyn BackingMemory>,
         mem_offsets: &'b [MemRegion],
@@ -34,7 +34,7 @@ impl<'a, 'b, R: IoSource + ?Sized + Unpin> WriteMem<'a, 'b, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for WriteMem<'_, '_, R> {
+impl<W: IoSource + ?Sized> Future for WriteMem<'_, '_, W> {
     type Output = Result<u32>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -49,15 +49,12 @@ impl<R: IoSource + ?Sized + Unpin> Future for WriteMem<'_, '_, R> {
         let (new_state, ret) = match state.advance(
             |(file_offset, mem, mem_offsets)| {
                 Ok((
-                    Pin::new(&self.writer).write_from_mem(
-                        file_offset,
-                        Rc::clone(&mem),
-                        mem_offsets,
-                    )?,
+                    self.writer
+                        .write_from_mem(file_offset, Rc::clone(&mem), mem_offsets)?,
                     mem,
                 ))
             },
-            |op| Pin::new(&self.writer).poll_complete(cx, op),
+            |op| self.writer.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -79,7 +76,7 @@ mod tests {
 
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::WriteAsync;
     use crate::uring_mem::MemRegion;
     use crate::UringSource;
 

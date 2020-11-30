@@ -6,6 +6,7 @@
 
 pub mod panic_hook;
 
+use std::collections::BTreeMap;
 use std::default::Default;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -17,9 +18,10 @@ use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
 
-use arch::{set_default_serial_parameters, Pstore, SerialHardware, SerialParameters, SerialType};
-#[cfg(feature = "audio")]
-use audio_streams::StreamEffect;
+use arch::{
+    set_default_serial_parameters, Pstore, SerialHardware, SerialParameters, SerialType,
+    VcpuAffinity,
+};
 use base::{
     debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
     validate_raw_fd, warn,
@@ -114,6 +116,43 @@ fn parse_cpu_set(s: &str) -> argument::Result<Vec<usize>> {
         }
     }
     Ok(cpuset)
+}
+
+/// Parse a list of guest to host CPU mappings.
+///
+/// Each mapping consists of a single guest CPU index mapped to one or more host CPUs in the form
+/// accepted by `parse_cpu_set`:
+///
+///  `<GUEST-CPU>=<HOST-CPU-SET>[:<GUEST-CPU>=<HOST-CPU-SET>[:...]]`
+fn parse_cpu_affinity(s: &str) -> argument::Result<VcpuAffinity> {
+    if s.contains('=') {
+        let mut affinity_map = BTreeMap::new();
+        for cpu_pair in s.split(':') {
+            let assignment: Vec<&str> = cpu_pair.split('=').collect();
+            if assignment.len() != 2 {
+                return Err(argument::Error::InvalidValue {
+                    value: cpu_pair.to_owned(),
+                    expected: String::from("invalid VCPU assignment syntax"),
+                });
+            }
+            let guest_cpu = assignment[0]
+                .parse()
+                .map_err(|_| argument::Error::InvalidValue {
+                    value: assignment[0].to_owned(),
+                    expected: String::from("CPU index must be a non-negative integer"),
+                })?;
+            let host_cpu_set = parse_cpu_set(assignment[1])?;
+            if affinity_map.insert(guest_cpu, host_cpu_set).is_some() {
+                return Err(argument::Error::InvalidValue {
+                    value: cpu_pair.to_owned(),
+                    expected: String::from("VCPU index must be unique"),
+                });
+            }
+        }
+        Ok(VcpuAffinity::PerVcpu(affinity_map))
+    } else {
+        Ok(VcpuAffinity::Global(parse_cpu_set(s)?))
+    }
 }
 
 #[cfg(feature = "gpu")]
@@ -283,6 +322,8 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                 ),
                             })?;
                 }
+                "cache-path" => gpu_params.cache_path = Some(v.to_string()),
+                "cache-size" => gpu_params.cache_size = Some(v.to_string()),
                 "" => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(format!(
@@ -336,18 +377,6 @@ fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
                     argument::Error::Syntax(format!("invalid capture option: {}", e))
                 })?;
             }
-            "capture_effects" => {
-                ac97_params.capture_effects = v
-                    .split('|')
-                    .map(|val| {
-                        val.parse::<StreamEffect>()
-                            .map_err(|e| argument::Error::InvalidValue {
-                                value: val.to_string(),
-                                expected: e.to_string(),
-                            })
-                    })
-                    .collect::<argument::Result<Vec<_>>>()?;
-            }
             _ => {
                 return Err(argument::Error::UnknownArgument(format!(
                     "unknown ac97 parameter {}",
@@ -374,7 +403,7 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
 
     let opts = s
         .split(',')
-        .map(|frag| frag.split('='))
+        .map(|frag| frag.splitn(2, '='))
         .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
 
     for (k, v) in opts {
@@ -393,10 +422,10 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
                 let num = v.parse::<u8>().map_err(|e| {
                     argument::Error::Syntax(format!("serial device number is not parsable: {}", e))
                 })?;
-                if num < 1 || num > 4 {
+                if num < 1 {
                     return Err(argument::Error::InvalidValue {
                         value: num.to_string(),
-                        expected: String::from("Serial port num must be between 1 - 4"),
+                        expected: String::from("Serial port num must be at least 1"),
                     });
                 }
                 serial_setting.num = num;
@@ -443,6 +472,13 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
                 )));
             }
         }
+    }
+
+    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+        return Err(argument::Error::InvalidValue {
+            value: serial_setting.num.to_string(),
+            expected: String::from("Serial port num must be 4 or less"),
+        });
     }
 
     Ok(serial_setting)
@@ -595,12 +631,23 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 )
         }
         "cpu-affinity" => {
-            if !cfg.vcpu_affinity.is_empty() {
+            if cfg.vcpu_affinity.is_some() {
                 return Err(argument::Error::TooManyArguments(
                     "`cpu-affinity` already given".to_owned(),
                 ));
             }
-            cfg.vcpu_affinity = parse_cpu_set(value.unwrap())?;
+            cfg.vcpu_affinity = Some(parse_cpu_affinity(value.unwrap())?);
+        }
+        "no-smt" => {
+            cfg.no_smt = true;
+        }
+        "rt-cpus" => {
+            if !cfg.rt_cpus.is_empty() {
+                return Err(argument::Error::TooManyArguments(
+                    "`rt-cpus` already given".to_owned(),
+                ));
+            }
+            cfg.rt_cpus = parse_cpu_set(value.unwrap())?;
         }
         "mem" => {
             if cfg.memory.is_some() {
@@ -1092,6 +1139,14 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                             })?;
                         shared_dir.cfg.rewrite_security_xattrs = rewrite_security_xattrs;
                     }
+                    "ascii_casefold" => {
+                        let ascii_casefold =
+                            value.parse().map_err(|_| argument::Error::InvalidValue {
+                                value: value.to_owned(),
+                                expected: String::from("`ascii_casefold` must be a boolean"),
+                            })?;
+                        shared_dir.cfg.ascii_casefold = ascii_casefold;
+                    }
                     _ => {
                         return Err(argument::Error::InvalidValue {
                             value: kind.to_owned(),
@@ -1322,6 +1377,10 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
 
             cfg.acpi_tables.push(acpi_table);
         }
+        "protected-vm" => {
+            cfg.protected_vm = true;
+            cfg.params.push("swiotlb=force".to_string());
+        }
 
         "help" => return Err(argument::Error::PrintHelp),
         _ => unreachable!(),
@@ -1378,7 +1437,10 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
                                 "PARAMS",
                                 "Extra kernel or plugin command line arguments. Can be given more than once."),
           Argument::short_value('c', "cpus", "N", "Number of VCPUs. (default: 1)"),
-          Argument::value("cpu-affinity", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on. (e.g. 0,1-3,5) (default: no mask)"),
+          Argument::value("cpu-affinity", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on (e.g. 0,1-3,5)
+                              or colon-separated list of assignments of guest to host CPU assignments (e.g. 0=0:1=1:2=2) (default: no mask)"),
+          Argument::flag("no-smt", "Don't use SMT in the guest"),
+          Argument::value("rt-cpus", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on. (e.g. 0,1-3,5) (default: none)"),
           Argument::short_value('m',
                                 "mem",
                                 "N",
@@ -1500,6 +1562,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
           #[cfg(feature = "video-encoder")]
           Argument::flag("video-encoder", "(EXPERIMENTAL) enable virtio-video encoder device"),
           Argument::value("acpi-table", "PATH", "Path to user provided ACPI table"),
+          Argument::flag("protected-vm", "(EXPERIMENTAL) prevent host access to guest memory"),
           Argument::short_flag('h', "help", "Print help message.")];
 
     let mut cfg = Config::default();
@@ -2087,6 +2150,39 @@ mod tests {
         parse_cpu_set("0,1,2,").expect_err("parse should have failed");
     }
 
+    #[test]
+    fn parse_cpu_affinity_global() {
+        assert_eq!(
+            parse_cpu_affinity("0,5-7,9").expect("parse failed"),
+            VcpuAffinity::Global(vec![0, 5, 6, 7, 9]),
+        );
+    }
+
+    #[test]
+    fn parse_cpu_affinity_per_vcpu_one_to_one() {
+        let mut expected_map = BTreeMap::new();
+        expected_map.insert(0, vec![0]);
+        expected_map.insert(1, vec![1]);
+        expected_map.insert(2, vec![2]);
+        expected_map.insert(3, vec![3]);
+        assert_eq!(
+            parse_cpu_affinity("0=0:1=1:2=2:3=3").expect("parse failed"),
+            VcpuAffinity::PerVcpu(expected_map),
+        );
+    }
+
+    #[test]
+    fn parse_cpu_affinity_per_vcpu_sets() {
+        let mut expected_map = BTreeMap::new();
+        expected_map.insert(0, vec![0, 1, 2]);
+        expected_map.insert(1, vec![3, 4, 5]);
+        expected_map.insert(2, vec![6, 7, 8]);
+        assert_eq!(
+            parse_cpu_affinity("0=0,1,2:1=3-5:2=6,7-8").expect("parse failed"),
+            VcpuAffinity::PerVcpu(expected_map),
+        );
+    }
+
     #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_vaild() {
@@ -2101,23 +2197,8 @@ mod tests {
 
     #[cfg(feature = "audio")]
     #[test]
-    fn parse_ac97_dup_effect_vaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=aec|aec")
-            .expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_effect_invaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=abc")
-            .expect_err("parse should have failed");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_effect_vaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=aec")
-            .expect("parse should have succeded");
+    fn parse_ac97_capture_vaild() {
+        parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
     }
 
     #[test]
@@ -2127,8 +2208,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_serial_virtio_console_vaild() {
+        parse_serial_options("type=syslog,num=5,console=true,stdin=true,hardware=virtio-console")
+            .expect("parse should have succeded");
+    }
+
+    #[test]
     fn parse_serial_valid_no_num() {
         parse_serial_options("type=syslog").expect("parse should have succeded");
+    }
+
+    #[test]
+    fn parse_serial_equals_in_value() {
+        let parsed = parse_serial_options("type=syslog,path=foo=bar==.log")
+            .expect("parse should have succeded");
+        assert_eq!(parsed.path, Some(PathBuf::from("foo=bar==.log")));
     }
 
     #[test]
@@ -2144,6 +2238,12 @@ mod tests {
     #[test]
     fn parse_serial_invalid_num_lower() {
         parse_serial_options("type=syslog,num=0").expect_err("parse should have failed");
+    }
+
+    #[test]
+    fn parse_serial_virtio_console_invalid_num_lower() {
+        parse_serial_options("type=syslog,hardware=virtio-console,num=0")
+            .expect_err("parse should have failed");
     }
 
     #[test]

@@ -19,7 +19,7 @@ pub struct Fallocate<'a, R: IoSource + ?Sized> {
     state: UringFutState<(u64, u64, u32), ()>,
 }
 
-impl<'a, R: IoSource + ?Sized + Unpin> Fallocate<'a, R> {
+impl<'a, R: IoSource + ?Sized> Fallocate<'a, R> {
     pub(crate) fn new(reader: &'a R, file_offset: u64, len: u64, mode: u32) -> Self {
         Fallocate {
             reader,
@@ -28,19 +28,14 @@ impl<'a, R: IoSource + ?Sized + Unpin> Fallocate<'a, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for Fallocate<'_, R> {
+impl<R: IoSource + ?Sized> Future for Fallocate<'_, R> {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let state = std::mem::replace(&mut self.state, UringFutState::Processing);
         let (new_state, ret) = match state.advance(
-            |(file_offset, len, mode)| {
-                Ok((
-                    Pin::new(&self.reader).fallocate(file_offset, len, mode)?,
-                    (),
-                ))
-            },
-            |op| Pin::new(&self.reader).poll_complete(cx, op),
+            |(file_offset, len, mode)| Ok((self.reader.fallocate(file_offset, len, mode)?, ())),
+            |op| self.reader.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -65,7 +60,7 @@ mod tests {
 
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::WriteAsync;
     use crate::UringSource;
 
     #[test]
@@ -83,7 +78,7 @@ mod tests {
             let source = UringSource::new(f).unwrap();
             if let Err(e) = source.fallocate(0, 4096, 0).await {
                 match e {
-                    crate::uring_executor::Error::Io(io_err) => {
+                    crate::io_ext::Error::Uring(crate::uring_executor::Error::Io(io_err)) => {
                         if io_err.kind() == std::io::ErrorKind::InvalidInput {
                             // Skip the test on kernels before fallocate support.
                             return;

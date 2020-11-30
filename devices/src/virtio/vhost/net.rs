@@ -9,7 +9,7 @@ use std::thread;
 
 use net_util::{MacAddress, TapT};
 
-use base::{error, warn, EventFd};
+use base::{error, warn, Event};
 use vhost::NetT as VhostNetT;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
@@ -26,12 +26,12 @@ const NUM_QUEUES: usize = 2;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 
 pub struct Net<T: TapT, U: VhostNetT<T>> {
-    workers_kill_evt: Option<EventFd>,
-    kill_evt: EventFd,
+    workers_kill_evt: Option<Event>,
+    kill_evt: Event,
     worker_thread: Option<thread::JoinHandle<(Worker<U>, T)>>,
     tap: Option<T>,
     vhost_net_handle: Option<U>,
-    vhost_interrupt: Option<Vec<EventFd>>,
+    vhost_interrupt: Option<Vec<Event>>,
     avail_features: u64,
     acked_features: u64,
     request_socket: Option<VhostDevRequestSocket>,
@@ -46,12 +46,13 @@ where
     /// Create a new virtio network device with the given IP address and
     /// netmask.
     pub fn new(
+        base_features: u64,
         ip_addr: Ipv4Addr,
         netmask: Ipv4Addr,
         mac_addr: MacAddress,
         mem: &GuestMemory,
     ) -> Result<Net<T, U>> {
-        let kill_evt = EventFd::new().map_err(Error::CreateKillEventFd)?;
+        let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
 
         let tap: T = T::new(true, false).map_err(Error::TapOpen)?;
         tap.set_ip_addr(ip_addr).map_err(Error::TapSetIp)?;
@@ -73,7 +74,8 @@ where
         tap.enable().map_err(Error::TapEnable)?;
         let vhost_net_handle = U::new(mem).map_err(Error::VhostOpen)?;
 
-        let avail_features = 1 << virtio_net::VIRTIO_NET_F_GUEST_CSUM
+        let avail_features = base_features
+            | 1 << virtio_net::VIRTIO_NET_F_GUEST_CSUM
             | 1 << virtio_net::VIRTIO_NET_F_CSUM
             | 1 << virtio_net::VIRTIO_NET_F_GUEST_TSO4
             | 1 << virtio_net::VIRTIO_NET_F_GUEST_UFO
@@ -82,18 +84,17 @@ where
             | 1 << virtio_net::VIRTIO_NET_F_MRG_RXBUF
             | 1 << virtio_sys::vhost::VIRTIO_RING_F_INDIRECT_DESC
             | 1 << virtio_sys::vhost::VIRTIO_RING_F_EVENT_IDX
-            | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
-            | 1 << virtio_sys::vhost::VIRTIO_F_VERSION_1;
+            | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY;
 
         let mut vhost_interrupt = Vec::new();
         for _ in 0..NUM_QUEUES {
-            vhost_interrupt.push(EventFd::new().map_err(Error::VhostIrqCreate)?);
+            vhost_interrupt.push(Event::new().map_err(Error::VhostIrqCreate)?);
         }
 
         let (request_socket, response_socket) = create_control_sockets();
 
         Ok(Net {
-            workers_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEventFd)?),
+            workers_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEvent)?),
             kill_evt,
             worker_thread: None,
             tap: Some(tap),
@@ -113,7 +114,7 @@ where
     U: VhostNetT<T>,
 {
     fn drop(&mut self) {
-        // Only kill the child if it claimed its eventfd.
+        // Only kill the child if it claimed its event.
         if self.workers_kill_evt.is_none() {
             // Ignore the result because there is nothing we can do about it.
             let _ = self.kill_evt.write(1);
@@ -194,7 +195,7 @@ where
         _: GuestMemory,
         interrupt: Interrupt,
         queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     ) {
         if queues.len() != NUM_QUEUES || queue_evts.len() != NUM_QUEUES {
             error!("net: expected {} queues, got {}", NUM_QUEUES, queues.len());
@@ -317,7 +318,7 @@ where
     }
 
     fn reset(&mut self) -> bool {
-        // Only kill the child if it claimed its eventfd.
+        // Only kill the child if it claimed its event.
         if self.workers_kill_evt.is_none() && self.kill_evt.write(1).is_err() {
             error!("{}: failed to notify the kill event", self.debug_label());
             return false;
@@ -346,6 +347,7 @@ where
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::virtio::base_features;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
     use net_util::fakes::FakeTap;
     use std::result;
@@ -362,7 +364,9 @@ pub mod tests {
 
     fn create_net_common() -> Net<FakeTap, FakeNet<FakeTap>> {
         let guest_memory = create_guest_memory().unwrap();
+        let features = base_features(false);
         Net::<FakeTap, FakeNet<FakeTap>>::new(
+            features,
             Ipv4Addr::new(127, 0, 0, 1),
             Ipv4Addr::new(255, 255, 255, 0),
             "de:21:e8:47:6b:6a".parse().unwrap(),
@@ -406,13 +410,13 @@ pub mod tests {
             guest_memory,
             Interrupt::new(
                 Arc::new(AtomicUsize::new(0)),
-                EventFd::new().unwrap(),
-                EventFd::new().unwrap(),
+                Event::new().unwrap(),
+                Event::new().unwrap(),
                 None,
                 VIRTIO_MSI_NO_VECTOR,
             ),
             vec![Queue::new(1)],
-            vec![EventFd::new().unwrap()],
+            vec![Event::new().unwrap()],
         );
     }
 }

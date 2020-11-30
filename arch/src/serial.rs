@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use base::{error, info, read_raw_stdin, syslog, EventFd};
+use base::{error, info, read_raw_stdin, syslog, Event};
 use devices::{Bus, ProxyDevice, Serial, SerialDevice};
 use minijail::Minijail;
 use sync::Mutex;
@@ -21,7 +21,7 @@ use crate::DeviceRegistrationError;
 
 #[derive(Debug)]
 pub enum Error {
-    CloneEventFd(base::Error),
+    CloneEvent(base::Error),
     FileError(std::io::Error),
     InvalidSerialHardware(String),
     InvalidSerialType(String),
@@ -35,7 +35,7 @@ impl Display for Error {
         use self::Error::*;
 
         match self {
-            CloneEventFd(e) => write!(f, "unable to clone an EventFd: {}", e),
+            CloneEvent(e) => write!(f, "unable to clone an Event: {}", e),
             FileError(e) => write!(f, "unable to open/create file: {}", e),
             InvalidSerialHardware(e) => write!(f, "invalid serial hardware: {}", e),
             InvalidSerialType(e) => write!(f, "invalid serial type: {}", e),
@@ -219,16 +219,17 @@ impl SerialParameters {
     /// Helper function to create a serial device from the defined parameters.
     ///
     /// # Arguments
-    /// * `evt_fd` - eventfd used for interrupt events
+    /// * `evt` - event used for interrupt events
     /// * `keep_fds` - Vector of FDs required by this device if it were sandboxed in a child
-    ///                process. `evt_fd` will always be added to this vector by this function.
+    ///                process. `evt` will always be added to this vector by this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
-        evt_fd: &EventFd,
+        protected_vm: bool,
+        evt: &Event,
         keep_fds: &mut Vec<RawFd>,
     ) -> std::result::Result<T, Error> {
-        let evt_fd = evt_fd.try_clone().map_err(Error::CloneEventFd)?;
-        keep_fds.push(evt_fd.as_raw_fd());
+        let evt = evt.try_clone().map_err(Error::CloneEvent)?;
+        keep_fds.push(evt.as_raw_fd());
         let input: Option<Box<dyn io::Read + Send>> = if let Some(input_path) = &self.input {
             let input_file = File::open(input_path.as_path()).map_err(Error::FileError)?;
             keep_fds.push(input_file.as_raw_fd());
@@ -274,11 +275,20 @@ impl SerialParameters {
             },
             SerialType::UnixSocket => match &self.path {
                 Some(path) => {
-                    let sock = match UnixDatagram::bind(path).map_err(Error::FileError) {
+                    let sock = match UnixDatagram::bind(path) {
                         Ok(sock) => sock,
                         Err(e) => {
-                            error!("Couldn't bind: {:?}", e);
-                            UnixDatagram::unbound().map_err(Error::FileError)?
+                            if e.kind() == ErrorKind::AddrInUse {
+                                // In most cases vmlog_forwarder will
+                                // have already bound this address and
+                                // this error is expected. This
+                                // unbound socket will be connected on
+                                // first write.
+                                UnixDatagram::unbound().map_err(Error::FileError)?
+                            } else {
+                                error!("Couldn't bind: {:?}", e);
+                                return Err(Error::FileError(e));
+                            }
                         }
                     };
                     keep_fds.push(sock.as_raw_fd());
@@ -287,7 +297,7 @@ impl SerialParameters {
                 None => return Err(Error::PathRequired),
             },
         };
-        Ok(T::new(evt_fd, input, output, keep_fds.to_vec()))
+        Ok(T::new(protected_vm, evt, input, output, keep_fds.to_vec()))
     }
 
     pub fn add_bind_mounts(&self, jail: &mut Minijail) -> Result<(), minijail::Error> {
@@ -365,15 +375,16 @@ pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 /// # Arguments
 ///
 /// * `io_bus` - Bus to add the devices to
-/// * `com_evt_1_3` - eventfd for com1 and com3
-/// * `com_evt_1_4` - eventfd for com2 and com4
+/// * `com_evt_1_3` - event for com1 and com3
+/// * `com_evt_1_4` - event for com2 and com4
 /// * `io_bus` - Bus to add the devices to
 /// * `serial_parameters` - definitions of serial parameter configurations.
 ///   All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
+    protected_vm: bool,
     io_bus: &mut Bus,
-    com_evt_1_3: &EventFd,
-    com_evt_2_4: &EventFd,
+    com_evt_1_3: &Event,
+    com_evt_2_4: &Event,
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
     serial_jail: Option<Minijail>,
 ) -> Result<(), DeviceRegistrationError> {
@@ -392,7 +403,7 @@ pub fn add_serial_devices(
 
         let mut preserved_fds = Vec::new();
         let com = param
-            .create_serial_device::<Serial>(&com_evt, &mut preserved_fds)
+            .create_serial_device::<Serial>(protected_vm, &com_evt, &mut preserved_fds)
             .map_err(DeviceRegistrationError::CreateSerialDevice)?;
 
         match serial_jail.as_ref() {
