@@ -8,9 +8,13 @@ edition = "2018"
 path = "src/lib.rs"
 
 [dependencies]
-base = "*"
+# ANDROID: make cargo2android happy
+#base = "*"
+base = { path = "../base" }
 bitflags = "1"
-data_model = "*"
+# ANDROID: make cargo2android happy
+#data_model = "*"
+data_model = { path = "../data_model" }
 enumn = { path = "../enumn" }
 libc = "*"
 thiserror = "1.0.20"

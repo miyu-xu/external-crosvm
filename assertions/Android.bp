@@ -27,4 +27,15 @@ rust_library {
     crate_name: "assertions",
     srcs: ["src/lib.rs"],
     edition: "2018",
+
+    // ANDROID: needed to make libchromeos-rs build for the libdata_model dependency.
+    enabled: true,
+    target: {
+        windows_x86: {
+            enabled: false,
+        },
+        windows_x86_64: {
+            enabled: false,
+        },
+    },
 }
