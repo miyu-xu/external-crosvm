@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fe40a8e7_8af2ccbe",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2020-12-07T20:24:00Z",
+      "side": 1,
+      "message": "SGTM",
+      "parentUuid": "91aa0008_5a908549",
+      "revId": "793e6e92833aae413c1dec13770d989aa09b4edb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "38e78511_0f47e0b3",
@@ -31,6 +49,30 @@
       "writtenOn": "2020-12-07T18:20:16Z",
       "side": 1,
       "message": "I think these lines will just make conflict resolution more difficult in the future. We can see the history from the diff. I\u0027d be inclined to just remove the comment and the older line, as we did in the other Cargo.toml changes.",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 16,
+        "endChar": 17
+      },
+      "revId": "793e6e92833aae413c1dec13770d989aa09b4edb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b82db260_88e2c9fe",
+        "filename": "fuse/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2020-12-07T20:24:00Z",
+      "side": 1,
+      "message": "Done.  FWIW, it doesn\u0027t refer to base and data_model by local path unlike others, because we may publish the crate / move out of crosvm in the future.",
+      "parentUuid": "38e78511_0f47e0b3",
       "range": {
         "startLine": 15,
         "startChar": 0,
