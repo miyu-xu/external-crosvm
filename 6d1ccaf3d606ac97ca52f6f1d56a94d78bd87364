@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a9586894_cffdc31f",
+        "filename": "src/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 506,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-12-07T18:15:44Z",
+      "side": 0,
+      "message": "this side of the merge is preferred",
+      "range": {
+        "startLine": 505,
+        "startChar": 0,
+        "endLine": 506,
+        "endChar": 96
+      },
+      "revId": "6d1ccaf3d606ac97ca52f6f1d56a94d78bd87364",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
