@@ -16,6 +16,29 @@
       "message": "Squash this into the merge commit? That way, we don\u0027t have bisection points that don\u0027t build.",
       "revId": "793e6e92833aae413c1dec13770d989aa09b4edb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38e78511_0f47e0b3",
+        "filename": "fuse/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-12-07T18:20:16Z",
+      "side": 1,
+      "message": "I think these lines will just make conflict resolution more difficult in the future. We can see the history from the diff. I\u0027d be inclined to just remove the comment and the older line, as we did in the other Cargo.toml changes.",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 16,
+        "endChar": 17
+      },
+      "revId": "793e6e92833aae413c1dec13770d989aa09b4edb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
