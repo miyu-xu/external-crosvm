@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "91aa0008_5a908549",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2020-12-07T18:16:09Z",
+      "side": 1,
+      "message": "Squash this into the merge commit? That way, we don\u0027t have bisection points that don\u0027t build.",
+      "revId": "793e6e92833aae413c1dec13770d989aa09b4edb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
