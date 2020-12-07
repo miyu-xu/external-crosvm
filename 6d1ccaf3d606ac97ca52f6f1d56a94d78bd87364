@@ -22,6 +22,30 @@
       },
       "revId": "6d1ccaf3d606ac97ca52f6f1d56a94d78bd87364",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "758fc1f6_45ca2902",
+        "filename": "src/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 506,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2020-12-07T20:26:46Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "a9586894_cffdc31f",
+      "range": {
+        "startLine": 505,
+        "startChar": 0,
+        "endLine": 506,
+        "endChar": 96
+      },
+      "revId": "6d1ccaf3d606ac97ca52f6f1d56a94d78bd87364",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
