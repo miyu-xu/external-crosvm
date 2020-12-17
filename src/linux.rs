@@ -554,20 +554,19 @@ fn create_tpm_device(cfg: &Config) -> DeviceResult {
     })
 }
 
-fn create_single_touch_device(cfg: &Config, single_touch_spec: &TouchDeviceOption) -> DeviceResult {
-    let socket = single_touch_spec
-        .get_path()
-        .into_unix_stream()
-        .map_err(|e| {
-            error!("failed configuring virtio single touch: {:?}", e);
-            e
-        })?;
+fn create_touch_device(cfg: &Config, touch_spec: &TouchDeviceOption) -> DeviceResult {
+    let socket = touch_spec.get_path().into_unix_stream().map_err(|e| {
+        error!("failed configuring virtio touch: {:?}", e);
+        e
+    })?;
 
-    let (width, height) = single_touch_spec.get_size();
-    let dev = virtio::new_single_touch(
+    let (width, height) = touch_spec.get_size();
+    let max_touch_count = touch_spec.get_max_touch_count();
+    let dev = virtio::new_touch(
         socket,
         width,
         height,
+        max_touch_count,
         virtio::base_features(cfg.protected_vm),
     )
     .map_err(Error::InputDeviceNew)?;
@@ -1257,8 +1256,8 @@ fn create_virtio_devices(
         }
     }
 
-    if let Some(single_touch_spec) = &cfg.virtio_single_touch {
-        devs.push(create_single_touch_device(cfg, single_touch_spec)?);
+    if let Some(touch_spec) = &cfg.virtio_touch {
+        devs.push(create_touch_device(cfg, touch_spec)?);
     }
 
     if let Some(trackpad_spec) = &cfg.virtio_trackpad {
@@ -1345,15 +1344,20 @@ fn create_virtio_devices(
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
                     UnixStream::pair().map_err(Error::CreateSocket)?;
-                let (single_touch_width, single_touch_height) = cfg
-                    .virtio_single_touch
+                let (touch_width, touch_height) = cfg
+                    .virtio_touch
                     .as_ref()
-                    .map(|single_touch_spec| single_touch_spec.get_size())
+                    .map(|touch_spec| touch_spec.get_size())
                     .unwrap_or((gpu_parameters.display_width, gpu_parameters.display_height));
-                let dev = virtio::new_single_touch(
+                let max_touch_count = cfg
+                    .virtio_touch
+                    .as_ref()
+                    .map_or(1, |touch_spec| touch_spec.get_max_touch_count());
+                let dev = virtio::new_touch(
                     virtio_dev_socket,
-                    single_touch_width,
-                    single_touch_height,
+                    touch_width,
+                    touch_height,
+                    max_touch_count,
                     virtio::base_features(cfg.protected_vm),
                 )
                 .map_err(Error::InputDeviceNew)?;
