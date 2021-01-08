@@ -398,6 +398,32 @@ impl KvmVm {
             errno_result()
         }
     }
+
+    /// Checks whether a particular hypervisor-specific capability is available.
+    ///
+    /// # Arguments
+    /// * `cap` - hypervisor-specific constant defined by the hypervisor API (e.g., kvm.h)
+    fn check_raw_capability(&self, capability: KvmCap) -> bool {
+        // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
+        // it's an unavailable extension and returns 0.
+        unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), capability as c_ulong) == 1 }
+    }
+
+    fn enable_raw_capability(&self, capability: KvmCap, args: &[u64; 4]) -> Result<()> {
+        let kvm_cap = kvm_enable_cap {
+            cap: capability as u32,
+            args: *args,
+            ..Default::default()
+        };
+        // Safe because we allocated the struct and we know the kernel will read
+        // exactly the size of the struct.
+        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
+    }
 }
 
 impl Vm for KvmVm {
@@ -418,14 +444,16 @@ impl Vm for KvmVm {
         match c {
             VmCap::DirtyLog => true,
             VmCap::PvClock => false,
-            VmCap::PvClockSuspend => self.check_raw_capability(KVM_CAP_KVMCLOCK_CTRL),
+            VmCap::PvClockSuspend => self.check_raw_capability(KvmCap::KvmclockCtrl),
+            VmCap::Protected => self.check_raw_capability(KvmCap::ArmProtectedVm),
         }
     }
 
-    fn check_raw_capability(&self, cap: u32) -> bool {
-        // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
-        // it's an unavailable extension and returns 0.
-        unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), cap as c_ulong) == 1 }
+    fn enable_protected_vm(&self, bootloader_memslot_id: Option<u64>) -> Result<()> {
+        self.enable_raw_capability(
+            KvmCap::ArmProtectedVm,
+            &[bootloader_memslot_id.unwrap_or(-1i64 as u64), 0, 0, 0],
+        )
     }
 
     fn get_memory(&self) -> &GuestMemory {
@@ -812,7 +840,7 @@ impl Vcpu for KvmVcpu {
             args: *args,
             ..Default::default()
         };
-        // Safe becuase we allocated the struct and we know the kernel will read
+        // Safe because we allocated the struct and we know the kernel will read
         // exactly the size of the struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap) };
         if ret == 0 {
@@ -1168,9 +1196,9 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        assert!(vm.check_raw_capability(KVM_CAP_USER_MEMORY));
+        assert!(vm.check_raw_capability(KvmCap::UserMemory));
         // I assume nobody is testing this on s390
-        assert!(!vm.check_raw_capability(KVM_CAP_S390_USER_SIGP));
+        assert!(!vm.check_raw_capability(KvmCap::S390UserSigp));
     }
 
     #[test]

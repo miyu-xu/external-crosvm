@@ -27,7 +27,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use libc::{self, c_int, gid_t, uid_t};
+use libc::{self, c_int, gid_t, uid_t, EINVAL};
 
 use acpi_tables::sdt::SDT;
 
@@ -1896,9 +1896,16 @@ fn file_to_i64<P: AsRef<Path>>(path: P) -> io::Result<i64> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty file"))
 }
 
-fn create_kvm(mem: GuestMemory) -> base::Result<KvmVm> {
+fn create_kvm(mem: GuestMemory, protected_vm: bool) -> base::Result<KvmVm> {
     let kvm = Kvm::new()?;
     let vm = KvmVm::new(&kvm, mem)?;
+    if protected_vm {
+        if !vm.check_capability(VmCap::Protected) {
+            error!("Protected VM not supported.");
+            return Err(base::Error::new(EINVAL));
+        }
+        vm.enable_protected_vm(None)?;
+    }
     Ok(vm)
 }
 
@@ -1942,7 +1949,7 @@ where
     V: VmArch + 'static,
     Vcpu: VcpuArch + 'static,
     I: IrqChipArch + 'static,
-    FV: FnOnce(GuestMemory) -> base::Result<V>,
+    FV: FnOnce(GuestMemory, bool) -> base::Result<V>,
     FI: FnOnce(
         &V,
         usize,              // vcpu_count

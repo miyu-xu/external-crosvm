@@ -339,7 +339,7 @@ impl arch::LinuxArch for X8664arch {
             &mut SystemAllocator,
             &Event,
         ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
+        FV: FnOnce(GuestMemory, bool) -> std::result::Result<V, E2>,
         FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
         E1: StdError + 'static,
         E2: StdError + 'static,
@@ -353,7 +353,8 @@ impl arch::LinuxArch for X8664arch {
         let mut resources = Self::get_resource_allocator(&mem, components.wayland_dmabuf);
 
         let vcpu_count = components.vcpu_count;
-        let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
+        let mut vm = create_vm(mem.clone(), components.protected_vm)
+            .map_err(|e| Error::CreateVm(Box::new(e)))?;
         let mut irq_chip =
             create_irq_chip(&vm, vcpu_count).map_err(|e| Error::CreateIrqChip(Box::new(e)))?;
 

@@ -211,7 +211,7 @@ impl arch::LinuxArch for AArch64 {
             &mut SystemAllocator,
             &Event,
         ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
+        FV: FnOnce(GuestMemory, bool) -> std::result::Result<V, E2>,
         FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
         E1: StdError + 'static,
         E2: StdError + 'static,
@@ -220,7 +220,8 @@ impl arch::LinuxArch for AArch64 {
         let mut resources =
             Self::get_resource_allocator(components.memory_size, components.wayland_dmabuf);
         let mem = Self::setup_memory(components.memory_size)?;
-        let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
+        let mut vm = create_vm(mem.clone(), components.protected_vm)
+            .map_err(|e| Error::CreateVm(Box::new(e)))?;
 
         let mut use_pmu = vm
             .get_hypervisor()

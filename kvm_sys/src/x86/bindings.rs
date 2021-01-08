@@ -429,6 +429,7 @@ pub const KVM_CAP_HYPERV_SYNIC: ::std::os::raw::c_uint = 123;
 pub const KVM_CAP_ARM_PMU_V3: ::std::os::raw::c_uint = 126;
 pub const KVM_CAP_IMMEDIATE_EXIT: ::std::os::raw::c_uint = 136;
 pub const KVM_CAP_HYPERV_SYNIC2: ::std::os::raw::c_uint = 148;
+pub const KVM_CAP_ARM_PROTECTED_VM: ::std::os::raw::c_uint = 191;
 pub const KVM_IRQ_ROUTING_IRQCHIP: ::std::os::raw::c_uint = 1;
 pub const KVM_IRQ_ROUTING_MSI: ::std::os::raw::c_uint = 2;
 pub const KVM_IRQ_ROUTING_S390_ADAPTER: ::std::os::raw::c_uint = 3;

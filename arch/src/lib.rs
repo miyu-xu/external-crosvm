@@ -144,7 +144,7 @@ pub trait LinuxArch {
             &mut SystemAllocator,
             &Event,
         ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
+        FV: FnOnce(GuestMemory, bool) -> std::result::Result<V, E2>,
         FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
         E1: StdError + 'static,
         E2: StdError + 'static,
