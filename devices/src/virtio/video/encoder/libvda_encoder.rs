@@ -5,10 +5,11 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::os::unix::io::IntoRawFd;
 
 use libvda::encode::{EncodeCapabilities, VeaImplType, VeaInstance};
 
-use base::{error, warn, IntoRawDescriptor};
+use base::{error, warn};
 
 use crate::virtio::video::encoder::encoder::*;
 use crate::virtio::video::format::{Format, FormatDesc, FormatRange, FrameFormat, Level, Profile};
@@ -51,12 +52,12 @@ impl LibvdaEncoder {
                     frame_formats: vec![FrameFormat {
                         width: FormatRange {
                             min: 2,
-                            max: 4096,
+                            max: 1920,
                             step: 1,
                         },
                         height: FormatRange {
                             min: 2,
-                            max: 4096,
+                            max: 1080,
                             step: 1,
                         },
                         bitrates: vec![FormatRange {
@@ -280,7 +281,7 @@ impl<'a> EncoderSession for LibvdaEncoderSession<'a> {
         self.session
             .encode(
                 input_buffer_id as i32,
-                resource.into_raw_descriptor(),
+                resource.into_raw_fd(),
                 &libvda_planes,
                 timestamp as i64,
                 force_keyframe,
@@ -297,12 +298,7 @@ impl<'a> EncoderSession for LibvdaEncoderSession<'a> {
         self.next_output_buffer_id = self.next_output_buffer_id.wrapping_add(1);
 
         self.session
-            .use_output_buffer(
-                output_buffer_id as i32,
-                file.into_raw_descriptor(),
-                offset,
-                size,
-            )
+            .use_output_buffer(output_buffer_id as i32, file.into_raw_fd(), offset, size)
             .map_err(|e| EncoderError::Implementation(Box::new(e)))?;
 
         Ok(output_buffer_id)

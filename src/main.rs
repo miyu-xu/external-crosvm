@@ -12,6 +12,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::num::ParseIntError;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::string::String;
 use std::thread::sleep;
@@ -23,12 +24,11 @@ use arch::{
 };
 use base::{
     debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
-    validate_raw_descriptor, warn, FromRawDescriptor, IntoRawDescriptor, RawDescriptor,
-    SafeDescriptor,
+    validate_raw_fd, warn,
 };
 use crosvm::{
     argument::{self, print_help, set_arguments, Argument},
-    platform, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
+    linux, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::{GpuMode, GpuParameters};
@@ -37,13 +37,15 @@ use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use vm_control::{
-    BalloonControlCommand, BatControlCommand, BatControlResult, BatteryType, DiskControlCommand,
-    MaybeOwnedDescriptor, UsbControlCommand, UsbControlResult, VmControlRequestSocket, VmRequest,
-    VmResponse, USB_CONTROL_MAX_PORTS,
+    BalloonControlCommand, DiskControlCommand, MaybeOwnedFd, UsbControlCommand, UsbControlResult,
+    VmControlRequestSocket, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
-    matches!(executable, Some(Executable::Plugin(_)))
+    match executable {
+        Some(Executable::Plugin(_)) => true,
+        _ => false,
+    }
 }
 
 // Wait for all children to exit. Return true if they have all exited, false
@@ -160,8 +162,6 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut vulkan_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
-    #[cfg(feature = "gfxstream")]
-    let mut angle_specified = false;
 
     if let Some(s) = s {
         let opts = s
@@ -283,24 +283,6 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                 }
                 #[cfg(feature = "gfxstream")]
-                "angle" => {
-                    angle_specified = true;
-                    match v {
-                        "true" | "" => {
-                            gpu_params.gfxstream_use_guest_angle = true;
-                        }
-                        "false" => {
-                            gpu_params.gfxstream_use_guest_angle = false;
-                        }
-                        _ => {
-                            return Err(argument::Error::InvalidValue {
-                                value: v.to_string(),
-                                expected: String::from("gpu parameter 'angle' should be a boolean"),
-                            });
-                        }
-                    }
-                }
-                #[cfg(feature = "gfxstream")]
                 "vulkan" => {
                     vulkan_specified = true;
                     match v {
@@ -355,7 +337,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
 
     #[cfg(feature = "gfxstream")]
     {
-        if vulkan_specified || syncfd_specified || angle_specified {
+        if vulkan_specified || syncfd_specified {
             match gpu_params.mode {
                 GpuMode::ModeGfxStream => {}
                 _ => {
@@ -590,40 +572,6 @@ fn parse_plugin_gid_map_option(value: &str) -> argument::Result<GidMap> {
         outer,
         count,
     })
-}
-
-fn parse_battery_options(s: Option<&str>) -> argument::Result<BatteryType> {
-    let mut battery_type: BatteryType = Default::default();
-
-    if let Some(s) = s {
-        let opts = s
-            .split(",")
-            .map(|frag| frag.split("="))
-            .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-        for (k, v) in opts {
-            match k {
-                "type" => match v.parse::<BatteryType>() {
-                    Ok(type_) => battery_type = type_,
-                    Err(e) => {
-                        return Err(argument::Error::InvalidValue {
-                            value: v.to_string(),
-                            expected: e.to_string(),
-                        });
-                    }
-                },
-                "" => {}
-                _ => {
-                    return Err(argument::Error::UnknownArgument(format!(
-                        "battery parameter {}",
-                        k
-                    )));
-                }
-            }
-        }
-    }
-
-    Ok(battery_type)
 }
 
 fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::Result<()> {
@@ -1161,8 +1109,8 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                         })?;
 
                         let dur = Duration::from_secs(seconds);
-                        shared_dir.fs_cfg.entry_timeout = dur.clone();
-                        shared_dir.fs_cfg.attr_timeout = dur;
+                        shared_dir.cfg.entry_timeout = dur.clone();
+                        shared_dir.cfg.attr_timeout = dur;
                     }
                     "cache" => {
                         let policy = value.parse().map_err(|_| argument::Error::InvalidValue {
@@ -1171,7 +1119,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                 "`cache` must be one of `never`, `always`, or `auto`",
                             ),
                         })?;
-                        shared_dir.fs_cfg.cache_policy = policy;
+                        shared_dir.cfg.cache_policy = policy;
                     }
                     "writeback" => {
                         let writeback =
@@ -1179,7 +1127,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                 value: value.to_owned(),
                                 expected: String::from("`writeback` must be a boolean"),
                             })?;
-                        shared_dir.fs_cfg.writeback = writeback;
+                        shared_dir.cfg.writeback = writeback;
                     }
                     "rewrite-security-xattrs" => {
                         let rewrite_security_xattrs =
@@ -1189,7 +1137,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                     "`rewrite-security-xattrs` must be a boolean",
                                 ),
                             })?;
-                        shared_dir.fs_cfg.rewrite_security_xattrs = rewrite_security_xattrs;
+                        shared_dir.cfg.rewrite_security_xattrs = rewrite_security_xattrs;
                     }
                     "ascii_casefold" => {
                         let ascii_casefold =
@@ -1197,8 +1145,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                 value: value.to_owned(),
                                 expected: String::from("`ascii_casefold` must be a boolean"),
                             })?;
-                        shared_dir.fs_cfg.ascii_casefold = ascii_casefold;
-                        shared_dir.p9_cfg.ascii_casefold = ascii_casefold;
+                        shared_dir.cfg.ascii_casefold = ascii_casefold;
                     }
                     _ => {
                         return Err(argument::Error::InvalidValue {
@@ -1434,21 +1381,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             cfg.protected_vm = true;
             cfg.params.push("swiotlb=force".to_string());
         }
-        "battery" => {
-            let params = parse_battery_options(value)?;
-            cfg.battery_type = Some(params);
-        }
-        #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-        "gdb" => {
-            let port = value
-                .unwrap()
-                .parse()
-                .map_err(|_| argument::Error::InvalidValue {
-                    value: value.unwrap().to_owned(),
-                    expected: String::from("expected a valid port number"),
-                })?;
-            cfg.gdb = Some(port);
-        }
+
         "help" => return Err(argument::Error::PrintHelp),
         _ => unreachable!(),
     }
@@ -1488,14 +1421,6 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
             if let Some(virtio_single_touch) = cfg.virtio_single_touch.as_mut() {
                 virtio_single_touch.set_default_size(width, height);
             }
-        }
-    }
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    if cfg.gdb.is_some() {
-        if cfg.vcpu_count.unwrap_or(1) != 1 {
-            return Err(argument::Error::ExpectedArgument(
-                "`gdb` requires the number of vCPU to be 1".to_owned(),
-            ));
         }
     }
     set_default_serial_parameters(&mut cfg.serial_parameters);
@@ -1618,7 +1543,6 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   egl[=true|=false] - If the virtio-gpu backend should use a EGL context for rendering.
                                   glx[=true|=false] - If the virtio-gpu backend should use a GLX context for rendering.
                                   surfaceless[=true|=false] - If the virtio-gpu backend should use a surfaceless context for rendering.
-                                  angle[=true|=false] - If the guest is using ANGLE (OpenGL on Vulkan) as its native OpenGL driver.
                                   syncfd[=true|=false] - If the gfxstream backend should support EGL_ANDROID_native_fence_sync
                                   vulkan[=true|=false] - If the gfxstream backend should support vulkan
                                   "),
@@ -1639,13 +1563,6 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
           Argument::flag("video-encoder", "(EXPERIMENTAL) enable virtio-video encoder device"),
           Argument::value("acpi-table", "PATH", "Path to user provided ACPI table"),
           Argument::flag("protected-vm", "(EXPERIMENTAL) prevent host access to guest memory"),
-          Argument::flag_or_value("battery",
-                                  "[type=TYPE]",
-                                  "Comma separated key=value pairs for setting up battery device
-                                  Possible key values:
-                                  type=goldfish - type of battery emulation, defaults to goldfish
-                                  "),
-          Argument::value("gdb", "PORT", "(EXPERIMENTAL) gdb on the given port"),
           Argument::short_flag('h', "help", "Print help message.")];
 
     let mut cfg = Config::default();
@@ -1668,7 +1585,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                 }
             }
         }
-        Ok(()) => match platform::run_config(cfg) {
+        Ok(()) => match linux::run_config(cfg) {
             Ok(_) => {
                 info!("crosvm has exited normally");
                 Ok(())
@@ -1917,7 +1834,7 @@ enum ModifyUsbError {
     ArgMissing(&'static str),
     ArgParse(&'static str, String),
     ArgParseInt(&'static str, String, ParseIntError),
-    FailedDescriptorValidate(base::Error),
+    FailedFdValidate(base::Error),
     PathDoesNotExist(PathBuf),
     SocketFailed,
     UnexpectedResponse(VmResponse),
@@ -1939,7 +1856,7 @@ impl fmt::Display for ModifyUsbError {
                 "failed to parse integer argument {} value `{}`: {}",
                 name, value, e
             ),
-            FailedDescriptorValidate(e) => write!(f, "failed to validate file descriptor: {}", e),
+            FailedFdValidate(e) => write!(f, "failed to validate file descriptor: {}", e),
             PathDoesNotExist(p) => write!(f, "path `{}` does not exist", p.display()),
             SocketFailed => write!(f, "socket failed"),
             UnexpectedResponse(r) => write!(f, "unexpected response: {}", r),
@@ -1975,11 +1892,11 @@ fn parse_bus_id_addr(v: &str) -> ModifyUsbResult<(u8, u8, u16, u16)> {
     }
 }
 
-fn raw_descriptor_from_path(path: &Path) -> ModifyUsbResult<RawDescriptor> {
+fn raw_fd_from_path(path: &Path) -> ModifyUsbResult<RawFd> {
     if !path.exists() {
         return Err(ModifyUsbError::PathDoesNotExist(path.to_owned()));
     }
-    let raw_descriptor = path
+    let raw_fd = path
         .file_name()
         .and_then(|fd_osstr| fd_osstr.to_str())
         .map_or(
@@ -1993,7 +1910,7 @@ fn raw_descriptor_from_path(path: &Path) -> ModifyUsbResult<RawDescriptor> {
                 })
             },
         )?;
-    validate_raw_descriptor(raw_descriptor).map_err(ModifyUsbError::FailedDescriptorValidate)
+    validate_raw_fd(raw_fd).map_err(ModifyUsbError::FailedFdValidate)
 }
 
 fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
@@ -2010,7 +1927,7 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
     } else if dev_path.parent() == Some(Path::new("/proc/self/fd")) {
         // Special case '/proc/self/fd/*' paths. The FD is already open, just use it.
         // Safe because we will validate |raw_fd|.
-        Some(unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&dev_path)?) })
+        Some(unsafe { File::from_raw_fd(raw_fd_from_path(&dev_path)?) })
     } else {
         Some(
             OpenOptions::new()
@@ -2026,12 +1943,7 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
         addr,
         vid,
         pid,
-        // Safe because we are transferring ownership to the rawdescriptor
-        descriptor: usb_file.map(|file| {
-            MaybeOwnedDescriptor::Owned(unsafe {
-                SafeDescriptor::from_raw_descriptor(file.into_raw_descriptor())
-            })
-        }),
+        fd: usb_file.map(MaybeOwnedFd::Owned),
     });
     let response = handle_request(&request, args).map_err(|_| ModifyUsbError::SocketFailed)?;
     match response {
@@ -2118,55 +2030,6 @@ fn pkg_version() -> std::result::Result<(), ()> {
     Ok(())
 }
 
-enum ModifyBatError {
-    BatControlErr(BatControlResult),
-}
-
-impl fmt::Display for ModifyBatError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::ModifyBatError::*;
-
-        match self {
-            BatControlErr(e) => write!(f, "{}", e),
-        }
-    }
-}
-
-fn modify_battery(mut args: std::env::Args) -> std::result::Result<(), ()> {
-    if args.len() < 4 {
-        print_help("crosvm battery BATTERY_TYPE ",
-                   "[status STATUS | present PRESENT | health HEALTH | capacity CAPACITY | aconline ACONLINE ] VM_SOCKET...", &[]);
-        return Err(());
-    }
-
-    // This unwrap will not panic because of the above length check.
-    let battery_type = args.next().unwrap();
-    let property = args.next().unwrap();
-    let target = args.next().unwrap();
-
-    let response = match battery_type.parse::<BatteryType>() {
-        Ok(type_) => match BatControlCommand::new(property, target) {
-            Ok(cmd) => {
-                let request = VmRequest::BatCommand(type_, cmd);
-                Ok(handle_request(&request, args)?)
-            }
-            Err(e) => Err(ModifyBatError::BatControlErr(e)),
-        },
-        Err(e) => Err(ModifyBatError::BatControlErr(e)),
-    };
-
-    match response {
-        Ok(response) => {
-            println!("{}", response);
-            Ok(())
-        }
-        Err(e) => {
-            println!("error {}", e);
-            Err(())
-        }
-    }
-}
-
 fn crosvm_main() -> std::result::Result<(), ()> {
     if let Err(e) = syslog::init() {
         println!("failed to initialize syslog: {}", e);
@@ -2197,7 +2060,6 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         Some("disk") => disk_cmd(args),
         Some("usb") => modify_usb(args),
         Some("version") => pkg_version(),
-        Some("battery") => modify_battery(args),
         Some(c) => {
             println!("invalid subcommand: {:?}", c);
             print_usage();
@@ -2663,25 +2525,5 @@ mod tests {
     fn parse_gpu_options_not_gfxstream_with_syncfd_specified() {
         assert!(parse_gpu_options(Some("backend=3d,syncfd=true")).is_err());
         assert!(parse_gpu_options(Some("syncfd=true,backend=3d")).is_err());
-    }
-
-    #[test]
-    fn parse_battery_vaild() {
-        parse_battery_options(Some("type=goldfish")).expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_battery_vaild_no_type() {
-        parse_battery_options(None).expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_battery_invaild_parameter() {
-        parse_battery_options(Some("tyep=goldfish")).expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_battery_invaild_type_value() {
-        parse_battery_options(Some("type=xxx")).expect_err("parse should have failed");
     }
 }

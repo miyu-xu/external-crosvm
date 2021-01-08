@@ -6,19 +6,20 @@ use super::constants::*;
 use super::evdev::{grab_evdev, ungrab_evdev};
 use super::InputError;
 use super::Result;
-use base::{warn, AsRawDescriptor, RawDescriptor};
+use base::warn;
 use data_model::DataInit;
 use linux_input_sys::{input_event, virtio_input_event, InputEventDecoder};
 use std::collections::VecDeque;
 use std::io::Read;
 use std::io::Write;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 /// Encapsulates a socket or device node into an abstract event source, providing a common
 /// interface.
 /// It supports read and write operations to provide and accept events just like an event device
 /// node would, except that it handles virtio_input_event instead of input_event structures.
 /// It's necessary to call receive_events() before events are available for read.
-pub trait EventSource: AsRawDescriptor {
+pub trait EventSource: AsRawFd {
     /// Perform any necessary initialization before receiving and sending events from/to the source.
     fn init(&mut self) -> Result<()> {
         Ok(())
@@ -48,9 +49,9 @@ pub struct EventSourceImpl<T> {
     read_idx: usize,
 }
 
-impl<T: AsRawDescriptor> EventSourceImpl<T> {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.source.as_raw_descriptor()
+impl<T: AsRawFd> EventSourceImpl<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.source.as_raw_fd()
     }
 }
 
@@ -140,7 +141,7 @@ pub struct SocketEventSource<T> {
 
 impl<T> SocketEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawFd,
 {
     pub fn new(source: T) -> SocketEventSource<T> {
         SocketEventSource {
@@ -149,15 +150,15 @@ where
     }
 }
 
-impl<T: AsRawDescriptor> AsRawDescriptor for SocketEventSource<T> {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.evt_source_impl.as_raw_descriptor()
+impl<T: AsRawFd> AsRawFd for SocketEventSource<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.evt_source_impl.as_raw_fd()
     }
 }
 
 impl<T> EventSource for SocketEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawFd,
 {
     fn init(&mut self) -> Result<()> {
         Ok(())
@@ -192,7 +193,7 @@ pub struct EvdevEventSource<T> {
 
 impl<T> EvdevEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawFd,
 {
     pub fn new(source: T) -> EvdevEventSource<T> {
         EvdevEventSource {
@@ -201,15 +202,15 @@ where
     }
 }
 
-impl<T: AsRawDescriptor> AsRawDescriptor for EvdevEventSource<T> {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.evt_source_impl.as_raw_descriptor()
+impl<T: AsRawFd> AsRawFd for EvdevEventSource<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.evt_source_impl.as_raw_fd()
     }
 }
 
 impl<T> EventSource for EvdevEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawFd,
 {
     fn init(&mut self) -> Result<()> {
         grab_evdev(self)

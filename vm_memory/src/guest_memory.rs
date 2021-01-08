@@ -8,6 +8,7 @@ use std::convert::AsRef;
 use std::convert::TryFrom;
 use std::fmt::{self, Display};
 use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::result;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use crate::guest_address::GuestAddress;
 use base::{pagesize, Error as SysError};
 use base::{
     AsRawDescriptor, MappedRegion, MemfdSeals, MemoryMapping, MemoryMappingBuilder, MmapError,
-    RawDescriptor, SharedMemory, SharedMemoryUnix,
+    SharedMemory, SharedMemoryUnix,
 };
 use cros_async::{
     uring_mem::{self, BorrowedIoVec},
@@ -114,8 +115,8 @@ pub struct GuestMemory {
     memfd: Arc<SharedMemory>,
 }
 
-impl AsRawDescriptor for GuestMemory {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
+impl AsRawFd for GuestMemory {
+    fn as_raw_fd(&self) -> RawFd {
         self.memfd.as_raw_descriptor()
     }
 }

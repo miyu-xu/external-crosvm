@@ -3,10 +3,11 @@
 // found in the LICENSE file.
 
 use std::io::{self, Read, Write};
+use std::os::unix::io::RawFd;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::thread;
 
-use base::{error, Event, PollToken, RawDescriptor, WaitContext};
+use base::{error, Event, PollContext, PollToken};
 use data_model::{DataInit, Le16, Le32};
 use vm_memory::GuestMemory;
 
@@ -235,7 +236,7 @@ impl Worker {
         // the main worker thread with an event for notification bridges this gap.
         let mut in_channel = self.spawn_input_thread(&in_avail_evt);
 
-        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
             (&transmit_evt, Token::TransmitQueueAvailable),
             (&receive_evt, Token::ReceiveQueueAvailable),
             (&in_avail_evt, Token::InputAvailable),
@@ -244,7 +245,7 @@ impl Worker {
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating WaitContext: {}", e);
+                error!("failed creating PollContext: {}", e);
                 return;
             }
         };
@@ -254,8 +255,8 @@ impl Worker {
             None => Box::new(io::sink()),
         };
 
-        'wait: loop {
-            let events = match wait_ctx.wait() {
+        'poll: loop {
+            let events = match poll_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -263,33 +264,33 @@ impl Worker {
                 }
             };
 
-            for event in events.iter().filter(|e| e.is_readable) {
-                match event.token {
+            for event in events.iter_readable() {
+                match event.token() {
                     Token::TransmitQueueAvailable => {
                         if let Err(e) = transmit_evt.read() {
                             error!("failed reading transmit queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         self.process_transmit_queue(&mut transmit_queue, &mut output);
                     }
                     Token::ReceiveQueueAvailable => {
                         if let Err(e) = receive_evt.read() {
                             error!("failed reading receive queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         self.handle_input(&mut in_channel, &mut receive_queue);
                     }
                     Token::InputAvailable => {
                         if let Err(e) = in_avail_evt.read() {
                             error!("failed reading in_avail_evt: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         self.handle_input(&mut in_channel, &mut receive_queue);
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'wait,
+                    Token::Kill => break 'poll,
                 }
             }
         }
@@ -303,7 +304,7 @@ pub struct Console {
     worker_thread: Option<thread::JoinHandle<Worker>>,
     input: Option<Box<dyn io::Read + Send>>,
     output: Option<Box<dyn io::Write + Send>>,
-    keep_rds: Vec<RawDescriptor>,
+    keep_fds: Vec<RawFd>,
 }
 
 impl SerialDevice for Console {
@@ -312,7 +313,7 @@ impl SerialDevice for Console {
         _evt: Event,
         input: Option<Box<dyn io::Read + Send>>,
         output: Option<Box<dyn io::Write + Send>>,
-        keep_rds: Vec<RawDescriptor>,
+        keep_fds: Vec<RawFd>,
     ) -> Console {
         Console {
             base_features: base_features(protected_vm),
@@ -320,7 +321,7 @@ impl SerialDevice for Console {
             worker_thread: None,
             input,
             output,
-            keep_rds,
+            keep_fds,
         }
     }
 }
@@ -339,8 +340,8 @@ impl Drop for Console {
 }
 
 impl VirtioDevice for Console {
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
-        self.keep_rds.clone()
+    fn keep_fds(&self) -> Vec<RawFd> {
+        self.keep_fds.clone()
     }
 
     fn features(&self) -> u64 {

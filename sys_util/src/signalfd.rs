@@ -12,7 +12,8 @@ use std::result;
 use libc::{c_void, read, signalfd, signalfd_siginfo};
 use libc::{EAGAIN, SFD_CLOEXEC, SFD_NONBLOCK};
 
-use crate::{errno, signal, AsRawDescriptor, RawDescriptor};
+use crate::errno;
+use crate::signal;
 
 #[derive(Debug)]
 pub enum Error {
@@ -131,12 +132,6 @@ impl SignalFd {
 impl AsRawFd for SignalFd {
     fn as_raw_fd(&self) -> RawFd {
         self.signalfd.as_raw_fd()
-    }
-}
-
-impl AsRawDescriptor for SignalFd {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.signalfd.as_raw_descriptor()
     }
 }
 

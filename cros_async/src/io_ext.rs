@@ -18,13 +18,11 @@
 use crate::poll_source::PollSource;
 use crate::UringSource;
 use async_trait::async_trait;
-use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use thiserror::Error as ThisError;
 
 use crate::uring_mem::{BackingMemory, MemRegion};
-use sys_util::net::UnixSeqpacket;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -96,41 +94,27 @@ pub trait IoSourceExt<F>: ReadAsync + WriteAsync {
     fn as_source(&self) -> &F;
 }
 
-/// Marker trait signifying that the implementor is suitable for use with
-/// cros_async. Examples of this include File, and sys_util::net::UnixSeqpacket.
-///
-/// (Note: it'd be really nice to implement a TryFrom for any implementors, and
-/// remove our factory functions. Unfortunately
-/// https://github.com/rust-lang/rust/issues/50133 makes that too painful.)
-pub trait IntoAsync: AsRawFd {}
-
-impl IntoAsync for File {}
-impl IntoAsync for UnixSeqpacket {}
-impl IntoAsync for &UnixSeqpacket {}
-
 /// Creates a concrete `IoSourceExt` that uses uring if available or falls back to the fd_executor if not.
 /// Note that on older kernels (pre 5.6) FDs such as event or timer FDs are unreliable when
 /// having readvwritev performed through io_uring. To deal with EventFd or TimerFd, use
 /// `IoSourceExt::read_u64`.
-pub fn async_from<'a, F: IntoAsync + 'a>(f: F) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
+pub fn new<'a, F: AsRawFd + 'a>(f: F) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
     if crate::uring_executor::use_uring() {
-        async_uring_from(f)
+        new_uring(f)
     } else {
-        async_poll_from(f)
+        new_poll(f)
     }
 }
 
 /// Creates a concrete `IoSourceExt` using Uring.
-pub(crate) fn async_uring_from<'a, F: IntoAsync + 'a>(
-    f: F,
-) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
+pub(crate) fn new_uring<'a, F: AsRawFd + 'a>(f: F) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
     UringSource::new(f)
         .map(|u| Box::new(u) as Box<dyn IoSourceExt<F>>)
         .map_err(Error::Uring)
 }
 
 /// Creates a concrete `IoSourceExt` using the fd_executor.
-pub(crate) fn async_poll_from<'a, F: IntoAsync + 'a>(f: F) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
+pub(crate) fn new_poll<'a, F: AsRawFd + 'a>(f: F) -> Result<Box<dyn IoSourceExt<F> + 'a>> {
     PollSource::new(f)
         .map(|u| Box::new(u) as Box<dyn IoSourceExt<F>>)
         .map_err(Error::Poll)
@@ -161,7 +145,7 @@ mod tests {
         }
 
         let f = File::open("/dev/zero").unwrap();
-        let uring_source = async_uring_from(f).unwrap();
+        let uring_source = new_uring(f).unwrap();
         let fut = go(uring_source);
         pin_mut!(fut);
         crate::uring_executor::URingExecutor::new(crate::RunOne::new(fut))
@@ -170,7 +154,7 @@ mod tests {
             .unwrap();
 
         let f = File::open("/dev/zero").unwrap();
-        let poll_source = async_poll_from(f).unwrap();
+        let poll_source = new_poll(f).unwrap();
         let fut = go(poll_source);
         pin_mut!(fut);
         crate::fd_executor::FdExecutor::new(crate::RunOne::new(fut))
@@ -191,7 +175,7 @@ mod tests {
         }
 
         let f = OpenOptions::new().write(true).open("/dev/null").unwrap();
-        let uring_source = async_uring_from(f).unwrap();
+        let uring_source = new_uring(f).unwrap();
         let fut = go(uring_source);
         pin_mut!(fut);
         crate::uring_executor::URingExecutor::new(crate::RunOne::new(fut))
@@ -200,7 +184,7 @@ mod tests {
             .unwrap();
 
         let f = OpenOptions::new().write(true).open("/dev/null").unwrap();
-        let poll_source = async_poll_from(f).unwrap();
+        let poll_source = new_poll(f).unwrap();
         let fut = go(poll_source);
         pin_mut!(fut);
         crate::fd_executor::FdExecutor::new(crate::RunOne::new(fut))
@@ -239,7 +223,7 @@ mod tests {
         }
 
         let f = File::open("/dev/zero").unwrap();
-        let uring_source = async_uring_from(f).unwrap();
+        let uring_source = new_uring(f).unwrap();
         let fut = go(uring_source);
         pin_mut!(fut);
         crate::uring_executor::URingExecutor::new(crate::RunOne::new(fut))
@@ -248,7 +232,7 @@ mod tests {
             .unwrap();
 
         let f = File::open("/dev/zero").unwrap();
-        let poll_source = async_poll_from(f).unwrap();
+        let poll_source = new_poll(f).unwrap();
         let fut = go(poll_source);
         pin_mut!(fut);
         crate::fd_executor::FdExecutor::new(crate::RunOne::new(fut))
@@ -273,7 +257,7 @@ mod tests {
         }
 
         let f = OpenOptions::new().write(true).open("/dev/null").unwrap();
-        let uring_source = async_uring_from(f).unwrap();
+        let uring_source = new_uring(f).unwrap();
         let fut = go(uring_source);
         pin_mut!(fut);
         crate::uring_executor::URingExecutor::new(crate::RunOne::new(fut))
@@ -282,7 +266,7 @@ mod tests {
             .unwrap();
 
         let f = OpenOptions::new().write(true).open("/dev/null").unwrap();
-        let poll_source = async_poll_from(f).unwrap();
+        let poll_source = new_poll(f).unwrap();
         let fut = go(poll_source);
         pin_mut!(fut);
         crate::fd_executor::FdExecutor::new(crate::RunOne::new(fut))
@@ -293,8 +277,8 @@ mod tests {
 
     #[test]
     fn read_u64s() {
-        async fn go(async_source: File) -> u64 {
-            let source = async_from(async_source).unwrap();
+        async fn go<F: AsRawFd + Unpin>(async_source: F) -> u64 {
+            let source = new(async_source).unwrap();
             source.read_u64().await.unwrap()
         }
 
@@ -310,7 +294,7 @@ mod tests {
 
     #[test]
     fn read_eventfds() {
-        use sys_util::EventFd;
+        use base::EventFd;
 
         async fn go<F: AsRawFd + Unpin>(source: Box<dyn IoSourceExt<F>>) -> u64 {
             source.read_u64().await.unwrap()
@@ -318,7 +302,7 @@ mod tests {
 
         let eventfd = EventFd::new().unwrap();
         eventfd.write(0x55).unwrap();
-        let fut = go(async_uring_from(eventfd).unwrap());
+        let fut = go(new(eventfd).unwrap());
         pin_mut!(fut);
         let val = crate::uring_executor::URingExecutor::new(crate::RunOne::new(fut))
             .unwrap()
@@ -328,7 +312,7 @@ mod tests {
 
         let eventfd = EventFd::new().unwrap();
         eventfd.write(0xaa).unwrap();
-        let fut = go(async_poll_from(eventfd).unwrap());
+        let fut = go(new_poll(eventfd).unwrap());
         pin_mut!(fut);
         let val = crate::fd_executor::FdExecutor::new(crate::RunOne::new(fut))
             .unwrap()
@@ -350,7 +334,7 @@ mod tests {
         }
 
         let f = tempfile::tempfile().unwrap();
-        let source = async_from(f).unwrap();
+        let source = new(f).unwrap();
 
         let fut = go(source);
         pin_mut!(fut);

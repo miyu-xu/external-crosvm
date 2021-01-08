@@ -74,8 +74,7 @@ mod waker;
 pub use event::EventAsync;
 pub use executor::Executor;
 pub use io_ext::{
-    async_from, Error as AsyncError, IntoAsync, IoSourceExt, ReadAsync, Result as AsyncResult,
-    WriteAsync,
+    new, Error as AsyncError, IoSourceExt, ReadAsync, Result as AsyncResult, WriteAsync,
 };
 pub use poll_source::PollSource;
 pub use select::SelectResult;

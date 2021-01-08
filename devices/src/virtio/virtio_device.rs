@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::{Event, RawDescriptor};
+use std::os::unix::io::RawFd;
+
+use base::Event;
 use vm_memory::GuestMemory;
 
 use super::*;
@@ -26,7 +28,7 @@ pub trait VirtioDevice: Send {
 
     /// A vector of device-specific file descriptors that must be kept open
     /// after jailing. Must be called before the process is jailed.
-    fn keep_rds(&self) -> Vec<RawDescriptor>;
+    fn keep_fds(&self) -> Vec<RawFd>;
 
     /// The virtio device type.
     fn device_type(&self) -> u32;

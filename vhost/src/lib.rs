@@ -13,11 +13,12 @@ use std::alloc::Layout;
 use std::fmt::{self, Display};
 use std::io::Error as IoError;
 use std::mem;
+use std::os::unix::io::AsRawFd;
 use std::ptr::null;
 
 use assertions::const_assert;
 use base::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
-use base::{AsRawDescriptor, Event, LayoutAllocation};
+use base::{Event, LayoutAllocation};
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 #[derive(Debug)]
@@ -63,7 +64,7 @@ fn ioctl_result<T>() -> Result<T> {
 /// from regular virtio devices because the host kernel takes care of handling all the data
 /// transfer.  The device itself only needs to deal with setting up the kernel driver and
 /// managing the control channel.
-pub trait Vhost: AsRawDescriptor + std::marker::Sized {
+pub trait Vhost: AsRawFd + std::marker::Sized {
     /// Get the guest memory mapping.
     fn mem(&self) -> &GuestMemory;
 
@@ -297,11 +298,11 @@ pub trait Vhost: AsRawDescriptor + std::marker::Sized {
     ///
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
-    /// * `event` - Event to trigger.
-    fn set_vring_call(&self, queue_index: usize, event: &Event) -> Result<()> {
+    /// * `fd` - Event to trigger.
+    fn set_vring_call(&self, queue_index: usize, fd: &Event) -> Result<()> {
         let vring_file = virtio_sys::vhost_vring_file {
             index: queue_index as u32,
-            event: event.as_raw_descriptor(),
+            fd: fd.as_raw_fd(),
         };
 
         // This ioctl is called on a valid vhost_net fd and has its
@@ -319,10 +320,10 @@ pub trait Vhost: AsRawDescriptor + std::marker::Sized {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `fd` - Event that will be signaled from guest.
-    fn set_vring_kick(&self, queue_index: usize, event: &Event) -> Result<()> {
+    fn set_vring_kick(&self, queue_index: usize, fd: &Event) -> Result<()> {
         let vring_file = virtio_sys::vhost_vring_file {
             index: queue_index as u32,
-            event: event.as_raw_descriptor(),
+            fd: fd.as_raw_fd(),
         };
 
         // This ioctl is called on a valid vhost_net fd and has its

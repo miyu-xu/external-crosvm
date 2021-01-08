@@ -19,7 +19,6 @@ use std::time::Duration;
 use libc::{recvfrom, MSG_PEEK, MSG_TRUNC};
 
 use crate::sock_ctrl_msg::{ScmSocket, SCM_SOCKET_MAX_FD_COUNT};
-use crate::{AsRawDescriptor, RawDescriptor};
 
 // Offset of sun_path in structure sockaddr_un.
 fn sun_path_offset() -> usize {
@@ -335,18 +334,6 @@ impl FromRawFd for UnixSeqpacket {
 
 impl AsRawFd for UnixSeqpacket {
     fn as_raw_fd(&self) -> RawFd {
-        self.fd
-    }
-}
-
-impl AsRawFd for &UnixSeqpacket {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd
-    }
-}
-
-impl AsRawDescriptor for UnixSeqpacket {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
         self.fd
     }
 }

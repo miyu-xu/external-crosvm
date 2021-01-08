@@ -6,10 +6,11 @@ use std::ffi::CStr;
 use std::io;
 use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
+use std::os::unix::io::AsRawFd;
 
-use base::AsRawDescriptor;
 use data_model::DataInit;
-use fuse::filesystem::{DirEntry, DirectoryIterator};
+
+use crate::virtio::fs::filesystem::{DirEntry, DirectoryIterator};
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -28,9 +29,9 @@ pub struct ReadDir<P> {
 }
 
 impl<P: DerefMut<Target = [u8]>> ReadDir<P> {
-    pub fn new<D: AsRawDescriptor>(dir: &D, offset: libc::off64_t, mut buf: P) -> io::Result<Self> {
+    pub fn new<D: AsRawFd>(dir: &D, offset: libc::off64_t, mut buf: P) -> io::Result<Self> {
         // Safe because this doesn't modify any memory and we check the return value.
-        let res = unsafe { libc::lseek64(dir.as_raw_descriptor(), offset, libc::SEEK_SET) };
+        let res = unsafe { libc::lseek64(dir.as_raw_fd(), offset, libc::SEEK_SET) };
         if res < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -40,7 +41,7 @@ impl<P: DerefMut<Target = [u8]>> ReadDir<P> {
         let res = unsafe {
             libc::syscall(
                 libc::SYS_getdents64,
-                dir.as_raw_descriptor(),
+                dir.as_raw_fd(),
                 buf.as_mut_ptr() as *mut LinuxDirent64,
                 buf.len() as libc::c_int,
             )

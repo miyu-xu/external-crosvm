@@ -12,9 +12,10 @@ use crate::usb::xhci::xhci::Xhci;
 use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use crate::usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XhciRegs};
 use crate::utils::FailHandle;
-use base::{error, Event, RawDescriptor};
+use base::{error, Event};
 use resources::{Alloc, MmioType, SystemAllocator};
 use std::mem;
+use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use vm_memory::GuestMemory;
@@ -170,9 +171,9 @@ impl PciDevice for XhciController {
         self.pci_address = Some(address);
     }
 
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
+    fn keep_fds(&self) -> Vec<RawFd> {
         match &self.state {
-            XhciControllerState::Created { device_provider } => device_provider.keep_rds(),
+            XhciControllerState::Created { device_provider } => device_provider.keep_fds(),
             _ => {
                 error!("xhci controller is in a wrong state");
                 vec![]

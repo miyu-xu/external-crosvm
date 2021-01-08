@@ -8,6 +8,7 @@ use std::env::{current_exe, var_os};
 use std::ffi::OsString;
 use std::fs::remove_file;
 use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
@@ -126,7 +127,7 @@ fn test_plugin(src: &str) {
     run_plugin(&bin_path.0, true);
 }
 
-fn keep_fd_on_exec<F: AsRawDescriptor>(f: &F) {
+fn keep_fd_on_exec<F: AsRawFd>(f: &F) {
     unsafe {
         ioctl(f, 0x5450 /* FIONCLEX */);
     }

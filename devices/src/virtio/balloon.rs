@@ -3,13 +3,12 @@
 // found in the LICENSE file.
 
 use std::fmt::{self, Display};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use base::{
-    self, error, info, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, WaitContext,
-};
+use base::{self, error, info, warn, Event, PollContext, PollToken};
 use data_model::{DataInit, Le16, Le32, Le64};
 use msg_socket::{MsgReceiver, MsgSender};
 use vm_control::{
@@ -229,7 +228,7 @@ impl Worker {
         let deflate_queue_evt = queue_evts.remove(0);
         let stats_queue_evt = queue_evts.remove(0);
 
-        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
             (&inflate_queue_evt, Token::Inflate),
             (&deflate_queue_evt, Token::Deflate),
             (&stats_queue_evt, Token::Stats),
@@ -239,13 +238,13 @@ impl Worker {
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating WaitContext: {}", e);
+                error!("failed creating PollContext: {}", e);
                 return;
             }
         };
 
-        'wait: loop {
-            let events = match wait_ctx.wait() {
+        'poll: loop {
+            let events = match poll_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -255,26 +254,26 @@ impl Worker {
 
             let mut needs_interrupt_inflate = false;
             let mut needs_interrupt_deflate = false;
-            for event in events.iter().filter(|e| e.is_readable) {
-                match event.token {
+            for event in events.iter_readable() {
+                match event.token() {
                     Token::Inflate => {
                         if let Err(e) = inflate_queue_evt.read() {
                             error!("failed reading inflate queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         needs_interrupt_inflate |= self.process_inflate_deflate(true);
                     }
                     Token::Deflate => {
                         if let Err(e) = deflate_queue_evt.read() {
                             error!("failed reading deflate queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         needs_interrupt_deflate |= self.process_inflate_deflate(false);
                     }
                     Token::Stats => {
                         if let Err(e) = stats_queue_evt.read() {
                             error!("failed reading stats queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         self.process_stats();
                     }
@@ -298,14 +297,14 @@ impl Worker {
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'wait,
+                    Token::Kill => break 'poll,
                 }
             }
-            for event in events.iter().filter(|e| e.is_hungup) {
-                if event.token == Token::CommandSocket && !event.is_readable {
+            for event in events.iter_hungup() {
+                if event.token() == Token::CommandSocket && !event.readable() {
                     // If this call fails, the command socket was already removed from the
-                    // WaitContext.
-                    let _ = wait_ctx.delete(&self.command_socket);
+                    // PollContext.
+                    let _ = poll_ctx.delete(&self.command_socket);
                 }
             }
 
@@ -374,8 +373,8 @@ impl Drop for Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
-        vec![self.command_socket.as_ref().unwrap().as_raw_descriptor()]
+    fn keep_fds(&self) -> Vec<RawFd> {
+        vec![self.command_socket.as_ref().unwrap().as_raw_fd()]
     }
 
     fn device_type(&self) -> u32 {

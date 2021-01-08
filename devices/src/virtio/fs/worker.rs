@@ -2,48 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
-use std::io;
 use std::sync::Arc;
 
-use base::{error, Event, PollToken, WaitContext};
-use fuse::filesystem::{FileSystem, ZeroCopyReader, ZeroCopyWriter};
+use base::{error, Event, PollContext, PollToken};
 use vm_memory::GuestMemory;
 
+use crate::virtio::fs::filesystem::FileSystem;
+use crate::virtio::fs::server::Server;
 use crate::virtio::fs::{Error, Result};
 use crate::virtio::{Interrupt, Queue, Reader, Writer};
 
-impl fuse::Reader for Reader {}
-
-impl fuse::Writer for Writer {
-    fn write_at<F>(&mut self, offset: usize, f: F) -> io::Result<usize>
-    where
-        F: Fn(&mut Self) -> io::Result<usize>,
-    {
-        let mut writer = Writer::split_at(self, offset);
-        f(&mut writer)
-    }
-
-    fn has_sufficient_buffer(&self, size: u32) -> bool {
-        self.available_bytes() >= size as usize
-    }
-}
-
-impl ZeroCopyReader for Reader {
-    fn read_to(&mut self, f: &mut File, count: usize, off: u64) -> io::Result<usize> {
-        self.read_to_at(f, count, off)
-    }
-}
-
-impl ZeroCopyWriter for Writer {
-    fn write_from(&mut self, f: &mut File, count: usize, off: u64) -> io::Result<usize> {
-        self.write_from_at(f, count, off)
-    }
-}
 pub struct Worker<F: FileSystem + Sync> {
     mem: GuestMemory,
     queue: Queue,
-    server: Arc<fuse::Server<F>>,
+    server: Arc<Server<F>>,
     irq: Arc<Interrupt>,
 }
 
@@ -51,7 +23,7 @@ impl<F: FileSystem + Sync> Worker<F> {
     pub fn new(
         mem: GuestMemory,
         queue: Queue,
-        server: Arc<fuse::Server<F>>,
+        server: Arc<Server<F>>,
         irq: Arc<Interrupt>,
     ) -> Worker<F> {
         Worker {
@@ -101,20 +73,20 @@ impl<F: FileSystem + Sync> Worker<F> {
             Kill,
         }
 
-        let wait_ctx =
-            WaitContext::build_with(&[(&queue_evt, Token::QueueReady), (&kill_evt, Token::Kill)])
-                .map_err(Error::CreateWaitContext)?;
+        let poll_ctx =
+            PollContext::build_with(&[(&queue_evt, Token::QueueReady), (&kill_evt, Token::Kill)])
+                .map_err(Error::CreatePollContext)?;
 
         if watch_resample_event {
-            wait_ctx
+            poll_ctx
                 .add(self.irq.get_resample_evt(), Token::InterruptResample)
-                .map_err(Error::CreateWaitContext)?;
+                .map_err(Error::CreatePollContext)?;
         }
 
         loop {
-            let events = wait_ctx.wait().map_err(Error::WaitError)?;
-            for event in events.iter().filter(|e| e.is_readable) {
-                match event.token {
+            let events = poll_ctx.wait().map_err(Error::PollError)?;
+            for event in events.iter_readable() {
+                match event.token() {
                     Token::QueueReady => {
                         queue_evt.read().map_err(Error::ReadQueueEvent)?;
                         if let Err(e) = self.process_queue() {

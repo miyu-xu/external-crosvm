@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
 use std::sync::Arc;
 
 use super::error::*;
@@ -12,16 +11,17 @@ use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use crate::utils::AsyncJobQueue;
 use crate::utils::{EventHandler, EventLoop, FailHandle};
 use base::net::UnixSeqpacket;
-use base::{error, AsRawDescriptor, FromRawDescriptor, RawDescriptor, WatchingEvents};
+use base::{error, WatchingEvents};
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use std::collections::HashMap;
 use std::mem;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Duration;
 use sync::Mutex;
 use usb_util::Device;
 use vm_control::{
-    MaybeOwnedDescriptor, UsbControlAttachedDevice, UsbControlCommand, UsbControlResult,
-    UsbControlSocket, USB_CONTROL_MAX_PORTS,
+    MaybeOwnedFd, UsbControlAttachedDevice, UsbControlCommand, UsbControlResult, UsbControlSocket,
+    USB_CONTROL_MAX_PORTS,
 };
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
@@ -110,9 +110,9 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
             })
     }
 
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
+    fn keep_fds(&self) -> Vec<RawFd> {
         match self {
-            HostBackendDeviceProvider::Created { sock } => vec![sock.lock().as_raw_descriptor()],
+            HostBackendDeviceProvider::Created { sock } => vec![sock.lock().as_raw_fd()],
             _ => {
                 error!(
                     "Trying to get keepfds when HostBackendDeviceProvider is not in created state"
@@ -160,18 +160,17 @@ impl ProviderInner {
 
     /// Open a usbdevfs file to create a host USB device object.
     /// `fd` should be an open file descriptor for a file in `/dev/bus/usb`.
-    fn handle_attach_device(&self, fd: Option<MaybeOwnedDescriptor>) -> UsbControlResult {
+    fn handle_attach_device(&self, fd: Option<MaybeOwnedFd>) -> UsbControlResult {
         let usb_file = match fd {
-            Some(MaybeOwnedDescriptor::Owned(file)) => file,
+            Some(MaybeOwnedFd::Owned(file)) => file,
             _ => {
                 error!("missing fd in UsbControlCommand::AttachDevice message");
                 return UsbControlResult::FailedToOpenDevice;
             }
         };
 
-        let raw_descriptor = usb_file.as_raw_descriptor();
-        // Safe as it is valid to have multiple variables accessing the same fd.
-        let device = match Device::new(unsafe { File::from_raw_descriptor(raw_descriptor) }) {
+        let raw_fd = usb_file.as_raw_fd();
+        let device = match Device::new(usb_file) {
             Ok(d) => d,
             Err(e) => {
                 error!("could not construct USB device from fd: {}", e);
@@ -186,7 +185,7 @@ impl ProviderInner {
         });
 
         if let Err(e) = self.event_loop.add_event(
-            &MaybeOwnedDescriptor::Borrowed(raw_descriptor),
+            &MaybeOwnedFd::Borrowed(raw_fd),
             WatchingEvents::empty().set_read().set_write(),
             Arc::downgrade(&event_handler),
         ) {
@@ -231,11 +230,9 @@ impl ProviderInner {
                     let device = device_ctx.device.lock();
                     let fd = device.fd();
 
-                    if let Err(e) =
-                        self.event_loop
-                            .remove_event_for_fd(&MaybeOwnedDescriptor::Borrowed(
-                                fd.as_raw_descriptor(),
-                            ))
+                    if let Err(e) = self
+                        .event_loop
+                        .remove_event_for_fd(&MaybeOwnedFd::Borrowed(fd.as_raw_fd()))
                     {
                         error!(
                             "failed to remove poll change handler from event loop: {}",
@@ -277,9 +274,7 @@ impl ProviderInner {
         let sock = self.sock.lock();
         let cmd = sock.recv().map_err(Error::ReadControlSock)?;
         let result = match cmd {
-            UsbControlCommand::AttachDevice { descriptor, .. } => {
-                self.handle_attach_device(descriptor)
-            }
+            UsbControlCommand::AttachDevice { fd, .. } => self.handle_attach_device(fd),
             UsbControlCommand::DetachDevice { port } => self.handle_detach_device(port),
             UsbControlCommand::ListDevice { ports } => self.handle_list_devices(ports),
         };

@@ -8,11 +8,12 @@
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
+use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::usize;
 
-use base::{error, warn, AsRawDescriptor, Error, ExternalMapping};
+use base::{error, warn, Error, ExternalMapping};
 use data_model::*;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::Alloc;
@@ -37,7 +38,7 @@ use crate::virtio::gpu::{
 use crate::virtio::resource_bridge::{PlaneInfo, ResourceInfo, ResourceResponse};
 
 use vm_control::{
-    MaybeOwnedDescriptor, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+    MaybeOwnedFd, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
 };
 
 struct Virtio3DResource {
@@ -151,7 +152,7 @@ impl VirtioResource for Virtio3DResource {
         };
 
         match display.borrow_mut().import_dmabuf(
-            dmabuf.as_raw_descriptor(),
+            dmabuf.as_raw_fd(),
             offset,
             stride,
             query.out_modifier,
@@ -828,7 +829,7 @@ impl Backend for Virtio3DBackend {
         let request = match export {
             Ok(ref export) => VmMemoryRequest::RegisterFdAtPciBarOffset(
                 self.pci_bar,
-                MaybeOwnedDescriptor::Borrowed(export.as_raw_descriptor()),
+                MaybeOwnedFd::Borrowed(export.as_raw_fd()),
                 resource.size as usize,
                 offset,
             ),

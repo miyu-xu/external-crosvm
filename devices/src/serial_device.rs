@@ -3,8 +3,9 @@
 // found in the LICENSE file.
 
 use std::io;
+use std::os::unix::io::RawFd;
 
-use base::{Event, RawDescriptor};
+use base::Event;
 
 /// Abstraction over serial-like devices that can be created given an event and optional input and
 /// output streams.
@@ -14,6 +15,6 @@ pub trait SerialDevice {
         interrupt_evt: Event,
         input: Option<Box<dyn io::Read + Send>>,
         output: Option<Box<dyn io::Write + Send>>,
-        keep_rds: Vec<RawDescriptor>,
+        keep_fds: Vec<RawFd>,
     ) -> Self;
 }

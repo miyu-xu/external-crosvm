@@ -4,10 +4,11 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 use crate::{DisplayT, EventDevice, GpuDisplayError, GpuDisplayFramebuffer};
 
-use base::{AsRawDescriptor, Event, RawDescriptor};
+use base::Event;
 use data_model::VolatileSlice;
 
 type SurfaceId = NonZeroU32;
@@ -129,7 +130,7 @@ impl SurfacesHelper {
 }
 
 pub struct DisplayStub {
-    /// This event is never triggered and is used solely to fulfill AsRawDescriptor.
+    /// This event is never triggered and is used solely to fulfill AsRawFd.
     event: Event,
     surfaces: SurfacesHelper,
 }
@@ -184,7 +185,7 @@ impl DisplayT for DisplayStub {
 
     fn import_dmabuf(
         &mut self,
-        _fd: RawDescriptor,
+        _fd: RawFd,
         _offset: u32,
         _stride: u32,
         _modifiers: u64,
@@ -224,8 +225,8 @@ impl DisplayT for DisplayStub {
     }
 }
 
-impl AsRawDescriptor for DisplayStub {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.event.as_raw_descriptor()
+impl AsRawFd for DisplayStub {
+    fn as_raw_fd(&self) -> RawFd {
+        self.event.as_raw_fd()
     }
 }

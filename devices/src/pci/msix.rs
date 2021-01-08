@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 use crate::pci::{PciCapability, PciCapabilityID};
-use base::{error, AsRawDescriptor, Error as SysError, Event, RawDescriptor};
+use base::{error, Error as SysError, Event};
 use msg_socket::{MsgError, MsgReceiver, MsgSender};
 use std::convert::TryInto;
 use std::fmt::{self, Display};
-use vm_control::{MaybeOwnedDescriptor, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse};
+use std::os::unix::io::{AsRawFd, RawFd};
+use vm_control::{MaybeOwnedFd, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse};
 
 use data_model::DataInit;
 
@@ -237,7 +238,7 @@ impl MsixConfig {
             let irqfd = Event::new().unwrap();
             self.msi_device_socket
                 .send(&VmIrqRequest::AllocateOneMsi {
-                    irqfd: MaybeOwnedDescriptor::Borrowed(irqfd.as_raw_descriptor()),
+                    irqfd: MaybeOwnedFd::Borrowed(irqfd.as_raw_fd()),
                 })
                 .map_err(MsixError::AllocateOneMsiSend)?;
             let irq_num: u32;
@@ -497,8 +498,8 @@ impl MsixConfig {
     }
 
     /// Return the raw fd of the MSI device socket
-    pub fn get_msi_socket(&self) -> RawDescriptor {
-        self.msi_device_socket.as_ref().as_raw_descriptor()
+    pub fn get_msi_socket(&self) -> RawFd {
+        self.msi_device_socket.as_ref().as_raw_fd()
     }
 
     /// Return irqfd of MSI-X Table entry
@@ -513,9 +514,9 @@ impl MsixConfig {
     }
 }
 
-impl AsRawDescriptor for MsixConfig {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.msi_device_socket.as_raw_descriptor()
+impl AsRawFd for MsixConfig {
+    fn as_raw_fd(&self) -> RawFd {
+        self.msi_device_socket.as_raw_fd()
     }
 }
 

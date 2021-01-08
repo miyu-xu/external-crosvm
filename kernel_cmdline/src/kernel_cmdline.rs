@@ -39,7 +39,10 @@ impl Display for Error {
 pub type Result<T> = result::Result<T, Error>;
 
 fn valid_char(c: char) -> bool {
-    matches!(c, ' '..='~')
+    match c {
+        ' '..='~' => true,
+        _ => false,
+    }
 }
 
 fn valid_str(s: &str) -> Result<()> {

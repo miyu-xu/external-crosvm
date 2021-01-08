@@ -5,7 +5,6 @@
 use std::fmt::Debug;
 use std::fs::File;
 
-use base::RawDescriptor;
 #[cfg(feature = "wl-dmabuf")]
 use libc::EINVAL;
 

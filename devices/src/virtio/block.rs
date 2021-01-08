@@ -6,6 +6,7 @@ use std::cmp::{max, min};
 use std::fmt::{self, Display};
 use std::io::{self, Write};
 use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::result;
 use std::sync::Arc;
 use std::thread;
@@ -14,10 +15,7 @@ use std::u32;
 
 use base::Error as SysError;
 use base::Result as SysResult;
-use base::{
-    error, info, iov_max, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, Timer,
-    WaitContext,
-};
+use base::{error, info, iov_max, warn, Event, PollContext, PollToken, Timer};
 use data_model::{DataInit, Le16, Le32, Le64};
 use disk::DiskFile;
 use msg_socket::{MsgReceiver, MsgSender};
@@ -379,7 +377,7 @@ impl Worker {
         };
         let mut flush_timer_armed = false;
 
-        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
             (&flush_timer, Token::FlushTimer),
             (&queue_evt, Token::QueueAvailable),
             (self.interrupt.get_resample_evt(), Token::InterruptResample),
@@ -393,13 +391,13 @@ impl Worker {
         }) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating WaitContext: {}", e);
+                error!("failed creating PollContext: {}", e);
                 return;
             }
         };
 
-        'wait: loop {
-            let events = match wait_ctx.wait() {
+        'poll: loop {
+            let events = match poll_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -408,22 +406,22 @@ impl Worker {
             };
 
             let mut needs_config_interrupt = false;
-            for event in events.iter().filter(|e| e.is_readable) {
-                match event.token {
+            for event in events.iter_readable() {
+                match event.token() {
                     Token::FlushTimer => {
                         if let Err(e) = self.disk_image.fsync() {
                             error!("Failed to flush the disk: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         if let Err(e) = flush_timer.wait() {
                             error!("Failed to clear flush timer: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                     }
                     Token::QueueAvailable => {
                         if let Err(e) = queue_evt.read() {
                             error!("failed reading queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         self.process_queue(0, &mut flush_timer, &mut flush_timer_armed);
                     }
@@ -432,14 +430,14 @@ impl Worker {
                             Some(cs) => cs,
                             None => {
                                 error!("received control socket request with no control socket");
-                                break 'wait;
+                                break 'poll;
                             }
                         };
                         let req = match control_socket.recv() {
                             Ok(req) => req,
                             Err(e) => {
                                 error!("control socket failed recv: {}", e);
-                                break 'wait;
+                                break 'poll;
                             }
                         };
 
@@ -456,13 +454,13 @@ impl Worker {
                         // We already know there is Some control_socket used to recv a request.
                         if let Err(e) = self.control_socket.as_ref().unwrap().send(&resp) {
                             error!("control socket failed send: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'wait,
+                    Token::Kill => break 'poll,
                 }
             }
             if needs_config_interrupt {
@@ -718,18 +716,18 @@ impl Drop for Block {
 }
 
 impl VirtioDevice for Block {
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
-        let mut keep_rds = Vec::new();
+    fn keep_fds(&self) -> Vec<RawFd> {
+        let mut keep_fds = Vec::new();
 
         if let Some(disk_image) = &self.disk_image {
-            keep_rds.extend(disk_image.as_raw_descriptors());
+            keep_fds.extend(disk_image.as_raw_descriptors());
         }
 
         if let Some(control_socket) = &self.control_socket {
-            keep_rds.push(control_socket.as_raw_descriptor());
+            keep_fds.push(control_socket.as_raw_fd());
         }
 
-        keep_rds
+        keep_fds
     }
 
     fn features(&self) -> u64 {

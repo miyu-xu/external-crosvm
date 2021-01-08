@@ -21,7 +21,7 @@ use std::task::Waker;
 
 use slab::Slab;
 
-use sys_util::{error, PollContext, WatchingEvents};
+use base::{PollContext, WatchingEvents};
 
 use crate::executor::{ExecutableFuture, Executor, FutureList};
 use crate::WakerToken;
@@ -31,15 +31,15 @@ pub enum Error {
     /// Attempts to create two Executors on the same thread fail.
     AttemptedDuplicateExecutor,
     /// Failed to copy the FD for the polling context.
-    DuplicatingFd(sys_util::Error),
+    DuplicatingFd(base::Error),
     /// Failed accessing the thread local storage for wakers.
     InvalidContext,
     /// Creating a context to wait on FDs failed.
-    CreatingContext(sys_util::Error),
+    CreatingContext(base::Error),
     /// PollContext failure.
-    PollContextError(sys_util::Error),
+    PollContextError(base::Error),
     /// Failed to submit the waker to the polling context.
-    SubmittingWaker(sys_util::Error),
+    SubmittingWaker(base::Error),
     /// A Waker was canceled, but the operation isn't running.
     UnknownWaker,
 }
@@ -150,7 +150,7 @@ pub(crate) fn add_future(future: Pin<Box<dyn Future<Output = ()>>>) -> Result<()
 // Tracks active wakers and associates wakers with the futures that registered them.
 struct FdWakerState {
     poll_ctx: PollContext<usize>,
-    tokens: Slab<(File, Option<Waker>)>,
+    tokens: Slab<(File, Waker)>,
     new_futures: VecDeque<ExecutableFuture<()>>,
 }
 
@@ -175,7 +175,7 @@ impl FdWakerState {
         self.poll_ctx
             .add_fd_with_events(&duped_fd, events, next_token)
             .map_err(Error::SubmittingWaker)?;
-        entry.insert((duped_fd, Some(waker)));
+        entry.insert((duped_fd, waker));
         Ok(WakerToken(next_token))
     }
 
@@ -184,16 +184,9 @@ impl FdWakerState {
         let events = self.poll_ctx.wait().map_err(Error::PollContextError)?;
         for e in events.iter() {
             let token = e.token();
-            if let Some((fd, waker)) = self.tokens.get_mut(token) {
-                self.poll_ctx.delete(fd).map_err(Error::PollContextError)?;
-                if let Some(waker) = waker.take() {
-                    waker.wake();
-                } else {
-                    error!("Woken twice");
-                }
-            } else {
-                error!("Unknown waker");
-            }
+            let (fd, waker) = self.tokens.remove(token);
+            self.poll_ctx.delete(&fd).map_err(Error::PollContextError)?;
+            waker.wake();
         }
         Ok(())
     }
@@ -281,7 +274,7 @@ impl<T: FutureList> Drop for FdExecutor<T> {
 unsafe fn dup_fd(fd: RawFd) -> Result<RawFd> {
     let ret = libc::dup(fd);
     if ret < 0 {
-        Err(Error::DuplicatingFd(sys_util::Error::last()))
+        Err(Error::DuplicatingFd(base::Error::last()))
     } else {
         Ok(ret)
     }
@@ -345,7 +338,7 @@ mod test {
     #[test]
     fn test_it() {
         async fn do_test() {
-            let (r, _w) = sys_util::pipe(true).unwrap();
+            let (r, _w) = base::pipe(true).unwrap();
             let done = Box::pin(async { 5usize });
             let pending = Box::pin(TestFut::new(r));
             match futures::future::select(pending, done).await {

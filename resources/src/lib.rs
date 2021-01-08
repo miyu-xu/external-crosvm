@@ -10,7 +10,6 @@ extern crate gpu_buffer;
 extern crate libc;
 extern crate msg_socket;
 
-use base::RawDescriptor;
 use msg_socket::MsgOnSocket;
 use std::fmt::Display;
 

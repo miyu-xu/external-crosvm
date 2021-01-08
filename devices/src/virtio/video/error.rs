@@ -61,12 +61,6 @@ impl fmt::Display for VideoError {
     }
 }
 
-impl From<libvda::Error> for VideoError {
-    fn from(error: libvda::Error) -> Self {
-        VideoError::VdaError(error)
-    }
-}
-
 impl std::error::Error for VideoError {}
 
 pub type VideoResult<T> = Result<T, VideoError>;

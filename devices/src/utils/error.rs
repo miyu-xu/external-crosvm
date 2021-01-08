@@ -11,9 +11,9 @@ pub enum Error {
     CreateEvent(SysError),
     ReadEvent(SysError),
     WriteEvent(SysError),
-    CreateWaitContext(SysError),
-    WaitContextAddDescriptor(SysError),
-    WaitContextDeleteDescriptor(SysError),
+    CreatePollContext(SysError),
+    PollContextAddFd(SysError),
+    PollContextDeleteFd(SysError),
     StartThread(std::io::Error),
 }
 
@@ -26,11 +26,9 @@ impl Display for Error {
             CreateEvent(e) => write!(f, "failed to create event: {}", e),
             ReadEvent(e) => write!(f, "failed to read event: {}", e),
             WriteEvent(e) => write!(f, "failed to write event: {}", e),
-            CreateWaitContext(e) => write!(f, "failed to create poll context: {}", e),
-            WaitContextAddDescriptor(e) => write!(f, "failed to add fd to poll context: {}", e),
-            WaitContextDeleteDescriptor(e) => {
-                write!(f, "failed to delete fd from poll context: {}", e)
-            }
+            CreatePollContext(e) => write!(f, "failed to create poll context: {}", e),
+            PollContextAddFd(e) => write!(f, "failed to add fd to poll context: {}", e),
+            PollContextDeleteFd(e) => write!(f, "failed to delete fd from poll context: {}", e),
             StartThread(e) => write!(f, "failed to start thread: {}", e),
         }
     }

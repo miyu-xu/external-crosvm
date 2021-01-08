@@ -2,20 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::u32;
 
-use base::{
-    error, AsRawDescriptor, Event, MappedRegion, MemoryMapping, MemoryMappingBuilder, RawDescriptor,
-};
+use base::{error, Event, MappedRegion, MemoryMapping, MemoryMappingBuilder};
 use hypervisor::Datamatch;
 use msg_socket::{MsgReceiver, MsgSender};
 use resources::{Alloc, MmioType, SystemAllocator};
 
 use vfio_sys::*;
 use vm_control::{
-    MaybeOwnedDescriptor, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse,
-    VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+    MaybeOwnedFd, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse, VmMemoryControlRequestSocket,
+    VmMemoryRequest, VmMemoryResponse,
 };
 
 use crate::pci::msix::{
@@ -271,7 +270,7 @@ impl VfioMsiCap {
         }
 
         if let Err(e) = self.vm_socket_irq.send(&VmIrqRequest::AllocateOneMsi {
-            irqfd: MaybeOwnedDescriptor::Borrowed(self.irqfd.as_ref().unwrap().as_raw_descriptor()),
+            irqfd: MaybeOwnedFd::Borrowed(self.irqfd.as_ref().unwrap().as_raw_fd()),
         }) {
             error!("failed to send AllocateOneMsi request: {:?}", e);
             return;
@@ -662,8 +661,8 @@ impl VfioPciDevice {
             None => return,
         };
 
-        if let Some(descriptors) = irqfds {
-            if let Err(e) = self.device.irq_enable(descriptors, VfioIrqType::Msix) {
+        if let Some(fds) = irqfds {
+            if let Err(e) = self.device.irq_enable(fds, VfioIrqType::Msix) {
                 error!("failed to enable msix: {}", e);
                 self.enable_intx();
                 return;
@@ -710,7 +709,7 @@ impl VfioPciDevice {
                 if self
                     .vm_socket_mem
                     .send(&VmMemoryRequest::RegisterMmapMemory {
-                        descriptor: MaybeOwnedDescriptor::Borrowed(self.device.as_raw_descriptor()),
+                        fd: MaybeOwnedFd::Borrowed(self.device.as_raw_fd()),
                         size: mmap_size as usize,
                         offset,
                         gpa: guest_map_start,
@@ -777,22 +776,22 @@ impl PciDevice for VfioPciDevice {
         self.pci_address = Some(address);
     }
 
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
-        let mut rds = self.device.keep_rds();
+    fn keep_fds(&self) -> Vec<RawFd> {
+        let mut fds = self.device.keep_fds();
         if let Some(ref interrupt_evt) = self.interrupt_evt {
-            rds.push(interrupt_evt.as_raw_descriptor());
+            fds.push(interrupt_evt.as_raw_fd());
         }
         if let Some(ref interrupt_resample_evt) = self.interrupt_resample_evt {
-            rds.push(interrupt_resample_evt.as_raw_descriptor());
+            fds.push(interrupt_resample_evt.as_raw_fd());
         }
-        rds.push(self.vm_socket_mem.as_raw_descriptor());
+        fds.push(self.vm_socket_mem.as_raw_fd());
         if let Some(msi_cap) = &self.msi_cap {
-            rds.push(msi_cap.vm_socket_irq.as_raw_descriptor());
+            fds.push(msi_cap.vm_socket_irq.as_raw_fd());
         }
         if let Some(msix_cap) = &self.msix_cap {
-            rds.push(msix_cap.config.as_raw_descriptor());
+            fds.push(msix_cap.config.as_raw_fd());
         }
-        rds
+        fds
     }
 
     fn assign_irq(
@@ -834,7 +833,10 @@ impl PciDevice for VfioPciDevice {
             low = self.config.read_config_dword(offset);
 
             let low_flag = low & 0xf;
-            let is_64bit = low_flag & 0x4 == 0x4;
+            let is_64bit = match low_flag & 0x4 {
+                0x4 => true,
+                _ => false,
+            };
             if (low_flag & 0x1 == 0 || i == VFIO_PCI_ROM_REGION_INDEX) && low != 0 {
                 let mut upper: u32 = 0xffffffff;
                 if is_64bit {

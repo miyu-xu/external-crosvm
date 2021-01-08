@@ -5,9 +5,10 @@
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::thread;
 
-use base::{error, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, WaitContext};
+use base::{error, warn, Event, PollContext, PollToken};
 use vm_memory::GuestMemory;
 
 use super::{Interrupt, Queue, VirtioDevice, Writer, TYPE_RNG};
@@ -73,20 +74,20 @@ impl Worker {
             Kill,
         }
 
-        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
+        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
             (&queue_evt, Token::QueueAvailable),
             (self.interrupt.get_resample_evt(), Token::InterruptResample),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating WaitContext: {}", e);
+                error!("failed creating PollContext: {}", e);
                 return;
             }
         };
 
-        'wait: loop {
-            let events = match wait_ctx.wait() {
+        'poll: loop {
+            let events = match poll_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -95,19 +96,19 @@ impl Worker {
             };
 
             let mut needs_interrupt = false;
-            for event in events.iter().filter(|e| e.is_readable) {
-                match event.token {
+            for event in events.iter_readable() {
+                match event.token() {
                     Token::QueueAvailable => {
                         if let Err(e) = queue_evt.read() {
                             error!("failed reading queue Event: {}", e);
-                            break 'wait;
+                            break 'poll;
                         }
                         needs_interrupt |= self.process_queue();
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'wait,
+                    Token::Kill => break 'poll,
                 }
             }
             if needs_interrupt {
@@ -152,14 +153,14 @@ impl Drop for Rng {
 }
 
 impl VirtioDevice for Rng {
-    fn keep_rds(&self) -> Vec<RawDescriptor> {
-        let mut keep_rds = Vec::new();
+    fn keep_fds(&self) -> Vec<RawFd> {
+        let mut keep_fds = Vec::new();
 
         if let Some(random_file) = &self.random_file {
-            keep_rds.push(random_file.as_raw_descriptor());
+            keep_fds.push(random_file.as_raw_fd());
         }
 
-        keep_rds
+        keep_fds
     }
 
     fn device_type(&self) -> u32 {
