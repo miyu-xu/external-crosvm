@@ -29,6 +29,7 @@ use base::{
 use crosvm::{
     argument::{self, print_help, set_arguments, Argument},
     platform, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
+    DISK_ID_LEN,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::{GpuMode, GpuParameters};
@@ -181,7 +182,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                 }
                 #[cfg(feature = "gfxstream")]
                 "gfxstream" => {
-                    gpu_params.mode = GpuMode::ModeGfxStream;
+                    gpu_params.mode = GpuMode::ModeGfxstream;
                 }
                 // Preferred: Specifying --gpu,backend=<mode>
                 "backend" => match v {
@@ -193,7 +194,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                     #[cfg(feature = "gfxstream")]
                     "gfxstream" => {
-                        gpu_params.mode = GpuMode::ModeGfxStream;
+                        gpu_params.mode = GpuMode::ModeGfxstream;
                     }
                     _ => {
                         return Err(argument::Error::InvalidValue {
@@ -357,7 +358,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     {
         if vulkan_specified || syncfd_specified || angle_specified {
             match gpu_params.mode {
-                GpuMode::ModeGfxStream => {}
+                GpuMode::ModeGfxstream => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(
                         "gpu parameter vulkan and syncfd are only supported for gfxstream backend"
@@ -721,6 +722,13 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
         #[cfg(feature = "audio")]
         "ac97" => {
             let ac97_params = parse_ac97_options(value.unwrap())?;
+            // Add kernel parameters related to the intel8x0 driver for ac97 devices once.
+            if cfg.ac97_parameters.is_empty() {
+                // Set `inside_vm=1` to save some register read ops in the driver.
+                cfg.params.push("snd_intel8x0.inside_vm=1".to_string());
+                // Set `ac97_clock=48000` to save intel8x0_measure_ac97_clock call in the driver.
+                cfg.params.push("snd_intel8x0.ac97_clock=48000".to_string());
+            }
             cfg.ac97_parameters.push(ac97_params);
         }
         "serial" => {
@@ -823,6 +831,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 read_only,
                 sparse: true,
                 block_size: 512,
+                id: None,
             };
 
             for opt in components {
@@ -852,6 +861,22 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                             })?;
                         disk.block_size = block_size;
                     }
+                    "id" => {
+                        if value.len() > DISK_ID_LEN {
+                            return Err(argument::Error::InvalidValue {
+                                value: value.to_owned(),
+                                expected: format!(
+                                    "`id` must be {} or fewer characters",
+                                    DISK_ID_LEN
+                                ),
+                            });
+                        }
+                        let mut id = [0u8; DISK_ID_LEN];
+                        // Slicing id to value's length will never panic
+                        // because we checked that value will fit into id above.
+                        id[..value.len()].copy_from_slice(value.as_bytes());
+                        disk.id = Some(id);
+                    }
                     _ => {
                         return Err(argument::Error::InvalidValue {
                             value: kind.to_owned(),
@@ -877,6 +902,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 read_only: !name.starts_with("rw"),
                 sparse: false,
                 block_size: base::pagesize() as u32,
+                id: None,
             });
         }
         "pstore" => {
@@ -1531,7 +1557,8 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
           Argument::short_value('d', "disk", "PATH[,key=value[,key=value[,...]]", "Path to a disk image followed by optional comma-separated options.
                               Valid keys:
                               sparse=BOOL - Indicates whether the disk should support the discard operation (default: true)
-                              block_size=BYTES - Set the reported block size of the disk (default: 512)"),
+                              block_size=BYTES - Set the reported block size of the disk (default: 512)
+                              id=STRING - Set the block device identifier to an ASCII string, up to 20 characters (default: no ID)"),
           Argument::value("rwdisk", "PATH[,key=value[,key=value[,...]]", "Path to a writable disk image followed by optional comma-separated options.
                               See --disk for valid options."),
           Argument::value("rw-pmem-device", "PATH", "Path to a writable disk image."),

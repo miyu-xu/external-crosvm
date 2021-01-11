@@ -62,13 +62,14 @@ use base::{
 use vm_control::{
     BalloonControlCommand, BalloonControlRequestSocket, BalloonControlResponseSocket,
     BalloonControlResult, DiskControlCommand, DiskControlRequestSocket, DiskControlResponseSocket,
-    DiskControlResult, IrqSetup, UsbControlSocket, VcpuControl, VmControlResponseSocket,
-    VmIrqRequest, VmIrqRequestSocket, VmIrqResponse, VmIrqResponseSocket,
-    VmMemoryControlRequestSocket, VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse,
-    VmMsyncRequest, VmMsyncRequestSocket, VmMsyncResponse, VmMsyncResponseSocket, VmRunMode,
+    DiskControlResult, FsMappingRequest, FsMappingRequestSocket, FsMappingResponseSocket, IrqSetup,
+    UsbControlSocket, VcpuControl, VmControlResponseSocket, VmIrqRequest, VmIrqRequestSocket,
+    VmIrqResponse, VmIrqResponseSocket, VmMemoryControlRequestSocket,
+    VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse, VmMsyncRequest,
+    VmMsyncRequestSocket, VmMsyncResponse, VmMsyncResponseSocket, VmResponse, VmRunMode,
 };
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-use vm_control::{VcpuDebug, VcpuDebugStatus, VcpuDebugStatusMessage, VmRequest, VmResponse};
+use vm_control::{VcpuDebug, VcpuDebugStatus, VcpuDebugStatusMessage, VmRequest};
 use vm_memory::{GuestAddress, GuestMemory};
 
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
@@ -310,6 +311,7 @@ impl std::error::Error for Error {}
 type Result<T> = std::result::Result<T, Error>;
 
 enum TaggedControlSocket {
+    Fs(FsMappingResponseSocket),
     Vm(VmControlResponseSocket),
     VmMemory(VmMemoryControlResponseSocket),
     VmIrq(VmIrqResponseSocket),
@@ -320,6 +322,7 @@ impl AsRef<UnixSeqpacket> for TaggedControlSocket {
     fn as_ref(&self) -> &UnixSeqpacket {
         use self::TaggedControlSocket::*;
         match &self {
+            Fs(ref socket) => socket.as_ref(),
             Vm(ref socket) => socket.as_ref(),
             VmMemory(ref socket) => socket.as_ref(),
             VmIrq(ref socket) => socket.as_ref(),
@@ -485,6 +488,7 @@ fn create_block_device(
         disk.read_only,
         disk.sparse,
         disk.block_size,
+        disk.id,
         Some(disk_device_socket),
     )
     .map_err(Error::BlockDeviceNew)?;
@@ -847,6 +851,13 @@ fn create_gpu_device(
                 (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RDONLY) as usize,
             )?;
 
+            // To enable perfetto tracing, we need to give access to the perfetto service IPC
+            // endpoints.
+            let perfetto_path = Path::new("/run/perfetto");
+            if perfetto_path.exists() {
+                jail.mount_bind(perfetto_path, perfetto_path, true)?;
+            }
+
             Some(jail)
         }
         None => None,
@@ -1006,6 +1017,7 @@ fn create_fs_device(
     src: &Path,
     tag: &str,
     fs_cfg: virtio::fs::passthrough::Config,
+    device_socket: FsMappingRequestSocket,
 ) -> DeviceResult {
     let max_open_files = get_max_open_files()?;
     let j = if cfg.sandbox {
@@ -1030,7 +1042,8 @@ fn create_fs_device(
     let features = virtio::base_features(cfg.protected_vm);
     // TODO(chirantan): Use more than one worker once the kernel driver has been fixed to not panic
     // when num_queues > 1.
-    let dev = virtio::fs::Fs::new(features, tag, 1, fs_cfg).map_err(Error::FsDeviceNew)?;
+    let dev =
+        virtio::fs::Fs::new(features, tag, 1, fs_cfg, device_socket).map_err(Error::FsDeviceNew)?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -1219,6 +1232,7 @@ fn create_virtio_devices(
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
+    fs_device_sockets: &mut Vec<FsMappingRequestSocket>,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
 
@@ -1407,7 +1421,18 @@ fn create_virtio_devices(
         } = shared_dir;
 
         let dev = match kind {
-            SharedDirKind::FS => create_fs_device(cfg, uid_map, gid_map, src, tag, fs_cfg.clone())?,
+            SharedDirKind::FS => {
+                let device_socket = fs_device_sockets.remove(0);
+                create_fs_device(
+                    cfg,
+                    uid_map,
+                    gid_map,
+                    src,
+                    tag,
+                    fs_cfg.clone(),
+                    device_socket,
+                )?
+            }
             SharedDirKind::P9 => create_9p_device(cfg, uid_map, gid_map, src, tag, p9_cfg.clone())?,
         };
         devs.push(dev);
@@ -1428,6 +1453,7 @@ fn create_devices(
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
+    fs_device_sockets: &mut Vec<FsMappingRequestSocket>,
     usb_provider: HostBackendDeviceProvider,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
 ) -> DeviceResult<Vec<(Box<dyn PciDevice>, Option<Minijail>)>> {
@@ -1443,6 +1469,7 @@ fn create_devices(
         disk_device_sockets,
         pmem_device_sockets,
         map_request,
+        fs_device_sockets,
     )?;
 
     let mut pci_devices = Vec::new();
@@ -2225,12 +2252,49 @@ where
     control_sockets.push(TaggedControlSocket::VmIrq(ioapic_host_socket));
 
     let battery = if cfg.battery_type.is_some() {
-        (&cfg.battery_type, simple_jail(&cfg, "battery")?)
+        let jail = match simple_jail(&cfg, "battery")? {
+            #[cfg_attr(not(feature = "powerd-monitor-powerd"), allow(unused_mut))]
+            Some(mut jail) => {
+                // Setup a bind mount to the system D-Bus socket if the powerd monitor is used.
+                #[cfg(feature = "power-monitor-powerd")]
+                {
+                    add_crosvm_user_to_jail(&mut jail, "battery")?;
+
+                    // Create a tmpfs in the device's root directory so that we can bind mount files.
+                    jail.mount_with_data(
+                        Path::new("none"),
+                        Path::new("/"),
+                        "tmpfs",
+                        (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as usize,
+                        "size=67108864",
+                    )?;
+
+                    let system_bus_socket_path = Path::new("/run/dbus/system_bus_socket");
+                    jail.mount_bind(system_bus_socket_path, system_bus_socket_path, true)?;
+                }
+                Some(jail)
+            }
+            None => None,
+        };
+        (&cfg.battery_type, jail)
     } else {
         (&cfg.battery_type, None)
     };
 
     let map_request: Arc<Mutex<Option<ExternalMapping>>> = Arc::new(Mutex::new(None));
+
+    let fs_count = cfg
+        .shared_dirs
+        .iter()
+        .filter(|sd| sd.kind == SharedDirKind::FS)
+        .count();
+    let mut fs_device_sockets = Vec::with_capacity(fs_count);
+    for _ in 0..fs_count {
+        let (fs_host_socket, fs_device_socket) =
+            msg_socket::pair::<VmResponse, FsMappingRequest>().map_err(Error::CreateSocket)?;
+        control_sockets.push(TaggedControlSocket::Fs(fs_host_socket));
+        fs_device_sockets.push(fs_device_socket);
+    }
 
     let linux: RunnableLinuxVm<_, Vcpu, _> = Arch::build_vm(
         components,
@@ -2250,6 +2314,7 @@ where
                 balloon_device_socket,
                 &mut disk_device_sockets,
                 &mut pmem_device_sockets,
+                &mut fs_device_sockets,
                 usb_provider,
                 Arc::clone(&map_request),
             )
@@ -2712,6 +2777,22 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static, I: IrqChipArch + '
                                         vm_control_indices_to_remove.push(index);
                                     } else {
                                         error!("failed to recv VmMsyncRequest: {}", e);
+                                    }
+                                }
+                            },
+                            TaggedControlSocket::Fs(socket) => match socket.recv() {
+                                Ok(request) => {
+                                    let response =
+                                        request.execute(&mut linux.vm, &mut linux.resources);
+                                    if let Err(e) = socket.send(&response) {
+                                        error!("failed to send VmResponse: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    if let MsgError::BadRecvSize { actual: 0, .. } = e {
+                                        vm_control_indices_to_remove.push(index);
+                                    } else {
+                                        error!("failed to recv VmResponse: {}", e);
                                     }
                                 }
                             },

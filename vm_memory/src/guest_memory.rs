@@ -14,8 +14,8 @@ use std::sync::Arc;
 use crate::guest_address::GuestAddress;
 use base::{pagesize, Error as SysError};
 use base::{
-    AsRawDescriptor, MappedRegion, MemfdSeals, MemoryMapping, MemoryMappingBuilder, MmapError,
-    RawDescriptor, SharedMemory, SharedMemoryUnix,
+    AsRawDescriptor, MappedRegion, MemfdSeals, MemoryMapping, MemoryMappingBuilder,
+    MemoryMappingUnix, MmapError, RawDescriptor, SharedMemory, SharedMemoryUnix,
 };
 use cros_async::{
     uring_mem::{self, BorrowedIoVec},
@@ -110,7 +110,7 @@ impl MemoryRegion {
 /// fd of the underlying memory regions.
 #[derive(Clone)]
 pub struct GuestMemory {
-    regions: Arc<Vec<MemoryRegion>>,
+    regions: Arc<[MemoryRegion]>,
     memfd: Arc<SharedMemory>,
 }
 
@@ -192,7 +192,7 @@ impl GuestMemory {
         }
 
         Ok(GuestMemory {
-            regions: Arc::new(regions),
+            regions: Arc::from(regions),
             memfd: Arc::new(memfd),
         })
     }
