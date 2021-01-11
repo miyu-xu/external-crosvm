@@ -462,24 +462,32 @@ pub fn add_goldfish_battery(
         msg_socket::pair::<BatControlCommand, BatControlResult>()
             .map_err(DeviceRegistrationError::CreateSocket)?;
 
+    #[cfg(feature = "power-monitor-powerd")]
+    let create_monitor = Some(Box::new(power_monitor::powerd::DBusMonitor::connect)
+        as Box<dyn power_monitor::CreatePowerMonitorFn>);
+
+    #[cfg(not(feature = "power-monitor-powerd"))]
+    let create_monitor = None;
+
     let goldfish_bat = devices::GoldfishBattery::new(
         mmio_base,
         irq_num,
         irq_evt,
         irq_resample_evt,
         response_socket,
+        create_monitor,
     )
     .map_err(DeviceRegistrationError::RegisterBattery)?;
     Aml::to_aml_bytes(&goldfish_bat, amls);
 
     match battery_jail.as_ref() {
         Some(jail) => {
-            let mut keep_fds = goldfish_bat.keep_fds();
-            syslog::push_fds(&mut keep_fds);
+            let mut keep_rds = goldfish_bat.keep_rds();
+            syslog::push_fds(&mut keep_rds);
             mmio_bus
                 .insert(
                     Arc::new(Mutex::new(
-                        ProxyDevice::new(goldfish_bat, &jail, keep_fds)
+                        ProxyDevice::new(goldfish_bat, &jail, keep_rds)
                             .map_err(DeviceRegistrationError::ProxyDeviceCreation)?,
                     )),
                     mmio_base,
