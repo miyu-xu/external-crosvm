@@ -6,13 +6,14 @@ edition = "2018"
 
 [features]
 audio = []
-gpu = ["gpu_buffer", "gpu_display", "gpu_renderer"]
+gpu = ["gpu_buffer", "gpu_display","rutabaga_gfx"]
 tpm = ["protos/trunks", "tpm2"]
 video-decoder = []
 video-encoder = []
 wl-dmabuf = []
 x = ["gpu_display/x"]
-gfxstream = ["gpu", "gpu_renderer/gfxstream"]
+virgl_renderer = ["gpu", "rutabaga_gfx/virgl_renderer"]
+gfxstream = ["gpu", "rutabaga_gfx/gfxstream"]
 
 [dependencies]
 acpi_tables = {path = "../acpi_tables" }
@@ -25,7 +26,7 @@ enumn = { path = "../enumn" }
 fuse = {path = "../fuse" }
 gpu_buffer = { path = "../gpu_buffer", optional = true }
 gpu_display = { path = "../gpu_display", optional = true }
-gpu_renderer = { path = "../gpu_renderer", optional = true }
+rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
@@ -36,7 +37,12 @@ msg_on_socket_derive = { path = "../msg_socket/msg_on_socket_derive" }
 msg_socket = { path = "../msg_socket" }
 net_sys = { path = "../net_sys" }
 net_util = { path = "../net_util" }
+<<<<<<< HEAD   (9431bd Merge "Merge commit '47996808415af4e0b7bd11db103b52d5fdd5fda)
 p9 = { path = "../../vm_tools/p9" }
+=======
+p9 = "*"
+power_monitor = { path = "../power_monitor" }
+>>>>>>> BRANCH (028b80 crosvm: clearer naming about GPU features)
 protos = { path = "../protos", optional = true }
 rand_ish = { path = "../rand_ish" }
 remain = "*"

@@ -31,19 +31,21 @@ exclude = [
 ]
 
 [features]
-default = ["audio"]
+default = ["audio", "gpu"]
 chromeos = ["base/chromeos"]
 default-no-sandbox = []
 audio = ["devices/audio"]
 gpu = ["devices/gpu"]
 plugin = ["protos/plugin", "crosvm_plugin", "kvm", "kvm_sys", "protobuf"]
+power-monitor-powerd = ["arch/power-monitor-powerd"]
 tpm = ["devices/tpm"]
 video-decoder = ["devices/video-decoder"]
 video-encoder = ["devices/video-encoder"]
 wl-dmabuf = ["devices/wl-dmabuf", "gpu_buffer", "resources/wl-dmabuf"]
 x = ["devices/x"]
-virtio-gpu-next = ["gpu_renderer/virtio-gpu-next"]
+virgl_renderer_next = ["rutabaga_gfx/virgl_renderer_next"]
 composite-disk = ["protos/composite-disk", "protobuf", "disk/composite-disk"]
+virgl_renderer = ["devices/virgl_renderer"]
 gfxstream = ["devices/gfxstream"]
 gdb = ["gdbstub", "thiserror",  "arch/gdb", "vm_control/gdb", "x86_64/gdb"]
 
@@ -60,7 +62,7 @@ disk = { path = "disk" }
 enumn = { path = "enumn" }
 gdbstub = { version = "0.4.0", optional = true }
 gpu_buffer = { path = "gpu_buffer", optional = true }
-gpu_renderer = { path = "gpu_renderer", optional = true }
+rutabaga_gfx = { path = "rutabaga_gfx", optional = true }
 hypervisor = { path = "hypervisor" }
 kernel_cmdline = { path = "kernel_cmdline" }
 kernel_loader = { path = "kernel_loader" }
@@ -106,4 +108,8 @@ sync = { path = "sync" }
 syscall_defines = { path = "syscall_defines" }
 sys_util = { path = "sys_util" }
 tempfile = { path = "tempfile" }
+<<<<<<< HEAD   (9431bd Merge "Merge commit '47996808415af4e0b7bd11db103b52d5fdd5fda)
 wire_format_derive = { path = "../vm_tools/p9/wire_format_derive" } # ignored by ebuild
+=======
+wire_format_derive = { path = "../../platform2/vm_tools/p9/wire_format_derive" } # ignored by ebuild
+>>>>>>> BRANCH (028b80 crosvm: clearer naming about GPU features)
