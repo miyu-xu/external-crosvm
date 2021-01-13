@@ -234,6 +234,11 @@ impl VirglRendererFlags {
 }
 
 /// Flags for the gfxstream renderer.
+pub const GFXSTREAM_RENDERER_FLAGS_USE_EGL: u32 = 1;
+pub const GFXSTREAM_RENDERER_FLAGS_THREAD_SYNC: u32 = 2;
+pub const GFXSTREAM_RENDERER_FLAGS_USE_GLX: u32 = 4;
+pub const GFXSTREAM_RENDERER_FLAGS_USE_SURFACELESS: u32 = 8;
+pub const GFXSTREAM_RENDERER_FLAGS_USE_GLES: u32 = 16;
 pub const GFXSTREAM_RENDERER_FLAGS_NO_SYNCFD_BIT: u32 = 1 << 20;
 pub const GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT: u32 = 1 << 5;
 pub const GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE: u32 = 1 << 21;
@@ -254,6 +259,26 @@ impl GfxstreamFlags {
         } else {
             GfxstreamFlags(self.0 & (!bitmask))
         }
+    }
+
+    /// Use EGL for context creation.
+    pub fn use_egl(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_EGL, v)
+    }
+
+    /// Use GLX for context creation.
+    pub fn use_glx(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_GLX, v)
+    }
+
+    /// No surfaces required when creating context.
+    pub fn use_surfaceless(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_SURFACELESS, v)
+    }
+
+    /// Use GLES drivers.
+    pub fn use_gles(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_GLES, v)
     }
 
     /// Use external synchronization.
