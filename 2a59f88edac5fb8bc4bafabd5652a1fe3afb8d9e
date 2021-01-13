@@ -58,6 +58,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8ad36956_1c609473",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1466604
+      },
+      "writtenOn": "2021-01-13T20:45:10Z",
+      "side": 1,
+      "message": "Good call. I replaced the check for a strict size with a check against a max size (1 MB). I was able to replace this function outright with a call to the helper function load_image.",
+      "parentUuid": "d8a5e04a_e91b2d05",
+      "range": {
+        "startLine": 406,
+        "startChar": 11,
+        "endLine": 406,
+        "endChar": 48
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "999eefbc_65463b29",
@@ -81,6 +105,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "12a67442_8616c041",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 420,
+      "author": {
+        "id": 1466604
+      },
+      "writtenOn": "2021-01-13T20:45:10Z",
+      "side": 1,
+      "message": "Good point. However instead of dropping the Ok (and given Cody\u0027s comment above), I deleted this entire function and replaced it with a call to the helper function, load_image.",
+      "parentUuid": "999eefbc_65463b29",
+      "range": {
+        "startLine": 420,
+        "startChar": 7,
+        "endLine": 420,
+        "endChar": 14
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "621c219c_36331f32",
@@ -94,6 +142,30 @@
       "writtenOn": "2021-01-13T01:58:47Z",
       "side": 1,
       "message": "this looks unused",
+      "range": {
+        "startLine": 470,
+        "startChar": 33,
+        "endLine": 470,
+        "endChar": 49
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "57568de3_d5c737bd",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 470,
+      "author": {
+        "id": 1466604
+      },
+      "writtenOn": "2021-01-13T20:45:10Z",
+      "side": 1,
+      "message": "Good catch. Removed.",
+      "parentUuid": "621c219c_36331f32",
       "range": {
         "startLine": 470,
         "startChar": 33,
