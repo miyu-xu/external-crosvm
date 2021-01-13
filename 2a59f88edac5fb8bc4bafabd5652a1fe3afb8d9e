@@ -16,6 +16,52 @@
       "message": "Just wondering if you had any thoughts on this CL before I brought it over to crosvm upstream.",
       "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "999eefbc_65463b29",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 420,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-01-13T01:58:47Z",
+      "side": 1,
+      "message": "nit: given that the action of loading the bios is accomplished when calling read_to_memory, I\u0027d just return with the previous sentence and skip this \u0027Ok(())\u0027.\nYou may need to call map if read_to_memory returns something",
+      "range": {
+        "startLine": 420,
+        "startChar": 7,
+        "endLine": 420,
+        "endChar": 14
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "621c219c_36331f32",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 470,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-01-13T01:58:47Z",
+      "side": 1,
+      "message": "this looks unused",
+      "range": {
+        "startLine": 470,
+        "startChar": 33,
+        "endLine": 470,
+        "endChar": 49
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
