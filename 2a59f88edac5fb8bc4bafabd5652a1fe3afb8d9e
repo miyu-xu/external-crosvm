@@ -18,6 +18,46 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ffdae20c_067cc065",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 13
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2021-01-13T03:24:44Z",
+      "side": 1,
+      "message": "Nice!",
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d8a5e04a_e91b2d05",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2021-01-13T03:24:44Z",
+      "side": 1,
+      "message": "Since the reset vector is at 0x0, is it valuable to enforce a strict size value instead of a maximum size? For x86 the size was more precise because the last few bytes of 32-bit memory had the reset vector, but with the reset vector at 0x0 ( https://developer.arm.com/documentation/ddi0337/e/exceptions/resets/vector-table-and-reset ) the important code addresses are frontloaded.",
+      "range": {
+        "startLine": 406,
+        "startChar": 11,
+        "endLine": 406,
+        "endChar": 48
+      },
+      "revId": "2a59f88edac5fb8bc4bafabd5652a1fe3afb8d9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "999eefbc_65463b29",
