@@ -13,7 +13,7 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::null_mut;
 use std::rc::Rc;
 
-use base::{ExternalMapping, ExternalMappingError, ExternalMappingResult};
+use base::{error, ExternalMapping, ExternalMappingError, ExternalMappingResult};
 
 use crate::generated::virgl_renderer_bindings::{
     iovec, virgl_box, virgl_renderer_resource_create_args,
@@ -365,12 +365,15 @@ impl RutabagaComponent for Gfxstream {
             d: transfer.d,
         };
 
+        let mut iov = RutabagaIovec{
+            base: null_mut(),
+            len: 0,
+        };
+
         let (iovecs, num_iovecs) = match buf {
             Some(buf) => {
-                let mut iov = RutabagaIovec {
-                    base: buf.as_ptr() as *mut c_void,
-                    len: buf.size() as usize,
-                };
+                iov.base = buf.as_ptr() as *mut c_void;
+                iov.len = buf.size() as usize;
                 (&mut iov as *mut RutabagaIovec as *mut iovec, 1)
             }
             None => (null_mut(), 0),
