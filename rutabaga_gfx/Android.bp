@@ -10,8 +10,8 @@ rust_defaults {
     edition: "2018",
     features: [
         "gfxstream",
-        "virgl_renderer",
-        "virgl_renderer_next",
+        //"virgl_renderer",
+        //"virgl_renderer_next",
     ],
     rustlibs: [
         "libbase_rust",
@@ -61,8 +61,8 @@ rust_library {
     edition: "2018",
     features: [
         "gfxstream",
-        "virgl_renderer",
-        "virgl_renderer_next",
+        //"virgl_renderer",
+        //"virgl_renderer_next",
     ],
     rustlibs: [
         "libbase_rust",
