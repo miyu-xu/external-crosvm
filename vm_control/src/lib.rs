@@ -966,7 +966,7 @@ fn register_memory_hva(
     pci_allocation: (Alloc, u64),
 ) -> Result<(u64, MemSlot)> {
     let addr = allocator
-        .mmio_allocator(MmioType::High)
+        .mmio_allocator(MmioType::Low)
         .address_from_pci_offset(pci_allocation.0, pci_allocation.1, mem.size() as u64)
         .map_err(|_e| SysError::new(EINVAL))?;
 
