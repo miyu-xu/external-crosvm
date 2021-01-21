@@ -32,6 +32,7 @@ PRODUCT_PACKAGES += \
     vhost_net_device.policy \
     vhost_vsock_device.policy \
     video_device.policy \
+    vois_audio_device.policy \
     wl_device.policy \
     xhci.policy \
 
@@ -54,5 +55,6 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     system/etc/seccomp_policy/crosvm/vhost_net_device.policy \
     system/etc/seccomp_policy/crosvm/vhost_vsock_device.policy \
     system/etc/seccomp_policy/crosvm/video_device.policy \
+    system/etc/seccomp_policy/crosvm/vios_audio_device.policy \
     system/etc/seccomp_policy/crosvm/wl_device.policy \
     system/etc/seccomp_policy/crosvm/xhci.policy \

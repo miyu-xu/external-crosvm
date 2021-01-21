@@ -32,6 +32,7 @@ crosvm_inline_seccomp_policy_x86_64 := \
     usr/share/crosvm/x86_64-linux-gnu/seccomp/vhost_net_device.policy \
     usr/share/crosvm/x86_64-linux-gnu/seccomp/vhost_vsock_device.policy \
     usr/share/crosvm/x86_64-linux-gnu/seccomp/video_device.policy \
+    usr/share/crosvm/x86_64-linux-gnu/seccomp/vios_audio_device.policy \
     usr/share/crosvm/x86_64-linux-gnu/seccomp/wl_device.policy \
     usr/share/crosvm/x86_64-linux-gnu/seccomp/xhci.policy \
 
@@ -51,6 +52,7 @@ crosvm_inline_seccomp_policy_aarch64 := \
     usr/share/crosvm/aarch64-linux-gnu/seccomp/tpm_device.policy \
     usr/share/crosvm/aarch64-linux-gnu/seccomp/vhost_net_device.policy \
     usr/share/crosvm/aarch64-linux-gnu/seccomp/vhost_vsock_device.policy \
+    usr/share/crosvm/aarch64-linux-gnu/seccomp/vios_audio_device.policy \
     usr/share/crosvm/aarch64-linux-gnu/seccomp/wl_device.policy \
     usr/share/crosvm/aarch64-linux-gnu/seccomp/xhci.policy \
 
