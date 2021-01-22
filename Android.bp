@@ -35,6 +35,7 @@ rust_defaults {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    min_sdk_version: "S",
 }
 
 rust_defaults {

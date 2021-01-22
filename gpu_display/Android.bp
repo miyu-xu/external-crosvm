@@ -66,6 +66,7 @@ cc_library_static {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    min_sdk_version: "S",
 }
 
 wayland_protocol_codegen {
