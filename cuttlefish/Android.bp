@@ -1,4 +1,8 @@
 // wrapper script to run crosvm for cuttlefish
+package {
+    default_applicable_licenses: ["external_crosvm_license"],
+}
+
 sh_binary_host {
     name: "common_crosvm",
     filename: "crosvm",

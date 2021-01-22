@@ -5,6 +5,10 @@
 //   does not generate cc_library module yet
 //   does not generate wayland_protocol_codegen module yet
 
+package {
+    default_applicable_licenses: ["external_crosvm_license"],
+}
+
 rust_library {
     name: "libgpu_display",
     defaults: ["crosvm_defaults"],

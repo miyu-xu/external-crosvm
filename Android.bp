@@ -12,6 +12,17 @@
 //   * Use --no-subdir to suppress output of subdirectory Android.bp files.
 //   * Run cargo2android.py in each subdirectory to generate .bp files.
 
+package {
+    default_applicable_licenses: ["external_crosvm_license"],
+}
+
+license {
+    name: "external_crosvm_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-Apache-2.0","SPDX-license-identifier-BSD","SPDX-license-identifier-MIT","legacy_unencumbered"],
+    license_text: ["LICENSE"],
+}
+
 rust_defaults {
     name: "crosvm_defaults",
     edition: "2018",
