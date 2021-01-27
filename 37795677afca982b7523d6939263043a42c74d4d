@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6fbe5dde_43912761",
+        "filename": "devices/src/virtio/input/defaults.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 91,
+      "author": {
+        "id": 1381006
+      },
+      "writtenOn": "2021-01-27T22:31:44Z",
+      "side": 1,
+      "message": "Is this necessary? I seem to recall this not being needed.",
+      "range": {
+        "startLine": 91,
+        "startChar": 52,
+        "endLine": 91,
+        "endChar": 67
+      },
+      "revId": "37795677afca982b7523d6939263043a42c74d4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "191c3b0f_59bf3b17",
+        "filename": "src/linux.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 559,
+      "author": {
+        "id": 1381006
+      },
+      "writtenOn": "2021-01-27T22:31:44Z",
+      "side": 1,
+      "message": "remove single?",
+      "range": {
+        "startLine": 559,
+        "startChar": 42,
+        "endLine": 559,
+        "endChar": 48
+      },
+      "revId": "37795677afca982b7523d6939263043a42c74d4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
