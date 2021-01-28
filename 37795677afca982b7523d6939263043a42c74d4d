@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "cb355119_3205eae5",
+        "filename": "devices/src/virtio/input/defaults.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 91,
+      "author": {
+        "id": 1818233
+      },
+      "writtenOn": "2021-01-28T15:25:00Z",
+      "side": 1,
+      "message": "You are right. I\u0027m getting BTN_TOOL_FINGERs when tracing my Samsung S9\nwith \u0027adb shell getevent /dev/input/event0\u0027\nAlso cuttlefish multitouch handler emits BTN_TOOL_FINGER, but I tested\nthe updated patchset and BTN_TOOL_FINGER does not seem to be necessary.",
+      "parentUuid": "6fbe5dde_43912761",
+      "range": {
+        "startLine": 91,
+        "startChar": 52,
+        "endLine": 91,
+        "endChar": 67
+      },
+      "revId": "37795677afca982b7523d6939263043a42c74d4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "191c3b0f_59bf3b17",
@@ -37,6 +61,30 @@
       "writtenOn": "2021-01-27T22:31:44Z",
       "side": 1,
       "message": "remove single?",
+      "range": {
+        "startLine": 559,
+        "startChar": 42,
+        "endLine": 559,
+        "endChar": 48
+      },
+      "revId": "37795677afca982b7523d6939263043a42c74d4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75a318c3_b7dd5ed4",
+        "filename": "src/linux.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 559,
+      "author": {
+        "id": 1818233
+      },
+      "writtenOn": "2021-01-28T15:25:00Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "191c3b0f_59bf3b17",
       "range": {
         "startLine": 559,
         "startChar": 42,
