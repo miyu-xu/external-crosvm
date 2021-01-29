@@ -8,14 +8,15 @@ use std::convert::AsRef;
 use std::convert::TryFrom;
 use std::fmt::{self, Display};
 use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::result;
 use std::sync::Arc;
 
 use crate::guest_address::GuestAddress;
 use base::{pagesize, Error as SysError};
-use base::{MappedRegion, MemoryMapping, MmapError};
-use base::{MemfdSeals, SharedMemory};
+use base::{
+    AsRawDescriptor, MappedRegion, MemfdSeals, MemoryMapping, MemoryMappingBuilder, MmapError,
+    RawDescriptor, SharedMemory, SharedMemoryUnix,
+};
 use cros_async::{
     uring_mem::{self, BorrowedIoVec},
     BackingMemory,
@@ -33,7 +34,6 @@ pub enum Error {
     MemoryRegionTooLarge(u64),
     MemoryNotAligned,
     MemoryCreationFailed(SysError),
-    MemorySetSizeFailed(SysError),
     MemoryAddSealsFailed(SysError),
     ShortWrite { expected: usize, completed: usize },
     ShortRead { expected: usize, completed: usize },
@@ -62,7 +62,6 @@ impl Display for Error {
             MemoryRegionTooLarge(size) => write!(f, "memory region size {} is too large", size),
             MemoryNotAligned => write!(f, "memfd regions must be page aligned"),
             MemoryCreationFailed(_) => write!(f, "failed to create memfd region"),
-            MemorySetSizeFailed(e) => write!(f, "failed to set memfd region size: {}", e),
             MemoryAddSealsFailed(e) => write!(f, "failed to set seals on memfd region: {}", e),
             ShortWrite {
                 expected,
@@ -115,9 +114,9 @@ pub struct GuestMemory {
     memfd: Arc<SharedMemory>,
 }
 
-impl AsRawFd for GuestMemory {
-    fn as_raw_fd(&self) -> RawFd {
-        self.memfd.as_raw_fd()
+impl AsRawDescriptor for GuestMemory {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.memfd.as_raw_descriptor()
     }
 }
 
@@ -146,10 +145,8 @@ impl GuestMemory {
         seals.set_grow_seal();
         seals.set_seal_seal();
 
-        let mut memfd = SharedMemory::named("crosvm_guest").map_err(Error::MemoryCreationFailed)?;
-        memfd
-            .set_size(aligned_size)
-            .map_err(Error::MemorySetSizeFailed)?;
+        let mut memfd = SharedMemory::named("crosvm_guest", aligned_size)
+            .map_err(Error::MemoryCreationFailed)?;
         memfd
             .add_seals(seals)
             .map_err(Error::MemoryAddSealsFailed)?;
@@ -180,7 +177,10 @@ impl GuestMemory {
 
             let size =
                 usize::try_from(range.1).map_err(|_| Error::MemoryRegionTooLarge(range.1))?;
-            let mapping = MemoryMapping::from_fd_offset(&memfd, size, offset)
+            let mapping = MemoryMappingBuilder::new(size)
+                .from_descriptor(&memfd)
+                .offset(offset)
+                .build()
                 .map_err(Error::MemoryMappingFailed)?;
             regions.push(MemoryRegion {
                 mapping,
@@ -545,7 +545,7 @@ impl GuestMemory {
     pub fn read_to_memory(
         &self,
         guest_addr: GuestAddress,
-        src: &dyn AsRawFd,
+        src: &dyn AsRawDescriptor,
         count: usize,
     ) -> Result<()> {
         self.do_in_region(guest_addr, move |mapping, offset| {
@@ -583,7 +583,7 @@ impl GuestMemory {
     pub fn write_from_memory(
         &self,
         guest_addr: GuestAddress,
-        dst: &dyn AsRawFd,
+        dst: &dyn AsRawDescriptor,
         count: usize,
     ) -> Result<()> {
         self.do_in_region(guest_addr, move |mapping, offset| {
@@ -853,7 +853,11 @@ mod tests {
             .unwrap();
 
         let _ = gm.with_regions::<_, ()>(|index, _, size, _, memfd_offset| {
-            let mmap = MemoryMapping::from_fd_offset(&gm, size, memfd_offset).unwrap();
+            let mmap = MemoryMappingBuilder::new(size)
+                .from_descriptor(gm.as_ref())
+                .offset(memfd_offset)
+                .build()
+                .unwrap();
 
             if index == 0 {
                 assert!(mmap.read_obj::<u16>(0x0).unwrap() == 0x1337u16);

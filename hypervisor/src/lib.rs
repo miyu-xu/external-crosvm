@@ -10,10 +10,9 @@ pub mod kvm;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod x86_64;
 
-use std::ops::{Deref, DerefMut};
 use std::os::raw::c_int;
 
-use base::{EventFd, MappedRegion, Result, SafeDescriptor};
+use base::{Event, MappedRegion, RawDescriptor, Result, SafeDescriptor};
 use msg_socket::MsgOnSocket;
 use vm_memory::{GuestAddress, GuestMemory};
 
@@ -27,18 +26,22 @@ pub use crate::x86_64::*;
 pub type MemSlot = u32;
 
 /// A trait for checking hypervisor capabilities.
-pub trait Hypervisor: Send + Sized {
+pub trait Hypervisor: Send {
     /// Makes a shallow clone of this `Hypervisor`.
-    fn try_clone(&self) -> Result<Self>;
+    fn try_clone(&self) -> Result<Self>
+    where
+        Self: Sized;
 
     /// Checks if a particular `HypervisorCap` is available.
     fn check_capability(&self, cap: &HypervisorCap) -> bool;
 }
 
 /// A wrapper for using a VM and getting/setting its state.
-pub trait Vm: Send + Sized {
+pub trait Vm: Send {
     /// Makes a shallow clone of this `Vm`.
-    fn try_clone(&self) -> Result<Self>;
+    fn try_clone(&self) -> Result<Self>
+    where
+        Self: Sized;
 
     /// Checks if a particular `VmCap` is available.
     ///
@@ -106,8 +109,8 @@ pub trait Vm: Send + Sized {
     /// In all cases where `evt` is signaled, the ordinary vmexit to userspace that would be
     /// triggered is prevented.
     fn register_ioevent(
-        &self,
-        evt: &EventFd,
+        &mut self,
+        evt: &Event,
         addr: IoEventAddress,
         datamatch: Datamatch,
     ) -> Result<()>;
@@ -117,11 +120,17 @@ pub trait Vm: Send + Sized {
     /// The `evt`, `addr`, and `datamatch` set must be the same as the ones passed into
     /// `register_ioevent`.
     fn unregister_ioevent(
-        &self,
-        evt: &EventFd,
+        &mut self,
+        evt: &Event,
         addr: IoEventAddress,
         datamatch: Datamatch,
     ) -> Result<()>;
+
+    /// Trigger any matching registered io events based on an MMIO or PIO write at `addr`. The
+    /// `data` slice represents the contents and length of the write, which is used to compare with
+    /// the registered io events' Datamatch values. If the hypervisor does in-kernel IO event
+    /// delivery, this is a no-op.
+    fn handle_io_events(&self, addr: IoEventAddress, data: &[u8]) -> Result<()>;
 
     /// Retrieves the current timestamp of the paravirtual clock as seen by the current guest.
     /// Only works on VMs that support `VmCap::PvClock`.
@@ -132,33 +141,100 @@ pub trait Vm: Send + Sized {
     fn set_pvclock(&self, state: &ClockState) -> Result<()>;
 }
 
-/// A wrapper around using a VCPU.
-/// `Vcpu` provides all functionality except for running.  To run, `to_runnable` must be called to
-/// lock the vcpu to a thread.  Then the returned `RunnableVcpu` can be used for running.
-pub trait Vcpu: Send + Sized {
-    type Runnable: RunnableVcpu<Vcpu = Self>;
+/// A unique fingerprint for a particular `VcpuRunHandle`, used in `Vcpu` impls to ensure the
+/// `VcpuRunHandle ` they receive is the same one that was returned from `take_run_handle`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VcpuRunHandleFingerprint(u64);
 
+impl VcpuRunHandleFingerprint {
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A handle returned by a `Vcpu` to be used with `Vcpu::run` to execute a virtual machine's VCPU.
+///
+/// This is used to ensure that the caller has bound the `Vcpu` to a thread with
+/// `Vcpu::take_run_handle` and to execute hypervisor specific cleanup routines when dropped.
+pub struct VcpuRunHandle {
+    drop_fn: fn(),
+    fingerprint: VcpuRunHandleFingerprint,
+    // Prevents Send+Sync for this type.
+    phantom: std::marker::PhantomData<*mut ()>,
+}
+
+impl VcpuRunHandle {
+    /// Used by `Vcpu` impls to create a unique run handle, that when dropped, will call the given
+    /// `drop_fn`.
+    pub fn new(drop_fn: fn()) -> Self {
+        // Creates a probably unique number with a hash of the current thread id and epoch time.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::time::Instant::now().hash(&mut hasher);
+        std::thread::current().id().hash(&mut hasher);
+        Self {
+            drop_fn,
+            fingerprint: VcpuRunHandleFingerprint(hasher.finish()),
+            phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Gets the unique fingerprint which may be copied and compared freely.
+    pub fn fingerprint(&self) -> &VcpuRunHandleFingerprint {
+        &self.fingerprint
+    }
+}
+
+impl Drop for VcpuRunHandle {
+    fn drop(&mut self) {
+        (self.drop_fn)();
+    }
+}
+
+/// A virtual CPU holding a virtualized hardware thread's state, such as registers and interrupt
+/// state, which may be used to execute virtual machines.
+///
+/// To run, `take_run_handle` must be called to lock the vcpu to a thread. Then the returned
+/// `VcpuRunHandle` can be used for running.
+pub trait Vcpu: downcast_rs::DowncastSync {
     /// Makes a shallow clone of this `Vcpu`.
-    fn try_clone(&self) -> Result<Self>;
+    fn try_clone(&self) -> Result<Self>
+    where
+        Self: Sized;
 
-    /// Consumes `self` and returns a `RunnableVcpu`.  A `RunnableVcpu` is required to run the
-    /// guest.  Assigns a vcpu to the current thread and stores it in a hash map that can be used
-    /// by signal handlers to call set_local_immediate_exit().  An optional signal number will be
-    /// temporarily blocked while assigning the vcpu to the thread and later blocked when
-    /// `RunnableVcpu` is destroyed.
+    /// Casts this architecture specific trait object to the base trait object `Vcpu`.
+    fn as_vcpu(&self) -> &dyn Vcpu;
+
+    /// Returns a unique `VcpuRunHandle`. A `VcpuRunHandle` is required to run the guest.
+    ///
+    /// Assigns a vcpu to the current thread so that signal handlers can call
+    /// set_local_immediate_exit().  An optional signal number will be temporarily blocked while
+    /// assigning the vcpu to the thread and later blocked when `VcpuRunHandle` is destroyed.
     ///
     /// Returns an error, `EBUSY`, if the current thread already contains a Vcpu.
-    fn to_runnable(self, signal_num: Option<c_int>) -> Result<Self::Runnable>;
+    fn take_run_handle(&self, signal_num: Option<c_int>) -> Result<VcpuRunHandle>;
+
+    /// Runs the VCPU until it exits, returning the reason for the exit.
+    ///
+    /// Note that the state of the VCPU and associated VM must be setup first for this to do
+    /// anything useful. The given `run_handle` must be the same as the one returned by
+    /// `take_run_handle` for this `Vcpu`.
+    fn run(&self, run_handle: &VcpuRunHandle) -> Result<VcpuExit>;
+
+    /// Returns the vcpu id.
+    fn id(&self) -> usize;
 
     /// Sets the bit that requests an immediate exit.
     fn set_immediate_exit(&self, exit: bool);
 
     /// Sets/clears the bit for immediate exit for the vcpu on the current thread.
-    fn set_local_immediate_exit(exit: bool);
+    fn set_local_immediate_exit(exit: bool)
+    where
+        Self: Sized;
 
-    /// Trigger any io events based on the memory mapped IO at `addr`.  If the hypervisor does
-    /// in-kernel IO event delivery, this is a no-op.
-    fn handle_io_events(&self, addr: IoEventAddress) -> Result<()>;
+    /// Returns a function pointer that invokes `set_local_immediate_exit` in a
+    /// signal-safe way when called.
+    fn set_local_immediate_exit_fn(&self) -> extern "C" fn();
 
     /// Sets the data received by a mmio read, ioport in, or hypercall instruction.
     ///
@@ -180,27 +256,17 @@ pub trait Vcpu: Send + Sized {
     fn enable_raw_capability(&self, cap: u32, args: &[u64; 4]) -> Result<()>;
 }
 
-/// A Vcpu that has a thread and can be run. Created by calling `to_runnable` on a `Vcpu`.
-/// Implements `Deref` to a `Vcpu` so all `Vcpu` methods are usable, with the addition of the `run`
-/// function to execute the guest.
-pub trait RunnableVcpu: Deref<Target = <Self as RunnableVcpu>::Vcpu> + DerefMut {
-    type Vcpu: Vcpu;
-
-    /// Runs the VCPU until it exits, returning the reason for the exit.
-    ///
-    /// Note that the state of the VCPU and associated VM must be setup first for this to do
-    /// anything useful.
-    fn run(&self) -> Result<VcpuExit>;
-}
+downcast_rs::impl_downcast!(sync Vcpu);
 
 /// An address either in programmable I/O space or in memory mapped I/O space.
-#[derive(Copy, Clone, Debug, MsgOnSocket)]
+#[derive(Copy, Clone, Debug, MsgOnSocket, PartialEq, Eq, std::hash::Hash)]
 pub enum IoEventAddress {
     Pio(u64),
     Mmio(u64),
 }
 
 /// Used in `Vm::register_ioevent` to indicate a size and optionally value to match.
+#[derive(PartialEq, Eq)]
 pub enum Datamatch {
     AnyLength,
     U8(Option<u8>),

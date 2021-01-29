@@ -6,27 +6,29 @@
 
 pub mod panic_hook;
 
+use std::collections::BTreeMap;
 use std::default::Default;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::num::ParseIntError;
-use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
 
-use arch::{set_default_serial_parameters, Pstore, SerialHardware, SerialParameters, SerialType};
-#[cfg(feature = "audio")]
-use audio_streams::StreamEffect;
+use arch::{
+    set_default_serial_parameters, Pstore, SerialHardware, SerialParameters, SerialType,
+    VcpuAffinity,
+};
 use base::{
     debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
-    validate_raw_fd, warn,
+    validate_raw_descriptor, warn, FromRawDescriptor, IntoRawDescriptor, RawDescriptor,
+    SafeDescriptor,
 };
 use crosvm::{
     argument::{self, print_help, set_arguments, Argument},
-    linux, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
+    platform, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::{GpuMode, GpuParameters};
@@ -35,15 +37,13 @@ use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use vm_control::{
-    BalloonControlCommand, DiskControlCommand, MaybeOwnedFd, UsbControlCommand, UsbControlResult,
-    VmControlRequestSocket, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
+    BalloonControlCommand, BatControlCommand, BatControlResult, BatteryType, DiskControlCommand,
+    MaybeOwnedDescriptor, UsbControlCommand, UsbControlResult, VmControlRequestSocket, VmRequest,
+    VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
-    match executable {
-        Some(Executable::Plugin(_)) => true,
-        _ => false,
-    }
+    matches!(executable, Some(Executable::Plugin(_)))
 }
 
 // Wait for all children to exit. Return true if they have all exited, false
@@ -116,6 +116,43 @@ fn parse_cpu_set(s: &str) -> argument::Result<Vec<usize>> {
     Ok(cpuset)
 }
 
+/// Parse a list of guest to host CPU mappings.
+///
+/// Each mapping consists of a single guest CPU index mapped to one or more host CPUs in the form
+/// accepted by `parse_cpu_set`:
+///
+///  `<GUEST-CPU>=<HOST-CPU-SET>[:<GUEST-CPU>=<HOST-CPU-SET>[:...]]`
+fn parse_cpu_affinity(s: &str) -> argument::Result<VcpuAffinity> {
+    if s.contains('=') {
+        let mut affinity_map = BTreeMap::new();
+        for cpu_pair in s.split(':') {
+            let assignment: Vec<&str> = cpu_pair.split('=').collect();
+            if assignment.len() != 2 {
+                return Err(argument::Error::InvalidValue {
+                    value: cpu_pair.to_owned(),
+                    expected: String::from("invalid VCPU assignment syntax"),
+                });
+            }
+            let guest_cpu = assignment[0]
+                .parse()
+                .map_err(|_| argument::Error::InvalidValue {
+                    value: assignment[0].to_owned(),
+                    expected: String::from("CPU index must be a non-negative integer"),
+                })?;
+            let host_cpu_set = parse_cpu_set(assignment[1])?;
+            if affinity_map.insert(guest_cpu, host_cpu_set).is_some() {
+                return Err(argument::Error::InvalidValue {
+                    value: cpu_pair.to_owned(),
+                    expected: String::from("VCPU index must be unique"),
+                });
+            }
+        }
+        Ok(VcpuAffinity::PerVcpu(affinity_map))
+    } else {
+        Ok(VcpuAffinity::Global(parse_cpu_set(s)?))
+    }
+}
+
 #[cfg(feature = "gpu")]
 fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut gpu_params: GpuParameters = Default::default();
@@ -123,6 +160,8 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
     let mut vulkan_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut angle_specified = false;
 
     if let Some(s) = s {
         let opts = s
@@ -244,6 +283,24 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                 }
                 #[cfg(feature = "gfxstream")]
+                "angle" => {
+                    angle_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_use_guest_angle = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_use_guest_angle = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from("gpu parameter 'angle' should be a boolean"),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
                 "vulkan" => {
                     vulkan_specified = true;
                     match v {
@@ -283,6 +340,8 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                 ),
                             })?;
                 }
+                "cache-path" => gpu_params.cache_path = Some(v.to_string()),
+                "cache-size" => gpu_params.cache_size = Some(v.to_string()),
                 "" => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(format!(
@@ -296,7 +355,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
 
     #[cfg(feature = "gfxstream")]
     {
-        if vulkan_specified || syncfd_specified {
+        if vulkan_specified || syncfd_specified || angle_specified {
             match gpu_params.mode {
                 GpuMode::ModeGfxStream => {}
                 _ => {
@@ -336,18 +395,6 @@ fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
                     argument::Error::Syntax(format!("invalid capture option: {}", e))
                 })?;
             }
-            "capture_effects" => {
-                ac97_params.capture_effects = v
-                    .split('|')
-                    .map(|val| {
-                        val.parse::<StreamEffect>()
-                            .map_err(|e| argument::Error::InvalidValue {
-                                value: val.to_string(),
-                                expected: e.to_string(),
-                            })
-                    })
-                    .collect::<argument::Result<Vec<_>>>()?;
-            }
             _ => {
                 return Err(argument::Error::UnknownArgument(format!(
                     "unknown ac97 parameter {}",
@@ -374,7 +421,7 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
 
     let opts = s
         .split(',')
-        .map(|frag| frag.split('='))
+        .map(|frag| frag.splitn(2, '='))
         .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
 
     for (k, v) in opts {
@@ -393,10 +440,10 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
                 let num = v.parse::<u8>().map_err(|e| {
                     argument::Error::Syntax(format!("serial device number is not parsable: {}", e))
                 })?;
-                if num < 1 || num > 4 {
+                if num < 1 {
                     return Err(argument::Error::InvalidValue {
                         value: num.to_string(),
-                        expected: String::from("Serial port num must be between 1 - 4"),
+                        expected: String::from("Serial port num must be at least 1"),
                     });
                 }
                 serial_setting.num = num;
@@ -443,6 +490,13 @@ fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
                 )));
             }
         }
+    }
+
+    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+        return Err(argument::Error::InvalidValue {
+            value: serial_setting.num.to_string(),
+            expected: String::from("Serial port num must be 4 or less"),
+        });
     }
 
     Ok(serial_setting)
@@ -538,6 +592,40 @@ fn parse_plugin_gid_map_option(value: &str) -> argument::Result<GidMap> {
     })
 }
 
+fn parse_battery_options(s: Option<&str>) -> argument::Result<BatteryType> {
+    let mut battery_type: BatteryType = Default::default();
+
+    if let Some(s) = s {
+        let opts = s
+            .split(",")
+            .map(|frag| frag.split("="))
+            .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
+
+        for (k, v) in opts {
+            match k {
+                "type" => match v.parse::<BatteryType>() {
+                    Ok(type_) => battery_type = type_,
+                    Err(e) => {
+                        return Err(argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: e.to_string(),
+                        });
+                    }
+                },
+                "" => {}
+                _ => {
+                    return Err(argument::Error::UnknownArgument(format!(
+                        "battery parameter {}",
+                        k
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(battery_type)
+}
+
 fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::Result<()> {
     match name {
         "" => {
@@ -595,12 +683,23 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 )
         }
         "cpu-affinity" => {
-            if !cfg.vcpu_affinity.is_empty() {
+            if cfg.vcpu_affinity.is_some() {
                 return Err(argument::Error::TooManyArguments(
                     "`cpu-affinity` already given".to_owned(),
                 ));
             }
-            cfg.vcpu_affinity = parse_cpu_set(value.unwrap())?;
+            cfg.vcpu_affinity = Some(parse_cpu_affinity(value.unwrap())?);
+        }
+        "no-smt" => {
+            cfg.no_smt = true;
+        }
+        "rt-cpus" => {
+            if !cfg.rt_cpus.is_empty() {
+                return Err(argument::Error::TooManyArguments(
+                    "`rt-cpus` already given".to_owned(),
+                ));
+            }
+            cfg.rt_cpus = parse_cpu_set(value.unwrap())?;
         }
         "mem" => {
             if cfg.memory.is_some() {
@@ -1062,8 +1161,8 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                         })?;
 
                         let dur = Duration::from_secs(seconds);
-                        shared_dir.cfg.entry_timeout = dur.clone();
-                        shared_dir.cfg.attr_timeout = dur;
+                        shared_dir.fs_cfg.entry_timeout = dur.clone();
+                        shared_dir.fs_cfg.attr_timeout = dur;
                     }
                     "cache" => {
                         let policy = value.parse().map_err(|_| argument::Error::InvalidValue {
@@ -1072,7 +1171,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                 "`cache` must be one of `never`, `always`, or `auto`",
                             ),
                         })?;
-                        shared_dir.cfg.cache_policy = policy;
+                        shared_dir.fs_cfg.cache_policy = policy;
                     }
                     "writeback" => {
                         let writeback =
@@ -1080,7 +1179,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                 value: value.to_owned(),
                                 expected: String::from("`writeback` must be a boolean"),
                             })?;
-                        shared_dir.cfg.writeback = writeback;
+                        shared_dir.fs_cfg.writeback = writeback;
                     }
                     "rewrite-security-xattrs" => {
                         let rewrite_security_xattrs =
@@ -1090,7 +1189,16 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                                     "`rewrite-security-xattrs` must be a boolean",
                                 ),
                             })?;
-                        shared_dir.cfg.rewrite_security_xattrs = rewrite_security_xattrs;
+                        shared_dir.fs_cfg.rewrite_security_xattrs = rewrite_security_xattrs;
+                    }
+                    "ascii_casefold" => {
+                        let ascii_casefold =
+                            value.parse().map_err(|_| argument::Error::InvalidValue {
+                                value: value.to_owned(),
+                                expected: String::from("`ascii_casefold` must be a boolean"),
+                            })?;
+                        shared_dir.fs_cfg.ascii_casefold = ascii_casefold;
+                        shared_dir.p9_cfg.ascii_casefold = ascii_casefold;
                     }
                     _ => {
                         return Err(argument::Error::InvalidValue {
@@ -1322,7 +1430,25 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
 
             cfg.acpi_tables.push(acpi_table);
         }
-
+        "protected-vm" => {
+            cfg.protected_vm = true;
+            cfg.params.push("swiotlb=force".to_string());
+        }
+        "battery" => {
+            let params = parse_battery_options(value)?;
+            cfg.battery_type = Some(params);
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+        "gdb" => {
+            let port = value
+                .unwrap()
+                .parse()
+                .map_err(|_| argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("expected a valid port number"),
+                })?;
+            cfg.gdb = Some(port);
+        }
         "help" => return Err(argument::Error::PrintHelp),
         _ => unreachable!(),
     }
@@ -1364,6 +1490,14 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
             }
         }
     }
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    if cfg.gdb.is_some() {
+        if cfg.vcpu_count.unwrap_or(1) != 1 {
+            return Err(argument::Error::ExpectedArgument(
+                "`gdb` requires the number of vCPU to be 1".to_owned(),
+            ));
+        }
+    }
     set_default_serial_parameters(&mut cfg.serial_parameters);
     Ok(())
 }
@@ -1378,7 +1512,10 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
                                 "PARAMS",
                                 "Extra kernel or plugin command line arguments. Can be given more than once."),
           Argument::short_value('c', "cpus", "N", "Number of VCPUs. (default: 1)"),
-          Argument::value("cpu-affinity", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on. (e.g. 0,1-3,5) (default: no mask)"),
+          Argument::value("cpu-affinity", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on (e.g. 0,1-3,5)
+                              or colon-separated list of assignments of guest to host CPU assignments (e.g. 0=0:1=1:2=2) (default: no mask)"),
+          Argument::flag("no-smt", "Don't use SMT in the guest"),
+          Argument::value("rt-cpus", "CPUSET", "Comma-separated list of CPUs or CPU ranges to run VCPUs on. (e.g. 0,1-3,5) (default: none)"),
           Argument::short_value('m',
                                 "mem",
                                 "N",
@@ -1481,6 +1618,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   egl[=true|=false] - If the virtio-gpu backend should use a EGL context for rendering.
                                   glx[=true|=false] - If the virtio-gpu backend should use a GLX context for rendering.
                                   surfaceless[=true|=false] - If the virtio-gpu backend should use a surfaceless context for rendering.
+                                  angle[=true|=false] - If the guest is using ANGLE (OpenGL on Vulkan) as its native OpenGL driver.
                                   syncfd[=true|=false] - If the gfxstream backend should support EGL_ANDROID_native_fence_sync
                                   vulkan[=true|=false] - If the gfxstream backend should support vulkan
                                   "),
@@ -1500,6 +1638,14 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
           #[cfg(feature = "video-encoder")]
           Argument::flag("video-encoder", "(EXPERIMENTAL) enable virtio-video encoder device"),
           Argument::value("acpi-table", "PATH", "Path to user provided ACPI table"),
+          Argument::flag("protected-vm", "(EXPERIMENTAL) prevent host access to guest memory"),
+          Argument::flag_or_value("battery",
+                                  "[type=TYPE]",
+                                  "Comma separated key=value pairs for setting up battery device
+                                  Possible key values:
+                                  type=goldfish - type of battery emulation, defaults to goldfish
+                                  "),
+          Argument::value("gdb", "PORT", "(EXPERIMENTAL) gdb on the given port"),
           Argument::short_flag('h', "help", "Print help message.")];
 
     let mut cfg = Config::default();
@@ -1522,7 +1668,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                 }
             }
         }
-        Ok(()) => match linux::run_config(cfg) {
+        Ok(()) => match platform::run_config(cfg) {
             Ok(_) => {
                 info!("crosvm has exited normally");
                 Ok(())
@@ -1771,7 +1917,7 @@ enum ModifyUsbError {
     ArgMissing(&'static str),
     ArgParse(&'static str, String),
     ArgParseInt(&'static str, String, ParseIntError),
-    FailedFdValidate(base::Error),
+    FailedDescriptorValidate(base::Error),
     PathDoesNotExist(PathBuf),
     SocketFailed,
     UnexpectedResponse(VmResponse),
@@ -1793,7 +1939,7 @@ impl fmt::Display for ModifyUsbError {
                 "failed to parse integer argument {} value `{}`: {}",
                 name, value, e
             ),
-            FailedFdValidate(e) => write!(f, "failed to validate file descriptor: {}", e),
+            FailedDescriptorValidate(e) => write!(f, "failed to validate file descriptor: {}", e),
             PathDoesNotExist(p) => write!(f, "path `{}` does not exist", p.display()),
             SocketFailed => write!(f, "socket failed"),
             UnexpectedResponse(r) => write!(f, "unexpected response: {}", r),
@@ -1829,11 +1975,11 @@ fn parse_bus_id_addr(v: &str) -> ModifyUsbResult<(u8, u8, u16, u16)> {
     }
 }
 
-fn raw_fd_from_path(path: &Path) -> ModifyUsbResult<RawFd> {
+fn raw_descriptor_from_path(path: &Path) -> ModifyUsbResult<RawDescriptor> {
     if !path.exists() {
         return Err(ModifyUsbError::PathDoesNotExist(path.to_owned()));
     }
-    let raw_fd = path
+    let raw_descriptor = path
         .file_name()
         .and_then(|fd_osstr| fd_osstr.to_str())
         .map_or(
@@ -1847,7 +1993,7 @@ fn raw_fd_from_path(path: &Path) -> ModifyUsbResult<RawFd> {
                 })
             },
         )?;
-    validate_raw_fd(raw_fd).map_err(ModifyUsbError::FailedFdValidate)
+    validate_raw_descriptor(raw_descriptor).map_err(ModifyUsbError::FailedDescriptorValidate)
 }
 
 fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
@@ -1864,7 +2010,7 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
     } else if dev_path.parent() == Some(Path::new("/proc/self/fd")) {
         // Special case '/proc/self/fd/*' paths. The FD is already open, just use it.
         // Safe because we will validate |raw_fd|.
-        Some(unsafe { File::from_raw_fd(raw_fd_from_path(&dev_path)?) })
+        Some(unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&dev_path)?) })
     } else {
         Some(
             OpenOptions::new()
@@ -1880,7 +2026,12 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
         addr,
         vid,
         pid,
-        fd: usb_file.map(MaybeOwnedFd::Owned),
+        // Safe because we are transferring ownership to the rawdescriptor
+        descriptor: usb_file.map(|file| {
+            MaybeOwnedDescriptor::Owned(unsafe {
+                SafeDescriptor::from_raw_descriptor(file.into_raw_descriptor())
+            })
+        }),
     });
     let response = handle_request(&request, args).map_err(|_| ModifyUsbError::SocketFailed)?;
     match response {
@@ -1967,6 +2118,55 @@ fn pkg_version() -> std::result::Result<(), ()> {
     Ok(())
 }
 
+enum ModifyBatError {
+    BatControlErr(BatControlResult),
+}
+
+impl fmt::Display for ModifyBatError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ModifyBatError::*;
+
+        match self {
+            BatControlErr(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+fn modify_battery(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    if args.len() < 4 {
+        print_help("crosvm battery BATTERY_TYPE ",
+                   "[status STATUS | present PRESENT | health HEALTH | capacity CAPACITY | aconline ACONLINE ] VM_SOCKET...", &[]);
+        return Err(());
+    }
+
+    // This unwrap will not panic because of the above length check.
+    let battery_type = args.next().unwrap();
+    let property = args.next().unwrap();
+    let target = args.next().unwrap();
+
+    let response = match battery_type.parse::<BatteryType>() {
+        Ok(type_) => match BatControlCommand::new(property, target) {
+            Ok(cmd) => {
+                let request = VmRequest::BatCommand(type_, cmd);
+                Ok(handle_request(&request, args)?)
+            }
+            Err(e) => Err(ModifyBatError::BatControlErr(e)),
+        },
+        Err(e) => Err(ModifyBatError::BatControlErr(e)),
+    };
+
+    match response {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 fn crosvm_main() -> std::result::Result<(), ()> {
     if let Err(e) = syslog::init() {
         println!("failed to initialize syslog: {}", e);
@@ -1997,6 +2197,7 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         Some("disk") => disk_cmd(args),
         Some("usb") => modify_usb(args),
         Some("version") => pkg_version(),
+        Some("battery") => modify_battery(args),
         Some(c) => {
             println!("invalid subcommand: {:?}", c);
             print_usage();
@@ -2087,6 +2288,39 @@ mod tests {
         parse_cpu_set("0,1,2,").expect_err("parse should have failed");
     }
 
+    #[test]
+    fn parse_cpu_affinity_global() {
+        assert_eq!(
+            parse_cpu_affinity("0,5-7,9").expect("parse failed"),
+            VcpuAffinity::Global(vec![0, 5, 6, 7, 9]),
+        );
+    }
+
+    #[test]
+    fn parse_cpu_affinity_per_vcpu_one_to_one() {
+        let mut expected_map = BTreeMap::new();
+        expected_map.insert(0, vec![0]);
+        expected_map.insert(1, vec![1]);
+        expected_map.insert(2, vec![2]);
+        expected_map.insert(3, vec![3]);
+        assert_eq!(
+            parse_cpu_affinity("0=0:1=1:2=2:3=3").expect("parse failed"),
+            VcpuAffinity::PerVcpu(expected_map),
+        );
+    }
+
+    #[test]
+    fn parse_cpu_affinity_per_vcpu_sets() {
+        let mut expected_map = BTreeMap::new();
+        expected_map.insert(0, vec![0, 1, 2]);
+        expected_map.insert(1, vec![3, 4, 5]);
+        expected_map.insert(2, vec![6, 7, 8]);
+        assert_eq!(
+            parse_cpu_affinity("0=0,1,2:1=3-5:2=6,7-8").expect("parse failed"),
+            VcpuAffinity::PerVcpu(expected_map),
+        );
+    }
+
     #[cfg(feature = "audio")]
     #[test]
     fn parse_ac97_vaild() {
@@ -2101,23 +2335,8 @@ mod tests {
 
     #[cfg(feature = "audio")]
     #[test]
-    fn parse_ac97_dup_effect_vaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=aec|aec")
-            .expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_effect_invaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=abc")
-            .expect_err("parse should have failed");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_effect_vaild() {
-        parse_ac97_options("backend=cras,capture=true,capture_effects=aec")
-            .expect("parse should have succeded");
+    fn parse_ac97_capture_vaild() {
+        parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
     }
 
     #[test]
@@ -2127,8 +2346,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_serial_virtio_console_vaild() {
+        parse_serial_options("type=syslog,num=5,console=true,stdin=true,hardware=virtio-console")
+            .expect("parse should have succeded");
+    }
+
+    #[test]
     fn parse_serial_valid_no_num() {
         parse_serial_options("type=syslog").expect("parse should have succeded");
+    }
+
+    #[test]
+    fn parse_serial_equals_in_value() {
+        let parsed = parse_serial_options("type=syslog,path=foo=bar==.log")
+            .expect("parse should have succeded");
+        assert_eq!(parsed.path, Some(PathBuf::from("foo=bar==.log")));
     }
 
     #[test]
@@ -2144,6 +2376,12 @@ mod tests {
     #[test]
     fn parse_serial_invalid_num_lower() {
         parse_serial_options("type=syslog,num=0").expect_err("parse should have failed");
+    }
+
+    #[test]
+    fn parse_serial_virtio_console_invalid_num_lower() {
+        parse_serial_options("type=syslog,hardware=virtio-console,num=0")
+            .expect_err("parse should have failed");
     }
 
     #[test]
@@ -2425,5 +2663,25 @@ mod tests {
     fn parse_gpu_options_not_gfxstream_with_syncfd_specified() {
         assert!(parse_gpu_options(Some("backend=3d,syncfd=true")).is_err());
         assert!(parse_gpu_options(Some("syncfd=true,backend=3d")).is_err());
+    }
+
+    #[test]
+    fn parse_battery_vaild() {
+        parse_battery_options(Some("type=goldfish")).expect("parse should have succeded");
+    }
+
+    #[test]
+    fn parse_battery_vaild_no_type() {
+        parse_battery_options(None).expect("parse should have succeded");
+    }
+
+    #[test]
+    fn parse_battery_invaild_parameter() {
+        parse_battery_options(Some("tyep=goldfish")).expect_err("parse should have failed");
+    }
+
+    #[test]
+    fn parse_battery_invaild_type_value() {
+        parse_battery_options(Some("type=xxx")).expect_err("parse should have failed");
     }
 }

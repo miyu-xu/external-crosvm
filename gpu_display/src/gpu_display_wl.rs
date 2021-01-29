@@ -17,11 +17,13 @@ use crate::{DisplayT, EventDevice, GpuDisplayError, GpuDisplayFramebuffer};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::ptr::{null, null_mut};
 
-use base::{round_up_to_page_size, MemoryMapping, SharedMemory};
+use base::{
+    round_up_to_page_size, AsRawDescriptor, MemoryMapping, MemoryMappingBuilder, RawDescriptor,
+    SharedMemory,
+};
 use data_model::VolatileMemory;
 
 const BUFFER_COUNT: usize = 3;
@@ -82,7 +84,7 @@ impl Surface {
 
 /// A connection to the compositor and associated collection of state.
 ///
-/// The user of `GpuDisplay` can use `AsRawFd` to poll on the compositor connection's file
+/// The user of `GpuDisplay` can use `AsRawDescriptor` to poll on the compositor connection's file
 /// descriptor. When the connection is readable, `dispatch_events` can be called to process it.
 pub struct DisplayWl {
     dmabufs: HashMap<u32, DwlDmabuf>,
@@ -144,7 +146,7 @@ impl DisplayWl {
 impl DisplayT for DisplayWl {
     fn import_dmabuf(
         &mut self,
-        fd: RawFd,
+        fd: RawDescriptor,
         offset: u32,
         stride: u32,
         modifiers: u64,
@@ -204,12 +206,12 @@ impl DisplayT for DisplayWl {
         let row_size = width * BYTES_PER_PIXEL;
         let fb_size = row_size * height;
         let buffer_size = round_up_to_page_size(fb_size as usize * BUFFER_COUNT);
-        let mut buffer_shm =
-            SharedMemory::named("GpuDisplaySurface").map_err(GpuDisplayError::CreateShm)?;
-        buffer_shm
-            .set_size(buffer_size as u64)
-            .map_err(GpuDisplayError::SetSize)?;
-        let buffer_mem = MemoryMapping::from_fd(&buffer_shm, buffer_size).unwrap();
+        let buffer_shm = SharedMemory::named("GpuDisplaySurface", buffer_size as u64)
+            .map_err(GpuDisplayError::CreateShm)?;
+        let buffer_mem = MemoryMappingBuilder::new(buffer_size)
+            .from_descriptor(&buffer_shm)
+            .build()
+            .unwrap();
 
         // Safe because only a valid context, parent pointer (if not  None), and buffer FD are used.
         // The returned surface is checked for validity before being filed away.
@@ -217,7 +219,7 @@ impl DisplayT for DisplayWl {
             dwl_context_surface_new(
                 self.ctx(),
                 parent_ptr,
-                buffer_shm.as_raw_fd(),
+                buffer_shm.as_raw_descriptor(),
                 buffer_size,
                 fb_size as usize,
                 width,
@@ -350,8 +352,8 @@ impl DisplayT for DisplayWl {
     }
 }
 
-impl AsRawFd for DisplayWl {
-    fn as_raw_fd(&self) -> RawFd {
+impl AsRawDescriptor for DisplayWl {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
         // Safe given that the context pointer is valid.
         unsafe { dwl_context_fd(self.ctx.0) }
     }

@@ -6,7 +6,10 @@
 //! configs.
 
 pub mod argument;
-pub mod linux;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+pub mod gdb;
+#[path = "linux.rs"]
+pub mod platform;
 #[cfg(feature = "plugin")]
 pub mod plugin;
 
@@ -16,13 +19,14 @@ use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use arch::{Pstore, SerialHardware, SerialParameters};
+use arch::{Pstore, SerialHardware, SerialParameters, VcpuAffinity};
 use devices::virtio::fs::passthrough;
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::GpuParameters;
 #[cfg(feature = "audio")]
 use devices::Ac97Parameters;
 use libc::{getegid, geteuid};
+use vm_control::BatteryType;
 
 static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
 
@@ -142,7 +146,8 @@ pub struct SharedDir {
     pub kind: SharedDirKind,
     pub uid_map: String,
     pub gid_map: String,
-    pub cfg: passthrough::Config,
+    pub fs_cfg: passthrough::Config,
+    pub p9_cfg: p9::Config,
 }
 
 impl Default for SharedDir {
@@ -153,7 +158,8 @@ impl Default for SharedDir {
             kind: Default::default(),
             uid_map: format!("0 {} 1", unsafe { geteuid() }),
             gid_map: format!("0 {} 1", unsafe { getegid() }),
-            cfg: Default::default(),
+            fs_cfg: Default::default(),
+            p9_cfg: Default::default(),
         }
     }
 }
@@ -161,7 +167,9 @@ impl Default for SharedDir {
 /// Aggregate of all configurable options for a running VM.
 pub struct Config {
     pub vcpu_count: Option<usize>,
-    pub vcpu_affinity: Vec<usize>,
+    pub rt_cpus: Vec<usize>,
+    pub vcpu_affinity: Option<VcpuAffinity>,
+    pub no_smt: bool,
     pub memory: Option<u64>,
     pub executable_path: Option<Executable>,
     pub android_fstab: Option<PathBuf>,
@@ -207,13 +215,19 @@ pub struct Config {
     pub video_dec: bool,
     pub video_enc: bool,
     pub acpi_tables: Vec<PathBuf>,
+    pub protected_vm: bool,
+    pub battery_type: Option<BatteryType>,
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    pub gdb: Option<u32>,
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
             vcpu_count: None,
-            vcpu_affinity: Vec::new(),
+            rt_cpus: Vec::new(),
+            vcpu_affinity: None,
+            no_smt: false,
             memory: None,
             executable_path: None,
             android_fstab: None,
@@ -259,6 +273,10 @@ impl Default for Config {
             video_dec: false,
             video_enc: false,
             acpi_tables: Vec::new(),
+            protected_vm: false,
+            battery_type: None,
+            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            gdb: None,
         }
     }
 }

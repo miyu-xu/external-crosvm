@@ -2,9 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::os::unix::io::RawFd;
-
-use base::EventFd;
+use base::{Event, RawDescriptor};
 use vm_memory::GuestMemory;
 
 use super::*;
@@ -28,7 +26,7 @@ pub trait VirtioDevice: Send {
 
     /// A vector of device-specific file descriptors that must be kept open
     /// after jailing. Must be called before the process is jailed.
-    fn keep_fds(&self) -> Vec<RawFd>;
+    fn keep_rds(&self) -> Vec<RawDescriptor>;
 
     /// The virtio device type.
     fn device_type(&self) -> u32;
@@ -36,9 +34,9 @@ pub trait VirtioDevice: Send {
     /// The maximum size of each queue that this device supports.
     fn queue_max_sizes(&self) -> &[u16];
 
-    /// The set of feature bits that this device supports.
+    /// The set of feature bits that this device supports in addition to the base features.
     fn features(&self) -> u64 {
-        1 << VIRTIO_F_VERSION_1
+        0
     }
 
     /// Acknowledges that this set of features should be enabled.
@@ -64,7 +62,7 @@ pub trait VirtioDevice: Send {
         mem: GuestMemory,
         interrupt: Interrupt,
         queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     );
 
     /// Optionally deactivates this device. If the reset method is

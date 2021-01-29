@@ -50,7 +50,7 @@ you can install `libcap-dev` and `libfdt-dev`.
 Handy Debian one-liner for all build and runtime deps, particularly if you're
 running Crostini:
 ```sh
-sudo apt install build-essential libcap-dev libfdt-dev pkg-config python
+sudo apt install build-essential libcap-dev libfdt-dev libgbm-dev libvirglrenderer-dev libwayland-bin libwayland-dev pkg-config protobuf-compiler python wayland-protocols
 ```
 
 Known issues:
@@ -89,6 +89,8 @@ build directory in the case of x86 at `arch/x86/boot/compressed/vmlinux`.
 
 ### Rootfs
 
+#### With a disk image
+
 In most cases, you will want to give the VM a virtual block device to use as a
 root file system:
 
@@ -112,6 +114,16 @@ crosvm run --rwdisk "${ROOT_IMAGE}" -p "root=/dev/vda" vmlinux
 ```
 >**NOTE:** If more disks arguments are added prior to the desired rootfs image,
 the `root=/dev/vda` must be adjusted to the appropriate letter.
+
+#### With virtiofs
+
+Linux kernel 5.4+ is required for using virtiofs. This is convenient for testing.
+The file system must be named "mtd*" or "ubi*".
+
+```bash
+crosvm run --shared-dir "/:mtdfake:type=fs:cache=always" \
+    -p "rootfstype=virtiofs root=mtdfake" vmlinux
+```
 
 ### Control Socket
 
@@ -149,6 +161,34 @@ along with a `termina` rootfs.
 To use it, ensure that the `XDG_RUNTIME_DIR` enviroment variable is set and that
 the path `$XDG_RUNTIME_DIR/wayland-0` points to the socket of the Wayland
 compositor you would like the guest to use.
+
+### GDB Support
+
+crosvm supports [GDB Remote Serial Protocol] to allow developers to debug guest
+kernel via GDB.
+
+You can enable the feature by `--gdb` flag:
+
+```sh
+# Use uncompressed vmlinux
+$ crosvm run --gdb <port> ${USUAL_CROSVM_ARGS} vmlinux
+```
+
+Then, you can start GDB in another shell.
+
+```sh
+$ gdb vmlinux
+(gdb) target remote :<port>
+(gdb) hbreak start_kernel
+(gdb) c
+<start booting in the other shell>
+```
+
+For general techniques for debugging the Linux kernel via GDB, see this
+[kernel documentation].
+
+[GDB Remote Serial Protocol]: https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html
+[kernel documentation]: https://www.kernel.org/doc/html/latest/dev-tools/gdb-kernel-debugging.html
 
 ## Defaults
 

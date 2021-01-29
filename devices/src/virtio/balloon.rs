@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 use std::fmt::{self, Display};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use base::{self, error, info, warn, EventFd, PollContext, PollToken};
+use base::{
+    self, error, info, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, WaitContext,
+};
 use data_model::{DataInit, Le16, Le32, Le64};
 use msg_socket::{MsgReceiver, MsgSender};
 use vm_control::{
@@ -16,9 +17,7 @@ use vm_control::{
 };
 use vm_memory::{GuestAddress, GuestMemory};
 
-use super::{
-    copy_config, Interrupt, Queue, Reader, VirtioDevice, TYPE_BALLOON, VIRTIO_F_VERSION_1,
-};
+use super::{copy_config, Interrupt, Queue, Reader, VirtioDevice, TYPE_BALLOON};
 
 #[derive(Debug)]
 pub enum BalloonError {
@@ -134,7 +133,7 @@ impl Worker {
             let index = avail_desc.index;
 
             if inflate {
-                let mut reader = match Reader::new(&self.mem, avail_desc) {
+                let mut reader = match Reader::new(self.mem.clone(), avail_desc) {
                     Ok(r) => r,
                     Err(e) => {
                         error!("balloon: failed to create reader: {}", e);
@@ -180,7 +179,7 @@ impl Worker {
                 queue.add_used(&self.mem, prev_desc, 0);
             }
             self.stats_desc_index = Some(stats_desc.index);
-            let mut reader = match Reader::new(&self.mem, stats_desc) {
+            let mut reader = match Reader::new(self.mem.clone(), stats_desc) {
                 Ok(r) => r,
                 Err(e) => {
                     error!("balloon: failed to create reader: {}", e);
@@ -215,7 +214,7 @@ impl Worker {
         }
     }
 
-    fn run(&mut self, mut queue_evts: Vec<EventFd>, kill_evt: EventFd) {
+    fn run(&mut self, mut queue_evts: Vec<Event>, kill_evt: Event) {
         #[derive(PartialEq, PollToken)]
         enum Token {
             Inflate,
@@ -230,7 +229,7 @@ impl Worker {
         let deflate_queue_evt = queue_evts.remove(0);
         let stats_queue_evt = queue_evts.remove(0);
 
-        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
+        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (&inflate_queue_evt, Token::Inflate),
             (&deflate_queue_evt, Token::Deflate),
             (&stats_queue_evt, Token::Stats),
@@ -240,13 +239,13 @@ impl Worker {
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating PollContext: {}", e);
+                error!("failed creating WaitContext: {}", e);
                 return;
             }
         };
 
-        'poll: loop {
-            let events = match poll_ctx.wait() {
+        'wait: loop {
+            let events = match wait_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -256,26 +255,26 @@ impl Worker {
 
             let mut needs_interrupt_inflate = false;
             let mut needs_interrupt_deflate = false;
-            for event in events.iter_readable() {
-                match event.token() {
+            for event in events.iter().filter(|e| e.is_readable) {
+                match event.token {
                     Token::Inflate => {
                         if let Err(e) = inflate_queue_evt.read() {
-                            error!("failed reading inflate queue EventFd: {}", e);
-                            break 'poll;
+                            error!("failed reading inflate queue Event: {}", e);
+                            break 'wait;
                         }
                         needs_interrupt_inflate |= self.process_inflate_deflate(true);
                     }
                     Token::Deflate => {
                         if let Err(e) = deflate_queue_evt.read() {
-                            error!("failed reading deflate queue EventFd: {}", e);
-                            break 'poll;
+                            error!("failed reading deflate queue Event: {}", e);
+                            break 'wait;
                         }
                         needs_interrupt_deflate |= self.process_inflate_deflate(false);
                     }
                     Token::Stats => {
                         if let Err(e) = stats_queue_evt.read() {
-                            error!("failed reading stats queue EventFd: {}", e);
-                            break 'poll;
+                            error!("failed reading stats queue Event: {}", e);
+                            break 'wait;
                         }
                         self.process_stats();
                     }
@@ -299,14 +298,14 @@ impl Worker {
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'poll,
+                    Token::Kill => break 'wait,
                 }
             }
-            for event in events.iter_hungup() {
-                if event.token() == Token::CommandSocket && !event.readable() {
+            for event in events.iter().filter(|e| e.is_hungup) {
+                if event.token == Token::CommandSocket && !event.is_readable {
                     // If this call fails, the command socket was already removed from the
-                    // PollContext.
-                    let _ = poll_ctx.delete(&self.command_socket);
+                    // WaitContext.
+                    let _ = wait_ctx.delete(&self.command_socket);
                 }
             }
 
@@ -326,13 +325,16 @@ pub struct Balloon {
     command_socket: Option<BalloonControlResponseSocket>,
     config: Arc<BalloonConfig>,
     features: u64,
-    kill_evt: Option<EventFd>,
+    kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<Worker>>,
 }
 
 impl Balloon {
     /// Create a new virtio balloon device.
-    pub fn new(command_socket: BalloonControlResponseSocket) -> Result<Balloon> {
+    pub fn new(
+        base_features: u64,
+        command_socket: BalloonControlResponseSocket,
+    ) -> Result<Balloon> {
         Ok(Balloon {
             command_socket: Some(command_socket),
             config: Arc::new(BalloonConfig {
@@ -341,10 +343,10 @@ impl Balloon {
             }),
             kill_evt: None,
             worker_thread: None,
-            features: 1 << VIRTIO_BALLOON_F_MUST_TELL_HOST
+            features: base_features
+                | 1 << VIRTIO_BALLOON_F_MUST_TELL_HOST
                 | 1 << VIRTIO_BALLOON_F_STATS_VQ
-                | 1 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM
-                | 1 << VIRTIO_F_VERSION_1,
+                | 1 << VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
         })
     }
 
@@ -372,8 +374,8 @@ impl Drop for Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    fn keep_fds(&self) -> Vec<RawFd> {
-        vec![self.command_socket.as_ref().unwrap().as_raw_fd()]
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        vec![self.command_socket.as_ref().unwrap().as_raw_descriptor()]
     }
 
     fn device_type(&self) -> u32 {
@@ -409,16 +411,16 @@ impl VirtioDevice for Balloon {
         mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     ) {
         if queues.len() != QUEUE_SIZES.len() || queue_evts.len() != QUEUE_SIZES.len() {
             return;
         }
 
-        let (self_kill_evt, kill_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(e) => {
-                error!("failed to create kill EventFd pair: {}", e);
+                error!("failed to create kill Event pair: {}", e);
                 return;
             }
         };

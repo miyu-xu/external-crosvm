@@ -3,9 +3,13 @@
 // found in the LICENSE file.
 
 use crate::Bus;
-use base::{error, Error, EventFd, Result};
+use base::{error, Error, Event, Result};
 use hypervisor::kvm::KvmVcpu;
-use hypervisor::{IrqRoute, MPState};
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+use hypervisor::VmAArch64;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::VmX86_64;
+use hypervisor::{HypervisorCap, IrqRoute, MPState, Vcpu};
 use kvm_sys::kvm_mp_state;
 use resources::SystemAllocator;
 
@@ -19,13 +23,16 @@ mod aarch64;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
 
-use crate::IrqChip;
+use crate::{IrqChip, IrqChipCap, IrqEventIndex, VcpuRunState};
 
 /// This IrqChip only works with Kvm so we only implement it for KvmVcpu.
-impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
+impl IrqChip for KvmKernelIrqChip {
     /// Add a vcpu to the irq chip.
-    fn add_vcpu(&mut self, vcpu_id: usize, vcpu: KvmVcpu) -> Result<()> {
-        self.vcpus.lock()[vcpu_id] = Some(vcpu);
+    fn add_vcpu(&mut self, vcpu_id: usize, vcpu: &dyn Vcpu) -> Result<()> {
+        let vcpu: &KvmVcpu = vcpu
+            .downcast_ref()
+            .expect("KvmKernelIrqChip::add_vcpu called with non-KvmVcpu");
+        self.vcpus.lock()[vcpu_id] = Some(vcpu.try_clone()?);
         Ok(())
     }
 
@@ -33,14 +40,15 @@ impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
     fn register_irq_event(
         &mut self,
         irq: u32,
-        irq_event: &EventFd,
-        resample_event: Option<&EventFd>,
-    ) -> Result<()> {
-        self.vm.register_irqfd(irq, irq_event, resample_event)
+        irq_event: &Event,
+        resample_event: Option<&Event>,
+    ) -> Result<Option<IrqEventIndex>> {
+        self.vm.register_irqfd(irq, irq_event, resample_event)?;
+        Ok(None)
     }
 
     /// Unregister an event for a particular GSI.
-    fn unregister_irq_event(&mut self, irq: u32, irq_event: &EventFd) -> Result<()> {
+    fn unregister_irq_event(&mut self, irq: u32, irq_event: &Event) -> Result<()> {
         self.vm.unregister_irqfd(irq, irq_event)
     }
 
@@ -62,11 +70,11 @@ impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
         self.vm.set_gsi_routing(&*current_routes)
     }
 
-    /// Return a vector of all registered irq numbers and their associated events.  To be used by
-    /// the main thread to wait for irq events to be triggered.
+    /// Return a vector of all registered irq numbers and their associated events and event
+    /// indices. These should be used by the main thread to wait for irq events.
     /// For the KvmKernelIrqChip, the kernel handles listening to irq events being triggered by
     /// devices, so this function always returns an empty Vec.
-    fn irq_event_tokens(&self) -> Result<Vec<(u32, EventFd)>> {
+    fn irq_event_tokens(&self) -> Result<Vec<(IrqEventIndex, u32, Event)>> {
         Ok(Vec::new())
     }
 
@@ -77,12 +85,12 @@ impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
         self.vm.set_irq_line(irq, level)
     }
 
-    /// Service an IRQ event by asserting then deasserting an IRQ line. The associated EventFd
+    /// Service an IRQ event by asserting then deasserting an IRQ line. The associated Event
     /// that triggered the irq event will be read from. If the irq is associated with a resample
-    /// EventFd, then the deassert will only happen after an EOI is broadcast for a vector
+    /// Event, then the deassert will only happen after an EOI is broadcast for a vector
     /// associated with the irq line.
     /// This function should never be called on KvmKernelIrqChip.
-    fn service_irq_event(&mut self, _irq: u32) -> Result<()> {
+    fn service_irq_event(&mut self, _event_index: IrqEventIndex) -> Result<()> {
         error!("service_irq_event should never be called for KvmKernelIrqChip");
         Ok(())
     }
@@ -90,25 +98,34 @@ impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
     /// Broadcast an end of interrupt.
     /// This should never be called on a KvmKernelIrqChip because a KVM vcpu should never exit
     /// with the KVM_EXIT_EOI_BROADCAST reason when an in-kernel irqchip exists.
-    fn broadcast_eoi(&mut self, _vector: u8) -> Result<()> {
+    fn broadcast_eoi(&self, _vector: u8) -> Result<()> {
         error!("broadcast_eoi should never be called for KvmKernelIrqChip");
         Ok(())
     }
 
-    /// Return true if there is a pending interrupt for the specified vcpu.
-    /// For the KvmKernelIrqChip this should always return false because KVM is responsible for
-    /// injecting all interrupts.
-    fn interrupt_requested(&self, _vcpu_id: usize) -> bool {
-        false
+    /// Injects any pending interrupts for `vcpu`.
+    /// For KvmKernelIrqChip this is a no-op because KVM is responsible for injecting all
+    /// interrupts.
+    fn inject_interrupts(&self, _vcpu: &dyn Vcpu) -> Result<()> {
+        Ok(())
     }
 
-    /// Check if the specified vcpu has any pending interrupts. Returns None for no interrupts,
-    /// otherwise Some(u32) should be the injected interrupt vector.
-    /// For the KvmKernelIrqChip this should always return None because KVM is responsible for
-    /// injecting all interrupts.
-    fn get_external_interrupt(&mut self, _vcpu_id: usize) -> Result<Option<u32>> {
-        Ok(None)
+    /// Notifies the irq chip that the specified VCPU has executed a halt instruction.
+    /// For KvmKernelIrqChip this is a no-op because KVM handles VCPU blocking.
+    fn halted(&self, _vcpu_id: usize) {}
+
+    /// Blocks until `vcpu` is in a runnable state or until interrupted by
+    /// `IrqChip::kick_halted_vcpus`.  Returns `VcpuRunState::Runnable if vcpu is runnable, or
+    /// `VcpuRunState::Interrupted` if the wait was interrupted.
+    /// For KvmKernelIrqChip this is a no-op and always returns Runnable because KVM handles VCPU
+    /// blocking.
+    fn wait_until_runnable(&self, _vcpu: &dyn Vcpu) -> Result<VcpuRunState> {
+        Ok(VcpuRunState::Runnable)
     }
+
+    /// Makes unrunnable VCPUs return immediately from `wait_until_runnable`.
+    /// For KvmKernelIrqChip this is a no-op because KVM handles VCPU blocking.
+    fn kick_halted_vcpus(&self) {}
 
     /// Get the current MP state of the specified VCPU.
     fn get_mp_state(&self, vcpu_id: usize) -> Result<MPState> {
@@ -149,6 +166,16 @@ impl IrqChip<KvmVcpu> for KvmKernelIrqChip {
     fn process_delayed_irq_events(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn check_capability(&self, c: IrqChipCap) -> bool {
+        match c {
+            IrqChipCap::TscDeadlineTimer => self
+                .vm
+                .get_hypervisor()
+                .check_capability(&HypervisorCap::TscDeadlineTimer),
+            IrqChipCap::X2Apic => true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -175,7 +202,8 @@ mod tests {
             .expect("failed to instantiate KvmKernelIrqChip");
 
         let vcpu = vm.create_vcpu(0).expect("failed to instantiate vcpu");
-        chip.add_vcpu(0, vcpu).expect("failed to add vcpu");
+        chip.add_vcpu(0, vcpu.as_vcpu())
+            .expect("failed to add vcpu");
     }
 
     #[test]
@@ -188,7 +216,8 @@ mod tests {
             .expect("failed to instantiate KvmKernelIrqChip");
 
         let vcpu = vm.create_vcpu(0).expect("failed to instantiate vcpu");
-        chip.add_vcpu(0, vcpu).expect("failed to add vcpu");
+        chip.add_vcpu(0, vcpu.as_vcpu())
+            .expect("failed to add vcpu");
 
         let state = chip.get_mp_state(0).expect("failed to get mp state");
         assert_eq!(state, MPState::Runnable);

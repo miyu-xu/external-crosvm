@@ -39,7 +39,6 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 #[cfg(feature = "wl-dmabuf")]
 use std::os::raw::{c_uint, c_ulonglong};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -56,8 +55,9 @@ use data_model::*;
 #[cfg(feature = "wl-dmabuf")]
 use base::ioctl_iow_nr;
 use base::{
-    error, pipe, round_up_to_page_size, warn, Error, EventFd, FileFlags, PollContext, PollToken,
-    Result, ScmSocket, SharedMemory,
+    error, pipe, round_up_to_page_size, warn, AsRawDescriptor, Error, Event, FileFlags,
+    FromRawDescriptor, PollToken, RawDescriptor, Result, ScmSocket, SharedMemory, SharedMemoryUnix,
+    WaitContext,
 };
 use msg_socket::{MsgError, MsgReceiver, MsgSender};
 #[cfg(feature = "wl-dmabuf")]
@@ -68,11 +68,9 @@ use vm_memory::{GuestMemory, GuestMemoryError};
 use base::ioctl_with_ref;
 
 use super::resource_bridge::*;
-use super::{
-    DescriptorChain, Interrupt, Queue, Reader, VirtioDevice, Writer, TYPE_WL, VIRTIO_F_VERSION_1,
-};
+use super::{DescriptorChain, Interrupt, Queue, Reader, VirtioDevice, Writer, TYPE_WL};
 use vm_control::{
-    MaybeOwnedFd, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+    MaybeOwnedDescriptor, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
 };
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
@@ -263,7 +261,6 @@ fn encode_resp(writer: &mut Writer, resp: WlResp) -> WlResult<()> {
 enum WlError {
     NewAlloc(Error),
     NewPipe(Error),
-    AllocSetSize(Error),
     SocketConnect(io::Error),
     SocketNonBlock(io::Error),
     VmControl(MsgError),
@@ -276,8 +273,9 @@ enum WlError {
     WritePipe(io::Error),
     RecvVfd(Error),
     ReadPipe(io::Error),
-    PollContextAdd(Error),
+    WaitContextAdd(Error),
     DmabufSync(io::Error),
+    FromSharedMemory(Error),
     WriteResponse(io::Error),
     InvalidString(std::str::Utf8Error),
     UnknownSocketName(String),
@@ -290,7 +288,6 @@ impl Display for WlError {
         match self {
             NewAlloc(e) => write!(f, "failed to create shared memory allocation: {}", e),
             NewPipe(e) => write!(f, "failed to create pipe: {}", e),
-            AllocSetSize(e) => write!(f, "failed to set size of shared memory: {}", e),
             SocketConnect(e) => write!(f, "failed to connect socket: {}", e),
             SocketNonBlock(e) => write!(f, "failed to set socket as non-blocking: {}", e),
             VmControl(e) => write!(f, "failed to control parent VM: {}", e),
@@ -303,8 +300,11 @@ impl Display for WlError {
             WritePipe(e) => write!(f, "failed to write to a pipe: {}", e),
             RecvVfd(e) => write!(f, "failed to recv on a socket: {}", e),
             ReadPipe(e) => write!(f, "failed to read a pipe: {}", e),
-            PollContextAdd(e) => write!(f, "failed to listen to FD on poll context: {}", e),
+            WaitContextAdd(e) => write!(f, "failed to listen to descriptor on wait context: {}", e),
             DmabufSync(e) => write!(f, "failed to synchronize DMABuf access: {}", e),
+            FromSharedMemory(e) => {
+                write!(f, "failed to create shared memory from descriptor: {}", e)
+            }
             WriteResponse(e) => write!(f, "failed to write response: {}", e),
             InvalidString(e) => write!(f, "invalid string: {}", e),
             UnknownSocketName(name) => write!(f, "unknown socket name: {}", name),
@@ -519,7 +519,7 @@ impl<'a> WlResp<'a> {
 #[derive(Default)]
 struct WlVfd {
     socket: Option<UnixStream>,
-    guest_shared_memory: Option<(u64 /* size */, File)>,
+    guest_shared_memory: Option<(u64 /* size */, SharedMemory)>,
     remote_pipe: Option<File>,
     local_pipe: Option<(u32 /* flags */, File)>,
     slot: Option<(MemSlot, u64 /* pfn */, VmRequester)>,
@@ -531,16 +531,16 @@ impl fmt::Debug for WlVfd {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "WlVfd {{")?;
         if let Some(s) = &self.socket {
-            write!(f, " socket: {}", s.as_raw_fd())?;
+            write!(f, " socket: {}", s.as_raw_descriptor())?;
         }
         if let Some((slot, pfn, _)) = &self.slot {
             write!(f, " slot: {} pfn: {}", slot, pfn)?;
         }
         if let Some(s) = &self.remote_pipe {
-            write!(f, " remote: {}", s.as_raw_fd())?;
+            write!(f, " remote: {}", s.as_raw_descriptor())?;
         }
         if let Some((_, s)) = &self.local_pipe {
-            write!(f, " local: {}", s.as_raw_fd())?;
+            write!(f, " local: {}", s.as_raw_descriptor())?;
         }
         write!(f, " }}")
     }
@@ -556,18 +556,17 @@ impl WlVfd {
 
     fn allocate(vm: VmRequester, size: u64) -> WlResult<WlVfd> {
         let size_page_aligned = round_up_to_page_size(size as usize) as u64;
-        let mut vfd_shm = SharedMemory::named("virtwl_alloc").map_err(WlError::NewAlloc)?;
-        vfd_shm
-            .set_size(size_page_aligned)
-            .map_err(WlError::AllocSetSize)?;
+        let vfd_shm =
+            SharedMemory::named("virtwl_alloc", size_page_aligned).map_err(WlError::NewAlloc)?;
+
         let register_response = vm.request(VmMemoryRequest::RegisterMemory(
-            MaybeOwnedFd::Borrowed(vfd_shm.as_raw_fd()),
+            MaybeOwnedDescriptor::Borrowed(vfd_shm.as_raw_descriptor()),
             vfd_shm.size() as usize,
         ))?;
         match register_response {
             VmMemoryResponse::RegisterMemory { pfn, slot } => {
                 let mut vfd = WlVfd::default();
-                vfd.guest_shared_memory = Some((vfd_shm.size(), vfd_shm.into()));
+                vfd.guest_shared_memory = Some((vfd_shm.size(), vfd_shm));
                 vfd.slot = Some((slot, pfn, vm));
                 Ok(vfd)
             }
@@ -590,14 +589,15 @@ impl WlVfd {
             })?;
         match allocate_and_register_gpu_memory_response {
             VmMemoryResponse::AllocateAndRegisterGpuMemory {
-                fd: MaybeOwnedFd::Owned(file),
+                descriptor: MaybeOwnedDescriptor::Owned(file),
                 pfn,
                 slot,
                 desc,
             } => {
                 let mut vfd = WlVfd::default();
-                let vfd_shm = SharedMemory::from_file(file).map_err(WlError::NewAlloc)?;
-                vfd.guest_shared_memory = Some((vfd_shm.size(), vfd_shm.into()));
+                let vfd_shm =
+                    SharedMemory::from_safe_descriptor(file).map_err(WlError::NewAlloc)?;
+                vfd.guest_shared_memory = Some((vfd_shm.size(), vfd_shm));
                 vfd.slot = Some((slot, pfn, vm));
                 vfd.is_dmabuf = true;
                 Ok((vfd, desc))
@@ -613,12 +613,12 @@ impl WlVfd {
         }
 
         match &self.guest_shared_memory {
-            Some((_, fd)) => {
+            Some((_, descriptor)) => {
                 let sync = dma_buf_sync {
                     flags: flags as u64,
                 };
-                // Safe as fd is a valid dmabuf and incorrect flags will return an error.
-                if unsafe { ioctl_with_ref(fd, DMA_BUF_IOCTL_SYNC(), &sync) } < 0 {
+                // Safe as descriptor is a valid dmabuf and incorrect flags will return an error.
+                if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC(), &sync) } < 0 {
                     Err(WlError::DmabufSync(io::Error::last_os_error()))
                 } else {
                     Ok(())
@@ -644,24 +644,28 @@ impl WlVfd {
         Ok(vfd)
     }
 
-    fn from_file(vm: VmRequester, mut fd: File) -> WlResult<WlVfd> {
+    fn from_file(vm: VmRequester, mut descriptor: File) -> WlResult<WlVfd> {
         // We need to determine if the given file is more like shared memory or a pipe/socket. A
         // quick and easy check is to seek to the end of the file. If it works we assume it's not a
         // pipe/socket because those have no end. We can even use that seek location as an indicator
         // for how big the shared memory chunk to map into guest memory is. If seeking to the end
         // fails, we assume it's a socket or pipe with read/write semantics.
-        match fd.seek(SeekFrom::End(0)) {
+        match descriptor.seek(SeekFrom::End(0)) {
             Ok(fd_size) => {
                 let size = round_up_to_page_size(fd_size as usize) as u64;
                 let register_response = vm.request(VmMemoryRequest::RegisterMemory(
-                    MaybeOwnedFd::Borrowed(fd.as_raw_fd()),
+                    MaybeOwnedDescriptor::Borrowed(descriptor.as_raw_descriptor()),
                     size as usize,
                 ))?;
 
                 match register_response {
                     VmMemoryResponse::RegisterMemory { pfn, slot } => {
                         let mut vfd = WlVfd::default();
-                        vfd.guest_shared_memory = Some((size, fd));
+                        vfd.guest_shared_memory = Some((
+                            size,
+                            SharedMemory::from_file(descriptor)
+                                .map_err(WlError::FromSharedMemory)?,
+                        ));
                         vfd.slot = Some((slot, pfn, vm));
                         Ok(vfd)
                     }
@@ -669,14 +673,14 @@ impl WlVfd {
                 }
             }
             _ => {
-                let flags = match FileFlags::from_file(&fd) {
+                let flags = match FileFlags::from_file(&descriptor) {
                     Ok(FileFlags::Read) => VIRTIO_WL_VFD_READ,
                     Ok(FileFlags::Write) => VIRTIO_WL_VFD_WRITE,
                     Ok(FileFlags::ReadWrite) => VIRTIO_WL_VFD_READ | VIRTIO_WL_VFD_WRITE,
                     _ => 0,
                 };
                 let mut vfd = WlVfd::default();
-                vfd.local_pipe = Some((flags, fd));
+                vfd.local_pipe = Some((flags, descriptor));
                 Ok(vfd)
             }
         }
@@ -713,34 +717,37 @@ impl WlVfd {
     }
 
     // The FD that gets sent if this VFD is sent over a socket.
-    fn send_fd(&self) -> Option<RawFd> {
+    fn send_descriptor(&self) -> Option<RawDescriptor> {
         self.guest_shared_memory
             .as_ref()
-            .map(|(_, fd)| fd.as_raw_fd())
-            .or(self.socket.as_ref().map(|s| s.as_raw_fd()))
-            .or(self.remote_pipe.as_ref().map(|p| p.as_raw_fd()))
+            .map(|(_, shm)| shm.as_raw_descriptor())
+            .or(self.socket.as_ref().map(|s| s.as_raw_descriptor()))
+            .or(self.remote_pipe.as_ref().map(|p| p.as_raw_descriptor()))
     }
 
     // The FD that is used for polling for events on this VFD.
-    fn poll_fd(&self) -> Option<&dyn AsRawFd> {
+    fn wait_descriptor(&self) -> Option<&dyn AsRawDescriptor> {
         self.socket
             .as_ref()
-            .map(|s| s as &dyn AsRawFd)
-            .or(self.local_pipe.as_ref().map(|(_, p)| p as &dyn AsRawFd))
+            .map(|s| s as &dyn AsRawDescriptor)
+            .or(self
+                .local_pipe
+                .as_ref()
+                .map(|(_, p)| p as &dyn AsRawDescriptor))
     }
 
     // Sends data/files from the guest to the host over this VFD.
-    fn send(&mut self, fds: &[RawFd], data: &mut Reader) -> WlResult<WlResp> {
+    fn send(&mut self, rds: &[RawDescriptor], data: &mut Reader) -> WlResult<WlResp> {
         if let Some(socket) = &self.socket {
             socket
-                .send_with_fds(data.get_remaining(), fds)
+                .send_with_fds(&data.get_remaining(), rds)
                 .map_err(WlError::SendVfd)?;
             // All remaining data in `data` is now considered consumed.
             data.consume(::std::usize::MAX);
             Ok(WlResp::Ok)
         } else if let Some((_, local_pipe)) = &mut self.local_pipe {
-            // Impossible to send fds over a simple pipe.
-            if !fds.is_empty() {
+            // Impossible to send descriptors over a simple pipe.
+            if !rds.is_empty() {
                 return Ok(WlResp::InvalidType);
             }
             data.read_to(local_pipe, usize::max_value())
@@ -770,7 +777,7 @@ impl WlVfd {
                 in_file_queue.extend(
                     fd_buf[..file_count]
                         .iter()
-                        .map(|&fd| unsafe { File::from_raw_fd(fd) }),
+                        .map(|&descriptor| unsafe { File::from_raw_descriptor(descriptor) }),
                 );
                 return Ok(buf);
             }
@@ -826,7 +833,7 @@ struct WlState {
     vm: VmRequester,
     resource_bridge: Option<ResourceRequestSocket>,
     use_transition_flags: bool,
-    poll_ctx: PollContext<u32>,
+    wait_ctx: WaitContext<u32>,
     vfds: Map<u32, WlVfd>,
     next_vfd_id: u32,
     in_file_queue: Vec<File>,
@@ -846,7 +853,7 @@ impl WlState {
             wayland_paths,
             vm: VmRequester::new(vm_socket),
             resource_bridge,
-            poll_ctx: PollContext::new().expect("failed to create PollContext"),
+            wait_ctx: WaitContext::new().expect("failed to create WaitContext"),
             use_transition_flags,
             vfds: Map::new(),
             next_vfd_id: NEXT_VFD_ID_BASE,
@@ -879,9 +886,9 @@ impl WlState {
                 } else {
                     return Ok(WlResp::InvalidFlags);
                 };
-                self.poll_ctx
-                    .add(vfd.poll_fd().unwrap(), id)
-                    .map_err(WlError::PollContextAdd)?;
+                self.wait_ctx
+                    .add(vfd.wait_descriptor().unwrap(), id)
+                    .map_err(WlError::WaitContextAdd)?;
                 let resp = WlResp::VfdNew {
                     id,
                     flags: 0,
@@ -983,9 +990,9 @@ impl WlState {
                         .get(name)
                         .ok_or(WlError::UnknownSocketName(name.to_string()))?,
                 )?);
-                self.poll_ctx
-                    .add(vfd.poll_fd().unwrap(), id)
-                    .map_err(WlError::PollContextAdd)?;
+                self.wait_ctx
+                    .add(vfd.wait_descriptor().unwrap(), id)
+                    .map_err(WlError::WaitContextAdd)?;
                 Ok(WlResp::VfdNew {
                     id,
                     flags,
@@ -998,8 +1005,8 @@ impl WlState {
         }
     }
 
-    fn process_poll_context(&mut self) {
-        let events = match self.poll_ctx.wait_timeout(Duration::from_secs(0)) {
+    fn process_wait_context(&mut self) {
+        let events = match self.wait_ctx.wait_timeout(Duration::from_secs(0)) {
             Ok(v) => v.to_owned(),
             Err(e) => {
                 error!("failed polling for vfd evens: {}", e);
@@ -1007,17 +1014,19 @@ impl WlState {
             }
         };
 
-        for event in events.as_ref().iter_readable() {
-            if let Err(e) = self.recv(event.token()) {
+        for event in events.iter().filter(|e| e.is_readable) {
+            if let Err(e) = self.recv(event.token) {
                 error!("failed to recv from vfd: {}", e)
             }
         }
 
-        for event in events.as_ref().iter_hungup() {
-            if !event.readable() {
-                let vfd_id = event.token();
-                if let Some(fd) = self.vfds.get(&vfd_id).and_then(|vfd| vfd.poll_fd()) {
-                    if let Err(e) = self.poll_ctx.delete(fd) {
+        for event in events.iter().filter(|e| e.is_hungup) {
+            if !event.is_readable {
+                let vfd_id = event.token;
+                if let Some(descriptor) =
+                    self.vfds.get(&vfd_id).and_then(|vfd| vfd.wait_descriptor())
+                {
+                    if let Err(e) = self.wait_ctx.delete(descriptor) {
                         warn!("failed to remove hungup vfd from poll context: {}", e);
                     }
                 }
@@ -1070,15 +1079,15 @@ impl WlState {
         }
 
         // Next stage collects corresponding file descriptors for each id.
-        let mut fds = [0; VIRTWL_SEND_MAX_ALLOCS];
+        let mut rds = [0; VIRTWL_SEND_MAX_ALLOCS];
         #[cfg(feature = "gpu")]
         let mut bridged_files = Vec::new();
-        for (&send_vfd_id, fd) in send_vfd_ids[..vfd_count].iter().zip(fds.iter_mut()) {
+        for (&send_vfd_id, descriptor) in send_vfd_ids[..vfd_count].iter().zip(rds.iter_mut()) {
             let id = send_vfd_id.id.to_native();
             match send_vfd_id.kind.to_native() {
                 VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL => match self.vfds.get(&id) {
-                    Some(vfd) => match vfd.send_fd() {
-                        Some(vfd_fd) => *fd = vfd_fd,
+                    Some(vfd) => match vfd.send_descriptor() {
+                        Some(vfd_fd) => *descriptor = vfd_fd,
                         None => return Ok(WlResp::InvalidType),
                     },
                     None => {
@@ -1091,7 +1100,7 @@ impl WlState {
                     let sock = self.resource_bridge.as_ref().unwrap();
                     match get_resource_info(sock, id) {
                         Ok(info) => {
-                            *fd = info.file.as_raw_fd();
+                            *descriptor = info.file.as_raw_descriptor();
                             bridged_files.push(info.file);
                         }
                         Err(ResourceBridgeError::InvalidResource(id)) => {
@@ -1123,7 +1132,7 @@ impl WlState {
 
         // Final stage sends file descriptors and data to the target vfd's socket.
         match self.vfds.get_mut(&vfd_id) {
-            Some(vfd) => match vfd.send(&fds[..vfd_count], reader)? {
+            Some(vfd) => match vfd.send(&rds[..vfd_count], reader)? {
                 WlResp::Ok => {}
                 _ => return Ok(WlResp::InvalidType),
             },
@@ -1152,10 +1161,10 @@ impl WlState {
         }
         for file in self.in_file_queue.drain(..) {
             let vfd = WlVfd::from_file(self.vm.clone(), file)?;
-            if let Some(poll_fd) = vfd.poll_fd() {
-                self.poll_ctx
-                    .add(poll_fd, self.next_vfd_id)
-                    .map_err(WlError::PollContextAdd)?;
+            if let Some(wait_descriptor) = vfd.wait_descriptor() {
+                self.wait_ctx
+                    .add(wait_descriptor, self.next_vfd_id)
+                    .map_err(WlError::WaitContextAdd)?;
             }
             self.vfds.insert(self.next_vfd_id, vfd);
             self.in_queue.push_back((
@@ -1375,7 +1384,7 @@ impl Worker {
         }
     }
 
-    fn run(&mut self, mut queue_evts: Vec<EventFd>, kill_evt: EventFd) {
+    fn run(&mut self, mut queue_evts: Vec<Event>, kill_evt: Event) {
         let mut in_desc_chains: VecDeque<DescriptorChain> =
             VecDeque::with_capacity(QUEUE_SIZE as usize);
         let in_queue_evt = queue_evts.remove(0);
@@ -1389,24 +1398,24 @@ impl Worker {
             InterruptResample,
         }
 
-        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
+        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (&in_queue_evt, Token::InQueue),
             (&out_queue_evt, Token::OutQueue),
             (&kill_evt, Token::Kill),
-            (&self.state.poll_ctx, Token::State),
+            (&self.state.wait_ctx, Token::State),
             (self.interrupt.get_resample_evt(), Token::InterruptResample),
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating PollContext: {}", e);
+                error!("failed creating WaitContext: {}", e);
                 return;
             }
         };
 
-        'poll: loop {
+        'wait: loop {
             let mut signal_used_in = false;
             let mut signal_used_out = false;
-            let events = match poll_ctx.wait() {
+            let events = match wait_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -1415,7 +1424,7 @@ impl Worker {
             };
 
             for event in &events {
-                match event.token() {
+                match event.token {
                     Token::InQueue => {
                         let _ = in_queue_evt.read();
                         // Used to buffer descriptor indexes that are invalid for our uses.
@@ -1446,8 +1455,8 @@ impl Worker {
                         while let Some(desc) = self.out_queue.pop(&self.mem) {
                             let desc_index = desc.index;
                             match (
-                                Reader::new(&self.mem, desc.clone()),
-                                Writer::new(&self.mem, desc),
+                                Reader::new(self.mem.clone(), desc.clone()),
+                                Writer::new(self.mem.clone(), desc),
                             ) {
                                 (Ok(mut reader), Ok(mut writer)) => {
                                     let resp = match self.state.execute(&mut reader) {
@@ -1480,8 +1489,8 @@ impl Worker {
                             }
                         }
                     }
-                    Token::Kill => break 'poll,
-                    Token::State => self.state.process_poll_context(),
+                    Token::Kill => break 'wait,
+                    Token::State => self.state.process_wait_context(),
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
@@ -1496,7 +1505,7 @@ impl Worker {
                     // in_desc_chains is not empty (checked by loop condition) so unwrap is safe.
                     let desc = in_desc_chains.pop_front().unwrap();
                     let index = desc.index;
-                    match Writer::new(&self.mem, desc) {
+                    match Writer::new(self.mem.clone(), desc) {
                         Ok(mut writer) => {
                             match encode_resp(&mut writer, in_resp) {
                                 Ok(()) => {
@@ -1536,16 +1545,18 @@ impl Worker {
 }
 
 pub struct Wl {
-    kill_evt: Option<EventFd>,
+    kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<()>>,
     wayland_paths: Map<String, PathBuf>,
     vm_socket: Option<VmMemoryControlRequestSocket>,
     resource_bridge: Option<ResourceRequestSocket>,
     use_transition_flags: bool,
+    base_features: u64,
 }
 
 impl Wl {
     pub fn new(
+        base_features: u64,
         wayland_paths: Map<String, PathBuf>,
         vm_socket: VmMemoryControlRequestSocket,
         resource_bridge: Option<ResourceRequestSocket>,
@@ -1557,6 +1568,7 @@ impl Wl {
             vm_socket: Some(vm_socket),
             resource_bridge,
             use_transition_flags: false,
+            base_features,
         })
     }
 }
@@ -1575,17 +1587,17 @@ impl Drop for Wl {
 }
 
 impl VirtioDevice for Wl {
-    fn keep_fds(&self) -> Vec<RawFd> {
-        let mut keep_fds = Vec::new();
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        let mut keep_rds = Vec::new();
 
         if let Some(vm_socket) = &self.vm_socket {
-            keep_fds.push(vm_socket.as_raw_fd());
+            keep_rds.push(vm_socket.as_raw_descriptor());
         }
         if let Some(resource_bridge) = &self.resource_bridge {
-            keep_fds.push(resource_bridge.as_raw_fd());
+            keep_rds.push(resource_bridge.as_raw_descriptor());
         }
 
-        keep_fds
+        keep_rds
     }
 
     fn device_type(&self) -> u32 {
@@ -1597,7 +1609,7 @@ impl VirtioDevice for Wl {
     }
 
     fn features(&self) -> u64 {
-        1 << VIRTIO_WL_F_TRANS_FLAGS | 1 << VIRTIO_F_VERSION_1
+        self.base_features | 1 << VIRTIO_WL_F_TRANS_FLAGS
     }
 
     fn ack_features(&mut self, value: u64) {
@@ -1611,16 +1623,16 @@ impl VirtioDevice for Wl {
         mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     ) {
         if queues.len() != QUEUE_SIZES.len() || queue_evts.len() != QUEUE_SIZES.len() {
             return;
         }
 
-        let (self_kill_evt, kill_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(e) => {
-                error!("failed creating kill EventFd pair: {}", e);
+                error!("failed creating kill Event pair: {}", e);
                 return;
             }
         };

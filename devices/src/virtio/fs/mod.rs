@@ -2,34 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::ffi::FromBytesWithNulError;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::thread;
 
-use base::{error, warn, Error as SysError, EventFd};
+use base::{error, warn, Error as SysError, Event, RawDescriptor};
 use data_model::{DataInit, Le32};
 use vm_memory::GuestMemory;
 
-use crate::virtio::{
-    copy_config, DescriptorError, Interrupt, Queue, VirtioDevice, TYPE_FS, VIRTIO_F_VERSION_1,
-};
+use crate::virtio::{copy_config, DescriptorError, Interrupt, Queue, VirtioDevice, TYPE_FS};
 
-mod filesystem;
-#[allow(dead_code)]
-mod fuse;
-#[cfg(fuzzing)]
-pub mod fuzzing;
 mod multikey;
 pub mod passthrough;
-mod server;
+mod read_dir;
 mod worker;
 
+use fuse::Server;
 use passthrough::PassthroughFs;
-use server::Server;
 use worker::Worker;
 
 // The fs device does not have a fixed number of queues.
@@ -58,38 +49,31 @@ pub enum Error {
     TagTooLong(usize),
     /// Failed to create the file system.
     CreateFs(io::Error),
-    /// Creating PollContext failed.
-    CreatePollContext(SysError),
+    /// Creating WaitContext failed.
+    CreateWaitContext(SysError),
     /// Error while polling for events.
-    PollError(SysError),
-    /// Error while reading from the virtio queue's EventFd.
-    ReadQueueEventFd(SysError),
+    WaitError(SysError),
+    /// Error while reading from the virtio queue's Event.
+    ReadQueueEvent(SysError),
     /// A request is missing readable descriptors.
     NoReadableDescriptors,
     /// A request is missing writable descriptors.
     NoWritableDescriptors,
     /// Failed to signal the virio used queue.
     SignalUsedQueue(SysError),
-    /// Failed to decode protocol messages.
-    DecodeMessage(io::Error),
-    /// Failed to encode protocol messages.
-    EncodeMessage(io::Error),
-    /// One or more parameters are missing.
-    MissingParameter,
-    /// A C string parameter is invalid.
-    InvalidCString(FromBytesWithNulError),
     /// The `len` field of the header is too small.
-    InvalidHeaderLength,
-    /// A `DescriptorChain` contains invalid data.
     InvalidDescriptorChain(DescriptorError),
-    /// The `size` field of the `SetxattrIn` message does not match the length
-    /// of the decoded value.
-    InvalidXattrSize((u32, usize)),
-    /// Requested too many `iovec`s for an `ioctl` retry.
-    TooManyIovecs((usize, usize)),
+    /// Error happened in FUSE.
+    FuseError(fuse::Error),
 }
 
 impl ::std::error::Error for Error {}
+
+impl From<fuse::Error> for Error {
+    fn from(err: fuse::Error) -> Error {
+        Error::FuseError(err)
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -101,29 +85,14 @@ impl fmt::Display for Error {
                 len, FS_MAX_TAG_LEN
             ),
             CreateFs(err) => write!(f, "failed to create file system: {}", err),
-            CreatePollContext(err) => write!(f, "failed to create PollContext: {}", err),
-            PollError(err) => write!(f, "failed to poll events: {}", err),
-            ReadQueueEventFd(err) => write!(f, "failed to read from virtio queue EventFd: {}", err),
+            CreateWaitContext(err) => write!(f, "failed to create WaitContext: {}", err),
+            WaitError(err) => write!(f, "failed to wait for events: {}", err),
+            ReadQueueEvent(err) => write!(f, "failed to read from virtio queue Event: {}", err),
             NoReadableDescriptors => write!(f, "request does not have any readable descriptors"),
             NoWritableDescriptors => write!(f, "request does not have any writable descriptors"),
             SignalUsedQueue(err) => write!(f, "failed to signal used queue: {}", err),
-            DecodeMessage(err) => write!(f, "failed to decode fuse message: {}", err),
-            EncodeMessage(err) => write!(f, "failed to encode fuse message: {}", err),
-            MissingParameter => write!(f, "one or more parameters are missing"),
-            InvalidHeaderLength => write!(f, "the `len` field of the header is too small"),
-            InvalidCString(err) => write!(f, "a c string parameter is invalid: {}", err),
             InvalidDescriptorChain(err) => write!(f, "DescriptorChain is invalid: {}", err),
-            InvalidXattrSize((size, len)) => write!(
-                f,
-                "The `size` field of the `SetxattrIn` message does not match the length of the\
-                 decoded value: size = {}, value.len() = {}",
-                size, len
-            ),
-            TooManyIovecs((count, max)) => write!(
-                f,
-                "requested too many `iovec`s for an `ioctl` retry reply: requested {}, max: {}",
-                count, max
-            ),
+            FuseError(err) => write!(f, "fuse error: {}", err),
         }
     }
 }
@@ -136,11 +105,16 @@ pub struct Fs {
     queue_sizes: Box<[u16]>,
     avail_features: u64,
     acked_features: u64,
-    workers: Vec<(EventFd, thread::JoinHandle<Result<()>>)>,
+    workers: Vec<(Event, thread::JoinHandle<Result<()>>)>,
 }
 
 impl Fs {
-    pub fn new(tag: &str, num_workers: usize, fs_cfg: passthrough::Config) -> Result<Fs> {
+    pub fn new(
+        base_features: u64,
+        tag: &str,
+        num_workers: usize,
+        fs_cfg: passthrough::Config,
+    ) -> Result<Fs> {
         if tag.len() > FS_MAX_TAG_LEN {
             return Err(Error::TagTooLong(tag.len()));
         }
@@ -162,7 +136,7 @@ impl Fs {
             cfg,
             fs: Some(fs),
             queue_sizes: vec![QUEUE_SIZE; num_queues].into_boxed_slice(),
-            avail_features: 1 << VIRTIO_F_VERSION_1,
+            avail_features: base_features,
             acked_features: 0,
             workers: Vec::with_capacity(num_workers + 1),
         })
@@ -189,10 +163,10 @@ impl Fs {
 }
 
 impl VirtioDevice for Fs {
-    fn keep_fds(&self) -> Vec<RawFd> {
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
         self.fs
             .as_ref()
-            .map(PassthroughFs::keep_fds)
+            .map(PassthroughFs::keep_rds)
             .unwrap_or_else(Vec::new)
     }
 
@@ -229,7 +203,7 @@ impl VirtioDevice for Fs {
         guest_mem: GuestMemory,
         interrupt: Interrupt,
         queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     ) {
         if queues.len() != self.queue_sizes.len() || queue_evts.len() != self.queue_sizes.len() {
             return;
@@ -242,15 +216,15 @@ impl VirtioDevice for Fs {
 
         let mut watch_resample_event = true;
         for (idx, (queue, evt)) in queues.into_iter().zip(queue_evts.into_iter()).enumerate() {
-            let (self_kill_evt, kill_evt) =
-                match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!("fs: failed creating kill EventFd pair: {}", e);
-                        self.stop_workers();
-                        return;
-                    }
-                };
+            let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e)))
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("fs: failed creating kill Event pair: {}", e);
+                    self.stop_workers();
+                    return;
+                }
+            };
 
             let mem = guest_mem.clone();
             let server = server.clone();

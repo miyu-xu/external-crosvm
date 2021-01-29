@@ -60,25 +60,32 @@ use arch::{
     get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
     VmComponents, VmImage,
 };
-use base::EventFd;
+use base::Event;
 use devices::{IrqChip, IrqChipX86_64, PciConfigIo, PciDevice};
-use hypervisor::{HypervisorX86_64, Vcpu, VcpuX86_64, VmX86_64};
+use hypervisor::{HypervisorX86_64, VcpuX86_64, VmX86_64};
 use minijail::Minijail;
 use remain::sorted;
 use resources::SystemAllocator;
 use sync::Mutex;
+use vm_control::{BatControl, BatteryType};
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use {
+    gdbstub::arch::x86::reg::X86_64CoreRegs,
+    hypervisor::x86_64::{Regs, Sregs},
+};
 
 #[sorted]
 #[derive(Debug)]
 pub enum Error {
     AllocateIOResouce(resources::Error),
     AllocateIrq,
-    CloneEventFd(base::Error),
+    CloneEvent(base::Error),
     Cmdline(kernel_cmdline::Error),
     ConfigureSystem,
+    CreateBatDevices(arch::DeviceRegistrationError),
     CreateDevices(Box<dyn StdError>),
-    CreateEventFd(base::Error),
+    CreateEvent(base::Error),
     CreateFdt(arch::fdt::Error),
     CreateIoapicDevice(base::Error),
     CreateIrqChip(Box<dyn StdError>),
@@ -90,6 +97,7 @@ pub enum Error {
     CreateVcpu(base::Error),
     CreateVm(Box<dyn StdError>),
     E820Configuration,
+    EnableSinglestep(base::Error),
     EnableSplitIrqchip(base::Error),
     GetSerialCmdline(GetSerialCmdlineError),
     KernelOffsetPastEnd,
@@ -98,9 +106,13 @@ pub enum Error {
     LoadCmdline(kernel_loader::Error),
     LoadInitrd(arch::LoadImageError),
     LoadKernel(kernel_loader::Error),
+    PageNotPresent,
     Pstore(arch::pstore::Error),
+    ReadingGuestMemory(vm_memory::GuestMemoryError),
+    ReadRegs(base::Error),
     RegisterIrqfd(base::Error),
     RegisterVsock(arch::DeviceRegistrationError),
+    SetHwBreakpoint(base::Error),
     SetLint(interrupts::Error),
     SetTssAddr(base::Error),
     SetupCpuid(cpuid::Error),
@@ -111,6 +123,9 @@ pub enum Error {
     SetupRegs(regs::Error),
     SetupSmbios(smbios::Error),
     SetupSregs(regs::Error),
+    TranslatingVirtAddr,
+    WriteRegs(base::Error),
+    WritingGuestMemory(GuestMemoryError),
     ZeroPagePastRamEnd,
     ZeroPageSetup,
 }
@@ -124,11 +139,12 @@ impl Display for Error {
         match self {
             AllocateIOResouce(e) => write!(f, "error allocating IO resource: {}", e),
             AllocateIrq => write!(f, "error allocating a single irq"),
-            CloneEventFd(e) => write!(f, "unable to clone an EventFd: {}", e),
+            CloneEvent(e) => write!(f, "unable to clone an Event: {}", e),
             Cmdline(e) => write!(f, "the given kernel command line was invalid: {}", e),
             ConfigureSystem => write!(f, "error configuring the system"),
+            CreateBatDevices(e) => write!(f, "unable to create battery devices: {}", e),
             CreateDevices(e) => write!(f, "error creating devices: {}", e),
-            CreateEventFd(e) => write!(f, "unable to make an EventFd: {}", e),
+            CreateEvent(e) => write!(f, "unable to make an Event: {}", e),
             CreateFdt(e) => write!(f, "failed to create fdt: {}", e),
             CreateIoapicDevice(e) => write!(f, "failed to create IOAPIC device: {}", e),
             CreateIrqChip(e) => write!(f, "failed to create IRQ chip: {}", e),
@@ -140,6 +156,7 @@ impl Display for Error {
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create VM: {}", e),
             E820Configuration => write!(f, "invalid e820 setup params"),
+            EnableSinglestep(e) => write!(f, "failed to enable singlestep execution: {}", e),
             EnableSplitIrqchip(e) => write!(f, "failed to enable split irqchip: {}", e),
             GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
             KernelOffsetPastEnd => write!(f, "the kernel extends past the end of RAM"),
@@ -148,9 +165,13 @@ impl Display for Error {
             LoadCmdline(e) => write!(f, "error loading command line: {}", e),
             LoadInitrd(e) => write!(f, "error loading initrd: {}", e),
             LoadKernel(e) => write!(f, "error loading Kernel: {}", e),
+            PageNotPresent => write!(f, "error translating address: Page not present"),
             Pstore(e) => write!(f, "failed to allocate pstore region: {}", e),
+            ReadingGuestMemory(e) => write!(f, "error reading guest memory {}", e),
+            ReadRegs(e) => write!(f, "error reading CPU registers {}", e),
             RegisterIrqfd(e) => write!(f, "error registering an IrqFd: {}", e),
             RegisterVsock(e) => write!(f, "error registering virtual socket device: {}", e),
+            SetHwBreakpoint(e) => write!(f, "failed to set a hardware breakpoint: {}", e),
             SetLint(e) => write!(f, "failed to set interrupts: {}", e),
             SetTssAddr(e) => write!(f, "failed to set tss addr: {}", e),
             SetupCpuid(e) => write!(f, "failed to set up cpuid: {}", e),
@@ -161,6 +182,9 @@ impl Display for Error {
             SetupRegs(e) => write!(f, "failed to set up registers: {}", e),
             SetupSmbios(e) => write!(f, "failed to set up SMBIOS: {}", e),
             SetupSregs(e) => write!(f, "failed to set up sregs: {}", e),
+            TranslatingVirtAddr => write!(f, "failed to translate virtual address"),
+            WriteRegs(e) => write!(f, "error writing CPU registers {}", e),
+            WritingGuestMemory(e) => write!(f, "error writing guest memory {}", e),
             ZeroPagePastRamEnd => write!(f, "the zero page extends past the end of guest_mem"),
             ZeroPageSetup => write!(f, "error writing the zero page of guest memory"),
         }
@@ -299,7 +323,7 @@ fn arch_memory_regions(size: u64, has_bios: bool) -> Vec<(GuestAddress, u64)> {
     let end_32bit_gap_start = GuestAddress(END_ADDR_BEFORE_32BITS);
 
     let mut regions = Vec::new();
-    if mem_end < end_32bit_gap_start {
+    if mem_end <= end_32bit_gap_start {
         regions.push((GuestAddress(0), size));
         if has_bios {
             regions.push((GuestAddress(BIOS_START), BIOS_LEN as u64));
@@ -321,22 +345,24 @@ fn arch_memory_regions(size: u64, has_bios: bool) -> Vec<(GuestAddress, u64)> {
 impl arch::LinuxArch for X8664arch {
     type Error = Error;
 
-    fn build_vm<V, I, FD, FV, FI, E1, E2, E3>(
+    fn build_vm<V, Vcpu, I, FD, FV, FI, E1, E2, E3>(
         mut components: VmComponents,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
+        battery: (&Option<BatteryType>, Option<Minijail>),
         create_devices: FD,
         create_vm: FV,
         create_irq_chip: FI,
-    ) -> std::result::Result<RunnableLinuxVm<V, I>, Self::Error>
+    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu, I>, Self::Error>
     where
         V: VmX86_64,
-        I: IrqChipX86_64<V::Vcpu>,
+        Vcpu: VcpuX86_64,
+        I: IrqChipX86_64,
         FD: FnOnce(
             &GuestMemory,
             &mut V,
             &mut SystemAllocator,
-            &EventFd,
+            &Event,
         ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
         FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
         FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
@@ -344,10 +370,7 @@ impl arch::LinuxArch for X8664arch {
         E2: StdError + 'static,
         E3: StdError + 'static,
     {
-        let has_bios = match components.vm_image {
-            VmImage::Bios(_) => true,
-            _ => false,
-        };
+        let has_bios = matches!(components.vm_image, VmImage::Bios(_));
         let mem = Self::setup_memory(components.memory_size, has_bios)?;
         let mut resources = Self::get_resource_allocator(&mem, components.wayland_dmabuf);
 
@@ -361,7 +384,7 @@ impl arch::LinuxArch for X8664arch {
 
         let mut mmio_bus = devices::Bus::new();
 
-        let exit_evt = EventFd::new().map_err(Error::CreateEventFd)?;
+        let exit_evt = Event::new().map_err(Error::CreateEvent)?;
 
         let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
             .map_err(|e| Error::CreateDevices(Box::new(e)))?;
@@ -377,22 +400,32 @@ impl arch::LinuxArch for X8664arch {
         let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(pci)));
 
         // Event used to notify crosvm that guest OS is trying to suspend.
-        let suspend_evt = EventFd::new().map_err(Error::CreateEventFd)?;
+        let suspend_evt = Event::new().map_err(Error::CreateEvent)?;
 
         let mut io_bus = Self::setup_io_bus(
             irq_chip.pit_uses_speaker_port(),
-            exit_evt.try_clone().map_err(Error::CloneEventFd)?,
+            exit_evt.try_clone().map_err(Error::CloneEvent)?,
             Some(pci_bus.clone()),
             components.memory_size,
         )?;
 
-        Self::setup_serial_devices(&mut irq_chip, &mut io_bus, serial_parameters, serial_jail)?;
+        Self::setup_serial_devices(
+            components.protected_vm,
+            &mut irq_chip,
+            &mut io_bus,
+            serial_parameters,
+            serial_jail,
+        )?;
 
-        let acpi_dev_resource = Self::setup_acpi_devices(
+        let (acpi_dev_resource, bat_control) = Self::setup_acpi_devices(
             &mut io_bus,
             &mut resources,
-            suspend_evt.try_clone().map_err(Error::CloneEventFd)?,
+            suspend_evt.try_clone().map_err(Error::CloneEvent)?,
+            exit_evt.try_clone().map_err(Error::CloneEvent)?,
             components.acpi_sdts,
+            &mut irq_chip,
+            battery,
+            &mut mmio_bus,
         )?;
 
         let ramoops_region = match components.pstore {
@@ -432,7 +465,6 @@ impl arch::LinuxArch for X8664arch {
                 for param in components.extra_kernel_params {
                     cmdline.insert_str(&param).map_err(Error::Cmdline)?;
                 }
-
                 // It seems that default record_size is only 4096 byte even if crosvm allocates
                 // more memory. It means that one crash can only 4096 byte.
                 // Set record_size and console_size to 1/4 of allocated memory size.
@@ -475,25 +507,32 @@ impl arch::LinuxArch for X8664arch {
             vcpu_count,
             vcpus: None,
             vcpu_affinity: components.vcpu_affinity,
+            no_smt: components.no_smt,
             irq_chip,
             has_bios,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
             suspend_evt,
+            rt_cpus: components.rt_cpus,
+            bat_control,
+            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            gdb: components.gdb,
         })
     }
 
-    fn configure_vcpu<T: VcpuX86_64>(
+    fn configure_vcpu(
         guest_mem: &GuestMemory,
-        hypervisor: &impl HypervisorX86_64,
-        irq_chip: &mut impl IrqChipX86_64<T>,
-        vcpu: &mut impl VcpuX86_64,
+        hypervisor: &dyn HypervisorX86_64,
+        irq_chip: &mut dyn IrqChipX86_64,
+        vcpu: &mut dyn VcpuX86_64,
         vcpu_id: usize,
         num_cpus: usize,
         has_bios: bool,
+        no_smt: bool,
     ) -> Result<()> {
-        cpuid::setup_cpuid(hypervisor, vcpu, vcpu_id, num_cpus).map_err(Error::SetupCpuid)?;
+        cpuid::setup_cpuid(hypervisor, irq_chip, vcpu, vcpu_id, num_cpus, no_smt)
+            .map_err(Error::SetupCpuid)?;
 
         if has_bios {
             return Ok(());
@@ -517,6 +556,234 @@ impl arch::LinuxArch for X8664arch {
 
         Ok(())
     }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_read_registers<T: VcpuX86_64>(vcpu: &T) -> Result<X86_64CoreRegs> {
+        // General registers: RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, r8-r15
+        let gregs = vcpu.get_regs().map_err(Error::ReadRegs)?;
+        let regs = [
+            gregs.rax, gregs.rbx, gregs.rcx, gregs.rdx, gregs.rsi, gregs.rdi, gregs.rbp, gregs.rsp,
+            gregs.r8, gregs.r9, gregs.r10, gregs.r11, gregs.r12, gregs.r13, gregs.r14, gregs.r15,
+        ];
+
+        // GDB exposes 32-bit eflags instead of 64-bit rflags.
+        // https://github.com/bminor/binutils-gdb/blob/master/gdb/features/i386/64bit-core.xml
+        let eflags = gregs.rflags as u32;
+        let rip = gregs.rip;
+
+        // Segment registers: CS, SS, DS, ES, FS, GS
+        let sregs = vcpu.get_sregs().map_err(Error::ReadRegs)?;
+        let sgs = [sregs.cs, sregs.ss, sregs.ds, sregs.es, sregs.fs, sregs.gs];
+        let mut segments = [0u32; 6];
+        // GDB uses only the selectors.
+        for i in 0..sgs.len() {
+            segments[i] = sgs[i].selector as u32;
+        }
+
+        // TODO(keiichiw): Other registers such as FPU, xmm and mxcsr.
+
+        Ok(X86_64CoreRegs {
+            regs,
+            eflags,
+            rip,
+            segments,
+            ..Default::default()
+        })
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_write_registers<T: VcpuX86_64>(vcpu: &T, regs: &X86_64CoreRegs) -> Result<()> {
+        // General purpose registers (RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, r8-r15) + RIP + rflags
+        let orig_gregs = vcpu.get_regs().map_err(Error::ReadRegs)?;
+        let gregs = Regs {
+            rax: regs.regs[0],
+            rbx: regs.regs[1],
+            rcx: regs.regs[2],
+            rdx: regs.regs[3],
+            rsi: regs.regs[4],
+            rdi: regs.regs[5],
+            rbp: regs.regs[6],
+            rsp: regs.regs[7],
+            r8: regs.regs[8],
+            r9: regs.regs[9],
+            r10: regs.regs[10],
+            r11: regs.regs[11],
+            r12: regs.regs[12],
+            r13: regs.regs[13],
+            r14: regs.regs[14],
+            r15: regs.regs[15],
+            rip: regs.rip,
+            // Update the lower 32 bits of rflags.
+            rflags: (orig_gregs.rflags & !(u32::MAX as u64)) | (regs.eflags as u64),
+        };
+        vcpu.set_regs(&gregs).map_err(Error::WriteRegs)?;
+
+        // Segment registers: CS, SS, DS, ES, FS, GS
+        // Since GDB care only selectors, we call get_sregs() first.
+        let mut sregs = vcpu.get_sregs().map_err(Error::ReadRegs)?;
+        sregs.cs.selector = regs.segments[0] as u16;
+        sregs.ss.selector = regs.segments[1] as u16;
+        sregs.ds.selector = regs.segments[2] as u16;
+        sregs.es.selector = regs.segments[3] as u16;
+        sregs.fs.selector = regs.segments[4] as u16;
+        sregs.gs.selector = regs.segments[5] as u16;
+
+        vcpu.set_sregs(&sregs).map_err(Error::WriteRegs)?;
+
+        // TODO(keiichiw): Other registers such as FPU, xmm and mxcsr.
+
+        Ok(())
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_read_memory<T: VcpuX86_64>(
+        vcpu: &T,
+        guest_mem: &GuestMemory,
+        vaddr: GuestAddress,
+        len: usize,
+    ) -> Result<Vec<u8>> {
+        let sregs = vcpu.get_sregs().map_err(Error::ReadRegs)?;
+        let mut buf = vec![0; len];
+        let mut total_read = 0u64;
+        // Handle reads across page boundaries.
+
+        while total_read < len as u64 {
+            let (paddr, psize) = phys_addr(guest_mem, vaddr.0 + total_read, &sregs)?;
+            let read_len = std::cmp::min(len as u64 - total_read, psize - (paddr & (psize - 1)));
+            guest_mem
+                .get_slice_at_addr(GuestAddress(paddr), read_len as usize)
+                .map_err(Error::ReadingGuestMemory)?
+                .copy_to(&mut buf[total_read as usize..]);
+            total_read += read_len;
+        }
+        Ok(buf)
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_write_memory<T: VcpuX86_64>(
+        vcpu: &T,
+        guest_mem: &GuestMemory,
+        vaddr: GuestAddress,
+        buf: &[u8],
+    ) -> Result<()> {
+        let sregs = vcpu.get_sregs().map_err(Error::ReadRegs)?;
+        let mut total_written = 0u64;
+        // Handle writes across page boundaries.
+        while total_written < buf.len() as u64 {
+            let (paddr, psize) = phys_addr(guest_mem, vaddr.0 + total_written, &sregs)?;
+            let write_len = std::cmp::min(
+                buf.len() as u64 - total_written,
+                psize - (paddr & (psize - 1)),
+            );
+
+            guest_mem
+                .write_all_at_addr(
+                    &buf[total_written as usize..(total_written as usize + write_len as usize)],
+                    GuestAddress(paddr),
+                )
+                .map_err(Error::WritingGuestMemory)?;
+            total_written += write_len;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_enable_singlestep<T: VcpuX86_64>(vcpu: &T) -> Result<()> {
+        vcpu.set_guest_debug(&[], true /* enable_singlestep */)
+            .map_err(Error::EnableSinglestep)
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    fn debug_set_hw_breakpoints<T: VcpuX86_64>(
+        vcpu: &T,
+        breakpoints: &[GuestAddress],
+    ) -> Result<()> {
+        vcpu.set_guest_debug(&breakpoints, false /* enable_singlestep */)
+            .map_err(Error::SetHwBreakpoint)
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+// return the translated address and the size of the page it resides in.
+fn phys_addr(mem: &GuestMemory, vaddr: u64, sregs: &Sregs) -> Result<(u64, u64)> {
+    const CR0_PG_MASK: u64 = 1 << 31;
+    const CR4_PAE_MASK: u64 = 1 << 5;
+    const CR4_LA57_MASK: u64 = 1 << 12;
+    const MSR_EFER_LMA: u64 = 1 << 10;
+    // bits 12 through 51 are the address in a PTE.
+    const PTE_ADDR_MASK: u64 = ((1 << 52) - 1) & !0x0fff;
+    const PAGE_PRESENT: u64 = 0x1;
+    const PAGE_PSE_MASK: u64 = 0x1 << 7;
+
+    const PAGE_SIZE_4K: u64 = 4 * 1024;
+    const PAGE_SIZE_2M: u64 = 2 * 1024 * 1024;
+    const PAGE_SIZE_1G: u64 = 1024 * 1024 * 1024;
+
+    fn next_pte(mem: &GuestMemory, curr_table_addr: u64, vaddr: u64, level: usize) -> Result<u64> {
+        let ent: u64 = mem
+            .read_obj_from_addr(GuestAddress(
+                (curr_table_addr & PTE_ADDR_MASK) + page_table_offset(vaddr, level),
+            ))
+            .map_err(|_| Error::TranslatingVirtAddr)?;
+        /* TODO - convert to a trace
+        println!(
+            "level {} vaddr {:x} table-addr {:x} mask {:x} ent {:x} offset {:x}",
+            level,
+            vaddr,
+            curr_table_addr,
+            PTE_ADDR_MASK,
+            ent,
+            page_table_offset(vaddr, level)
+        );
+        */
+        if ent & PAGE_PRESENT == 0 {
+            return Err(Error::PageNotPresent);
+        }
+        Ok(ent)
+    }
+
+    // Get the offset in to the page of `vaddr`.
+    fn page_offset(vaddr: u64, page_size: u64) -> u64 {
+        vaddr & (page_size - 1)
+    }
+
+    // Get the offset in to the page table of the given `level` specified by the virtual `address`.
+    // `level` is 1 through 5 in x86_64 to handle the five levels of paging.
+    fn page_table_offset(addr: u64, level: usize) -> u64 {
+        let offset = (level - 1) * 9 + 12;
+        ((addr >> offset) & 0x1ff) << 3
+    }
+
+    if sregs.cr0 & CR0_PG_MASK == 0 {
+        return Ok((vaddr, PAGE_SIZE_4K));
+    }
+
+    if sregs.cr4 & CR4_PAE_MASK == 0 {
+        return Err(Error::TranslatingVirtAddr);
+    }
+
+    if sregs.efer & MSR_EFER_LMA != 0 {
+        // TODO - check LA57
+        if sregs.cr4 & CR4_LA57_MASK != 0 {}
+        let p4_ent = next_pte(mem, sregs.cr3, vaddr, 4)?;
+        let p3_ent = next_pte(mem, p4_ent, vaddr, 3)?;
+        // TODO check if it's a 1G page with the PSE bit in p2_ent
+        if p3_ent & PAGE_PSE_MASK != 0 {
+            // It's a 1G page with the PSE bit in p3_ent
+            let paddr = p3_ent & PTE_ADDR_MASK | page_offset(vaddr, PAGE_SIZE_1G);
+            return Ok((paddr, PAGE_SIZE_1G));
+        }
+        let p2_ent = next_pte(mem, p3_ent, vaddr, 2)?;
+        if p2_ent & PAGE_PSE_MASK != 0 {
+            // It's a 2M page with the PSE bit in p2_ent
+            let paddr = p2_ent & PTE_ADDR_MASK | page_offset(vaddr, PAGE_SIZE_2M);
+            return Ok((paddr, PAGE_SIZE_2M));
+        }
+        let p1_ent = next_pte(mem, p2_ent, vaddr, 1)?;
+        let paddr = p1_ent & PTE_ADDR_MASK | page_offset(vaddr, PAGE_SIZE_4K);
+        return Ok((paddr, PAGE_SIZE_4K));
+    }
+    Err(Error::TranslatingVirtAddr)
 }
 
 impl X8664arch {
@@ -690,11 +957,11 @@ impl X8664arch {
     /// # Arguments
     ///
     /// * - `pit_uses_speaker_port` - does the PIT use port 0x61 for the PC speaker
-    /// * - `exit_evt` - the event fd object which should receive exit events
+    /// * - `exit_evt` - the event object which should receive exit events
     /// * - `mem_size` - the size in bytes of physical ram for the guest
     fn setup_io_bus(
         pit_uses_speaker_port: bool,
-        exit_evt: EventFd,
+        exit_evt: Event,
         pci: Option<Arc<Mutex<devices::PciConfigIo>>>,
         mem_size: u64,
     ) -> Result<devices::Bus> {
@@ -726,35 +993,28 @@ impl X8664arch {
                 Arc::new(Mutex::new(devices::Cmos::new(mem_below_4g, mem_above_4g))),
                 0x70,
                 0x2,
-                false,
             )
             .unwrap();
 
         let nul_device = Arc::new(Mutex::new(NoDevice));
         let i8042 = Arc::new(Mutex::new(devices::I8042Device::new(
-            exit_evt.try_clone().map_err(Error::CloneEventFd)?,
+            exit_evt.try_clone().map_err(Error::CloneEvent)?,
         )));
 
         if pit_uses_speaker_port {
-            io_bus.insert(i8042, 0x062, 0x3, true).unwrap();
+            io_bus.insert(i8042, 0x062, 0x3).unwrap();
         } else {
-            io_bus.insert(i8042, 0x061, 0x4, true).unwrap();
+            io_bus.insert(i8042, 0x061, 0x4).unwrap();
         }
 
-        io_bus
-            .insert(nul_device.clone(), 0x0ed, 0x1, false)
-            .unwrap(); // most likely this one does nothing
-        io_bus
-            .insert(nul_device.clone(), 0x0f0, 0x2, false)
-            .unwrap(); // ignore fpu
+        io_bus.insert(nul_device.clone(), 0x0ed, 0x1).unwrap(); // most likely this one does nothing
+        io_bus.insert(nul_device.clone(), 0x0f0, 0x2).unwrap(); // ignore fpu
 
         if let Some(pci_root) = pci {
-            io_bus.insert(pci_root, 0xcf8, 0x8, false).unwrap();
+            io_bus.insert(pci_root, 0xcf8, 0x8).unwrap();
         } else {
             // ignore pci.
-            io_bus
-                .insert(nul_device.clone(), 0xcf8, 0x8, false)
-                .unwrap();
+            io_bus.insert(nul_device.clone(), 0xcf8, 0x8).unwrap();
         }
 
         Ok(io_bus)
@@ -768,13 +1028,21 @@ impl X8664arch {
     /// * - `io_bus` the I/O bus to add the devices to
     /// * - `resources` the SystemAllocator to allocate IO and MMIO for acpi
     ///                devices.
-    /// * - `suspend_evt` - the event fd object which used to suspend the vm
+    /// * - `suspend_evt` the event object which used to suspend the vm
+    /// * - `sdts` ACPI system description tables
+    /// * - `irq_chip` the IrqChip object for registering irq events
+    /// * - `battery` indicate whether to create the battery
+    /// * - `mmio_bus` the MMIO bus to add the devices to
     fn setup_acpi_devices(
         io_bus: &mut devices::Bus,
         resources: &mut SystemAllocator,
-        suspend_evt: EventFd,
+        suspend_evt: Event,
+        exit_evt: Event,
         sdts: Vec<SDT>,
-    ) -> Result<acpi::ACPIDevResource> {
+        irq_chip: &mut impl IrqChip,
+        battery: (&Option<BatteryType>, Option<Minijail>),
+        mmio_bus: &mut devices::Bus,
+    ) -> Result<(acpi::ACPIDevResource, Option<BatControl>)> {
         // The AML data for the acpi devices
         let mut amls = Vec::new();
 
@@ -791,7 +1059,7 @@ impl X8664arch {
             None => 0x600,
         };
 
-        let pmresource = devices::ACPIPMResource::new(suspend_evt);
+        let pmresource = devices::ACPIPMResource::new(suspend_evt, exit_evt);
         Aml::to_aml_bytes(&pmresource, &mut amls);
         let pm = Arc::new(Mutex::new(pmresource));
         io_bus
@@ -799,16 +1067,40 @@ impl X8664arch {
                 pm.clone(),
                 pm_iobase as u64,
                 devices::acpi::ACPIPM_RESOURCE_LEN as u64,
-                false,
             )
             .unwrap();
         io_bus.notify_on_resume(pm);
 
-        Ok(acpi::ACPIDevResource {
-            amls,
-            pm_iobase,
-            sdts,
-        })
+        let bat_control = if let Some(battery_type) = battery.0 {
+            match battery_type {
+                BatteryType::Goldfish => {
+                    let control_socket = arch::add_goldfish_battery(
+                        &mut amls,
+                        battery.1,
+                        mmio_bus,
+                        irq_chip,
+                        X86_64_SCI_IRQ,
+                        resources,
+                    )
+                    .map_err(Error::CreateBatDevices)?;
+                    Some(BatControl {
+                        type_: BatteryType::Goldfish,
+                        control_socket,
+                    })
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok((
+            acpi::ACPIDevResource {
+                amls,
+                pm_iobase,
+                sdts,
+            },
+            bat_control,
+        ))
     }
 
     /// Sets up the serial devices for this platform. Returns the serial port number and serial
@@ -819,16 +1111,18 @@ impl X8664arch {
     /// * - `irq_chip` the IrqChip object for registering irq events
     /// * - `io_bus` the I/O bus to add the devices to
     /// * - `serial_parmaters` - definitions for how the serial devices should be configured
-    fn setup_serial_devices<T: Vcpu>(
-        irq_chip: &mut impl IrqChip<T>,
+    fn setup_serial_devices(
+        protected_vm: bool,
+        irq_chip: &mut impl IrqChip,
         io_bus: &mut devices::Bus,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
     ) -> Result<()> {
-        let com_evt_1_3 = EventFd::new().map_err(Error::CreateEventFd)?;
-        let com_evt_2_4 = EventFd::new().map_err(Error::CreateEventFd)?;
+        let com_evt_1_3 = Event::new().map_err(Error::CreateEvent)?;
+        let com_evt_2_4 = Event::new().map_err(Error::CreateEvent)?;
 
         arch::add_serial_devices(
+            protected_vm,
             io_bus,
             &com_evt_1_3,
             &com_evt_2_4,
@@ -886,5 +1180,25 @@ mod tests {
         assert_eq!(GuestAddress(BIOS_START), regions[1].0);
         assert_eq!(BIOS_LEN as u64, regions[1].1);
         assert_eq!(GuestAddress(1u64 << 32), regions[2].0);
+    }
+
+    #[test]
+    fn regions_eq_4gb_nobios() {
+        // Test with size = 3328, which is exactly 4 GiB minus the size of the gap (768 MiB).
+        let regions = arch_memory_regions(3328 << 20, /* has_bios */ false);
+        assert_eq!(1, regions.len());
+        assert_eq!(GuestAddress(0), regions[0].0);
+        assert_eq!(3328 << 20, regions[0].1);
+    }
+
+    #[test]
+    fn regions_eq_4gb_bios() {
+        // Test with size = 3328, which is exactly 4 GiB minus the size of the gap (768 MiB).
+        let regions = arch_memory_regions(3328 << 20, /* has_bios */ true);
+        assert_eq!(2, regions.len());
+        assert_eq!(GuestAddress(0), regions[0].0);
+        assert_eq!(3328 << 20, regions[0].1);
+        assert_eq!(GuestAddress(BIOS_START), regions[1].0);
+        assert_eq!(BIOS_LEN as u64, regions[1].1);
     }
 }

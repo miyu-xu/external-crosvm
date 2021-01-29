@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::thread;
 
 use data_model::{DataInit, Le64};
 
-use base::{error, warn, EventFd};
+use base::{error, warn, AsRawDescriptor, Event, RawDescriptor};
 use vhost::Vhost;
 use vhost::Vsock as VhostVsockHandle;
 use vm_memory::GuestMemory;
@@ -21,35 +20,35 @@ const NUM_QUEUES: usize = 3;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 
 pub struct Vsock {
-    worker_kill_evt: Option<EventFd>,
-    kill_evt: Option<EventFd>,
+    worker_kill_evt: Option<Event>,
+    kill_evt: Option<Event>,
     vhost_handle: Option<VhostVsockHandle>,
     cid: u64,
-    interrupts: Option<Vec<EventFd>>,
+    interrupts: Option<Vec<Event>>,
     avail_features: u64,
     acked_features: u64,
 }
 
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
-    pub fn new(cid: u64, mem: &GuestMemory) -> Result<Vsock> {
-        let kill_evt = EventFd::new().map_err(Error::CreateKillEventFd)?;
+    pub fn new(base_features: u64, cid: u64, mem: &GuestMemory) -> Result<Vsock> {
+        let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
         let handle = VhostVsockHandle::new(mem).map_err(Error::VhostOpen)?;
 
-        let avail_features = 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
+        let avail_features = base_features
+            | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
             | 1 << virtio_sys::vhost::VIRTIO_RING_F_INDIRECT_DESC
             | 1 << virtio_sys::vhost::VIRTIO_RING_F_EVENT_IDX
             | 1 << virtio_sys::vhost::VHOST_F_LOG_ALL
-            | 1 << virtio_sys::vhost::VIRTIO_F_ANY_LAYOUT
-            | 1 << virtio_sys::vhost::VIRTIO_F_VERSION_1;
+            | 1 << virtio_sys::vhost::VIRTIO_F_ANY_LAYOUT;
 
         let mut interrupts = Vec::new();
         for _ in 0..NUM_QUEUES {
-            interrupts.push(EventFd::new().map_err(Error::VhostIrqCreate)?);
+            interrupts.push(Event::new().map_err(Error::VhostIrqCreate)?);
         }
 
         Ok(Vsock {
-            worker_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEventFd)?),
+            worker_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEvent)?),
             kill_evt: Some(kill_evt),
             vhost_handle: Some(handle),
             cid,
@@ -78,7 +77,7 @@ impl Vsock {
 
 impl Drop for Vsock {
     fn drop(&mut self) {
-        // Only kill the child if it claimed its eventfd.
+        // Only kill the child if it claimed its event.
         if self.worker_kill_evt.is_none() {
             if let Some(kill_evt) = &self.kill_evt {
                 // Ignore the result because there is nothing we can do about it.
@@ -89,24 +88,24 @@ impl Drop for Vsock {
 }
 
 impl VirtioDevice for Vsock {
-    fn keep_fds(&self) -> Vec<RawFd> {
-        let mut keep_fds = Vec::new();
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        let mut keep_rds = Vec::new();
 
         if let Some(handle) = &self.vhost_handle {
-            keep_fds.push(handle.as_raw_fd());
+            keep_rds.push(handle.as_raw_descriptor());
         }
 
         if let Some(interrupt) = &self.interrupts {
             for vhost_int in interrupt.iter() {
-                keep_fds.push(vhost_int.as_raw_fd());
+                keep_rds.push(vhost_int.as_raw_descriptor());
             }
         }
 
         if let Some(worker_kill_evt) = &self.worker_kill_evt {
-            keep_fds.push(worker_kill_evt.as_raw_fd());
+            keep_rds.push(worker_kill_evt.as_raw_descriptor());
         }
 
-        keep_fds
+        keep_rds
     }
 
     fn device_type(&self) -> u32 {
@@ -145,7 +144,7 @@ impl VirtioDevice for Vsock {
         _: GuestMemory,
         interrupt: Interrupt,
         queues: Vec<Queue>,
-        queue_evts: Vec<EventFd>,
+        queue_evts: Vec<Event>,
     ) {
         if queues.len() != NUM_QUEUES || queue_evts.len() != NUM_QUEUES {
             error!("net: expected {} queues, got {}", NUM_QUEUES, queues.len());

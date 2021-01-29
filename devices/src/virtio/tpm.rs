@@ -7,11 +7,10 @@ use std::fmt::{self, Display};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::ops::BitOrAssign;
-use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::thread;
 
-use base::{error, EventFd, PollContext, PollToken};
+use base::{error, Event, PollToken, RawDescriptor, WaitContext};
 use vm_memory::GuestMemory;
 
 use super::{
@@ -33,8 +32,8 @@ struct Worker {
     interrupt: Interrupt,
     queue: Queue,
     mem: GuestMemory,
-    queue_evt: EventFd,
-    kill_evt: EventFd,
+    queue_evt: Event,
+    kill_evt: Event,
     device: Device,
 }
 
@@ -44,8 +43,8 @@ struct Device {
 
 impl Device {
     fn perform_work(&mut self, mem: &GuestMemory, desc: DescriptorChain) -> Result<u32> {
-        let mut reader = Reader::new(mem, desc.clone()).map_err(Error::Descriptor)?;
-        let mut writer = Writer::new(mem, desc).map_err(Error::Descriptor)?;
+        let mut reader = Reader::new(mem.clone(), desc.clone()).map_err(Error::Descriptor)?;
+        let mut writer = Writer::new(mem.clone(), desc).map_err(Error::Descriptor)?;
 
         let available_bytes = reader.available_bytes();
         if available_bytes > TPM_BUFSIZE {
@@ -111,20 +110,20 @@ impl Worker {
             Kill,
         }
 
-        let poll_ctx = match PollContext::build_with(&[
+        let wait_ctx = match WaitContext::build_with(&[
             (&self.queue_evt, Token::QueueAvailable),
             (self.interrupt.get_resample_evt(), Token::InterruptResample),
             (&self.kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("vtpm failed creating PollContext: {}", e);
+                error!("vtpm failed creating WaitContext: {}", e);
                 return;
             }
         };
 
-        'poll: loop {
-            let events = match poll_ctx.wait() {
+        'wait: loop {
+            let events = match wait_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("vtpm failed polling for events: {}", e);
@@ -133,19 +132,19 @@ impl Worker {
             };
 
             let mut needs_interrupt = NeedsInterrupt::No;
-            for event in events.iter_readable() {
-                match event.token() {
+            for event in events.iter().filter(|e| e.is_readable) {
+                match event.token {
                     Token::QueueAvailable => {
                         if let Err(e) = self.queue_evt.read() {
-                            error!("vtpm failed reading queue EventFd: {}", e);
-                            break 'poll;
+                            error!("vtpm failed reading queue Event: {}", e);
+                            break 'wait;
                         }
                         needs_interrupt |= self.process_queue();
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'poll,
+                    Token::Kill => break 'wait,
                 }
             }
             if needs_interrupt == NeedsInterrupt::Yes {
@@ -158,7 +157,7 @@ impl Worker {
 /// Virtio vTPM device.
 pub struct Tpm {
     storage: PathBuf,
-    kill_evt: Option<EventFd>,
+    kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -185,7 +184,7 @@ impl Drop for Tpm {
 }
 
 impl VirtioDevice for Tpm {
-    fn keep_fds(&self) -> Vec<RawFd> {
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
         Vec::new()
     }
 
@@ -202,7 +201,7 @@ impl VirtioDevice for Tpm {
         mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Event>,
     ) {
         if queues.len() != 1 || queue_evts.len() != 1 {
             return;
@@ -220,10 +219,10 @@ impl VirtioDevice for Tpm {
         }
         let simulator = tpm2::Simulator::singleton_in_current_directory();
 
-        let (self_kill_evt, kill_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(err) => {
-                error!("vtpm failed to create kill EventFd pair: {}", err);
+                error!("vtpm failed to create kill Event pair: {}", err);
                 return;
             }
         };

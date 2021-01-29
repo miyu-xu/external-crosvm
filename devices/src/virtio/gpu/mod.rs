@@ -14,7 +14,6 @@ use std::i64;
 use std::io::Read;
 use std::mem::{self, size_of};
 use std::num::NonZeroU8;
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,7 +22,10 @@ use std::time::Duration;
 
 use data_model::*;
 
-use base::{debug, error, warn, EventFd, ExternalMapping, PollContext, PollToken};
+use base::{
+    debug, error, warn, AsRawDescriptor, Event, ExternalMapping, PollToken, RawDescriptor,
+    WaitContext,
+};
 use sync::Mutex;
 use vm_memory::{GuestAddress, GuestMemory};
 
@@ -36,7 +38,7 @@ use resources::Alloc;
 
 use super::{
     copy_config, resource_bridge::*, DescriptorChain, Interrupt, Queue, Reader, VirtioDevice,
-    Writer, TYPE_GPU, VIRTIO_F_VERSION_1,
+    Writer, TYPE_GPU,
 };
 
 use super::{PciCapabilityType, VirtioPciShmCap};
@@ -72,10 +74,14 @@ pub struct GpuParameters {
     pub renderer_use_glx: bool,
     pub renderer_use_surfaceless: bool,
     #[cfg(feature = "gfxstream")]
+    pub gfxstream_use_guest_angle: bool,
+    #[cfg(feature = "gfxstream")]
     pub gfxstream_use_syncfd: bool,
     #[cfg(feature = "gfxstream")]
     pub gfxstream_support_vulkan: bool,
     pub mode: GpuMode,
+    pub cache_path: Option<String>,
+    pub cache_size: Option<String>,
 }
 
 // First queue is for virtio gpu commands. Second queue is for cursor commands, which we expect
@@ -85,7 +91,7 @@ const FENCE_POLL_MS: u64 = 1;
 
 const GPU_BAR_NUM: u8 = 4;
 const GPU_BAR_OFFSET: u64 = 0;
-const GPU_BAR_SIZE: u64 = 1 << 33;
+const GPU_BAR_SIZE: u64 = 1 << 28;
 
 impl Default for GpuParameters {
     fn default() -> Self {
@@ -97,10 +103,14 @@ impl Default for GpuParameters {
             renderer_use_glx: false,
             renderer_use_surfaceless: true,
             #[cfg(feature = "gfxstream")]
+            gfxstream_use_guest_angle: false,
+            #[cfg(feature = "gfxstream")]
             gfxstream_use_syncfd: true,
             #[cfg(feature = "gfxstream")]
             gfxstream_support_vulkan: true,
             mode: GpuMode::Mode3D,
+            cache_path: None,
+            cache_size: None,
         }
     }
 }
@@ -117,7 +127,7 @@ pub struct VirtioScanoutBlobData {
 /// A virtio-gpu backend state tracker which supports display and potentially accelerated rendering.
 ///
 /// Commands from the virtio-gpu protocol can be submitted here using the methods, and they will be
-/// realized on the hardware. Most methods return a `GpuResponse` that indicate the success,
+/// realized on the hardware. Most methods return a `VirtioGpuResult` that indicate the success,
 /// failure, or requested data for the given command.
 trait Backend {
     /// Returns the number of capsets provided by the Backend.
@@ -125,7 +135,8 @@ trait Backend {
     where
         Self: Sized;
 
-    /// Returns the bitset of virtio features provided by the Backend.
+    /// Returns the bitset of virtio features provided by the Backend in addition to the base set
+    /// of device features.
     fn features() -> u64
     where
         Self: Sized;
@@ -152,7 +163,7 @@ trait Backend {
 
     /// Creates a fence with the given id that can be used to determine when the previous command
     /// completed.
-    fn create_fence(&mut self, ctx_id: u32, fence_id: u32) -> GpuResponse;
+    fn create_fence(&mut self, ctx_id: u32, fence_id: u32) -> VirtioGpuResult;
 
     /// Returns the id of the latest fence to complete.
     fn fence_poll(&mut self) -> u32;
@@ -162,7 +173,7 @@ trait Backend {
 
     /// Attaches the given input device to the given surface of the display (to allow for input
     /// from a X11 window for example).
-    fn import_event_device(&mut self, event_device: EventDevice, scanout: u32);
+    fn import_event_device(&mut self, event_device: EventDevice, scanout: u32) -> VirtioGpuResult;
 
     /// If supported, export the resource with the given id to a file.
     fn export_resource(&mut self, id: u32) -> ResourceResponse;
@@ -171,10 +182,16 @@ trait Backend {
     fn display_info(&self) -> [(u32, u32); 1];
 
     /// Creates a 2D resource with the given properties and associates it with the given id.
-    fn create_resource_2d(&mut self, id: u32, width: u32, height: u32, format: u32) -> GpuResponse;
+    fn create_resource_2d(
+        &mut self,
+        id: u32,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> VirtioGpuResult;
 
     /// Removes the guest's reference count for the given resource id.
-    fn unref_resource(&mut self, id: u32) -> GpuResponse;
+    fn unref_resource(&mut self, id: u32) -> VirtioGpuResult;
 
     /// Sets the given resource id as the source of scanout to the display, with optional blob data.
     fn set_scanout(
@@ -182,10 +199,17 @@ trait Backend {
         _scanout_id: u32,
         resource_id: u32,
         scanout_data: Option<VirtioScanoutBlobData>,
-    ) -> GpuResponse;
+    ) -> VirtioGpuResult;
 
     /// Flushes the given rectangle of pixels of the given resource to the display.
-    fn flush_resource(&mut self, id: u32, x: u32, y: u32, width: u32, height: u32) -> GpuResponse;
+    fn flush_resource(
+        &mut self,
+        id: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> VirtioGpuResult;
 
     /// Copes the given rectangle of pixels of the given resource's backing memory to the host side
     /// resource.
@@ -198,7 +222,7 @@ trait Backend {
         height: u32,
         src_offset: u64,
         mem: &GuestMemory,
-    ) -> GpuResponse;
+    ) -> VirtioGpuResult;
 
     /// Attaches backing memory to the given resource, represented by a `Vec` of `(address, size)`
     /// tuples in the guest's physical address space.
@@ -207,45 +231,45 @@ trait Backend {
         id: u32,
         mem: &GuestMemory,
         vecs: Vec<(GuestAddress, usize)>,
-    ) -> GpuResponse;
+    ) -> VirtioGpuResult;
 
     /// Detaches any backing memory from the given resource, if there is any.
-    fn detach_backing(&mut self, id: u32) -> GpuResponse;
+    fn detach_backing(&mut self, id: u32) -> VirtioGpuResult;
 
-    fn resource_assign_uuid(&mut self, _id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn resource_assign_uuid(&mut self, _id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Updates the cursor's memory to the given id, and sets its position to the given coordinates.
-    fn update_cursor(&mut self, id: u32, x: u32, y: u32) -> GpuResponse;
+    fn update_cursor(&mut self, id: u32, x: u32, y: u32) -> VirtioGpuResult;
 
     /// Moves the cursor's position to the given coordinates.
-    fn move_cursor(&mut self, x: u32, y: u32) -> GpuResponse;
+    fn move_cursor(&mut self, x: u32, y: u32) -> VirtioGpuResult;
 
     /// Gets the renderer's capset information associated with `index`.
-    fn get_capset_info(&self, index: u32) -> GpuResponse;
+    fn get_capset_info(&self, index: u32) -> VirtioGpuResult;
 
     /// Gets the capset of `version` associated with `id`.
-    fn get_capset(&self, id: u32, version: u32) -> GpuResponse;
+    fn get_capset(&self, id: u32, version: u32) -> VirtioGpuResult;
 
     /// Creates a fresh renderer context with the given `id`.
-    fn create_renderer_context(&mut self, _id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn create_renderer_context(&mut self, _id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Destorys the renderer context associated with `id`.
-    fn destroy_renderer_context(&mut self, _id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn destroy_renderer_context(&mut self, _id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Attaches the indicated resource to the given context.
-    fn context_attach_resource(&mut self, _ctx_id: u32, _res_id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn context_attach_resource(&mut self, _ctx_id: u32, _res_id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// detaches the indicated resource to the given context.
-    fn context_detach_resource(&mut self, _ctx_id: u32, _res_id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn context_detach_resource(&mut self, _ctx_id: u32, _res_id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Creates a 3D resource with the given properties and associates it with the given id.
@@ -262,8 +286,8 @@ trait Backend {
         _last_level: u32,
         _nr_samples: u32,
         _flags: u32,
-    ) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    ) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Copes the given 3D rectangle of pixels of the given resource's backing memory to the host
@@ -282,8 +306,8 @@ trait Backend {
         _stride: u32,
         _layer_stride: u32,
         _offset: u64,
-    ) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    ) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Copes the given rectangle of pixels from the resource to the given resource's backing
@@ -302,13 +326,13 @@ trait Backend {
         _stride: u32,
         _layer_stride: u32,
         _offset: u64,
-    ) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    ) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     /// Submits a command buffer to the given rendering context.
-    fn submit_command(&mut self, _ctx_id: u32, _commands: &mut [u8]) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn submit_command(&mut self, _ctx_id: u32, _commands: &mut [u8]) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
     fn resource_create_blob(
@@ -321,16 +345,16 @@ trait Backend {
         _size: u64,
         _vecs: Vec<(GuestAddress, usize)>,
         _mem: &GuestMemory,
-    ) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    ) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
-    fn resource_map_blob(&mut self, _resource_id: u32, _offset: u64) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn resource_map_blob(&mut self, _resource_id: u32, _offset: u64) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 
-    fn resource_unmap_blob(&mut self, _resource_id: u32) -> GpuResponse {
-        GpuResponse::ErrUnspec
+    fn resource_unmap_blob(&mut self, _resource_id: u32) -> VirtioGpuResult {
+        Err(GpuResponse::ErrUnspec)
     }
 }
 
@@ -353,7 +377,8 @@ impl BackendKind {
         }
     }
 
-    /// Returns the bitset of virtio features provided by the Backend.
+    /// Returns the bitset of virtio features provided by the Backend in addition to the base set
+    /// of device features.
     fn features(&self) -> u64 {
         match self {
             BackendKind::Virtio2D => Virtio2DBackend::features(),
@@ -491,13 +516,13 @@ impl Frontend {
         mem: &GuestMemory,
         cmd: GpuCommand,
         reader: &mut Reader,
-    ) -> GpuResponse {
+    ) -> VirtioGpuResult {
         self.backend.force_ctx_0();
 
         match cmd {
-            GpuCommand::GetDisplayInfo(_) => {
-                GpuResponse::OkDisplayInfo(self.backend.display_info().to_vec())
-            }
+            GpuCommand::GetDisplayInfo(_) => Ok(GpuResponse::OkDisplayInfo(
+                self.backend.display_info().to_vec(),
+            )),
             GpuCommand::ResourceCreate2d(info) => self.backend.create_resource_2d(
                 info.resource_id.to_native(),
                 info.width.to_native(),
@@ -540,14 +565,14 @@ impl Frontend {
                                 let len = entry.length.to_native() as usize;
                                 vecs.push((addr, len))
                             }
-                            Err(_) => return GpuResponse::ErrUnspec,
+                            Err(_) => return Err(GpuResponse::ErrUnspec),
                         }
                     }
                     self.backend
                         .attach_backing(info.resource_id.to_native(), mem, vecs)
                 } else {
                     error!("missing data for command {:?}", cmd);
-                    GpuResponse::ErrUnspec
+                    Err(GpuResponse::ErrUnspec)
                 }
             }
             GpuCommand::ResourceDetachBacking(info) => {
@@ -664,12 +689,12 @@ impl Frontend {
                         self.backend
                             .submit_command(info.hdr.ctx_id.to_native(), &mut cmd_buf[..])
                     } else {
-                        GpuResponse::ErrInvalidParameter
+                        Err(GpuResponse::ErrInvalidParameter)
                     }
                 } else {
                     // Silently accept empty command buffers to allow for
                     // benchmarking.
-                    GpuResponse::OkNoData
+                    Ok(GpuResponse::OkNoData)
                 }
             }
             GpuCommand::ResourceCreateBlob(info) => {
@@ -683,7 +708,7 @@ impl Frontend {
                 if entry_count > VIRTIO_GPU_MAX_IOVEC_ENTRIES
                     || (reader.available_bytes() == 0 && entry_count > 0)
                 {
-                    return GpuResponse::ErrUnspec;
+                    return Err(GpuResponse::ErrUnspec);
                 }
 
                 let mut vecs = Vec::with_capacity(entry_count as usize);
@@ -694,7 +719,7 @@ impl Frontend {
                             let len = entry.length.to_native() as usize;
                             vecs.push((addr, len))
                         }
-                        Err(_) => return GpuResponse::ErrUnspec,
+                        Err(_) => return Err(GpuResponse::ErrUnspec),
                     }
                 }
 
@@ -725,7 +750,7 @@ impl Frontend {
                     VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM => Format::new(b'A', b'R', b'2', b'4'),
                     _ => {
                         error!("unrecognized virtio-gpu format {}", virtio_gpu_format);
-                        return GpuResponse::ErrUnspec;
+                        return Err(GpuResponse::ErrUnspec);
                     }
                 };
 
@@ -766,8 +791,8 @@ impl Frontend {
         while let Some(desc) = queue.pop(mem) {
             if Frontend::validate_desc(&desc) {
                 match (
-                    Reader::new(mem, desc.clone()),
-                    Writer::new(mem, desc.clone()),
+                    Reader::new(mem.clone(), desc.clone()),
+                    Writer::new(mem.clone(), desc.clone()),
                 ) {
                     (Ok(mut reader), Ok(mut writer)) => {
                         if let Some(ret_desc) =
@@ -807,7 +832,7 @@ impl Frontend {
         reader: &mut Reader,
         writer: &mut Writer,
     ) -> Option<ReturnDescriptor> {
-        let mut resp = GpuResponse::ErrUnspec;
+        let mut resp = Err(GpuResponse::ErrUnspec);
         let mut gpu_cmd = None;
         let mut len = 0;
         match GpuCommand::decode(reader) {
@@ -817,9 +842,14 @@ impl Frontend {
             }
             Err(e) => debug!("descriptor decode error: {}", e),
         }
-        if resp.is_err() {
-            debug!("{:?} -> {:?}", gpu_cmd, resp);
-        }
+
+        let mut gpu_response = match resp {
+            Ok(gpu_response) => gpu_response,
+            Err(gpu_response) => {
+                debug!("{:?} -> {:?}", gpu_cmd, gpu_response);
+                gpu_response
+            }
+        };
 
         if writer.available_bytes() != 0 {
             let mut fence_id = 0;
@@ -832,17 +862,19 @@ impl Frontend {
                     ctx_id = ctrl_hdr.ctx_id.to_native();
                     flags = VIRTIO_GPU_FLAG_FENCE;
 
-                    let fence_resp = self.backend.create_fence(ctx_id, fence_id as u32);
-                    if fence_resp.is_err() {
-                        warn!("create_fence {} -> {:?}", fence_id, fence_resp);
-                        resp = fence_resp;
-                    }
+                    gpu_response = match self.backend.create_fence(ctx_id, fence_id as u32) {
+                        Ok(_) => gpu_response,
+                        Err(fence_resp) => {
+                            warn!("create_fence {} -> {:?}", fence_id, fence_resp);
+                            fence_resp
+                        }
+                    };
                 }
             }
 
             // Prepare the response now, even if it is going to wait until
             // fence is complete.
-            match resp.encode(flags, fence_id, ctx_id, writer) {
+            match gpu_response.encode(flags, fence_id, ctx_id, writer) {
                 Ok(l) => len = l,
                 Err(e) => debug!("ctrl queue response encode error: {}", e),
             }
@@ -892,14 +924,14 @@ impl Frontend {
 
 struct Worker {
     interrupt: Interrupt,
-    exit_evt: EventFd,
+    exit_evt: Event,
     mem: GuestMemory,
     ctrl_queue: Queue,
-    ctrl_evt: EventFd,
+    ctrl_evt: Event,
     cursor_queue: Queue,
-    cursor_evt: EventFd,
+    cursor_evt: Event,
     resource_bridges: Vec<ResourceResponseSocket>,
-    kill_evt: EventFd,
+    kill_evt: Event,
     state: Frontend,
 }
 
@@ -915,7 +947,7 @@ impl Worker {
             ResourceBridge { index: usize },
         }
 
-        let poll_ctx: PollContext<Token> = match PollContext::build_with(&[
+        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (&self.ctrl_evt, Token::CtrlQueue),
             (&self.cursor_evt, Token::CursorQueue),
             (&*self.state.display().borrow(), Token::Display),
@@ -924,14 +956,14 @@ impl Worker {
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating PollContext: {}", e);
+                error!("failed creating WaitContext: {}", e);
                 return;
             }
         };
 
         for (index, bridge) in self.resource_bridges.iter().enumerate() {
-            if let Err(e) = poll_ctx.add(bridge, Token::ResourceBridge { index }) {
-                error!("failed to add resource bridge to PollContext: {}", e);
+            if let Err(e) = wait_ctx.add(bridge, Token::ResourceBridge { index }) {
+                error!("failed to add resource bridge to WaitContext: {}", e);
             }
         }
 
@@ -945,7 +977,7 @@ impl Worker {
 
         // Declare this outside the loop so we don't keep allocating and freeing the vector.
         let mut process_resource_bridge = Vec::with_capacity(self.resource_bridges.len());
-        'poll: loop {
+        'wait: loop {
             // If there are outstanding fences, wake up early to poll them.
             let duration = if !self.state.fence_descriptors.is_empty() {
                 Duration::from_millis(FENCE_POLL_MS)
@@ -953,7 +985,7 @@ impl Worker {
                 Duration::new(i64::MAX as u64, 0)
             };
 
-            let events = match poll_ctx.wait_timeout(duration) {
+            let events = match wait_ctx.wait_timeout(duration) {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -970,15 +1002,15 @@ impl Worker {
 
             // This display isn't typically used when the virt-wl device is available and it can
             // lead to hung fds (crbug.com/1027379). Disable if it's hung.
-            for event in events.iter_hungup() {
-                if let Token::Display = event.token() {
+            for event in events.iter().filter(|e| e.is_hungup) {
+                if let Token::Display = event.token {
                     error!("default display hang-up detected");
-                    let _ = poll_ctx.delete(&*self.state.display().borrow());
+                    let _ = wait_ctx.delete(&*self.state.display().borrow());
                 }
             }
 
-            for event in events.iter_readable() {
-                match event.token() {
+            for event in events.iter().filter(|e| e.is_readable) {
+                match event.token {
                     Token::CtrlQueue => {
                         let _ = self.ctrl_evt.read();
                         // Set flag that control queue is available to be read, but defer reading
@@ -1004,7 +1036,7 @@ impl Worker {
                         self.interrupt.interrupt_resample();
                     }
                     Token::Kill => {
-                        break 'poll;
+                        break 'wait;
                     }
                 }
             }
@@ -1076,11 +1108,11 @@ impl DisplayBackend {
 }
 
 pub struct Gpu {
-    exit_evt: EventFd,
+    exit_evt: Event,
     gpu_device_socket: Option<VmMemoryControlRequestSocket>,
     resource_bridges: Vec<ResourceResponseSocket>,
     event_devices: Vec<EventDevice>,
-    kill_evt: Option<EventFd>,
+    kill_evt: Option<Event>,
     config_event: bool,
     worker_thread: Option<thread::JoinHandle<()>>,
     num_scanouts: NonZeroU8,
@@ -1092,11 +1124,12 @@ pub struct Gpu {
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
     external_blob: bool,
     backend_kind: BackendKind,
+    base_features: u64,
 }
 
 impl Gpu {
     pub fn new(
-        exit_evt: EventFd,
+        exit_evt: Event,
         gpu_device_socket: Option<VmMemoryControlRequestSocket>,
         num_scanouts: NonZeroU8,
         resource_bridges: Vec<ResourceResponseSocket>,
@@ -1105,6 +1138,7 @@ impl Gpu {
         event_devices: Vec<EventDevice>,
         map_request: Arc<Mutex<Option<ExternalMapping>>>,
         external_blob: bool,
+        base_features: u64,
     ) -> Gpu {
         let renderer_flags = RendererFlags::new()
             .use_egl(gpu_parameters.renderer_use_egl)
@@ -1113,6 +1147,7 @@ impl Gpu {
             .use_surfaceless(gpu_parameters.renderer_use_surfaceless);
         #[cfg(feature = "gfxstream")]
         let renderer_flags = renderer_flags
+            .use_guest_angle(gpu_parameters.gfxstream_use_guest_angle)
             .use_syncfd(gpu_parameters.gfxstream_use_syncfd)
             .support_vulkan(gpu_parameters.gfxstream_support_vulkan);
 
@@ -1140,6 +1175,7 @@ impl Gpu {
             map_request,
             external_blob,
             backend_kind,
+            base_features,
         }
     }
 
@@ -1171,24 +1207,24 @@ impl Drop for Gpu {
 }
 
 impl VirtioDevice for Gpu {
-    fn keep_fds(&self) -> Vec<RawFd> {
-        let mut keep_fds = Vec::new();
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        let mut keep_rds = Vec::new();
         // TODO(davidriley): Remove once virgl has another path to include
         // debugging logs.
         if cfg!(debug_assertions) {
-            keep_fds.push(libc::STDOUT_FILENO);
-            keep_fds.push(libc::STDERR_FILENO);
+            keep_rds.push(libc::STDOUT_FILENO);
+            keep_rds.push(libc::STDERR_FILENO);
         }
 
         if let Some(ref gpu_device_socket) = self.gpu_device_socket {
-            keep_fds.push(gpu_device_socket.as_raw_fd());
+            keep_rds.push(gpu_device_socket.as_raw_descriptor());
         }
 
-        keep_fds.push(self.exit_evt.as_raw_fd());
+        keep_rds.push(self.exit_evt.as_raw_descriptor());
         for bridge in &self.resource_bridges {
-            keep_fds.push(bridge.as_raw_fd());
+            keep_rds.push(bridge.as_raw_descriptor());
         }
-        keep_fds
+        keep_rds
     }
 
     fn device_type(&self) -> u32 {
@@ -1200,7 +1236,7 @@ impl VirtioDevice for Gpu {
     }
 
     fn features(&self) -> u64 {
-        self.backend_kind.features()
+        self.base_features | self.backend_kind.features()
     }
 
     fn ack_features(&mut self, value: u64) {
@@ -1224,7 +1260,7 @@ impl VirtioDevice for Gpu {
         mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
-        mut queue_evts: Vec<EventFd>,
+        mut queue_evts: Vec<Event>,
     ) {
         if queues.len() != QUEUE_SIZES.len() || queue_evts.len() != QUEUE_SIZES.len() {
             return;
@@ -1233,15 +1269,15 @@ impl VirtioDevice for Gpu {
         let exit_evt = match self.exit_evt.try_clone() {
             Ok(e) => e,
             Err(e) => {
-                error!("error cloning exit eventfd: {}", e);
+                error!("error cloning exit event: {}", e);
                 return;
             }
         };
 
-        let (self_kill_evt, kill_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(e) => {
-                error!("error creating kill EventFd pair: {}", e);
+                error!("error creating kill Event pair: {}", e);
                 return;
             }
         };

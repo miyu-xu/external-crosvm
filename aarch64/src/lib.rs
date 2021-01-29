@@ -7,14 +7,14 @@ use std::error::Error as StdError;
 use std::ffi::{CStr, CString};
 use std::fmt::{self, Display};
 use std::fs::File;
-use std::io;
+use std::io::{self, Seek};
 use std::sync::Arc;
 
 use arch::{
     get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
     VmComponents, VmImage,
 };
-use base::EventFd;
+use base::Event;
 use devices::{
     Bus, BusError, IrqChip, IrqChipAArch64, PciAddress, PciConfigMmio, PciDevice, PciInterruptPin,
 };
@@ -23,13 +23,14 @@ use minijail::Minijail;
 use remain::sorted;
 use resources::SystemAllocator;
 use sync::Mutex;
+use vm_control::BatteryType;
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 mod fdt;
 
-// We place the kernel at offset 8MB
-const AARCH64_KERNEL_OFFSET: u64 = 0x80000;
+const AARCH64_FDT_OFFSET: u64 = 0;
 const AARCH64_FDT_MAX_SIZE: u64 = 0x200000;
+const AARCH64_BINARY_OFFSET: u64 = AARCH64_FDT_MAX_SIZE;
 const AARCH64_INITRD_ALIGN: u64 = 0x1000000;
 
 // These constants indicate the address space used by the ARM vGIC.
@@ -39,6 +40,8 @@ const AARCH64_GIC_CPUI_SIZE: u64 = 0x20000;
 // This indicates the start of DRAM inside the physical address space.
 const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
 const AARCH64_AXI_BASE: u64 = 0x40000000;
+
+const AARCH64_BIOS_MAX_LEN: u64 = 1 << 20;
 
 // These constants indicate the placement of the GIC registers in the physical
 // address space.
@@ -73,8 +76,8 @@ macro_rules! arm64_core_reg {
     };
 }
 
-fn get_kernel_addr() -> GuestAddress {
-    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET)
+fn get_binary_addr() -> GuestAddress {
+    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BINARY_OFFSET)
 }
 
 // Serial device requires 8 bytes of registers;
@@ -110,10 +113,11 @@ const AARCH64_PMU_IRQ: u32 = 7;
 #[sorted]
 #[derive(Debug)]
 pub enum Error {
-    CloneEventFd(base::Error),
+    BiosLoadFailure(arch::LoadImageError),
+    CloneEvent(base::Error),
     Cmdline(kernel_cmdline::Error),
     CreateDevices(Box<dyn StdError>),
-    CreateEventFd(base::Error),
+    CreateEvent(base::Error),
     CreateFdt(arch::fdt::Error),
     CreateGICFailure(base::Error),
     CreateIrqChip(Box<dyn StdError>),
@@ -122,10 +126,10 @@ pub enum Error {
     CreateSocket(io::Error),
     CreateVcpu(base::Error),
     CreateVm(Box<dyn StdError>),
+    DowncastVcpu,
     GetSerialCmdline(GetSerialCmdlineError),
     InitrdLoadFailure(arch::LoadImageError),
     KernelLoadFailure(arch::LoadImageError),
-    KernelMissing,
     RegisterIrqfd(base::Error),
     RegisterPci(BusError),
     RegisterVsock(arch::DeviceRegistrationError),
@@ -142,10 +146,11 @@ impl Display for Error {
 
         #[sorted]
         match self {
-            CloneEventFd(e) => write!(f, "unable to clone an EventFd: {}", e),
+            BiosLoadFailure(e) => write!(f, "bios could not be loaded: {}", e),
+            CloneEvent(e) => write!(f, "unable to clone an Event: {}", e),
             Cmdline(e) => write!(f, "the given kernel command line was invalid: {}", e),
             CreateDevices(e) => write!(f, "error creating devices: {}", e),
-            CreateEventFd(e) => write!(f, "unable to make an EventFd: {}", e),
+            CreateEvent(e) => write!(f, "unable to make an Event: {}", e),
             CreateFdt(e) => write!(f, "FDT could not be created: {}", e),
             CreateGICFailure(e) => write!(f, "failed to create GIC: {}", e),
             CreateIrqChip(e) => write!(f, "failed to create IRQ chip: {}", e),
@@ -154,10 +159,10 @@ impl Display for Error {
             CreateSocket(e) => write!(f, "failed to create socket: {}", e),
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create vm: {}", e),
+            DowncastVcpu => write!(f, "vm created wrong kind of vcpu"),
             GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
-            InitrdLoadFailure(e) => write!(f, "initrd cound not be loaded: {}", e),
-            KernelLoadFailure(e) => write!(f, "kernel cound not be loaded: {}", e),
-            KernelMissing => write!(f, "aarch64 requires a kernel"),
+            InitrdLoadFailure(e) => write!(f, "initrd could not be loaded: {}", e),
+            KernelLoadFailure(e) => write!(f, "kernel could not be loaded: {}", e),
             RegisterIrqfd(e) => write!(f, "failed to register irq fd: {}", e),
             RegisterPci(e) => write!(f, "error registering PCI bus: {}", e),
             RegisterVsock(e) => write!(f, "error registering virtual socket device: {}", e),
@@ -179,34 +184,29 @@ pub fn arch_memory_regions(size: u64) -> Vec<(GuestAddress, u64)> {
     vec![(GuestAddress(AARCH64_PHYS_MEM_START), size)]
 }
 
-fn fdt_offset(mem_size: u64) -> u64 {
-    // Put fdt up near the top of memory
-    // TODO(sonnyrao): will have to handle this differently if there's
-    // > 4GB memory
-    mem_size - AARCH64_FDT_MAX_SIZE - 0x10000
-}
-
 pub struct AArch64;
 
 impl arch::LinuxArch for AArch64 {
     type Error = Error;
 
-    fn build_vm<V, I, FD, FV, FI, E1, E2, E3>(
+    fn build_vm<V, Vcpu, I, FD, FV, FI, E1, E2, E3>(
         mut components: VmComponents,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
+        _battery: (&Option<BatteryType>, Option<Minijail>),
         create_devices: FD,
         create_vm: FV,
         create_irq_chip: FI,
-    ) -> std::result::Result<RunnableLinuxVm<V, I>, Self::Error>
+    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu, I>, Self::Error>
     where
         V: VmAArch64,
-        I: IrqChipAArch64<V::Vcpu>,
+        Vcpu: VcpuAArch64,
+        I: IrqChipAArch64,
         FD: FnOnce(
             &GuestMemory,
             &mut V,
             &mut SystemAllocator,
-            &EventFd,
+            &Event,
         ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
         FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
         FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
@@ -214,6 +214,10 @@ impl arch::LinuxArch for AArch64 {
         E2: StdError + 'static,
         E3: StdError + 'static,
     {
+        let has_bios = match components.vm_image {
+            VmImage::Bios(_) => true,
+            _ => false,
+        };
         let mut resources =
             Self::get_resource_allocator(components.memory_size, components.wayland_dmabuf);
         let mem = Self::setup_memory(components.memory_size)?;
@@ -225,7 +229,11 @@ impl arch::LinuxArch for AArch64 {
         let vcpu_count = components.vcpu_count;
         let mut vcpus = Vec::with_capacity(vcpu_count);
         for vcpu_id in 0..vcpu_count {
-            let vcpu = vm.create_vcpu(vcpu_id).map_err(Error::CreateVcpu)?;
+            let vcpu = *vm
+                .create_vcpu(vcpu_id)
+                .map_err(Error::CreateVcpu)?
+                .downcast::<Vcpu>()
+                .map_err(|_| Error::DowncastVcpu)?;
             Self::configure_vcpu_early(vm.get_memory(), &vcpu, vcpu_id, use_pmu)?;
             vcpus.push(vcpu);
         }
@@ -239,11 +247,11 @@ impl arch::LinuxArch for AArch64 {
 
         let mut mmio_bus = devices::Bus::new();
 
-        let exit_evt = EventFd::new().map_err(Error::CreateEventFd)?;
+        let exit_evt = Event::new().map_err(Error::CreateEvent)?;
 
         // Event used by PMDevice to notify crosvm that
         // guest OS is trying to suspend.
-        let suspend_evt = EventFd::new().map_err(Error::CreateEventFd)?;
+        let suspend_evt = Event::new().map_err(Error::CreateEvent)?;
 
         let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
             .map_err(|e| Error::CreateDevices(Box::new(e)))?;
@@ -263,9 +271,10 @@ impl arch::LinuxArch for AArch64 {
 
         Self::add_arch_devs(&mut irq_chip, &mut mmio_bus)?;
 
-        let com_evt_1_3 = EventFd::new().map_err(Error::CreateEventFd)?;
-        let com_evt_2_4 = EventFd::new().map_err(Error::CreateEventFd)?;
+        let com_evt_1_3 = Event::new().map_err(Error::CreateEvent)?;
+        let com_evt_2_4 = Event::new().map_err(Error::CreateEvent)?;
         arch::add_serial_devices(
+            components.protected_vm,
             &mut mmio_bus,
             &com_evt_1_3,
             &com_evt_2_4,
@@ -282,12 +291,7 @@ impl arch::LinuxArch for AArch64 {
             .map_err(Error::RegisterIrqfd)?;
 
         mmio_bus
-            .insert(
-                pci_bus.clone(),
-                AARCH64_PCI_CFG_BASE,
-                AARCH64_PCI_CFG_SIZE,
-                false,
-            )
+            .insert(pci_bus.clone(), AARCH64_PCI_CFG_BASE, AARCH64_PCI_CFG_SIZE)
             .map_err(Error::RegisterPci)?;
 
         let mut cmdline = Self::get_base_linux_cmdline();
@@ -297,29 +301,55 @@ impl arch::LinuxArch for AArch64 {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;
         }
 
-        let kernel_image = if let VmImage::Kernel(ref mut img) = components.vm_image {
-            img
-        } else {
-            return Err(Error::KernelMissing);
-        };
+        let (pci_device_base, pci_device_size) =
+            Self::get_high_mmio_base_size(components.memory_size);
+        let mut initrd = None;
 
-        // separate out kernel loading from other setup to get a specific error for
-        // kernel loading
-        let kernel_size = arch::load_image(&mem, kernel_image, get_kernel_addr(), u64::max_value())
-            .map_err(Error::KernelLoadFailure)?;
-        let kernel_end = get_kernel_addr().offset() + kernel_size as u64;
-        Self::setup_system_memory(
+        // separate out image loading from other setup to get a specific error for
+        // image loading
+        match components.vm_image {
+            VmImage::Bios(ref mut bios) => {
+                arch::load_image(&mem, bios, get_binary_addr(), AARCH64_BIOS_MAX_LEN)
+                    .map_err(Error::BiosLoadFailure)?;
+            }
+            VmImage::Kernel(ref mut kernel_image) => {
+                let kernel_size =
+                    arch::load_image(&mem, kernel_image, get_binary_addr(), u64::max_value())
+                        .map_err(Error::KernelLoadFailure)?;
+                let kernel_end = get_binary_addr().offset() + kernel_size as u64;
+                initrd = match components.initrd_image {
+                    Some(initrd_file) => {
+                        let mut initrd_file = initrd_file;
+                        let initrd_addr =
+                            (kernel_end + (AARCH64_INITRD_ALIGN - 1)) & !(AARCH64_INITRD_ALIGN - 1);
+                        let initrd_max_size =
+                            components.memory_size - (initrd_addr - AARCH64_PHYS_MEM_START);
+                        let initrd_addr = GuestAddress(initrd_addr);
+                        let initrd_size =
+                            arch::load_image(&mem, &mut initrd_file, initrd_addr, initrd_max_size)
+                                .map_err(Error::InitrdLoadFailure)?;
+                        Some((initrd_addr, initrd_size))
+                    }
+                    None => None,
+                };
+            }
+        }
+
+        fdt::create_fdt(
+            AARCH64_FDT_MAX_SIZE as usize,
             &mem,
-            components.memory_size,
-            vcpu_count,
-            &CString::new(cmdline).unwrap(),
-            components.initrd_image,
             pci_irqs,
+            vcpu_count as u32,
+            AARCH64_FDT_OFFSET,
+            pci_device_base,
+            pci_device_size,
+            &CString::new(cmdline).unwrap(),
+            initrd,
             components.android_fstab,
-            kernel_end,
             irq_chip.get_vgic_version() == DeviceKind::ArmVgicV3,
             use_pmu,
-        )?;
+        )
+        .map_err(Error::CreateFdt)?;
 
         Ok(RunnableLinuxVm {
             vm,
@@ -328,23 +358,27 @@ impl arch::LinuxArch for AArch64 {
             vcpu_count,
             vcpus: Some(vcpus),
             vcpu_affinity: components.vcpu_affinity,
+            no_smt: components.no_smt,
             irq_chip,
-            has_bios: false,
+            has_bios,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
             suspend_evt,
+            rt_cpus: components.rt_cpus,
+            bat_control: None,
         })
     }
 
-    fn configure_vcpu<T: VcpuAArch64>(
+    fn configure_vcpu(
         _guest_mem: &GuestMemory,
-        _hypervisor: &impl Hypervisor,
-        _irq_chip: &mut impl IrqChipAArch64<T>,
-        _vcpu: &mut impl VcpuAArch64,
+        _hypervisor: &dyn Hypervisor,
+        _irq_chip: &mut dyn IrqChipAArch64,
+        _vcpu: &mut dyn VcpuAArch64,
         _vcpu_id: usize,
         _num_cpus: usize,
         _has_bios: bool,
+        _no_smt: bool,
     ) -> std::result::Result<(), Self::Error> {
         // AArch64 doesn't configure vcpus on the vcpu thread, so nothing to do here.
         Ok(())
@@ -352,51 +386,6 @@ impl arch::LinuxArch for AArch64 {
 }
 
 impl AArch64 {
-    fn setup_system_memory(
-        mem: &GuestMemory,
-        mem_size: u64,
-        vcpu_count: usize,
-        cmdline: &CStr,
-        initrd_file: Option<File>,
-        pci_irqs: Vec<(PciAddress, u32, PciInterruptPin)>,
-        android_fstab: Option<File>,
-        kernel_end: u64,
-        is_gicv3: bool,
-        use_pmu: bool,
-    ) -> Result<()> {
-        let initrd = match initrd_file {
-            Some(initrd_file) => {
-                let mut initrd_file = initrd_file;
-                let initrd_addr =
-                    (kernel_end + (AARCH64_INITRD_ALIGN - 1)) & !(AARCH64_INITRD_ALIGN - 1);
-                let initrd_max_size = mem_size - (initrd_addr - AARCH64_PHYS_MEM_START);
-                let initrd_addr = GuestAddress(initrd_addr);
-                let initrd_size =
-                    arch::load_image(mem, &mut initrd_file, initrd_addr, initrd_max_size)
-                        .map_err(Error::InitrdLoadFailure)?;
-                Some((initrd_addr, initrd_size))
-            }
-            None => None,
-        };
-        let (pci_device_base, pci_device_size) = Self::get_high_mmio_base_size(mem_size);
-        fdt::create_fdt(
-            AARCH64_FDT_MAX_SIZE as usize,
-            mem,
-            pci_irqs,
-            vcpu_count as u32,
-            fdt_offset(mem_size),
-            pci_device_base,
-            pci_device_size,
-            cmdline,
-            initrd,
-            android_fstab,
-            is_gicv3,
-            use_pmu,
-        )
-        .map_err(Error::CreateFdt)?;
-        Ok(())
-    }
-
     fn setup_memory(mem_size: u64) -> Result<GuestMemory> {
         let arch_mem_regions = arch_memory_regions(mem_size);
         let mem = GuestMemory::new(&arch_mem_regions).map_err(Error::SetupGuestMemory)?;
@@ -432,14 +421,14 @@ impl AArch64 {
     ///
     /// * `irq_chip` - The IRQ chip to add irqs to.
     /// * `bus` - The bus to add devices to.
-    fn add_arch_devs<T: VcpuAArch64>(irq_chip: &mut impl IrqChip<T>, bus: &mut Bus) -> Result<()> {
-        let rtc_evt = EventFd::new().map_err(Error::CreateEventFd)?;
+    fn add_arch_devs(irq_chip: &mut dyn IrqChip, bus: &mut Bus) -> Result<()> {
+        let rtc_evt = Event::new().map_err(Error::CreateEvent)?;
         irq_chip
             .register_irq_event(AARCH64_RTC_IRQ, &rtc_evt, None)
             .map_err(Error::RegisterIrqfd)?;
 
         let rtc = Arc::new(Mutex::new(devices::pl030::Pl030::new(rtc_evt)));
-        bus.insert(rtc, AARCH64_RTC_ADDR, AARCH64_RTC_SIZE, false)
+        bus.insert(rtc, AARCH64_RTC_ADDR, AARCH64_RTC_SIZE)
             .expect("failed to add rtc device");
 
         Ok(())
@@ -460,7 +449,7 @@ impl AArch64 {
     /// * `use_pmu` - Should `vcpu` be configured to use the Performance Monitor Unit.
     fn configure_vcpu_early(
         guest_mem: &GuestMemory,
-        vcpu: &impl VcpuAArch64,
+        vcpu: &dyn VcpuAArch64,
         vcpu_id: usize,
         use_pmu: bool,
     ) -> Result<()> {
@@ -485,13 +474,12 @@ impl AArch64 {
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            data = AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET;
+            data = AARCH64_PHYS_MEM_START + AARCH64_BINARY_OFFSET;
             reg_id = arm64_core_reg!(pc);
             vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
 
             /* X0 -- fdt address */
-            let mem_size = guest_mem.memory_size();
-            data = (AARCH64_PHYS_MEM_START + fdt_offset(mem_size)) as u64;
+            data = (AARCH64_PHYS_MEM_START + AARCH64_FDT_OFFSET) as u64;
             // hack -- can't get this to do offsetof(regs[0]) but luckily it's at offset 0
             reg_id = arm64_core_reg!(regs);
             vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;

@@ -13,12 +13,15 @@ use std::fs::File;
 use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
 use std::os::raw::*;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 use sync::Mutex;
 
+use base::{AsRawDescriptor, FromRawDescriptor, RawDescriptor};
 use data_model::vec_with_array_field;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use data_model::FlexibleArrayWrapper;
 
 use libc::sigset_t;
 use libc::{open, EBUSY, EINVAL, ENOENT, ENOSPC, EOVERFLOW, O_CLOEXEC, O_RDWR};
@@ -28,8 +31,8 @@ use kvm_sys::*;
 #[allow(unused_imports)]
 use base::{
     block_signal, ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref,
-    ioctl_with_val, pagesize, signal, unblock_signal, warn, Error, EventFd, IoctlNr, MappedRegion,
-    MemoryMapping, MmapError, Result, SIGRTMIN,
+    ioctl_with_val, pagesize, signal, unblock_signal, warn, Error, Event, IoctlNr, MappedRegion,
+    MemoryMapping, MemoryMappingBuilder, MmapError, Result, SIGRTMIN,
 };
 use msg_socket::MsgOnSocket;
 use vm_memory::{GuestAddress, GuestMemory};
@@ -40,7 +43,7 @@ fn errno_result<T>() -> Result<T> {
     Err(Error::last())
 }
 
-unsafe fn set_user_memory_region<F: AsRawFd>(
+unsafe fn set_user_memory_region<F: AsRawDescriptor>(
     fd: &F,
     slot: u32,
     read_only: bool,
@@ -99,7 +102,7 @@ impl Kvm {
         }
         // Safe because we verify that ret is valid and we own the fd.
         Ok(Kvm {
-            kvm: unsafe { File::from_raw_fd(ret) },
+            kvm: unsafe { File::from_raw_descriptor(ret) },
         })
     }
 
@@ -190,9 +193,9 @@ impl Kvm {
     }
 }
 
-impl AsRawFd for Kvm {
-    fn as_raw_fd(&self) -> RawFd {
-        self.kvm.as_raw_fd()
+impl AsRawDescriptor for Kvm {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.kvm.as_raw_descriptor()
     }
 }
 
@@ -267,7 +270,7 @@ impl Vm {
         let ret = unsafe { ioctl(kvm, KVM_CREATE_VM()) };
         if ret >= 0 {
             // Safe because we verify the value of ret and we are the owners of the fd.
-            let vm_file = unsafe { File::from_raw_fd(ret) };
+            let vm_file = unsafe { File::from_raw_descriptor(ret) };
             guest_mem.with_regions(|index, guest_addr, size, host_addr, _| {
                 unsafe {
                     // Safe because the guest regions are guaranteed not to overlap.
@@ -645,7 +648,7 @@ impl Vm {
     /// triggered is prevented.
     pub fn register_ioevent(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoeventAddress,
         datamatch: Datamatch,
     ) -> Result<()> {
@@ -658,7 +661,7 @@ impl Vm {
     /// `register_ioevent`.
     pub fn unregister_ioevent(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoeventAddress,
         datamatch: Datamatch,
     ) -> Result<()> {
@@ -667,7 +670,7 @@ impl Vm {
 
     fn ioeventfd(
         &self,
-        evt: &EventFd,
+        evt: &Event,
         addr: IoeventAddress,
         datamatch: Datamatch,
         deassign: bool,
@@ -708,7 +711,7 @@ impl Vm {
                 IoeventAddress::Pio(p) => p as u64,
                 IoeventAddress::Mmio(m) => m,
             },
-            fd: evt.as_raw_fd(),
+            fd: evt.as_raw_descriptor(),
             flags,
             ..Default::default()
         };
@@ -732,14 +735,14 @@ impl Vm {
     ))]
     pub fn register_irqfd_resample(
         &self,
-        evt: &EventFd,
-        resample_evt: &EventFd,
+        evt: &Event,
+        resample_evt: &Event,
         gsi: u32,
     ) -> Result<()> {
         let irqfd = kvm_irqfd {
             flags: KVM_IRQFD_FLAG_RESAMPLE,
-            fd: evt.as_raw_fd() as u32,
-            resamplefd: resample_evt.as_raw_fd() as u32,
+            fd: evt.as_raw_descriptor() as u32,
+            resamplefd: resample_evt.as_raw_descriptor() as u32,
             gsi,
             ..Default::default()
         };
@@ -764,9 +767,9 @@ impl Vm {
         target_arch = "arm",
         target_arch = "aarch64"
     ))]
-    pub fn unregister_irqfd(&self, evt: &EventFd, gsi: u32) -> Result<()> {
+    pub fn unregister_irqfd(&self, evt: &Event, gsi: u32) -> Result<()> {
         let irqfd = kvm_irqfd {
-            fd: evt.as_raw_fd() as u32,
+            fd: evt.as_raw_descriptor() as u32,
             gsi,
             flags: KVM_IRQFD_FLAG_DEASSIGN,
             ..Default::default()
@@ -833,9 +836,9 @@ impl Vm {
     }
 }
 
-impl AsRawFd for Vm {
-    fn as_raw_fd(&self) -> RawFd {
-        self.vm.as_raw_fd()
+impl AsRawDescriptor for Vm {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.vm.as_raw_descriptor()
     }
 }
 
@@ -944,10 +947,12 @@ impl Vcpu {
 
         // Wrap the vcpu now in case the following ? returns early. This is safe because we verified
         // the value of the fd and we own the fd.
-        let vcpu = unsafe { File::from_raw_fd(vcpu_fd) };
+        let vcpu = unsafe { File::from_raw_descriptor(vcpu_fd) };
 
-        let run_mmap =
-            MemoryMapping::from_fd(&vcpu, run_mmap_size).map_err(|_| Error::new(ENOSPC))?;
+        let run_mmap = MemoryMappingBuilder::new(run_mmap_size)
+            .from_descriptor(&vcpu)
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
 
         Ok(Vcpu { vcpu, run_mmap })
     }
@@ -1452,9 +1457,9 @@ impl Vcpu {
     }
 }
 
-impl AsRawFd for Vcpu {
-    fn as_raw_fd(&self) -> RawFd {
-        self.vcpu.as_raw_fd()
+impl AsRawDescriptor for Vcpu {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.vcpu.as_raw_descriptor()
     }
 }
 
@@ -1617,9 +1622,9 @@ impl DerefMut for RunnableVcpu {
     }
 }
 
-impl AsRawFd for RunnableVcpu {
-    fn as_raw_fd(&self) -> RawFd {
-        self.vcpu.as_raw_fd()
+impl AsRawDescriptor for RunnableVcpu {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.vcpu.as_raw_descriptor()
     }
 }
 
@@ -1641,56 +1646,7 @@ impl Drop for RunnableVcpu {
 /// Wrapper for kvm_cpuid2 which has a zero length array at the end.
 /// Hides the zero length array behind a bounds check.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub struct CpuId {
-    kvm_cpuid: Vec<kvm_cpuid2>,
-    allocated_len: usize, // Number of kvm_cpuid_entry2 structs at the end of kvm_cpuid2.
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-impl CpuId {
-    pub fn new(array_len: usize) -> CpuId {
-        let mut kvm_cpuid = vec_with_array_field::<kvm_cpuid2, kvm_cpuid_entry2>(array_len);
-        kvm_cpuid[0].nent = array_len as u32;
-
-        CpuId {
-            kvm_cpuid,
-            allocated_len: array_len,
-        }
-    }
-
-    /// Get the entries slice so they can be modified before passing to the VCPU.
-    pub fn mut_entries_slice(&mut self) -> &mut [kvm_cpuid_entry2] {
-        // Mapping the unsized array to a slice is unsafe because the length isn't known.  Using
-        // the length we originally allocated with eliminates the possibility of overflow.
-        if self.kvm_cpuid[0].nent as usize > self.allocated_len {
-            self.kvm_cpuid[0].nent = self.allocated_len as u32;
-        }
-        let nent = self.kvm_cpuid[0].nent as usize;
-        unsafe { self.kvm_cpuid[0].entries.as_mut_slice(nent) }
-    }
-
-    /// Get the entries slice, for inspecting. To modify, use mut_entries_slice instead.
-    pub fn entries_slice(&self) -> &[kvm_cpuid_entry2] {
-        // Mapping the unsized array to a slice is unsafe because the length isn't known.  Using
-        // the length we originally allocated with eliminates the possibility of overflow.
-        let slice_size = if self.kvm_cpuid[0].nent as usize > self.allocated_len {
-            self.allocated_len
-        } else {
-            self.kvm_cpuid[0].nent as usize
-        };
-        unsafe { self.kvm_cpuid[0].entries.as_slice(slice_size) }
-    }
-
-    /// Get a  pointer so it can be passed to the kernel.  Using this pointer is unsafe.
-    pub fn as_ptr(&self) -> *const kvm_cpuid2 {
-        &self.kvm_cpuid[0]
-    }
-
-    /// Get a mutable pointer so it can be passed to the kernel.  Using this pointer is unsafe.
-    pub fn as_mut_ptr(&mut self) -> *mut kvm_cpuid2 {
-        &mut self.kvm_cpuid[0]
-    }
-}
+pub type CpuId = FlexibleArrayWrapper<kvm_cpuid2, kvm_cpuid_entry2>;
 
 // Represents a temporarily blocked signal. It will unblock the signal when dropped.
 struct BlockedSignal {
@@ -1792,10 +1748,10 @@ mod tests {
         .unwrap();
         let mut vm = Vm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
             .unwrap();
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x10000), Box::new(mem), false, false)
             .unwrap();
     }
@@ -1806,7 +1762,7 @@ mod tests {
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x1000)]).unwrap();
         let mut vm = Vm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), true, false)
             .unwrap();
     }
@@ -1817,7 +1773,7 @@ mod tests {
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x1000)]).unwrap();
         let mut vm = Vm::new(&kvm, gm).unwrap();
         let mem_size = 0x1000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         let mem_ptr = mem.as_ptr();
         let slot = vm
             .add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
@@ -1841,7 +1797,7 @@ mod tests {
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
         let mut vm = Vm::new(&kvm, gm).unwrap();
         let mem_size = 0x2000;
-        let mem = MemoryMapping::new(mem_size).unwrap();
+        let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
         assert!(vm
             .add_memory_region(GuestAddress(0x2000), Box::new(mem), false, false)
             .is_err());
@@ -1908,7 +1864,7 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
         let vm = Vm::new(&kvm, gm).unwrap();
-        let evtfd = EventFd::new().unwrap();
+        let evtfd = Event::new().unwrap();
         vm.register_ioevent(&evtfd, IoeventAddress::Pio(0xf4), Datamatch::AnyLength)
             .unwrap();
         vm.register_ioevent(&evtfd, IoeventAddress::Mmio(0x1000), Datamatch::AnyLength)
@@ -1944,7 +1900,7 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
         let vm = Vm::new(&kvm, gm).unwrap();
-        let evtfd = EventFd::new().unwrap();
+        let evtfd = Event::new().unwrap();
         vm.register_ioevent(&evtfd, IoeventAddress::Pio(0xf4), Datamatch::AnyLength)
             .unwrap();
         vm.register_ioevent(&evtfd, IoeventAddress::Mmio(0x1000), Datamatch::AnyLength)
@@ -1972,13 +1928,13 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x10000)]).unwrap();
         let vm = Vm::new(&kvm, gm).unwrap();
-        let evtfd1 = EventFd::new().unwrap();
-        let evtfd2 = EventFd::new().unwrap();
+        let evtfd1 = Event::new().unwrap();
+        let evtfd2 = Event::new().unwrap();
         vm.create_irq_chip().unwrap();
         vm.register_irqfd_resample(&evtfd1, &evtfd2, 4).unwrap();
         vm.unregister_irqfd(&evtfd1, 4).unwrap();
         // Ensures the ioctl is actually reading the resamplefd.
-        vm.register_irqfd_resample(&evtfd1, unsafe { &EventFd::from_raw_fd(-1) }, 4)
+        vm.register_irqfd_resample(&evtfd1, unsafe { &Event::from_raw_descriptor(-1) }, 4)
             .unwrap_err();
     }
 

@@ -243,8 +243,7 @@ impl VirtioPciCommonConfig {
 mod tests {
     use super::*;
 
-    use base::EventFd;
-    use std::os::unix::io::RawFd;
+    use base::{Event, RawDescriptor};
     use vm_memory::GuestMemory;
 
     struct DummyDevice(u32);
@@ -252,7 +251,7 @@ mod tests {
     const QUEUE_SIZES: &'static [u16] = &[QUEUE_SIZE];
     const DUMMY_FEATURES: u64 = 0x5555_aaaa;
     impl VirtioDevice for DummyDevice {
-        fn keep_fds(&self) -> Vec<RawFd> {
+        fn keep_rds(&self) -> Vec<RawDescriptor> {
             Vec::new()
         }
         fn device_type(&self) -> u32 {
@@ -266,7 +265,7 @@ mod tests {
             _mem: GuestMemory,
             _interrupt: Interrupt,
             _queues: Vec<Queue>,
-            _queue_evts: Vec<EventFd>,
+            _queue_evts: Vec<Event>,
         ) {
         }
         fn features(&self) -> u64 {

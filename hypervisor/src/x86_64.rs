@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::{error, Result};
+use base::{error, RawDescriptor, Result};
 use bit_field::*;
+use downcast_rs::impl_downcast;
+use msg_socket::MsgOnSocket;
 use vm_memory::GuestAddress;
 
 use crate::{Hypervisor, IrqRoute, IrqSource, IrqSourceChip, Vcpu, Vm};
@@ -22,14 +24,11 @@ pub trait HypervisorX86_64: Hypervisor {
 
 /// A wrapper for using a VM on x86_64 and getting/setting its state.
 pub trait VmX86_64: Vm {
-    type Hypervisor: HypervisorX86_64;
-    type Vcpu: VcpuX86_64;
-
     /// Gets the `HypervisorX86_64` that created this VM.
-    fn get_hypervisor(&self) -> &Self::Hypervisor;
+    fn get_hypervisor(&self) -> &dyn HypervisorX86_64;
 
     /// Create a Vcpu with the specified Vcpu ID.
-    fn create_vcpu(&self, id: usize) -> Result<Self::Vcpu>;
+    fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuX86_64>>;
 
     /// Sets the address of the three-page region in the VM's address space.
     fn set_tss_addr(&self, addr: GuestAddress) -> Result<()>;
@@ -40,14 +39,18 @@ pub trait VmX86_64: Vm {
 
 /// A wrapper around creating and using a VCPU on x86_64.
 pub trait VcpuX86_64: Vcpu {
-    /// Request the VCPU to exit when it becomes possible to inject interrupts into the guest.
-    fn request_interrupt_window(&self);
+    /// Sets or clears the flag that requests the VCPU to exit when it becomes possible to inject
+    /// interrupts into the guest.
+    fn set_interrupt_window_requested(&self, requested: bool);
 
     /// Checks if we can inject an interrupt into the VCPU.
     fn ready_for_interrupt(&self) -> bool;
 
     /// Injects interrupt vector `irq` into the VCPU.
     fn interrupt(&self, irq: u32) -> Result<()>;
+
+    /// Injects a non-maskable interrupt into the VCPU.
+    fn inject_nmi(&self) -> Result<()>;
 
     /// Gets the VCPU general purpose registers.
     fn get_regs(&self) -> Result<Regs>;
@@ -91,7 +94,12 @@ pub trait VcpuX86_64: Vcpu {
 
     /// Gets the system emulated hyper-v CPUID values.
     fn get_hyperv_cpuid(&self) -> Result<CpuId>;
+
+    /// Sets up debug registers and configure vcpu for handling guest debug events.
+    fn set_guest_debug(&self, addrs: &[GuestAddress], enable_singlestep: bool) -> Result<()>;
 }
+
+impl_downcast!(VcpuX86_64);
 
 /// A CpuId Entry contains supported feature information for the given processor.
 /// This can be modified by the hypervisor to pass additional information to the guest kernel
@@ -153,6 +161,10 @@ pub enum DeliveryMode {
     External = 0b111,
 }
 
+// These MSI structures are for Intel's implementation of MSI.  The PCI spec defines most of MSI,
+// but the Intel spec defines the format of messages for raising interrupts.  The PCI spec defines
+// three u32s -- the address, address_high, and data -- but Intel only makes use of the address and
+// data.  The Intel portion of the specification is in Volume 3 section 10.11.
 #[bitfield]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MsiAddressMessage {
@@ -173,7 +185,8 @@ pub struct MsiDataMessage {
     #[bits = 3]
     pub delivery_mode: DeliveryMode,
     pub reserved: BitField3,
-    pub level: BitField1,
+    #[bits = 1]
+    pub level: Level,
     #[bits = 1]
     pub trigger: TriggerMode,
     pub reserved2: BitField16,
@@ -184,6 +197,14 @@ pub struct MsiDataMessage {
 pub enum DeliveryStatus {
     Idle = 0,
     Pending = 1,
+}
+
+/// The level of a level-triggered interrupt: asserted or deasserted.
+#[bitfield]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    Deassert = 0,
+    Assert = 1,
 }
 
 /// Represents a IOAPIC redirection table entry.
@@ -545,7 +566,7 @@ pub struct DebugRegs {
 }
 
 /// State of one VCPU register.  Currently used for MSRs and XCRs.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, MsgOnSocket)]
 pub struct Register {
     pub id: u32,
     pub value: u64,

@@ -15,12 +15,12 @@ use super::uring_fut::UringFutState;
 
 /// Future for the `read_to_mem` function.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct ReadMem<'a, 'b, W: IoSource + ?Sized> {
-    reader: &'a W,
+pub struct ReadMem<'a, 'b, R: IoSource + ?Sized> {
+    reader: &'a R,
     state: UringFutState<(u64, Rc<dyn BackingMemory>, &'b [MemRegion]), Rc<dyn BackingMemory>>,
 }
 
-impl<'a, 'b, R: IoSource + ?Sized + Unpin> ReadMem<'a, 'b, R> {
+impl<'a, 'b, R: IoSource + ?Sized> ReadMem<'a, 'b, R> {
     pub(crate) fn new(
         reader: &'a R,
         file_offset: u64,
@@ -34,7 +34,7 @@ impl<'a, 'b, R: IoSource + ?Sized + Unpin> ReadMem<'a, 'b, R> {
     }
 }
 
-impl<R: IoSource + ?Sized + Unpin> Future for ReadMem<'_, '_, R> {
+impl<R: IoSource + ?Sized> Future for ReadMem<'_, '_, R> {
     type Output = Result<u32>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -49,15 +49,12 @@ impl<R: IoSource + ?Sized + Unpin> Future for ReadMem<'_, '_, R> {
         let (new_state, ret) = match state.advance(
             |(file_offset, mem, mem_offsets)| {
                 Ok((
-                    Pin::new(&self.reader).read_to_mem(
-                        file_offset,
-                        Rc::clone(&mem),
-                        mem_offsets,
-                    )?,
+                    self.reader
+                        .read_to_mem(file_offset, Rc::clone(&mem), mem_offsets)?,
                     mem,
                 ))
             },
-            |op| Pin::new(&self.reader).poll_complete(cx, op),
+            |op| self.reader.poll_complete(cx, op),
         ) {
             Ok(d) => d,
             Err(e) => return Poll::Ready(Err(e)),
@@ -79,7 +76,7 @@ mod tests {
 
     use futures::pin_mut;
 
-    use crate::io_ext::IoSourceExt;
+    use crate::io_ext::ReadAsync;
     use crate::uring_mem::{MemRegion, VecIoWrapper};
     use crate::UringSource;
 

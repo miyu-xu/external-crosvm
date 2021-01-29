@@ -8,7 +8,7 @@ mod command_buffer;
 mod generated;
 mod vsnprintf;
 
-use base::{ExternalMapping, ExternalMappingError, ExternalMappingResult};
+use base::{ExternalMapping, ExternalMappingError, ExternalMappingResult, FromRawDescriptor};
 use std::cell::RefCell;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use std::ffi::CString;
@@ -16,7 +16,6 @@ use std::fmt::{self, Display};
 use std::fs::File;
 use std::mem::{size_of, transmute};
 use std::os::raw::{c_char, c_void};
-use std::os::unix::io::FromRawFd;
 use std::ptr::null_mut;
 use std::rc::Rc;
 use std::result;
@@ -228,6 +227,12 @@ impl RendererFlags {
         self.set_flag(GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT, !v)
     }
 
+    #[cfg(feature = "gfxstream")]
+    pub fn use_guest_angle(self, v: bool) -> RendererFlags {
+        const GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE: u32 = 1 << 21;
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE, v)
+    }
+
     pub fn use_external_blob(self, v: bool) -> RendererFlags {
         self.set_flag(VIRGL_RENDERER_USE_EXTERNAL_BLOB, v)
     }
@@ -338,6 +343,7 @@ impl Renderer {
         ret_to_res(ret)?;
         Ok(Resource {
             id: args.handle,
+            blob: false,
             backing_iovecs: Vec::new(),
             backing_mem: None,
         })
@@ -463,6 +469,7 @@ impl Renderer {
 
             Ok(Resource {
                 id: resource_id,
+                blob: true,
                 backing_iovecs: iovecs,
                 backing_mem: None,
             })
@@ -585,6 +592,7 @@ fn unmap_func(resource_id: u32) {
 /// A resource handle used by the renderer.
 pub struct Resource {
     id: u32,
+    blob: bool,
     backing_iovecs: Vec<VirglVec>,
     backing_mem: Option<GuestMemory>,
 }
@@ -618,8 +626,39 @@ impl Resource {
         self.export_query(false)
     }
 
-    /// Returns resource metadata and exports the associated dma-buf.
-    pub fn export(&self) -> Result<(Query, File)> {
+    /// Exports the associated dma-buf for a blob resource.
+    fn export_blob(&self) -> Result<File> {
+        #[cfg(feature = "virtio-gpu-next")]
+        {
+            let mut fd_type = 0;
+            let mut fd = 0;
+            let ret = unsafe {
+                virgl_renderer_resource_export_blob(self.id as u32, &mut fd_type, &mut fd)
+            };
+            ret_to_res(ret)?;
+
+            /* Only support dma-bufs until someone wants opaque fds too. */
+            if fd_type != VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF {
+                // Safe because the FD was just returned by a successful virglrenderer
+                // call so it must be valid and owned by us.
+                unsafe { close(fd) };
+                return Err(Error::Unsupported);
+            }
+
+            let dmabuf = unsafe { File::from_raw_descriptor(fd) };
+            Ok(dmabuf)
+        }
+        #[cfg(not(feature = "virtio-gpu-next"))]
+        Err(Error::Unsupported)
+    }
+
+    /// Exports the associated dma-buf for a blob resource and traditional virtio-gpu resource
+    /// backed by a dma-buf.
+    pub fn export(&self) -> Result<File> {
+        if self.blob {
+            return self.export_blob();
+        }
+
         let query = self.export_query(true)?;
         if query.out_num_fds != 1 || query.out_fds[0] < 0 {
             for fd in &query.out_fds {
@@ -634,8 +673,8 @@ impl Resource {
 
         // Safe because the FD was just returned by a successful virglrenderer call so it must
         // be valid and owned by us.
-        let dmabuf = unsafe { File::from_raw_fd(query.out_fds[0]) };
-        Ok((query, dmabuf))
+        let dmabuf = unsafe { File::from_raw_descriptor(query.out_fds[0]) };
+        Ok(dmabuf)
     }
 
     #[allow(unused_variables)]

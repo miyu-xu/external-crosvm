@@ -4,14 +4,14 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
-use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self};
 
-use base::{error, EventFd, Result};
+use base::{error, Event, RawDescriptor, Result};
 
+use crate::bus::BusAccessInfo;
 use crate::{BusDevice, SerialDevice};
 
 const LOOP_SIZE: usize = 0x40;
@@ -67,7 +67,7 @@ pub struct Serial {
     // Serial port registers
     interrupt_enable: Arc<AtomicU8>,
     interrupt_identification: u8,
-    interrupt_evt: EventFd,
+    interrupt_evt: Event,
     line_control: u8,
     line_status: u8,
     modem_control: u8,
@@ -84,10 +84,11 @@ pub struct Serial {
 
 impl SerialDevice for Serial {
     fn new(
-        interrupt_evt: EventFd,
+        _protected_vm: bool,
+        interrupt_evt: Event,
         input: Option<Box<dyn io::Read + Send>>,
         out: Option<Box<dyn io::Write + Send>>,
-        _keep_fds: Vec<RawFd>,
+        _keep_rds: Vec<RawDescriptor>,
     ) -> Serial {
         Serial {
             interrupt_enable: Default::default(),
@@ -136,7 +137,7 @@ impl Serial {
         let interrupt_evt = match self.interrupt_evt.try_clone() {
             Ok(e) => e,
             Err(e) => {
-                error!("failed to clone interrupt eventfd: {}", e);
+                error!("failed to clone interrupt event: {}", e);
                 return;
             }
         };
@@ -204,9 +205,9 @@ impl Serial {
         }
     }
 
-    /// Gets the interrupt eventfd used to interrupt the driver when it needs to respond to this
+    /// Gets the interrupt event used to interrupt the driver when it needs to respond to this
     /// device.
-    pub fn interrupt_eventfd(&self) -> &EventFd {
+    pub fn interrupt_event(&self) -> &Event {
         &self.interrupt_evt
     }
 
@@ -310,24 +311,24 @@ impl BusDevice for Serial {
         "serial".to_owned()
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
         if data.len() != 1 {
             return;
         }
 
-        if let Err(e) = self.handle_write(offset as u8, data[0]) {
+        if let Err(e) = self.handle_write(info.offset as u8, data[0]) {
             error!("serial failed write: {}", e);
         }
     }
 
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
+    fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         if data.len() != 1 {
             return;
         }
 
         self.handle_input_thread();
 
-        data[0] = match offset as u8 {
+        data[0] = match info.offset as u8 {
             DLAB_LOW if self.is_dlab_set() => self.baud_divisor as u8,
             DLAB_HIGH if self.is_dlab_set() => (self.baud_divisor >> 8) as u8,
             DATA => {
@@ -403,21 +404,31 @@ mod tests {
         }
     }
 
+    fn serial_bus_address(offset: u8) -> BusAccessInfo {
+        // Serial devices only use the offset of the BusAccessInfo
+        BusAccessInfo {
+            offset: offset as u64,
+            address: 0,
+            id: 0,
+        }
+    }
+
     #[test]
     fn serial_output() {
-        let intr_evt = EventFd::new().unwrap();
+        let intr_evt = Event::new().unwrap();
         let serial_out = SharedBuffer::new();
 
         let mut serial = Serial::new(
+            false,
             intr_evt,
             None,
             Some(Box::new(serial_out.clone())),
             Vec::new(),
         );
 
-        serial.write(DATA as u64, &['a' as u8]);
-        serial.write(DATA as u64, &['b' as u8]);
-        serial.write(DATA as u64, &['c' as u8]);
+        serial.write(serial_bus_address(DATA), &['a' as u8]);
+        serial.write(serial_bus_address(DATA), &['b' as u8]);
+        serial.write(serial_bus_address(DATA), &['c' as u8]);
         assert_eq!(
             serial_out.buf.lock().as_slice(),
             &['a' as u8, 'b' as u8, 'c' as u8]
@@ -426,28 +437,29 @@ mod tests {
 
     #[test]
     fn serial_input() {
-        let intr_evt = EventFd::new().unwrap();
+        let intr_evt = Event::new().unwrap();
         let serial_out = SharedBuffer::new();
 
         let mut serial = Serial::new(
+            false,
             intr_evt.try_clone().unwrap(),
             None,
             Some(Box::new(serial_out.clone())),
             Vec::new(),
         );
 
-        serial.write(IER as u64, &[IER_RECV_BIT]);
+        serial.write(serial_bus_address(IER), &[IER_RECV_BIT]);
         serial
             .queue_input_bytes(&['a' as u8, 'b' as u8, 'c' as u8])
             .unwrap();
 
         assert_eq!(intr_evt.read(), Ok(1));
         let mut data = [0u8; 1];
-        serial.read(DATA as u64, &mut data[..]);
+        serial.read(serial_bus_address(DATA), &mut data[..]);
         assert_eq!(data[0], 'a' as u8);
-        serial.read(DATA as u64, &mut data[..]);
+        serial.read(serial_bus_address(DATA), &mut data[..]);
         assert_eq!(data[0], 'b' as u8);
-        serial.read(DATA as u64, &mut data[..]);
+        serial.read(serial_bus_address(DATA), &mut data[..]);
         assert_eq!(data[0], 'c' as u8);
     }
 }

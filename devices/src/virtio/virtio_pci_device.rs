@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use sync::Mutex;
 
-use base::{warn, EventFd, Result};
+use base::{warn, AsRawDescriptor, Event, RawDescriptor, Result};
 use data_model::{DataInit, Le32};
 use hypervisor::Datamatch;
 use libc::ERANGE;
@@ -17,8 +16,8 @@ use vm_memory::GuestMemory;
 use super::*;
 use crate::pci::{
     MsixCap, MsixConfig, PciAddress, PciBarConfiguration, PciCapability, PciCapabilityID,
-    PciClassCode, PciConfiguration, PciDevice, PciDeviceError, PciHeaderType, PciInterruptPin,
-    PciSubclass,
+    PciClassCode, PciConfiguration, PciDevice, PciDeviceError, PciDisplaySubclass, PciHeaderType,
+    PciInterruptPin, PciSubclass,
 };
 use vm_control::VmIrqRequestSocket;
 
@@ -206,10 +205,10 @@ pub struct VirtioPciDevice {
     device_activated: bool,
 
     interrupt_status: Arc<AtomicUsize>,
-    interrupt_evt: Option<EventFd>,
-    interrupt_resample_evt: Option<EventFd>,
+    interrupt_evt: Option<Event>,
+    interrupt_resample_evt: Option<Event>,
     queues: Vec<Queue>,
-    queue_evts: Vec<EventFd>,
+    queue_evts: Vec<Event>,
     mem: Option<GuestMemory>,
     settings_bar: u8,
     msix_config: Arc<Mutex<MsixConfig>>,
@@ -226,7 +225,7 @@ impl VirtioPciDevice {
     ) -> Result<Self> {
         let mut queue_evts = Vec::new();
         for _ in device.queue_max_sizes() {
-            queue_evts.push(EventFd::new()?)
+            queue_evts.push(Event::new()?)
         }
         let queues = device
             .queue_max_sizes()
@@ -236,20 +235,28 @@ impl VirtioPciDevice {
 
         let pci_device_id = VIRTIO_PCI_DEVICE_ID_BASE + device.device_type() as u16;
 
+        let (pci_device_class, pci_device_subclass) = match device.device_type() {
+            TYPE_GPU => (
+                PciClassCode::DisplayController,
+                &PciDisplaySubclass::Other as &dyn PciSubclass,
+            ),
+            _ => (
+                PciClassCode::Other,
+                &PciVirtioSubclass::NonTransitionalBase as &dyn PciSubclass,
+            ),
+        };
+
         let num_queues = device.queue_max_sizes().len();
 
         // One MSI-X vector per queue plus one for configuration changes.
         let msix_num = u16::try_from(num_queues + 1).map_err(|_| base::Error::new(ERANGE))?;
-        let msix_config = Arc::new(Mutex::new(MsixConfig::new(
-            msix_num,
-            Arc::new(msi_device_socket),
-        )));
+        let msix_config = Arc::new(Mutex::new(MsixConfig::new(msix_num, msi_device_socket)));
 
         let config_regs = PciConfiguration::new(
             VIRTIO_PCI_VENDOR_ID,
             pci_device_id,
-            PciClassCode::Other,
-            &PciVirtioSubclass::NonTransitionalBase,
+            pci_device_class,
+            pci_device_subclass,
             None,
             PciHeaderType::Device,
             VIRTIO_PCI_VENDOR_ID,
@@ -375,7 +382,7 @@ impl VirtioPciDevice {
         Ok(())
     }
 
-    fn clone_queue_evts(&self) -> Result<Vec<EventFd>> {
+    fn clone_queue_evts(&self) -> Result<Vec<Event>> {
         self.queue_evts.iter().map(|e| e.try_clone()).collect()
     }
 }
@@ -389,23 +396,23 @@ impl PciDevice for VirtioPciDevice {
         self.pci_address = Some(address);
     }
 
-    fn keep_fds(&self) -> Vec<RawFd> {
-        let mut fds = self.device.keep_fds();
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        let mut rds = self.device.keep_rds();
         if let Some(interrupt_evt) = &self.interrupt_evt {
-            fds.push(interrupt_evt.as_raw_fd());
+            rds.push(interrupt_evt.as_raw_descriptor());
         }
         if let Some(interrupt_resample_evt) = &self.interrupt_resample_evt {
-            fds.push(interrupt_resample_evt.as_raw_fd());
+            rds.push(interrupt_resample_evt.as_raw_descriptor());
         }
-        let fd = self.msix_config.lock().get_msi_socket();
-        fds.push(fd);
-        fds
+        let descriptor = self.msix_config.lock().get_msi_socket();
+        rds.push(descriptor);
+        rds
     }
 
     fn assign_irq(
         &mut self,
-        irq_evt: EventFd,
-        irq_resample_evt: EventFd,
+        irq_evt: Event,
+        irq_resample_evt: Event,
         irq_num: u32,
         irq_pin: PciInterruptPin,
     ) {
@@ -467,7 +474,7 @@ impl PciDevice for VirtioPciDevice {
         let mut ranges = Vec::new();
         for config in self.device.get_device_bars(address) {
             let device_addr = resources
-                .mmio_allocator(MmioType::High)
+                .mmio_allocator_any()
                 .allocate_with_align(
                     config.get_size(),
                     Alloc::PciBar {
@@ -503,7 +510,7 @@ impl PciDevice for VirtioPciDevice {
         Ok(())
     }
 
-    fn ioeventfds(&self) -> Vec<(&EventFd, u64, Datamatch)> {
+    fn ioevents(&self) -> Vec<(&Event, u64, Datamatch)> {
         let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
         self.queue_evts
@@ -574,7 +581,7 @@ impl PciDevice for VirtioPciDevice {
             o if NOTIFICATION_BAR_OFFSET <= o
                 && o < NOTIFICATION_BAR_OFFSET + NOTIFICATION_SIZE =>
             {
-                // Handled with ioeventfds.
+                // Handled with ioevents.
             }
 
             o if MSIX_TABLE_BAR_OFFSET <= o && o < MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE => {
@@ -622,7 +629,7 @@ impl PciDevice for VirtioPciDevice {
             o if NOTIFICATION_BAR_OFFSET <= o
                 && o < NOTIFICATION_BAR_OFFSET + NOTIFICATION_SIZE =>
             {
-                // Handled with ioeventfds.
+                // Handled with ioevents.
             }
             o if MSIX_TABLE_BAR_OFFSET <= o && o < MSIX_TABLE_BAR_OFFSET + MSIX_TABLE_SIZE => {
                 let behavior = self

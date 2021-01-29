@@ -5,12 +5,13 @@
 
 use std::fmt::{self, Display};
 use std::io::Error as IoError;
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use base::{error, warn, Error as SysError, EventFd, Fd, PollContext, PollToken};
+use base::{
+    error, warn, AsRawDescriptor, Descriptor, Error as SysError, Event, PollToken, WaitContext,
+};
 use bit_field::BitField1;
 use bit_field::*;
 use hypervisor::{PitChannelState, PitRWMode, PitRWState, PitState};
@@ -22,10 +23,11 @@ use base::Clock;
 use base::FakeClock as Clock;
 
 #[cfg(test)]
-use base::FakeTimerFd as TimerFd;
+use base::FakeTimer as Timer;
 #[cfg(not(test))]
-use base::TimerFd;
+use base::Timer;
 
+use crate::bus::BusAccessInfo;
 use crate::BusDevice;
 
 // Bitmask for areas of standard (non-ReadBack) Control Word Format. Constant
@@ -147,17 +149,17 @@ const MAX_TIMER_FREQ: u32 = 65536;
 
 #[derive(Debug)]
 pub enum PitError {
-    TimerFdCreateError(SysError),
-    /// Creating PollContext failed.
-    CreatePollContext(SysError),
-    /// Error while polling for events.
-    PollError(SysError),
+    TimerCreateError(SysError),
+    /// Creating WaitContext failed.
+    CreateWaitContext(SysError),
+    /// Error while waiting for events.
+    WaitError(SysError),
     /// Error while trying to create worker thread.
     SpawnThread(IoError),
-    /// Error while creating event FD.
-    CreateEventFd(SysError),
-    /// Error while cloning event FD for worker thread.
-    CloneEventFd(SysError),
+    /// Error while creating event.
+    CreateEvent(SysError),
+    /// Error while cloning event for worker thread.
+    CloneEvent(SysError),
 }
 
 impl Display for PitError {
@@ -165,14 +167,12 @@ impl Display for PitError {
         use self::PitError::*;
 
         match self {
-            TimerFdCreateError(e) => {
-                write!(f, "failed to create pit counter due to timer fd: {}", e)
-            }
-            CreatePollContext(e) => write!(f, "failed to create poll context: {}", e),
-            PollError(err) => write!(f, "failed to poll events: {}", err),
+            TimerCreateError(e) => write!(f, "failed to create pit counter due to timer fd: {}", e),
+            CreateWaitContext(e) => write!(f, "failed to create poll context: {}", e),
+            WaitError(err) => write!(f, "failed to wait for events: {}", err),
             SpawnThread(err) => write!(f, "failed to spawn thread: {}", err),
-            CreateEventFd(err) => write!(f, "failed to create event fd: {}", err),
-            CloneEventFd(err) => write!(f, "failed to clone event fd: {}", err),
+            CreateEvent(err) => write!(f, "failed to create event: {}", err),
+            CloneEvent(err) => write!(f, "failed to clone event: {}", err),
         }
     }
 }
@@ -188,7 +188,7 @@ pub struct Pit {
     // when timers expire, so it needs asynchronous updates. All other counters need only update
     // when queried directly by the guest.
     worker_thread: Option<thread::JoinHandle<PitResult<()>>>,
-    kill_evt: EventFd,
+    kill_evt: Event,
 }
 
 impl Drop for Pit {
@@ -215,31 +215,31 @@ impl BusDevice for Pit {
         "userspace PIT".to_string()
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
         self.ensure_started();
 
         if data.len() != 1 {
             warn!("Bad write size for Pit: {}", data.len());
             return;
         }
-        match PortIOSpace::n(offset as i64) {
+        match PortIOSpace::n(info.address as i64) {
             Some(PortIOSpace::PortCounter0Data) => self.counters[0].lock().write_counter(data[0]),
             Some(PortIOSpace::PortCounter1Data) => self.counters[1].lock().write_counter(data[0]),
             Some(PortIOSpace::PortCounter2Data) => self.counters[2].lock().write_counter(data[0]),
             Some(PortIOSpace::PortCommand) => self.command_write(data[0]),
             Some(PortIOSpace::PortSpeaker) => self.counters[2].lock().write_speaker(data[0]),
-            None => warn!("PIT: bad write to offset {}", offset),
+            None => warn!("PIT: bad write to {}", info),
         }
     }
 
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
+    fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         self.ensure_started();
 
         if data.len() != 1 {
             warn!("Bad read size for Pit: {}", data.len());
             return;
         }
-        data[0] = match PortIOSpace::n(offset as i64) {
+        data[0] = match PortIOSpace::n(info.address as i64) {
             Some(PortIOSpace::PortCounter0Data) => self.counters[0].lock().read_counter(),
             Some(PortIOSpace::PortCounter1Data) => self.counters[1].lock().read_counter(),
             Some(PortIOSpace::PortCounter2Data) => self.counters[2].lock().read_counter(),
@@ -252,7 +252,7 @@ impl BusDevice for Pit {
             }
             Some(PortIOSpace::PortSpeaker) => self.counters[2].lock().read_speaker(),
             None => {
-                warn!("PIT: bad read from offset {}", offset);
+                warn!("PIT: bad read from {}", info);
                 return;
             }
         };
@@ -260,7 +260,7 @@ impl BusDevice for Pit {
 }
 
 impl Pit {
-    pub fn new(interrupt_evt: EventFd, clock: Arc<Mutex<Clock>>) -> PitResult<Pit> {
+    pub fn new(interrupt_evt: Event, clock: Arc<Mutex<Clock>>) -> PitResult<Pit> {
         let mut counters = Vec::new();
         let mut interrupt = Some(interrupt_evt);
         for i in 0..NUM_OF_COUNTERS {
@@ -276,7 +276,7 @@ impl Pit {
         // may not make sense to continue operation.
         assert_eq!(counters.len(), NUM_OF_COUNTERS);
 
-        let kill_evt = EventFd::new().map_err(PitError::CreateEventFd)?;
+        let kill_evt = Event::new().map_err(PitError::CreateEvent)?;
 
         Ok(Pit {
             counters,
@@ -297,9 +297,9 @@ impl Pit {
     fn start(&mut self) -> PitResult<()> {
         let mut worker = Worker {
             pit_counter: self.counters[0].clone(),
-            fd: Fd(self.counters[0].lock().timer.as_raw_fd()),
+            fd: Descriptor(self.counters[0].lock().timer.as_raw_descriptor()),
         };
-        let evt = self.kill_evt.try_clone().map_err(PitError::CloneEventFd)?;
+        let evt = self.kill_evt.try_clone().map_err(PitError::CloneEvent)?;
 
         self.worker_thread = Some(
             thread::Builder::new()
@@ -363,8 +363,8 @@ impl Pit {
 // Each instance of this represents one of the PIT counters. They are used to
 // implement one-shot and repeating timer alarms. An 8254 has three counters.
 struct PitCounter {
-    // EventFd to write when asserting an interrupt.
-    interrupt_evt: Option<EventFd>,
+    // Event to write when asserting an interrupt.
+    interrupt_evt: Option<Event>,
     // Stores the value with which the counter was initialized. Counters are 16-
     // bit values with an effective range of 1-65536 (65536 represented by 0).
     reload_value: u16,
@@ -400,7 +400,7 @@ struct PitCounter {
     // Indicates whether the current timer is valid.
     timer_valid: bool,
     // Timer to set and receive periodic notifications.
-    timer: TimerFd,
+    timer: Timer,
 }
 
 impl Drop for PitCounter {
@@ -443,13 +443,13 @@ fn get_monotonic_time() -> u64 {
 impl PitCounter {
     fn new(
         counter_id: usize,
-        interrupt_evt: Option<EventFd>,
+        interrupt_evt: Option<Event>,
         clock: Arc<Mutex<Clock>>,
     ) -> PitResult<PitCounter> {
         #[cfg(not(test))]
-        let timer = TimerFd::new().map_err(PitError::TimerFdCreateError)?;
+        let timer = Timer::new().map_err(PitError::TimerCreateError)?;
         #[cfg(test)]
-        let timer = TimerFd::new(clock.clone());
+        let timer = Timer::new(clock.clone());
         Ok(PitCounter {
             interrupt_evt,
             reload_value: 0,
@@ -552,28 +552,9 @@ impl PitCounter {
         //  - 2 counter select bits, which aren't used by the counter/channel itself
         self.command = (state.mode << 1) | ((state.rw_mode as u8) << 4);
         self.gate = state.gate;
-        self.latched = match state.count_latched {
-            PitRWState::None => false,
-            _ => true,
-        };
-
-        match state.read_state {
-            PitRWState::Word1 => {
-                self.read_low_byte = true;
-            }
-            _ => {
-                self.read_low_byte = false;
-            }
-        }
-
-        match state.write_state {
-            PitRWState::Word1 => {
-                self.wrote_low_byte = true;
-            }
-            _ => {
-                self.wrote_low_byte = false;
-            }
-        }
+        self.latched = state.count_latched != PitRWState::None;
+        self.read_low_byte = state.read_state == PitRWState::Word1;
+        self.wrote_low_byte = state.write_state == PitRWState::Word1;
 
         // To convert the count_load_time to an instant we have to convert it to a
         // duration by comparing it to get_monotonic_time.  Then subtract that duration from
@@ -825,7 +806,7 @@ impl PitCounter {
 
     fn timer_handler(&mut self) {
         if let Err(e) = self.timer.wait() {
-            // Under the current timerfd implementation (as of Jan 2019), this failure shouldn't
+            // Under the current Timer implementation (as of Jan 2019), this failure shouldn't
             // happen but implementation details may change in the future, and the failure
             // cases are complex to reason about. Because of this, avoid unwrap().
             error!("pit: timer wait unexpectedly failed: {}", e);
@@ -905,11 +886,11 @@ impl PitCounter {
 
 struct Worker {
     pit_counter: Arc<Mutex<PitCounter>>,
-    fd: Fd,
+    fd: Descriptor,
 }
 
 impl Worker {
-    fn run(&mut self, kill_evt: EventFd) -> PitResult<()> {
+    fn run(&mut self, kill_evt: Event) -> PitResult<()> {
         #[derive(PollToken)]
         enum Token {
             // The timer expired.
@@ -918,14 +899,14 @@ impl Worker {
             Kill,
         }
 
-        let poll_ctx: PollContext<Token> =
-            PollContext::build_with(&[(&self.fd, Token::TimerExpire), (&kill_evt, Token::Kill)])
-                .map_err(PitError::CreatePollContext)?;
+        let wait_ctx: WaitContext<Token> =
+            WaitContext::build_with(&[(&self.fd, Token::TimerExpire), (&kill_evt, Token::Kill)])
+                .map_err(PitError::CreateWaitContext)?;
 
         loop {
-            let events = poll_ctx.wait().map_err(PitError::PollError)?;
-            for event in events.iter_readable() {
-                match event.token() {
+            let events = wait_ctx.wait().map_err(PitError::WaitError)?;
+            for event in events.iter().filter(|e| e.is_readable) {
+                match event.token {
                     Token::TimerExpire => {
                         let mut pit = self.pit_counter.lock();
                         pit.timer_handler();
@@ -942,18 +923,39 @@ mod tests {
     use super::*;
     struct TestData {
         pit: Pit,
-        irqfd: EventFd,
+        irqfd: Event,
         clock: Arc<Mutex<Clock>>,
+    }
+
+    fn pit_bus_address(address: PortIOSpace) -> BusAccessInfo {
+        // The PIT is added to the io_bus in two locations, so the offset depends on which
+        // address range the address is in. The PIT implementation currently does not use the
+        // offset, but we're setting it accurately here in case it does in the future.
+        let offset = match address as u64 {
+            x if x >= PortIOSpace::PortCounter0Data as u64
+                && x < PortIOSpace::PortCounter0Data as u64 + 0x8 =>
+            {
+                address as u64 - PortIOSpace::PortCounter0Data as u64
+            }
+            x if x == PortIOSpace::PortSpeaker as u64 => 0,
+            _ => panic!("invalid PIT address: {:#x}", address as u64),
+        };
+
+        BusAccessInfo {
+            offset,
+            address: address as u64,
+            id: 0,
+        }
     }
 
     /// Utility method for writing a command word to a command register.
     fn write_command(pit: &mut Pit, command: u8) {
-        pit.write(PortIOSpace::PortCommand as u64, &[command])
+        pit.write(pit_bus_address(PortIOSpace::PortCommand), &[command])
     }
 
     /// Utility method for writing a command word to the speaker register.
     fn write_speaker(pit: &mut Pit, command: u8) {
-        pit.write(PortIOSpace::PortSpeaker as u64, &[command])
+        pit.write(pit_bus_address(PortIOSpace::PortSpeaker), &[command])
     }
 
     /// Utility method for writing to a counter.
@@ -963,17 +965,17 @@ mod tests {
             1 => PortIOSpace::PortCounter1Data,
             2 => PortIOSpace::PortCounter2Data,
             _ => panic!("Invalid counter_idx: {}", counter_idx),
-        } as u64;
+        };
         // Write the least, then the most, significant byte.
         if access_mode == CommandAccess::CommandRWLeast
             || access_mode == CommandAccess::CommandRWBoth
         {
-            pit.write(port, &[(data & 0xff) as u8]);
+            pit.write(pit_bus_address(port), &[(data & 0xff) as u8]);
         }
         if access_mode == CommandAccess::CommandRWMost
             || access_mode == CommandAccess::CommandRWBoth
         {
-            pit.write(port, &[(data >> 8) as u8]);
+            pit.write(pit_bus_address(port), &[(data >> 8) as u8]);
         }
     }
 
@@ -984,27 +986,27 @@ mod tests {
             1 => PortIOSpace::PortCounter1Data,
             2 => PortIOSpace::PortCounter2Data,
             _ => panic!("Invalid counter_idx: {}", counter_idx),
-        } as u64;
+        };
         let mut result: u16 = 0;
         if access_mode == CommandAccess::CommandRWLeast
             || access_mode == CommandAccess::CommandRWBoth
         {
             let mut buffer = [0];
-            pit.read(port, &mut buffer);
+            pit.read(pit_bus_address(port), &mut buffer);
             result = buffer[0].into();
         }
         if access_mode == CommandAccess::CommandRWMost
             || access_mode == CommandAccess::CommandRWBoth
         {
             let mut buffer = [0];
-            pit.read(port, &mut buffer);
+            pit.read(pit_bus_address(port), &mut buffer);
             result |= u16::from(buffer[0]) << 8;
         }
         assert_eq!(result, expected);
     }
 
     fn set_up() -> TestData {
-        let irqfd = EventFd::new().unwrap();
+        let irqfd = Event::new().unwrap();
         let clock = Arc::new(Mutex::new(Clock::new()));
         TestData {
             pit: Pit::new(irqfd.try_clone().unwrap(), clock.clone()).unwrap(),
@@ -1125,7 +1127,8 @@ mod tests {
     fn read_command() {
         let mut data = set_up();
         let mut buf = [0];
-        data.pit.read(PortIOSpace::PortCommand as u64, &mut buf);
+        data.pit
+            .read(pit_bus_address(PortIOSpace::PortCommand), &mut buf);
         assert_eq!(buf, [0]);
     }
 
@@ -1446,7 +1449,21 @@ mod tests {
     #[test]
     fn invalid_write_and_read() {
         let mut data = set_up();
-        data.pit.write(0x44, &[0]);
-        data.pit.read(0x55, &mut [0]);
+        data.pit.write(
+            BusAccessInfo {
+                address: 0x44,
+                offset: 0x4,
+                id: 0,
+            },
+            &[0],
+        );
+        data.pit.read(
+            BusAccessInfo {
+                address: 0x55,
+                offset: 0x15,
+                id: 0,
+            },
+            &mut [0],
+        );
     }
 }

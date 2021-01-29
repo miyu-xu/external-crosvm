@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::EventFd;
+use base::{Event, RawDescriptor};
 
 use msg_socket::*;
 
 #[derive(MsgOnSocket)]
 struct Request {
     field0: u8,
-    field1: EventFd,
+    field1: Event,
     field2: u32,
     field3: bool,
 }
@@ -20,7 +20,7 @@ struct DummyResponse {}
 #[test]
 fn sock_send_recv_struct() {
     let (req, res) = pair::<Request, DummyResponse>().unwrap();
-    let e0 = EventFd::new().unwrap();
+    let e0 = Event::new().unwrap();
     let e1 = e0.try_clone().unwrap();
     req.send(&Request {
         field0: 2,
@@ -35,17 +35,4 @@ fn sock_send_recv_struct() {
     assert_eq!(r.field3, true);
     r.field1.write(0x0f0f).unwrap();
     assert_eq!(e1.read().unwrap(), 0x0f0f);
-}
-#[derive(MsgOnSocket)]
-struct SkipMessage {
-    #[msg_on_socket(skip)]
-    a: u8,
-}
-
-#[test]
-fn sock_send_recv_struct_skip_empty() {
-    let (req, res) = pair::<SkipMessage, DummyResponse>().unwrap();
-    req.send(&SkipMessage { a: 123 }).unwrap();
-    let r = res.recv().unwrap();
-    assert_eq!(r.a, <u8>::default());
 }
