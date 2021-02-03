@@ -1,0 +1,9 @@
+Presubmit-Verified+2: Treehugger Robot <treehugger-gerrit@google.com>
+Lint+1: Lint 🤖 <ayeaye-gerrit@google.com>
+Verified+1: Alistair Delva <adelva@google.com>
+Code-Review+2: Alistair Delva <adelva@google.com>
+Submitted-by: Alistair Delva <adelva@google.com>
+Submitted-at: Wed, 03 Feb 2021 18:19:11 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1567561
+Project: platform/external/crosvm
+Branch: refs/heads/master
