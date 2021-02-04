@@ -69,11 +69,7 @@ rust_test_host {
 
     // added manually
     target: {
-        host: {
-            shared_libs: ["libvirglrenderer"],
-        },
         android: {
-            shared_libs: ["libdrm"],
             static_libs: [
                 "libepoxy",
                 "libgbm",
@@ -104,6 +100,16 @@ rust_library {
         "gfxstream",
     ],
     shared_libs: ["libgfxstream_backend",],
+    // added manually
+    target: {
+        android: {
+            static_libs: [
+                "libepoxy",
+                "libgbm",
+                "libvirglrenderer",
+            ],
+        },
+    },
     rustlibs: [
         "libacpi_tables",
         "libaudio_streams",
