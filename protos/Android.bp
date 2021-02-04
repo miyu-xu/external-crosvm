@@ -1,4 +1,11 @@
 // Only enable composite-disk and include cdisk_spec.rs for now.
+package {
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // the below license kinds from "external_crosvm_license":
+    //   SPDX-license-identifier-BSD
+    default_applicable_licenses: ["external_crosvm_license"],
+}
+
 rust_library {
     name: "libprotos",
     defaults: ["crosvm_defaults"],
