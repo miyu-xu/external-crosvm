@@ -14,6 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+// http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // the below license kinds from "external_crosvm_license":
+    //   SPDX-license-identifier-Apache-2.0
+    //   SPDX-license-identifier-BSD
+    default_applicable_licenses: ["external_crosvm_license"],
+}
+
 genrule_defaults {
     name: "crosvm_inline_seccomp_policy_x86_64",
     cmd: "$(location policy-inliner.sh) $(location x86_64/common_device.policy) < $(in) > $(out)",
@@ -934,4 +943,3 @@ prebuilt_etc {
         },
     },
 }
-
