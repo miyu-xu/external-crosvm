@@ -8,7 +8,8 @@ use std::io::Read;
 
 use arch::fdt::{
     begin_node, end_node, finish_fdt, generate_prop32, generate_prop64, property, property_cstring,
-    property_null, property_string, property_u32, property_u64, start_fdt, Error, Result,
+    property_null, property_string, property_string_list, property_u32, property_u64, start_fdt,
+    Error, Result,
 };
 use arch::SERIAL_ADDR;
 use devices::{PciAddress, PciInterruptPin};
@@ -182,11 +183,25 @@ fn create_serial_nodes(fdt: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+<<<<<<< HEAD   (ed8da5 Merge "Run crosvm using `exec`")
 // TODO(sonnyrao) -- check to see if host kernel supports PSCI 0_2
 fn create_psci_node(fdt: &mut Vec<u8>) -> Result<()> {
     let compatible = "arm,psci-0.2";
+=======
+fn create_psci_node(fdt: &mut Vec<u8>, version: &PsciVersion) -> Result<()> {
+    let mut compatible = vec![format!("arm,psci-{}.{}", version.major, version.minor)];
+    if version.major == 1 {
+        // Put `psci-0.2` as well because PSCI 1.0 is compatible with PSCI 0.2.
+        compatible.push(format!("arm,psci-0.2"))
+    };
+
+>>>>>>> BRANCH (359e7d Add the VioS audio backend)
     begin_node(fdt, "psci")?;
+<<<<<<< HEAD   (ed8da5 Merge "Run crosvm using `exec`")
     property_string(fdt, "compatible", compatible)?;
+=======
+    property_string_list(fdt, "compatible", compatible)?;
+>>>>>>> BRANCH (359e7d Add the VioS audio backend)
     // Only support aarch64 guest
     property_string(fdt, "method", "hvc")?;
     // These constants are from PSCI
