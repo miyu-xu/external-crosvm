@@ -60,6 +60,9 @@ rust_defaults {
 rust_test_host {
     name: "sys_util_host_test_src_lib",
     defaults: ["sys_util_defaults"],
+    test_options: {
+        unit_test: true,
+    },
 }
 
 // TODO: This doesn't build due to missing shm_open &c. in Bionic. Fix it upstream.
@@ -77,8 +80,8 @@ rust_test_host {
 //   ../sync/src/lib.rs
 //   ../syscall_defines/src/lib.rs
 //   ../tempfile/src/lib.rs
-//   libc-0.2.80 "default,std"
+//   libc-0.2.85 "default,std"
 //   proc-macro2-1.0.24 "default,proc-macro"
-//   quote-1.0.7 "default,proc-macro"
-//   syn-1.0.53 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
+//   quote-1.0.8 "default,proc-macro"
+//   syn-1.0.60 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
 //   unicode-xid-0.2.1 "default"
