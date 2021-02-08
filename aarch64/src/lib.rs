@@ -41,6 +41,7 @@ const AARCH64_GIC_CPUI_SIZE: u64 = 0x20000;
 const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
 const AARCH64_AXI_BASE: u64 = 0x40000000;
 
+const AARCH64_BIOS_OFFSET: u64 = 0x0;
 const AARCH64_BIOS_MAX_LEN: u64 = 1 << 20;
 
 // These constants indicate the placement of the GIC registers in the physical
@@ -78,6 +79,10 @@ macro_rules! arm64_core_reg {
 
 fn get_binary_addr() -> GuestAddress {
     GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BINARY_OFFSET)
+}
+
+fn get_bios_addr() -> GuestAddress {
+    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET)
 }
 
 // Serial device requires 8 bytes of registers;
@@ -218,8 +223,8 @@ impl arch::LinuxArch for AArch64 {
             VmImage::Bios(_) => true,
             _ => false,
         };
-        let mut resources =
-            Self::get_resource_allocator(components.memory_size, components.wayland_dmabuf);
+
+        let mut resources = Self::get_resource_allocator(components.memory_size);
         let mem = Self::setup_memory(components.memory_size)?;
         let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
 
@@ -234,7 +239,7 @@ impl arch::LinuxArch for AArch64 {
                 .map_err(Error::CreateVcpu)?
                 .downcast::<Vcpu>()
                 .map_err(|_| Error::DowncastVcpu)?;
-            Self::configure_vcpu_early(vm.get_memory(), &vcpu, vcpu_id, use_pmu)?;
+            Self::configure_vcpu_early(vm.get_memory(), &vcpu, vcpu_id, use_pmu, has_bios)?;
             vcpus.push(vcpu);
         }
 
@@ -301,6 +306,7 @@ impl arch::LinuxArch for AArch64 {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;
         }
 
+        let psci_version = vcpus[0].get_psci_version().map_err(Error::GetPsciVersion)?;
         let (pci_device_base, pci_device_size) =
             Self::get_high_mmio_base_size(components.memory_size);
         let mut initrd = None;
@@ -309,14 +315,14 @@ impl arch::LinuxArch for AArch64 {
         // image loading
         match components.vm_image {
             VmImage::Bios(ref mut bios) => {
-                arch::load_image(&mem, bios, get_binary_addr(), AARCH64_BIOS_MAX_LEN)
+                arch::load_image(&mem, bios, get_bios_addr(), AARCH64_BIOS_MAX_LEN)
                     .map_err(Error::BiosLoadFailure)?;
             }
             VmImage::Kernel(ref mut kernel_image) => {
                 let kernel_size =
-                    arch::load_image(&mem, kernel_image, get_binary_addr(), u64::max_value())
+                    arch::load_image(&mem, kernel_image, get_kernel_addr(), u64::max_value())
                         .map_err(Error::KernelLoadFailure)?;
-                let kernel_end = get_binary_addr().offset() + kernel_size as u64;
+                let kernel_end = get_kernel_addr().offset() + kernel_size as u64;
                 initrd = match components.initrd_image {
                     Some(initrd_file) => {
                         let mut initrd_file = initrd_file;
@@ -340,7 +346,7 @@ impl arch::LinuxArch for AArch64 {
             &mem,
             pci_irqs,
             vcpu_count as u32,
-            AARCH64_FDT_OFFSET,
+            fdt_offset(components.memory_size),
             pci_device_base,
             pci_device_size,
             &CString::new(cmdline).unwrap(),
@@ -348,6 +354,7 @@ impl arch::LinuxArch for AArch64 {
             components.android_fstab,
             irq_chip.get_vgic_version() == DeviceKind::ArmVgicV3,
             use_pmu,
+            psci_version,
         )
         .map_err(Error::CreateFdt)?;
 
@@ -406,12 +413,12 @@ impl AArch64 {
     }
 
     /// Returns a system resource allocator.
-    fn get_resource_allocator(mem_size: u64, gpu_allocation: bool) -> SystemAllocator {
+    fn get_resource_allocator(mem_size: u64) -> SystemAllocator {
         let (high_mmio_base, high_mmio_size) = Self::get_high_mmio_base_size(mem_size);
         SystemAllocator::builder()
             .add_high_mmio_addresses(high_mmio_base, high_mmio_size)
             .add_low_mmio_addresses(AARCH64_MMIO_BASE, AARCH64_MMIO_SIZE)
-            .create_allocator(AARCH64_IRQ_BASE, gpu_allocation)
+            .create_allocator(AARCH64_IRQ_BASE)
             .unwrap()
     }
 
@@ -452,6 +459,7 @@ impl AArch64 {
         vcpu: &dyn VcpuAArch64,
         vcpu_id: usize,
         use_pmu: bool,
+        has_bios: bool,
     ) -> Result<()> {
         let mut features = vec![VcpuFeature::PsciV0_2];
         if use_pmu {
@@ -474,7 +482,11 @@ impl AArch64 {
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            data = AARCH64_PHYS_MEM_START + AARCH64_BINARY_OFFSET;
+            if has_bios {
+                data = AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET;
+            } else {
+                data = AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET;
+            }
             reg_id = arm64_core_reg!(pc);
             vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
 

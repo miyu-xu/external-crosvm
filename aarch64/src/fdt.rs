@@ -8,7 +8,8 @@ use std::io::Read;
 
 use arch::fdt::{
     begin_node, end_node, finish_fdt, generate_prop32, generate_prop64, property, property_cstring,
-    property_null, property_string, property_u32, property_u64, start_fdt, Error, Result,
+    property_null, property_string, property_string_list, property_u32, property_u64, start_fdt,
+    Error, Result,
 };
 use arch::SERIAL_ADDR;
 use devices::{PciAddress, PciInterruptPin};
@@ -186,7 +187,7 @@ fn create_serial_nodes(fdt: &mut Vec<u8>) -> Result<()> {
 fn create_psci_node(fdt: &mut Vec<u8>) -> Result<()> {
     let compatible = "arm,psci-0.2";
     begin_node(fdt, "psci")?;
-    property_string(fdt, "compatible", compatible)?;
+    property_string_list(fdt, "compatible", compatible)?;
     // Only support aarch64 guest
     property_string(fdt, "method", "hvc")?;
     // These constants are from PSCI
