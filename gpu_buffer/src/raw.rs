@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (ed8da5 Merge "Run crosvm using `exec`")
 // Copyright 2018 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -269,3 +270,5 @@ extern "C" {
         plane: c_int,
     ) -> *mut c_void;
 }
+=======
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
