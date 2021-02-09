@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "1810535c_369dcdd1",
+        "filename": "bit_field/bit_field_derive/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-02-09T21:14:09Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d083408d_1d3fa543",
+      "range": {
+        "startLine": 3,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 1
+      },
+      "revId": "7638a5b64561ed9d9d3bda90983db158caee462f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3950b846_dfc570b9",
@@ -54,6 +78,30 @@
       "writtenOn": "2021-02-06T01:23:51Z",
       "side": 1,
       "message": "revert this",
+      "range": {
+        "startLine": 3,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 1
+      },
+      "revId": "7638a5b64561ed9d9d3bda90983db158caee462f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d234348d_1a900a7f",
+        "filename": "enumn/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-02-09T21:14:09Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "975899a3_f56cff8e",
       "range": {
         "startLine": 3,
         "startChar": 0,
@@ -121,6 +169,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "6f5783d4_f6fbcb9e",
+        "filename": "msg_socket/msg_on_socket_derive/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 44,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-02-09T21:14:09Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "fcd26b37_0a75cefa",
+      "range": {
+        "startLine": 17,
+        "startChar": 0,
+        "endLine": 44,
+        "endChar": 1
+      },
+      "revId": "7638a5b64561ed9d9d3bda90983db158caee462f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4c8f8e4d_d101224e",
@@ -151,6 +223,30 @@
       "writtenOn": "2021-02-06T01:23:51Z",
       "side": 1,
       "message": "revert this bit",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 42,
+        "endChar": 1
+      },
+      "revId": "7638a5b64561ed9d9d3bda90983db158caee462f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1593ab4c_9fa0f10b",
+        "filename": "sys_util/poll_token_derive/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-02-09T21:14:09Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "1c145d72_e80c2ac1",
       "range": {
         "startLine": 15,
         "startChar": 0,
