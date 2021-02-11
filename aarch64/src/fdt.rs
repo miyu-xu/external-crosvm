@@ -184,15 +184,7 @@ fn create_serial_nodes(fdt: &mut Vec<u8>) -> Result<()> {
 }
 
 fn create_psci_node(fdt: &mut Vec<u8>, version: &PsciVersion) -> Result<()> {
-    let compatible = if version.major == 1 {
-        // Put `psci-0.2` as well because PSCI 1.0 is compatible with PSCI 0.2.
-        format!(
-            "\"arm,psci-{}.{}\", \"arm,psci-0.2\"",
-            version.major, version.minor
-        )
-    } else {
-        format!("arm,psci-{}.{}", version.major, version.minor)
-    };
+    let compatible = format!("arm,psci-{}.{}", version.major, version.minor);
     begin_node(fdt, "psci")?;
     property_string(fdt, "compatible", &compatible)?;
     // Only support aarch64 guest
