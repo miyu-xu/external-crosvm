@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0d0b2b17_b2542acb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1729538
+      },
+      "writtenOn": "2021-02-12T09:19:07Z",
+      "side": 1,
+      "message": "With my limited understanding of Rust, this looks sensible.",
+      "revId": "a27590e21f41c787ae71f621fd4b08e6fcc9b9bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
