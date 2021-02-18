@@ -22,6 +22,30 @@
       },
       "revId": "7a77622b0f1287786b0c57c58177d04ab1be8e84",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e087953d_32aa948f",
+        "filename": "devices/src/virtio/gpu/virtio_gpu.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-02-18T01:45:19Z",
+      "side": 1,
+      "message": "IIUC The Android tree used to have an extra Android.bp under the rutabaga_gfx directory that declared the rutabaga_fgx module, but this was not in crosvm (my best guess is that it was WIP). With this merge the module in rutabaga_gfx is actually gpu_renderer, which still defines the same stuff, just under a different name.",
+      "parentUuid": "882e9ad1_b2f66a26",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 18,
+        "endChar": 19
+      },
+      "revId": "7a77622b0f1287786b0c57c58177d04ab1be8e84",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
