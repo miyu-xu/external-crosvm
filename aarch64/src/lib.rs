@@ -18,7 +18,9 @@ use base::Event;
 use devices::{
     Bus, BusError, IrqChip, IrqChipAArch64, PciAddress, PciConfigMmio, PciDevice, PciInterruptPin,
 };
-use hypervisor::{DeviceKind, Hypervisor, HypervisorCap, VcpuAArch64, VcpuFeature, VmAArch64};
+use hypervisor::{
+    DeviceKind, Hypervisor, HypervisorCap, PsciVersion, VcpuAArch64, VcpuFeature, VmAArch64,
+};
 use minijail::Minijail;
 use remain::sorted;
 use resources::SystemAllocator;
@@ -28,9 +30,9 @@ use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 mod fdt;
 
-const AARCH64_FDT_OFFSET: u64 = 0;
+// We place the kernel at offset 8MB
+const AARCH64_KERNEL_OFFSET: u64 = 0x80000;
 const AARCH64_FDT_MAX_SIZE: u64 = 0x200000;
-const AARCH64_BINARY_OFFSET: u64 = AARCH64_FDT_MAX_SIZE;
 const AARCH64_INITRD_ALIGN: u64 = 0x1000000;
 
 // These constants indicate the address space used by the ARM vGIC.
@@ -41,7 +43,10 @@ const AARCH64_GIC_CPUI_SIZE: u64 = 0x20000;
 const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
 const AARCH64_AXI_BASE: u64 = 0x40000000;
 
-const AARCH64_BIOS_OFFSET: u64 = 0x0;
+// FDT is placed at the front of RAM when booting in BIOS mode.
+const AARCH64_FDT_OFFSET_IN_BIOS_MODE: u64 = 0x0;
+// Therefore, the BIOS is placed after the FDT in memory.
+const AARCH64_BIOS_OFFSET: u64 = AARCH64_FDT_MAX_SIZE;
 const AARCH64_BIOS_MAX_LEN: u64 = 1 << 20;
 
 // These constants indicate the placement of the GIC registers in the physical
@@ -77,8 +82,12 @@ macro_rules! arm64_core_reg {
     };
 }
 
-fn get_binary_addr() -> GuestAddress {
-    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BINARY_OFFSET)
+fn get_kernel_addr() -> GuestAddress {
+    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET)
+}
+
+fn get_bios_addr() -> GuestAddress {
+    GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET)
 }
 
 fn get_bios_addr() -> GuestAddress {
@@ -132,6 +141,7 @@ pub enum Error {
     CreateVcpu(base::Error),
     CreateVm(Box<dyn StdError>),
     DowncastVcpu,
+    GetPsciVersion(base::Error),
     GetSerialCmdline(GetSerialCmdlineError),
     InitrdLoadFailure(arch::LoadImageError),
     KernelLoadFailure(arch::LoadImageError),
@@ -165,6 +175,7 @@ impl Display for Error {
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create vm: {}", e),
             DowncastVcpu => write!(f, "vm created wrong kind of vcpu"),
+            GetPsciVersion(e) => write!(f, "failed to get PSCI version: {}", e),
             GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
             InitrdLoadFailure(e) => write!(f, "initrd could not be loaded: {}", e),
             KernelLoadFailure(e) => write!(f, "kernel could not be loaded: {}", e),
@@ -187,6 +198,20 @@ impl std::error::Error for Error {}
 /// These should be used to configure the GuestMemory structure for the platfrom.
 pub fn arch_memory_regions(size: u64) -> Vec<(GuestAddress, u64)> {
     vec![(GuestAddress(AARCH64_PHYS_MEM_START), size)]
+}
+
+fn fdt_offset(mem_size: u64, has_bios: bool) -> u64 {
+    // TODO(rammuthiah) make kernel and BIOS startup use FDT from the same location. ARCVM startup
+    // currently expects the kernel at 0x80080000 and the FDT at the end of RAM for unknown reasons.
+    // Root cause and figure out how to fold these code paths together.
+    if has_bios {
+        AARCH64_FDT_OFFSET_IN_BIOS_MODE
+    } else {
+        // Put fdt up near the top of memory
+        // TODO(sonnyrao): will have to handle this differently if there's
+        // > 4GB memory
+        mem_size - AARCH64_FDT_MAX_SIZE - 0x10000
+    }
 }
 
 pub struct AArch64;
@@ -341,12 +366,13 @@ impl arch::LinuxArch for AArch64 {
             }
         }
 
+        let psci_version = vcpus[0].get_psci_version().map_err(Error::GetPsciVersion)?;
         fdt::create_fdt(
             AARCH64_FDT_MAX_SIZE as usize,
             &mem,
             pci_irqs,
             vcpu_count as u32,
-            fdt_offset(components.memory_size),
+            fdt_offset(components.memory_size, has_bios),
             pci_device_base,
             pci_device_size,
             &CString::new(cmdline).unwrap(),
@@ -491,7 +517,8 @@ impl AArch64 {
             vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
 
             /* X0 -- fdt address */
-            data = (AARCH64_PHYS_MEM_START + AARCH64_FDT_OFFSET) as u64;
+            let mem_size = guest_mem.memory_size();
+            data = (AARCH64_PHYS_MEM_START + fdt_offset(mem_size, has_bios)) as u64;
             // hack -- can't get this to do offsetof(regs[0]) but luckily it's at offset 0
             reg_id = arm64_core_reg!(regs);
             vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
