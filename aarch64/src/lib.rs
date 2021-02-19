@@ -43,10 +43,14 @@ const AARCH64_GIC_CPUI_SIZE: u64 = 0x20000;
 const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
 const AARCH64_AXI_BASE: u64 = 0x40000000;
 
+<<<<<<< HEAD   (fb9038 Merge "Clean up rust_test_host TEST_MAPPING after default up)
 // FDT is placed at the front of RAM when booting in BIOS mode.
 const AARCH64_FDT_OFFSET_IN_BIOS_MODE: u64 = 0x0;
 // Therefore, the BIOS is placed after the FDT in memory.
 const AARCH64_BIOS_OFFSET: u64 = AARCH64_FDT_MAX_SIZE;
+=======
+const AARCH64_BIOS_OFFSET: u64 = 0x0;
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
 const AARCH64_BIOS_MAX_LEN: u64 = 1 << 20;
 
 // These constants indicate the placement of the GIC registers in the physical
@@ -244,8 +248,13 @@ impl arch::LinuxArch for AArch64 {
             VmImage::Bios(_) => true,
             _ => false,
         };
+<<<<<<< HEAD   (fb9038 Merge "Clean up rust_test_host TEST_MAPPING after default up)
         let mut resources =
             Self::get_resource_allocator(components.memory_size, components.wayland_dmabuf);
+=======
+
+        let mut resources = Self::get_resource_allocator(components.memory_size);
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
         let mem = Self::setup_memory(components.memory_size)?;
         let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
 
@@ -327,6 +336,7 @@ impl arch::LinuxArch for AArch64 {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;
         }
 
+<<<<<<< HEAD   (fb9038 Merge "Clean up rust_test_host TEST_MAPPING after default up)
         let (pci_device_base, pci_device_size) =
             Self::get_high_mmio_base_size(components.memory_size);
         let mut initrd = None;
@@ -361,13 +371,56 @@ impl arch::LinuxArch for AArch64 {
             }
         }
 
+=======
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
         let psci_version = vcpus[0].get_psci_version().map_err(Error::GetPsciVersion)?;
+<<<<<<< HEAD   (fb9038 Merge "Clean up rust_test_host TEST_MAPPING after default up)
+=======
+        let (pci_device_base, pci_device_size) =
+            Self::get_high_mmio_base_size(components.memory_size);
+        let mut initrd = None;
+
+        // separate out image loading from other setup to get a specific error for
+        // image loading
+        match components.vm_image {
+            VmImage::Bios(ref mut bios) => {
+                arch::load_image(&mem, bios, get_bios_addr(), AARCH64_BIOS_MAX_LEN)
+                    .map_err(Error::BiosLoadFailure)?;
+            }
+            VmImage::Kernel(ref mut kernel_image) => {
+                let kernel_size =
+                    arch::load_image(&mem, kernel_image, get_kernel_addr(), u64::max_value())
+                        .map_err(Error::KernelLoadFailure)?;
+                let kernel_end = get_kernel_addr().offset() + kernel_size as u64;
+                initrd = match components.initrd_image {
+                    Some(initrd_file) => {
+                        let mut initrd_file = initrd_file;
+                        let initrd_addr =
+                            (kernel_end + (AARCH64_INITRD_ALIGN - 1)) & !(AARCH64_INITRD_ALIGN - 1);
+                        let initrd_max_size =
+                            components.memory_size - (initrd_addr - AARCH64_PHYS_MEM_START);
+                        let initrd_addr = GuestAddress(initrd_addr);
+                        let initrd_size =
+                            arch::load_image(&mem, &mut initrd_file, initrd_addr, initrd_max_size)
+                                .map_err(Error::InitrdLoadFailure)?;
+                        Some((initrd_addr, initrd_size))
+                    }
+                    None => None,
+                };
+            }
+        }
+
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
         fdt::create_fdt(
             AARCH64_FDT_MAX_SIZE as usize,
             &mem,
             pci_irqs,
             vcpu_count as u32,
+<<<<<<< HEAD   (fb9038 Merge "Clean up rust_test_host TEST_MAPPING after default up)
             fdt_offset(components.memory_size, has_bios),
+=======
+            fdt_offset(components.memory_size),
+>>>>>>> BRANCH (37857e ac97: Update Dummy* for inclusive language)
             pci_device_base,
             pci_device_size,
             &CString::new(cmdline).unwrap(),
@@ -434,12 +487,12 @@ impl AArch64 {
     }
 
     /// Returns a system resource allocator.
-    fn get_resource_allocator(mem_size: u64, gpu_allocation: bool) -> SystemAllocator {
+    fn get_resource_allocator(mem_size: u64) -> SystemAllocator {
         let (high_mmio_base, high_mmio_size) = Self::get_high_mmio_base_size(mem_size);
         SystemAllocator::builder()
             .add_high_mmio_addresses(high_mmio_base, high_mmio_size)
             .add_low_mmio_addresses(AARCH64_MMIO_BASE, AARCH64_MMIO_SIZE)
-            .create_allocator(AARCH64_IRQ_BASE, gpu_allocation)
+            .create_allocator(AARCH64_IRQ_BASE)
             .unwrap()
     }
 
