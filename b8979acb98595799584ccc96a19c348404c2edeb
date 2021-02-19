@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "97a7fe5f_3160dfbe",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2021-02-19T23:19:59Z",
+      "side": 1,
+      "message": "Verified guest_swiftshader and gfxstream locally.",
+      "revId": "b8979acb98595799584ccc96a19c348404c2edeb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
