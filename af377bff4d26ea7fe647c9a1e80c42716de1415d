@@ -1,0 +1,9 @@
+Presubmit-Verified+2: Treehugger Robot <treehugger-gerrit@google.com>
+Lint+1: Lint 🤖 <ayeaye-gerrit@google.com>
+Autosubmit+1: Jorge Moreira Broche <jemoreira@google.com>
+Code-Review+2: Jason Macnak <natsu@google.com>
+Submitted-by: Treehugger Robot <treehugger-gerrit@google.com>
+Submitted-at: Fri, 19 Feb 2021 23:19:24 +0000
+Reviewed-on: https://android-review.googlesource.com/c/platform/external/crosvm/+/1593214
+Project: platform/external/crosvm
+Branch: refs/heads/master
