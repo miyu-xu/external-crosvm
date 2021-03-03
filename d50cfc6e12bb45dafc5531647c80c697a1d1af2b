@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "39cae102_f80d35c7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-03-03T00:36:22Z",
+      "side": 1,
+      "message": "The original build break was due to a change not having landed yet in that branch, that issue has been resolved since ab/7168122.",
+      "revId": "d50cfc6e12bb45dafc5531647c80c697a1d1af2b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
