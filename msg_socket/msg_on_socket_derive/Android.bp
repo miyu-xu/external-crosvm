@@ -32,7 +32,6 @@ rust_test_host {
     auto_gen_config: true,
     edition: "2018",
     rustlibs: [
-        "libbase_rust",
         "libproc_macro2",
         "libquote",
         "libsyn",
