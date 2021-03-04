@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "398750a0_004a2acb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-03-04T19:16:44Z",
+      "side": 1,
+      "message": "aosp/1619859 has been uploaded and verified to fix the mac build, please don\u0027t submit this.",
+      "revId": "c3c0e7e4d694e77e4511d4245c400601587f9e0f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
