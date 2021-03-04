@@ -689,8 +689,9 @@ impl RutabagaBuilder {
             let rutabaga_2d = Rutabaga2D::init()?;
             rutabaga_components.insert(RutabagaComponentType::Rutabaga2D, rutabaga_2d);
         } else {
+
             #[cfg(feature = "virgl_renderer")]
-            {
+            if self.default_component == RutabagaComponentType::VirglRenderer {
                 let virglrenderer_flags = self
                     .virglrenderer_flags
                     .ok_or(RutabagaError::InvalidRutabagaBuild)?;
@@ -700,7 +701,7 @@ impl RutabagaBuilder {
             }
 
             #[cfg(feature = "gfxstream")]
-            {
+            if self.default_component == RutabagaComponentType::Gfxstream {
                 let display_width = self
                     .display_width
                     .ok_or(RutabagaError::InvalidRutabagaBuild)?;
