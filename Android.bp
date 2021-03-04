@@ -64,6 +64,9 @@ rust_defaults {
         darwin: {
             enabled: false,
         },
+        darwin_x86_64: {
+            enabled: false,
+        },
     },
     apex_available: [
         "//apex_available:platform",
