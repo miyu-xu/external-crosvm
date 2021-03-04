@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a4e59ad_ed7cb00a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1128849
+      },
+      "writtenOn": "2021-03-04T18:52:50Z",
+      "side": 1,
+      "message": "building ok on Mac now",
+      "revId": "6e3c2f6345f9f8c8fdeabfc9fb8b3f6cd7385cce",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
