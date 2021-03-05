@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fe77e454_d22e3a3e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-05T18:46:00Z",
+      "side": 1,
+      "message": "No, it was auto-merged only. I did not make any .rs changes.",
+      "parentUuid": "8a0610ce_291397ac",
+      "revId": "9a39ec845793300060289924c24ab64771d510c3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1739b76a_a21be18f",
