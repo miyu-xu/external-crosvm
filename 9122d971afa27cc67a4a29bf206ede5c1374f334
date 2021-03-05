@@ -16,6 +16,23 @@
       "message": "PTAL.  This is a cherry-pick from upstream.",
       "revId": "9122d971afa27cc67a4a29bf206ede5c1374f334",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "71517bab_d0e871e6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-05T17:57:32Z",
+      "side": 1,
+      "message": "We have an update pending in https://android-review.googlesource.com/c/platform/external/crosvm/+/1621573/2, will land this if that can\u0027t get in today for some reason.",
+      "revId": "9122d971afa27cc67a4a29bf206ede5c1374f334",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
