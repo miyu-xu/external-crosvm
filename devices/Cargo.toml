@@ -29,7 +29,13 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (900e4f Merge "Don't depened on disabled module for mac from a rust )
 libcras = { path = "../../adhd/cras/client/libcras" } # ignored by ebuild
+=======
+libchromeos = "*"
+libcras = "*"
+libvda = { version = "*", optional = true }
+>>>>>>> BRANCH (3c6367 seccomp: gpu: allow sched_yield)
 linux_input_sys = { path = "../linux_input_sys" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
 msg_on_socket_derive = { path = "../msg_socket/msg_on_socket_derive" }
@@ -54,6 +60,10 @@ vhost = { path = "../vhost" }
 virtio_sys = { path = "../virtio_sys" }
 vm_control = { path = "../vm_control" }
 vm_memory = { path = "../vm_memory" }
+
+[dependencies.futures]
+version = "*"
+default-features = false
 
 [dev-dependencies]
 tempfile = { path = "../tempfile" }
