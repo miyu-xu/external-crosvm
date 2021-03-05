@@ -103,9 +103,17 @@ assertions = { path = "assertions" }
 audio_streams = { path = "../adhd/audio_streams" } # ignored by ebuild
 base = { path = "base" }
 data_model = { path = "data_model" }
+<<<<<<< HEAD   (900e4f Merge "Don't depened on disabled module for mac from a rust )
 libcras = { path = "../adhd/cras/client/libcras" } # ignored by ebuild
 minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
 p9 = { path = "../vm_tools/p9" } # ignored by ebuild
+=======
+libcras = { path = "../../third_party/adhd/cras/client/libcras" } # ignored by ebuild
+libchromeos = { path = "../../platform2/libchromeos-rs" } # ignored by ebuild
+libvda = { path = "../../platform2/arc/vm/libvda/rust" } # ignored by ebuild
+minijail = { path = "../../aosp/external/minijail/rust/minijail" } # ignored by ebuild
+p9 = { path = "../../platform2/vm_tools/p9" } # ignored by ebuild
+>>>>>>> BRANCH (3c6367 seccomp: gpu: allow sched_yield)
 sync = { path = "sync" }
 syscall_defines = { path = "syscall_defines" }
 sys_util = { path = "sys_util" }
