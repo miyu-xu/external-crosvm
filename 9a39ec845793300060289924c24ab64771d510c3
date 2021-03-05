@@ -16,6 +16,23 @@
       "message": "Did you make any major changes?",
       "revId": "9a39ec845793300060289924c24ab64771d510c3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1739b76a_a21be18f",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 380,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-03-05T17:59:39Z",
+      "side": 1,
+      "message": "This looks like a bad merge, it\u0027s the same as line 345 above.",
+      "revId": "9a39ec845793300060289924c24ab64771d510c3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
