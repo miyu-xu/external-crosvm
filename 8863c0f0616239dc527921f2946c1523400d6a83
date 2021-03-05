@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "796b1795_8009514a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-05T18:45:33Z",
+      "side": 1,
+      "message": "Jiyong converted us away from Android.mk for the host seccomp file list, so I removed host_package.mk from gen_android.sh (the other target .mk is still being used).",
+      "revId": "8863c0f0616239dc527921f2946c1523400d6a83",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

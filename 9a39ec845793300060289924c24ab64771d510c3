@@ -33,6 +33,24 @@
       "message": "This looks like a bad merge, it\u0027s the same as line 345 above.",
       "revId": "9a39ec845793300060289924c24ab64771d510c3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8f3e3a87_95903940",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 380,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-05T18:45:33Z",
+      "side": 1,
+      "message": "Well spotted. Fixed.",
+      "parentUuid": "1739b76a_a21be18f",
+      "revId": "9a39ec845793300060289924c24ab64771d510c3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
