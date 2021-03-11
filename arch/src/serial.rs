@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Display};
 use std::fs::{File, OpenOptions};
 use std::io::{self, stdin, stdout, ErrorKind};
-use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -16,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use base::{error, info, read_raw_stdin, syslog, AsRawDescriptor, Event, RawDescriptor};
-use devices::{Bus, ProxyDevice, Serial, SerialDevice};
+use devices::{Bus, ProtectionType, ProxyDevice, Serial, SerialDevice};
 use minijail::Minijail;
 use sync::Mutex;
 
@@ -212,7 +211,7 @@ impl SerialParameters {
     ///                this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
-        protected_vm: bool,
+        protected_vm: ProtectionType,
         evt: &Event,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> std::result::Result<T, Error> {
@@ -286,7 +285,7 @@ impl SerialParameters {
                                 .open(path.parent().ok_or(Error::InvalidPath)?)
                                 .map_err(Error::FileError)?;
 
-                            short_path.push(dir.as_raw_fd().to_string());
+                            short_path.push(dir.as_raw_descriptor().to_string());
                             short_path.push(path.file_name().ok_or(Error::InvalidPath)?);
                             path_cow = Cow::Owned(short_path);
                             _dir_fd = Some(dir);
@@ -334,16 +333,13 @@ impl SerialParameters {
 
     pub fn add_bind_mounts(&self, jail: &mut Minijail) -> Result<(), minijail::Error> {
         if let Some(path) = &self.path {
-            match self.type_ {
-                SerialType::UnixSocket => {
-                    if let Some(parent) = path.as_path().parent() {
-                        if parent.exists() {
-                            info!("Bind mounting dir {}", parent.display());
-                            jail.mount_bind(parent, parent, true)?;
-                        }
+            if let SerialType::UnixSocket = self.type_ {
+                if let Some(parent) = path.as_path().parent() {
+                    if parent.exists() {
+                        info!("Bind mounting dir {}", parent.display());
+                        jail.mount_bind(parent, parent, true)?;
                     }
                 }
-                _ => {}
             }
         }
         Ok(())
@@ -413,7 +409,7 @@ pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 /// * `serial_parameters` - definitions of serial parameter configurations.
 ///   All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
-    protected_vm: bool,
+    protected_vm: ProtectionType,
     io_bus: &mut Bus,
     com_evt_1_3: &Event,
     com_evt_2_4: &Event,
