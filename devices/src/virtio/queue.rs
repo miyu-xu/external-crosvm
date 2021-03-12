@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::RefCell;
 use std::cmp::min;
 use std::num::Wrapping;
-use std::rc::Rc;
 use std::sync::atomic::{fence, Ordering};
 
 use base::error;
@@ -21,6 +19,7 @@ const VIRTQ_DESC_F_WRITE: u16 = 0x2;
 const VIRTQ_DESC_F_INDIRECT: u16 = 0x4;
 
 const VIRTQ_USED_F_NO_NOTIFY: u16 = 0x1;
+#[allow(dead_code)]
 const VIRTQ_AVAIL_F_NO_INTERRUPT: u16 = 0x1;
 
 /// An iterator over a single descriptor chain.  Not to be confused with AvailIter,
@@ -91,15 +90,10 @@ impl DescriptorChain {
             return None;
         }
 
-        let desc_head = match mem.checked_offset(desc_table, (index as u64) * 16) {
-            Some(a) => a,
-            None => return None,
-        };
+        let desc_head = mem.checked_offset(desc_table, (index as u64) * 16)?;
         // These reads can't fail unless Guest memory is hopelessly broken.
         let addr = GuestAddress(mem.read_obj_from_addr::<u64>(desc_head).unwrap() as u64);
-        if mem.checked_offset(desc_head, 16).is_none() {
-            return None;
-        }
+        mem.checked_offset(desc_head, 16)?;
         let len: u32 = mem.read_obj_from_addr(desc_head.unchecked_add(8)).unwrap();
         let flags: u16 = mem.read_obj_from_addr(desc_head.unchecked_add(12)).unwrap();
         let next: u16 = mem.read_obj_from_addr(desc_head.unchecked_add(14)).unwrap();
@@ -122,7 +116,7 @@ impl DescriptorChain {
         }
     }
 
-    #[allow(clippy::if_same_then_else)]
+    #[allow(clippy::if_same_then_else, clippy::needless_bool)]
     fn is_valid(&self) -> bool {
         if self.len > 0
             && self
@@ -361,6 +355,7 @@ impl Queue {
     // Query the value of a single-bit flag in the available ring.
     //
     // Returns `true` if `flag` is currently set (by the driver) in the available ring flags.
+    #[allow(dead_code)]
     fn get_avail_flag(&self, mem: &GuestMemory, flag: u16) -> bool {
         let avail_flags: u16 = mem.read_obj_from_addr(self.avail_ring).unwrap();
         avail_flags & flag == flag
@@ -493,6 +488,11 @@ impl Queue {
         self.set_used_index(mem, self.next_used);
     }
 
+    /// Updates the index at which the driver should signal the device next.
+    pub fn update_int_required(&mut self, mem: &GuestMemory) {
+        self.set_avail_event(mem, self.get_avail_index(mem));
+    }
+
     /// Enable / Disable guest notify device that requests are available on
     /// the descriptor chain.
     pub fn set_notify(&mut self, mem: &GuestMemory, enable: bool) {
@@ -503,7 +503,7 @@ impl Queue {
         }
 
         if self.features & ((1u64) << VIRTIO_RING_F_EVENT_IDX) != 0 {
-            self.set_avail_event(mem, self.get_avail_index(mem));
+            self.update_int_required(mem);
         } else {
             self.set_used_flag(
                 mem,
@@ -523,7 +523,13 @@ impl Queue {
             // so no need to inject new interrupt.
             self.next_used - used_event - Wrapping(1) < self.next_used - self.last_used
         } else {
-            !self.get_avail_flag(mem, VIRTQ_AVAIL_F_NO_INTERRUPT)
+            // TODO(b/172975852): This branch should check the flag that requests interrupt
+            // supression:
+            // ```
+            // !self.get_avail_flag(mem, VIRTQ_AVAIL_F_NO_INTERRUPT)
+            // ```
+            // Re-enable the flag check once the missing interrupt issue is debugged.
+            true
         }
     }
 
@@ -543,29 +549,6 @@ impl Queue {
     /// Acknowledges that this set of features should be enabled on this queue.
     pub fn ack_features(&mut self, features: u64) {
         self.features |= features;
-    }
-}
-
-/// Used to temporarily disable notifications while processing a request. Notification will be
-/// re-enabled on drop.
-pub struct NotifyGuard {
-    queue: Rc<RefCell<Queue>>,
-    mem: GuestMemory,
-}
-
-impl NotifyGuard {
-    /// Disable notifications for the lifetime of the returned guard. Useful when the caller is
-    /// processing a descriptor and doesn't need notifications of further messages from the guest.
-    pub fn new(queue: Rc<RefCell<Queue>>, mem: GuestMemory) -> Self {
-        // Disable notification until we're done processing the next request.
-        queue.borrow_mut().set_notify(&mem, false);
-        NotifyGuard { queue, mem }
-    }
-}
-
-impl Drop for NotifyGuard {
-    fn drop(&mut self) {
-        self.queue.borrow_mut().set_notify(&self.mem, true);
     }
 }
 
