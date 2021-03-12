@@ -15,7 +15,7 @@ pub const KERNEL_VERSION: u32 = 7;
 pub const OLDEST_SUPPORTED_KERNEL_MINOR_VERSION: u32 = 27;
 
 /// Minor version number of this interface.
-pub const KERNEL_MINOR_VERSION: u32 = 32;
+pub const KERNEL_MINOR_VERSION: u32 = 31;
 
 /// The ID of the inode corresponding to the root directory of the file system.
 pub const ROOT_ID: u64 = 1;
@@ -158,10 +158,6 @@ const EXPLICIT_INVAL_DATA: u32 = 33554432;
 
 /// The `map_alignment` field of the `InitOut` struct is valid.
 const MAP_ALIGNMENT: u32 = 67108864;
-
-/// The client should send the security context along with open, mkdir, create, and symlink
-/// requests.
-const SECURITY_CONTEXT: u32 = 1 << 27;
 
 bitflags! {
     /// A bitfield passed in as a parameter to and returned from the `init` method of the
@@ -361,7 +357,12 @@ bitflags! {
         /// This feature is disabled by default.
         const EXPLICIT_INVAL_DATA = EXPLICIT_INVAL_DATA;
 
-        const SECURITY_CONTEXT = SECURITY_CONTEXT;
+        /// Indicates that the `map_alignment` field of the `InitOut` struct is valid.
+        ///
+        /// The `MAP_ALIGNMENT` field is used by the FUSE kernel driver to ensure that its DAX
+        /// mapping requests are pagesize-aligned. This field automatically set by the server and
+        /// this feature is enabled by default.
+        const MAP_ALIGNMENT = MAP_ALIGNMENT;
     }
 }
 
@@ -447,6 +448,18 @@ pub const FUSE_COMPAT_WRITE_IN_SIZE: u32 = 24;
 pub const FUSE_COMPAT_STATFS_SIZE: u32 = 48;
 pub const FUSE_COMPAT_INIT_OUT_SIZE: u32 = 8;
 pub const FUSE_COMPAT_22_INIT_OUT_SIZE: u32 = 24;
+
+const SETUPMAPPING_FLAG_WRITE: u64 = 1;
+const SETUPMAPPING_FLAG_READ: u64 = 2;
+
+bitflags! {
+    pub struct SetUpMappingFlags: u64 {
+        /// Create writable mapping.
+        const WRITE = SETUPMAPPING_FLAG_WRITE;
+        /// Create readable mapping.
+        const READ = SETUPMAPPING_FLAG_READ;
+    }
+}
 
 // Message definitions follow.  It is safe to implement DataInit for all of these
 // because they are POD types.
@@ -588,6 +601,8 @@ pub enum Opcode {
     CopyFileRange = 47,
     SetUpMapping = 48,
     RemoveMapping = 49,
+
+    ChromeOsTmpfile = u32::MAX,
 }
 
 #[repr(u32)]
@@ -674,6 +689,14 @@ pub struct MkdirIn {
     pub umask: u32,
 }
 unsafe impl DataInit for MkdirIn {}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct ChromeOsTmpfileIn {
+    pub mode: u32,
+    pub umask: u32,
+}
+unsafe impl DataInit for ChromeOsTmpfileIn {}
 
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -1141,3 +1164,37 @@ pub struct CopyFileRangeIn {
     pub flags: u64,
 }
 unsafe impl DataInit for CopyFileRangeIn {}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct SetUpMappingIn {
+    /* An already open handle */
+    pub fh: u64,
+    /* Offset into the file to start the mapping */
+    pub foffset: u64,
+    /* Length of mapping required */
+    pub len: u64,
+    /* Flags, FUSE_SETUPMAPPING_FLAG_* */
+    pub flags: u64,
+    /* Offset in Memory Window */
+    pub moffset: u64,
+}
+unsafe impl DataInit for SetUpMappingIn {}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct RemoveMappingIn {
+    /* number of fuse_removemapping_one follows */
+    pub count: u32,
+}
+unsafe impl DataInit for RemoveMappingIn {}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct RemoveMappingOne {
+    /* Offset into the dax window start the unmapping */
+    pub moffset: u64,
+    /* Length of mapping required */
+    pub len: u64,
+}
+unsafe impl DataInit for RemoveMappingOne {}

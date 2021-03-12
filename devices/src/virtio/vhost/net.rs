@@ -348,6 +348,7 @@ pub mod tests {
     use super::*;
     use crate::virtio::base_features;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
+    use crate::ProtectionType;
     use net_util::fakes::FakeTap;
     use std::result;
     use std::sync::atomic::AtomicUsize;
@@ -358,12 +359,12 @@ pub mod tests {
     fn create_guest_memory() -> result::Result<GuestMemory, GuestMemoryError> {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x1000);
-        GuestMemory::new(&vec![(start_addr1, 0x1000), (start_addr2, 0x4000)])
+        GuestMemory::new(&[(start_addr1, 0x1000), (start_addr2, 0x4000)])
     }
 
     fn create_net_common() -> Net<FakeTap, FakeNet<FakeTap>> {
         let guest_memory = create_guest_memory().unwrap();
-        let features = base_features(false);
+        let features = base_features(ProtectionType::Unprotected);
         Net::<FakeTap, FakeNet<FakeTap>>::new(
             features,
             Ipv4Addr::new(127, 0, 0, 1),
@@ -383,7 +384,7 @@ pub mod tests {
     fn keep_rds() {
         let net = create_net_common();
         let fds = net.keep_rds();
-        assert!(fds.len() >= 1, "We should have gotten at least one fd");
+        assert!(!fds.is_empty(), "We should have gotten at least one fd");
     }
 
     #[test]

@@ -13,7 +13,7 @@ use vm_memory::GuestMemory;
 use super::{
     base_features, copy_config, Interrupt, Queue, Reader, VirtioDevice, Writer, TYPE_CONSOLE,
 };
-use crate::SerialDevice;
+use crate::{ProtectionType, SerialDevice};
 
 const QUEUE_SIZE: u16 = 256;
 
@@ -115,7 +115,7 @@ impl Worker {
         // The input thread runs in detached mode and will exit when channel is disconnected because
         // the console device has been dropped.
         let res = thread::Builder::new()
-            .name(format!("console_input"))
+            .name("console_input".to_string())
             .spawn(move || {
                 loop {
                     let mut rx_buf = vec![0u8; 1 << 12];
@@ -308,7 +308,7 @@ pub struct Console {
 
 impl SerialDevice for Console {
     fn new(
-        protected_vm: bool,
+        protected_vm: ProtectionType,
         _evt: Event,
         input: Option<Box<dyn io::Read + Send>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -402,7 +402,6 @@ impl VirtioDevice for Console {
         match worker_result {
             Err(e) => {
                 error!("failed to spawn virtio_console worker: {}", e);
-                return;
             }
             Ok(join_handle) => {
                 self.worker_thread = Some(join_handle);
