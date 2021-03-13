@@ -33,6 +33,24 @@
       "message": "Doesn\u0027t that add the feature for all targets, rather than just this specific one? I guess you should add a comment about the extra changes.",
       "revId": "11a7b2512f421417dd7b3971c69b248f70d6207b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b4f801a2_79a40840",
+        "filename": "arch/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-13T00:16:20Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "79afb6dd_c3015c5f",
+      "revId": "11a7b2512f421417dd7b3971c69b248f70d6207b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
