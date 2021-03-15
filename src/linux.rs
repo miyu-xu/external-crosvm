@@ -14,8 +14,6 @@ use std::io::{self, stdin, Read};
 use std::iter;
 use std::mem;
 use std::net::Ipv4Addr;
-#[cfg(feature = "gpu")]
-use std::num::NonZeroU8;
 use std::num::ParseIntError;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
@@ -40,6 +38,7 @@ use devices::virtio::vhost::user::{
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
 use devices::virtio::{self, Console, VirtioDevice};
+use devices::virtio::gpu::{DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT};
 #[cfg(feature = "audio")]
 use devices::Ac97Dev;
 use devices::{
@@ -904,7 +903,6 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEvent)?,
         Some(gpu_device_tube),
-        NonZeroU8::new(1).unwrap(), // number of scanouts
         resource_bridges,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
@@ -1535,6 +1533,13 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
+            let mut gpu_display_w = DEFAULT_DISPLAY_WIDTH;
+            let mut gpu_display_h = DEFAULT_DISPLAY_HEIGHT;
+            if !gpu_parameters.displays.is_empty() {
+                gpu_display_w = gpu_parameters.displays[0].width;
+                gpu_display_h = gpu_parameters.displays[0].height;
+            }
+
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
@@ -1544,7 +1549,7 @@ fn create_virtio_devices(
                     .first()
                     .as_ref()
                     .map(|multi_touch_spec| multi_touch_spec.get_size())
-                    .unwrap_or((gpu_parameters.display_width, gpu_parameters.display_height));
+                    .unwrap_or((gpu_display_w, gpu_display_h));
                 let dev = virtio::new_multi_touch(
                     u32::MAX,
                     virtio_dev_socket,

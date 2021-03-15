@@ -29,7 +29,7 @@ use crosvm::{
     VhostUserFsOption, VhostUserOption, DISK_ID_LEN,
 };
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{GpuMode, GpuParameters};
+use devices::virtio::gpu::{DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT, GpuMode, GpuDisplayParameters, GpuParameters};
 use devices::ProtectionType;
 #[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
@@ -154,14 +154,16 @@ fn parse_cpu_affinity(s: &str) -> argument::Result<VcpuAffinity> {
 }
 
 #[cfg(feature = "gpu")]
-fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
-    let mut gpu_params: GpuParameters = Default::default();
+fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argument::Result<()> {
     #[cfg(feature = "gfxstream")]
     let mut vulkan_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
     #[cfg(feature = "gfxstream")]
     let mut angle_specified = false;
+
+    let mut display_w : Option<u32> = None;
+    let mut display_h : Option<u32> = None;
 
     if let Some(s) = s {
         let opts = s
@@ -323,7 +325,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                     }
                 }
                 "width" => {
-                    gpu_params.display_width =
+                    let width =
                         v.parse::<u32>()
                             .map_err(|_| argument::Error::InvalidValue {
                                 value: v.to_string(),
@@ -331,9 +333,10 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                     "gpu parameter 'width' must be a valid integer",
                                 ),
                             })?;
+                    display_w = Some(width);
                 }
                 "height" => {
-                    gpu_params.display_height =
+                    let height =
                         v.parse::<u32>()
                             .map_err(|_| argument::Error::InvalidValue {
                                 value: v.to_string(),
@@ -341,6 +344,7 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
                                     "gpu parameter 'height' must be a valid integer",
                                 ),
                             })?;
+                    display_h = Some(height);
                 }
                 "cache-path" => gpu_params.cache_path = Some(v.to_string()),
                 "cache-size" => gpu_params.cache_size = Some(v.to_string()),
@@ -369,6 +373,20 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
         }
     }
 
+    if display_w.is_some() || display_h.is_some() {
+        if display_w.is_none() || display_h.is_none() {
+            return Err(argument::Error::InvalidValue {
+                value: s.unwrap_or("").to_string(),
+                expected: String::from("gpu must include both 'width' and 'height' if either is supplied"),
+            });
+        }
+
+        gpu_params.displays.push(GpuDisplayParameters{
+            width: display_w.unwrap(),
+            height: display_h.unwrap(),
+        });
+    }
+
     #[cfg(feature = "gfxstream")]
     {
         if !vulkan_specified && gpu_params.mode == GpuMode::ModeGfxstream {
@@ -388,7 +406,68 @@ fn parse_gpu_options(s: Option<&str>) -> argument::Result<GpuParameters> {
         }
     }
 
-    Ok(gpu_params)
+    Ok(())
+}
+
+#[cfg(feature = "gpu")]
+fn parse_gpu_display_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argument::Result<()> {
+    let mut display_w : Option<u32> = None;
+    let mut display_h : Option<u32> = None;
+
+    if let Some(s) = s {
+        let opts = s
+            .split(',')
+            .map(|frag| frag.split('='))
+            .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
+
+        for (k, v) in opts {
+            match k {
+                "width" => {
+                    let width =
+                        v.parse::<u32>()
+                            .map_err(|_| argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'width' must be a valid integer",
+                                ),
+                            })?;
+                    display_w = Some(width);
+                }
+                "height" => {
+                    let height =
+                        v.parse::<u32>()
+                            .map_err(|_| argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'height' must be a valid integer",
+                                ),
+                            })?;
+                    display_h = Some(height);
+                }
+                "" => {}
+                _ => {
+                    return Err(argument::Error::UnknownArgument(format!(
+                        "gpu-display parameter {}",
+                        k
+                    )));
+                }
+            }
+        }
+    }
+
+    if display_w.is_none() || display_h.is_none() {
+        return Err(argument::Error::InvalidValue {
+            value: s.unwrap_or("").to_string(),
+            expected: String::from("gpu-display must include both 'width' and 'height'"),
+        });
+    }
+
+    gpu_params.displays.push(GpuDisplayParameters{
+        width: display_w.unwrap(),
+        height: display_h.unwrap(),
+    });
+
+    Ok(())
 }
 
 #[cfg(feature = "audio")]
@@ -1483,8 +1562,17 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
         }
         #[cfg(feature = "gpu")]
         "gpu" => {
-            let params = parse_gpu_options(value)?;
-            cfg.gpu_parameters = Some(params);
+            if cfg.gpu_parameters.is_none() {
+                cfg.gpu_parameters = Some(Default::default());
+            }
+            parse_gpu_options(value, cfg.gpu_parameters.as_mut().unwrap())?;
+        }
+        #[cfg(feature = "gpu")]
+        "gpu-display" => {
+            if cfg.gpu_parameters.is_none() {
+                cfg.gpu_parameters = Some(Default::default());
+            }
+            parse_gpu_display_options(value, cfg.gpu_parameters.as_mut().unwrap())?;
         }
         "software-tpm" => {
             cfg.software_tpm = true;
@@ -1759,12 +1847,16 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = cfg.gpu_parameters.as_ref() {
-            let (width, height) = (gpu_parameters.display_width, gpu_parameters.display_height);
-            if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
-                virtio_multi_touch.set_default_size(width, height);
+            let mut display_w = DEFAULT_DISPLAY_WIDTH;
+            let mut display_h = DEFAULT_DISPLAY_HEIGHT;
+
+            if !gpu_parameters.displays.is_empty() {
+                display_w = gpu_parameters.displays[0].width;
+                display_h = gpu_parameters.displays[0].height;
             }
+
             if let Some(virtio_single_touch) = cfg.virtio_single_touch.first_mut() {
-                virtio_single_touch.set_default_size(width, height);
+                virtio_single_touch.set_default_size(display_w, display_h);
             }
         }
     }
@@ -1906,6 +1998,14 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   angle[=true|=false] - If the gfxstream backend should use ANGLE (OpenGL on Vulkan) as its native OpenGL driver.
                                   syncfd[=true|=false] - If the gfxstream backend should support EGL_ANDROID_native_fence_sync
                                   vulkan[=true|=false] - If the backend should support vulkan
+                                  "),
+          #[cfg(feature = "gpu")]
+          Argument::flag_or_value("gpu-display",
+                                  "[width=INT,height=INT]",
+                                  "(EXPERIMENTAL) Comma separated key=value pairs for setting up a display on the virtio-gpu device
+                                  Possible key values:
+                                  width=INT - The width of the virtual display connected to the virtio-gpu.
+                                  height=INT - The height of the virtual display connected to the virtio-gpu.
                                   "),
           #[cfg(feature = "tpm")]
           Argument::flag("software-tpm", "enable a software emulated trusted platform module device"),
@@ -2782,81 +2882,201 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_default_vulkan_support() {
-        assert!(
-            !parse_gpu_options(Some("backend=virglrenderer"))
-                .unwrap()
-                .use_vulkan
-        );
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("backend=virglrenderer"), &mut gpu_params).is_ok());
+            assert!(gpu_params.use_vulkan);
+        }
 
         #[cfg(feature = "gfxstream")]
-        assert!(
-            parse_gpu_options(Some("backend=gfxstream"))
-                .unwrap()
-                .use_vulkan
-        );
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("backend=gfxstream"), &mut gpu_params).is_ok());
+            assert!(gpu_params.use_vulkan);
+        }
     }
 
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_with_vulkan_specified() {
-        assert!(parse_gpu_options(Some("vulkan=true")).unwrap().use_vulkan);
-        assert!(
-            parse_gpu_options(Some("backend=virglrenderer,vulkan=true"))
-                .unwrap()
-                .use_vulkan
-        );
-        assert!(
-            parse_gpu_options(Some("vulkan=true,backend=virglrenderer"))
-                .unwrap()
-                .use_vulkan
-        );
-        assert!(!parse_gpu_options(Some("vulkan=false")).unwrap().use_vulkan);
-        assert!(
-            !parse_gpu_options(Some("backend=virglrenderer,vulkan=false"))
-                .unwrap()
-                .use_vulkan
-        );
-        assert!(
-            !parse_gpu_options(Some("vulkan=false,backend=virglrenderer"))
-                .unwrap()
-                .use_vulkan
-        );
-        assert!(parse_gpu_options(Some("backend=virglrenderer,vulkan=invalid_value")).is_err());
-        assert!(parse_gpu_options(Some("vulkan=invalid_value,backend=virglrenderer")).is_err());
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("vulkan=true"), &mut gpu_params).is_ok());
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("backend=virglrenderer,vulkan=true"), &mut gpu_params)
+                    .is_ok()
+            );
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("vulkan=true,backend=virglrenderer"), &mut gpu_params)
+                    .is_ok()
+            );
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("vulkan=false"), &mut gpu_params).is_ok());
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("backend=virglrenderer,vulkan=false"), &mut gpu_params)
+                    .is_ok()
+            );
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("vulkan=false,backend=virglrenderer"), &mut gpu_params)
+                    .is_ok()
+            );
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(
+                Some("backend=virglrenderer,vulkan=invalid_value"),
+                &mut gpu_params
+            )
+            .is_err());
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(
+                Some("vulkan=invalid_value,backend=virglrenderer"),
+                &mut gpu_params
+            )
+            .is_err());
+        }
     }
 
     #[cfg(all(feature = "gpu", feature = "gfxstream"))]
     #[test]
     fn parse_gpu_options_gfxstream_with_syncfd_specified() {
-        assert!(
-            parse_gpu_options(Some("backend=gfxstream,syncfd=true"))
-                .unwrap()
-                .gfxstream_use_syncfd
-        );
-        assert!(
-            parse_gpu_options(Some("syncfd=true,backend=gfxstream"))
-                .unwrap()
-                .gfxstream_use_syncfd
-        );
-        assert!(
-            !parse_gpu_options(Some("backend=gfxstream,syncfd=false"))
-                .unwrap()
-                .gfxstream_use_syncfd
-        );
-        assert!(
-            !parse_gpu_options(Some("syncfd=false,backend=gfxstream"))
-                .unwrap()
-                .gfxstream_use_syncfd
-        );
-        assert!(parse_gpu_options(Some("backend=gfxstream,syncfd=invalid_value")).is_err());
-        assert!(parse_gpu_options(Some("syncfd=invalid_value,backend=gfxstream")).is_err());
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("backend=gfxstream,syncfd=true"), &mut gpu_params).is_ok()
+            );
+            assert!(gpu_params.gfxstream_use_syncfd);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("syncfd=true,backend=gfxstream"), &mut gpu_params).is_ok()
+            );
+            assert!(gpu_params.gfxstream_use_syncfd);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("backend=gfxstream,syncfd=false"), &mut gpu_params).is_ok()
+            );
+            assert!(!gpu_params.gfxstream_use_syncfd);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("syncfd=false,backend=gfxstream"), &mut gpu_params).is_ok()
+            );
+            assert!(!gpu_params.gfxstream_use_syncfd);
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(
+                Some("backend=gfxstream,syncfd=invalid_value"),
+                &mut gpu_params
+            )
+            .is_err());
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(
+                Some("syncfd=invalid_value,backend=gfxstream"),
+                &mut gpu_params
+            )
+            .is_err());
+        }
     }
 
     #[cfg(all(feature = "gpu", feature = "gfxstream"))]
     #[test]
     fn parse_gpu_options_not_gfxstream_with_syncfd_specified() {
-        assert!(parse_gpu_options(Some("backend=virglrenderer,syncfd=true")).is_err());
-        assert!(parse_gpu_options(Some("syncfd=true,backend=virglrenderer")).is_err());
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("backend=virglrenderer,syncfd=true"), &mut gpu_params)
+                    .is_err()
+            );
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(
+                parse_gpu_options(Some("syncfd=true,backend=virglrenderer"), &mut gpu_params)
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn parse_gpu_display_options_valid() {
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("width=500,height=600"), &mut gpu_params).is_ok());
+            assert_eq!(gpu_params.displays.len(), 1);
+            assert_eq!(gpu_params.displays[0].width, 500);
+            assert_eq!(gpu_params.displays[0].height, 600);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn parse_gpu_display_options_invalid() {
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("width=500"), &mut gpu_params).is_err());
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("height=500"), &mut gpu_params).is_err());
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("width"), &mut gpu_params).is_err());
+        }
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(Some("blah"), &mut gpu_params).is_err());
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn parse_gpu_options_and_gpu_display_options_valid() {
+        {
+            let mut gpu_params: GpuParameters = Default::default();
+            assert!(parse_gpu_options(
+                Some("backend=gfxstream,width=500,height=600"),
+                &mut gpu_params
+            )
+            .is_ok());
+            assert!(parse_gpu_options(Some("width=700,height=800"), &mut gpu_params).is_ok());
+            assert_eq!(gpu_params.displays.len(), 2);
+            assert_eq!(gpu_params.displays[0].width, 500);
+            assert_eq!(gpu_params.displays[0].height, 600);
+            assert_eq!(gpu_params.displays[1].width, 500);
+            assert_eq!(gpu_params.displays[1].height, 600);
+        }
     }
 
     #[test]
