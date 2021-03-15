@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use crate::sys;
 
-pub use crate::sys::{FsOptions, IoctlFlags, IoctlIovec, OpenOptions, SetattrValid, ROOT_ID};
+use crate::server::Mapper;
+pub use crate::sys::{
+    FsOptions, IoctlFlags, IoctlIovec, OpenOptions, RemoveMappingOne, SetattrValid, ROOT_ID,
+};
 
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
 
@@ -495,7 +498,6 @@ pub trait FileSystem {
         linkname: &CStr,
         parent: Self::Inode,
         name: &CStr,
-        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -519,7 +521,6 @@ pub trait FileSystem {
         mode: u32,
         rdev: u32,
         umask: u32,
-        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -539,7 +540,17 @@ pub trait FileSystem {
         name: &CStr,
         mode: u32,
         umask: u32,
-        security_ctx: Option<&CStr>,
+    ) -> io::Result<Entry> {
+        Err(io::Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    /// Create an unnamed temporary file.
+    fn chromeos_tmpfile(
+        &self,
+        ctx: Context,
+        parent: Self::Inode,
+        mode: u32,
+        umask: u32,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -674,7 +685,6 @@ pub trait FileSystem {
         mode: u32,
         flags: u32,
         umask: u32,
-        security_ctx: Option<&CStr>,
     ) -> io::Result<(Entry, Option<Self::Handle>, OpenOptions)> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -1071,6 +1081,7 @@ pub trait FileSystem {
     fn ioctl<R: io::Read>(
         &self,
         ctx: Context,
+        inode: Self::Inode,
         handle: Self::Handle,
         flags: IoctlFlags,
         cmd: u32,
@@ -1144,6 +1155,39 @@ pub trait FileSystem {
         length: u64,
         flags: u64,
     ) -> io::Result<usize> {
+        Err(io::Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    /// Set up memory mappings.
+    ///
+    /// Used to set up file mappings in DAX window.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_offset` - Offset into the file to start the mapping.
+    /// * `mem_offset` - Offset in Memory Window.
+    /// * `size` - Length of mapping required.
+    /// * `flags` - Bit field of `FUSE_SETUPMAPPING_FLAGS_*`.
+    /// * `mapper` - Mapper object which performs the mapping.
+    fn set_up_mapping<M: Mapper>(
+        &self,
+        ctx: Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        file_offset: u64,
+        mem_offset: u64,
+        size: usize,
+        flags: u32,
+        mapper: M,
+    ) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    /// Remove memory mappings.
+    ///
+    /// Used to tear down file mappings in DAX window. This method must be supported when
+    /// `set_up_mapping` is supported.
+    fn remove_mapping<M: Mapper>(&self, msgs: &[RemoveMappingOne], mapper: M) -> io::Result<()> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
 }

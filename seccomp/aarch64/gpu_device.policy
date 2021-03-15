@@ -42,6 +42,10 @@ sigaltstack: 1
 write: 1
 writev: 1
 
+# Required for perfetto tracing
+getsockopt: 1
+shutdown: 1
+
 ## Rules specific to gpu
 connect: 1
 getrandom: 1
@@ -70,3 +74,9 @@ gettid: 1
 fcntl: 1
 tgkill: 1
 clock_gettime: 1
+
+# Rules specific to Mesa.
+uname: 1
+sched_setscheduler: 1
+sched_setaffinity: 1
+kcmp: 1

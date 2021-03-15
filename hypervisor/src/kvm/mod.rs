@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::convert::TryFrom;
 use std::mem::{size_of, ManuallyDrop};
 use std::os::raw::{c_char, c_int, c_ulong, c_void};
+use std::os::unix::io::AsRawFd;
 use std::ptr::copy_nonoverlapping;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -29,8 +30,8 @@ use libc::{
 use base::{
     block_signal, errno_result, error, ioctl, ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val,
     pagesize, signal, unblock_signal, AsRawDescriptor, Error, Event, FromRawDescriptor,
-    MappedRegion, MemoryMapping, MemoryMappingBuilder, MmapError, RawDescriptor, Result,
-    SafeDescriptor,
+    MappedRegion, MemoryMapping, MemoryMappingBuilder, MmapError, Protection, RawDescriptor,
+    Result, SafeDescriptor,
 };
 use data_model::vec_with_array_field;
 use kvm_sys::*;
@@ -374,6 +375,43 @@ impl KvmVm {
             errno_result()
         }
     }
+
+    /// Checks whether a particular KVM-specific capability is available for this VM.
+    fn check_raw_capability(&self, capability: KvmCap) -> bool {
+        // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
+        // it's an unavailable extension and returns 0.
+        unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), capability as c_ulong) == 1 }
+    }
+
+    // Currently only used on aarch64, but works on any architecture.
+    #[allow(dead_code)]
+    /// Enables a KVM-specific capability for this VM, with the given arguments.
+    ///
+    /// # Safety
+    /// This function is marked as unsafe because `args` may be interpreted as pointers for some
+    /// capabilities. The caller must ensure that any pointers passed in the `args` array are
+    /// allocated as the kernel expects, and that mutable pointers are owned.
+    unsafe fn enable_raw_capability(
+        &self,
+        capability: KvmCap,
+        flags: u32,
+        args: &[u64; 4],
+    ) -> Result<()> {
+        let kvm_cap = kvm_enable_cap {
+            cap: capability as u32,
+            args: *args,
+            flags,
+            ..Default::default()
+        };
+        // Safe because we allocated the struct and we know the kernel will read exactly the size of
+        // the struct, and because we assume the caller has allocated the args appropriately.
+        let ret = ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap);
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
+    }
 }
 
 impl Vm for KvmVm {
@@ -394,14 +432,9 @@ impl Vm for KvmVm {
         match c {
             VmCap::DirtyLog => true,
             VmCap::PvClock => false,
-            VmCap::PvClockSuspend => self.check_raw_capability(KVM_CAP_KVMCLOCK_CTRL),
+            VmCap::PvClockSuspend => self.check_raw_capability(KvmCap::KvmclockCtrl),
+            VmCap::Protected => self.check_raw_capability(KvmCap::ArmProtectedVm),
         }
-    }
-
-    fn check_raw_capability(&self, cap: u32) -> bool {
-        // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
-        // it's an unavailable extension and returns 0.
-        unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), cap as c_ulong) == 1 }
     }
 
     fn get_memory(&self) -> &GuestMemory {
@@ -416,7 +449,9 @@ impl Vm for KvmVm {
         log_dirty_pages: bool,
     ) -> Result<MemSlot> {
         let size = mem.size() as u64;
-        let end_addr = guest_addr.checked_add(size).ok_or(Error::new(EOVERFLOW))?;
+        let end_addr = guest_addr
+            .checked_add(size)
+            .ok_or_else(|| Error::new(EOVERFLOW))?;
         if self.guest_mem.range_overlap(guest_addr, end_addr) {
             return Err(Error::new(ENOSPC));
         }
@@ -453,7 +488,7 @@ impl Vm for KvmVm {
 
     fn msync_memory_region(&mut self, slot: MemSlot, offset: usize, size: usize) -> Result<()> {
         let mut regions = self.mem_regions.lock();
-        let mem = regions.get_mut(&slot).ok_or(Error::new(ENOENT))?;
+        let mem = regions.get_mut(&slot).ok_or_else(|| Error::new(ENOENT))?;
 
         mem.msync(offset, size).map_err(|err| match err {
             MmapError::InvalidAddress => Error::new(EFAULT),
@@ -507,7 +542,7 @@ impl Vm for KvmVm {
 
     fn get_dirty_log(&self, slot: MemSlot, dirty_log: &mut [u8]) -> Result<()> {
         let regions = self.mem_regions.lock();
-        let mmap = regions.get(&slot).ok_or(Error::new(ENOENT))?;
+        let mmap = regions.get(&slot).ok_or_else(|| Error::new(ENOENT))?;
         // Ensures that there are as many bytes in dirty_log as there are pages in the mmap.
         if dirty_log_bitmap_size(mmap.size()) > dirty_log.len() {
             return Err(Error::new(EINVAL));
@@ -557,6 +592,36 @@ impl Vm for KvmVm {
 
     fn set_pvclock(&self, state: &ClockState) -> Result<()> {
         self.set_pvclock_arch(state)
+    }
+
+    fn add_fd_mapping(
+        &mut self,
+        slot: u32,
+        offset: usize,
+        size: usize,
+        fd: &dyn AsRawFd,
+        fd_offset: u64,
+        prot: Protection,
+    ) -> Result<()> {
+        let mut regions = self.mem_regions.lock();
+        let region = regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?;
+
+        match region.add_fd_mapping(offset, size, fd, fd_offset, prot) {
+            Ok(()) => Ok(()),
+            Err(MmapError::SystemCallFailed(e)) => Err(e),
+            Err(_) => Err(Error::new(EIO)),
+        }
+    }
+
+    fn remove_mapping(&mut self, slot: u32, offset: usize, size: usize) -> Result<()> {
+        let mut regions = self.mem_regions.lock();
+        let region = regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?;
+
+        match region.remove_mapping(offset, size) {
+            Ok(()) => Ok(()),
+            Err(MmapError::SystemCallFailed(e)) => Err(e),
+            Err(_) => Err(Error::new(EIO)),
+        }
     }
 }
 
@@ -759,7 +824,7 @@ impl Vcpu for KvmVcpu {
         // kvm_sigmask.len  = size_of::<sigset_t>() as u32;
         kvm_sigmask[0].len = 8;
         // Ensure the length is not too big.
-        const _ASSERT: usize = size_of::<sigset_t>() - 8 as usize;
+        const _ASSERT: usize = size_of::<sigset_t>() - 8usize;
 
         // Safe as we allocated exactly the needed space
         unsafe {
@@ -782,15 +847,15 @@ impl Vcpu for KvmVcpu {
         }
     }
 
-    fn enable_raw_capability(&self, cap: u32, args: &[u64; 4]) -> Result<()> {
+    unsafe fn enable_raw_capability(&self, cap: u32, args: &[u64; 4]) -> Result<()> {
         let kvm_cap = kvm_enable_cap {
             cap,
             args: *args,
             ..Default::default()
         };
-        // Safe becuase we allocated the struct and we know the kernel will read
-        // exactly the size of the struct.
-        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap) };
+        // Safe because we allocated the struct and we know the kernel will read exactly the size of
+        // the struct, and because we assume the caller has allocated the args appropriately.
+        let ret = ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap);
         if ret == 0 {
             Ok(())
         } else {
@@ -1143,9 +1208,9 @@ mod tests {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
         let vm = KvmVm::new(&kvm, gm).unwrap();
-        assert!(vm.check_raw_capability(KVM_CAP_USER_MEMORY));
+        assert!(vm.check_raw_capability(KvmCap::UserMemory));
         // I assume nobody is testing this on s390
-        assert!(!vm.check_raw_capability(KVM_CAP_S390_USER_SIGP));
+        assert!(!vm.check_raw_capability(KvmCap::S390UserSigp));
     }
 
     #[test]
