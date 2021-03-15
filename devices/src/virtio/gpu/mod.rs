@@ -67,10 +67,15 @@ pub enum GpuMode {
     ModeGfxstream,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct GpuDisplayParameters {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug)]
 pub struct GpuParameters {
-    pub display_width: u32,
-    pub display_height: u32,
+    pub displays: Vec<GpuDisplayParameters>,
     pub renderer_use_egl: bool,
     pub renderer_use_gles: bool,
     pub renderer_use_glx: bool,
@@ -95,8 +100,7 @@ const GPU_BAR_SIZE: u64 = 1 << 28;
 impl Default for GpuParameters {
     fn default() -> Self {
         GpuParameters {
-            display_width: DEFAULT_DISPLAY_WIDTH,
-            display_height: DEFAULT_DISPLAY_HEIGHT,
+            displays: vec![],
             renderer_use_egl: true,
             renderer_use_gles: true,
             renderer_use_glx: false,
@@ -122,9 +126,8 @@ pub struct VirtioScanoutBlobData {
 
 /// Initializes the virtio_gpu state tracker.
 fn build(
-    possible_displays: &[DisplayBackend],
-    display_width: u32,
-    display_height: u32,
+    display_backends: &[DisplayBackend],
+    display_params: Vec<GpuDisplayParameters>,
     rutabaga_builder: RutabagaBuilder,
     event_devices: Vec<EventDevice>,
     gpu_device_socket: VmMemoryControlRequestSocket,
@@ -133,8 +136,8 @@ fn build(
     external_blob: bool,
 ) -> Option<VirtioGpu> {
     let mut display_opt = None;
-    for display in possible_displays {
-        match display.build() {
+    for display_backend in display_backends {
+        match display_backend.build() {
             Ok(c) => {
                 display_opt = Some(c);
                 break;
@@ -153,8 +156,7 @@ fn build(
 
     VirtioGpu::new(
         display,
-        display_width,
-        display_height,
+        display_params,
         rutabaga_builder,
         event_devices,
         gpu_device_socket,
@@ -329,12 +331,14 @@ impl Frontend {
             }
             GpuCommand::UpdateCursor(info) => self.virtio_gpu.update_cursor(
                 info.resource_id.to_native(),
+                info.pos.scanout_id.to_native(),
                 info.pos.x.into(),
                 info.pos.y.into(),
             ),
-            GpuCommand::MoveCursor(info) => self
-                .virtio_gpu
-                .move_cursor(info.pos.x.into(), info.pos.y.into()),
+            GpuCommand::MoveCursor(info) => self.virtio_gpu.move_cursor(
+                info.pos.scanout_id.to_native(),
+                info.pos.x.into(),
+                info.pos.y.into()),
             GpuCommand::ResourceAssignUuid(info) => {
                 let resource_id = info.resource_id.to_native();
                 self.virtio_gpu.resource_assign_uuid(resource_id)
@@ -870,10 +874,8 @@ pub struct Gpu {
     kill_evt: Option<Event>,
     config_event: bool,
     worker_thread: Option<thread::JoinHandle<()>>,
-    num_scanouts: NonZeroU8,
     display_backends: Vec<DisplayBackend>,
-    display_width: u32,
-    display_height: u32,
+    display_params: Vec<GpuDisplayParameters>,
     rutabaga_builder: Option<RutabagaBuilder>,
     pci_bar: Option<Alloc>,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
@@ -886,7 +888,6 @@ impl Gpu {
     pub fn new(
         exit_evt: Event,
         gpu_device_socket: Option<VmMemoryControlRequestSocket>,
-        num_scanouts: NonZeroU8,
         resource_bridges: Vec<ResourceResponseSocket>,
         display_backends: Vec<DisplayBackend>,
         gpu_parameters: &GpuParameters,
@@ -933,9 +934,16 @@ impl Gpu {
             GpuMode::ModeGfxstream => RutabagaComponentType::Gfxstream,
         };
 
+        let mut display_width = DEFAULT_DISPLAY_WIDTH;
+        let mut display_height = DEFAULT_DISPLAY_HEIGHT;
+        if !gpu_parameters.displays.is_empty() {
+            display_width = gpu_parameters.displays[0].width;
+            display_height = gpu_parameters.displays[0].height;
+        }
+
         let rutabaga_builder = RutabagaBuilder::new(component)
-            .set_display_width(gpu_parameters.display_width)
-            .set_display_height(gpu_parameters.display_height)
+            .set_display_width(display_width)
+            .set_display_height(display_height)
             .set_virglrenderer_flags(virglrenderer_flags)
             .set_gfxstream_flags(gfxstream_flags)
             .set_rutabaga_channels(rutabaga_channels_opt);
@@ -943,15 +951,13 @@ impl Gpu {
         Gpu {
             exit_evt,
             gpu_device_socket,
-            num_scanouts,
             resource_bridges,
             event_devices,
             config_event: false,
             kill_evt: None,
             worker_thread: None,
             display_backends,
-            display_width: gpu_parameters.display_width,
-            display_height: gpu_parameters.display_height,
+            display_params: gpu_parameters.displays.clone(),
             rutabaga_builder: Some(rutabaga_builder),
             pci_bar: None,
             map_request,
@@ -992,7 +998,7 @@ impl Gpu {
         virtio_gpu_config {
             events_read: Le32::from(events_read),
             events_clear: Le32::from(0),
-            num_scanouts: Le32::from(self.num_scanouts.get() as u32),
+            num_scanouts: Le32::from(self.display_params.len() as u32),
             num_capsets: Le32::from(num_capsets),
         }
     }
@@ -1105,8 +1111,7 @@ impl VirtioDevice for Gpu {
         let cursor_queue = queues.remove(0);
         let cursor_evt = queue_evts.remove(0);
         let display_backends = self.display_backends.clone();
-        let display_width = self.display_width;
-        let display_height = self.display_height;
+        let display_params = self.display_params.clone();
         let event_devices = self.event_devices.split_off(0);
         let map_request = Arc::clone(&self.map_request);
         let external_blob = self.external_blob;
@@ -1121,8 +1126,7 @@ impl VirtioDevice for Gpu {
                     .spawn(move || {
                         let virtio_gpu = match build(
                             &display_backends,
-                            display_width,
-                            display_height,
+                            display_params,
                             rutabaga_builder,
                             event_devices,
                             gpu_device_socket,
