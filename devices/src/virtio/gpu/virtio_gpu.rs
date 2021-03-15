@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap as Map;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::result::Result;
 use std::sync::Arc;
 
+use crate::virtio::gpu::GpuDisplayParameters;
 use crate::virtio::resource_bridge::{BufferInfo, PlaneInfo, ResourceInfo, ResourceResponse};
 use base::{error, AsRawDescriptor, ExternalMapping, Tube};
 
@@ -71,10 +73,11 @@ impl VirtioGpuResource {
 /// Handles functionality related to displays, input events and hypervisor memory management.
 pub struct VirtioGpu {
     display: Rc<RefCell<GpuDisplay>>,
-    display_width: u32,
-    display_height: u32,
-    scanout_resource_id: Option<NonZeroU32>,
-    scanout_surface_id: Option<u32>,
+    display_params: Vec<GpuDisplayParameters>,
+    // Maps virtio gpu's scanout id to the display backend's surface id.
+    scanout_id_to_surface_id: Map<u32, u32>,
+    // Maps virtio gpu's scanout id to the current resource set for that scanout.
+    scanout_id_to_resource_id: Map<u32, NonZeroU32>,
     cursor_resource_id: Option<NonZeroU32>,
     cursor_surface_id: Option<u32>,
     // Maps event devices to scanout number.
@@ -114,8 +117,7 @@ impl VirtioGpu {
     /// Creates a new instance of the VirtioGpu state tracker.
     pub fn new(
         display: GpuDisplay,
-        display_width: u32,
-        display_height: u32,
+        display_params: Vec<GpuDisplayParameters>,
         rutabaga_builder: RutabagaBuilder,
         event_devices: Vec<EventDevice>,
         gpu_device_tube: Tube,
@@ -140,11 +142,10 @@ impl VirtioGpu {
 
         let mut virtio_gpu = VirtioGpu {
             display: Rc::new(RefCell::new(display)),
-            display_width,
-            display_height,
+            display_params,
             event_devices: Default::default(),
-            scanout_resource_id: None,
-            scanout_surface_id: None,
+            scanout_id_to_surface_id: Default::default(),
+            scanout_id_to_resource_id: Default::default(),
             cursor_resource_id: None,
             cursor_surface_id: None,
             gpu_device_tube,
@@ -156,6 +157,8 @@ impl VirtioGpu {
             udmabuf_driver,
         };
 
+        virtio_gpu.create_display_surfaces();
+
         for event_device in event_devices {
             virtio_gpu
                 .import_event_device(event_device, 0)
@@ -166,25 +169,100 @@ impl VirtioGpu {
         Some(virtio_gpu)
     }
 
+    /// Returns the dimensions of the given scanout as a (width, height) pair.
+    fn get_scanout_dimensions(&self, scanout_id: u32) -> Option<(u32, u32)> {
+        self.display_params.get(scanout_id as usize).map(|params| (params.width, params.height))
+    }
+
+    /// Updates which resource should be sent to the display surface corresponding to the
+    /// given scanout when the resource is flushed.
+    fn update_scanout_resource(&mut self, scanout_id: u32, resource_id: u32) {
+        if resource_id == 0 {
+            // Ignore any initial set_scanout(..., resource_id: 0) calls.
+            if self.scanout_id_to_resource_id.contains_key(&scanout_id) {
+                self.release_scanout_surface(scanout_id);
+
+                self.scanout_id_to_resource_id.remove(&scanout_id);
+            }
+        } else {
+            let resource_id = NonZeroU32::new(resource_id).unwrap();
+            self.scanout_id_to_resource_id.insert(scanout_id, resource_id);
+        }
+    }
+
+    /// Returns the ids of the scaounts that need to be updated when the given resource
+    /// is flushed.
+    fn get_scanouts_for_resource(&self, resource_id: u32) -> Vec<u32> {
+        let mut dependent_scanout_ids = Vec::new();
+
+        if let Some(resource_id) = NonZeroU32::new(resource_id) {
+            for (scanout_id, scanout_resource_id) in &self.scanout_id_to_resource_id {
+                if resource_id == *scanout_resource_id {
+                    dependent_scanout_ids.push(*scanout_id);
+                }
+            }
+        }
+
+        dependent_scanout_ids
+    }
+
+    /// Ensures that the display backend has a surface for the given scanout and returns
+    /// the surface id that can be used with the display backend.
+    fn get_or_create_scanout_surface(&mut self, scanout_id: u32) -> Option<u32> {
+        let mut display = self.display.borrow_mut();
+
+        match self.scanout_id_to_surface_id.entry(scanout_id) {
+            Entry::Occupied(entry) => Some(*entry.get()),
+            Entry::Vacant(entry) => {
+                let display_width = self.display_params[scanout_id as usize].width;
+                let display_height = self.display_params[scanout_id as usize].height;
+
+                match display.create_surface(None, display_width, display_height) {
+                    Ok(surface_id) => {
+                        for (event_device_id, _) in &self.event_devices {
+                            display.attach_event_device(surface_id, *event_device_id);
+                        }
+                        entry.insert(surface_id);
+                        Some(surface_id)
+                    }
+                    Err(e) => {
+                        error!("failed to create display surface: {}", e);
+                        None
+                    }
+                }
+            },
+        }
+    }
+
+    /// Releases the surface in the display backend associated with the given scanout.
+    fn release_scanout_surface(&mut self, scanout_id: u32) {
+        if let Some(surface_id) = self.scanout_id_to_surface_id.get(&scanout_id) {
+            self.display.borrow_mut().release_surface(*surface_id);
+        }
+    }
+
     /// Imports the event device
     pub fn import_event_device(
         &mut self,
         event_device: EventDevice,
-        scanout: u32,
+        scanout_id: u32,
     ) -> VirtioGpuResult {
-        // TODO(zachr): support more than one scanout.
-        if scanout != 0 {
-            return Err(ErrScanout {
-                num_scanouts: scanout,
-            });
-        }
+        let surface_id = self.get_or_create_scanout_surface(scanout_id);
 
         let mut display = self.display.borrow_mut();
-        let event_device_id = display.import_event_device(event_device)?;
-        if let Some(s) = self.scanout_surface_id {
-            display.attach_event_device(s, event_device_id)
+        let event_device_id = match display.import_event_device(event_device) {
+            Ok(id) => id,
+            Err(e) => {
+                error!("error importing event device: {}", e);
+                return Err(ErrUnspec);
+            }
+        };
+
+        if let Some(surface_id) = surface_id {
+            display.attach_event_device(surface_id, event_device_id);
         }
-        self.event_devices.insert(event_device_id, scanout);
+
+        self.event_devices.insert(event_device_id, scanout_id);
         Ok(OkNoData)
     }
 
@@ -193,64 +271,81 @@ impl VirtioGpu {
         &self.display
     }
 
+    pub fn create_display_surfaces(&mut self) {
+        let number_of_scanouts = self.display_info().len();
+
+        for i in 0..number_of_scanouts {
+            self.get_or_create_scanout_surface(i as u32);
+        }
+    }
+
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
-    pub fn display_info(&self) -> [(u32, u32); 1] {
-        [(self.display_width, self.display_height)]
+    pub fn display_info(&self) -> Vec<(u32, u32)> {
+        self.display_params.iter().map(|params| (params.width, params.height)).collect::<Vec<_>>()
     }
 
     /// Processes the internal `display` events and returns `true` if the main display was closed.
     pub fn process_display(&mut self) -> bool {
         let mut display = self.display.borrow_mut();
         display.dispatch_events();
-        self.scanout_surface_id
-            .map(|s| display.close_requested(s))
-            .unwrap_or(false)
+        self.scanout_id_to_surface_id.values().any(|surface_id| display.close_requested(*surface_id))
     }
 
     /// Sets the given resource id as the source of scanout to the display.
     pub fn set_scanout(
         &mut self,
-        _scanout_id: u32,
+        scanout_id: u32,
         resource_id: u32,
         scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
-        let mut display = self.display.borrow_mut();
-        /// b/186580833.
-        /// Remove the part of deleting surface when resource_id is 0.
-        /// This is a workaround to solve the issue of black display.
-        /// Observation is when Surfaceflinger falls back to client composition,
-        /// host receives set_scanout 0 0, and then set scanout 0 <some valid resid>.
-        /// The first 0 0 removes the surface, the second creates a new surface
-        /// with id++, which will be more than 0 and be ignorned in vnc or webrtc
+        self.update_scanout_resource(scanout_id, resource_id);
+
+        if resource_id == 0 {
+            return Ok(OkNoData);
+        }
+
+        self.get_or_create_scanout_surface(scanout_id);
+
         let resource = self
             .resources
             .get_mut(&resource_id)
             .ok_or(ErrInvalidResourceId)?;
 
         resource.scanout_data = scanout_data;
-        self.scanout_resource_id = NonZeroU32::new(resource_id);
-        if self.scanout_surface_id.is_none() {
-            let surface_id =
-                display.create_surface(None, self.display_width, self.display_height)?;
-            self.scanout_surface_id = Some(surface_id);
-            for event_device_id in self.event_devices.keys() {
-                display.attach_event_device(surface_id, *event_device_id);
-            }
-        }
         Ok(OkNoData)
     }
 
     /// If the resource is the scanout resource, flush it to the display.
     pub fn flush_resource(&mut self, resource_id: u32) -> VirtioGpuResult {
+        let mut response = Ok(OkNoData);
+
         if resource_id == 0 {
-            return Ok(OkNoData);
+            return response;
         }
 
-        if let (Some(scanout_resource_id), Some(scanout_surface_id)) =
-            (self.scanout_resource_id, self.scanout_surface_id)
-        {
-            if scanout_resource_id.get() == resource_id {
-                self.flush_resource_to_surface(resource_id, scanout_surface_id)?;
+        let scanout_ids = self.get_scanouts_for_resource(resource_id);
+        for scanout_id in scanout_ids {
+            let scanout_dimensions = match self.get_scanout_dimensions(scanout_id) {
+                Some(d) => d,
+                None => {
+                    error!("unknown scanout dimensions");
+                    return Err(ErrUnspec);
+                },
+            };
+
+            let surface_width = scanout_dimensions.0;
+            let surface_height = scanout_dimensions.1;
+
+            if let Some(surface_id) = self.get_or_create_scanout_surface(scanout_id) {
+                response = self.flush_resource_to_surface(
+                    resource_id,
+                    surface_id,
+                    surface_width,
+                    surface_height,
+                );
+                if !response.is_ok() {
+                    return response;
+                }
             }
         }
 
@@ -258,7 +353,18 @@ impl VirtioGpu {
             (self.cursor_resource_id, self.cursor_surface_id)
         {
             if cursor_resource_id.get() == resource_id {
-                self.flush_resource_to_surface(resource_id, cursor_surface_id)?;
+                let resource = self
+                    .resources
+                    .get_mut(&resource_id)
+                    .ok_or(ErrInvalidResourceId)?;
+
+                let resource_width = resource.width;
+                let resource_height = resource.height;
+
+                self.flush_resource_to_surface(resource_id,
+                                               cursor_surface_id,
+                                               resource_width,
+                                               resource_height)?;
             }
         }
 
@@ -324,6 +430,8 @@ impl VirtioGpu {
         &mut self,
         resource_id: u32,
         surface_id: u32,
+        surface_width: u32,
+        surface_height: u32,
     ) -> VirtioGpuResult {
         if let Some(import_id) = self.import_to_display(resource_id) {
             self.display.borrow_mut().flip_to(surface_id, import_id);
@@ -341,11 +449,21 @@ impl VirtioGpu {
             return Ok(OkNoData);
         }
 
-        let fb = display
-            .framebuffer_region(surface_id, 0, 0, self.display_width, self.display_height)
-            .ok_or(ErrUnspec)?;
+        let fb = match display.framebuffer_region(
+            surface_id,
+            0,
+            0,
+            surface_width,
+            surface_height,
+        ) {
+            Some(fb) => fb,
+            None => {
+                error!("failed to access framebuffer for surface {}", surface_id);
+                return Err(ErrUnspec);
+            }
+        };
 
-        let mut transfer = Transfer3D::new_2d(0, 0, self.display_width, self.display_height);
+        let mut transfer = Transfer3D::new_2d(0, 0, surface_width, surface_height);
         transfer.stride = fb.stride();
         self.rutabaga
             .transfer_read(0, resource_id, transfer, Some(fb.as_volatile_slice()))?;
@@ -356,7 +474,7 @@ impl VirtioGpu {
 
     /// Updates the cursor's memory to the given resource_id, and sets its position to the given
     /// coordinates.
-    pub fn update_cursor(&mut self, resource_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+    pub fn update_cursor(&mut self, resource_id: u32, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
         if resource_id == 0 {
             if let Some(surface_id) = self.cursor_surface_id.take() {
                 self.display.borrow_mut().release_surface(surface_id);
@@ -373,9 +491,17 @@ impl VirtioGpu {
 
         self.cursor_resource_id = NonZeroU32::new(resource_id);
 
+        let scanout_surface_id = match self.get_or_create_scanout_surface(scanout_id) {
+            Some(id) => id,
+            None => {
+                error!("scanout not available for cursor");
+                return Err(ErrUnspec);
+            }
+        };
+
         if self.cursor_surface_id.is_none() {
             self.cursor_surface_id = Some(self.display.borrow_mut().create_surface(
-                self.scanout_surface_id,
+                Some(scanout_surface_id),
                 resource_width,
                 resource_height,
             )?);
@@ -407,13 +533,19 @@ impl VirtioGpu {
     }
 
     /// Moves the cursor's position to the given coordinates.
-    pub fn move_cursor(&mut self, x: u32, y: u32) -> VirtioGpuResult {
-        if let Some(cursor_surface_id) = self.cursor_surface_id {
-            if let Some(scanout_surface_id) = self.scanout_surface_id {
-                let mut display = self.display.borrow_mut();
-                display.set_position(cursor_surface_id, x, y);
-                display.commit(scanout_surface_id);
+    pub fn move_cursor(&mut self, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+        let scanout_surface_id = match self.get_or_create_scanout_surface(scanout_id) {
+            Some(id) => id,
+            None => {
+                error!("scanout not available for cursor");
+                return Err(ErrUnspec);
             }
+        };
+
+        if let Some(cursor_surface_id) = self.cursor_surface_id {
+            let mut display = self.display.borrow_mut();
+            display.set_position(cursor_surface_id, x, y);
+            display.commit(scanout_surface_id);
         }
         Ok(OkNoData)
     }
