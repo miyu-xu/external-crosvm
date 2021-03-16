@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "49fbdfd3_caa62177",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1054468
+      },
+      "writtenOn": "2021-03-16T12:58:02Z",
+      "side": 1,
+      "message": "Shouldn\u0027t there be patch files included since this change is modifying auto-generated files?",
+      "range": {
+        "startLine": 1,
+        "startChar": 28,
+        "endLine": 1,
+        "endChar": 95
+      },
+      "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
