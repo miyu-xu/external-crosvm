@@ -22,6 +22,30 @@
       },
       "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7ad0e2ac_4b2da435",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-16T14:32:24Z",
+      "side": 1,
+      "message": "Yes, but crosvm is one of the largest and earliest rust projects we imported, so there\u0027s a lot more technical debt. There are whole modules like gpu_display and proto which don\u0027t work with cargo2android.py.\n\nI can offer to start fixing this up in follow ups, but totally converting to patches at the moment is not feasible.",
+      "parentUuid": "49fbdfd3_caa62177",
+      "range": {
+        "startLine": 1,
+        "startChar": 28,
+        "endLine": 1,
+        "endChar": 95
+      },
+      "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
