@@ -70,6 +70,30 @@
       },
       "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6d131224_7adf6318",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-03-16T15:20:20Z",
+      "side": 1,
+      "message": "We do for over 90% of the files, but there are some which need to be revisited. Some files were hand written and we either haven\u0027t filed bugs in the tooling to cover the gap, or the gap is already covered but it\u0027s hard to tell from the rewrite. I\u0027m looking at it.",
+      "parentUuid": "4b796d0d_28605631",
+      "range": {
+        "startLine": 1,
+        "startChar": 28,
+        "endLine": 1,
+        "endChar": 95
+      },
+      "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
