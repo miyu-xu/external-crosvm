@@ -94,6 +94,30 @@
       },
       "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1ea39a97_6b05dc33",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1054468
+      },
+      "writtenOn": "2021-03-16T15:25:08Z",
+      "side": 1,
+      "message": "Either way, you all are handling updates for crosvm (Thank you!) so how the Android.bp files are managed is really your call.",
+      "parentUuid": "6d131224_7adf6318",
+      "range": {
+        "startLine": 1,
+        "startChar": 28,
+        "endLine": 1,
+        "endChar": 95
+      },
+      "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
