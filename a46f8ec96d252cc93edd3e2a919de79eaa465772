@@ -46,6 +46,30 @@
       },
       "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4b796d0d_28605631",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1054468
+      },
+      "writtenOn": "2021-03-16T15:09:00Z",
+      "side": 1,
+      "message": "Good point. Despite this comment, it doesn\u0027t look like we use cargo2android to manage crosvm Android.bp files anymore.",
+      "parentUuid": "7ad0e2ac_4b2da435",
+      "range": {
+        "startLine": 1,
+        "startChar": 28,
+        "endLine": 1,
+        "endChar": 95
+      },
+      "revId": "a46f8ec96d252cc93edd3e2a919de79eaa465772",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
