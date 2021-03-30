@@ -2717,7 +2717,8 @@ mod tests {
         validate_arguments(&mut config).unwrap();
         assert_eq!(
             config.virtio_switches.unwrap(),
-            PathBuf::from("/dev/switches-test"));
+            PathBuf::from("/dev/switches-test")
+        );
     }
 
     #[cfg(all(feature = "gpu", feature = "gfxstream"))]
