@@ -464,7 +464,8 @@ impl arch::LinuxArch for X8664arch {
 
         // Note that this puts the mptable at 0x9FC00 in guest physical memory.
         mptable::setup_mptable(&mem, vcpu_count as u8, pci_irqs).map_err(Error::SetupMptable)?;
-        smbios::setup_smbios(&mem).map_err(Error::SetupSmbios)?;
+        smbios::setup_smbios(&mem, components.dmi_path).map_err(Error::SetupSmbios)?;
+
         // TODO (tjeznach) Write RSDP to bootconfig before writing to memory
         acpi::create_acpi_tables(&mem, vcpu_count as u8, X86_64_SCI_IRQ, acpi_dev_resource);
 
@@ -1092,7 +1093,7 @@ impl X8664arch {
         let bat_control = if let Some(battery_type) = battery.0 {
             match battery_type {
                 BatteryType::Goldfish => {
-                    let control_socket = arch::add_goldfish_battery(
+                    let control_tube = arch::add_goldfish_battery(
                         &mut amls,
                         battery.1,
                         mmio_bus,
@@ -1103,7 +1104,7 @@ impl X8664arch {
                     .map_err(Error::CreateBatDevices)?;
                     Some(BatControl {
                         type_: BatteryType::Goldfish,
-                        control_socket,
+                        control_tube,
                     })
                 }
             }
