@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::result::Result;
 use std::sync::Arc;
 
-use crate::virtio::gpu::GpuDisplayParameters;
+use crate::virtio::gpu::{GpuDisplayParameters, GpuDisplayState};
 use crate::virtio::resource_bridge::{BufferInfo, PlaneInfo, ResourceInfo, ResourceResponse};
 use base::{error, AsRawDescriptor, ExternalMapping, Tube};
 
@@ -37,7 +37,7 @@ use sync::Mutex;
 
 use vm_memory::{GuestAddress, GuestMemory};
 
-use vm_control::{MemSlot, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{DisplayControlResult, MemSlot, VmMemoryRequest, VmMemoryResponse};
 
 struct VirtioGpuResource {
     resource_id: u32,
@@ -73,7 +73,7 @@ impl VirtioGpuResource {
 /// Handles functionality related to displays, input events and hypervisor memory management.
 pub struct VirtioGpu {
     display: Rc<RefCell<GpuDisplay>>,
-    display_params: Vec<GpuDisplayParameters>,
+    display_state: Arc<Mutex<GpuDisplayState>>,
     // Maps virtio gpu's scanout id to the display backend's surface id.
     scanout_id_to_surface_id: Map<u32, u32>,
     // Maps virtio gpu's scanout id to the current resource set for that scanout.
@@ -117,7 +117,7 @@ impl VirtioGpu {
     /// Creates a new instance of the VirtioGpu state tracker.
     pub fn new(
         display: GpuDisplay,
-        display_params: Vec<GpuDisplayParameters>,
+        display_state: Arc<Mutex<GpuDisplayState>>,
         rutabaga_builder: RutabagaBuilder,
         event_devices: Vec<EventDevice>,
         gpu_device_tube: Tube,
@@ -142,7 +142,7 @@ impl VirtioGpu {
 
         let mut virtio_gpu = VirtioGpu {
             display: Rc::new(RefCell::new(display)),
-            display_params,
+            display_state,
             event_devices: Default::default(),
             scanout_id_to_surface_id: Default::default(),
             scanout_id_to_resource_id: Default::default(),
@@ -171,7 +171,11 @@ impl VirtioGpu {
 
     /// Returns the dimensions of the given scanout as a (width, height) pair.
     fn get_scanout_dimensions(&self, scanout_id: u32) -> Option<(u32, u32)> {
-        self.display_params.get(scanout_id as usize).map(|params| (params.width, params.height))
+        self.display_state
+            .lock()
+            .displays
+            .get(scanout_id as usize)
+            .map(|params| (params.width, params.height))
     }
 
     /// Updates which resource should be sent to the display surface corresponding to the
@@ -186,7 +190,8 @@ impl VirtioGpu {
             }
         } else {
             let resource_id = NonZeroU32::new(resource_id).unwrap();
-            self.scanout_id_to_resource_id.insert(scanout_id, resource_id);
+            self.scanout_id_to_resource_id
+                .insert(scanout_id, resource_id);
         }
     }
 
@@ -214,23 +219,29 @@ impl VirtioGpu {
         match self.scanout_id_to_surface_id.entry(scanout_id) {
             Entry::Occupied(entry) => Some(*entry.get()),
             Entry::Vacant(entry) => {
-                let display_width = self.display_params[scanout_id as usize].width;
-                let display_height = self.display_params[scanout_id as usize].height;
+                if let Some(display_params) =
+                    self.display_state.lock().displays.get(scanout_id as usize)
+                {
+                    let display_width = display_params.width;
+                    let display_height = display_params.height;
 
-                match display.create_surface(None, display_width, display_height) {
-                    Ok(surface_id) => {
-                        for (event_device_id, _) in &self.event_devices {
-                            display.attach_event_device(surface_id, *event_device_id);
+                    match display.create_surface(None, display_width, display_height) {
+                        Ok(surface_id) => {
+                            for (event_device_id, _) in &self.event_devices {
+                                display.attach_event_device(surface_id, *event_device_id);
+                            }
+                            entry.insert(surface_id);
+                            Some(surface_id)
                         }
-                        entry.insert(surface_id);
-                        Some(surface_id)
+                        Err(e) => {
+                            error!("failed to create display surface: {}", e);
+                            None
+                        }
                     }
-                    Err(e) => {
-                        error!("failed to create display surface: {}", e);
-                        None
-                    }
+                } else {
+                    None
                 }
-            },
+            }
         }
     }
 
@@ -281,14 +292,28 @@ impl VirtioGpu {
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
     pub fn display_info(&self) -> Vec<(u32, u32)> {
-        self.display_params.iter().map(|params| (params.width, params.height)).collect::<Vec<_>>()
+        self.display_state.lock().get_display_dimension_pairs()
+    }
+
+    pub fn add_display(&mut self, width: u32, height: u32) -> DisplayControlResult {
+        self.display_state.lock().add_display(width, height)
+    }
+
+    pub fn list_displays(&self) -> DisplayControlResult {
+        self.display_state.lock().list_displays()
+    }
+
+    pub fn remove_display(&mut self, display_id: u32) -> DisplayControlResult {
+        self.display_state.lock().remove_display(display_id)
     }
 
     /// Processes the internal `display` events and returns `true` if the main display was closed.
     pub fn process_display(&mut self) -> bool {
         let mut display = self.display.borrow_mut();
         display.dispatch_events();
-        self.scanout_id_to_surface_id.values().any(|surface_id| display.close_requested(*surface_id))
+        self.scanout_id_to_surface_id
+            .values()
+            .any(|surface_id| display.close_requested(*surface_id))
     }
 
     /// Sets the given resource id as the source of scanout to the display.
@@ -330,7 +355,7 @@ impl VirtioGpu {
                 None => {
                     error!("unknown scanout dimensions");
                     return Err(ErrUnspec);
-                },
+                }
             };
 
             let surface_width = scanout_dimensions.0;
@@ -361,10 +386,12 @@ impl VirtioGpu {
                 let resource_width = resource.width;
                 let resource_height = resource.height;
 
-                self.flush_resource_to_surface(resource_id,
-                                               cursor_surface_id,
-                                               resource_width,
-                                               resource_height)?;
+                self.flush_resource_to_surface(
+                    resource_id,
+                    cursor_surface_id,
+                    resource_width,
+                    resource_height,
+                )?;
             }
         }
 
@@ -449,13 +476,7 @@ impl VirtioGpu {
             return Ok(OkNoData);
         }
 
-        let fb = match display.framebuffer_region(
-            surface_id,
-            0,
-            0,
-            surface_width,
-            surface_height,
-        ) {
+        let fb = match display.framebuffer_region(surface_id, 0, 0, surface_width, surface_height) {
             Some(fb) => fb,
             None => {
                 error!("failed to access framebuffer for surface {}", surface_id);
@@ -474,7 +495,13 @@ impl VirtioGpu {
 
     /// Updates the cursor's memory to the given resource_id, and sets its position to the given
     /// coordinates.
-    pub fn update_cursor(&mut self, resource_id: u32, scanout_id: u32, x: u32, y: u32) -> VirtioGpuResult {
+    pub fn update_cursor(
+        &mut self,
+        resource_id: u32,
+        scanout_id: u32,
+        x: u32,
+        y: u32,
+    ) -> VirtioGpuResult {
         if resource_id == 0 {
             if let Some(surface_id) = self.cursor_surface_id.take() {
                 self.display.borrow_mut().release_surface(surface_id);
