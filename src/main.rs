@@ -41,6 +41,7 @@ use disk::QcowFile;
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use vm_control::{
     BalloonControlCommand, BatControlCommand, BatControlResult, BatteryType, DiskControlCommand,
+    DisplayControlCommand, DisplayControlResult,
     MaybeOwnedDescriptor, UsbControlCommand, UsbControlResult, VmControlRequestSocket, VmRequest,
     VmResponse, USB_CONTROL_MAX_PORTS,
 };
@@ -2300,6 +2301,113 @@ fn modify_usb(mut args: std::env::Args) -> std::result::Result<(), ()> {
     }
 }
 
+enum ModifyDisplayError {
+    ArgMissing(&'static str),
+    ArgParseInt(&'static str, String, ParseIntError),
+    SocketFailed,
+    UnexpectedResponse(VmResponse),
+    UnknownCommand(String),
+    DisplayControl(DisplayControlResult),
+}
+
+impl fmt::Display for ModifyDisplayError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ModifyDisplayError::*;
+
+        match self {
+            ArgMissing(a) => write!(f, "argument missing: {}", a),
+            ArgParseInt(name, value, e) => write!(
+                f,
+                "failed to parse integer argument {} value `{}`: {}",
+                name, value, e
+            ),
+            SocketFailed => write!(f, "socket failed"),
+            UnexpectedResponse(r) => write!(f, "unexpected response: {}", r),
+            UnknownCommand(c) => write!(f, "unknown display command: `{}`", c),
+            DisplayControl(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+type ModifyDisplayResult<T> = std::result::Result<T, ModifyDisplayError>;
+
+fn display_add(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let width: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("WIDTH")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("WIDTH", p.to_owned(), e))
+        })?;
+
+    let height: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("HEIGHT")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("HEIGHT", p.to_owned(), e))
+        })?;
+
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::AddDisplay { width, height });
+    let response = handle_request(&request, args).map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
+fn display_list(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::ListDisplays);
+    let response = handle_request(&request, args).map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
+fn display_remove(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let display_id : u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("DISPLAY_ID")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("DISPLAY_ID", p.to_owned(), e))
+        })?;
+
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::RemoveDisplay { display_id });
+    let response = handle_request(&request, args).map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
+fn modify_display(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    if args.len() < 2 {
+        print_help("crosvm display",
+                   "[create DISPLAY_WIDTH:DISPLAY_HEIGHT | delete DISPLAY_ID] VM_SOCKET...", &[]);
+        return Err(());
+    }
+
+    // This unwrap will not panic because of the above length check.
+    let command = args.next().unwrap();
+
+    let result = match command.as_ref() {
+        "add" => display_add(args),
+        "list" => display_list(args),
+        "remove" => display_remove(args),
+        other => Err(ModifyDisplayError::UnknownCommand(other.to_owned())),
+    };
+
+    match result {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 fn print_usage() {
     print_help("crosvm", "[stop|run]", &[]);
     println!("Commands:");
@@ -2400,6 +2508,7 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         Some("balloon_stats") => balloon_stats(args),
         Some("create_qcow2") => create_qcow2(args),
         Some("disk") => disk_cmd(args),
+        Some("display") => modify_display(args),
         Some("usb") => modify_usb(args),
         Some("version") => pkg_version(),
         Some("battery") => modify_battery(args),

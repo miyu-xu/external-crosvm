@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::result::Result;
 use std::sync::Arc;
 
-use crate::virtio::gpu::GpuDisplayParameters;
+use crate::virtio::gpu::{GpuDisplayState, GpuDisplayParameters};
 use crate::virtio::resource_bridge::{BufferInfo, PlaneInfo, ResourceInfo, ResourceResponse};
 use base::{error, AsRawDescriptor, ExternalMapping};
 
@@ -35,7 +35,7 @@ use sync::Mutex;
 use vm_memory::{GuestAddress, GuestMemory};
 
 use vm_control::{
-    MaybeOwnedDescriptor, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
+    MaybeOwnedDescriptor, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse, DisplayControlResult
 };
 
 struct VirtioGpuResource {
@@ -72,7 +72,7 @@ impl VirtioGpuResource {
 /// Handles functionality related to displays, input events and hypervisor memory management.
 pub struct VirtioGpu {
     display: Rc<RefCell<GpuDisplay>>,
-    display_params: Vec<GpuDisplayParameters>,
+    display_params: Arc<Mutex<GpuDisplayState>>,
 
     // Maps virtio gpu's scanout id to the display backend's surface id.
     scanout_id_to_surface_id: Map<u32, u32>,
@@ -89,9 +89,6 @@ pub struct VirtioGpu {
     rutabaga: Rutabaga,
     resources: Map<u32, VirtioGpuResource>,
     external_blob: bool,
-
-
-
 }
 
 fn sglist_to_rutabaga_iovecs(
@@ -120,7 +117,7 @@ impl VirtioGpu {
     /// Creates a new instance of the VirtioGpu state tracker.
     pub fn new(
         display: GpuDisplay,
-        display_params: Vec<GpuDisplayParameters>,
+        display_params: Arc<Mutex<GpuDisplayState>>,
         rutabaga_builder: RutabagaBuilder,
         event_devices: Vec<EventDevice>,
         gpu_device_socket: VmMemoryControlRequestSocket,
@@ -190,21 +187,25 @@ impl VirtioGpu {
         match self.scanout_id_to_surface_id.entry(scanout_id) {
             Entry::Occupied(entry) => Some(*entry.get()),
             Entry::Vacant(entry) => {
-                let display_width = self.display_params[scanout_id as usize].width;
-                let display_height = self.display_params[scanout_id as usize].height;
+                if let Some(display_params) = self.display_params.lock().displays.get(scanout_id as usize) {
+                    let display_width = display_params.width;
+                    let display_height = display_params.height;
 
-                match display.create_surface(None, display_width, display_height) {
-                    Ok(surface_id) => {
-                        for (event_device_id, _) in &self.event_devices {
-                            display.attach_event_device(surface_id, *event_device_id);
+                    match display.create_surface(None, display_width, display_height) {
+                        Ok(surface_id) => {
+                            for (event_device_id, _) in &self.event_devices {
+                                display.attach_event_device(surface_id, *event_device_id);
+                            }
+                            entry.insert(surface_id);
+                            Some(surface_id)
                         }
-                        entry.insert(surface_id);
-                        Some(surface_id)
+                        Err(e) => {
+                            error!("failed to create display surface: {}", e);
+                            None
+                        }
                     }
-                    Err(e) => {
-                        error!("failed to create display surface: {}", e);
-                        None
-                    }
+                } else {
+                    None
                 }
             },
         }
@@ -217,7 +218,7 @@ impl VirtioGpu {
     }
 
     pub fn get_scanout_dimensions(&self, scanout_id: u32) -> Option<(u32, u32)> {
-        self.display_params.get(scanout_id as usize).map(|params| (params.width, params.height))
+        self.display_params.lock().displays.get(scanout_id as usize).map(|params| (params.width, params.height))
     }
 
     /// Imports the event device
@@ -256,7 +257,19 @@ impl VirtioGpu {
 
     /// Gets the list of supported display resolutions as a slice of `(width, height)` tuples.
     pub fn display_info(&self) -> Vec<(u32, u32)> {
-        self.display_params.iter().map(|params| (params.width, params.height)).collect::<Vec<_>>()
+        self.display_params.lock().get_display_dimension_pairs()
+    }
+
+    pub fn add_display(&mut self, width: u32, height: u32) -> DisplayControlResult {
+        self.display_params.lock().add_display(width, height)
+    }
+
+    pub fn list_displays(&self) -> DisplayControlResult {
+        self.display_params.lock().list_displays()
+    }
+
+    pub fn remove_display(&mut self, display_id: u32) -> DisplayControlResult {
+        self.display_params.lock().remove_display(display_id)
     }
 
     /// Processes the internal `display` events and returns `true` if the main display was closed.

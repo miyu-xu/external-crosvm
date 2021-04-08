@@ -924,6 +924,7 @@ impl GpuResponse {
                     pmodes: Default::default(),
                 };
                 for (disp_mode, &(width, height)) in disp_info.pmodes.iter_mut().zip(info) {
+                    base::error!("jasonjason sending display info w:{} h:{}", width, height);
                     disp_mode.r.width = Le32::from(width);
                     disp_mode.r.height = Le32::from(height);
                     disp_mode.enabled = Le32::from(1);
