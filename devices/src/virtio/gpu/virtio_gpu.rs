@@ -36,7 +36,7 @@ use sync::Mutex;
 
 use vm_memory::{GuestAddress, GuestMemory};
 
-use vm_control::{MemSlot, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{DisplayControlResult, MemSlot, VmMemoryRequest, VmMemoryResponse};
 
 struct VirtioGpuResource {
     resource_id: u32,
@@ -380,6 +380,34 @@ impl VirtioGpu {
             .iter()
             .map(|scanout| (scanout.width, scanout.height))
             .collect::<Vec<_>>()
+    }
+
+    pub fn add_display(&mut self, width: u32, height: u32) -> DisplayControlResult {
+        let display_index = self.scanouts.len(); 
+        self.scanouts.push(
+            VirtioGpuScanout::new(
+                width,
+                height,
+                display_index as u32,
+            ));
+
+        DisplayControlResult::Ok
+    }
+
+    pub fn list_displays(&self) -> DisplayControlResult {
+        DisplayControlResult::DisplayList {
+            displays: self.display_info(),
+        }
+    }
+
+    pub fn remove_display(&mut self, display_id: u32) -> DisplayControlResult {
+        let display_id_usize = display_id as usize;
+        if display_id_usize >= self.scanouts.len() {
+            return DisplayControlResult::NoSuchDisplay { display_id };
+        }
+
+        self.scanouts.remove(display_id_usize);
+        DisplayControlResult::Ok
     }
 
     /// Processes the internal `display` events and returns `true` if any display was closed.

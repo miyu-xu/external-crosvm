@@ -161,6 +161,73 @@ pub fn do_modify_battery(
     }
 }
 
+pub enum ModifyDisplayError {
+    ArgMissing(&'static str),
+    ArgParseInt(&'static str, String, ParseIntError),
+    SocketFailed,
+    UnexpectedResponse(VmResponse),
+    UnknownCommand(String),
+    DisplayControl(DisplayControlResult),
+}
+
+impl fmt::Display for ModifyDisplayError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ModifyDisplayError::*;
+
+        match self {
+            ArgMissing(a) => write!(f, "argument missing: {}", a),
+            ArgParseInt(name, value, e) => write!(
+                f,
+                "failed to parse integer argument {} value `{}`: {}",
+                name, value, e
+            ),
+            SocketFailed => write!(f, "socket failed"),
+            UnexpectedResponse(r) => write!(f, "unexpected response: {}", r),
+            UnknownCommand(c) => write!(f, "unknown display command: `{}`", c),
+            DisplayControl(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+pub type ModifyDisplayResult<T> = std::result::Result<T, ModifyDisplayError>;
+
+pub fn do_display_add(
+    control_socket_path: &Path,
+    width: u32,
+    height: u32,
+) -> ModifyDisplayResult<DisplayControlResult> {
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::AddDisplay { width, height });
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
+pub fn do_display_list(control_socket_path: &Path) -> ModifyDisplayResult<DisplayControlResult> {
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::ListDisplays);
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
+pub fn do_display_remove(
+    control_socket_path: &Path,
+    display_id: u32,
+) -> ModifyDisplayResult<DisplayControlResult> {
+    let request = VmRequest::DisplayCommand(DisplayControlCommand::RemoveDisplay { display_id });
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyDisplayError::SocketFailed)?;
+    match response {
+        VmResponse::DisplayResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyDisplayError::UnexpectedResponse(r)),
+    }
+}
+
 pub type HandleRequestResult = std::result::Result<VmResponse, ()>;
 
 pub fn handle_request(request: &VmRequest, socket_path: &Path) -> HandleRequestResult {

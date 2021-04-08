@@ -305,7 +305,7 @@ pub struct virtio_gpu_display_one {
 unsafe impl DataInit for virtio_gpu_display_one {}
 
 /* VIRTIO_GPU_RESP_OK_DISPLAY_INFO */
-const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
+pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct virtio_gpu_resp_display_info {

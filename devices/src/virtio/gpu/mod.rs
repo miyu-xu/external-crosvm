@@ -23,6 +23,7 @@ use base::{
     debug, error, warn, AsRawDescriptor, Event, ExternalMapping, PollToken, RawDescriptor, Tube,
     WaitContext,
 };
+use vm_control::{DisplayControlCommand, DisplayControlResult};
 
 use data_model::*;
 
@@ -342,6 +343,18 @@ impl Frontend {
     /// Processes the internal `display` events and returns `true` if any display was closed.
     pub fn process_display(&mut self) -> bool {
         self.virtio_gpu.process_display()
+    }
+
+    fn add_display(&mut self, width: u32, height: u32) -> DisplayControlResult {
+        self.virtio_gpu.add_display(width, height)
+    }
+
+    fn list_displays(&self) -> DisplayControlResult {
+        self.virtio_gpu.list_displays()
+    }
+
+    fn remove_display(&mut self, display_id: u32) -> DisplayControlResult {
+        self.virtio_gpu.remove_display(display_id)
     }
 
     /// Processes incoming requests on `resource_bridge`.
@@ -796,6 +809,8 @@ struct Worker {
     resource_bridges: Vec<Tube>,
     kill_evt: Event,
     state: Frontend,
+    display_control_tube: Option<Tube>,
+    display_updated: Arc<Mutex<bool>>,
 }
 
 impl Worker {
@@ -805,6 +820,7 @@ impl Worker {
             CtrlQueue,
             CursorQueue,
             Display,
+            DisplayControlRequest,
             InterruptResample,
             Kill,
             ResourceBridge { index: usize },
@@ -814,6 +830,10 @@ impl Worker {
             (&self.ctrl_evt, Token::CtrlQueue),
             (&self.cursor_evt, Token::CursorQueue),
             (&*self.state.display().borrow(), Token::Display),
+            (
+                self.display_control_tube.as_ref().unwrap(),
+                Token::DisplayControlRequest,
+            ),
             (&self.kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
@@ -866,6 +886,7 @@ impl Worker {
             let mut signal_used_cursor = false;
             let mut signal_used_ctrl = false;
             let mut ctrl_available = false;
+            let mut needs_config_interrupt = false;
 
             // Clear the old values and re-initialize with false.
             process_resource_bridge.clear();
@@ -898,6 +919,49 @@ impl Worker {
                         let close_requested = self.state.process_display();
                         if close_requested {
                             let _ = self.exit_evt.write(1);
+                        }
+                    }
+                    Token::DisplayControlRequest => {
+                        let control_socket = match self.display_control_tube.as_ref() {
+                            Some(cs) => cs,
+                            None => {
+                                error!(
+                                    "display control socket request with no display control socket"
+                                );
+                                break 'wait;
+                            }
+                        };
+
+                        let req = match control_socket.recv() {
+                            Ok(req) => req,
+                            Err(e) => {
+                                error!("display control socket failed recv: {:?}", e);
+                                break 'wait;
+                            }
+                        };
+
+                        let resp = match req {
+                            DisplayControlCommand::AddDisplay { width, height } => {
+                                let resp = self.state.add_display(width, height);
+                                if resp == DisplayControlResult::Ok {
+                                    needs_config_interrupt = true;
+                                }
+                                resp
+                            }
+                            DisplayControlCommand::ListDisplays => self.state.list_displays(),
+                            DisplayControlCommand::RemoveDisplay { display_id } => {
+                                let resp = self.state.remove_display(display_id);
+                                if resp == DisplayControlResult::Ok {
+                                    needs_config_interrupt = true;
+                                }
+                                resp
+                            }
+                        };
+
+                        // We already know there is Some control_socket used to recv a request.
+                        if let Err(e) = self.display_control_tube.as_ref().unwrap().send(&resp) {
+                            error!("display control socket failed send: {}", e);
+                            break 'wait;
                         }
                     }
                     Token::ResourceBridge { index } => {
@@ -945,6 +1009,10 @@ impl Worker {
             if signal_used_cursor {
                 self.cursor_queue.signal_used(&self.mem);
             }
+
+            if needs_config_interrupt {
+                self.interrupt.signal_config_changed();
+            }
         }
     }
 }
@@ -976,13 +1044,14 @@ impl DisplayBackend {
 pub struct Gpu {
     exit_evt: Event,
     gpu_device_tube: Option<Tube>,
+    gpu_device_display_tube: Option<Tube>,
     resource_bridges: Vec<Tube>,
     event_devices: Vec<EventDevice>,
     kill_evt: Option<Event>,
-    config_event: bool,
     worker_thread: Option<thread::JoinHandle<()>>,
     display_backends: Vec<DisplayBackend>,
     display_params: Vec<GpuDisplayParameters>,
+    display_updated: Arc<Mutex<bool>>,
     rutabaga_builder: Option<RutabagaBuilder>,
     pci_bar: Option<Alloc>,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
@@ -996,6 +1065,7 @@ impl Gpu {
     pub fn new(
         exit_evt: Event,
         gpu_device_tube: Option<Tube>,
+        gpu_device_display_tube: Option<Tube>,
         resource_bridges: Vec<Tube>,
         display_backends: Vec<DisplayBackend>,
         gpu_parameters: &GpuParameters,
@@ -1060,13 +1130,14 @@ impl Gpu {
         Gpu {
             exit_evt,
             gpu_device_tube,
+            gpu_device_display_tube,
             resource_bridges,
             event_devices,
-            config_event: false,
             kill_evt: None,
             worker_thread: None,
             display_backends,
             display_params: gpu_parameters.displays.clone(),
+            display_updated: Arc::new(Mutex::new(false)),
             rutabaga_builder: Some(rutabaga_builder),
             pci_bar: None,
             map_request,
@@ -1115,7 +1186,8 @@ impl Gpu {
 
     fn get_config(&self) -> virtio_gpu_config {
         let mut events_read = 0;
-        if self.config_event {
+
+        if *self.display_updated.lock() {
             events_read |= VIRTIO_GPU_EVENT_DISPLAY;
         }
 
@@ -1146,7 +1218,7 @@ impl Gpu {
         virtio_gpu_config {
             events_read: Le32::from(events_read),
             events_clear: Le32::from(0),
-            num_scanouts: Le32::from(self.display_params.len() as u32),
+            num_scanouts: Le32::from(VIRTIO_GPU_MAX_SCANOUTS as u32),
             num_capsets: Le32::from(num_capsets),
         }
     }
@@ -1177,6 +1249,10 @@ impl VirtioDevice for Gpu {
 
         if let Some(ref gpu_device_tube) = self.gpu_device_tube {
             keep_rds.push(gpu_device_tube.as_raw_descriptor());
+        }
+
+        if let Some(ref gpu_device_display_tube) = &self.gpu_device_display_tube {
+            keep_rds.push(gpu_device_display_tube.as_raw_descriptor());
         }
 
         keep_rds.push(self.exit_evt.as_raw_descriptor());
@@ -1230,7 +1306,7 @@ impl VirtioDevice for Gpu {
         let mut cfg = self.get_config();
         copy_config(cfg.as_mut_slice(), offset, data, 0);
         if (cfg.events_clear.to_native() & VIRTIO_GPU_EVENT_DISPLAY) != 0 {
-            self.config_event = false;
+            *self.display_updated.lock() = false;
         }
     }
 
@@ -1271,13 +1347,20 @@ impl VirtioDevice for Gpu {
         let cursor_evt = queue_evts.remove(0);
         let display_backends = self.display_backends.clone();
         let display_params = self.display_params.clone();
+        let display_updated = self.display_updated.clone();
         let event_devices = self.event_devices.split_off(0);
         let map_request = Arc::clone(&self.map_request);
         let external_blob = self.external_blob;
         let udmabuf = self.udmabuf;
         let fence_state = Arc::new(Mutex::new(Default::default()));
-        if let (Some(gpu_device_tube), Some(pci_bar), Some(rutabaga_builder)) = (
+        if let (
+            Some(gpu_device_tube),
+            Some(gpu_device_display_tube),
+            Some(pci_bar),
+            Some(rutabaga_builder),
+        ) = (
             self.gpu_device_tube.take(),
+            self.gpu_device_display_tube.take(),
             self.pci_bar.take(),
             self.rutabaga_builder.take(),
         ) {
@@ -1318,6 +1401,8 @@ impl VirtioDevice for Gpu {
                             resource_bridges,
                             kill_evt,
                             state: Frontend::new(virtio_gpu, fence_state),
+                            display_control_tube: Some(gpu_device_display_tube),
+                            display_updated,
                         }
                         .run()
                     });

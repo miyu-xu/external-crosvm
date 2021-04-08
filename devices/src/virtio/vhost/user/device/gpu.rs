@@ -471,6 +471,7 @@ pub fn run_gpu_device(program_name: &str, args: std::env::Args) -> anyhow::Resul
 
     // Initialized later.
     let gpu_device_tube = None;
+    let gpu_device_display_tube = None;
 
     let mut display_backends = vec![
         virtio::DisplayBackend::X(matches.opt_str("x-display")),
@@ -495,6 +496,7 @@ pub fn run_gpu_device(program_name: &str, args: std::env::Args) -> anyhow::Resul
     let gpu = Rc::new(RefCell::new(Gpu::new(
         exit_evt,
         gpu_device_tube,
+        gpu_device_display_tube,
         Vec::new(), // resource_bridges, handled separately by us
         display_backends,
         &gpu_parameters,

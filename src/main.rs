@@ -53,10 +53,11 @@ use disk::{
 };
 use vm_control::{
     client::{
-        do_modify_battery, do_usb_attach, do_usb_detach, do_usb_list, handle_request, vms_request,
-        ModifyUsbError, ModifyUsbResult,
+        do_display_add, do_display_list, do_display_remove, do_modify_battery, do_usb_attach,
+        do_usb_detach, do_usb_list, handle_request, vms_request, ModifyDisplayError,
+        ModifyDisplayResult, ModifyUsbError, ModifyUsbResult,
     },
-    BalloonControlCommand, BatteryType, DiskControlCommand, UsbControlResult, VmRequest,
+    BalloonControlCommand, BatteryType, DiskControlCommand, DisplayControlCommand, DisplayControlResult, UsbControlResult, VmRequest,
     VmResponse,
 };
 
@@ -2903,6 +2904,86 @@ fn modify_usb(mut args: std::env::Args) -> std::result::Result<(), ()> {
     }
 }
 
+fn display_add(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let width: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("WIDTH")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("WIDTH", p.to_owned(), e))
+        })?;
+
+    let height: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("HEIGHT")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("HEIGHT", p.to_owned(), e))
+        })?;
+
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_add(control_socket_path, width, height)
+}
+
+fn display_list(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_list(control_socket_path)
+}
+
+fn display_remove(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let display_id: u32 =
+        args.next()
+            .map_or(Err(ModifyDisplayError::ArgMissing("DISPLAY_ID")), |p| {
+                p.parse::<u32>()
+                    .map_err(|e| ModifyDisplayError::ArgParseInt("DISPLAY_ID", p.to_owned(), e))
+            })?;
+
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_remove(control_socket_path, display_id)
+}
+
+fn modify_display(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    if args.len() < 2 {
+        print_help(
+            "crosvm display",
+            "[create DISPLAY_WIDTH:DISPLAY_HEIGHT | delete DISPLAY_ID] VM_SOCKET...",
+            &[],
+        );
+        return Err(());
+    }
+
+    // This unwrap will not panic because of the above length check.
+    let command = args.next().unwrap();
+
+    let result = match command.as_ref() {
+        "add" => display_add(args),
+        "list" => display_list(args),
+        "remove" => display_remove(args),
+        other => Err(ModifyDisplayError::UnknownCommand(other.to_owned())),
+    };
+
+    match result {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 #[allow(clippy::unnecessary_wraps)]
 fn pkg_version() -> std::result::Result<(), ()> {
     const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -2967,6 +3048,7 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         Some("create_qcow2") => create_qcow2(args),
         Some("device") => start_device(args),
         Some("disk") => disk_cmd(args),
+        Some("display") => modify_display(args),
         Some("make_rt") => make_rt(args),
         Some("resume") => resume_vms(args),
         Some("run") => run_vm(args),

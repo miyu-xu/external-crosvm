@@ -721,6 +721,7 @@ fn create_gpu_device(
     cfg: &Config,
     exit_evt: &Event,
     gpu_device_tube: Tube,
+    display_device_tube: Tube,
     resource_bridges: Vec<Tube>,
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
@@ -749,6 +750,7 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().context("failed to clone event")?,
         Some(gpu_device_tube),
+        Some(display_device_tube),
         resource_bridges,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
@@ -1303,6 +1305,7 @@ fn create_virtio_devices(
     _exit_evt: &Event,
     wayland_device_tube: Tube,
     gpu_device_tube: Tube,
+    gpu_device_display_tube: Tube,
     vhost_user_gpu_tubes: Vec<(Tube, Tube)>,
     balloon_device_tube: Tube,
     disk_device_tubes: &mut Vec<Tube>,
@@ -1534,6 +1537,7 @@ fn create_virtio_devices(
                 cfg,
                 _exit_evt,
                 gpu_device_tube,
+                gpu_device_display_tube,
                 resource_bridges,
                 // Use the unnamed socket for GPU display screens.
                 cfg.wayland_socket_paths.get(""),
@@ -1702,6 +1706,7 @@ fn create_devices(
     control_tubes: &mut Vec<TaggedControlTube>,
     wayland_device_tube: Tube,
     gpu_device_tube: Tube,
+    gpu_device_display_tube: Tube,
     vhost_user_gpu_tubes: Vec<(Tube, Tube)>,
     balloon_device_tube: Tube,
     disk_device_tubes: &mut Vec<Tube>,
@@ -1717,6 +1722,7 @@ fn create_devices(
         exit_evt,
         wayland_device_tube,
         gpu_device_tube,
+        gpu_device_display_tube,
         vhost_user_gpu_tubes,
         balloon_device_tube,
         disk_device_tubes,
@@ -2595,6 +2601,10 @@ where
     let (gpu_host_tube, gpu_device_tube) = Tube::pair().context("failed to create tube")?;
     control_tubes.push(TaggedControlTube::VmMemory(gpu_host_tube));
 
+    let (display_host_tube, display_device_tube) =
+        Tube::pair().context("failed to create tube")?;
+    //control_tubes.push(TaggedControlTube::VmMemory(display_host_tube));
+
     if let Some(ioapic_host_tube) = ioapic_host_tube {
         control_tubes.push(TaggedControlTube::VmIrq(ioapic_host_tube));
     }
@@ -2666,6 +2676,7 @@ where
         &mut control_tubes,
         wayland_device_tube,
         gpu_device_tube,
+        display_device_tube,
         vhost_user_gpu_tubes,
         balloon_device_tube,
         &mut disk_device_tubes,
@@ -2814,6 +2825,7 @@ where
         control_tubes,
         balloon_host_tube,
         &disk_host_tubes,
+        display_host_tube,
         #[cfg(feature = "usb")]
         usb_control_tube,
         exit_evt,
@@ -2937,6 +2949,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut control_tubes: Vec<TaggedControlTube>,
     balloon_host_tube: Tube,
     disk_host_tubes: &[Tube],
+    display_host_tube: Tube,
     #[cfg(feature = "usb")] usb_control_tube: Tube,
     exit_evt: Event,
     sigchld_fd: SignalFd,
@@ -3166,6 +3179,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                         &balloon_host_tube,
                                         &mut balloon_stats_id,
                                         disk_host_tubes,
+                                        &display_host_tube,
                                         #[cfg(feature = "usb")]
                                         Some(&usb_control_tube),
                                         #[cfg(not(feature = "usb"))]
