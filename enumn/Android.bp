@@ -9,8 +9,8 @@ package {
     default_applicable_licenses: ["external_crosvm_license"],
 }
 
-rust_test_host {
-    name: "enumn_host_test_src_lib",
+rust_defaults {
+    name: "enumn_defaults",
     defaults: ["crosvm_defaults"],
     crate_name: "enumn",
     srcs: ["src/lib.rs"],
@@ -22,10 +22,21 @@ rust_test_host {
         "libquote",
         "libsyn",
     ],
+}
+
+rust_test_host {
+    name: "enumn_host_test_src_lib",
+    defaults: ["enumn_defaults"],
     test_options: {
         unit_test: true,
     },
 }
+
+// This doesn't build
+// rust_test {
+//     name: "enumn_device_test_src_lib",
+//     defaults: ["enumn_defaults"],
+// }
 
 rust_proc_macro {
     name: "libenumn",
@@ -41,7 +52,7 @@ rust_proc_macro {
 }
 
 // dependent_library ["feature_list"]
-//   proc-macro2-1.0.24 "default,proc-macro"
+//   proc-macro2-1.0.26 "default,proc-macro"
 //   quote-1.0.9 "default,proc-macro"
-//   syn-1.0.61 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
+//   syn-1.0.68 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
 //   unicode-xid-0.2.1 "default"

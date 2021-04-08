@@ -9,8 +9,8 @@ package {
     default_applicable_licenses: ["external_crosvm_license"],
 }
 
-rust_test_host {
-    name: "bit_field_derive_host_test_bit_field_derive",
+rust_defaults {
+    name: "bit_field_derive_defaults",
     defaults: ["crosvm_defaults"],
     crate_name: "bit_field_derive",
     srcs: ["bit_field_derive.rs"],
@@ -23,6 +23,20 @@ rust_test_host {
         "libsyn",
     ],
 }
+
+rust_test_host {
+    name: "bit_field_derive_host_test_bit_field_derive",
+    defaults: ["bit_field_derive_defaults"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+// This doesn't build because libproc_macro2 and libquote are not available
+// rust_test {
+//     name: "bit_field_derive_device_test_bit_field_derive",
+//     defaults: ["bit_field_derive_defaults"],
+// }
 
 rust_proc_macro {
     name: "libbit_field_derive",
@@ -38,7 +52,7 @@ rust_proc_macro {
 }
 
 // dependent_library ["feature_list"]
-//   proc-macro2-1.0.24 "default,proc-macro"
+//   proc-macro2-1.0.26 "default,proc-macro"
 //   quote-1.0.9 "default,proc-macro"
-//   syn-1.0.61 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
+//   syn-1.0.68 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
 //   unicode-xid-0.2.1 "default"
