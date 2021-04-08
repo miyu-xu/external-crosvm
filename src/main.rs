@@ -29,17 +29,21 @@ use crosvm::{
     VhostUserFsOption, VhostUserOption, DISK_ID_LEN,
 };
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{DEFAULT_DISPLAY_WIDTH, DEFAULT_DISPLAY_HEIGHT, GpuMode, GpuDisplayParameters, GpuParameters};
+use devices::virtio::gpu::{
+    GpuDisplayParameters, GpuMode, GpuParameters, DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH,
+};
 use devices::ProtectionType;
 #[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
 use vm_control::{
     client::{
-        do_modify_battery, do_usb_attach, do_usb_detach, do_usb_list, handle_request, vms_request,
-        ModifyUsbError, ModifyUsbResult,
+        do_display_add, do_display_list, do_display_remove, do_modify_battery, do_usb_attach,
+        do_usb_detach, do_usb_list, handle_request, vms_request, ModifyDisplayError,
+        ModifyDisplayResult, ModifyUsbError, ModifyUsbResult,
     },
-    BalloonControlCommand, BatteryType, DiskControlCommand, UsbControlResult, VmRequest,
+    BalloonControlCommand, BatteryType, DiskControlCommand, DisplayControlCommand,
+    DisplayControlResult, UsbControlResult, VmRequest,
 };
 
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
@@ -193,8 +197,8 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
     #[cfg(feature = "gfxstream")]
     let mut angle_specified = false;
 
-    let mut display_w : Option<u32> = None;
-    let mut display_h : Option<u32> = None;
+    let mut display_w: Option<u32> = None;
+    let mut display_h: Option<u32> = None;
 
     if let Some(s) = s {
         let opts = s
@@ -356,25 +360,23 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
                     }
                 }
                 "width" => {
-                    let width =
-                        v.parse::<u32>()
-                            .map_err(|_| argument::Error::InvalidValue {
-                                value: v.to_string(),
-                                expected: String::from(
-                                    "gpu parameter 'width' must be a valid integer",
-                                ),
-                            })?;
+                    let width = v
+                        .parse::<u32>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from("gpu parameter 'width' must be a valid integer"),
+                        })?;
                     display_w = Some(width);
                 }
                 "height" => {
-                    let height =
-                        v.parse::<u32>()
-                            .map_err(|_| argument::Error::InvalidValue {
-                                value: v.to_string(),
-                                expected: String::from(
-                                    "gpu parameter 'height' must be a valid integer",
-                                ),
-                            })?;
+                    let height = v
+                        .parse::<u32>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'height' must be a valid integer",
+                            ),
+                        })?;
                     display_h = Some(height);
                 }
                 "cache-path" => gpu_params.cache_path = Some(v.to_string()),
@@ -408,11 +410,13 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
         if display_w.is_none() || display_h.is_none() {
             return Err(argument::Error::InvalidValue {
                 value: s.unwrap_or("").to_string(),
-                expected: String::from("gpu must include both 'width' and 'height' if either is supplied"),
+                expected: String::from(
+                    "gpu must include both 'width' and 'height' if either is supplied",
+                ),
             });
         }
 
-        gpu_params.displays.push(GpuDisplayParameters{
+        gpu_params.displays.push(GpuDisplayParameters {
             width: display_w.unwrap(),
             height: display_h.unwrap(),
         });
@@ -441,9 +445,12 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
 }
 
 #[cfg(feature = "gpu")]
-fn parse_gpu_display_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argument::Result<()> {
-    let mut display_w : Option<u32> = None;
-    let mut display_h : Option<u32> = None;
+fn parse_gpu_display_options(
+    s: Option<&str>,
+    gpu_params: &mut GpuParameters,
+) -> argument::Result<()> {
+    let mut display_w: Option<u32> = None;
+    let mut display_h: Option<u32> = None;
 
     if let Some(s) = s {
         let opts = s
@@ -454,25 +461,23 @@ fn parse_gpu_display_options(s: Option<&str>, gpu_params: &mut GpuParameters) ->
         for (k, v) in opts {
             match k {
                 "width" => {
-                    let width =
-                        v.parse::<u32>()
-                            .map_err(|_| argument::Error::InvalidValue {
-                                value: v.to_string(),
-                                expected: String::from(
-                                    "gpu parameter 'width' must be a valid integer",
-                                ),
-                            })?;
+                    let width = v
+                        .parse::<u32>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from("gpu parameter 'width' must be a valid integer"),
+                        })?;
                     display_w = Some(width);
                 }
                 "height" => {
-                    let height =
-                        v.parse::<u32>()
-                            .map_err(|_| argument::Error::InvalidValue {
-                                value: v.to_string(),
-                                expected: String::from(
-                                    "gpu parameter 'height' must be a valid integer",
-                                ),
-                            })?;
+                    let height = v
+                        .parse::<u32>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'height' must be a valid integer",
+                            ),
+                        })?;
                     display_h = Some(height);
                 }
                 "" => {}
@@ -493,7 +498,7 @@ fn parse_gpu_display_options(s: Option<&str>, gpu_params: &mut GpuParameters) ->
         });
     }
 
-    gpu_params.displays.push(GpuDisplayParameters{
+    gpu_params.displays.push(GpuDisplayParameters {
         width: display_w.unwrap(),
         height: display_h.unwrap(),
     });
@@ -2416,6 +2421,86 @@ fn modify_usb(mut args: std::env::Args) -> std::result::Result<(), ()> {
     }
 }
 
+fn display_add(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let width: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("WIDTH")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("WIDTH", p.to_owned(), e))
+        })?;
+
+    let height: u32 = args
+        .next()
+        .map_or(Err(ModifyDisplayError::ArgMissing("HEIGHT")), |p| {
+            p.parse::<u32>()
+                .map_err(|e| ModifyDisplayError::ArgParseInt("HEIGHT", p.to_owned(), e))
+        })?;
+
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_add(control_socket_path, width, height)
+}
+
+fn display_list(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_list(control_socket_path)
+}
+
+fn display_remove(mut args: std::env::Args) -> ModifyDisplayResult<DisplayControlResult> {
+    let display_id: u32 =
+        args.next()
+            .map_or(Err(ModifyDisplayError::ArgMissing("DISPLAY_ID")), |p| {
+                p.parse::<u32>()
+                    .map_err(|e| ModifyDisplayError::ArgParseInt("DISPLAY_ID", p.to_owned(), e))
+            })?;
+
+    let control_socket_path = args
+        .next()
+        .ok_or(ModifyDisplayError::ArgMissing("control socket path"))?;
+    let control_socket_path = Path::new(&control_socket_path);
+
+    do_display_remove(control_socket_path, display_id)
+}
+
+fn modify_display(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    if args.len() < 2 {
+        print_help(
+            "crosvm display",
+            "[create DISPLAY_WIDTH:DISPLAY_HEIGHT | delete DISPLAY_ID] VM_SOCKET...",
+            &[],
+        );
+        return Err(());
+    }
+
+    // This unwrap will not panic because of the above length check.
+    let command = args.next().unwrap();
+
+    let result = match command.as_ref() {
+        "add" => display_add(args),
+        "list" => display_list(args),
+        "remove" => display_remove(args),
+        other => Err(ModifyDisplayError::UnknownCommand(other.to_owned())),
+    };
+
+    match result {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 fn print_usage() {
     print_help("crosvm", "[command]", &[]);
     println!("Commands:");
@@ -2491,6 +2576,7 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         Some("balloon_stats") => balloon_stats(args),
         Some("create_qcow2") => create_qcow2(args),
         Some("disk") => disk_cmd(args),
+        Some("display") => modify_display(args),
         Some("usb") => modify_usb(args),
         Some("version") => pkg_version(),
         Some("battery") => modify_battery(args),
