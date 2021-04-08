@@ -312,6 +312,50 @@ impl Display for UsbControlResult {
 }
 
 #[derive(MsgOnSocket, Debug)]
+pub enum DisplayControlCommand {
+    AddDisplay {
+        width: u32,
+        height: u32,
+    },
+    ListDisplays,
+    RemoveDisplay {
+        display_id: u32,
+    },
+}
+
+#[derive(MsgOnSocket, Debug, PartialEq)]
+pub enum DisplayControlResult {
+    Ok,
+    DisplayList {
+        displays: Vec<(u32, u32)>,
+    },
+    TooManyDisplays(usize),
+    NoSuchDisplay { display_id: u32 },
+}
+
+impl Display for DisplayControlResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::DisplayControlResult::*;
+
+        match self {
+            Ok => write!(f, "ok"),
+            DisplayList { displays } => {
+                write!(f, "Displays {{")?;
+                for (display_index, display) in displays.iter().enumerate() {
+                    write!(f, "\n  Display {} {{", display_index)?;
+                    write!(f, "\n    width: {}", display.0)?;
+                    write!(f, "\n    height: {}", display.1)?;
+                    write!(f, "\n  }}")?;
+                }
+                write!(f, "\n}}")
+            },
+            TooManyDisplays(n) => write!(f, "too_many_displays {}", n),
+            NoSuchDisplay { display_id } => write!(f, "no_such_display {}", display_id),
+        }
+    }
+}
+
+#[derive(MsgOnSocket, Debug)]
 pub enum VmMemoryRequest {
     /// Register shared memory represented by the given descriptor into guest address space.
     /// The response variant is `VmResponse::RegisterMemory`.
@@ -928,6 +972,9 @@ pub type BatControlResponseSocket = MsgSocket<BatControlResult, BatControlComman
 pub type DiskControlRequestSocket = MsgSocket<DiskControlCommand, DiskControlResult>;
 pub type DiskControlResponseSocket = MsgSocket<DiskControlResult, DiskControlCommand>;
 
+pub type DisplayControlRequestSocket = MsgSocket<DisplayControlCommand, DisplayControlResult>;
+pub type DisplayControlResponseSocket = MsgSocket<DisplayControlResult, DisplayControlCommand>;
+
 pub type FsMappingRequestSocket = MsgSocket<FsMappingRequest, VmResponse>;
 pub type FsMappingResponseSocket = MsgSocket<VmResponse, FsMappingRequest>;
 
@@ -964,6 +1011,8 @@ pub enum VmRequest {
         disk_index: usize,
         command: DiskControlCommand,
     },
+    /// Command to modify displays.
+    DisplayCommand(DisplayControlCommand),
     /// Command to use controller.
     UsbCommand(UsbControlCommand),
     /// Command to set battery.
@@ -1031,6 +1080,7 @@ impl VmRequest {
         run_mode: &mut Option<VmRunMode>,
         balloon_host_socket: &BalloonControlRequestSocket,
         disk_host_sockets: &[DiskControlRequestSocket],
+        display_host_socket: &DisplayControlRequestSocket,
         usb_control_socket: &UsbControlSocket,
         bat_control: &mut Option<BatControl>,
     ) -> VmResponse {
@@ -1092,6 +1142,20 @@ impl VmRequest {
                     }
                 } else {
                     VmResponse::Err(SysError::new(ENODEV))
+                }
+            }
+            VmRequest::DisplayCommand(ref cmd) => {
+                let res = display_host_socket.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to display control socket: {}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match display_host_socket.recv() {
+                    Ok(response) => VmResponse::DisplayResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from display control socket: {}", e);
+                        VmResponse::Err(SysError::new(EIO))
+                    }
                 }
             }
             VmRequest::UsbCommand(ref cmd) => {
@@ -1166,6 +1230,8 @@ pub enum VmResponse {
     UsbResponse(UsbControlResult),
     /// Results of battery control commands.
     BatResponse(BatControlResult),
+    /// Results of display control commands.
+    DisplayResponse(DisplayControlResult),
 }
 
 impl Display for VmResponse {
@@ -1194,6 +1260,7 @@ impl Display for VmResponse {
                 balloon_actual, stats
             ),
             UsbResponse(result) => write!(f, "usb control request get result {:?}", result),
+            DisplayResponse(result) => write!(f, "display control request result {:?}", result),
             BatResponse(result) => write!(f, "{}", result),
         }
     }
