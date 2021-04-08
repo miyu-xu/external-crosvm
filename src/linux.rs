@@ -62,7 +62,9 @@ use base::{
 use vm_control::{
     BalloonControlCommand, BalloonControlRequestSocket, BalloonControlResponseSocket,
     BalloonControlResult, BalloonStats, DiskControlCommand, DiskControlRequestSocket,
-    DiskControlResponseSocket, DiskControlResult, FsMappingRequest, FsMappingRequestSocket,
+    DiskControlResponseSocket, DiskControlResult, DisplayControlCommand,
+    DisplayControlRequestSocket, DisplayControlResponseSocket, DisplayControlResult,
+    FsMappingRequest, FsMappingRequestSocket,
     FsMappingResponseSocket, IrqSetup, UsbControlSocket, VcpuControl, VmControlResponseSocket,
     VmIrqRequest, VmIrqRequestSocket, VmIrqResponse, VmIrqResponseSocket,
     VmMemoryControlRequestSocket, VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse,
@@ -805,6 +807,7 @@ fn create_gpu_device(
     cfg: &Config,
     exit_evt: &Event,
     gpu_device_socket: VmMemoryControlRequestSocket,
+    gpu_device_display_socket: DisplayControlResponseSocket,
     gpu_sockets: Vec<virtio::resource_bridge::ResourceResponseSocket>,
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
@@ -832,6 +835,7 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEvent)?,
         Some(gpu_device_socket),
+        Some(gpu_device_display_socket),
         gpu_sockets,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
@@ -1312,6 +1316,7 @@ fn create_virtio_devices(
     _exit_evt: &Event,
     wayland_device_socket: VmMemoryControlRequestSocket,
     gpu_device_socket: VmMemoryControlRequestSocket,
+    gpu_device_display_socket: DisplayControlResponseSocket,
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
@@ -1494,6 +1499,7 @@ fn create_virtio_devices(
                 cfg,
                 _exit_evt,
                 gpu_device_socket,
+                gpu_device_display_socket,
                 resource_bridges,
                 // Use the unnamed socket for GPU display screens.
                 cfg.wayland_socket_paths.get(""),
@@ -1549,6 +1555,7 @@ fn create_devices(
     control_sockets: &mut Vec<TaggedControlSocket>,
     wayland_device_socket: VmMemoryControlRequestSocket,
     gpu_device_socket: VmMemoryControlRequestSocket,
+    gpu_device_display_socket: DisplayControlResponseSocket,
     balloon_device_socket: BalloonControlResponseSocket,
     disk_device_sockets: &mut Vec<DiskControlResponseSocket>,
     pmem_device_sockets: &mut Vec<VmMsyncRequestSocket>,
@@ -1564,6 +1571,7 @@ fn create_devices(
         exit_evt,
         wayland_device_socket,
         gpu_device_socket,
+        gpu_device_display_socket,
         balloon_device_socket,
         disk_device_sockets,
         pmem_device_sockets,
@@ -2353,6 +2361,9 @@ where
         msg_socket::pair::<VmMemoryResponse, VmMemoryRequest>().map_err(Error::CreateSocket)?;
     control_sockets.push(TaggedControlSocket::VmMemory(gpu_host_socket));
 
+    let (gpu_host_display_socket, gpu_device_display_socket) =
+        msg_socket::pair::<DisplayControlCommand, DisplayControlResult>().map_err(Error::CreateSocket)?;
+
     let (ioapic_host_socket, ioapic_device_socket) =
         msg_socket::pair::<VmIrqResponse, VmIrqRequest>().map_err(Error::CreateSocket)?;
     control_sockets.push(TaggedControlSocket::VmIrq(ioapic_host_socket));
@@ -2418,6 +2429,7 @@ where
                 &mut control_sockets,
                 wayland_device_socket,
                 gpu_device_socket,
+                gpu_device_display_socket,
                 balloon_device_socket,
                 &mut disk_device_sockets,
                 &mut pmem_device_sockets,
@@ -2437,6 +2449,7 @@ where
         control_sockets,
         balloon_host_socket,
         &disk_host_sockets,
+        gpu_host_display_socket,
         usb_control_socket,
         sigchld_fd,
         cfg.sandbox,
@@ -2634,6 +2647,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static, I: IrqChipArch + '
     mut control_sockets: Vec<TaggedControlSocket>,
     balloon_host_socket: BalloonControlRequestSocket,
     disk_host_sockets: &[DiskControlRequestSocket],
+    display_host_socket: DisplayControlRequestSocket,
     usb_control_socket: UsbControlSocket,
     sigchld_fd: SignalFd,
     sandbox: bool,
@@ -2909,6 +2923,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static, I: IrqChipArch + '
                                         &mut run_mode_opt,
                                         &balloon_host_socket,
                                         disk_host_sockets,
+                                        &display_host_socket,
                                         &usb_control_socket,
                                         &mut linux.bat_control,
                                     );
