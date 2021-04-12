@@ -9,17 +9,19 @@ use std::ptr;
 use std::time::Duration;
 
 use libc::{c_void, dup, eventfd, read, write, POLLIN};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    errno_result, AsRawDescriptor, FromRawDescriptor, IntoRawDescriptor, RawDescriptor, Result,
-    SafeDescriptor,
+    duration_to_timespec, errno_result, AsRawDescriptor, FromRawDescriptor, IntoRawDescriptor,
+    RawDescriptor, Result, SafeDescriptor,
 };
 
 /// A safe wrapper around a Linux eventfd (man 2 eventfd).
 ///
 /// An eventfd is useful because it is sendable across processes and can be used for signaling in
 /// and out of the KVM API. They can also be polled like any other file descriptor.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct EventFd {
     event_handle: SafeDescriptor,
 }
@@ -94,12 +96,7 @@ impl EventFd {
             events: POLLIN,
             revents: 0,
         };
-        // Safe because we are zero-initializing a struct with only primitive member fields.
-        let mut timeoutspec: libc::timespec = unsafe { mem::zeroed() };
-        timeoutspec.tv_sec = timeout.as_secs() as libc::time_t;
-        // nsec always fits in i32 because subsec_nanos is defined to be less than one billion.
-        let nsec = timeout.subsec_nanos() as i32;
-        timeoutspec.tv_nsec = libc::c_long::from(nsec);
+        let timeoutspec: libc::timespec = duration_to_timespec(timeout);
         // Safe because this only modifies |pfd| and we check the return value
         let ret = unsafe {
             libc::ppoll(

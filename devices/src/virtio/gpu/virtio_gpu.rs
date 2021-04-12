@@ -10,7 +10,7 @@ use std::result::Result;
 use std::sync::Arc;
 
 use crate::virtio::resource_bridge::{BufferInfo, PlaneInfo, ResourceInfo, ResourceResponse};
-use base::{error, AsRawDescriptor, ExternalMapping};
+use base::{error, AsRawDescriptor, ExternalMapping, Tube};
 
 use data_model::VolatileSlice;
 
@@ -20,21 +20,20 @@ use rutabaga_gfx::{
     RutabagaIovec, Transfer3D,
 };
 
-use msg_socket::{MsgReceiver, MsgSender};
-
 use libc::c_void;
 
 use resources::Alloc;
 
-use super::protocol::{GpuResponse::*, GpuResponsePlaneInfo, VirtioGpuResult};
+use super::protocol::{
+    GpuResponse::{self, *},
+    GpuResponsePlaneInfo, VirtioGpuResult,
+};
 use super::VirtioScanoutBlobData;
 use sync::Mutex;
 
 use vm_memory::{GuestAddress, GuestMemory};
 
-use vm_control::{
-    MaybeOwnedDescriptor, MemSlot, VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
-};
+use vm_control::{MemSlot, VmMemoryRequest, VmMemoryResponse};
 
 struct VirtioGpuResource {
     resource_id: u32,
@@ -78,7 +77,7 @@ pub struct VirtioGpu {
     cursor_surface_id: Option<u32>,
     // Maps event devices to scanout number.
     event_devices: Map<u32, u32>,
-    gpu_device_socket: VmMemoryControlRequestSocket,
+    gpu_device_tube: Tube,
     pci_bar: Alloc,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
     rutabaga: Rutabaga,
@@ -116,7 +115,7 @@ impl VirtioGpu {
         display_height: u32,
         rutabaga_builder: RutabagaBuilder,
         event_devices: Vec<EventDevice>,
-        gpu_device_socket: VmMemoryControlRequestSocket,
+        gpu_device_tube: Tube,
         pci_bar: Alloc,
         map_request: Arc<Mutex<Option<ExternalMapping>>>,
         external_blob: bool,
@@ -134,7 +133,7 @@ impl VirtioGpu {
             scanout_surface_id: None,
             cursor_resource_id: None,
             cursor_surface_id: None,
-            gpu_device_socket,
+            gpu_device_tube,
             pci_bar,
             map_request,
             rutabaga,
@@ -424,7 +423,7 @@ impl VirtioGpu {
     /// If supported, export the resource with the given `resource_id` to a file.
     pub fn export_resource(&mut self, resource_id: u32) -> ResourceResponse {
         let file = match self.rutabaga.export_blob(resource_id) {
-            Ok(handle) => handle.os_handle,
+            Ok(handle) => handle.os_handle.into(),
             Err(_) => return ResourceResponse::Invalid,
         };
 
@@ -460,7 +459,7 @@ impl VirtioGpu {
     pub fn export_fence(&self, fence_id: u32) -> ResourceResponse {
         match self.rutabaga.export_fence(fence_id) {
             Ok(handle) => ResourceResponse::Resource(ResourceInfo::Fence {
-                file: handle.os_handle,
+                file: handle.os_handle.into(),
             }),
             Err(_) => ResourceResponse::Invalid,
         }
@@ -517,7 +516,7 @@ impl VirtioGpu {
 
         // Rely on rutabaga to check for duplicate resource ids.
         self.resources.insert(resource_id, resource);
-        self.result_from_query(resource_id)
+        Ok(self.result_from_query(resource_id))
     }
 
     /// Attaches backing memory to the given resource, represented by a `Vec` of `(address, size)`
@@ -600,7 +599,7 @@ impl VirtioGpu {
 
         // Rely on rutabaga to check for duplicate resource ids.
         self.resources.insert(resource_id, resource);
-        self.result_from_query(resource_id)
+        Ok(self.result_from_query(resource_id))
     }
 
     /// Uses the hypervisor to map the rutabaga blob resource.
@@ -614,9 +613,9 @@ impl VirtioGpu {
         let export = self.rutabaga.export_blob(resource_id);
 
         let request = match export {
-            Ok(ref export) => VmMemoryRequest::RegisterFdAtPciBarOffset(
+            Ok(export) => VmMemoryRequest::RegisterFdAtPciBarOffset(
                 self.pci_bar,
-                MaybeOwnedDescriptor::Borrowed(export.os_handle.as_raw_descriptor()),
+                export.os_handle,
                 resource.size as usize,
                 offset,
             ),
@@ -638,8 +637,8 @@ impl VirtioGpu {
             }
         };
 
-        self.gpu_device_socket.send(&request)?;
-        let response = self.gpu_device_socket.recv()?;
+        self.gpu_device_tube.send(&request)?;
+        let response = self.gpu_device_tube.recv()?;
 
         match response {
             VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
@@ -660,8 +659,8 @@ impl VirtioGpu {
 
         let slot = resource.slot.ok_or(ErrUnspec)?;
         let request = VmMemoryRequest::UnregisterMemory(slot);
-        self.gpu_device_socket.send(&request)?;
-        let response = self.gpu_device_socket.recv()?;
+        self.gpu_device_tube.send(&request)?;
+        let response = self.gpu_device_tube.recv()?;
 
         match response {
             VmMemoryResponse::Ok => {
@@ -704,7 +703,7 @@ impl VirtioGpu {
     }
 
     // Non-public function -- no doc comment needed!
-    fn result_from_query(&mut self, resource_id: u32) -> VirtioGpuResult {
+    fn result_from_query(&mut self, resource_id: u32) -> GpuResponse {
         match self.rutabaga.query(resource_id) {
             Ok(query) => {
                 let mut plane_info = Vec::with_capacity(4);
@@ -715,12 +714,12 @@ impl VirtioGpu {
                     });
                 }
                 let format_modifier = query.modifier;
-                Ok(OkResourcePlaneInfo {
+                OkResourcePlaneInfo {
                     format_modifier,
                     plane_info,
-                })
+                }
             }
-            Err(_) => Ok(OkNoData),
+            Err(_) => OkNoData,
         }
     }
 }

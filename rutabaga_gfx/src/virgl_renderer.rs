@@ -9,7 +9,6 @@
 
 use std::cell::RefCell;
 use std::ffi::CString;
-use std::fs::File;
 use std::mem::{size_of, transmute};
 use std::os::raw::{c_char, c_void};
 use std::ptr::null_mut;
@@ -19,7 +18,7 @@ use std::sync::Arc;
 
 use base::{
     warn, Error as SysError, ExternalMapping, ExternalMappingError, ExternalMappingResult,
-    FromRawDescriptor,
+    FromRawDescriptor, SafeDescriptor,
 };
 
 use crate::generated::virgl_renderer_bindings::*;
@@ -181,7 +180,10 @@ impl VirglRenderer {
         // Initialize it only once and use the non-send/non-sync Renderer struct to keep things tied
         // to whichever thread called this function first.
         static INIT_ONCE: AtomicBool = AtomicBool::new(false);
-        if INIT_ONCE.compare_and_swap(false, true, Ordering::Acquire) {
+        if INIT_ONCE
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
+            .is_err()
+        {
             return Err(RutabagaError::AlreadyInUse);
         }
 
@@ -266,7 +268,7 @@ impl VirglRenderer {
                 return Err(RutabagaError::Unsupported);
             }
 
-            let dmabuf = unsafe { File::from_raw_descriptor(fd) };
+            let dmabuf = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
             Ok(Arc::new(RutabagaHandle {
                 os_handle: dmabuf,
                 handle_type: RUTABAGA_MEM_HANDLE_TYPE_DMABUF,
@@ -536,7 +538,7 @@ impl RutabagaComponent for VirglRenderer {
 
             // Safe because the FD was just returned by a successful virglrenderer call so it must
             // be valid and owned by us.
-            let fence = unsafe { File::from_raw_descriptor(fd) };
+            let fence = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
             Ok(RutabagaHandle {
                 os_handle: fence,
                 handle_type: RUTABAGA_FENCE_HANDLE_TYPE_SYNC_FD,

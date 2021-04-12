@@ -24,13 +24,14 @@ use arch::{
 };
 use base::{
     debug, error, getpid, info, kill_process_group, net::UnixSeqpacket, reap_child, syslog,
-    validate_raw_descriptor, warn, FromRawDescriptor, IntoRawDescriptor, RawDescriptor,
-    SafeDescriptor,
+    validate_raw_descriptor, warn, FromRawDescriptor, RawDescriptor, Tube,
 };
+#[cfg(feature = "direct")]
+use crosvm::DirectIoOption;
 use crosvm::{
     argument::{self, print_help, set_arguments, Argument},
     platform, BindMount, Config, DiskOption, Executable, GidMap, SharedDir, TouchDeviceOption,
-    DISK_ID_LEN,
+    VhostUserFsOption, VhostUserOption, DISK_ID_LEN,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::{GpuMode, GpuParameters};
@@ -38,11 +39,9 @@ use devices::ProtectionType;
 #[cfg(feature = "audio")]
 use devices::{Ac97Backend, Ac97Parameters};
 use disk::QcowFile;
-use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use vm_control::{
     BalloonControlCommand, BatControlCommand, BatControlResult, BatteryType, DiskControlCommand,
-    MaybeOwnedDescriptor, UsbControlCommand, UsbControlResult, VmControlRequestSocket, VmRequest,
-    VmResponse, USB_CONTROL_MAX_PORTS,
+    UsbControlCommand, UsbControlResult, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
@@ -398,7 +397,15 @@ fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
                     argument::Error::Syntax(format!("invalid capture option: {}", e))
                 })?;
             }
-            #[cfg(target_os = "linux")]
+            "client_type" => {
+                ac97_params
+                    .set_client_type(v)
+                    .map_err(|e| argument::Error::InvalidValue {
+                        value: v.to_string(),
+                        expected: e.to_string(),
+                    })?;
+            }
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             "server" => {
                 ac97_params.vios_server_path =
                     Some(
@@ -418,7 +425,7 @@ fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
     }
 
     // server is required for and exclusive to vios backend
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     match ac97_params.backend {
         Ac97Backend::VIOS => {
             if ac97_params.vios_server_path.is_none() {
@@ -658,6 +665,64 @@ fn parse_battery_options(s: Option<&str>) -> argument::Result<BatteryType> {
     Ok(battery_type)
 }
 
+#[cfg(feature = "direct")]
+fn parse_direct_io_options(s: Option<&str>) -> argument::Result<DirectIoOption> {
+    let s = s.ok_or(argument::Error::ExpectedValue(String::from(
+        "expected path@range[,range] value",
+    )))?;
+    let parts: Vec<&str> = s.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        return Err(argument::Error::InvalidValue {
+            value: s.to_string(),
+            expected: String::from("missing port range, use /path@X-Y,Z,.. syntax"),
+        });
+    }
+    let path = PathBuf::from(parts[0]);
+    if !path.exists() {
+        return Err(argument::Error::InvalidValue {
+            value: parts[0].to_owned(),
+            expected: String::from("the path does not exist"),
+        });
+    };
+    let ranges: argument::Result<Vec<(u64, u64)>> = parts[1]
+        .split(',')
+        .map(|frag| frag.split('-'))
+        .map(|mut range| {
+            let base = range
+                .next()
+                .map(|v| v.parse::<u64>())
+                .map_or(Ok(None), |r| r.map(Some));
+            let last = range
+                .next()
+                .map(|v| v.parse::<u64>())
+                .map_or(Ok(None), |r| r.map(Some));
+            (base, last)
+        })
+        .map(|range| match range {
+            (Ok(Some(base)), Ok(None)) => Ok((base, 1)),
+            (Ok(Some(base)), Ok(Some(last))) => {
+                Ok((base, last.saturating_sub(base).saturating_add(1)))
+            }
+            (Err(e), _) => Err(argument::Error::InvalidValue {
+                value: e.to_string(),
+                expected: String::from("invalid base range value"),
+            }),
+            (_, Err(e)) => Err(argument::Error::InvalidValue {
+                value: e.to_string(),
+                expected: String::from("invalid last range value"),
+            }),
+            _ => Err(argument::Error::InvalidValue {
+                value: s.to_owned(),
+                expected: String::from("invalid range format"),
+            }),
+        })
+        .collect();
+    Ok(DirectIoOption {
+        path,
+        ranges: ranges?,
+    })
+}
+
 fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::Result<()> {
     match name {
         "" => {
@@ -675,6 +740,39 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 });
             }
             cfg.executable_path = Some(Executable::Kernel(kernel_path));
+        }
+        "kvm-device" => {
+            let kvm_device_path = PathBuf::from(value.unwrap());
+            if !kvm_device_path.exists() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("this kvm device path does not exist"),
+                });
+            }
+
+            cfg.kvm_device_path = kvm_device_path;
+        }
+        "vhost-vsock-device" => {
+            let vhost_vsock_device_path = PathBuf::from(value.unwrap());
+            if !vhost_vsock_device_path.exists() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("this vhost-vsock device path does not exist"),
+                });
+            }
+
+            cfg.vhost_vsock_device_path = vhost_vsock_device_path;
+        }
+        "vhost-net-device" => {
+            let vhost_net_device_path = PathBuf::from(value.unwrap());
+            if !vhost_net_device_path.exists() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("this vhost-vsock device path does not exist"),
+                });
+            }
+
+            cfg.vhost_net_device_path = vhost_net_device_path;
         }
         "android-fstab" => {
             if cfg.android_fstab.is_some()
@@ -1544,6 +1642,94 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                     * 1024
                     * 1024; // cfg.balloon_bias is in bytes.
         }
+        "vhost-user-blk" => cfg.vhost_user_blk.push(VhostUserOption {
+            socket: PathBuf::from(value.unwrap()),
+        }),
+        "vhost-user-net" => cfg.vhost_user_net.push(VhostUserOption {
+            socket: PathBuf::from(value.unwrap()),
+        }),
+        "vhost-user-fs" => {
+            // (socket:tag)
+            let param = value.unwrap();
+            let mut components = param.split(':');
+            let socket =
+                PathBuf::from(
+                    components
+                        .next()
+                        .ok_or_else(|| argument::Error::InvalidValue {
+                            value: param.to_owned(),
+                            expected: String::from("missing socket path for `vhost-user-fs`"),
+                        })?,
+                );
+            let tag = components
+                .next()
+                .ok_or_else(|| argument::Error::InvalidValue {
+                    value: param.to_owned(),
+                    expected: String::from("missing tag for `vhost-user-fs`"),
+                })?
+                .to_owned();
+            cfg.vhost_user_fs.push(VhostUserFsOption { socket, tag });
+        }
+        #[cfg(feature = "direct")]
+        "direct-pmio" => {
+            if cfg.direct_pmio.is_some() {
+                return Err(argument::Error::TooManyArguments(
+                    "`direct_pmio` already given".to_owned(),
+                ));
+            }
+            cfg.direct_pmio = Some(parse_direct_io_options(value)?);
+        }
+        #[cfg(feature = "direct")]
+        "direct-level-irq" => {
+            cfg.direct_level_irq
+                .push(
+                    value
+                        .unwrap()
+                        .parse()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: value.unwrap().to_owned(),
+                            expected: String::from(
+                                "this value for `direct-level-irq` must be an unsigned integer",
+                            ),
+                        })?,
+                );
+        }
+        #[cfg(feature = "direct")]
+        "direct-edge-irq" => {
+            cfg.direct_edge_irq
+                .push(
+                    value
+                        .unwrap()
+                        .parse()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: value.unwrap().to_owned(),
+                            expected: String::from(
+                                "this value for `direct-edge-irq` must be an unsigned integer",
+                            ),
+                        })?,
+                );
+        }
+        "dmi" => {
+            if cfg.dmi_path.is_some() {
+                return Err(argument::Error::TooManyArguments(
+                    "`dmi` already given".to_owned(),
+                ));
+            }
+            let dmi_path = PathBuf::from(value.unwrap());
+            if !dmi_path.exists() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("the dmi path does not exist"),
+                });
+            }
+            if !dmi_path.is_dir() {
+                return Err(argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("the dmi path should be directory"),
+                });
+            }
+            cfg.dmi_path = Some(dmi_path);
+        }
         "help" => return Err(argument::Error::PrintHelp),
         _ => unreachable!(),
     }
@@ -1603,6 +1789,9 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
 fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
     let arguments =
         &[Argument::positional("KERNEL", "bzImage of kernel to run"),
+          Argument::value("kvm-device", "PATH", "Path to the KVM device. (default /dev/kvm)"),
+          Argument::value("vhost-vsock-device", "PATH", "Path to the vhost-vsock device. (default /dev/vhost-vsock)"),
+          Argument::value("vhost-net-device", "PATH", "Path to the vhost-net device. (default /dev/vhost-net)"),
           Argument::value("android-fstab", "PATH", "Path to Android fstab"),
           Argument::short_value('i', "initrd", "PATH", "Initial ramdisk to load."),
           Argument::short_value('p',
@@ -1644,13 +1833,14 @@ fn run_vm(args: std::env::Args) -> std::result::Result<(), ()> {
           Argument::value("net-vq-pairs", "N", "virtio net virtual queue paris. (default: 1)"),
           #[cfg(feature = "audio")]
           Argument::value("ac97",
-                          "[backend=BACKEND,capture=true,capture_effect=EFFECT,shm-fd=FD,client-fd=FD,server-fd=FD]",
+                          "[backend=BACKEND,capture=true,capture_effect=EFFECT,client_type=TYPE,shm-fd=FD,client-fd=FD,server-fd=FD]",
                           "Comma separated key=value pairs for setting up Ac97 devices. Can be given more than once .
                           Possible key values:
                           backend=(null, cras, vios) - Where to route the audio device. If not provided, backend will default to null.
                           `null` for /dev/null, cras for CRAS server and vios for VioS server.
                           capture - Enable audio capture
                           capture_effects - | separated effects to be enabled for recording. The only supported effect value now is EchoCancellation or aec.
+                          client_type - Set specific client type for cras backend.
                           server - The to the VIOS server (unix socket)."),
           Argument::value("serial",
                           "type=TYPE,[hardware=HW,num=NUM,path=PATH,input=PATH,console,earlycon,stdin]",
@@ -1749,6 +1939,17 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
                                   "),
           Argument::value("gdb", "PORT", "(EXPERIMENTAL) gdb on the given port"),
           Argument::value("balloon_bias_mib", "N", "Amount to bias balance of memory between host and guest as the balloon inflates, in MiB."),
+          Argument::value("vhost-user-blk", "SOCKET_PATH", "Path to a socket for vhost-user block"),
+          Argument::value("vhost-user-net", "SOCKET_PATH", "Path to a socket for vhost-user net"),
+          Argument::value("vhost-user-fs", "SOCKET_PATH:TAG",
+                          "Path to a socket path for vhost-user fs, and tag for the shared dir"),
+          #[cfg(feature = "direct")]
+          Argument::value("direct-pmio", "PATH@RANGE[,RANGE[,...]]", "Path and ranges for direct port I/O access"),
+          #[cfg(feature = "direct")]
+          Argument::value("direct-level-irq", "irq", "Enable interrupt passthrough"),
+          #[cfg(feature = "direct")]
+          Argument::value("direct-edge-irq", "irq", "Enable interrupt passthrough"),
+          Argument::value("dmi", "DIR", "Directory with smbios_entry_point/DMI files"),
           Argument::short_flag('h', "help", "Print help message.")];
 
     let mut cfg = Config::default();
@@ -1800,7 +2001,7 @@ fn handle_request(
     for socket_path in args {
         match UnixSeqpacket::connect(&socket_path) {
             Ok(s) => {
-                let socket: VmControlRequestSocket = MsgSocket::new(s);
+                let socket = Tube::new(s);
                 if let Err(e) = socket.send(request) {
                     error!(
                         "failed to send request to socket at '{}': {}",
@@ -2108,20 +2309,16 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
         args.next()
             .ok_or(ModifyUsbError::ArgMissing("usb device path"))?,
     );
-    let usb_file: Option<File> = if dev_path == Path::new("-") {
-        None
-    } else if dev_path.parent() == Some(Path::new("/proc/self/fd")) {
+    let usb_file = if dev_path.parent() == Some(Path::new("/proc/self/fd")) {
         // Special case '/proc/self/fd/*' paths. The FD is already open, just use it.
         // Safe because we will validate |raw_fd|.
-        Some(unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&dev_path)?) })
+        unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&dev_path)?) }
     } else {
-        Some(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&dev_path)
-                .map_err(|_| ModifyUsbError::UsbControl(UsbControlResult::FailedToOpenDevice))?,
-        )
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dev_path)
+            .map_err(|_| ModifyUsbError::UsbControl(UsbControlResult::FailedToOpenDevice))?
     };
 
     let request = VmRequest::UsbCommand(UsbControlCommand::AttachDevice {
@@ -2129,12 +2326,7 @@ fn usb_attach(mut args: std::env::Args) -> ModifyUsbResult<UsbControlResult> {
         addr,
         vid,
         pid,
-        // Safe because we are transferring ownership to the rawdescriptor
-        descriptor: usb_file.map(|file| {
-            MaybeOwnedDescriptor::Owned(unsafe {
-                SafeDescriptor::from_raw_descriptor(file.into_raw_descriptor())
-            })
-        }),
+        file: usb_file,
     });
     let response = handle_request(&request, args).map_err(|_| ModifyUsbError::SocketFailed)?;
     match response {
@@ -2209,6 +2401,7 @@ fn print_usage() {
     println!("    version - Show package version.");
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn pkg_version() -> std::result::Result<(), ()> {
     const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
     const PKG_VERSION: Option<&'static str> = option_env!("PKG_VERSION");
@@ -2440,6 +2633,17 @@ mod tests {
     #[test]
     fn parse_ac97_capture_vaild() {
         parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn parse_ac97_client_type() {
+        parse_ac97_options("backend=cras,capture=true,client_type=crosvm")
+            .expect("parse should have succeded");
+        parse_ac97_options("backend=cras,capture=true,client_type=arcvm")
+            .expect("parse should have succeded");
+        parse_ac97_options("backend=cras,capture=true,client_type=none")
+            .expect_err("parse should have failed");
     }
 
     #[cfg(feature = "audio")]
@@ -2717,7 +2921,12 @@ mod tests {
         validate_arguments(&mut config).unwrap();
         assert_eq!(
             config.virtio_switches.unwrap(),
+<<<<<<< HEAD   (38a783 crosvm prefers rlib even on device)
             PathBuf::from("/dev/switches-test"));
+=======
+            PathBuf::from("/dev/switches-test")
+        );
+>>>>>>> BRANCH (a73b65 virtio: switch to accessor for msix config)
     }
 
     #[cfg(all(feature = "gpu", feature = "gfxstream"))]

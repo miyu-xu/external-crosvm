@@ -1,8 +1,14 @@
+<<<<<<< HEAD   (38a783 crosvm prefers rlib even on device)
 adelva@google.com
 chirantan@google.com
 dgreid@google.com
+=======
+acourbot@chromium.org
+chirantan@chromium.org
+dgreid@chromium.org
+dverkamp@chromium.org
+keiichiw@chromium.org
+>>>>>>> BRANCH (a73b65 virtio: switch to accessor for msix config)
 smbarber@chromium.org
+tjeznach@chromium.org
 zachr@chromium.org
-
-# So any team members can +2
-*
