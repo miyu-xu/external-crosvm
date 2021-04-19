@@ -158,8 +158,8 @@ impl ProxyDevice {
                     let debug_label_trimmed =
                         &debug_label.as_bytes()[..std::cmp::min(max_len, debug_label.len())];
                     let thread_name = CString::new(debug_label_trimmed).unwrap();
-                     // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all
-                     // targets
+                    // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all
+                    // targets
                     #[cfg(all(target_os = "linux", target_env = "gnu"))]
                     let _ = libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr());
                     device.on_sandboxed();

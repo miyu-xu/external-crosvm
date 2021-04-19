@@ -188,7 +188,7 @@ impl<F: FileSystem + Sync> Worker<F> {
         // cases.
         const SECBIT_NO_SETUID_FIXUP: i32 = 1 << 2;
 
-         // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all targets.
+        // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all targets.
         #[cfg(target_os = "linux")]
         {
             // Safe because this doesn't modify any memory and we check the return value.
