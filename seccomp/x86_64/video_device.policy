@@ -39,3 +39,5 @@ uname: 1
 
 # Required by mesa on AMD GPU
 sysinfo: 1
+
+prctl: arg0 == PR_SET_NAME

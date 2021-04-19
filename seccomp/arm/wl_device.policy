@@ -19,3 +19,4 @@ ftruncate64: 1
 _llseek: 1
 # Allow F_GETFL only
 fcntl64: arg1 == 3
+prctl: arg0 == PR_SET_NAME

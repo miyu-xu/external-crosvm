@@ -6,3 +6,4 @@
 
 fcntl: 1
 openat: return ENOENT
+prctl: arg0 == PR_SET_NAME
