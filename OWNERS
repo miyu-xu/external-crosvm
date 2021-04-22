@@ -1,8 +1,14 @@
+<<<<<<< HEAD   (38a783 crosvm prefers rlib even on device)
 adelva@google.com
 chirantan@google.com
 dgreid@google.com
+=======
+acourbot@chromium.org
+chirantan@chromium.org
+dgreid@chromium.org
+dverkamp@chromium.org
+keiichiw@chromium.org
+>>>>>>> BRANCH (5be4f2 disk: read up to 4K block when detecting image type)
 smbarber@chromium.org
+tjeznach@chromium.org
 zachr@chromium.org
-
-# So any team members can +2
-*
