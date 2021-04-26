@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3f9f99ee_bd64db12",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2021-04-26T22:00:24Z",
+      "side": 1,
+      "message": "Verified --gpu_mode\u003dguest_swiftshader and --gpu_mode\u003dgfxstream locally.",
+      "revId": "b36408f79c53537b851351b2022c2818388c4903",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
