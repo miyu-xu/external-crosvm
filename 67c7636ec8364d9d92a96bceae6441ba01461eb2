@@ -16,6 +16,23 @@
       "message": "Seeing issues when trying to verify locally",
       "revId": "67c7636ec8364d9d92a96bceae6441ba01461eb2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1c16b095_a0d33a9d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2021-04-26T22:00:15Z",
+      "side": 1,
+      "message": "Verified --gpu_mode\u003dguest_swiftshader and --gpu_mode\u003dgfxstream locally.\n\nEarlier mentioned issues are unrelated to merge and being tracked in b/186419593 (cause already identified).",
+      "revId": "67c7636ec8364d9d92a96bceae6441ba01461eb2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
