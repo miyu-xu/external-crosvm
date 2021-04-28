@@ -1490,11 +1490,6 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             cfg.software_tpm = true;
         }
         "single-touch" => {
-            if cfg.virtio_single_touch.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`single-touch` already given".to_owned(),
-                ));
-            }
             let mut it = value.unwrap().split(':');
 
             let mut single_touch_spec =
@@ -1505,14 +1500,9 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             if let Some(height) = it.next() {
                 single_touch_spec.set_height(height.trim().parse().unwrap());
             }
-            cfg.virtio_single_touch = Some(single_touch_spec);
+            cfg.virtio_single_touch.push(single_touch_spec);
         }
         "multi-touch" => {
-            if cfg.virtio_multi_touch.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`multi-touch` already given".to_owned(),
-                ));
-            }
             let mut it = value.unwrap().split(':');
 
             let mut multi_touch_spec =
@@ -1523,14 +1513,9 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             if let Some(height) = it.next() {
                 multi_touch_spec.set_height(height.trim().parse().unwrap());
             }
-            cfg.virtio_multi_touch = Some(multi_touch_spec);
+            cfg.virtio_multi_touch.push(multi_touch_spec);
         }
         "trackpad" => {
-            if cfg.virtio_trackpad.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`trackpad` already given".to_owned(),
-                ));
-            }
             let mut it = value.unwrap().split(':');
 
             let mut trackpad_spec =
@@ -1541,31 +1526,19 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             if let Some(height) = it.next() {
                 trackpad_spec.set_height(height.trim().parse().unwrap());
             }
-            cfg.virtio_trackpad = Some(trackpad_spec);
+            cfg.virtio_trackpad.push(trackpad_spec);
         }
         "mouse" => {
-            if cfg.virtio_mouse.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`mouse` already given".to_owned(),
-                ));
-            }
-            cfg.virtio_mouse = Some(PathBuf::from(value.unwrap().to_owned()));
+            cfg.virtio_mice
+                .push(PathBuf::from(value.unwrap().to_owned()));
         }
         "keyboard" => {
-            if cfg.virtio_keyboard.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`keyboard` already given".to_owned(),
-                ));
-            }
-            cfg.virtio_keyboard = Some(PathBuf::from(value.unwrap().to_owned()));
+            cfg.virtio_keyboard
+                .push(PathBuf::from(value.unwrap().to_owned()));
         }
         "switches" => {
-            if cfg.virtio_switches.is_some() {
-                return Err(argument::Error::TooManyArguments(
-                    "`switches` already given".to_owned(),
-                ));
-            }
-            cfg.virtio_switches = Some(PathBuf::from(value.unwrap().to_owned()));
+            cfg.virtio_switches
+                .push(PathBuf::from(value.unwrap().to_owned()));
         }
         "evdev" => {
             let dev_path = PathBuf::from(value.unwrap());
@@ -1787,10 +1760,10 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     {
         if let Some(gpu_parameters) = cfg.gpu_parameters.as_ref() {
             let (width, height) = (gpu_parameters.display_width, gpu_parameters.display_height);
-            if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.as_mut() {
+            if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
                 virtio_multi_touch.set_default_size(width, height);
             }
-            if let Some(virtio_single_touch) = cfg.virtio_single_touch.as_mut() {
+            if let Some(virtio_single_touch) = cfg.virtio_single_touch.first_mut() {
                 virtio_single_touch.set_default_size(width, height);
             }
         }
