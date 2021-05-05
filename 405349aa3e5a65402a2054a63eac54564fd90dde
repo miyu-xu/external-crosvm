@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "98471b5c_d1df6ac9",
+        "filename": "devices/src/virtio/gpu/virtio_gpu.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2021-05-05T15:44:56Z",
+      "side": 1,
+      "message": "Delete code and cite bug 186580833 as the reason in a comment?",
+      "range": {
+        "startLine": 204,
+        "startChar": 0,
+        "endLine": 210,
+        "endChar": 12
+      },
+      "revId": "405349aa3e5a65402a2054a63eac54564fd90dde",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
