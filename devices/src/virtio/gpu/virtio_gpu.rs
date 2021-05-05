@@ -201,13 +201,13 @@ impl VirtioGpu {
         scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
         let mut display = self.display.borrow_mut();
-        if resource_id == 0 {
-            if let Some(surface_id) = self.scanout_surface_id.take() {
-                display.release_surface(surface_id);
-            }
-            self.scanout_resource_id = None;
-            return Ok(OkNoData);
-        }
+///        if resource_id == 0 {
+///            if let Some(surface_id) = self.scanout_surface_id.take() {
+///                display.release_surface(surface_id);
+///            }
+///            self.scanout_resource_id = None;
+///            return Ok(OkNoData);
+///        }
 
         let resource = self
             .resources
