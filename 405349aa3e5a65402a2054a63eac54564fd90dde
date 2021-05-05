@@ -46,6 +46,30 @@
       },
       "revId": "405349aa3e5a65402a2054a63eac54564fd90dde",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "31af752d_2ffd4f71",
+        "filename": "devices/src/virtio/gpu/virtio_gpu.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1129273
+      },
+      "writtenOn": "2021-05-05T16:04:40Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5062e25e_3ad8ab45",
+      "range": {
+        "startLine": 204,
+        "startChar": 0,
+        "endLine": 210,
+        "endChar": 12
+      },
+      "revId": "405349aa3e5a65402a2054a63eac54564fd90dde",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
