@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f943efa7_93aba495",
+        "filename": "devices/src/virtio/gpu/virtio_gpu.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 207,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2021-05-05T19:00:45Z",
+      "side": 1,
+      "message": "nit: when fall back -\u003e when Surfaceflinger falls back to client composition",
+      "range": {
+        "startLine": 207,
+        "startChar": 32,
+        "endLine": 207,
+        "endChar": 41
+      },
+      "revId": "7a9bcf93d1cdb1dea31bf01f9db27c21c21cb109",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1b1b070d_5c368fc6",
+        "filename": "devices/src/virtio/gpu/virtio_gpu.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1082465
+      },
+      "writtenOn": "2021-05-05T19:00:45Z",
+      "side": 1,
+      "message": "nit: ignored",
+      "range": {
+        "startLine": 210,
+        "startChar": 56,
+        "endLine": 210,
+        "endChar": 64
+      },
+      "revId": "7a9bcf93d1cdb1dea31bf01f9db27c21c21cb109",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
