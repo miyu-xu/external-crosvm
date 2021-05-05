@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d8c95996_1a7c621e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1067948
+      },
+      "writtenOn": "2021-05-05T20:34:01Z",
+      "side": 1,
+      "message": "Ok with me as Frank tells me there is a plan for a better fix that will go upstream.",
+      "revId": "cd5a9a9b85b5d6522b31f1f2bfb7451bf23bcd32",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
