@@ -350,6 +350,18 @@ impl DisplayT for DisplayWl {
     fn attach_event_device(&mut self, _surface_id: u32, _event_device_id: u32) {
         // unsupported
     }
+
+    fn set_scanout_id(&mut self, surface_id: u32, scanout_id: u32) {
+        match self.get_surface(surface_id) {
+            Some(surface) => {
+                // Safe because only a valid surface is used.
+                unsafe {
+                    dwl_surface_set_scanout_id(surface.surface(), scanout_id);
+                }
+            }
+            None => debug_assert!(false, "invalid surface_id {}", surface_id),
+        }
+    }
 }
 
 impl AsRawDescriptor for DisplayWl {

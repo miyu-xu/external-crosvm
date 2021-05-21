@@ -160,6 +160,7 @@ trait DisplayT: AsRawDescriptor {
     fn import_event_device(&mut self, event_device: EventDevice) -> Result<u32, GpuDisplayError>;
     fn release_event_device(&mut self, event_device_id: u32);
     fn attach_event_device(&mut self, surface_id: u32, event_device_id: u32);
+    fn set_scanout_id(&mut self, _surface_id: u32, _scanout_id: u32) {}
 }
 
 /// A connection to the compositor and associated collection of state.
@@ -322,6 +323,11 @@ impl GpuDisplay {
 
     pub fn attach_event_device(&mut self, surface_id: u32, event_device_id: u32) {
         self.inner.attach_event_device(surface_id, event_device_id);
+    }
+
+    /// Associates the scanout id with the given surface.
+    pub fn set_scanout_id(&mut self, surface_id: u32, scanout_id: u32) {
+        self.inner.set_scanout_id(surface_id, scanout_id);
     }
 }
 
