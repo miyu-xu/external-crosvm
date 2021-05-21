@@ -210,7 +210,7 @@ impl VirtioGpu {
     /// Sets the given resource id as the source of scanout to the display.
     pub fn set_scanout(
         &mut self,
-        _scanout_id: u32,
+        scanout_id: u32,
         resource_id: u32,
         scanout_data: Option<VirtioScanoutBlobData>,
     ) -> VirtioGpuResult {
@@ -232,6 +232,7 @@ impl VirtioGpu {
         if self.scanout_surface_id.is_none() {
             let surface_id =
                 display.create_surface(None, self.display_width, self.display_height)?;
+            display.set_scanout_id(surface_id, scanout_id);
             self.scanout_surface_id = Some(surface_id);
             for event_device_id in self.event_devices.keys() {
                 display.attach_event_device(surface_id, *event_device_id);
