@@ -23,6 +23,7 @@
 #include "aura-shell.h"
 #include "linux-dmabuf-unstable-v1.h"
 #include "viewporter.h"
+#include "virtio-gpu-metadata.h"
 #include "xdg-shell-unstable-v6.h"
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
@@ -44,6 +45,7 @@ struct interfaces {
 	struct zwp_linux_dmabuf_v1 *linux_dmabuf;
 	struct zxdg_shell_v6 *xdg_shell;
 	struct wp_viewporter *viewporter; // optional
+	struct virtio_gpu_metadata *virtio_gpu_metadata; // optional
 };
 
 struct output {
@@ -82,6 +84,7 @@ struct dwl_surface {
 	struct zxdg_surface_v6 *xdg;
 	struct zxdg_toplevel_v6 *toplevel;
 	struct wp_viewport *viewport;
+	struct virtio_gpu_surface_metadata *virtio_metadata;
 	struct wl_subsurface *subsurface;
 	uint32_t width;
 	uint32_t height;
@@ -279,6 +282,10 @@ static void registry_global(void *data, struct wl_registry *registry,
 	} else if (strcmp(interface, "wp_viewporter") == 0) {
 		ifaces->viewporter = (struct wp_viewporter *)wl_registry_bind(
 		    registry, id, &wp_viewporter_interface, 1);
+	} else if (strcmp(interface, "virtio_gpu_metadata") == 0) {
+		ifaces->virtio_gpu_metadata =
+				(struct virtio_gpu_metadata *)wl_registry_bind(
+	    registry, id, &virtio_gpu_metadata_interface, 1);
 	}
 }
 
@@ -678,6 +685,15 @@ struct dwl_surface *dwl_context_surface_new(struct dwl_context *self,
 		}
 	}
 
+	if (self->ifaces.virtio_gpu_metadata) {
+		disp_surface->virtio_metadata = virtio_gpu_metadata_get_surface_metadata(
+			self->ifaces.virtio_gpu_metadata, disp_surface->surface);
+		if (!disp_surface->virtio_metadata) {
+			syslog(LOG_ERR, "failed to make surface virtio gpu metadata");
+			goto fail;
+		}
+	}
+
 	wl_surface_attach(disp_surface->surface, disp_surface->buffers[0], 0,
 			  0);
 	wl_surface_damage(disp_surface->surface, 0, 0, width, height);
@@ -799,5 +815,12 @@ void dwl_surface_set_position(struct dwl_surface *self, uint32_t x, uint32_t y)
 					   y / self->scale);
 		wl_surface_commit(self->surface);
 		wl_display_flush(self->context->display);
+	}
+}
+
+void dwl_surface_set_scanout_id(struct dwl_surface *self, uint32_t scanout_id)
+{
+	if (self->virtio_metadata) {
+		virtio_gpu_surface_metadata_set_scanout_id(self->virtio_metadata, scanout_id);
 	}
 }

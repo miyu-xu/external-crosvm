@@ -123,3 +123,6 @@ extern "C" {
 extern "C" {
     pub fn dwl_surface_set_position(self_: *mut dwl_surface, x: u32, y: u32);
 }
+extern "C" {
+    pub fn dwl_surface_set_scanout_id(self_: *mut dwl_surface, scanout_id: u32);
+}

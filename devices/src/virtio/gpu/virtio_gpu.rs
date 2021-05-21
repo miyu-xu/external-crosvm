@@ -120,6 +120,8 @@ fn import_resource_to_display(
 struct VirtioGpuScanout {
     width: u32,
     height: u32,
+    // If this scanout is a main scanout, the scanout id.
+    scanout_id: Option<u32>,
     surface_id: Option<u32>,
     resource_id: Option<NonZeroU32>,
     // If this scanout is a cursor scanout, the scanout that this is cursor is overlayed onto.
@@ -147,6 +149,12 @@ impl VirtioGpuScanout {
             }
             Err(e) => {
                 error!("failed to create display surface: {}", e);
+            }
+        }
+
+        if let Some(surface_id) = self.surface_id {
+            if let Some(scanout_id) = self.scanout_id {
+                display.borrow_mut().set_scanout_id(surface_id, scanout_id);
             }
         }
     }
@@ -250,10 +258,16 @@ struct VirtioGpuScanoutHelper {
 }
 
 impl VirtioGpuScanoutHelper {
-    fn create_scanout(&mut self, width: u32, height: u32) -> &mut VirtioGpuScanout {
+    fn create_scanout(
+        &mut self,
+        scanout_id: u32,
+        width: u32,
+        height: u32,
+    ) -> &mut VirtioGpuScanout {
         self.scanouts.push(VirtioGpuScanout {
             width,
             height,
+            scanout_id: Some(scanout_id),
             surface_id: None,
             resource_id: None,
             parent_surface_id: None,
@@ -406,10 +420,12 @@ impl VirtioGpu {
     }
 
     fn create_scanouts(&mut self) {
-        for display_params in &self.display_params {
-            let scanout = self
-                .scanout_helper
-                .create_scanout(display_params.width, display_params.height);
+        for (display_index, display_params) in self.display_params.iter().enumerate() {
+            let scanout = self.scanout_helper.create_scanout(
+                display_index as u32,
+                display_params.width,
+                display_params.height,
+            );
             scanout.create_display_surface(&self.display);
         }
     }
