@@ -104,7 +104,7 @@ impl VulkanoGralloc {
 
             let intersection = supported_extensions.intersection(&desired_extensions);
 
-            if let Ok(device, mut _queues) = Device::new(
+            if let Ok((device, mut _queues)) = Device::new(
                 physical,
                 physical.supported_features(),
                 &intersection,
