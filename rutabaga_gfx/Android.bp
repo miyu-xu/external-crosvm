@@ -27,7 +27,9 @@ rust_library {
         "libdata_model",
         "liblibc",
         "libsync_rust",
+        "libthiserror",
     ],
+    proc_macros: ["libremain"],
     shared_libs: ["libgfxstream_backend"],
     target: {
         host: {
@@ -64,7 +66,9 @@ rust_defaults {
         "libdata_model",
         "liblibc",
         "libsync_rust",
+        "libthiserror",
     ],
+    proc_macros: ["libremain"],
 }
 
 rust_test_host {
