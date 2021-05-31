@@ -11,7 +11,7 @@ use std::os::unix::io::RawFd;
 /// Mount options to pass to mount(2) for a FUSE filesystem. See the [official document](
 /// https://www.kernel.org/doc/html/latest/filesystems/fuse.html#mount-options) for the
 /// descriptions.
-pub enum MountOption {
+pub enum MountOption<'a> {
     FD(RawFd),
     RootMode(u32),
     UserId(libc::uid_t),
@@ -20,10 +20,14 @@ pub enum MountOption {
     AllowOther,
     MaxRead(u32),
     BlockSize(u32),
+    Context(&'a str),
+    FsContext(&'a str),
+    DefContext(&'a str),
+    RootContext(&'a str),
 }
 
 // Implement Display for ToString to convert to actual mount options.
-impl fmt::Display for MountOption {
+impl<'a> fmt::Display for MountOption<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             MountOption::FD(fd) => write!(f, "fd={}", fd),
@@ -34,6 +38,10 @@ impl fmt::Display for MountOption {
             MountOption::AllowOther => write!(f, "allow_other"),
             MountOption::MaxRead(size) => write!(f, "max_read={}", size),
             MountOption::BlockSize(size) => write!(f, "blksize={}", size),
+            MountOption::Context(label) => write!(f, "context={}", label),
+            MountOption::FsContext(label) => write!(f, "fscontext={}", label),
+            MountOption::DefContext(label) => write!(f, "defcontext={}", label),
+            MountOption::RootContext(label) => write!(f, "rootcontext={}", label),
         }
     }
 }
@@ -120,6 +128,16 @@ mod tests {
                 MountOption::UserId(12),
                 MountOption::GroupId(34),
                 MountOption::MaxRead(4096),
+            ])
+        );
+
+        assert_eq!(
+            "context=a,fscontext=b,defcontext=c,rootcontext=d".to_string(),
+            join_mount_options(&[
+                MountOption::Context("a"),
+                MountOption::FsContext("b"),
+                MountOption::DefContext("c"),
+                MountOption::RootContext("r"),
             ])
         );
     }
