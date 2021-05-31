@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "376895d0_a47fe42f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-05-31T06:00:26Z",
+      "side": 1,
+      "message": "Upstream CL is here: https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/2466484\n\nUploaded here just to run the presubmit tests along with other changes in the topic.",
+      "revId": "775860cbb2c60f91547b4b2f22864783d016786b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
