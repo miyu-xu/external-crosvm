@@ -41,7 +41,7 @@ exclude = [
 ]
 
 [features]
-default = ["audio", "gpu"]
+default = ["audio", "gpu", "usb"]
 chromeos = ["base/chromeos"]
 default-no-sandbox = []
 direct = ["devices/direct"]
@@ -50,6 +50,7 @@ gpu = ["devices/gpu"]
 plugin = ["protos/plugin", "crosvm_plugin", "kvm", "kvm_sys", "protobuf"]
 power-monitor-powerd = ["arch/power-monitor-powerd"]
 tpm = ["devices/tpm"]
+usb = ["devices/usb"]
 video-decoder = ["devices/video-decoder"]
 video-encoder = ["devices/video-encoder"]
 wl-dmabuf = ["devices/minigbm"]
@@ -92,6 +93,7 @@ sync = { path = "sync" }
 tempfile = "*"
 thiserror = { version = "1.0.20", optional = true }
 vhost = { path = "vhost" }
+vhost_user_devices = { path = "vhost_user_devices" }
 vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
 vm_memory = { path = "vm_memory" }
@@ -111,12 +113,24 @@ audio_streams = { path = "../adhd/audio_streams" } # ignored by ebuild
 base = { path = "base" }
 cros_fuzz = { path = "../../platform2/cros-fuzz" } # ignored by ebuild
 data_model = { path = "data_model" }
+<<<<<<< HEAD   (96334c Merge "Not remove surface when resource_id is 0")
 libchromeos = { path = "../libchromeos-rs" } # ignored by ebuild
 libcras = { path = "../adhd/cras/client/libcras" } # ignored by ebuild
 minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
 p9 = { path = "../vm_tools/p9" } # ignored by ebuild
+=======
+libcras = { path = "../../third_party/adhd/cras/client/libcras" } # ignored by ebuild
+libvda = { path = "../../platform2/arc/vm/libvda/rust" } # ignored by ebuild
+minijail = { path = "../../aosp/external/minijail/rust/minijail" } # ignored by ebuild
+p9 = { path = "../../platform2/vm_tools/p9" } # ignored by ebuild
+>>>>>>> BRANCH (4d5b35 wl: Move queue handling to standalone functions)
 sync = { path = "sync" }
 sys_util = { path = "sys_util" }
 tempfile = { path = "tempfile" }
+<<<<<<< HEAD   (96334c Merge "Not remove surface when resource_id is 0")
 wire_format_derive = { path = "../vm_tools/p9/wire_format_derive" } # ignored by ebuild
 vmm_vhost = { path = "../rust/crates/vhost", features = ["vhost-user-master"] } # ignored by ebuild
+=======
+vmm_vhost = { path = "../../third_party/rust-vmm/vhost", features = ["vhost-user-master", "vhost-user-slave"] } # ignored by ebuild
+wire_format_derive = { path = "../../platform2/vm_tools/p9/wire_format_derive" } # ignored by ebuild
+>>>>>>> BRANCH (4d5b35 wl: Move queue handling to standalone functions)

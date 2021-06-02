@@ -9,8 +9,14 @@ audio = []
 direct = []
 gpu = ["gpu_display","rutabaga_gfx"]
 tpm = ["protos/trunks", "tpm2"]
+<<<<<<< HEAD   (96334c Merge "Not remove surface when resource_id is 0")
 video-decoder = []
 video-encoder = []
+=======
+usb = []
+video-decoder = ["libvda"]
+video-encoder = ["libvda"]
+>>>>>>> BRANCH (4d5b35 wl: Move queue handling to standalone functions)
 minigbm = ["rutabaga_gfx/minigbm"]
 x = ["gpu_display/x"]
 virgl_renderer = ["gpu", "rutabaga_gfx/virgl_renderer"]
