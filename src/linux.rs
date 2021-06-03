@@ -142,6 +142,7 @@ pub enum Error {
     InvalidWaylandPath,
     IoJail(minijail::Error),
     LoadKernel(Box<dyn StdError>),
+    Mac80211DeviceNew(virtio::Mac80211Error),
     MemoryTooLarge,
     NetDeviceNew(virtio::NetError),
     OpenAcpiTable(PathBuf, io::Error),
@@ -264,6 +265,7 @@ impl Display for Error {
             InvalidWaylandPath => write!(f, "wayland socket path has no parent or file name"),
             IoJail(e) => write!(f, "{}", e),
             LoadKernel(e) => write!(f, "failed to load kernel: {}", e),
+            Mac80211DeviceNew(e) => write!(f, "failed to create mac80211 device {}", e),
             MemoryTooLarge => write!(f, "requested memory size too large"),
             NetDeviceNew(e) => write!(f, "failed to set up virtio networking: {}", e),
             OpenAcpiTable(p, e) => write!(f, "failed to open ACPI file {}: {}", p.display(), e),
@@ -1328,6 +1330,16 @@ fn create_pmem_device(
     })
 }
 
+fn create_mac80211_device(cfg: &Config) -> DeviceResult {
+    let features = virtio::base_features(cfg.protected_vm);
+    let dev = virtio::Mac80211::new(features).map_err(Error::Mac80211DeviceNew)?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(&cfg, "mac80211_device")?,
+    })
+}
+
 fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult {
     let mut keep_rds = Vec::new();
     let evt = Event::new().map_err(Error::CreateEvent)?;
@@ -1615,6 +1627,8 @@ fn create_virtio_devices(
         };
         devs.push(dev);
     }
+
+    devs.push(create_mac80211_device(cfg)?);
 
     Ok(devs)
 }
