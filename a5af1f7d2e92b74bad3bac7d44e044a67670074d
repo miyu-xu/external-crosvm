@@ -16,6 +16,23 @@
       "message": "+Chirantan who approved the upstream change for the owner-review-vote bit.",
       "revId": "a5af1f7d2e92b74bad3bac7d44e044a67670074d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bf721d6b_36c6a780",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-06-08T00:15:56Z",
+      "side": 1,
+      "message": "Adding more owners. Please take a look. This was already merged in upstream. https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/2927178 \n\nI am cherry-picking it to AOSP before a full merge as the change is quite small.",
+      "revId": "a5af1f7d2e92b74bad3bac7d44e044a67670074d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
