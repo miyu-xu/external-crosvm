@@ -681,29 +681,156 @@ impl fmt::Debug for GpuCommand {
         use self::GpuCommand::*;
         match self {
             GetDisplayInfo(_info) => f.debug_struct("GetDisplayInfo").finish(),
-            ResourceCreate2d(_info) => f.debug_struct("ResourceCreate2d").finish(),
-            ResourceUnref(_info) => f.debug_struct("ResourceUnref").finish(),
-            SetScanout(_info) => f.debug_struct("SetScanout").finish(),
-            SetScanoutBlob(_info) => f.debug_struct("SetScanoutBlob").finish(),
-            ResourceFlush(_info) => f.debug_struct("ResourceFlush").finish(),
-            TransferToHost2d(_info) => f.debug_struct("TransferToHost2d").finish(),
-            ResourceAttachBacking(_info) => f.debug_struct("ResourceAttachBacking").finish(),
-            ResourceDetachBacking(_info) => f.debug_struct("ResourceDetachBacking").finish(),
-            GetCapsetInfo(_info) => f.debug_struct("GetCapsetInfo").finish(),
-            GetCapset(_info) => f.debug_struct("GetCapset").finish(),
-            CtxCreate(_info) => f.debug_struct("CtxCreate").finish(),
-            CtxDestroy(_info) => f.debug_struct("CtxDestroy").finish(),
-            CtxAttachResource(_info) => f.debug_struct("CtxAttachResource").finish(),
-            CtxDetachResource(_info) => f.debug_struct("CtxDetachResource").finish(),
-            ResourceCreate3d(_info) => f.debug_struct("ResourceCreate3d").finish(),
-            TransferToHost3d(_info) => f.debug_struct("TransferToHost3d").finish(),
-            TransferFromHost3d(_info) => f.debug_struct("TransferFromHost3d").finish(),
-            CmdSubmit3d(_info) => f.debug_struct("CmdSubmit3d").finish(),
-            ResourceCreateBlob(_info) => f.debug_struct("ResourceCreateBlob").finish(),
-            ResourceMapBlob(_info) => f.debug_struct("ResourceMapBlob").finish(),
-            ResourceUnmapBlob(_info) => f.debug_struct("ResourceUnmapBlob").finish(),
-            UpdateCursor(_info) => f.debug_struct("UpdateCursor").finish(),
-            MoveCursor(_info) => f.debug_struct("MoveCursor").finish(),
+            ResourceCreate2d(info) => f
+                .debug_struct("ResourceCreate2d")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("width", &info.width.to_native())
+                .field("height", &info.height.to_native())
+                .field("format", &info.format.to_native())
+                .finish(),
+            ResourceUnref(info) => f
+                .debug_struct("ResourceUnref")
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            SetScanout(info) => f
+                .debug_struct("SetScanout")
+                .field("scanout_id", &info.scanout_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            SetScanoutBlob(info) => f
+                .debug_struct("SetScanoutBlob")
+                .field("scanout_id", &info.scanout_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            ResourceFlush(info) => f
+                .debug_struct("ResourceFlush")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("r.x", &info.r.x.to_native())
+                .field("r.y", &info.r.y.to_native())
+                .field("r.width", &info.r.width.to_native())
+                .field("r.height", &info.r.height.to_native())
+                .finish(),
+            TransferToHost2d(info) => f
+                .debug_struct("TransferToHost2d")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("r.x", &info.r.x.to_native())
+                .field("r.y", &info.r.y.to_native())
+                .field("r.width", &info.r.width.to_native())
+                .field("r.height", &info.r.height.to_native())
+                .field("offset", &info.offset.to_native())
+                .finish(),
+            ResourceAttachBacking(info) => f
+                .debug_struct("ResourceAttachBacking")
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            ResourceDetachBacking(info) => f
+                .debug_struct("ResourceDetachBacking")
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            GetCapsetInfo(info) => f
+                .debug_struct("GetCapsetInfo")
+                .field("capset_index", &info.capset_index.to_native())
+                .finish(),
+            GetCapset(info) => f
+                .debug_struct("GetCapset")
+                .field("capset_id", &info.capset_id.to_native())
+                .field("capset_version", &info.capset_version.to_native())
+                .finish(),
+            CtxCreate(info) => f
+                .debug_struct("CtxCreate")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .finish(),
+            CtxDestroy(info) => f
+                .debug_struct("CtxDestroy")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .finish(),
+            CtxAttachResource(info) => f
+                .debug_struct("CtxAttachResource")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            CtxDetachResource(info) => f
+                .debug_struct("CtxDetachResource")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            ResourceCreate3d(info) => f
+                .debug_struct("ResourceCreate3d")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("target", &info.target.to_native())
+                .field("format", &info.format.to_native())
+                .field("bind", &info.bind.to_native())
+                .field("width", &info.width.to_native())
+                .field("height", &info.height.to_native())
+                .field("depth", &info.depth.to_native())
+                .field("array_size", &info.array_size.to_native())
+                .field("last_level", &info.last_level.to_native())
+                .field("nr_samples", &info.nr_samples.to_native())
+                .field("flags", &info.flags.to_native())
+                .finish(),
+            TransferToHost3d(info) => f
+                .debug_struct("TransferToHost3d")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .field("box_.x", &info.box_.x.to_native())
+                .field("box_.y", &info.box_.y.to_native())
+                .field("box_.z", &info.box_.z.to_native())
+                .field("box_.w", &info.box_.w.to_native())
+                .field("box_.h", &info.box_.h.to_native())
+                .field("box_.d", &info.box_.d.to_native())
+                .field("level", &info.level.to_native())
+                .field("stride", &info.stride.to_native())
+                .field("layer_stride", &info.layer_stride.to_native())
+                .field("offset", &info.offset.to_native())
+                .finish(),
+            TransferFromHost3d(info) => f
+                .debug_struct("TransferFromHost3d")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .field("box_.x", &info.box_.x.to_native())
+                .field("box_.y", &info.box_.y.to_native())
+                .field("box_.z", &info.box_.z.to_native())
+                .field("box_.w", &info.box_.w.to_native())
+                .field("box_.h", &info.box_.h.to_native())
+                .field("box_.d", &info.box_.d.to_native())
+                .field("level", &info.level.to_native())
+                .field("stride", &info.stride.to_native())
+                .field("layer_stride", &info.layer_stride.to_native())
+                .field("offset", &info.offset.to_native())
+                .finish(),
+            CmdSubmit3d(info) => f
+                .debug_struct("CmdSubmit3d")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .finish(),
+            ResourceCreateBlob(info) => f
+                .debug_struct("ResourceCreateBlob")
+                .field("hdr.ctx_id", &info.hdr.ctx_id.to_native())
+                .field("resource_id", &info.resource_id.to_native())
+                .field("blob_mem", &info.blob_mem.to_native())
+                .field("blob_flags", &info.blob_flags.to_native())
+                .field("blob_id", &info.blob_id.to_native())
+                .field("size", &info.size.to_native())
+                .finish(),
+            ResourceMapBlob(info) => f
+                .debug_struct("ResourceMapBlob")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("offset", &info.offset.to_native())
+                .finish(),
+            ResourceUnmapBlob(info) => f
+                .debug_struct("ResourceUnmapBlob")
+                .field("resource_id", &info.resource_id.to_native())
+                .finish(),
+            UpdateCursor(info) => f
+                .debug_struct("UpdateCursor")
+                .field("resource_id", &info.resource_id.to_native())
+                .field("pos.x", &info.pos.x.to_native())
+                .field("pos.y", &info.pos.y.to_native())
+                .finish(),
+            MoveCursor(info) => f
+                .debug_struct("MoveCursor")
+                .field("pos.x", &info.pos.x.to_native())
+                .field("pos.y", &info.pos.y.to_native())
+                .finish(),
             ResourceAssignUuid(_info) => f.debug_struct("ResourceAssignUuid").finish(),
         }
     }

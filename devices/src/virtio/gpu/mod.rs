@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[macro_use]
+mod log;
 mod protocol;
 mod udmabuf;
 mod udmabuf_bindings;
@@ -253,6 +255,8 @@ impl Frontend {
         cmd: GpuCommand,
         reader: &mut Reader,
     ) -> VirtioGpuResult {
+        gpu_debug!("{:?}", cmd);
+
         self.virtio_gpu.force_ctx_0();
 
         match cmd {
