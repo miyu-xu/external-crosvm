@@ -14,7 +14,8 @@ use crate::virtio::snd::constants::*;
 use audio_streams::shm_streams::{BufferSet, ServerRequest, ShmStream, ShmStreamSource};
 use audio_streams::{BoxError, SampleFormat, StreamDirection, StreamEffect};
 
-use base::{error, SharedMemory, SharedMemoryUnix};
+use base::{error, MemoryMapping, MemoryMappingBuilder, SharedMemory, SharedMemoryUnix};
+use data_model::{VolatileMemory, VolatileSlice};
 
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -24,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use sys_util::{Error as SysError, SharedMemory as SysSharedMemory};
 
-use super::shm_vios::{Error, Result};
+use super::shm_vios::{mmap_buffer, Error, Result};
 
 // This is the error type used in audio_streams::shm_streams. Unfortunately, it's not declared
 // public there so it needs to be re-declared here. It also prevents the usage of anyhow::Error.
@@ -128,7 +129,7 @@ impl ShmStreamSource for VioSShmStreamSource {
         client_shm: &SysSharedMemory,
         buffer_offsets: [u64; 2],
     ) -> GenericResult<Box<dyn ShmStream>> {
-        self.vios_client.ensure_bg_thread_started()?;
+        self.vios_client.start_bg_thread()?;
         let virtio_dir = match direction {
             StreamDirection::Playback => VIRTIO_SND_D_OUTPUT,
             StreamDirection::Capture => VIRTIO_SND_D_INPUT,
@@ -263,20 +264,47 @@ impl BufferSet for VioSndShmStream {
     fn callback(&mut self, offset: usize, frames: usize) -> GenericResult<()> {
         match self.direction {
             StreamDirection::Playback => {
-                self.vios_client.inject_audio_data(
+                let requested_size = frames * self.frame_size;
+                let shm_ref = &mut self.client_shm;
+                let (_, res) = self.vios_client.inject_audio_data::<Result<()>, _>(
                     self.stream_id,
-                    &mut self.client_shm,
-                    offset,
-                    frames * self.frame_size,
+                    requested_size,
+                    |slice| {
+                        if requested_size != slice.size() {
+                            error!(
+                                "Buffer size is different than the requested size: {} vs {}",
+                                requested_size,
+                                slice.size()
+                            );
+                        }
+                        let size = std::cmp::min(requested_size, slice.size());
+                        let (src_mmap, mmap_offset) = mmap_buffer(shm_ref, offset, size)?;
+                        let src_slice = src_mmap
+                            .get_slice(mmap_offset, size)
+                            .map_err(Error::VolatileMemoryError)?;
+                        src_slice.copy_to_volatile_slice(slice);
+                        Ok(())
+                    },
                 )?;
+                res?;
             }
             StreamDirection::Capture => {
-                self.vios_client.request_audio_data(
+                let requested_size = frames * self.frame_size;
+                let shm_ref = &mut self.client_shm;
+                let (_, res) = self.vios_client.request_audio_data::<Result<()>, _>(
                     self.stream_id,
-                    &mut self.client_shm,
-                    offset,
-                    frames * self.frame_size,
+                    requested_size,
+                    |slice| {
+                        let size = std::cmp::min(requested_size, slice.size());
+                        let (dst_mmap, mmap_offset) = mmap_buffer(shm_ref, offset, size)?;
+                        let dst_slice = dst_mmap
+                            .get_slice(mmap_offset, size)
+                            .map_err(Error::VolatileMemoryError)?;
+                        slice.copy_to_volatile_slice(dst_slice);
+                        Ok(())
+                    },
                 )?;
+                res?;
             }
         }
         Ok(())
