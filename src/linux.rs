@@ -183,6 +183,7 @@ pub enum Error {
     SettingSignalMask(base::Error),
     SettingUidMap(minijail::Error),
     SignalFd(base::SignalFdError),
+    SoundDeviceNew(virtio::SoundError),
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     SpawnGdbServer(io::Error),
     SpawnVcpu(io::Error),
@@ -319,6 +320,7 @@ impl Display for Error {
             SettingSignalMask(e) => write!(f, "failed to set the signal mask for vcpu: {}", e),
             SettingUidMap(e) => write!(f, "error setting UID map: {}", e),
             SignalFd(e) => write!(f, "failed to read signal fd: {}", e),
+            SoundDeviceNew(e) => write!(f, "failed to create sound device: {}", e),
             #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
             SpawnGdbServer(e) => write!(f, "failed to spawn GDB thread: {}", e),
             SpawnVcpu(e) => write!(f, "failed to spawn VCPU thread: {}", e),
@@ -1394,6 +1396,16 @@ fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult
     })
 }
 
+fn create_sound_device(path: &PathBuf, cfg: &Config) -> DeviceResult {
+    let dev = virtio::new_sound(path, virtio::base_features(cfg.protected_vm))
+        .map_err(Error::SoundDeviceNew)?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(&cfg, "vios_audio_device")?,
+    })
+}
+
 // gpu_device_tube is not used when GPU support is disabled.
 #[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
 fn create_virtio_devices(
@@ -1665,6 +1677,10 @@ fn create_virtio_devices(
             SharedDirKind::P9 => create_9p_device(cfg, uid_map, gid_map, src, tag, p9_cfg.clone())?,
         };
         devs.push(dev);
+    }
+
+    if let Some(path) = &cfg.sound {
+        devs.push(create_sound_device(&path, &cfg)?);
     }
 
     Ok(devs)

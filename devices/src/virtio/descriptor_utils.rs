@@ -686,6 +686,19 @@ impl Writer {
         self.regions.bytes_consumed()
     }
 
+    /// Returns a `&[VolatileSlice]` that represents all the remaining data in this `Writer`.
+    /// Calling this method does not actually consume any data from the `Writer` and callers should
+    /// call `consume` to advance the `Writer`.
+    pub fn get_remaining(&self) -> SmallVec<[VolatileSlice; 16]> {
+        self.regions.get_remaining(&self.mem)
+    }
+
+    /// Consumes `amt` bytes from the underlying descriptor chain. If `amt` is larger than the
+    /// remaining data left in this `Reader`, then all remaining data will be consumed.
+    pub fn consume_bytes(&mut self, amt: usize) {
+        self.regions.consume(amt)
+    }
+
     /// Splits this `Writer` into two at the given offset in the `DescriptorChain` buffer. After the
     /// split, `self` will be able to write up to `offset` bytes while the returned `Writer` can
     /// write up to `available_bytes() - offset` bytes. If `offset > self.available_bytes()`, then

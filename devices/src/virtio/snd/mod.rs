@@ -7,3 +7,231 @@ pub mod constants;
 pub mod layout;
 
 pub mod vios_backend;
+
+pub mod streams;
+
+mod worker;
+
+use std::thread;
+
+use super::{
+    copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt,
+    VirtioDevice, Writer, TYPE_SOUND,
+};
+use base::{
+    error, info, set_rt_prio_limit, set_rt_round_robin, warn, AsRawDescriptor, Error as BaseError,
+    Event, PollToken, RawDescriptor, WaitContext,
+};
+use data_model::{DataInit, Le32, VolatileSlice};
+use sync::Mutex;
+use vm_memory::GuestMemory;
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::ops::Deref;
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, RecvError, SendError, Sender};
+use std::sync::{Arc, RwLock};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use constants::*;
+use layout::*;
+use streams::StreamMsg;
+use vios_backend::*;
+use worker::*;
+
+use std::io::{Error as IoError, Read};
+use thiserror::Error as ThisError;
+use vios_backend::Error as VioSError;
+
+const QUEUE_SIZES: &[u16] = &[64, 64, 64, 64];
+
+#[derive(ThisError, Debug)]
+pub enum SoundError {
+    #[error("Failed to create VioS client: {0}")]
+    ClientNew(VioSError),
+    #[error("Error creating WaitContext: {0}")]
+    WaitCtx(BaseError),
+    #[error("Error consuming queue event: {0}")]
+    QueueEvt(BaseError),
+    #[error("Error with queue descriptor: {0}")]
+    Descriptor(DescriptorError),
+    #[error("The driver sent an invalid message")]
+    BadDriverMsg,
+    #[error("Failed to read/write from/to queue: {0}")]
+    QueueIO(IoError),
+    #[error("Failed to create thread: {0}")]
+    CreateThread(IoError),
+    #[error("Attempted a {0} operation while on the wrong state: {1}, this is a bug")]
+    ImpossibleState(&'static str, &'static str),
+    #[error("Failed to create event pair: {0}")]
+    CreateEvent(BaseError),
+    #[error("Failed to send message: {0}")]
+    StreamThreadSend(SendError<StreamMsg>),
+    #[error("Failed to receive message: {0}")]
+    StreamThreadRecv(RecvError),
+    #[error("Failed to create Reader from descriptor chain: {0}")]
+    CreateReader(DescriptorError),
+    #[error("Failed to create Writer from descriptor chain: {0}")]
+    CreateWriter(DescriptorError),
+}
+
+pub type Result<T> = std::result::Result<T, SoundError>;
+
+pub struct Sound {
+    config: virtio_snd_config,
+    virtio_features: u64,
+    worker_thread: Option<thread::JoinHandle<bool>>,
+    kill_evt: Option<Event>,
+    vios_client: Arc<VioSClient>,
+}
+
+impl VirtioDevice for Sound {
+    fn keep_rds(&self) -> Vec<RawDescriptor> {
+        self.vios_client.keep_fds()
+    }
+
+    fn device_type(&self) -> u32 {
+        TYPE_SOUND
+    }
+
+    fn queue_max_sizes(&self) -> &[u16] {
+        QUEUE_SIZES
+    }
+
+    fn read_config(&self, offset: u64, data: &mut [u8]) {
+        copy_config(data, 0, self.config.as_slice(), offset);
+    }
+
+    fn write_config(&mut self, offset: u64, data: &[u8]) {
+        error!("virtio-snd: driver attempted a config write which is not allowed by the spec");
+    }
+
+    fn features(&self) -> u64 {
+        self.virtio_features
+    }
+
+    fn activate(
+        &mut self,
+        mem: GuestMemory,
+        interrupt: Interrupt,
+        mut queues: Vec<Queue>,
+        mut queue_evts: Vec<Event>,
+    ) {
+        if self.worker_thread.is_some() {
+            error!("virtio-snd: Device is already active");
+            return;
+        }
+        if queues.len() != 4 || queue_evts.len() != 4 {
+            error!(
+                "virtio-snd: device activated with wrong number of queues: {}, {}",
+                queues.len(),
+                queue_evts.len()
+            );
+            return;
+        }
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("virtio-snd: failed to create kill Event pair: {}", e);
+                return;
+            }
+        };
+        self.kill_evt = Some(self_kill_evt);
+        let control_queue = queues.remove(0);
+        let control_queue_evt = queue_evts.remove(0);
+        let event_queue = queues.remove(0);
+        let event_queue_evt = queue_evts.remove(0);
+        let tx_queue = queues.remove(0);
+        let tx_queue_evt = queue_evts.remove(0);
+        let rx_queue = queues.remove(0);
+        let rx_queue_evt = queue_evts.remove(0);
+
+        let vios_client = self.vios_client.clone();
+        if let Err(e) = vios_client.start_bg_thread() {
+            error!("Failed to start vios background thread: {}", e);
+        }
+
+        let thread_result = thread::Builder::new()
+            .name(String::from("virtio_snd"))
+            .spawn(move || {
+                match Worker::try_new(
+                    vios_client,
+                    Arc::new(Mutex::new(interrupt)),
+                    mem,
+                    Arc::new(Mutex::new(control_queue)),
+                    control_queue_evt,
+                    event_queue,
+                    event_queue_evt,
+                    Arc::new(Mutex::new(tx_queue)),
+                    tx_queue_evt,
+                    Arc::new(Mutex::new(rx_queue)),
+                    rx_queue_evt,
+                ) {
+                    Ok(mut worker) => match worker.run(kill_evt) {
+                        Ok(_) => true,
+                        Err(e) => {
+                            error!("virtio-snd: Error in worker loop: {}", e);
+                            false
+                        }
+                    },
+                    Err(e) => {
+                        error!("virtio-snd: Failed to create worker: {}", e);
+                        false
+                    }
+                }
+            });
+        match thread_result {
+            Err(e) => {
+                error!("failed to spawn virtio_snd worker thread: {}", e);
+            }
+            Ok(join_handle) => {
+                self.worker_thread = Some(join_handle);
+            }
+        }
+    }
+
+    fn reset(&mut self) -> bool {
+        let mut ret = true;
+        if let Some(kill_evt) = self.kill_evt.take() {
+            if let Err(e) = kill_evt.write(1) {
+                error!("virtio-snd: failed to notify the kill event: {}", e);
+                ret = false;
+            }
+        } else {
+            if let Some(worker_thread) = self.worker_thread.take() {
+                match worker_thread.join() {
+                    Err(e) => {
+                        error!("virtio-snd: Worker thread panicked: {:?}", e);
+                        ret = false;
+                    }
+                    Ok(worker_status) => {
+                        ret = worker_status;
+                    }
+                }
+            }
+        }
+        if let Err(e) = self.vios_client.stop_bg_thread() {
+            error!("virtio-snd: Failed to stop vios background thread: {}", e);
+            ret = false;
+        }
+        ret
+    }
+}
+
+/// Creates a new virtio sound device connected to a VioS backend
+pub fn new_sound<P: AsRef<Path>>(path: P, virtio_features: u64) -> Result<Sound> {
+    let vios_client = Arc::new(VioSClient::try_new(path).map_err(SoundError::ClientNew)?);
+    Ok(Sound {
+        config: virtio_snd_config {
+            jacks: Le32::from(vios_client.num_jacks()),
+            streams: Le32::from(vios_client.num_streams()),
+            chmaps: Le32::from(vios_client.num_chmaps()),
+        },
+        virtio_features,
+        worker_thread: None,
+        kill_evt: None,
+        vios_client,
+    })
+}
