@@ -53,7 +53,7 @@ pub enum Error {
     NoStreamsAvailable,
     #[error("No stream with id {0}")]
     InvalidStreamId(u32),
-    #[error("Stream is unexpected state: {0:?}")]
+    #[error("Stream is in unexpected state: {0:?}")]
     UnexpectedState(StreamState),
     #[error("Invalid operation for stream direction: {0}")]
     WrongDirection(u8),
@@ -352,6 +352,7 @@ impl VioSClient {
             let lock = self.rx.lock();
             (lock.socket.as_raw_fd(), lock.file.as_raw_fd())
         };
+        let recv_event = self.recv_event.lock().as_raw_descriptor();
         vec![
             control_fd,
             event_fd,
