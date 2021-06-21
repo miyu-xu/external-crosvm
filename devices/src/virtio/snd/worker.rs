@@ -181,7 +181,6 @@ impl Worker {
     // Err if it encounters an unrecoverable error.
     fn process_controlq_buffers(&mut self) -> Result<()> {
         while let Some(avail_desc) = lock_pop_unlock(&self.control_queue, &self.guest_memory) {
-            let desc_index = avail_desc.index;
             let mut reader = Reader::new(self.guest_memory.clone(), avail_desc.clone())
                 .map_err(SoundError::Descriptor)?;
             let available_bytes = reader.available_bytes();
@@ -207,33 +206,56 @@ impl Worker {
             code.as_mut_slice()
                 .copy_from_slice(&read_buf[..std::mem::size_of::<Le32>()]);
             let request_type = code.to_native();
-            if request_type == VIRTIO_SND_R_PCM_INFO {
-                let info_vec = self.process_stream_info_query(&read_buf);
-                let code = if info_vec.len() > 0 {
-                    VIRTIO_SND_S_OK
-                } else {
-                    VIRTIO_SND_S_BAD_MSG
+            if request_type == VIRTIO_SND_R_CHMAP_INFO {
+                let (code, info_vec) = {
+                    match self.parse_info_query(&read_buf) {
+                        None => (VIRTIO_SND_S_BAD_MSG, Vec::new()),
+                        Some((start_id, count)) => {
+                            if start_id + count > self.vios_client.num_chmaps() {
+                                error!(
+                                    "virtio-snd: Requested info on invalid chmaps ids: {}..{}",
+                                    start_id,
+                                    start_id + count - 1
+                                );
+                                (VIRTIO_SND_S_NOT_SUPP, Vec::new())
+                            } else {
+                                (
+                                    VIRTIO_SND_S_OK,
+                                    // Safe to unwrap because we just ensured all the ids are valid
+                                    (start_id..start_id + count)
+                                        .map(|id| self.vios_client.chmap_info(id).unwrap())
+                                        .collect(),
+                                )
+                            }
+                        }
+                    }
                 };
-                let mut writer = Writer::new(self.guest_memory.clone(), avail_desc)
-                    .map_err(SoundError::Descriptor)?;
-                writer
-                    .write_obj(virtio_snd_hdr {
-                        code: Le32::from(code),
-                    })
-                    .map_err(SoundError::QueueIO)?;
-                for info in info_vec {
-                    writer.write_obj(info).map_err(SoundError::QueueIO)?;
-                }
-                {
-                    let mut queue_lock = self.control_queue.lock();
-                    queue_lock.add_used(
-                        &self.guest_memory,
-                        desc_index,
-                        writer.bytes_written() as u32,
-                    );
-                    let interrupt_lock = self.interrupt.lock();
-                    queue_lock.trigger_interrupt(&self.guest_memory, interrupt_lock.deref());
-                }
+                self.send_info_reply(avail_desc, code, info_vec)?;
+            } else if request_type == VIRTIO_SND_R_PCM_INFO {
+                let (code, info_vec) = {
+                    match self.parse_info_query(&read_buf) {
+                        None => (VIRTIO_SND_S_BAD_MSG, Vec::new()),
+                        Some((start_id, count)) => {
+                            if start_id + count > self.vios_client.num_streams() {
+                                error!(
+                                    "virtio-snd: Requested info on invalid pcm ids: {}..{}",
+                                    start_id,
+                                    start_id + count - 1
+                                );
+                                (VIRTIO_SND_S_NOT_SUPP, Vec::new())
+                            } else {
+                                (
+                                    VIRTIO_SND_S_OK,
+                                    // Safe to unwrap because we just ensured all the ids are valid
+                                    (start_id..start_id + count)
+                                        .map(|id| self.vios_client.stream_info(id).unwrap())
+                                        .collect(),
+                                )
+                            }
+                        }
+                    }
+                };
+                self.send_info_reply(avail_desc, code, info_vec)?;
             } else {
                 match request_type {
                     VIRTIO_SND_R_PCM_SET_PARAMS => {
@@ -271,37 +293,19 @@ impl Worker {
         Ok(())
     }
 
-    fn process_stream_info_query(&mut self, read_buf: &[u8]) -> Vec<virtio_snd_pcm_info> {
+    fn parse_info_query(&mut self, read_buf: &[u8]) -> Option<(u32, u32)> {
         if read_buf.len() != std::mem::size_of::<virtio_snd_query_info>() {
             error!(
                 "virtio-snd: The driver sent the wrong number bytes for a pcm_info struct: {}",
                 read_buf.len()
             );
-            return Vec::new();
+            return None;
         }
-        let mut pcm_query: virtio_snd_query_info = Default::default();
-        pcm_query.as_mut_slice().copy_from_slice(&read_buf);
-        if pcm_query.size.to_native() as usize != std::mem::size_of::<virtio_snd_pcm_info>() {
-            error!(
-                "virtio-snd: The size provided in the pcm_query message is wrong: {}",
-                pcm_query.size.to_native()
-            );
-            return Vec::new();
-        }
-        let start_id = pcm_query.start_id.to_native();
-        let count = pcm_query.count.to_native();
-        if start_id + count > self.vios_client.num_streams() {
-            error!(
-                "virtio-snd: Requested info on invalid pcm ids: {}..{}",
-                start_id,
-                start_id + count - 1
-            );
-            return Vec::new();
-        }
-        (start_id..start_id + count)
-            // Safe to unwrap because we just ensured all the ids are valid
-            .map(|id| self.vios_client.stream_info(id).unwrap())
-            .collect()
+        let mut query: virtio_snd_query_info = Default::default();
+        query.as_mut_slice().copy_from_slice(&read_buf);
+        let start_id = query.start_id.to_native();
+        let count = query.count.to_native();
+        Some((start_id, count))
     }
 
     // Returns Err if it encounters an unrecoverable error, Ok otherwise
@@ -384,6 +388,36 @@ impl Worker {
                 &self.interrupt,
             )
         }
+    }
+
+    fn send_info_reply<T: DataInit>(
+        &mut self,
+        desc: DescriptorChain,
+        code: u32,
+        info_vec: Vec<T>,
+    ) -> Result<()> {
+        let desc_index = desc.index;
+        let mut writer =
+            Writer::new(self.guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+        writer
+            .write_obj(virtio_snd_hdr {
+                code: Le32::from(code),
+            })
+            .map_err(SoundError::QueueIO)?;
+        for info in info_vec {
+            writer.write_obj(info).map_err(SoundError::QueueIO)?;
+        }
+        {
+            let mut queue_lock = self.control_queue.lock();
+            queue_lock.add_used(
+                &self.guest_memory,
+                desc_index,
+                writer.bytes_written() as u32,
+            );
+            let interrupt_lock = self.interrupt.lock();
+            queue_lock.trigger_interrupt(&self.guest_memory, interrupt_lock.deref());
+        }
+        Ok(())
     }
 }
 
