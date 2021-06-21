@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::io::prelude::*;
 use std::io::{self, Read, Write};
+use std::mem::{size_of, transmute};
+use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 
 use vm_memory::GuestMemory;
 
+use data_model::DataInit;
+
 use thiserror::Error as ThisError;
 
 use base::Error as SysError;
 use base::{error, warn};
-use base::{Event, EventType, PollToken, RawDescriptor, WaitContext};
+use base::{AsRawDescriptor, Event, EventType, PollToken, RawDescriptor, WaitContext};
 
 use super::{
     DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice, Writer,
@@ -41,6 +46,108 @@ pub enum Mac80211HwsimError {
     WaitOnContext(SysError),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum WmediumdMsgType {
+    WMEDIUMD_MSG_INVALID = 0,
+    WMEDIUMD_MSG_ACK = 1,
+    WMEDIUMD_MSG_REGISTER = 2,
+    WMEDIUMD_MSG_UNREGISTER = 3,
+    WMEDIUMD_MSG_NETLINK = 4,
+    WMEDIUMD_MSG_SET_CONTROL = 5,
+    WMEDIUMD_MSG_TX_START = 6,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+struct WmediumdMsgHeader {
+    msg_type: u32,
+    data_len: u32,
+}
+
+// Safe because it only has data and has no implicit padding.
+unsafe impl DataInit for WmediumdMsgHeader {}
+
+struct WmediumdApiClient {
+    stream: UnixStream,
+}
+
+impl WmediumdApiClient {
+    fn process_message(&mut self) -> Option<Vec<u8>> {
+        let header = self.read_header();
+        let mut buf: Option<Vec<u8>> = match header.data_len {
+            0 => None,
+            _ => Some(vec![0; header.data_len as usize]),
+        };
+
+        self.send_ack();
+
+        match header.msg_type {
+            x if x == WmediumdMsgType::WMEDIUMD_MSG_NETLINK as u32 => {
+                if let Some(data) = &mut buf {
+                    self.stream.read_exact(data);
+                }
+            }
+            _ => {}
+        }
+
+        buf
+    }
+
+    fn read_header(&mut self) -> WmediumdMsgHeader {
+        let mut buf = [0u8; std::mem::size_of::<WmediumdMsgHeader>()];
+
+        self.stream.read_exact(&mut buf).unwrap();
+
+        unsafe {
+            transmute::<[u8; std::mem::size_of::<WmediumdMsgHeader>()], WmediumdMsgHeader>(buf)
+        }
+    }
+
+    fn wait_ack(&mut self) {
+        let header = self.read_header();
+
+        if header.msg_type != WmediumdMsgType::WMEDIUMD_MSG_ACK as u32 || header.data_len != 0 {
+            error!("Ack not received");
+        }
+    }
+
+    fn send_ack(&mut self) {
+        self.send_packet(WmediumdMsgType::WMEDIUMD_MSG_ACK, None);
+    }
+
+    fn send_packet(&mut self, msg_type: WmediumdMsgType, payload: Option<&[u8]>) {
+        let data_len = match payload {
+            None => 0,
+            Some(data) => data.len(),
+        };
+
+        let header = WmediumdMsgHeader {
+            msg_type: msg_type as u32,
+            data_len: data_len as u32,
+        };
+
+        if let Some(data) = &payload {
+            let mut v: Vec<u8> = vec![];
+            v.extend_from_slice(header.as_slice());
+            v.extend_from_slice(data);
+
+            self.stream.write_all(&v).unwrap();
+        } else {
+            self.stream.write_all(header.as_slice()).unwrap();
+        }
+
+        if msg_type != WmediumdMsgType::WMEDIUMD_MSG_ACK {
+            self.wait_ack();
+        }
+    }
+}
+
+impl AsRawDescriptor for WmediumdApiClient {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.stream.as_raw_descriptor()
+    }
+}
+
 pub struct Mac80211Hwsim {
     avail_features: u64,
     queue_sizes: [u16; 2],
@@ -65,6 +172,7 @@ struct Worker {
     frame_send_channel: Sender<Vec<u8>>,
     frame_recv_channel: Receiver<Vec<u8>>,
     frame_channel_evt: Event,
+    wmediumd_client: WmediumdApiClient,
 }
 
 impl Worker {
@@ -76,6 +184,9 @@ impl Worker {
     ) -> Result<Worker, Mac80211HwsimError> {
         let (frame_send_channel, frame_recv_channel) = channel();
         let frame_channel_evt = Event::new().map_err(Mac80211HwsimError::CreateMac80211Hwsim)?;
+        let wmediumd_client = WmediumdApiClient {
+            stream: UnixStream::connect("/tmp/wmediumd_api").unwrap(),
+        };
 
         Ok(Worker {
             mem,
@@ -85,6 +196,7 @@ impl Worker {
             frame_send_channel,
             frame_recv_channel,
             frame_channel_evt,
+            wmediumd_client,
         })
     }
 
@@ -100,6 +212,9 @@ impl Worker {
             let read_count = reader
                 .read(&mut buf)
                 .map_err(Mac80211HwsimError::ReadQueue)?;
+
+            self.wmediumd_client
+                .send_packet(WmediumdMsgType::WMEDIUMD_MSG_NETLINK, Some(&buf));
 
             self.tx_queue.add_used(&self.mem, index, 0);
         }
@@ -165,13 +280,18 @@ impl Worker {
             RxQueue,
             TxQueue,
             FrameToGuest,
+            Wmediumd,
             InterruptResample,
         }
+
+        self.wmediumd_client
+            .send_packet(WmediumdMsgType::WMEDIUMD_MSG_REGISTER, None);
 
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
             (&tx_queue_evt, Token::TxQueue),
             (&rx_queue_evt, Token::RxQueue),
             (&self.frame_channel_evt, Token::FrameToGuest),
+            (&self.wmediumd_client, Token::Wmediumd),
         ])
         .map_err(Mac80211HwsimError::CreateWaitContext)?;
 
@@ -188,6 +308,12 @@ impl Worker {
 
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
+                    Token::Wmediumd => match self.wmediumd_client.process_message() {
+                        None => {}
+                        Some(buf) => {
+                            self.send_frame_to_guest(&buf);
+                        }
+                    },
                     Token::TxQueue => {
                         tx_queue_evt.read().map_err(Mac80211HwsimError::ReadEvent)?;
                         self.process_tx_queue()?;
