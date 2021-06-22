@@ -48,7 +48,7 @@ rust_test_host {
                 "gdbstub",
             ],
             rustlibs: [
-                "libgdbstub",
+                "libgdbstub_arch",
             ],
         },
     },
@@ -64,7 +64,7 @@ rust_test {
                 "gdbstub",
             ],
             rustlibs: [
-                "libgdbstub",
+                "libgdbstub_arch",
             ],
         },
     },
@@ -99,7 +99,7 @@ rust_library {
                 "gdbstub",
             ],
             rustlibs: [
-                "libgdbstub",
+                "libgdbstub_arch",
             ],
         },
     },
