@@ -39,6 +39,8 @@ const QUEUE_SIZES: &[u16] = &[64, 64, 64, 64];
 pub enum SoundError {
     #[error("Failed to create VioS client: {0}")]
     ClientNew(VioSError),
+    #[error("Failed to get event notifier from VioS client: {0}")]
+    ClientEventNotifier(VioSError),
     #[error("Error creating WaitContext: {0}")]
     WaitCtx(BaseError),
     #[error("Error consuming queue event: {0}")]

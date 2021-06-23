@@ -8,7 +8,7 @@ use std::sync::{mpsc::Sender, Arc};
 use std::thread;
 
 use crate::virtio::{DescriptorChain, Interrupt, Queue, Reader, SignalableInterrupt, Writer};
-use base::{error, Event, PollToken, WaitContext};
+use base::{error, warn, Event, PollToken, WaitContext};
 use data_model::{DataInit, Le32};
 use sync::Mutex;
 use vm_memory::GuestMemory;
@@ -110,16 +110,22 @@ impl Worker {
     /// Emulates the virtio-snd device. It won't return until something is written to the kill_evt
     /// event or an unrecoverable error occurs.
     pub fn control_loop(&mut self, kill_evt: Event) -> Result<()> {
+        let event_notifier = self
+            .vios_client
+            .get_event_notifier()
+            .map_err(SoundError::ClientEventNotifier)?;
         #[derive(PollToken)]
         enum Token {
             ControlQAvailable,
             EventQAvailable,
             InterruptResample,
+            EventTriggered,
             Kill,
         }
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
             (&self.control_queue_evt, Token::ControlQAvailable),
             (&self.event_queue_evt, Token::EventQAvailable),
+            (&event_notifier, Token::EventTriggered),
             (&kill_evt, Token::Kill),
         ])
         .map_err(SoundError::WaitCtx)?;
@@ -141,7 +147,14 @@ impl Worker {
                         self.process_controlq_buffers()?;
                     }
                     Token::EventQAvailable => {
+                        // Just read from the event object to make sure the producer of such events
+                        // never blocks. The buffers will only be used when actual virtio-snd
+                        // events are triggered.
                         self.event_queue_evt.read().map_err(SoundError::QueueEvt)?;
+                    }
+                    Token::EventTriggered => {
+                        event_notifier.read().map_err(SoundError::QueueEvt)?;
+                        self.process_event_triggered()?;
                     }
                     Token::InterruptResample => {
                         self.interrupt.lock().interrupt_resample();
@@ -288,6 +301,30 @@ impl Worker {
                         )?;
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn process_event_triggered(&mut self) -> Result<()> {
+        while let Some(evt) = self.vios_client.pop_event() {
+            if let Some(desc) = self.event_queue.pop(&self.guest_memory) {
+                let desc_index = desc.index;
+                let mut writer =
+                    Writer::new(self.guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+                writer.write_obj(evt).map_err(SoundError::QueueIO)?;
+                self.event_queue.add_used(
+                    &self.guest_memory,
+                    desc_index,
+                    writer.bytes_written() as u32,
+                );
+                {
+                    let interrupt_lock = self.interrupt.lock();
+                    self.event_queue
+                        .trigger_interrupt(&self.guest_memory, interrupt_lock.deref());
+                }
+            } else {
+                warn!("virtio-snd: Dropping event because there are no buffers in virtqueue");
             }
         }
         Ok(())
