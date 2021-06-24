@@ -433,7 +433,7 @@ impl QcowFile {
         }
 
         let cluster_bits: u32 = header.cluster_bits;
-        if cluster_bits < MIN_CLUSTER_BITS || cluster_bits > MAX_CLUSTER_BITS {
+        if !(MIN_CLUSTER_BITS..=MAX_CLUSTER_BITS).contains(&cluster_bits) {
             return Err(Error::InvalidClusterSize);
         }
         let cluster_size = 0x01u64 << cluster_bits;
@@ -1916,7 +1916,7 @@ mod tests {
     }
 
     #[test]
-    fn test_header_crazy_file_size_rejected() {
+    fn test_header_excessive_file_size_rejected() {
         let mut header = valid_header();
         &mut header[24..32].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x1e]);
         with_basic_file(&header, |disk_file: File| {
@@ -1969,7 +1969,7 @@ mod tests {
         let mut header = valid_header();
         &mut header[56..60].copy_from_slice(&[0x02, 0x00, 0xe8, 0xff]);
         with_basic_file(&header, |disk_file: File| {
-            QcowFile::from(disk_file).expect_err("Created disk with crazy refcount clusters");
+            QcowFile::from(disk_file).expect_err("Created disk with excessive refcount clusters");
         });
     }
 
@@ -1978,7 +1978,7 @@ mod tests {
         let mut header = valid_header();
         &mut header[48..56].copy_from_slice(&[0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x02, 0x00]);
         with_basic_file(&header, |disk_file: File| {
-            QcowFile::from(disk_file).expect_err("Created disk with crazy refcount offset");
+            QcowFile::from(disk_file).expect_err("Created disk with excessive refcount offset");
         });
     }
 

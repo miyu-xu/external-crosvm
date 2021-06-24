@@ -6,12 +6,11 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use base::{error, info};
-use msg_socket::{MsgReceiver, MsgSender};
+use base::{error, info, Tube, TubeError};
+
 use sync::Mutex;
 use vm_control::{
-    VcpuControl, VcpuDebug, VcpuDebugStatus, VcpuDebugStatusMessage, VmControlRequestSocket,
-    VmRequest, VmResponse,
+    VcpuControl, VcpuDebug, VcpuDebugStatus, VcpuDebugStatusMessage, VmRequest, VmResponse,
 };
 use vm_memory::GuestAddress;
 
@@ -82,15 +81,15 @@ enum Error {
     VcpuResponse(mpsc::RecvTimeoutError),
     /// Failed to send a VM request.
     #[error("failed to send a VM request: {0}")]
-    VmRequest(msg_socket::MsgError),
+    VmRequest(TubeError),
     /// Failed to receive a VM request.
     #[error("failed to receive a VM response: {0}")]
-    VmResponse(msg_socket::MsgError),
+    VmResponse(TubeError),
 }
 type GdbResult<T> = std::result::Result<T, Error>;
 
 pub struct GdbStub {
-    vm_socket: Mutex<VmControlRequestSocket>,
+    vm_tube: Mutex<Tube>,
     vcpu_com: Vec<mpsc::Sender<VcpuControl>>,
     from_vcpu: mpsc::Receiver<VcpuDebugStatusMessage>,
 
@@ -99,12 +98,12 @@ pub struct GdbStub {
 
 impl GdbStub {
     pub fn new(
-        vm_socket: VmControlRequestSocket,
+        vm_tube: Tube,
         vcpu_com: Vec<mpsc::Sender<VcpuControl>>,
         from_vcpu: mpsc::Receiver<VcpuDebugStatusMessage>,
     ) -> Self {
         GdbStub {
-            vm_socket: Mutex::new(vm_socket),
+            vm_tube: Mutex::new(vm_tube),
             vcpu_com,
             from_vcpu,
             hw_breakpoints: Default::default(),
@@ -122,9 +121,9 @@ impl GdbStub {
     }
 
     fn vm_request(&self, request: VmRequest) -> GdbResult<()> {
-        let vm_socket = self.vm_socket.lock();
-        vm_socket.send(&request).map_err(Error::VmRequest)?;
-        match vm_socket.recv() {
+        let vm_tube = self.vm_tube.lock();
+        vm_tube.send(&request).map_err(Error::VmRequest)?;
+        match vm_tube.recv() {
             Ok(VmResponse::Ok) => Ok(()),
             Ok(r) => Err(Error::UnexpectedVmResponse(r)),
             Err(e) => Err(Error::VmResponse(e)),
@@ -176,11 +175,12 @@ impl SingleThreadOps for GdbStub {
 
         // Polling
         loop {
-            match self
+            // TODO(keiichiw): handle error?
+            if let Ok(msg) = self
                 .from_vcpu
                 .recv_timeout(std::time::Duration::from_millis(100))
             {
-                Ok(msg) => match msg.msg {
+                match msg.msg {
                     VcpuDebugStatus::HitBreakPoint => {
                         if single_step {
                             return Ok(StopReason::DoneStep);
@@ -191,9 +191,8 @@ impl SingleThreadOps for GdbStub {
                     status => {
                         error!("Unexpected VcpuDebugStatus: {:?}", status);
                     }
-                },
-                Err(_) => {} // TODO(keiichiw): handle error?
-            };
+                }
+            }
 
             if check_gdb_interrupt() {
                 self.vm_request(VmRequest::Suspend).map_err(|e| {

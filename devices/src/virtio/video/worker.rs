@@ -6,11 +6,10 @@
 
 use std::collections::VecDeque;
 
-use base::{error, info, Event, WaitContext};
+use base::{error, info, Event, Tube, WaitContext};
 use vm_memory::GuestMemory;
 
 use crate::virtio::queue::{DescriptorChain, Queue};
-use crate::virtio::resource_bridge::ResourceRequestSocket;
 use crate::virtio::video::async_cmd_desc_map::AsyncCmdDescMap;
 use crate::virtio::video::command::{QueueType, VideoCmd};
 use crate::virtio::video::device::{
@@ -19,7 +18,7 @@ use crate::virtio::video::device::{
 use crate::virtio::video::event::{self, EvtType, VideoEvt};
 use crate::virtio::video::response::{self, Response};
 use crate::virtio::video::{Error, Result};
-use crate::virtio::{Interrupt, Reader, Writer};
+use crate::virtio::{Interrupt, Reader, SignalableInterrupt, Writer};
 
 pub struct Worker {
     pub interrupt: Interrupt,
@@ -27,7 +26,7 @@ pub struct Worker {
     pub cmd_evt: Event,
     pub event_evt: Event,
     pub kill_evt: Event,
-    pub resource_bridge: ResourceRequestSocket,
+    pub resource_bridge: Tube,
 }
 
 /// Pair of a descriptor chain and a response to be written.
@@ -143,11 +142,11 @@ impl Worker {
 
     /// Handles a `DescriptorChain` value sent via the command queue and returns a `VecDeque`
     /// of `WritableResp` to be sent to the guest.
-    fn handle_command_desc<T: Device>(
+    fn handle_command_desc(
         &self,
         cmd_queue: &mut Queue,
         event_queue: &mut Queue,
-        device: &mut T,
+        device: &mut dyn Device,
         wait_ctx: &WaitContext<Token>,
         desc_map: &mut AsyncCmdDescMap,
         desc: DescriptorChain,
@@ -228,11 +227,11 @@ impl Worker {
     }
 
     /// Handles each command in the command queue.
-    fn handle_command_queue<T: Device>(
+    fn handle_command_queue(
         &self,
         cmd_queue: &mut Queue,
         event_queue: &mut Queue,
-        device: &mut T,
+        device: &mut dyn Device,
         wait_ctx: &WaitContext<Token>,
         desc_map: &mut AsyncCmdDescMap,
     ) -> Result<()> {
@@ -246,11 +245,11 @@ impl Worker {
     }
 
     /// Handles an event notified via an event.
-    fn handle_event<T: Device>(
+    fn handle_event(
         &self,
         cmd_queue: &mut Queue,
         event_queue: &mut Queue,
-        device: &mut T,
+        device: &mut dyn Device,
         desc_map: &mut AsyncCmdDescMap,
         stream_id: u32,
     ) -> Result<()> {
@@ -266,18 +265,23 @@ impl Worker {
         Ok(())
     }
 
-    pub fn run<T: Device>(
+    pub fn run(
         &mut self,
         mut cmd_queue: Queue,
         mut event_queue: Queue,
-        mut device: T,
+        mut device: Box<dyn Device>,
     ) -> Result<()> {
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
             (&self.cmd_evt, Token::CmdQueue),
             (&self.event_evt, Token::EventQueue),
             (&self.kill_evt, Token::Kill),
-            (self.interrupt.get_resample_evt(), Token::InterruptResample),
         ])
+        .and_then(|wc| {
+            if let Some(resample_evt) = self.interrupt.get_resample_evt() {
+                wc.add(resample_evt, Token::InterruptResample)?;
+            }
+            Ok(wc)
+        })
         .map_err(Error::WaitContextCreationFailed)?;
 
         // Stores descriptors in which responses for asynchronous commands will be written.
@@ -292,7 +296,7 @@ impl Worker {
                         self.handle_command_queue(
                             &mut cmd_queue,
                             &mut event_queue,
-                            &mut device,
+                            device.as_mut(),
                             &wait_ctx,
                             &mut desc_map,
                         )?;
@@ -304,7 +308,7 @@ impl Worker {
                         self.handle_event(
                             &mut cmd_queue,
                             &mut event_queue,
-                            &mut device,
+                            device.as_mut(),
                             &mut desc_map,
                             id,
                         )?;

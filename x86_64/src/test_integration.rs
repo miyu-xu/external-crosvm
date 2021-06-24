@@ -4,6 +4,7 @@
 
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 
+use arch::LinuxArch;
 use devices::{IrqChipX86_64, ProtectionType};
 use hypervisor::{HypervisorX86_64, VcpuExit, VcpuX86_64, VmX86_64};
 use vm_memory::{GuestAddress, GuestMemory};
@@ -12,13 +13,13 @@ use super::cpuid::setup_cpuid;
 use super::interrupts::set_lint;
 use super::regs::{setup_fpu, setup_msrs, setup_regs, setup_sregs};
 use super::X8664arch;
-use super::{acpi, bootparam, mptable, smbios};
+use super::{acpi, arch_memory_regions, bootparam, mptable, smbios};
 use super::{
     BOOT_STACK_POINTER, END_ADDR_BEFORE_32BITS, KERNEL_64BIT_ENTRY_OFFSET, KERNEL_START_OFFSET,
     X86_64_SCI_IRQ, ZERO_PAGE_OFFSET,
 };
 
-use base::Event;
+use base::{Event, Tube};
 
 use std::collections::BTreeMap;
 use std::ffi::CString;
@@ -28,14 +29,9 @@ use sync::Mutex;
 
 use devices::PciConfigIo;
 
-use vm_control::{
-    DiskControlCommand, DiskControlResult, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse,
-    VmIrqResponseSocket, VmMemoryControlResponseSocket, VmMemoryRequest, VmMemoryResponse,
-};
-
-enum TaggedControlSocket {
-    VmMemory(VmMemoryControlResponseSocket),
-    VmIrq(VmIrqResponseSocket),
+enum TaggedControlTube {
+    VmMemory(Tube),
+    VmIrq(Tube),
 }
 
 #[test]
@@ -64,8 +60,8 @@ fn simple_kvm_split_irqchip_test() {
             let vm = KvmVm::new(&kvm, guest_mem).expect("failed to create kvm vm");
             (kvm, vm)
         },
-        |vm, vcpu_count, device_socket| {
-            KvmSplitIrqChip::new(vm, vcpu_count, device_socket)
+        |vm, vcpu_count, device_tube| {
+            KvmSplitIrqChip::new(vm, vcpu_count, device_tube, None)
                 .expect("failed to create KvmSplitIrqChip")
         },
     );
@@ -82,7 +78,7 @@ where
     Vcpu: VcpuX86_64 + 'static,
     I: IrqChipX86_64 + 'static,
     FV: FnOnce(GuestMemory) -> (H, V),
-    FI: FnOnce(V, /* vcpu_count: */ usize, VmIrqRequestSocket) -> I,
+    FI: FnOnce(V, /* vcpu_count: */ usize, Tube) -> I,
 {
     /*
     0x0000000000000000:  67 89 18    mov dword ptr [eax], ebx
@@ -100,38 +96,33 @@ where
     let write_addr = GuestAddress(0x4000);
 
     // guest mem is 400 pages
-    let guest_mem = X8664arch::setup_memory(memory_size, None).unwrap();
-    // let guest_mem = GuestMemory::new(&[(GuestAddress(0), memory_size)]).unwrap();
-    let mut resources = X8664arch::get_resource_allocator(&guest_mem);
+    let arch_mem_regions = arch_memory_regions(memory_size, None);
+    let guest_mem = GuestMemory::new(&arch_mem_regions).unwrap();
+
+    let mut resources = X8664arch::create_system_allocator(&guest_mem);
 
     let (hyp, mut vm) = create_vm(guest_mem.clone());
-    let (irqchip_socket, device_socket) =
-        msg_socket::pair::<VmIrqResponse, VmIrqRequest>().expect("failed to create irq socket");
+    let (irqchip_tube, device_tube) = Tube::pair().expect("failed to create irq tube");
 
-    let mut irq_chip = create_irq_chip(
-        vm.try_clone().expect("failed to clone vm"),
-        1,
-        device_socket,
-    );
+    let mut irq_chip = create_irq_chip(vm.try_clone().expect("failed to clone vm"), 1, device_tube);
 
     let mut mmio_bus = devices::Bus::new();
+    let mut io_bus = devices::Bus::new();
     let exit_evt = Event::new().unwrap();
 
-    let mut control_sockets = vec![TaggedControlSocket::VmIrq(irqchip_socket)];
+    let mut control_tubes = vec![TaggedControlTube::VmIrq(irqchip_tube)];
     // Create one control socket per disk.
-    let mut disk_device_sockets = Vec::new();
-    let mut disk_host_sockets = Vec::new();
+    let mut disk_device_tubes = Vec::new();
+    let mut disk_host_tubes = Vec::new();
     let disk_count = 0;
     for _ in 0..disk_count {
-        let (disk_host_socket, disk_device_socket) =
-            msg_socket::pair::<DiskControlCommand, DiskControlResult>().unwrap();
-        disk_host_sockets.push(disk_host_socket);
-        disk_device_sockets.push(disk_device_socket);
+        let (disk_host_tube, disk_device_tube) = Tube::pair().unwrap();
+        disk_host_tubes.push(disk_host_tube);
+        disk_device_tubes.push(disk_device_tube);
     }
-    let (gpu_host_socket, _gpu_device_socket) =
-        msg_socket::pair::<VmMemoryResponse, VmMemoryRequest>().unwrap();
+    let (gpu_host_tube, _gpu_device_tube) = Tube::pair().unwrap();
 
-    control_sockets.push(TaggedControlSocket::VmMemory(gpu_host_socket));
+    control_tubes.push(TaggedControlTube::VmMemory(gpu_host_tube));
 
     let devices = vec![];
 
@@ -139,17 +130,19 @@ where
         devices,
         &mut irq_chip,
         &mut mmio_bus,
+        &mut io_bus,
         &mut resources,
         &mut vm,
         4,
     )
     .unwrap();
     let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(pci)));
+    io_bus.insert(pci_bus, 0xcf8, 0x8).unwrap();
 
-    let mut io_bus = X8664arch::setup_io_bus(
+    X8664arch::setup_legacy_devices(
+        &mut io_bus,
         irq_chip.pit_uses_speaker_port(),
         exit_evt.try_clone().unwrap(),
-        Some(pci_bus),
         memory_size,
     )
     .unwrap();
@@ -167,7 +160,7 @@ where
     )
     .unwrap();
 
-    let param_args = "nokaslr";
+    let param_args = "nokaslr pci=noacpi";
 
     let mut cmdline = X8664arch::get_base_linux_cmdline();
 
@@ -212,7 +205,7 @@ where
 
     // Note that this puts the mptable at 0x9FC00 in guest physical memory.
     mptable::setup_mptable(&guest_mem, 1, pci_irqs).expect("failed to setup mptable");
-    smbios::setup_smbios(&guest_mem).expect("failed to setup smbios");
+    smbios::setup_smbios(&guest_mem, None).expect("failed to setup smbios");
 
     acpi::create_acpi_tables(&guest_mem, 1, X86_64_SCI_IRQ, acpi_dev_resource.0);
 

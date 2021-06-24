@@ -11,24 +11,28 @@ use std::mem::size_of;
 use std::result;
 use std::sync::Arc;
 
-use crate::guest_address::GuestAddress;
 use base::{pagesize, Error as SysError};
 use base::{
-    AsRawDescriptor, MappedRegion, MemfdSeals, MemoryMapping, MemoryMappingBuilder,
-    MemoryMappingUnix, MmapError, RawDescriptor, SharedMemory, SharedMemoryUnix,
+    AsRawDescriptor, AsRawDescriptors, MappedRegion, MemfdSeals, MemoryMapping,
+    MemoryMappingBuilder, MemoryMappingBuilderUnix, MemoryMappingUnix, MmapError, RawDescriptor,
+    SharedMemory, SharedMemoryUnix,
 };
+use bitflags::bitflags;
 use cros_async::{mem, BackingMemory};
 use data_model::volatile_memory::*;
 use data_model::DataInit;
+
+use crate::guest_address::GuestAddress;
 
 #[derive(Debug)]
 pub enum Error {
     DescriptorChainOverflow,
     InvalidGuestAddress(GuestAddress),
+    InvalidOffset(u64),
     MemoryAccess(GuestAddress, MmapError),
     MemoryMappingFailed(MmapError),
     MemoryRegionOverlap,
-    MemoryRegionTooLarge(u64),
+    MemoryRegionTooLarge(u128),
     MemoryNotAligned,
     MemoryCreationFailed(SysError),
     MemoryAddSealsFailed(SysError),
@@ -51,6 +55,7 @@ impl Display for Error {
                 "the combined length of all the buffers in a DescriptorChain is too large"
             ),
             InvalidGuestAddress(addr) => write!(f, "invalid guest address {}", addr),
+            InvalidOffset(addr) => write!(f, "invalid offset {}", addr),
             MemoryAccess(addr, e) => {
                 write!(f, "invalid guest memory access at addr={}: {}", addr, e)
             }
@@ -82,13 +87,44 @@ impl Display for Error {
     }
 }
 
-struct MemoryRegion {
+bitflags! {
+    pub struct MemoryPolicy: u32 {
+        const USE_HUGEPAGES = 1;
+    }
+}
+
+/// A regions of memory mapped memory.
+/// Holds the memory mapping with its offset in guest memory.
+/// Also holds the backing fd for the mapping and the offset in that fd of the mapping.
+pub struct MemoryRegion {
     mapping: MemoryMapping,
     guest_base: GuestAddress,
-    memfd_offset: u64,
+    shm_offset: u64,
+    shm: Arc<SharedMemory>,
 }
 
 impl MemoryRegion {
+    /// Creates a new MemoryRegion using the given SharedMemory object to later be attached to a VM
+    /// at `guest_base` address in the guest.
+    pub fn new(
+        size: u64,
+        guest_base: GuestAddress,
+        shm_offset: u64,
+        shm: Arc<SharedMemory>,
+    ) -> Result<Self> {
+        let mapping = MemoryMappingBuilder::new(size as usize)
+            .from_descriptor(shm.as_ref())
+            .offset(shm_offset)
+            .build()
+            .map_err(Error::MemoryMappingFailed)?;
+        Ok(MemoryRegion {
+            mapping,
+            guest_base,
+            shm_offset,
+            shm,
+        })
+    }
+
     fn start(&self) -> GuestAddress {
         self.guest_base
     }
@@ -103,29 +139,25 @@ impl MemoryRegion {
     }
 }
 
-/// Tracks a memory region and where it is mapped in the guest, along with a shm
-/// fd of the underlying memory regions.
+/// Tracks memory regions and where they are mapped in the guest, along with shm
+/// fds of the underlying memory regions.
 #[derive(Clone)]
 pub struct GuestMemory {
     regions: Arc<[MemoryRegion]>,
-    shm: Arc<SharedMemory>,
 }
 
-impl AsRawDescriptor for GuestMemory {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.shm.as_raw_descriptor()
-    }
-}
-
-impl AsRef<SharedMemory> for GuestMemory {
-    fn as_ref(&self) -> &SharedMemory {
-        &self.shm
+impl AsRawDescriptors for GuestMemory {
+    fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
+        self.regions
+            .iter()
+            .map(|r| r.shm.as_raw_descriptor())
+            .collect()
     }
 }
 
 impl GuestMemory {
     /// Creates backing shm for GuestMemory regions
-    fn create_memfd(ranges: &[(GuestAddress, u64)]) -> Result<SharedMemory> {
+    fn create_shm(ranges: &[(GuestAddress, u64)]) -> Result<SharedMemory> {
         let mut aligned_size = 0;
         let pg_size = pagesize();
         for range in ranges {
@@ -154,7 +186,7 @@ impl GuestMemory {
     pub fn new(ranges: &[(GuestAddress, u64)]) -> Result<GuestMemory> {
         // Create shm
 
-        let shm = GuestMemory::create_memfd(ranges)?;
+        let shm = Arc::new(GuestMemory::create_shm(ranges)?);
         // Create memory regions
         let mut regions = Vec::<MemoryRegion>::new();
         let mut offset = 0;
@@ -170,17 +202,18 @@ impl GuestMemory {
                 }
             }
 
-            let size =
-                usize::try_from(range.1).map_err(|_| Error::MemoryRegionTooLarge(range.1))?;
+            let size = usize::try_from(range.1)
+                .map_err(|_| Error::MemoryRegionTooLarge(range.1 as u128))?;
             let mapping = MemoryMappingBuilder::new(size)
-                .from_descriptor(&shm)
+                .from_shared_memory(shm.as_ref())
                 .offset(offset)
                 .build()
                 .map_err(Error::MemoryMappingFailed)?;
             regions.push(MemoryRegion {
                 mapping,
                 guest_base: range.0,
-                memfd_offset: offset,
+                shm_offset: offset,
+                shm: Arc::clone(&shm),
             });
 
             offset += size as u64;
@@ -188,7 +221,34 @@ impl GuestMemory {
 
         Ok(GuestMemory {
             regions: Arc::from(regions),
-            shm: Arc::new(shm),
+        })
+    }
+
+    /// Creates a `GuestMemory` from a collection of MemoryRegions.
+    pub fn from_regions(mut regions: Vec<MemoryRegion>) -> Result<Self> {
+        // Sort the regions and ensure non overlap.
+        regions.sort_by(|a, b| a.guest_base.cmp(&b.guest_base));
+
+        if regions.len() > 1 {
+            let mut prev_end = regions[0]
+                .guest_base
+                .checked_add(regions[0].mapping.size() as u64)
+                .ok_or(Error::MemoryRegionOverlap)?;
+            for region in &regions[1..] {
+                if prev_end > region.guest_base {
+                    return Err(Error::MemoryRegionOverlap);
+                }
+                prev_end = region
+                    .guest_base
+                    .checked_add(region.mapping.size() as u64)
+                    .ok_or(Error::MemoryRegionTooLarge(
+                        region.guest_base.0 as u128 + region.mapping.size() as u128,
+                    ))?;
+            }
+        }
+
+        Ok(GuestMemory {
+            regions: Arc::from(regions),
         })
     }
 
@@ -252,11 +312,24 @@ impl GuestMemory {
 
     /// Madvise away the address range in the host that is associated with the given guest range.
     pub fn remove_range(&self, addr: GuestAddress, count: u64) -> Result<()> {
-        self.do_in_region(addr, move |mapping, offset| {
+        self.do_in_region(addr, move |mapping, offset, _| {
             mapping
                 .remove_range(offset, count as usize)
                 .map_err(|e| Error::MemoryAccess(addr, e))
         })
+    }
+
+    /// Handles guest memory policy hints/advices.
+    pub fn set_memory_policy(&self, mem_policy: MemoryPolicy) {
+        if mem_policy.contains(MemoryPolicy::USE_HUGEPAGES) {
+            for (_, region) in self.regions.iter().enumerate() {
+                let ret = region.mapping.use_hugepages();
+
+                if let Err(err) = ret {
+                    println!("Failed to enable HUGEPAGE for mapping {}", err);
+                }
+            }
+        }
     }
 
     /// Perform the specified action on each region's addresses.
@@ -266,10 +339,11 @@ impl GuestMemory {
     ///  * guest_addr : GuestAddress
     ///  * size: usize
     ///  * host_addr: usize
-    ///  * memfd_offset: usize
+    ///  * shm: SharedMemory backing for the given region
+    ///  * shm_offset: usize
     pub fn with_regions<F, E>(&self, mut cb: F) -> result::Result<(), E>
     where
-        F: FnMut(usize, GuestAddress, usize, usize, u64) -> result::Result<(), E>,
+        F: FnMut(usize, GuestAddress, usize, usize, &SharedMemory, u64) -> result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(
@@ -277,7 +351,8 @@ impl GuestMemory {
                 region.start(),
                 region.mapping.size(),
                 region.mapping.as_ptr() as usize,
-                region.memfd_offset,
+                region.shm.as_ref(),
+                region.shm_offset,
             )?;
         }
         Ok(())
@@ -303,7 +378,7 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_at_addr(&self, buf: &[u8], guest_addr: GuestAddress) -> Result<usize> {
-        self.do_in_region(guest_addr, move |mapping, offset| {
+        self.do_in_region(guest_addr, move |mapping, offset, _| {
             mapping
                 .write_slice(buf, offset)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -362,7 +437,7 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_at_addr(&self, buf: &mut [u8], guest_addr: GuestAddress) -> Result<usize> {
-        self.do_in_region(guest_addr, move |mapping, offset| {
+        self.do_in_region(guest_addr, move |mapping, offset, _| {
             mapping
                 .read_slice(buf, offset)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -422,7 +497,7 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_obj_from_addr<T: DataInit>(&self, guest_addr: GuestAddress) -> Result<T> {
-        self.do_in_region(guest_addr, |mapping, offset| {
+        self.do_in_region(guest_addr, |mapping, offset, _| {
             mapping
                 .read_obj(offset)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -446,7 +521,7 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_obj_at_addr<T: DataInit>(&self, val: T, guest_addr: GuestAddress) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset| {
+        self.do_in_region(guest_addr, move |mapping, offset, _| {
             mapping
                 .write_obj(val, offset)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -543,7 +618,7 @@ impl GuestMemory {
         src: &dyn AsRawDescriptor,
         count: usize,
     ) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset| {
+        self.do_in_region(guest_addr, move |mapping, offset, _| {
             mapping
                 .read_to_memory(offset, src, count)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -581,7 +656,7 @@ impl GuestMemory {
         dst: &dyn AsRawDescriptor,
         count: usize,
     ) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset| {
+        self.do_in_region(guest_addr, move |mapping, offset, _| {
             mapping
                 .write_from_memory(offset, dst, count)
                 .map_err(|e| Error::MemoryAccess(guest_addr, e))
@@ -609,16 +684,42 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn get_host_address(&self, guest_addr: GuestAddress) -> Result<*const u8> {
-        self.do_in_region(guest_addr, |mapping, offset| {
+        self.do_in_region(guest_addr, |mapping, offset, _| {
             // This is safe; `do_in_region` already checks that offset is in
             // bounds.
             Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
         })
     }
 
+    /// Returns a reference to the SharedMemory region that backs the given address.
+    pub fn shm_region(&self, guest_addr: GuestAddress) -> Result<&SharedMemory> {
+        self.regions
+            .iter()
+            .find(|region| region.contains(guest_addr))
+            .ok_or(Error::InvalidGuestAddress(guest_addr))
+            .map(|region| region.shm.as_ref())
+    }
+
+    /// Returns the region that contains the memory at `offset` from the base of guest memory.
+    pub fn offset_region(&self, offset: u64) -> Result<&SharedMemory> {
+        self.shm_region(
+            self.checked_offset(self.regions[0].guest_base, offset)
+                .ok_or(Error::InvalidOffset(offset))?,
+        )
+    }
+
+    /// Loops over all guest memory regions of `self`, and performs the callback function `F` in
+    /// the target region that contains `guest_addr`.  The callback function `F` takes in:
+    ///
+    /// (i) the memory mapping associated with the target region.
+    /// (ii) the relative offset from the start of the target region to `guest_addr`.
+    /// (iii) the absolute offset from the start of the memory mapping to the target region.
+    ///
+    /// If no target region is found, an error is returned.  The callback function `F` may return
+    /// an Ok(`T`) on success or a `GuestMemoryError` on failure.
     pub fn do_in_region<F, T>(&self, guest_addr: GuestAddress, cb: F) -> Result<T>
     where
-        F: FnOnce(&MemoryMapping, usize) -> Result<T>,
+        F: FnOnce(&MemoryMapping, usize, u64) -> Result<T>,
     {
         self.regions
             .iter()
@@ -628,11 +729,12 @@ impl GuestMemory {
                 cb(
                     &region.mapping,
                     guest_addr.offset_from(region.start()) as usize,
+                    region.shm_offset,
                 )
             })
     }
 
-    /// Convert a GuestAddress into an offset within self.shm.
+    /// Convert a GuestAddress into an offset within the associated shm region.
     ///
     /// Due to potential gaps within GuestMemory, it is helpful to know the
     /// offset within the shm where a given address is found. This offset
@@ -660,7 +762,7 @@ impl GuestMemory {
             .iter()
             .find(|region| region.contains(guest_addr))
             .ok_or(Error::InvalidGuestAddress(guest_addr))
-            .map(|region| region.memfd_offset + guest_addr.offset_from(region.start()))
+            .map(|region| region.shm_offset + guest_addr.offset_from(region.start()))
     }
 }
 
@@ -800,7 +902,7 @@ mod tests {
 
     // Get the base address of the mapping for a GuestAddress.
     fn get_mapping(mem: &GuestMemory, addr: GuestAddress) -> Result<*const u8> {
-        mem.do_in_region(addr, |mapping, _| Ok(mapping.as_ptr() as *const u8))
+        mem.do_in_region(addr, |mapping, _, _| Ok(mapping.as_ptr() as *const u8))
     }
 
     #[test]
@@ -823,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn memfd_offset() {
+    fn shm_offset() {
         if !kernel_has_memfd() {
             return;
         }
@@ -839,10 +941,10 @@ mod tests {
         gm.write_obj_at_addr(0x0420u16, GuestAddress(0x10000))
             .unwrap();
 
-        let _ = gm.with_regions::<_, ()>(|index, _, size, _, memfd_offset| {
+        let _ = gm.with_regions::<_, ()>(|index, _, size, _, shm, shm_offset| {
             let mmap = MemoryMappingBuilder::new(size)
-                .from_descriptor(gm.as_ref())
-                .offset(memfd_offset)
+                .from_shared_memory(shm)
+                .offset(shm_offset)
                 .build()
                 .unwrap();
 

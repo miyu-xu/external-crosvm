@@ -20,7 +20,7 @@ use crate::{
     ClockState, CpuId, CpuIdEntry, DebugRegs, DescriptorTable, DeviceKind, Fpu, HypervisorX86_64,
     IoapicRedirectionTableEntry, IoapicState, IrqSourceChip, LapicState, PicSelect, PicState,
     PitChannelState, PitState, Register, Regs, Segment, Sregs, VcpuX86_64, VmCap, VmX86_64,
-    NUM_IOAPIC_PINS,
+    MAX_IOAPIC_PINS, NUM_IOAPIC_PINS,
 };
 
 type KvmCpuId = kvm::CpuId;
@@ -192,6 +192,17 @@ impl KvmVm {
         }
     }
 
+    /// Retrieves the KVM_IOAPIC_NUM_PINS value for emulated IO-APIC.
+    pub fn get_ioapic_num_pins(&self) -> Result<usize> {
+        // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
+        // it's an unavailable extension and returns 0, producing default KVM_IOAPIC_NUM_PINS value.
+        match unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_IOAPIC_NUM_PINS as u64) }
+        {
+            ret if ret < 0 => errno_result(),
+            ret => Ok((ret as usize).max(NUM_IOAPIC_PINS).min(MAX_IOAPIC_PINS)),
+        }
+    }
+
     /// Retrieves the state of IOAPIC by issuing KVM_GET_IRQCHIP ioctl.
     ///
     /// Note that this call can only succeed after a call to `Vm::create_irq_chip`.
@@ -280,12 +291,12 @@ impl KvmVm {
     }
 
     /// Enable support for split-irqchip.
-    pub fn enable_split_irqchip(&self) -> Result<()> {
+    pub fn enable_split_irqchip(&self, ioapic_pins: usize) -> Result<()> {
         let mut cap = kvm_enable_cap {
             cap: KVM_CAP_SPLIT_IRQCHIP,
             ..Default::default()
         };
-        cap.args[0] = NUM_IOAPIC_PINS as u64;
+        cap.args[0] = ioapic_pins as u64;
         // safe becuase we allocated the struct and we know the kernel will read
         // exactly the size of the struct
         let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &cap) };
@@ -761,7 +772,7 @@ impl From<&kvm_ioapic_state> for IoapicState {
             ioregsel: item.ioregsel as u8,
             ioapicid: item.id,
             current_interrupt_level_bitmap: item.irr,
-            redirect_table: [IoapicRedirectionTableEntry::default(); 24],
+            redirect_table: [IoapicRedirectionTableEntry::default(); 120],
         };
         for (in_state, out_state) in item.redirtbl.iter().zip(state.redirect_table.iter_mut()) {
             *out_state = in_state.into();
@@ -1284,6 +1295,8 @@ mod tests {
     #[test]
     fn ioapic_state() {
         let mut entry = IoapicRedirectionTableEntry::default();
+        let mut noredir = IoapicRedirectionTableEntry::default();
+
         // default entry should be 0
         assert_eq!(entry.get(0, 64), 0);
 
@@ -1305,13 +1318,18 @@ mod tests {
 
         assert_eq!(entry.get(0, 64), bit_repr);
 
-        let state = IoapicState {
+        let mut state = IoapicState {
             base_address: 1,
             ioregsel: 2,
             ioapicid: 4,
             current_interrupt_level_bitmap: 8,
-            redirect_table: [entry; 24],
+            redirect_table: [noredir; 120],
         };
+
+        // Initialize first 24 (kvm_state limit) redirection entries
+        for i in 0..24 {
+            state.redirect_table[i] = entry;
+        }
 
         let kvm_state = kvm_ioapic_state::from(&state);
         assert_eq!(kvm_state.base_address, 1);
@@ -1319,7 +1337,7 @@ mod tests {
         assert_eq!(kvm_state.id, 4);
         assert_eq!(kvm_state.irr, 8);
         assert_eq!(kvm_state.pad, 0);
-        // check our entries
+        // check first 24 entries
         for i in 0..24 {
             assert_eq!(unsafe { kvm_state.redirtbl[i].bits }, bit_repr);
         }

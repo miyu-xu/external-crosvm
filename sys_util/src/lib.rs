@@ -22,6 +22,7 @@ pub mod syslog;
 mod capabilities;
 mod clock;
 mod descriptor;
+mod descriptor_reflection;
 mod errno;
 mod eventfd;
 mod external_mapping;
@@ -33,8 +34,12 @@ pub mod net;
 mod passwd;
 mod poll;
 mod priority;
+pub mod rand;
 mod raw_fd;
+pub mod read_dir;
 pub mod sched;
+pub mod scoped_path;
+pub mod scoped_signal_handler;
 mod seek_hole;
 mod shm;
 pub mod signal;
@@ -43,6 +48,7 @@ mod sock_ctrl_msg;
 mod struct_util;
 mod terminal;
 mod timerfd;
+pub mod vsock;
 mod write_zeroes;
 
 pub use crate::alloc::LayoutAllocation;
@@ -61,6 +67,7 @@ pub use crate::poll::*;
 pub use crate::priority::*;
 pub use crate::raw_fd::*;
 pub use crate::sched::*;
+pub use crate::scoped_signal_handler::*;
 pub use crate::shm::*;
 pub use crate::signal::*;
 pub use crate::signalfd::*;
@@ -68,6 +75,10 @@ pub use crate::sock_ctrl_msg::*;
 pub use crate::struct_util::*;
 pub use crate::terminal::*;
 pub use crate::timerfd::*;
+pub use descriptor_reflection::{
+    deserialize_with_descriptors, with_as_descriptor, with_raw_descriptor, FileSerdeWrapper,
+    SerializeDescriptors,
+};
 pub use poll_token_derive::*;
 
 pub use crate::external_mapping::Error as ExternalMappingError;
@@ -84,19 +95,36 @@ pub use crate::write_zeroes::{PunchHole, WriteZeroes, WriteZeroesAt};
 use std::cell::Cell;
 use std::ffi::CStr;
 use std::fs::{remove_file, File};
+use std::mem;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
 use std::ptr;
+use std::time::Duration;
 
 use libc::{
-    c_int, c_long, fcntl, gid_t, kill, pid_t, pipe2, syscall, sysconf, uid_t, waitpid, F_GETFL,
+    c_int, c_long, fcntl, pipe2, syscall, sysconf, waitpid, SYS_getpid, SYS_gettid, F_GETFL,
     F_SETFL, O_CLOEXEC, SIGKILL, WNOHANG, _SC_IOV_MAX, _SC_PAGESIZE,
 };
 
-use syscall_defines::linux::LinuxSyscall::SYS_getpid;
+/// Re-export libc types that are part of the API.
+pub type Pid = libc::pid_t;
+pub type Uid = libc::uid_t;
+pub type Gid = libc::gid_t;
 
 /// Used to mark types as !Sync.
 pub type UnsyncMarker = std::marker::PhantomData<Cell<usize>>;
+
+#[macro_export]
+macro_rules! syscall {
+    ($e:expr) => {{
+        let res = $e;
+        if res < 0 {
+            $crate::errno_result()
+        } else {
+            Ok(res)
+        }
+    }};
+}
 
 /// Safe wrapper for `sysconf(_SC_PAGESIZE)`.
 #[inline(always)]
@@ -121,36 +149,48 @@ pub fn round_up_to_page_size(v: usize) -> usize {
 /// This bypasses `libc`'s caching `getpid(2)` wrapper which can be invalid if a raw clone was used
 /// elsewhere.
 #[inline(always)]
-pub fn getpid() -> pid_t {
+pub fn getpid() -> Pid {
     // Safe because this syscall can never fail and we give it a valid syscall number.
-    unsafe { syscall(SYS_getpid as c_long) as pid_t }
+    unsafe { syscall(SYS_getpid as c_long) as Pid }
+}
+
+/// Safe wrapper for the gettid Linux systemcall.
+pub fn gettid() -> Pid {
+    // Calling the gettid() sycall is always safe.
+    unsafe { syscall(SYS_gettid as c_long) as Pid }
+}
+
+/// Safe wrapper for `getsid(2)`.
+pub fn getsid(pid: Option<Pid>) -> Result<Pid> {
+    // Calling the getsid() sycall is always safe.
+    syscall!(unsafe { libc::getsid(pid.unwrap_or(0)) } as Pid)
+}
+
+/// Wrapper for `setsid(2)`.
+pub fn setsid() -> Result<Pid> {
+    // Safe because the return code is checked.
+    syscall!(unsafe { libc::setsid() as Pid })
 }
 
 /// Safe wrapper for `geteuid(2)`.
 #[inline(always)]
-pub fn geteuid() -> uid_t {
+pub fn geteuid() -> Uid {
     // trivially safe
     unsafe { libc::geteuid() }
 }
 
 /// Safe wrapper for `getegid(2)`.
 #[inline(always)]
-pub fn getegid() -> gid_t {
+pub fn getegid() -> Gid {
     // trivially safe
     unsafe { libc::getegid() }
 }
 
 /// Safe wrapper for chown(2).
 #[inline(always)]
-pub fn chown(path: &CStr, uid: uid_t, gid: gid_t) -> Result<()> {
+pub fn chown(path: &CStr, uid: Uid, gid: Gid) -> Result<()> {
     // Safe since we pass in a valid string pointer and check the return value.
-    let ret = unsafe { libc::chown(path.as_ptr(), uid, gid) };
-
-    if ret < 0 {
-        errno_result()
-    } else {
-        Ok(())
-    }
+    syscall!(unsafe { libc::chown(path.as_ptr(), uid, gid) }).map(|_| ())
 }
 
 /// The operation to perform with `flock`.
@@ -175,13 +215,7 @@ pub fn flock(file: &dyn AsRawFd, op: FlockOperation, nonblocking: bool) -> Resul
     }
 
     // Safe since we pass in a valid fd and flock operation, and check the return value.
-    let ret = unsafe { libc::flock(file.as_raw_fd(), operation) };
-
-    if ret < 0 {
-        errno_result()
-    } else {
-        Ok(())
-    }
+    syscall!(unsafe { libc::flock(file.as_raw_fd(), operation) }).map(|_| ())
 }
 
 /// The operation to perform with `fallocate`.
@@ -223,12 +257,7 @@ pub fn fallocate(
 
     // Safe since we pass in a valid fd and fallocate mode, validate offset and len,
     // and check the return value.
-    let ret = unsafe { libc::fallocate64(file.as_raw_fd(), mode, offset, len) };
-    if ret < 0 {
-        errno_result()
-    } else {
-        Ok(())
-    }
+    syscall!(unsafe { libc::fallocate64(file.as_raw_fd(), mode, offset, len) }).map(|_| ())
 }
 
 /// Reaps a child process that has terminated.
@@ -256,7 +285,7 @@ pub fn fallocate(
 ///     }
 /// }
 /// ```
-pub fn reap_child() -> Result<pid_t> {
+pub fn reap_child() -> Result<Pid> {
     // Safe because we pass in no memory, prevent blocking with WNOHANG, and check for error.
     let ret = unsafe { waitpid(-1, ptr::null_mut(), WNOHANG) };
     if ret == -1 {
@@ -271,13 +300,9 @@ pub fn reap_child() -> Result<pid_t> {
 /// On success, this kills all processes in the current process group, including the current
 /// process, meaning this will not return. This is equivalent to a call to `kill(0, SIGKILL)`.
 pub fn kill_process_group() -> Result<()> {
-    let ret = unsafe { kill(0, SIGKILL) };
-    if ret == -1 {
-        errno_result()
-    } else {
-        // Kill succeeded, so this process never reaches here.
-        unreachable!();
-    }
+    unsafe { kill(0, SIGKILL) }?;
+    // Kill succeeded, so this process never reaches here.
+    unreachable!();
 }
 
 /// Spawns a pipe pair where the first pipe is the read end and the second pipe is the write end.
@@ -308,11 +333,7 @@ pub fn pipe(close_on_exec: bool) -> Result<(File, File)> {
 /// Returns the new size of the pipe or an error if the OS fails to set the pipe size.
 pub fn set_pipe_size(fd: RawFd, size: usize) -> Result<usize> {
     // Safe because fcntl with the `F_SETPIPE_SZ` arg doesn't touch memory.
-    let ret = unsafe { fcntl(fd, libc::F_SETPIPE_SZ, size as c_int) };
-    if ret < 0 {
-        return errno_result();
-    }
-    Ok(ret as usize)
+    syscall!(unsafe { fcntl(fd, libc::F_SETPIPE_SZ, size as c_int) }).map(|ret| ret as usize)
 }
 
 /// Test-only function used to create a pipe that is full. The pipe is created, has its size set to
@@ -398,11 +419,7 @@ pub fn poll_in(fd: &dyn AsRawFd) -> bool {
 /// Returns an error if the OS indicates the flags can't be retrieved.
 fn get_fd_flags(fd: RawFd) -> Result<c_int> {
     // Safe because no third parameter is expected and we check the return result.
-    let ret = unsafe { fcntl(fd, F_GETFL) };
-    if ret < 0 {
-        return errno_result();
-    }
-    Ok(ret)
+    syscall!(unsafe { fcntl(fd, F_GETFL) })
 }
 
 /// Sets the file flags set for the given `RawFD`.
@@ -411,11 +428,7 @@ fn get_fd_flags(fd: RawFd) -> Result<c_int> {
 fn set_fd_flags(fd: RawFd, flags: c_int) -> Result<()> {
     // Safe because we supply the third parameter and we check the return result.
     // fcntlt is trusted not to modify the memory of the calling process.
-    let ret = unsafe { fcntl(fd, F_SETFL, flags) };
-    if ret < 0 {
-        return errno_result();
-    }
-    Ok(())
+    syscall!(unsafe { fcntl(fd, F_SETFL, flags) }).map(|_| ())
 }
 
 /// Performs a logical OR of the given flags with the FD's flags, setting the given bits for the
@@ -433,6 +446,23 @@ pub fn add_fd_flags(fd: RawFd, set_flags: c_int) -> Result<()> {
 pub fn clear_fd_flags(fd: RawFd, clear_flags: c_int) -> Result<()> {
     let start_flags = get_fd_flags(fd)?;
     set_fd_flags(fd, start_flags & !clear_flags)
+}
+
+/// Return a timespec filed with the specified Duration `duration`.
+pub fn duration_to_timespec(duration: Duration) -> libc::timespec {
+    // Safe because we are zero-initializing a struct with only primitive member fields.
+    let mut ts: libc::timespec = unsafe { mem::zeroed() };
+
+    ts.tv_sec = duration.as_secs() as libc::time_t;
+    // nsec always fits in i32 because subsec_nanos is defined to be less than one billion.
+    let nsec = duration.subsec_nanos() as i32;
+    ts.tv_nsec = libc::c_long::from(nsec);
+    ts
+}
+
+/// Return the maximum Duration that can be used with libc::timespec.
+pub fn max_timeout() -> Duration {
+    Duration::new(libc::time_t::max_value() as u64, 999999999)
 }
 
 #[cfg(test)]

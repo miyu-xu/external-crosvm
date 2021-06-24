@@ -6,12 +6,10 @@
 
 mod balloon;
 mod block;
-mod block_async;
 mod console;
 mod descriptor_utils;
 mod input;
 mod interrupt;
-mod net;
 mod p9;
 mod pmem;
 mod queue;
@@ -28,6 +26,7 @@ mod wl;
 pub mod fs;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod net;
 pub mod resource_bridge;
 #[cfg(feature = "audio")]
 pub mod snd;
@@ -35,7 +34,6 @@ pub mod vhost;
 
 pub use self::balloon::*;
 pub use self::block::*;
-pub use self::block_async::*;
 pub use self::console::*;
 pub use self::descriptor_utils::Error as DescriptorError;
 pub use self::descriptor_utils::*;
@@ -92,7 +90,7 @@ const MAX_VIRTIO_DEVICE_ID: u32 = 63;
 const TYPE_WL: u32 = MAX_VIRTIO_DEVICE_ID;
 const TYPE_TPM: u32 = MAX_VIRTIO_DEVICE_ID - 1;
 
-const VIRTIO_F_VERSION_1: u32 = 32;
+pub const VIRTIO_F_VERSION_1: u32 = 32;
 const VIRTIO_F_ACCESS_PLATFORM: u32 = 33;
 
 const INTERRUPT_STATUS_USED_RING: u32 = 0x1;

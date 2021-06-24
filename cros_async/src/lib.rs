@@ -67,6 +67,7 @@ pub mod mem;
 mod poll_source;
 mod queue;
 mod select;
+pub mod sync;
 mod timer;
 mod uring_executor;
 mod uring_source;
@@ -76,7 +77,8 @@ pub use event::EventAsync;
 pub use executor::Executor;
 pub use fd_executor::FdExecutor;
 pub use io_ext::{
-    Error as AsyncError, IntoAsync, IoSourceExt, ReadAsync, Result as AsyncResult, WriteAsync,
+    AsyncWrapper, Error as AsyncError, IntoAsync, IoSourceExt, ReadAsync, Result as AsyncResult,
+    WriteAsync,
 };
 pub use mem::{BackingMemory, MemRegion};
 pub use poll_source::PollSource;

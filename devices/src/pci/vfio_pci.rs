@@ -6,24 +6,25 @@ use std::sync::Arc;
 use std::u32;
 
 use base::{
-    error, AsRawDescriptor, Event, MappedRegion, MemoryMapping, MemoryMappingBuilder, RawDescriptor,
+    error, pagesize, AsRawDescriptor, Event, MappedRegion, MemoryMapping, MemoryMappingBuilder,
+    RawDescriptor, Tube,
 };
 use hypervisor::Datamatch;
-use msg_socket::{MsgReceiver, MsgSender};
+
 use resources::{Alloc, MmioType, SystemAllocator};
 
 use vfio_sys::*;
-use vm_control::{
-    MaybeOwnedDescriptor, VmIrqRequest, VmIrqRequestSocket, VmIrqResponse,
-    VmMemoryControlRequestSocket, VmMemoryRequest, VmMemoryResponse,
-};
+use vm_control::{VmIrqRequest, VmIrqResponse, VmMemoryRequest, VmMemoryResponse};
 
 use crate::pci::msix::{
     MsixConfig, BITS_PER_PBA_ENTRY, MSIX_PBA_ENTRIES_MODULO, MSIX_TABLE_ENTRIES_MODULO,
 };
 
 use crate::pci::pci_device::{Error as PciDeviceError, PciDevice};
-use crate::pci::{PciAddress, PciClassCode, PciInterruptPin};
+use crate::pci::{
+    PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode,
+    PciInterruptPin,
+};
 
 use crate::vfio::{VfioDevice, VfioIrqType};
 
@@ -128,13 +129,13 @@ struct VfioMsiCap {
     ctl: u16,
     address: u64,
     data: u16,
-    vm_socket_irq: VmIrqRequestSocket,
+    vm_socket_irq: Tube,
     irqfd: Option<Event>,
     gsi: Option<u32>,
 }
 
 impl VfioMsiCap {
-    fn new(config: &VfioPciConfig, msi_cap_start: u32, vm_socket_irq: VmIrqRequestSocket) -> Self {
+    fn new(config: &VfioPciConfig, msi_cap_start: u32, vm_socket_irq: Tube) -> Self {
         let msi_ctl = config.read_config_word(msi_cap_start + PCI_MSI_FLAGS);
 
         VfioMsiCap {
@@ -151,18 +152,11 @@ impl VfioMsiCap {
     }
 
     fn is_msi_reg(&self, index: u64, len: usize) -> bool {
-        let msi_len: u32 = if self.is_64bit {
-            if self.mask_cap {
-                MSI_LENGTH_64BIT_WITH_MASK
-            } else {
-                MSI_LENGTH_64BIT_WITHOUT_MASK
-            }
-        } else {
-            if self.mask_cap {
-                MSI_LENGTH_32BIT_WITH_MASK
-            } else {
-                MSI_LENGTH_32BIT_WITHOUT_MASK
-            }
+        let msi_len = match (self.is_64bit, self.mask_cap) {
+            (true, true) => MSI_LENGTH_64BIT_WITH_MASK,
+            (true, false) => MSI_LENGTH_64BIT_WITHOUT_MASK,
+            (false, true) => MSI_LENGTH_32BIT_WITH_MASK,
+            (false, false) => MSI_LENGTH_32BIT_WITHOUT_MASK,
         };
 
         index >= self.offset as u64
@@ -253,19 +247,27 @@ impl VfioMsiCap {
     }
 
     fn allocate_one_msi(&mut self) {
-        if self.irqfd.is_none() {
-            match Event::new() {
-                Ok(fd) => self.irqfd = Some(fd),
+        let irqfd = match self.irqfd.take() {
+            Some(e) => e,
+            None => match Event::new() {
+                Ok(e) => e,
                 Err(e) => {
                     error!("failed to create event: {:?}", e);
                     return;
                 }
-            };
-        }
+            },
+        };
 
-        if let Err(e) = self.vm_socket_irq.send(&VmIrqRequest::AllocateOneMsi {
-            irqfd: MaybeOwnedDescriptor::Borrowed(self.irqfd.as_ref().unwrap().as_raw_descriptor()),
-        }) {
+        let request = VmIrqRequest::AllocateOneMsi { irqfd };
+        let request_result = self.vm_socket_irq.send(&request);
+
+        // Stash the irqfd in self immediately because we used take above.
+        self.irqfd = match request {
+            VmIrqRequest::AllocateOneMsi { irqfd } => Some(irqfd),
+            _ => unreachable!(),
+        };
+
+        if let Err(e) = request_result {
             error!("failed to send AllocateOneMsi request: {:?}", e);
             return;
         }
@@ -310,7 +312,7 @@ struct VfioMsixCap {
 }
 
 impl VfioMsixCap {
-    fn new(config: &VfioPciConfig, msix_cap_start: u32, vm_socket_irq: VmIrqRequestSocket) -> Self {
+    fn new(config: &VfioPciConfig, msix_cap_start: u32, vm_socket_irq: Tube) -> Self {
         let msix_ctl = config.read_config_word(msix_cap_start + PCI_MSIX_FLAGS);
         let table_size = (msix_ctl & PCI_MSIX_FLAGS_QSIZE) + 1;
         let table = config.read_config_dword(msix_cap_start + PCI_MSIX_TABLE);
@@ -415,16 +417,6 @@ impl VfioMsixCap {
     }
 }
 
-struct MmioInfo {
-    bar_index: u32,
-    start: u64,
-    length: u64,
-}
-
-struct IoInfo {
-    bar_index: u32,
-}
-
 enum DeviceData {
     IntelGfxData { opregion_index: u32 },
 }
@@ -436,12 +428,12 @@ pub struct VfioPciDevice {
     pci_address: Option<PciAddress>,
     interrupt_evt: Option<Event>,
     interrupt_resample_evt: Option<Event>,
-    mmio_regions: Vec<MmioInfo>,
-    io_regions: Vec<IoInfo>,
+    mmio_regions: Vec<PciBarConfiguration>,
+    io_regions: Vec<PciBarConfiguration>,
     msi_cap: Option<VfioMsiCap>,
     msix_cap: Option<VfioMsixCap>,
     irq_type: Option<VfioIrqType>,
-    vm_socket_mem: VmMemoryControlRequestSocket,
+    vm_socket_mem: Tube,
     device_data: Option<DeviceData>,
 
     // scratch MemoryMapping to avoid unmap beform vm exit
@@ -452,9 +444,9 @@ impl VfioPciDevice {
     /// Constructs a new Vfio Pci device for the give Vfio device
     pub fn new(
         device: VfioDevice,
-        vfio_device_socket_msi: VmIrqRequestSocket,
-        vfio_device_socket_msix: VmIrqRequestSocket,
-        vfio_device_socket_mem: VmMemoryControlRequestSocket,
+        vfio_device_socket_msi: Tube,
+        vfio_device_socket_msix: Tube,
+        vfio_device_socket_mem: Tube,
     ) -> Self {
         let dev = Arc::new(device);
         let config = VfioPciConfig::new(Arc::clone(&dev));
@@ -521,14 +513,10 @@ impl VfioPciDevice {
         ret
     }
 
-    fn find_region(&self, addr: u64) -> Option<MmioInfo> {
+    fn find_region(&self, addr: u64) -> Option<PciBarConfiguration> {
         for mmio_info in self.mmio_regions.iter() {
-            if addr >= mmio_info.start && addr < mmio_info.start + mmio_info.length {
-                return Some(MmioInfo {
-                    bar_index: mmio_info.bar_index,
-                    start: mmio_info.start,
-                    length: mmio_info.length,
-                });
+            if addr >= mmio_info.address() && addr < mmio_info.address() + mmio_info.size() {
+                return Some(*mmio_info);
             }
         }
 
@@ -541,24 +529,28 @@ impl VfioPciDevice {
         }
 
         if let Some(ref interrupt_evt) = self.interrupt_evt {
-            let mut fds = Vec::new();
-            fds.push(interrupt_evt);
-            if let Err(e) = self.device.irq_enable(fds, VfioIrqType::Intx) {
+            if let Err(e) = self
+                .device
+                .irq_enable(&[interrupt_evt], VFIO_PCI_INTX_IRQ_INDEX)
+            {
                 error!("Intx enable failed: {}", e);
                 return;
             }
             if let Some(ref irq_resample_evt) = self.interrupt_resample_evt {
-                if let Err(e) = self.device.irq_mask(VfioIrqType::Intx) {
+                if let Err(e) = self.device.irq_mask(VFIO_PCI_INTX_IRQ_INDEX) {
                     error!("Intx mask failed: {}", e);
                     self.disable_intx();
                     return;
                 }
-                if let Err(e) = self.device.resample_virq_enable(irq_resample_evt) {
+                if let Err(e) = self
+                    .device
+                    .resample_virq_enable(irq_resample_evt, VFIO_PCI_INTX_IRQ_INDEX)
+                {
                     error!("resample enable failed: {}", e);
                     self.disable_intx();
                     return;
                 }
-                if let Err(e) = self.device.irq_unmask(VfioIrqType::Intx) {
+                if let Err(e) = self.device.irq_unmask(VFIO_PCI_INTX_IRQ_INDEX) {
                     error!("Intx unmask failed: {}", e);
                     self.disable_intx();
                     return;
@@ -570,7 +562,7 @@ impl VfioPciDevice {
     }
 
     fn disable_intx(&mut self) {
-        if let Err(e) = self.device.irq_disable(VfioIrqType::Intx) {
+        if let Err(e) = self.device.irq_disable(VFIO_PCI_INTX_IRQ_INDEX) {
             error!("Intx disable failed: {}", e);
         }
         self.irq_type = None;
@@ -608,9 +600,7 @@ impl VfioPciDevice {
             }
         };
 
-        let mut fds = Vec::new();
-        fds.push(irqfd);
-        if let Err(e) = self.device.irq_enable(fds, VfioIrqType::Msi) {
+        if let Err(e) = self.device.irq_enable(&[irqfd], VFIO_PCI_MSI_IRQ_INDEX) {
             error!("failed to enable msi: {}", e);
             self.enable_intx();
             return;
@@ -620,7 +610,7 @@ impl VfioPciDevice {
     }
 
     fn disable_msi(&mut self) {
-        if let Err(e) = self.device.irq_disable(VfioIrqType::Msi) {
+        if let Err(e) = self.device.irq_disable(VFIO_PCI_MSI_IRQ_INDEX) {
             error!("failed to disable msi: {}", e);
             return;
         }
@@ -637,7 +627,10 @@ impl VfioPciDevice {
         };
 
         if let Some(descriptors) = irqfds {
-            if let Err(e) = self.device.irq_enable(descriptors, VfioIrqType::Msix) {
+            if let Err(e) = self
+                .device
+                .irq_enable(&descriptors, VFIO_PCI_MSIX_IRQ_INDEX)
+            {
                 error!("failed to enable msix: {}", e);
                 self.enable_intx();
                 return;
@@ -651,7 +644,7 @@ impl VfioPciDevice {
     }
 
     fn disable_msix(&mut self) {
-        if let Err(e) = self.device.irq_disable(VfioIrqType::Msix) {
+        if let Err(e) = self.device.irq_disable(VFIO_PCI_MSIX_IRQ_INDEX) {
             error!("failed to disable msix: {}", e);
             return;
         }
@@ -681,10 +674,14 @@ impl VfioPciDevice {
                 let guest_map_start = bar_addr + mmap_offset;
                 let region_offset = self.device.get_region_offset(index);
                 let offset = region_offset + mmap_offset;
+                let descriptor = match self.device.device_file().try_clone() {
+                    Ok(device_file) => device_file.into(),
+                    Err(_) => break,
+                };
                 if self
                     .vm_socket_mem
                     .send(&VmMemoryRequest::RegisterMmapMemory {
-                        descriptor: MaybeOwnedDescriptor::Borrowed(self.device.as_raw_descriptor()),
+                        descriptor,
                         size: mmap_size as usize,
                         offset,
                         gpa: guest_map_start,
@@ -694,7 +691,7 @@ impl VfioPciDevice {
                     break;
                 }
 
-                let response = match self.vm_socket_mem.recv() {
+                let response: VmMemoryResponse = match self.vm_socket_mem.recv() {
                     Ok(res) => res,
                     Err(_) => break,
                 };
@@ -704,7 +701,7 @@ impl VfioPciDevice {
                         // device process doesn't has this mapping, but vfio_dma_map() need it
                         // in device process, so here map it again.
                         let mmap = match MemoryMappingBuilder::new(mmap_size as usize)
-                            .from_descriptor(self.device.as_ref())
+                            .from_file(self.device.device_file())
                             .offset(offset)
                             .build()
                         {
@@ -712,10 +709,13 @@ impl VfioPciDevice {
                             Err(_e) => break,
                         };
                         let host = (&mmap).as_ptr() as u64;
+                        let pgsz = pagesize() as u64;
+                        let size = (mmap_size + pgsz - 1) / pgsz * pgsz;
                         // Safe because the given guest_map_start is valid guest bar address. and
                         // the host pointer is correct and valid guaranteed by MemoryMapping interface.
-                        match unsafe { self.device.vfio_dma_map(guest_map_start, mmap_size, host) }
-                        {
+                        // The size will be extened to page size aligned if it is not which is also
+                        // safe because VFIO actually maps the BAR with page size aligned size.
+                        match unsafe { self.device.vfio_dma_map(guest_map_start, size, host) } {
                             Ok(_) => mem_map.push(mmap),
                             Err(e) => {
                                 error!(
@@ -736,7 +736,7 @@ impl VfioPciDevice {
 
     fn enable_bars_mmap(&mut self) {
         for mmio_info in self.mmio_regions.iter() {
-            let mut mem_map = self.add_bar_mmap(mmio_info.bar_index, mmio_info.start);
+            let mut mem_map = self.add_bar_mmap(mmio_info.bar_index() as u32, mmio_info.address());
             self.mem.append(&mut mem_map);
         }
     }
@@ -826,6 +826,7 @@ impl PciDevice for VfioPciDevice {
 
             let low_flag = low & 0xf;
             let is_64bit = low_flag & 0x4 == 0x4;
+            let prefetchable = low_flag & 0x8 == 0x8;
             if (low_flag & 0x1 == 0 || i == VFIO_PCI_ROM_REGION_INDEX) && low != 0 {
                 let mut upper: u32 = 0xffffffff;
                 if is_64bit {
@@ -857,11 +858,23 @@ impl PciDevice for VfioPciDevice {
                     )
                     .map_err(|e| PciDeviceError::IoAllocationFailed(size, e))?;
                 ranges.push((bar_addr, size));
-                self.mmio_regions.push(MmioInfo {
-                    bar_index: i,
-                    start: bar_addr,
-                    length: size,
-                });
+                self.mmio_regions.push(
+                    PciBarConfiguration::new(
+                        i as usize,
+                        size,
+                        if is_64bit {
+                            PciBarRegionType::Memory64BitRegion
+                        } else {
+                            PciBarRegionType::Memory32BitRegion
+                        },
+                        if prefetchable {
+                            PciBarPrefetchable::Prefetchable
+                        } else {
+                            PciBarPrefetchable::NotPrefetchable
+                        },
+                    )
+                    .set_address(bar_addr),
+                );
 
                 low = bar_addr as u32;
                 low |= low_flag;
@@ -871,7 +884,13 @@ impl PciDevice for VfioPciDevice {
                     self.config.write_config_dword(upper, offset + 4);
                 }
             } else if low_flag & 0x1 == 0x1 {
-                self.io_regions.push(IoInfo { bar_index: i });
+                let size = !(low & 0xffff_fffc) + 1;
+                self.io_regions.push(PciBarConfiguration::new(
+                    i as usize,
+                    u64::from(size),
+                    PciBarRegionType::IORegion,
+                    PciBarPrefetchable::NotPrefetchable,
+                ));
             }
 
             if is_64bit {
@@ -929,15 +948,29 @@ impl PciDevice for VfioPciDevice {
                 opregion_index: index,
             });
 
-            self.mmio_regions.push(MmioInfo {
-                bar_index: index,
-                start: bar_addr,
-                length: size,
-            });
+            self.mmio_regions.push(
+                PciBarConfiguration::new(
+                    index as usize,
+                    size,
+                    PciBarRegionType::Memory32BitRegion,
+                    PciBarPrefetchable::NotPrefetchable,
+                )
+                .set_address(bar_addr),
+            );
             self.config.write_config_dword(bar_addr as u32, 0xFC);
         }
 
         Ok(ranges)
+    }
+
+    fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
+        for region in self.mmio_regions.iter().chain(self.io_regions.iter()) {
+            if region.bar_index() == bar_num {
+                return Some(*region);
+            }
+        }
+
+        None
     }
 
     fn register_device_capabilities(&mut self) -> Result<(), PciDeviceError> {
@@ -954,9 +987,10 @@ impl PciDevice for VfioPciDevice {
         let mut config = self.config.read_config_dword(reg);
 
         // Ignore IO bar
-        if reg >= 0x10 && reg <= 0x24 {
-            for io_info in self.io_regions.iter() {
-                if io_info.bar_index * 4 + 0x10 == reg {
+        if (0x10..=0x24).contains(&reg) {
+            let bar_idx = (reg as usize - 0x10) / 4;
+            if let Some(bar) = self.get_bar_configuration(bar_idx) {
+                if bar.is_io() {
                     config = 0;
                 }
             }
@@ -1017,8 +1051,8 @@ impl PciDevice for VfioPciDevice {
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
         if let Some(mmio_info) = self.find_region(addr) {
-            let offset = addr - mmio_info.start;
-            let bar_index = mmio_info.bar_index;
+            let offset = addr - mmio_info.address();
+            let bar_index = mmio_info.bar_index() as u32;
             if let Some(msix_cap) = &self.msix_cap {
                 if msix_cap.is_msix_table(bar_index, offset) {
                     msix_cap.read_table(offset, data);
@@ -1038,15 +1072,15 @@ impl PciDevice for VfioPciDevice {
             if let Some(device_data) = &self.device_data {
                 match *device_data {
                     DeviceData::IntelGfxData { opregion_index } => {
-                        if opregion_index == mmio_info.bar_index {
+                        if opregion_index == mmio_info.bar_index() as u32 {
                             return;
                         }
                     }
                 }
             }
 
-            let offset = addr - mmio_info.start;
-            let bar_index = mmio_info.bar_index;
+            let offset = addr - mmio_info.address();
+            let bar_index = mmio_info.bar_index() as u32;
 
             if let Some(msix_cap) = self.msix_cap.as_mut() {
                 if msix_cap.is_msix_table(bar_index, offset) {

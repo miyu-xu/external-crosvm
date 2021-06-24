@@ -6,6 +6,10 @@
 
 mod bus;
 mod cmos;
+#[cfg(feature = "direct")]
+pub mod direct_io;
+#[cfg(feature = "direct")]
+pub mod direct_irq;
 mod i8042;
 pub mod irqchip;
 mod pci;
@@ -13,13 +17,16 @@ mod pci;
 mod pit;
 pub mod pl030;
 mod proxy;
+#[cfg(feature = "usb")]
 #[macro_use]
 mod register_space;
 pub mod acpi;
 pub mod bat;
 mod serial;
 mod serial_device;
+#[cfg(feature = "usb")]
 pub mod usb;
+#[cfg(feature = "usb")]
 mod utils;
 pub mod vfio;
 pub mod virtio;
@@ -27,8 +34,12 @@ pub mod virtio;
 pub use self::acpi::ACPIPMResource;
 pub use self::bat::{BatteryError, GoldfishBattery};
 pub use self::bus::Error as BusError;
-pub use self::bus::{Bus, BusAccessInfo, BusDevice, BusRange, BusResumeDevice};
+pub use self::bus::{Bus, BusAccessInfo, BusDevice, BusDeviceSync, BusRange, BusResumeDevice};
 pub use self::cmos::Cmos;
+#[cfg(feature = "direct")]
+pub use self::direct_io::DirectIo;
+#[cfg(feature = "direct")]
+pub use self::direct_irq::{DirectIrq, DirectIrqError};
 pub use self::i8042::I8042Device;
 pub use self::irqchip::*;
 #[cfg(feature = "audio")]
@@ -44,7 +55,9 @@ pub use self::proxy::Error as ProxyError;
 pub use self::proxy::ProxyDevice;
 pub use self::serial::Serial;
 pub use self::serial_device::SerialDevice;
+#[cfg(feature = "usb")]
 pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+#[cfg(feature = "usb")]
 pub use self::usb::xhci::xhci_controller::XhciController;
 pub use self::vfio::{VfioContainer, VfioDevice};
 pub use self::virtio::VirtioPciDevice;

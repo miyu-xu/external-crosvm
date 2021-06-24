@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use sync::Mutex;
 
-use base::{warn, AsRawDescriptor, Event, RawDescriptor, Result};
+use base::{warn, AsRawDescriptor, Event, RawDescriptor, Result, Tube};
 use data_model::{DataInit, Le32};
 use hypervisor::Datamatch;
 use libc::ERANGE;
@@ -15,11 +15,10 @@ use vm_memory::GuestMemory;
 
 use super::*;
 use crate::pci::{
-    MsixCap, MsixConfig, PciAddress, PciBarConfiguration, PciCapability, PciCapabilityID,
-    PciClassCode, PciConfiguration, PciDevice, PciDeviceError, PciDisplaySubclass, PciHeaderType,
-    PciInterruptPin, PciSubclass,
+    MsixCap, MsixConfig, PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType,
+    PciCapability, PciCapabilityID, PciClassCode, PciConfiguration, PciDevice, PciDeviceError,
+    PciDisplaySubclass, PciHeaderType, PciInterruptPin, PciSubclass,
 };
-use vm_control::VmIrqRequestSocket;
 
 use self::virtio_pci_common_config::VirtioPciCommonConfig;
 
@@ -193,6 +192,7 @@ const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
 
 const VIRTIO_PCI_VENDOR_ID: u16 = 0x1af4;
 const VIRTIO_PCI_DEVICE_ID_BASE: u16 = 0x1040; // Add to device type to get device ID.
+const VIRTIO_PCI_REVISION_ID: u8 = 1;
 
 /// Implements the
 /// [PCI](http://docs.oasis-open.org/virtio/virtio/v1.0/cs04/virtio-v1.0-cs04.html#x1-650001)
@@ -221,7 +221,7 @@ impl VirtioPciDevice {
     pub fn new(
         mem: GuestMemory,
         device: Box<dyn VirtioDevice>,
-        msi_device_socket: VmIrqRequestSocket,
+        msi_device_tube: Tube,
     ) -> Result<Self> {
         let mut queue_evts = Vec::new();
         for _ in device.queue_max_sizes() {
@@ -250,7 +250,7 @@ impl VirtioPciDevice {
 
         // One MSI-X vector per queue plus one for configuration changes.
         let msix_num = u16::try_from(num_queues + 1).map_err(|_| base::Error::new(ERANGE))?;
-        let msix_config = Arc::new(Mutex::new(MsixConfig::new(msix_num, msi_device_socket)));
+        let msix_config = Arc::new(Mutex::new(MsixConfig::new(msix_num, msi_device_tube)));
 
         let config_regs = PciConfiguration::new(
             VIRTIO_PCI_VENDOR_ID,
@@ -261,6 +261,7 @@ impl VirtioPciDevice {
             PciHeaderType::Device,
             VIRTIO_PCI_VENDOR_ID,
             pci_device_id,
+            VIRTIO_PCI_REVISION_ID,
         );
 
         Ok(VirtioPciDevice {
@@ -389,7 +390,7 @@ impl VirtioPciDevice {
 
 impl PciDevice for VirtioPciDevice {
     fn debug_label(&self) -> String {
-        format!("virtio-pci ({})", self.device.debug_label())
+        format!("pci{}", self.device.debug_label())
     }
 
     fn allocate_address(
@@ -461,10 +462,13 @@ impl PciDevice for VirtioPciDevice {
                 CAPABILITY_BAR_SIZE,
             )
             .map_err(|e| PciDeviceError::IoAllocationFailed(CAPABILITY_BAR_SIZE, e))?;
-        let config = PciBarConfiguration::default()
-            .set_register_index(0)
-            .set_address(settings_config_addr)
-            .set_size(CAPABILITY_BAR_SIZE);
+        let config = PciBarConfiguration::new(
+            0,
+            CAPABILITY_BAR_SIZE,
+            PciBarRegionType::Memory32BitRegion,
+            PciBarPrefetchable::NotPrefetchable,
+        )
+        .set_address(settings_config_addr);
         let settings_bar = self
             .config_regs
             .add_pci_bar(config)
@@ -490,28 +494,32 @@ impl PciDevice for VirtioPciDevice {
             let device_addr = resources
                 .mmio_allocator_any()
                 .allocate_with_align(
-                    config.get_size(),
+                    config.size(),
                     Alloc::PciBar {
                         bus: address.bus,
                         dev: address.dev,
                         func: address.func,
-                        bar: config.get_register_index() as u8,
+                        bar: config.bar_index() as u8,
                     },
                     format!(
                         "virtio-{}-custom_bar",
                         type_to_str(self.device.device_type()).unwrap_or("?")
                     ),
-                    config.get_size(),
+                    config.size(),
                 )
-                .map_err(|e| PciDeviceError::IoAllocationFailed(config.get_size(), e))?;
+                .map_err(|e| PciDeviceError::IoAllocationFailed(config.size(), e))?;
             let config = config.set_address(device_addr);
             let _device_bar = self
                 .config_regs
                 .add_pci_bar(config)
                 .map_err(|e| PciDeviceError::IoRegistrationFailed(device_addr, e))?;
-            ranges.push((device_addr, config.get_size()));
+            ranges.push((device_addr, config.size()));
         }
         Ok(ranges)
+    }
+
+    fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
+        self.config_regs.get_bar_configuration(bar_num)
     }
 
     fn register_device_capabilities(&mut self) -> std::result::Result<(), PciDeviceError> {

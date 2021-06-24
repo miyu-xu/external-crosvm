@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::{error, RawDescriptor, Result};
+use serde::{Deserialize, Serialize};
+
+use base::{error, Result};
 use bit_field::*;
 use downcast_rs::impl_downcast;
-use msg_socket::MsgOnSocket;
+
 use vm_memory::GuestAddress;
 
 use crate::{Hypervisor, IrqRoute, IrqSource, IrqSourceChip, Vcpu, Vm};
@@ -227,12 +229,15 @@ pub struct IoapicRedirectionTableEntry {
     dest_id: BitField8,
 }
 
-/// Number of pins on the IOAPIC.
+/// Number of pins on the standard KVM/IOAPIC.
 pub const NUM_IOAPIC_PINS: usize = 24;
+
+/// Maximum number of pins on the IOAPIC.
+pub const MAX_IOAPIC_PINS: usize = 120;
 
 /// Represents the state of the IOAPIC.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IoapicState {
     /// base_address is the memory base address for this IOAPIC. It cannot be changed.
     pub base_address: u64,
@@ -243,7 +248,13 @@ pub struct IoapicState {
     /// current_interrupt_level_bitmap represents a bitmap of the state of all of the irq lines
     pub current_interrupt_level_bitmap: u32,
     /// redirect_table contains the irq settings for each irq line
-    pub redirect_table: [IoapicRedirectionTableEntry; 24],
+    pub redirect_table: [IoapicRedirectionTableEntry; 120],
+}
+
+impl Default for IoapicState {
+    fn default() -> IoapicState {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -566,7 +577,7 @@ pub struct DebugRegs {
 }
 
 /// State of one VCPU register.  Currently used for MSRs and XCRs.
-#[derive(Debug, Default, Copy, Clone, MsgOnSocket)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct Register {
     pub id: u32,
     pub value: u64,

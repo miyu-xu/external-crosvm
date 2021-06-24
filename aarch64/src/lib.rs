@@ -4,24 +4,18 @@
 
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
-use std::ffi::{CStr, CString};
 use std::fmt::{self, Display};
-use std::fs::File;
-use std::io::{self, Seek};
+use std::io::{self};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arch::{
     get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
     VmComponents, VmImage,
 };
-use base::Event;
-use devices::{
-    Bus, BusError, IrqChip, IrqChipAArch64, PciAddress, PciConfigMmio, PciDevice, PciInterruptPin,
-    ProtectionType,
-};
-use hypervisor::{
-    DeviceKind, Hypervisor, HypervisorCap, PsciVersion, VcpuAArch64, VcpuFeature, VmAArch64,
-};
+use base::{Event, MemoryMappingBuilder};
+use devices::{Bus, BusError, IrqChip, IrqChipAArch64, PciConfigMmio, PciDevice, ProtectionType};
+use hypervisor::{DeviceKind, Hypervisor, HypervisorCap, VcpuAArch64, VcpuFeature, VmAArch64};
 use minijail::Minijail;
 use remain::sorted;
 use resources::SystemAllocator;
@@ -54,6 +48,10 @@ const AARCH64_PROTECTED_VM_FW_MAX_SIZE: u64 = 0x200000;
 const AARCH64_PROTECTED_VM_FW_START: u64 =
     AARCH64_PHYS_MEM_START - AARCH64_PROTECTED_VM_FW_MAX_SIZE;
 
+const AARCH64_PVTIME_IPA_MAX_SIZE: u64 = 0x10000;
+const AARCH64_PVTIME_IPA_START: u64 = AARCH64_PROTECTED_VM_FW_START - AARCH64_PVTIME_IPA_MAX_SIZE;
+const AARCH64_PVTIME_SIZE: u64 = 64;
+
 // These constants indicate the placement of the GIC registers in the physical
 // address space.
 const AARCH64_GIC_DIST_BASE: u64 = AARCH64_AXI_BASE - AARCH64_GIC_DIST_SIZE;
@@ -78,12 +76,26 @@ const KVM_REG_SIZE_U64: u64 = 0x0030000000000000;
 const KVM_REG_ARM_COPROC_SHIFT: u64 = 16;
 const KVM_REG_ARM_CORE: u64 = 0x0010 << KVM_REG_ARM_COPROC_SHIFT;
 
+/// Gives the ID for a register to be used with `set_one_reg`.
+///
+/// Pass the name of a field in `user_pt_regs` to get the corresponding register
+/// ID, e.g. `arm64_core_reg!(pstate)`
+///
+/// To get ID for registers `x0`-`x31`, refer to the `regs` field along with the
+/// register number, e.g. `arm64_core_reg!(regs, 5)` for `x5`. This is different
+/// to work around `offset__of!(kvm_sys::user_pt_regs, regs[$x])` not working.
 macro_rules! arm64_core_reg {
     ($reg: tt) => {
         KVM_REG_ARM64
             | KVM_REG_SIZE_U64
             | KVM_REG_ARM_CORE
             | ((offset__of!(kvm_sys::user_pt_regs, $reg) / 4) as u64)
+    };
+    (regs, $x: literal) => {
+        KVM_REG_ARM64
+            | KVM_REG_SIZE_U64
+            | KVM_REG_ARM_CORE
+            | (((offset__of!(kvm_sys::user_pt_regs, regs) + ($x * size_of::<u64>())) / 4) as u64)
     };
 }
 
@@ -129,23 +141,27 @@ const AARCH64_PMU_IRQ: u32 = 7;
 #[derive(Debug)]
 pub enum Error {
     BiosLoadFailure(arch::LoadImageError),
+    BuildPvtimeError(base::MmapError),
     CloneEvent(base::Error),
+    CloneIrqChip(base::Error),
     Cmdline(kernel_cmdline::Error),
     CreateDevices(Box<dyn StdError>),
     CreateEvent(base::Error),
     CreateFdt(arch::fdt::Error),
     CreateGICFailure(base::Error),
-    CreateIrqChip(Box<dyn StdError>),
     CreatePciRoot(arch::DeviceRegistrationError),
     CreateSerialDevices(arch::DeviceRegistrationError),
     CreateSocket(io::Error),
     CreateVcpu(base::Error),
     CreateVm(Box<dyn StdError>),
     DowncastVcpu,
+    FinalizeIrqChip(Box<dyn StdError>),
     GetPsciVersion(base::Error),
     GetSerialCmdline(GetSerialCmdlineError),
+    InitPvtimeError(base::Error),
     InitrdLoadFailure(arch::LoadImageError),
     KernelLoadFailure(arch::LoadImageError),
+    MapPvtimeError(base::Error),
     ProtectVm(base::Error),
     RegisterIrqfd(base::Error),
     RegisterPci(BusError),
@@ -164,23 +180,27 @@ impl Display for Error {
         #[sorted]
         match self {
             BiosLoadFailure(e) => write!(f, "bios could not be loaded: {}", e),
+            BuildPvtimeError(e) => write!(f, "failed to build arm pvtime memory: {}", e),
             CloneEvent(e) => write!(f, "unable to clone an Event: {}", e),
+            CloneIrqChip(e) => write!(f, "failed to clone IRQ chip: {}", e),
             Cmdline(e) => write!(f, "the given kernel command line was invalid: {}", e),
             CreateDevices(e) => write!(f, "error creating devices: {}", e),
             CreateEvent(e) => write!(f, "unable to make an Event: {}", e),
             CreateFdt(e) => write!(f, "FDT could not be created: {}", e),
             CreateGICFailure(e) => write!(f, "failed to create GIC: {}", e),
-            CreateIrqChip(e) => write!(f, "failed to create IRQ chip: {}", e),
             CreatePciRoot(e) => write!(f, "failed to create a PCI root hub: {}", e),
             CreateSerialDevices(e) => write!(f, "unable to create serial devices: {}", e),
             CreateSocket(e) => write!(f, "failed to create socket: {}", e),
             CreateVcpu(e) => write!(f, "failed to create VCPU: {}", e),
             CreateVm(e) => write!(f, "failed to create vm: {}", e),
             DowncastVcpu => write!(f, "vm created wrong kind of vcpu"),
+            FinalizeIrqChip(e) => write!(f, "failed to finalize IRQ chip: {}", e),
             GetPsciVersion(e) => write!(f, "failed to get PSCI version: {}", e),
             GetSerialCmdline(e) => write!(f, "failed to get serial cmdline: {}", e),
+            InitPvtimeError(e) => write!(f, "failed to initialize arm pvtime: {}", e),
             InitrdLoadFailure(e) => write!(f, "initrd could not be loaded: {}", e),
             KernelLoadFailure(e) => write!(f, "kernel could not be loaded: {}", e),
+            MapPvtimeError(e) => write!(f, "failed to map arm pvtime memory: {}", e),
             ProtectVm(e) => write!(f, "failed to protect vm: {}", e),
             RegisterIrqfd(e) => write!(f, "failed to register irq fd: {}", e),
             RegisterPci(e) => write!(f, "error registering PCI bus: {}", e),
@@ -222,39 +242,37 @@ pub struct AArch64;
 impl arch::LinuxArch for AArch64 {
     type Error = Error;
 
-    fn build_vm<V, Vcpu, I, FD, FV, FI, E1, E2, E3>(
+    fn guest_memory_layout(
+        components: &VmComponents,
+    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
+        Ok(arch_memory_regions(components.memory_size))
+    }
+
+    fn create_system_allocator(guest_mem: &GuestMemory) -> SystemAllocator {
+        Self::get_resource_allocator(guest_mem.memory_size())
+    }
+
+    fn build_vm<V, Vcpu>(
         mut components: VmComponents,
+        _exit_evt: &Event,
+        system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         _battery: (&Option<BatteryType>, Option<Minijail>),
-        create_devices: FD,
-        create_vm: FV,
-        create_irq_chip: FI,
-    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu, I>, Self::Error>
+        mut vm: V,
+        pci_devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
+        irq_chip: &mut dyn IrqChipAArch64,
+    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmAArch64,
         Vcpu: VcpuAArch64,
-        I: IrqChipAArch64,
-        FD: FnOnce(
-            &GuestMemory,
-            &mut V,
-            &mut SystemAllocator,
-            &Event,
-        ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
-        FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
-        E1: StdError + 'static,
-        E2: StdError + 'static,
-        E3: StdError + 'static,
     {
         let has_bios = match components.vm_image {
             VmImage::Bios(_) => true,
             _ => false,
         };
 
-        let mut resources = Self::get_resource_allocator(components.memory_size);
-        let mem = Self::setup_memory(components.memory_size)?;
-        let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
+        let mem = vm.get_memory().clone();
 
         if components.protected_vm == ProtectionType::Protected {
             vm.enable_protected_vm(
@@ -268,49 +286,73 @@ impl arch::LinuxArch for AArch64 {
             .get_hypervisor()
             .check_capability(&HypervisorCap::ArmPmuV3);
         let vcpu_count = components.vcpu_count;
+        let mut has_pvtime = true;
         let mut vcpus = Vec::with_capacity(vcpu_count);
         for vcpu_id in 0..vcpu_count {
-            let vcpu = *vm
+            let vcpu: Vcpu = *vm
                 .create_vcpu(vcpu_id)
                 .map_err(Error::CreateVcpu)?
                 .downcast::<Vcpu>()
                 .map_err(|_| Error::DowncastVcpu)?;
-            Self::configure_vcpu_early(vm.get_memory(), &vcpu, vcpu_id, use_pmu, has_bios)?;
+            Self::configure_vcpu_early(
+                vm.get_memory(),
+                &vcpu,
+                vcpu_id,
+                use_pmu,
+                has_bios,
+                components.protected_vm,
+            )?;
+            has_pvtime &= vcpu.has_pvtime_support();
             vcpus.push(vcpu);
         }
 
-        let mut irq_chip =
-            create_irq_chip(&vm, vcpu_count).map_err(|e| Error::CreateIrqChip(Box::new(e)))?;
+        irq_chip
+            .finalize()
+            .map_err(|e| Error::FinalizeIrqChip(Box::new(e)))?;
 
-        for vcpu in &vcpus {
+        if has_pvtime {
+            let pvtime_mem = MemoryMappingBuilder::new(AARCH64_PVTIME_IPA_MAX_SIZE as usize)
+                .build()
+                .map_err(Error::BuildPvtimeError)?;
+            vm.add_memory_region(
+                GuestAddress(AARCH64_PVTIME_IPA_START),
+                Box::new(pvtime_mem),
+                false,
+                false,
+            )
+            .map_err(Error::MapPvtimeError)?;
+        }
+
+        for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
             use_pmu &= vcpu.init_pmu(AARCH64_PMU_IRQ as u64 + 16).is_ok();
+            if has_pvtime {
+                vcpu.init_pvtime(AARCH64_PVTIME_IPA_START + (vcpu_id as u64 * AARCH64_PVTIME_SIZE))
+                    .map_err(Error::InitPvtimeError)?;
+            }
         }
 
         let mut mmio_bus = devices::Bus::new();
 
-        let exit_evt = Event::new().map_err(Error::CreateEvent)?;
+        // ARM doesn't really use the io bus like x86, so just create an empty bus.
+        let mut io_bus = devices::Bus::new();
 
         // Event used by PMDevice to notify crosvm that
         // guest OS is trying to suspend.
         let suspend_evt = Event::new().map_err(Error::CreateEvent)?;
 
-        let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
-            .map_err(|e| Error::CreateDevices(Box::new(e)))?;
         let (pci, pci_irqs, pid_debug_label_map) = arch::generate_pci_root(
             pci_devices,
-            &mut irq_chip,
+            irq_chip.as_irq_chip_mut(),
             &mut mmio_bus,
-            &mut resources,
+            &mut io_bus,
+            system_allocator,
             &mut vm,
             (devices::AARCH64_GIC_NR_IRQS - AARCH64_IRQ_BASE) as usize,
         )
         .map_err(Error::CreatePciRoot)?;
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci)));
 
-        // ARM doesn't really use the io bus like x86, so just create an empty bus.
-        let io_bus = devices::Bus::new();
-
-        Self::add_arch_devs(&mut irq_chip, &mut mmio_bus)?;
+        Self::add_arch_devs(irq_chip.as_irq_chip_mut(), &mut mmio_bus)?;
 
         let com_evt_1_3 = Event::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = Event::new().map_err(Error::CreateEvent)?;
@@ -382,6 +424,8 @@ impl arch::LinuxArch for AArch64 {
             &mem,
             pci_irqs,
             vcpu_count as u32,
+            components.cpu_clusters,
+            components.cpu_capacity,
             fdt_offset(components.memory_size, has_bios),
             pci_device_base,
             pci_device_size,
@@ -396,13 +440,11 @@ impl arch::LinuxArch for AArch64 {
 
         Ok(RunnableLinuxVm {
             vm,
-            resources,
-            exit_evt,
             vcpu_count,
             vcpus: Some(vcpus),
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
-            irq_chip,
+            irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
             has_bios,
             io_bus,
             mmio_bus,
@@ -429,12 +471,6 @@ impl arch::LinuxArch for AArch64 {
 }
 
 impl AArch64 {
-    fn setup_memory(mem_size: u64) -> Result<GuestMemory> {
-        let arch_mem_regions = arch_memory_regions(mem_size);
-        let mem = GuestMemory::new(&arch_mem_regions).map_err(Error::SetupGuestMemory)?;
-        Ok(mem)
-    }
-
     fn get_high_mmio_base_size(mem_size: u64) -> (u64, u64) {
         let base = AARCH64_PHYS_MEM_START + mem_size;
         let size = u64::max_value() - base;
@@ -496,6 +532,7 @@ impl AArch64 {
         vcpu_id: usize,
         use_pmu: bool,
         has_bios: bool,
+        protected_vm: ProtectionType,
     ) -> Result<()> {
         let mut features = vec![VcpuFeature::PsciV0_2];
         if use_pmu {
@@ -507,31 +544,31 @@ impl AArch64 {
         }
         vcpu.init(&features).map_err(Error::VcpuInit)?;
 
-        // set up registers
-        let mut data: u64;
-        let mut reg_id: u64;
-
         // All interrupts masked
-        data = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1H;
-        reg_id = arm64_core_reg!(pstate);
-        vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
+        let pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1H;
+        vcpu.set_one_reg(arm64_core_reg!(pstate), pstate)
+            .map_err(Error::SetReg)?;
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            if has_bios {
-                data = AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET;
+            let entry_addr = if has_bios {
+                AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET
             } else {
-                data = AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET;
-            }
-            reg_id = arm64_core_reg!(pc);
-            vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
+                AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET
+            };
+            let entry_addr_reg_id = if protected_vm == ProtectionType::Protected {
+                arm64_core_reg!(regs, 1)
+            } else {
+                arm64_core_reg!(pc)
+            };
+            vcpu.set_one_reg(entry_addr_reg_id, entry_addr)
+                .map_err(Error::SetReg)?;
 
             /* X0 -- fdt address */
             let mem_size = guest_mem.memory_size();
-            data = (AARCH64_PHYS_MEM_START + fdt_offset(mem_size, has_bios)) as u64;
-            // hack -- can't get this to do offsetof(regs[0]) but luckily it's at offset 0
-            reg_id = arm64_core_reg!(regs);
-            vcpu.set_one_reg(reg_id, data).map_err(Error::SetReg)?;
+            let fdt_addr = (AARCH64_PHYS_MEM_START + fdt_offset(mem_size, has_bios)) as u64;
+            vcpu.set_one_reg(arm64_core_reg!(regs, 0), fdt_addr)
+                .map_err(Error::SetReg)?;
         }
 
         Ok(())

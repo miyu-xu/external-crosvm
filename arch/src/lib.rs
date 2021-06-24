@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
-use base::{syslog, AsRawDescriptor, Event};
+use base::{syslog, AsRawDescriptor, Event, Tube};
 use devices::virtio::VirtioDevice;
 use devices::{
     Bus, BusDevice, BusError, IrqChip, PciAddress, PciDevice, PciDeviceError, PciInterruptPin,
@@ -27,11 +27,7 @@ use hypervisor::{IoEventAddress, Vm};
 use minijail::Minijail;
 use resources::{MmioType, SystemAllocator};
 use sync::Mutex;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-use vm_control::VmControlRequestSocket;
-use vm_control::{
-    BatControl, BatControlCommand, BatControlRequestSocket, BatControlResult, BatteryType,
-};
+use vm_control::{BatControl, BatteryType};
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
@@ -82,7 +78,10 @@ pub struct VmComponents {
     pub memory_size: u64,
     pub vcpu_count: usize,
     pub vcpu_affinity: Option<VcpuAffinity>,
+    pub cpu_clusters: Vec<Vec<usize>>,
+    pub cpu_capacity: BTreeMap<usize, u32>,
     pub no_smt: bool,
+    pub hugepages: bool,
     pub vm_image: VmImage,
     pub android_fstab: Option<File>,
     pub pstore: Option<Pstore>,
@@ -93,21 +92,21 @@ pub struct VmComponents {
     pub rt_cpus: Vec<usize>,
     pub protected_vm: ProtectionType,
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    pub gdb: Option<(u32, VmControlRequestSocket)>, // port and control socket.
+    pub gdb: Option<(u32, Tube)>, // port and control tube.
+    pub dmi_path: Option<PathBuf>,
+    pub no_legacy: bool,
 }
 
 /// Holds the elements needed to run a Linux VM. Created by `build_vm`.
-pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch, I: IrqChipArch> {
+pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub vm: V,
-    pub resources: SystemAllocator,
-    pub exit_evt: Event,
     pub vcpu_count: usize,
     /// If vcpus is None, then it's the responsibility of the vcpu thread to create vcpus.
     /// If it's Some, then `build_vm` already created the vcpus.
     pub vcpus: Option<Vec<Vcpu>>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub no_smt: bool,
-    pub irq_chip: I,
+    pub irq_chip: Box<dyn IrqChipArch>,
     pub has_bios: bool,
     pub io_bus: Bus,
     pub mmio_bus: Bus,
@@ -116,7 +115,7 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch, I: IrqChipArch> {
     pub rt_cpus: Vec<usize>,
     pub bat_control: Option<BatControl>,
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    pub gdb: Option<(u32, VmControlRequestSocket)>,
+    pub gdb: Option<(u32, Tube)>,
 }
 
 /// The device and optional jail.
@@ -130,40 +129,51 @@ pub struct VirtioDeviceStub {
 pub trait LinuxArch {
     type Error: StdError;
 
+    /// Returns a Vec of the valid memory addresses as pairs of address and length. These should be
+    /// used to configure the `GuestMemory` structure for the platform.
+    ///
+    /// # Arguments
+    ///
+    /// * `components` - Parts used to determine the memory layout.
+    fn guest_memory_layout(
+        components: &VmComponents,
+    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error>;
+
+    /// Creates a new `SystemAllocator` that fits the given `GuestMemory`'s layout.
+    ///
+    /// # Arguments
+    ///
+    /// * `guest_mem` - The memory to be used as a template for the `SystemAllocator`.
+    fn create_system_allocator(guest_mem: &GuestMemory) -> SystemAllocator;
+
     /// Takes `VmComponents` and generates a `RunnableLinuxVm`.
     ///
     /// # Arguments
     ///
     /// * `components` - Parts to use to build the VM.
-    /// * `serial_parameters` - definitions for how the serial devices should be configured.
-    /// * `battery` - defines what battery device will be created.
-    /// * `create_devices` - Function to generate a list of devices.
-    /// * `create_vm` - Function to generate a VM.
-    /// * `create_irq_chip` - Function to generate an IRQ chip.
-    fn build_vm<V, Vcpu, I, FD, FV, FI, E1, E2, E3>(
+    /// * `exit_evt` - Event used by sub-devices to request that crosvm exit.
+    /// * `system_allocator` - Allocator created by this trait's implementation of
+    ///   `create_system_allocator`.
+    /// * `serial_parameters` - Definitions for how the serial devices should be configured.
+    /// * `serial_jail` - Jail used for serial devices created here.
+    /// * `battery` - Defines what battery device will be created.
+    /// * `vm` - A VM implementation to build upon.
+    /// * `pci_devices` - The PCI devices to be built into the VM.
+    /// * `irq_chip` - The IRQ chip implemention for the VM.
+    fn build_vm<V, Vcpu>(
         components: VmComponents,
+        exit_evt: &Event,
+        system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         battery: (&Option<BatteryType>, Option<Minijail>),
-        create_devices: FD,
-        create_vm: FV,
-        create_irq_chip: FI,
-    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu, I>, Self::Error>
+        vm: V,
+        pci_devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
+        irq_chip: &mut dyn IrqChipArch,
+    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmArch,
-        Vcpu: VcpuArch,
-        I: IrqChipArch,
-        FD: FnOnce(
-            &GuestMemory,
-            &mut V,
-            &mut SystemAllocator,
-            &Event,
-        ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
-        FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
-        E1: StdError + 'static,
-        E2: StdError + 'static,
-        E3: StdError + 'static;
+        Vcpu: VcpuArch;
 
     /// Configures the vcpu and should be called once per vcpu from the vcpu's thread.
     ///
@@ -236,12 +246,14 @@ pub enum DeviceRegistrationError {
     AllocateDeviceAddrs(PciDeviceError),
     /// Could not allocate an IRQ number.
     AllocateIrq,
+    /// Unable to clone a jail for the device.
+    CloneJail(minijail::Error),
     // Unable to create a pipe.
     CreatePipe(base::Error),
     // Unable to create serial device from serial parameters
     CreateSerialDevice(serial::Error),
-    // Unable to create socket
-    CreateSocket(io::Error),
+    // Unable to create tube
+    CreateTube(base::TubeError),
     /// Could not clone an event.
     EventClone(base::Error),
     /// Could not create an event.
@@ -277,9 +289,10 @@ impl Display for DeviceRegistrationError {
             AllocateIoResource(e) => write!(f, "Allocating IO resource: {}", e),
             AllocateDeviceAddrs(e) => write!(f, "Allocating device addresses: {}", e),
             AllocateIrq => write!(f, "Allocating IRQ number"),
+            CloneJail(e) => write!(f, "failed to clone jail: {}", e),
             CreatePipe(e) => write!(f, "failed to create pipe: {}", e),
             CreateSerialDevice(e) => write!(f, "failed to create serial device: {}", e),
-            CreateSocket(e) => write!(f, "failed to create socket: {}", e),
+            CreateTube(e) => write!(f, "failed to create tube: {}", e),
             Cmdline(e) => write!(f, "unable to add device to kernel command line: {}", e),
             EventClone(e) => write!(f, "failed to clone event: {}", e),
             EventCreate(e) => write!(f, "failed to create event: {}", e),
@@ -301,8 +314,9 @@ impl Display for DeviceRegistrationError {
 /// Creates a root PCI device for use by this Vm.
 pub fn generate_pci_root(
     mut devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
-    irq_chip: &mut impl IrqChip,
+    irq_chip: &mut dyn IrqChip,
     mmio_bus: &mut Bus,
+    io_bus: &mut Bus,
     resources: &mut SystemAllocator,
     vm: &mut impl Vm,
     max_irqs: usize,
@@ -314,7 +328,7 @@ pub fn generate_pci_root(
     ),
     DeviceRegistrationError,
 > {
-    let mut root = PciRoot::new();
+    let mut root = PciRoot::new(mmio_bus.clone(), io_bus.clone());
     let mut pci_irqs = Vec::new();
     let mut pid_labels = BTreeMap::new();
 
@@ -431,10 +445,10 @@ pub fn add_goldfish_battery(
     amls: &mut Vec<u8>,
     battery_jail: Option<Minijail>,
     mmio_bus: &mut Bus,
-    irq_chip: &mut impl IrqChip,
+    irq_chip: &mut dyn IrqChip,
     irq_num: u32,
     resources: &mut SystemAllocator,
-) -> Result<BatControlRequestSocket, DeviceRegistrationError> {
+) -> Result<Tube, DeviceRegistrationError> {
     let alloc = resources.get_anon_alloc();
     let mmio_base = resources
         .mmio_allocator(MmioType::Low)
@@ -453,9 +467,8 @@ pub fn add_goldfish_battery(
         .register_irq_event(irq_num, &irq_evt, Some(&irq_resample_evt))
         .map_err(DeviceRegistrationError::RegisterIrqfd)?;
 
-    let (control_socket, response_socket) =
-        msg_socket::pair::<BatControlCommand, BatControlResult>()
-            .map_err(DeviceRegistrationError::CreateSocket)?;
+    let (control_tube, response_tube) =
+        Tube::pair().map_err(DeviceRegistrationError::CreateTube)?;
 
     #[cfg(feature = "power-monitor-powerd")]
     let create_monitor = Some(Box::new(power_monitor::powerd::DBusMonitor::connect)
@@ -469,7 +482,7 @@ pub fn add_goldfish_battery(
         irq_num,
         irq_evt,
         irq_resample_evt,
-        response_socket,
+        response_tube,
         create_monitor,
     )
     .map_err(DeviceRegistrationError::RegisterBattery)?;
@@ -501,7 +514,7 @@ pub fn add_goldfish_battery(
         }
     }
 
-    Ok(control_socket)
+    Ok(control_tube)
 }
 
 /// Errors for image loading.

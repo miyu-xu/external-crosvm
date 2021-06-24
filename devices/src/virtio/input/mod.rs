@@ -16,8 +16,8 @@ use vm_memory::GuestMemory;
 
 use self::event_source::{EvdevEventSource, EventSource, SocketEventSource};
 use super::{
-    copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader, VirtioDevice, Writer,
-    TYPE_INPUT,
+    copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt,
+    VirtioDevice, Writer, TYPE_INPUT,
 };
 use linux_input_sys::{virtio_input_event, InputEventDecoder};
 use std::collections::BTreeMap;
@@ -433,7 +433,7 @@ impl<T: EventSource> Worker<T> {
                 Ok(count) => count,
                 Err(e) => {
                     error!("Input: failed to read events from virtqueue: {}", e);
-                    break;
+                    return Err(e);
                 }
             };
 
@@ -463,7 +463,6 @@ impl<T: EventSource> Worker<T> {
             (&event_queue_evt, Token::EventQAvailable),
             (&status_queue_evt, Token::StatusQAvailable),
             (&self.event_source, Token::InputEventsAvailable),
-            (self.interrupt.get_resample_evt(), Token::InterruptResample),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(wait_ctx) => wait_ctx,
@@ -472,6 +471,15 @@ impl<T: EventSource> Worker<T> {
                 return;
             }
         };
+        if let Some(resample_evt) = self.interrupt.get_resample_evt() {
+            if wait_ctx
+                .add(resample_evt, Token::InterruptResample)
+                .is_err()
+            {
+                error!("failed adding resample event to WaitContext.");
+                return;
+            }
+        }
 
         'wait: loop {
             let wait_events = match wait_ctx.wait() {
@@ -676,6 +684,7 @@ where
 
 /// Creates a new virtio touch device which supports single touch only.
 pub fn new_single_touch<T>(
+    idx: u32,
     source: T,
     width: u32,
     height: u32,
@@ -687,7 +696,7 @@ where
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_single_touch_config(width, height),
+        config: defaults::new_single_touch_config(idx, width, height),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
@@ -695,6 +704,7 @@ where
 
 /// Creates a new virtio touch device which supports multi touch.
 pub fn new_multi_touch<T>(
+    idx: u32,
     source: T,
     width: u32,
     height: u32,
@@ -706,7 +716,7 @@ where
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_multi_touch_config(width, height),
+        config: defaults::new_multi_touch_config(idx, width, height),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
@@ -715,6 +725,7 @@ where
 /// Creates a new virtio trackpad device which supports (single) touch, primary and secondary
 /// buttons as well as X and Y axis.
 pub fn new_trackpad<T>(
+    idx: u32,
     source: T,
     width: u32,
     height: u32,
@@ -726,49 +737,61 @@ where
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_trackpad_config(width, height),
+        config: defaults::new_trackpad_config(idx, width, height),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
 }
 
 /// Creates a new virtio mouse which supports primary, secondary, wheel and REL events.
-pub fn new_mouse<T>(source: T, virtio_features: u64) -> Result<Input<SocketEventSource<T>>>
+pub fn new_mouse<T>(
+    idx: u32,
+    source: T,
+    virtio_features: u64,
+) -> Result<Input<SocketEventSource<T>>>
 where
     T: Read + Write + AsRawDescriptor,
 {
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_mouse_config(),
+        config: defaults::new_mouse_config(idx),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
 }
 
 /// Creates a new virtio keyboard, which supports the same events as an en-us physical keyboard.
-pub fn new_keyboard<T>(source: T, virtio_features: u64) -> Result<Input<SocketEventSource<T>>>
+pub fn new_keyboard<T>(
+    idx: u32,
+    source: T,
+    virtio_features: u64,
+) -> Result<Input<SocketEventSource<T>>>
 where
     T: Read + Write + AsRawDescriptor,
 {
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_keyboard_config(),
+        config: defaults::new_keyboard_config(idx),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
 }
 
 /// Creates a new virtio device for switches.
-pub fn new_switches<T>(source: T, virtio_features: u64) -> Result<Input<SocketEventSource<T>>>
+pub fn new_switches<T>(
+    idx: u32,
+    source: T,
+    virtio_features: u64,
+) -> Result<Input<SocketEventSource<T>>>
 where
     T: Read + Write + AsRawDescriptor,
 {
     Ok(Input {
         kill_evt: None,
         worker_thread: None,
-        config: defaults::new_switches_config(),
+        config: defaults::new_switches_config(idx),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })

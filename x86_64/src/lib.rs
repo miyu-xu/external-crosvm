@@ -81,6 +81,7 @@ pub enum Error {
     AllocateIOResouce(resources::Error),
     AllocateIrq,
     CloneEvent(base::Error),
+    CloneIrqChip(base::Error),
     Cmdline(kernel_cmdline::Error),
     ConfigureSystem,
     CreateBatDevices(arch::DeviceRegistrationError),
@@ -88,7 +89,6 @@ pub enum Error {
     CreateEvent(base::Error),
     CreateFdt(arch::fdt::Error),
     CreateIoapicDevice(base::Error),
-    CreateIrqChip(Box<dyn StdError>),
     CreatePciRoot(arch::DeviceRegistrationError),
     CreatePit(base::Error),
     CreatePitDevice(devices::PitError),
@@ -141,6 +141,7 @@ impl Display for Error {
             AllocateIOResouce(e) => write!(f, "error allocating IO resource: {}", e),
             AllocateIrq => write!(f, "error allocating a single irq"),
             CloneEvent(e) => write!(f, "unable to clone an Event: {}", e),
+            CloneIrqChip(e) => write!(f, "failed to clone IRQ chip: {}", e),
             Cmdline(e) => write!(f, "the given kernel command line was invalid: {}", e),
             ConfigureSystem => write!(f, "error configuring the system"),
             CreateBatDevices(e) => write!(f, "unable to create battery devices: {}", e),
@@ -148,7 +149,6 @@ impl Display for Error {
             CreateEvent(e) => write!(f, "unable to make an Event: {}", e),
             CreateFdt(e) => write!(f, "failed to create fdt: {}", e),
             CreateIoapicDevice(e) => write!(f, "failed to create IOAPIC device: {}", e),
-            CreateIrqChip(e) => write!(f, "failed to create IRQ chip: {}", e),
             CreatePciRoot(e) => write!(f, "failed to create a PCI root hub: {}", e),
             CreatePit(e) => write!(f, "unable to create PIT: {}", e),
             CreatePitDevice(e) => write!(f, "unable to make PIT device: {}", e),
@@ -349,83 +349,82 @@ fn arch_memory_regions(size: u64, bios_size: Option<u64>) -> Vec<(GuestAddress, 
 impl arch::LinuxArch for X8664arch {
     type Error = Error;
 
-    fn build_vm<V, Vcpu, I, FD, FV, FI, E1, E2, E3>(
+    fn guest_memory_layout(
+        components: &VmComponents,
+    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
+        let bios_size = match &components.vm_image {
+            VmImage::Bios(bios_file) => Some(bios_file.metadata().map_err(Error::LoadBios)?.len()),
+            VmImage::Kernel(_) => None,
+        };
+        Ok(arch_memory_regions(components.memory_size, bios_size))
+    }
+
+    fn create_system_allocator(guest_mem: &GuestMemory) -> SystemAllocator {
+        let high_mmio_start = Self::get_high_mmio_base(guest_mem);
+        SystemAllocator::builder()
+            .add_io_addresses(0xc000, 0x10000)
+            .add_low_mmio_addresses(END_ADDR_BEFORE_32BITS, MMIO_SIZE)
+            .add_high_mmio_addresses(high_mmio_start, u64::max_value() - high_mmio_start)
+            .create_allocator(X86_64_IRQ_BASE)
+            .unwrap()
+    }
+
+    fn build_vm<V, Vcpu>(
         mut components: VmComponents,
+        exit_evt: &Event,
+        system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         battery: (&Option<BatteryType>, Option<Minijail>),
-        create_devices: FD,
-        create_vm: FV,
-        create_irq_chip: FI,
-    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu, I>, Self::Error>
+        mut vm: V,
+        pci_devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
+        irq_chip: &mut dyn IrqChipX86_64,
+    ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmX86_64,
         Vcpu: VcpuX86_64,
-        I: IrqChipX86_64,
-        FD: FnOnce(
-            &GuestMemory,
-            &mut V,
-            &mut SystemAllocator,
-            &Event,
-        ) -> std::result::Result<Vec<(Box<dyn PciDevice>, Option<Minijail>)>, E1>,
-        FV: FnOnce(GuestMemory) -> std::result::Result<V, E2>,
-        FI: FnOnce(&V, /* vcpu_count: */ usize) -> std::result::Result<I, E3>,
-        E1: StdError + 'static,
-        E2: StdError + 'static,
-        E3: StdError + 'static,
     {
         if components.protected_vm != ProtectionType::Unprotected {
             return Err(Error::UnsupportedProtectionType);
         }
 
-        let bios_size = match components.vm_image {
-            VmImage::Bios(ref mut bios_file) => {
-                Some(bios_file.metadata().map_err(Error::LoadBios)?.len())
-            }
-            VmImage::Kernel(_) => None,
-        };
-        let has_bios = bios_size.is_some();
-        let mem = Self::setup_memory(components.memory_size, bios_size)?;
-        let mut resources = Self::get_resource_allocator(&mem);
+        let mem = vm.get_memory().clone();
 
         let vcpu_count = components.vcpu_count;
-        let mut vm = create_vm(mem.clone()).map_err(|e| Error::CreateVm(Box::new(e)))?;
-        let mut irq_chip =
-            create_irq_chip(&vm, vcpu_count).map_err(|e| Error::CreateIrqChip(Box::new(e)))?;
 
         let tss_addr = GuestAddress(TSS_ADDR);
         vm.set_tss_addr(tss_addr).map_err(Error::SetTssAddr)?;
 
         let mut mmio_bus = devices::Bus::new();
+        let mut io_bus = devices::Bus::new();
 
-        let exit_evt = Event::new().map_err(Error::CreateEvent)?;
-
-        let pci_devices = create_devices(&mem, &mut vm, &mut resources, &exit_evt)
-            .map_err(|e| Error::CreateDevices(Box::new(e)))?;
         let (pci, pci_irqs, pid_debug_label_map) = arch::generate_pci_root(
             pci_devices,
-            &mut irq_chip,
+            irq_chip.as_irq_chip_mut(),
             &mut mmio_bus,
-            &mut resources,
+            &mut io_bus,
+            system_allocator,
             &mut vm,
             4, // Share the four pin interrupts (INTx#)
         )
         .map_err(Error::CreatePciRoot)?;
         let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(pci)));
+        io_bus.insert(pci_bus, 0xcf8, 0x8).unwrap();
 
         // Event used to notify crosvm that guest OS is trying to suspend.
         let suspend_evt = Event::new().map_err(Error::CreateEvent)?;
 
-        let mut io_bus = Self::setup_io_bus(
-            irq_chip.pit_uses_speaker_port(),
-            exit_evt.try_clone().map_err(Error::CloneEvent)?,
-            Some(pci_bus),
-            components.memory_size,
-        )?;
-
+        if !components.no_legacy {
+            Self::setup_legacy_devices(
+                &mut io_bus,
+                irq_chip.pit_uses_speaker_port(),
+                exit_evt.try_clone().map_err(Error::CloneEvent)?,
+                components.memory_size,
+            )?;
+        }
         Self::setup_serial_devices(
             components.protected_vm,
-            &mut irq_chip,
+            irq_chip.as_irq_chip_mut(),
             &mut io_bus,
             serial_parameters,
             serial_jail,
@@ -433,25 +432,28 @@ impl arch::LinuxArch for X8664arch {
 
         let (acpi_dev_resource, bat_control) = Self::setup_acpi_devices(
             &mut io_bus,
-            &mut resources,
+            system_allocator,
             suspend_evt.try_clone().map_err(Error::CloneEvent)?,
             exit_evt.try_clone().map_err(Error::CloneEvent)?,
             components.acpi_sdts,
-            &mut irq_chip,
+            irq_chip.as_irq_chip_mut(),
             battery,
             &mut mmio_bus,
         )?;
 
+        // Use ACPI description if provided by the user.
+        let noacpi = acpi_dev_resource.sdts.is_empty();
+
         let ramoops_region = match components.pstore {
             Some(pstore) => Some(
-                arch::pstore::create_memory_region(&mut vm, &mut resources, &pstore)
+                arch::pstore::create_memory_region(&mut vm, system_allocator, &pstore)
                     .map_err(Error::Pstore)?,
             ),
             None => None,
         };
 
         irq_chip
-            .finalize_devices(&mut resources, &mut io_bus, &mut mmio_bus)
+            .finalize_devices(system_allocator, &mut io_bus, &mut mmio_bus)
             .map_err(Error::RegisterIrqfd)?;
 
         // All of these bios generated tables are set manually for the benefit of the kernel boot
@@ -464,7 +466,8 @@ impl arch::LinuxArch for X8664arch {
 
         // Note that this puts the mptable at 0x9FC00 in guest physical memory.
         mptable::setup_mptable(&mem, vcpu_count as u8, pci_irqs).map_err(Error::SetupMptable)?;
-        smbios::setup_smbios(&mem).map_err(Error::SetupSmbios)?;
+        smbios::setup_smbios(&mem, components.dmi_path).map_err(Error::SetupSmbios)?;
+
         // TODO (tjeznach) Write RSDP to bootconfig before writing to memory
         acpi::create_acpi_tables(&mem, vcpu_count as u8, X86_64_SCI_IRQ, acpi_dev_resource);
 
@@ -472,6 +475,10 @@ impl arch::LinuxArch for X8664arch {
             VmImage::Bios(ref mut bios) => Self::load_bios(&mem, bios)?,
             VmImage::Kernel(ref mut kernel_image) => {
                 let mut cmdline = Self::get_base_linux_cmdline();
+
+                if noacpi {
+                    cmdline.insert_str("pci=noacpi").unwrap();
+                }
 
                 get_serial_cmdline(&mut cmdline, serial_parameters, "io")
                     .map_err(Error::GetSerialCmdline)?;
@@ -516,14 +523,12 @@ impl arch::LinuxArch for X8664arch {
 
         Ok(RunnableLinuxVm {
             vm,
-            resources,
-            exit_evt,
             vcpu_count,
             vcpus: None,
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
-            irq_chip,
-            has_bios,
+            irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
+            has_bios: matches!(components.vm_image, VmImage::Bios(_)),
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -929,15 +934,6 @@ impl X8664arch {
         Ok(())
     }
 
-    /// This creates a GuestMemory object for this VM
-    ///
-    /// * `mem_size` - Desired physical memory size in bytes for this VM
-    fn setup_memory(mem_size: u64, bios_size: Option<u64>) -> Result<GuestMemory> {
-        let arch_mem_regions = arch_memory_regions(mem_size, bios_size);
-        let mem = GuestMemory::new(&arch_mem_regions).map_err(Error::SetupGuestMemory)?;
-        Ok(mem)
-    }
-
     /// This returns the start address of high mmio
     ///
     /// # Arguments
@@ -954,43 +950,31 @@ impl X8664arch {
     /// This returns a minimal kernel command for this architecture
     fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(CMDLINE_MAX_SIZE as usize);
-        cmdline.insert_str("pci=noacpi reboot=k panic=-1").unwrap();
+        cmdline.insert_str("reboot=k panic=-1").unwrap();
 
         cmdline
     }
 
-    /// Returns a system resource allocator.
-    fn get_resource_allocator(mem: &GuestMemory) -> SystemAllocator {
-        let high_mmio_start = Self::get_high_mmio_base(mem);
-        SystemAllocator::builder()
-            .add_io_addresses(0xc000, 0x10000)
-            .add_low_mmio_addresses(END_ADDR_BEFORE_32BITS, MMIO_SIZE)
-            .add_high_mmio_addresses(high_mmio_start, u64::max_value() - high_mmio_start)
-            .create_allocator(X86_64_IRQ_BASE)
-            .unwrap()
-    }
-
-    /// Sets up the IO bus for this platform
+    /// Sets up the legacy x86 IO platform devices
     ///
     /// # Arguments
     ///
+    /// * - `io_bus` - the IO bus object
     /// * - `pit_uses_speaker_port` - does the PIT use port 0x61 for the PC speaker
     /// * - `exit_evt` - the event object which should receive exit events
     /// * - `mem_size` - the size in bytes of physical ram for the guest
-    fn setup_io_bus(
+    fn setup_legacy_devices(
+        io_bus: &mut devices::Bus,
         pit_uses_speaker_port: bool,
         exit_evt: Event,
-        pci: Option<Arc<Mutex<devices::PciConfigIo>>>,
         mem_size: u64,
-    ) -> Result<devices::Bus> {
+    ) -> Result<()> {
         struct NoDevice;
         impl devices::BusDevice for NoDevice {
             fn debug_label(&self) -> String {
                 "no device".to_owned()
             }
         }
-
-        let mut io_bus = devices::Bus::new();
 
         let mem_regions = arch_memory_regions(mem_size, None);
 
@@ -1026,16 +1010,9 @@ impl X8664arch {
         }
 
         io_bus.insert(nul_device.clone(), 0x0ed, 0x1).unwrap(); // most likely this one does nothing
-        io_bus.insert(nul_device.clone(), 0x0f0, 0x2).unwrap(); // ignore fpu
+        io_bus.insert(nul_device, 0x0f0, 0x2).unwrap(); // ignore fpu
 
-        if let Some(pci_root) = pci {
-            io_bus.insert(pci_root, 0xcf8, 0x8).unwrap();
-        } else {
-            // ignore pci.
-            io_bus.insert(nul_device, 0xcf8, 0x8).unwrap();
-        }
-
-        Ok(io_bus)
+        Ok(())
     }
 
     /// Sets up the acpi devices for this platform and
@@ -1057,7 +1034,7 @@ impl X8664arch {
         suspend_evt: Event,
         exit_evt: Event,
         sdts: Vec<SDT>,
-        irq_chip: &mut impl IrqChip,
+        irq_chip: &mut dyn IrqChip,
         battery: (&Option<BatteryType>, Option<Minijail>),
         mmio_bus: &mut devices::Bus,
     ) -> Result<(acpi::ACPIDevResource, Option<BatControl>)> {
@@ -1092,7 +1069,7 @@ impl X8664arch {
         let bat_control = if let Some(battery_type) = battery.0 {
             match battery_type {
                 BatteryType::Goldfish => {
-                    let control_socket = arch::add_goldfish_battery(
+                    let control_tube = arch::add_goldfish_battery(
                         &mut amls,
                         battery.1,
                         mmio_bus,
@@ -1103,7 +1080,7 @@ impl X8664arch {
                     .map_err(Error::CreateBatDevices)?;
                     Some(BatControl {
                         type_: BatteryType::Goldfish,
-                        control_socket,
+                        control_tube,
                     })
                 }
             }
@@ -1131,7 +1108,7 @@ impl X8664arch {
     /// * - `serial_parmaters` - definitions for how the serial devices should be configured
     fn setup_serial_devices(
         protected_vm: ProtectionType,
-        irq_chip: &mut impl IrqChip,
+        irq_chip: &mut dyn IrqChip,
         io_bus: &mut devices::Bus,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
