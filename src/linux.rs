@@ -498,18 +498,31 @@ fn simple_jail(cfg: &Config, policy: &str) -> Result<Option<Minijail>> {
 
 type DeviceResult<T = VirtioDeviceStub> = std::result::Result<T, Error>;
 
-fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) -> DeviceResult {
+/// Open the file with the given path, or if it is of the form `/proc/self/fd/N` then just use the
+/// file descriptor.
+///
+/// Note that this will not work properly if the same `/proc/self/fd/N` path is used twice in
+/// different places, as the metadata (including the offset) will be shared between both file
+/// descriptors.
+fn open_file<F>(path: &Path, read_only: bool, error_constructor: F) -> Result<File>
+where
+    F: FnOnce(PathBuf, io::Error) -> Error,
+{
     // Special case '/proc/self/fd/*' paths. The FD is already open, just use it.
-    let raw_image: File = if disk.path.parent() == Some(Path::new("/proc/self/fd")) {
+    Ok(if path.parent() == Some(Path::new("/proc/self/fd")) {
         // Safe because we will validate |raw_fd|.
-        unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&disk.path)?) }
+        unsafe { File::from_raw_descriptor(raw_descriptor_from_path(path)?) }
     } else {
         OpenOptions::new()
             .read(true)
-            .write(!disk.read_only)
-            .open(&disk.path)
-            .map_err(|e| Error::Disk(disk.path.to_path_buf(), e))?
-    };
+            .write(!read_only)
+            .open(path)
+            .map_err(|e| error_constructor(path.to_path_buf(), e))?
+    })
+}
+
+fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) -> DeviceResult {
+    let raw_image: File = open_file(&disk.path, disk.read_only, Error::Disk)?;
     // Lock the disk image to prevent other crosvm instances from using it.
     let lock_op = if disk.read_only {
         FlockOperation::LockShared
@@ -1272,17 +1285,7 @@ fn create_pmem_device(
     index: usize,
     pmem_device_tube: Tube,
 ) -> DeviceResult {
-    // Special case '/proc/self/fd/*' paths. The FD is already open, just use it.
-    let fd: File = if disk.path.parent() == Some(Path::new("/proc/self/fd")) {
-        // Safe because we will validate |raw_fd|.
-        unsafe { File::from_raw_descriptor(raw_descriptor_from_path(&disk.path)?) }
-    } else {
-        OpenOptions::new()
-            .read(true)
-            .write(!disk.read_only)
-            .open(&disk.path)
-            .map_err(|e| Error::Disk(disk.path.to_path_buf(), e))?
-    };
+    let fd = open_file(&disk.path, disk.read_only, Error::Disk)?;
 
     let arena_size = {
         let metadata =
@@ -1813,9 +1816,6 @@ fn add_crosvm_user_to_jail(jail: &mut Minijail, feature: &str) -> Result<Ids> {
 }
 
 fn raw_descriptor_from_path(path: &Path) -> Result<RawDescriptor> {
-    if !path.is_file() {
-        return Err(Error::InvalidFdPath);
-    }
     let raw_descriptor = path
         .file_name()
         .and_then(|fd_osstr| fd_osstr.to_str())
@@ -2325,18 +2325,18 @@ fn file_to_i64<P: AsRef<Path>>(path: P, nth: usize) -> io::Result<i64> {
 
 fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
     let initrd_image = if let Some(initrd_path) = &cfg.initrd_path {
-        Some(File::open(initrd_path).map_err(|e| Error::OpenInitrd(initrd_path.clone(), e))?)
+        Some(open_file(initrd_path, true, Error::OpenInitrd)?)
     } else {
         None
     };
 
     let vm_image = match cfg.executable_path {
-        Some(Executable::Kernel(ref kernel_path)) => VmImage::Kernel(
-            File::open(kernel_path).map_err(|e| Error::OpenKernel(kernel_path.to_path_buf(), e))?,
-        ),
-        Some(Executable::Bios(ref bios_path)) => VmImage::Bios(
-            File::open(bios_path).map_err(|e| Error::OpenBios(bios_path.to_path_buf(), e))?,
-        ),
+        Some(Executable::Kernel(ref kernel_path)) => {
+            VmImage::Kernel(open_file(kernel_path, true, Error::OpenKernel)?)
+        }
+        Some(Executable::Bios(ref bios_path)) => {
+            VmImage::Bios(open_file(bios_path, true, Error::OpenBios)?)
+        }
         _ => panic!("Did not receive a bios or kernel, should be impossible."),
     };
 
