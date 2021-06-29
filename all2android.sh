@@ -6,18 +6,22 @@
 set -e
 
 cargo2android() {
-  cargo2android.py --run --device --tests --dependencies $@
+  cargo2android.py --run --device --tests --dependencies --no-test-mapping $@
   rm -r cargo.out
   rm -rf target.tmp || /bin/true
 }
 
 # Run in the main crosvm directory.
-cargo2android --no-subdir
 
 for dir in */src
 do
   base=`dirname $dir`
   echo "$base"
+
+  if [[ "$base" == "aarch64" ]]; then
+  continue
+  fi
+
   cd "$base"
   # If the subdirectory has more subdirectories with crates, then pass --no-subdir and run it in
   # each of them too.
