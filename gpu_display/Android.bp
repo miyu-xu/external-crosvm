@@ -64,6 +64,7 @@ cc_library_static {
         "gpu_display_client_protocol_headers",
         "wayland_extension_client_protocol_headers",
     ],
+    header_libs: ["libc_headers"],
 
     // added manually
     target: {
