@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-pub mod asynchronous;
-pub mod block;
-pub(crate) mod common;
+mod block_on;
 
-pub use asynchronous::{BlockAsync, DiskState};
-pub use block::Block;
-pub use common::*;
+pub use block_on::*;

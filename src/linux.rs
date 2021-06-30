@@ -14,8 +14,6 @@ use std::io::{self, stdin, Read};
 use std::iter;
 use std::mem;
 use std::net::Ipv4Addr;
-#[cfg(feature = "gpu")]
-use std::num::NonZeroU8;
 use std::num::ParseIntError;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
@@ -32,10 +30,13 @@ use libc::{self, c_int, gid_t, uid_t};
 
 use acpi_tables::sdt::SDT;
 
-use base::net::{UnixSeqpacketListener, UnlinkUnixSeqpacketListener};
+use base::net::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListener};
 use base::*;
+#[cfg(feature = "gpu")]
+use devices::virtio::gpu::{DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH};
 use devices::virtio::vhost::user::{
     Block as VhostUserBlock, Error as VhostUserError, Fs as VhostUserFs, Net as VhostUserNet,
+    Wl as VhostUserWl,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
@@ -63,7 +64,7 @@ use vm_memory::{GuestAddress, GuestMemory, MemoryPolicy};
 use crate::gdb::{gdb_thread, GdbStub};
 use crate::{
     Config, DiskOption, Executable, SharedDir, SharedDirKind, TouchDeviceOption, VhostUserFsOption,
-    VhostUserOption,
+    VhostUserOption, VhostUserWlOption,
 };
 use arch::{
     self, LinuxArch, RunnableLinuxVm, SerialHardware, SerialParameters, VcpuAffinity,
@@ -100,6 +101,7 @@ pub enum Error {
     CloneEvent(base::Error),
     CloneVcpu(base::Error),
     ConfigureVcpu(<Arch as LinuxArch>::Error),
+    ConnectTube(io::Error),
     #[cfg(feature = "audio")]
     CreateAc97(devices::PciDeviceError),
     CreateConsole(arch::serial::Error),
@@ -193,6 +195,7 @@ pub enum Error {
     VhostUserFsDeviceNew(VhostUserError),
     VhostUserNetDeviceNew(VhostUserError),
     VhostUserNetWithNetArgs,
+    VhostUserWlDeviceNew(VhostUserError),
     VhostVsockDeviceNew(virtio::vhost::Error),
     VirtioPciDev(base::Error),
     WaitContextAdd(base::Error),
@@ -223,6 +226,7 @@ impl Display for Error {
             CloneEvent(e) => write!(f, "failed to clone event: {}", e),
             CloneVcpu(e) => write!(f, "failed to clone vcpu: {}", e),
             ConfigureVcpu(e) => write!(f, "failed to configure vcpu: {}", e),
+            ConnectTube(e) => write!(f, "failed to connect to tube: {}", e),
             #[cfg(feature = "audio")]
             CreateAc97(e) => write!(f, "failed to create ac97 device: {}", e),
             CreateConsole(e) => write!(f, "failed to create console device: {}", e),
@@ -334,6 +338,9 @@ impl Display for Error {
                 f,
                 "vhost-user-net cannot be used with any of --host_ip, --netmask or --mac"
             ),
+            VhostUserWlDeviceNew(e) => {
+                write!(f, "failed to set up vhost-user wl device: {}", e)
+            }
             VhostVsockDeviceNew(e) => write!(f, "failed to set up virtual socket device: {}", e),
             VirtioPciDev(e) => write!(f, "failed to create virtio pci dev: {}", e),
             WaitContextAdd(e) => write!(f, "failed to add descriptor to wait context: {}", e),
@@ -879,6 +886,19 @@ fn create_vhost_user_net_device(cfg: &Config, opt: &VhostUserOption) -> DeviceRe
     })
 }
 
+fn create_vhost_user_wl_device(cfg: &Config, opt: &VhostUserWlOption) -> DeviceResult {
+    // The crosvm wl device expects us to connect the tube before it will accept a vhost-user
+    // connection.
+    let dev = VhostUserWl::new(virtio::base_features(cfg.protected_vm), &opt.socket)
+        .map_err(Error::VhostUserWlDeviceNew)?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        // no sandbox here because virtqueue handling is exported to a different process.
+        jail: None,
+    })
+}
+
 #[cfg(feature = "gpu")]
 fn create_gpu_device(
     cfg: &Config,
@@ -913,7 +933,6 @@ fn create_gpu_device(
     let dev = virtio::Gpu::new(
         exit_evt.try_clone().map_err(Error::CloneEvent)?,
         Some(gpu_device_tube),
-        NonZeroU8::new(1).unwrap(), // number of scanouts
         resource_bridges,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
@@ -1512,6 +1531,10 @@ fn create_virtio_devices(
         devs.push(create_vhost_user_net_device(cfg, net)?);
     }
 
+    for opt in &cfg.vhost_user_wl {
+        devs.push(create_vhost_user_wl_device(cfg, opt)?);
+    }
+
     #[cfg_attr(not(feature = "gpu"), allow(unused_mut))]
     let mut resource_bridges = Vec::<Tube>::new();
 
@@ -1556,6 +1579,13 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
+            let mut gpu_display_w = DEFAULT_DISPLAY_WIDTH;
+            let mut gpu_display_h = DEFAULT_DISPLAY_HEIGHT;
+            if !gpu_parameters.displays.is_empty() {
+                gpu_display_w = gpu_parameters.displays[0].width;
+                gpu_display_h = gpu_parameters.displays[0].height;
+            }
+
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
@@ -1565,7 +1595,7 @@ fn create_virtio_devices(
                     .first()
                     .as_ref()
                     .map(|multi_touch_spec| multi_touch_spec.get_size())
-                    .unwrap_or((gpu_parameters.display_width, gpu_parameters.display_height));
+                    .unwrap_or((gpu_display_w, gpu_display_h));
                 let dev = virtio::new_multi_touch(
                     // u32::MAX is the least likely to collide with the indices generated above for
                     // the multi_touch options, which begin at 0.
@@ -1925,8 +1955,7 @@ where
     )
     .map_err(Error::ConfigureVcpu)?;
 
-    #[cfg(feature = "chromeos")]
-    if let Err(e) = base::sched::enable_core_scheduling() {
+    if let Err(e) = enable_core_scheduling() {
         error!("Failed to enable core scheduling: {}", e);
     }
 
@@ -2479,10 +2508,21 @@ where
         components.gdb = Some((port, gdb_control_tube));
     }
 
+    for wl_cfg in &cfg.vhost_user_wl {
+        let wayland_host_tube = UnixSeqpacket::connect(&wl_cfg.vm_tube)
+            .map(Tube::new)
+            .map_err(Error::ConnectTube)?;
+        control_tubes.push(TaggedControlTube::VmMemory(wayland_host_tube));
+    }
+
     let (wayland_host_tube, wayland_device_tube) = Tube::pair().map_err(Error::CreateTube)?;
     control_tubes.push(TaggedControlTube::VmMemory(wayland_host_tube));
     // Balloon gets a special socket so balloon requests can be forwarded from the main process.
     let (balloon_host_tube, balloon_device_tube) = Tube::pair().map_err(Error::CreateTube)?;
+    // Set recv timeout to avoid deadlock on sending BalloonControlCommand before guest is ready.
+    balloon_host_tube
+        .set_recv_timeout(Some(Duration::from_millis(100)))
+        .map_err(Error::CreateTube)?;
 
     // Create one control socket per disk.
     let mut disk_device_tubes = Vec::new();
