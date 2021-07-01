@@ -3,64 +3,50 @@
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::thread;
-use std::u32;
 
 use base::{error, Event, RawDescriptor};
 use cros_async::Executor;
-use virtio_sys::virtio_net;
-use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::GuestMemory;
 use vmm_vhost::vhost_user::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
 
-use crate::virtio::vhost::user::handler::VhostUserHandler;
 use crate::virtio::vhost::user::worker::Worker;
-use crate::virtio::vhost::user::Error;
-use crate::virtio::{Interrupt, Queue, VirtioDevice, VirtioNetConfig, TYPE_NET};
+use crate::virtio::vhost::user::{Result, VhostUserHandler};
+use crate::virtio::wl::{
+    QUEUE_SIZE, QUEUE_SIZES, VIRTIO_WL_F_SEND_FENCES, VIRTIO_WL_F_TRANS_FLAGS,
+};
+use crate::virtio::{Interrupt, Queue, VirtioDevice, TYPE_WL};
 
-type Result<T> = std::result::Result<T, Error>;
-
-const QUEUE_SIZE: u16 = 256;
-
-pub struct Net {
+pub struct Wl {
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<Worker>>,
     handler: RefCell<VhostUserHandler>,
     queue_sizes: Vec<u16>,
 }
 
-impl Net {
-    pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Net> {
-        let socket = UnixStream::connect(&socket_path).map_err(Error::SocketConnect)?;
+impl Wl {
+    pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Wl> {
+        let default_queue_size = QUEUE_SIZES.len();
 
-        let allow_features = 1 << crate::virtio::VIRTIO_F_VERSION_1
-            | 1 << virtio_net::VIRTIO_NET_F_CSUM
-            | 1 << virtio_net::VIRTIO_NET_F_CTRL_VQ
-            | 1 << virtio_net::VIRTIO_NET_F_CTRL_GUEST_OFFLOADS
-            | 1 << virtio_net::VIRTIO_NET_F_GUEST_CSUM
-            | 1 << virtio_net::VIRTIO_NET_F_GUEST_TSO4
-            | 1 << virtio_net::VIRTIO_NET_F_GUEST_UFO
-            | 1 << virtio_net::VIRTIO_NET_F_HOST_TSO4
-            | 1 << virtio_net::VIRTIO_NET_F_HOST_UFO
-            | 1 << virtio_net::VIRTIO_NET_F_MQ
-            | 1 << VIRTIO_RING_F_EVENT_IDX
+        let allow_features = 1u64 << crate::virtio::VIRTIO_F_VERSION_1
+            | 1 << VIRTIO_WL_F_TRANS_FLAGS
+            | 1 << VIRTIO_WL_F_SEND_FENCES
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let allow_protocol_features =
             VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::CONFIG;
 
-        let mut handler = VhostUserHandler::new_from_stream(
-            socket,
-            3, /* # of queues */
+        let mut handler = VhostUserHandler::new_from_path(
+            socket_path,
+            default_queue_size as u64,
             allow_features,
             init_features,
             allow_protocol_features,
         )?;
-        let queue_sizes = handler.queue_sizes(QUEUE_SIZE, 3 /* rx, tx, ctrl */)?;
+        let queue_sizes = handler.queue_sizes(QUEUE_SIZE, default_queue_size)?;
 
-        Ok(Net {
+        Ok(Wl {
             kill_evt: None,
             worker_thread: None,
             handler: RefCell::new(handler),
@@ -69,22 +55,17 @@ impl Net {
     }
 }
 
-impl Drop for Net {
-    fn drop(&mut self) {
-        if let Some(kill_evt) = self.kill_evt.take() {
-            // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
-        }
-
-        if let Some(worker_thread) = self.worker_thread.take() {
-            let _ = worker_thread.join();
-        }
-    }
-}
-
-impl VirtioDevice for Net {
+impl VirtioDevice for Wl {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         Vec::new()
+    }
+
+    fn device_type(&self) -> u32 {
+        TYPE_WL
+    }
+
+    fn queue_max_sizes(&self) -> &[u16] {
+        &self.queue_sizes
     }
 
     fn features(&self) -> u64 {
@@ -97,23 +78,7 @@ impl VirtioDevice for Net {
         }
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_NET
-    }
-
-    fn queue_max_sizes(&self) -> &[u16] {
-        self.queue_sizes.as_slice()
-    }
-
-    fn read_config(&self, offset: u64, data: &mut [u8]) {
-        if let Err(e) = self
-            .handler
-            .borrow_mut()
-            .read_config::<VirtioNetConfig>(offset, data)
-        {
-            error!("failed to read config: {}", e);
-        }
-    }
+    fn read_config(&self, _offset: u64, _data: &mut [u8]) {}
 
     fn activate(
         &mut self,
@@ -141,7 +106,7 @@ impl VirtioDevice for Net {
         self.kill_evt = Some(self_kill_evt);
 
         let worker_result = thread::Builder::new()
-            .name("vhost_user_virtio_net".to_string())
+            .name("vhost_user_wl".to_string())
             .spawn(move || {
                 let ex = Executor::new().expect("failed to create an executor");
                 let mut worker = Worker {
@@ -149,6 +114,7 @@ impl VirtioDevice for Net {
                     mem,
                     kill_evt,
                 };
+
                 if let Err(e) = worker.run(&ex, interrupt) {
                     error!("failed to start a worker: {}", e);
                 }
@@ -157,7 +123,7 @@ impl VirtioDevice for Net {
 
         match worker_result {
             Err(e) => {
-                error!("failed to spawn virtio_net worker: {}", e);
+                error!("failed to spawn vhost_user_wl worker: {}", e);
             }
             Ok(join_handle) => {
                 self.worker_thread = Some(join_handle);
@@ -167,10 +133,24 @@ impl VirtioDevice for Net {
 
     fn reset(&mut self) -> bool {
         if let Err(e) = self.handler.borrow_mut().reset(self.queue_sizes.len()) {
-            error!("Failed to reset net device: {}", e);
+            error!("Failed to reset wl device: {}", e);
             false
         } else {
             true
+        }
+    }
+}
+
+impl Drop for Wl {
+    fn drop(&mut self) {
+        if let Some(kill_evt) = self.kill_evt.take() {
+            if let Some(worker_thread) = self.worker_thread.take() {
+                if let Err(e) = kill_evt.write(1) {
+                    error!("failed to write to kill_evt: {}", e);
+                    return;
+                }
+                let _ = worker_thread.join();
+            }
         }
     }
 }
