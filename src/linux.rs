@@ -36,6 +36,7 @@ use base::net::{UnixSeqpacketListener, UnlinkUnixSeqpacketListener};
 use base::*;
 use devices::virtio::vhost::user::{
     Block as VhostUserBlock, Error as VhostUserError, Fs as VhostUserFs, Net as VhostUserNet,
+    Mac80211Hwsim as VhostUserMac80211Hwsim,
 };
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
@@ -191,6 +192,7 @@ pub enum Error {
     VhostNetDeviceNew(virtio::vhost::Error),
     VhostUserBlockDeviceNew(VhostUserError),
     VhostUserFsDeviceNew(VhostUserError),
+    VhostUserMac80211HwsimNew(VhostUserError),
     VhostUserNetDeviceNew(VhostUserError),
     VhostUserNetWithNetArgs,
     VhostVsockDeviceNew(virtio::vhost::Error),
@@ -329,6 +331,7 @@ impl Display for Error {
                 write!(f, "failed to set up vhost-user block device: {}", e)
             }
             VhostUserFsDeviceNew(e) => write!(f, "failed to set up vhost-user fs device: {}", e),
+            VhostUserMac80211HwsimNew(e) => write!(f, "failed to set up vhost-user mac80211_hwsim device {}", e),
             VhostUserNetDeviceNew(e) => write!(f, "failed to set up vhost-user net device: {}", e),
             VhostUserNetWithNetArgs => write!(
                 f,
@@ -572,6 +575,17 @@ fn create_vhost_user_fs_device(cfg: &Config, option: &VhostUserFsOption) -> Devi
         &option.tag,
     )
     .map_err(Error::VhostUserFsDeviceNew)?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        // no sandbox here because virtqueue handling is exported to a different process.
+        jail: None,
+    })
+}
+
+fn create_vhost_user_mac80211_hwsim_device(cfg: &Config, opt: &VhostUserOption) -> DeviceResult {
+    let dev = VhostUserMac80211Hwsim::new(virtio::base_features(cfg.protected_vm), &opt.socket)
+        .map_err(Error::VhostUserMac80211HwsimNew)?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -1666,6 +1680,10 @@ fn create_virtio_devices(
         };
         devs.push(dev);
     }
+
+    devs.push(create_vhost_user_mac80211_hwsim_device(cfg, &VhostUserOption {
+        socket: PathBuf::from("/tmp/vhost_server_mac80211"),
+    })?);
 
     Ok(devs)
 }

@@ -7,11 +7,13 @@ mod fs;
 mod handler;
 mod net;
 mod worker;
+mod mac80211_hwsim;
 
 pub use self::block::*;
 pub use self::fs::*;
 pub use self::handler::VhostUserHandler;
 pub use self::net::*;
+pub use self::mac80211_hwsim::*;
 
 use remain::sorted;
 use thiserror::Error as ThisError;
