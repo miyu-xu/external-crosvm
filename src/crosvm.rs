@@ -264,6 +264,7 @@ pub struct Config {
     pub vhost_user_blk: Vec<VhostUserOption>,
     pub vhost_user_console: Vec<VhostUserOption>,
     pub vhost_user_fs: Vec<VhostUserFsOption>,
+    pub vhost_user_mac80211_hwsim: Vec<VhostUserOption>,
     pub vhost_user_net: Vec<VhostUserOption>,
     pub vhost_user_wl: Vec<VhostUserWlOption>,
     #[cfg(feature = "direct")]
@@ -345,6 +346,7 @@ impl Default for Config {
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),
             vhost_user_fs: Vec::new(),
+            vhost_user_mac80211_hwsim: Vec::new(),
             vhost_user_net: Vec::new(),
             vhost_user_wl: Vec::new(),
             #[cfg(feature = "direct")]
