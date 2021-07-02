@@ -1679,6 +1679,9 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
         "vhost-user-net" => cfg.vhost_user_net.push(VhostUserOption {
             socket: PathBuf::from(value.unwrap()),
         }),
+        "vhost-user-mac80211-hwsim" => cfg.vhost_user_mac80211_hwsim.push(VhostUserOption {
+            socket: PathBuf::from(value.unwrap()),
+        }),
         "vhost-user-fs" => {
             // (socket:tag)
             let param = value.unwrap();
@@ -1978,6 +1981,7 @@ writeback=BOOL - Indicates whether the VM can use writeback caching (default: fa
           Argument::value("balloon_bias_mib", "N", "Amount to bias balance of memory between host and guest as the balloon inflates, in MiB."),
           Argument::value("vhost-user-blk", "SOCKET_PATH", "Path to a socket for vhost-user block"),
           Argument::value("vhost-user-net", "SOCKET_PATH", "Path to a socket for vhost-user net"),
+          Argument::value("vhost-user-mac80211-hwsim", "SOCKET_PATH", "Path to a socket for vhost-user mac80211_hwsim"),
           Argument::value("vhost-user-fs", "SOCKET_PATH:TAG",
                           "Path to a socket path for vhost-user fs, and tag for the shared dir"),
           #[cfg(feature = "direct")]
