@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "77b2a4ea_f600e7aa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-07-02T17:26:31Z",
+      "side": 1,
+      "message": "LG overall, but shouldn\u0027t this be brought as part of a merge instead of a cherry-pick?",
+      "revId": "c49b685982dc1e4410cb1c1a87244d9d965e73b8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
