@@ -16,6 +16,24 @@
       "message": "LG overall, but shouldn\u0027t this be brought as part of a merge instead of a cherry-pick?",
       "revId": "c49b685982dc1e4410cb1c1a87244d9d965e73b8",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "91697c57_659985cf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2021-07-02T19:44:49Z",
+      "side": 1,
+      "message": "I saw a couple of times where we cherry-picked in AOSP in parallel with getting a change upstreamed to avoid potentially getting stuck waiting for chrome commit queue. crrev.com/c/3002149 made it through surprisingly quick so re-did the merge in aosp/1752440 to include.",
+      "parentUuid": "77b2a4ea_f600e7aa",
+      "revId": "c49b685982dc1e4410cb1c1a87244d9d965e73b8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
