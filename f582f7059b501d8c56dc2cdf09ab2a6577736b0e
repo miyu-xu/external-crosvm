@@ -1,0 +1,113 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f20af205_bb3f29ce",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2021-07-09T03:37:12Z",
+      "side": 1,
+      "message": "Not necessarily wmediumd, right? How about state this in more generic way? And we don\u0027t have wmediumd in AOSP tree yet.",
+      "range": {
+        "startLine": 10,
+        "startChar": 20,
+        "endLine": 10,
+        "endChar": 47
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "603472c4_06502093",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2021-07-09T03:37:12Z",
+      "side": 1,
+      "message": "It looks like that mac80211_hwsim.rs does a very generic job of forwarding virtio to socket. I guess there\u0027d be more like this. If so, can we make this a generic forwarder and reuse it?",
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "83571fe3_558b6fa4",
+        "filename": "devices/src/virtio/vhost/user/mac80211_hwsim.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2021-07-09T03:37:12Z",
+      "side": 1,
+      "message": "Should this be \u00272\u0027 above? Then let\u0027s make it a const.",
+      "range": {
+        "startLine": 49,
+        "startChar": 58,
+        "endLine": 49,
+        "endChar": 59
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b80471af_3766fb4a",
+        "filename": "devices/src/virtio/vhost/user/mac80211_hwsim.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2021-07-09T03:37:12Z",
+      "side": 1,
+      "message": "Can we make activate() simpler by introducing Result returning helper?",
+      "range": {
+        "startLine": 108,
+        "startChar": 12,
+        "endLine": 109,
+        "endChar": 19
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bed0e2ec_f833c121",
+        "filename": "src/crosvm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 267,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2021-07-09T03:37:12Z",
+      "side": 1,
+      "message": "Why is this Vec? Does it make sense to have multiple mac80211_hwsim devices?",
+      "range": {
+        "startLine": 267,
+        "startChar": 34,
+        "endLine": 267,
+        "endChar": 56
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
