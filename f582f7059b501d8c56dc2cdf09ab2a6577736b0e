@@ -26,6 +26,30 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "2f15a46b_9178a370",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1689978
+      },
+      "writtenOn": "2021-07-13T00:52:15Z",
+      "side": 1,
+      "message": "Changed commit message to more generic way (from wmediumd to unix socket of vhost server).",
+      "parentUuid": "f20af205_bb3f29ce",
+      "range": {
+        "startLine": 10,
+        "startChar": 20,
+        "endLine": 10,
+        "endChar": 47
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "603472c4_06502093",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 3
@@ -37,6 +61,24 @@
       "writtenOn": "2021-07-09T03:37:12Z",
       "side": 1,
       "message": "It looks like that mac80211_hwsim.rs does a very generic job of forwarding virtio to socket. I guess there\u0027d be more like this. If so, can we make this a generic forwarder and reuse it?",
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9b1c565e_e8da52fa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1689978
+      },
+      "writtenOn": "2021-07-13T00:52:15Z",
+      "side": 1,
+      "message": "Yes, vhost-user devices like fs, block, console, net and mac80211_hwsim have very similar behavior. I think it can be reused. Filed a bug b/193471422 for this.",
+      "parentUuid": "603472c4_06502093",
       "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -54,6 +96,30 @@
       "writtenOn": "2021-07-09T03:37:12Z",
       "side": 1,
       "message": "Should this be \u00272\u0027 above? Then let\u0027s make it a const.",
+      "range": {
+        "startLine": 49,
+        "startChar": 58,
+        "endLine": 49,
+        "endChar": 59
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3c537d09_50728091",
+        "filename": "devices/src/virtio/vhost/user/mac80211_hwsim.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1689978
+      },
+      "writtenOn": "2021-07-13T00:52:15Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "83571fe3_558b6fa4",
       "range": {
         "startLine": 49,
         "startChar": 58,
@@ -87,6 +153,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0df512fa_d538152d",
+        "filename": "devices/src/virtio/vhost/user/mac80211_hwsim.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1689978
+      },
+      "writtenOn": "2021-07-13T00:52:15Z",
+      "side": 1,
+      "message": "Created helper function that returns error and changed this function to just call helper function and check error.",
+      "parentUuid": "b80471af_3766fb4a",
+      "range": {
+        "startLine": 108,
+        "startChar": 12,
+        "endLine": 109,
+        "endChar": 19
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "bed0e2ec_f833c121",
@@ -100,6 +190,30 @@
       "writtenOn": "2021-07-09T03:37:12Z",
       "side": 1,
       "message": "Why is this Vec? Does it make sense to have multiple mac80211_hwsim devices?",
+      "range": {
+        "startLine": 267,
+        "startChar": 34,
+        "endLine": 267,
+        "endChar": 56
+      },
+      "revId": "f582f7059b501d8c56dc2cdf09ab2a6577736b0e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9ed9c334_b8af7340",
+        "filename": "src/crosvm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 267,
+      "author": {
+        "id": 1689978
+      },
+      "writtenOn": "2021-07-13T00:52:15Z",
+      "side": 1,
+      "message": "No, mac80211_hwsim driver needs just one virtio backend at crosvm, so we just need one device for one Cuttlefish instance. Changed from Vec to Option",
+      "parentUuid": "bed0e2ec_f833c121",
       "range": {
         "startLine": 267,
         "startChar": 34,
