@@ -32,8 +32,13 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (979fcb Update gpu_display build for new Wayland extension)
 libchromeos = { path = "../../libchromeos-rs" } # ignored by ebuild
 libcras = { path = "../../adhd/cras/client/libcras" } # ignored by ebuild
+=======
+libcras = "*"
+libvda = { path = "../libvda", optional = true }
+>>>>>>> BRANCH (bc55e3 Handle /proc/self/fd/N specially for composite disk componen)
 linux_input_sys = { path = "../linux_input_sys" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
 net_sys = { path = "../net_sys" }
