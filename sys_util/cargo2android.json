@@ -1,0 +1,9 @@
+{
+  "add-module-block": "cargo2android_target.bp",
+  "add_workspace": true,
+  "dependencies": true,
+  "device": true,
+  "global_defaults": "crosvm_defaults",
+  "run": true,
+  "tests": false
+}
