@@ -1,0 +1,48 @@
+diff --git a/protos/Android.bp b/protos/Android.bp
+index 5330d569..888b3d5b 100644
+--- a/protos/Android.bp
++++ b/protos/Android.bp
+@@ -17,11 +17,33 @@ rust_library {
+     crate_name: "protos",
+     srcs: ["src/lib.rs"],
+     edition: "2018",
++    features: ["composite-disk"],
+     rustlibs: [
++        "libcdisk_spec_proto",
+         "libprotobuf",
+     ],
+ }
+ 
++rust_protobuf {
++    name: "libcdisk_spec_proto",
++    crate_name: "cdisk_spec_proto",
++    protos: ["src/cdisk_spec.proto"],
++    source_stem: "cdisk_spec",
++    host_supported: true,
++    apex_available: [
++        "//apex_available:platform",
++        "com.android.virt",
++    ],
++}
++
++rust_protobuf {
++    name: "libcrosvm_plugin_proto",
++    crate_name: "crosvm_plugin_proto",
++    protos: ["src/plugin.proto"],
++    source_stem: "plugin",
++    host_supported: true,
++}
++
+ rust_defaults {
+     name: "protos_test_defaults",
+     defaults: ["crosvm_defaults"],
+@@ -30,7 +52,9 @@ rust_defaults {
+     test_suites: ["general-tests"],
+     auto_gen_config: true,
+     edition: "2018",
++    features: ["composite-disk"],
+     rustlibs: [
++        "libcdisk_spec_proto",
+         "libprotobuf",
+     ],
+ }
