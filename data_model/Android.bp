@@ -55,9 +55,9 @@ rust_library {
 // dependent_library ["feature_list"]
 //   ../assertions/src/lib.rs
 //   libc-0.2.98 "default,std"
-//   proc-macro2-1.0.27 "default,proc-macro"
+//   proc-macro2-1.0.28 "default,proc-macro"
 //   quote-1.0.9 "default,proc-macro"
 //   serde-1.0.126 "default,derive,serde_derive,std"
 //   serde_derive-1.0.126 "default"
-//   syn-1.0.73 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
+//   syn-1.0.74 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
 //   unicode-xid-0.2.2 "default"
