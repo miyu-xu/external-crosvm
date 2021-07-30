@@ -22,6 +22,30 @@
       },
       "revId": "b1fcab2fdabed28a8182c2ae8cb2286879471951",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "43c39e24_b9c4c8d6",
+        "filename": "sys_util/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-07-30T15:50:52Z",
+      "side": 0,
+      "message": "No, though I don\u0027t think it makes a difference. Added back anyway.",
+      "parentUuid": "221d1ed5_10da38b8",
+      "range": {
+        "startLine": 1,
+        "startChar": 119,
+        "endLine": 1,
+        "endChar": 130
+      },
+      "revId": "b1fcab2fdabed28a8182c2ae8cb2286879471951",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
