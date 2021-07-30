@@ -1,0 +1,95 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4a3a81de_4d7a9891",
+        "filename": "devices/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T15:28:19Z",
+      "side": 1,
+      "message": "Can you pass these to the \"features\" block in cargo2android.json instead of patching them in?",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 15
+      },
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0af5e9ae_308abeb1",
+        "filename": "devices/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T15:28:19Z",
+      "side": 1,
+      "message": "I wonder if we could add a feature to cargo2android to let you specify additional rustlibs...",
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c628ee7b_e6b7faf7",
+        "filename": "disk/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T15:28:19Z",
+      "side": 1,
+      "message": "Same as above: can you put this in the .json?",
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "27ee4171_6deaa917",
+        "filename": "protos/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T15:28:19Z",
+      "side": 1,
+      "message": "Same as above.",
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e3cfa0ab_b3e3bb4a",
+        "filename": "protos/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T15:28:19Z",
+      "side": 1,
+      "message": "You can use the add-toplevel-block thing in the json file for these.",
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
