@@ -50,6 +50,30 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "25367add_1366d756",
+        "filename": "devices/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-07-30T16:01:43Z",
+      "side": 1,
+      "message": "Ah, because the gpu feature adds the gpu_display feature, which you don\u0027t want?  Got it.",
+      "parentUuid": "8a5ec03f_9ab5ca7d",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 15
+      },
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "0af5e9ae_308abeb1",
         "filename": "devices/patches/Android.bp.patch",
         "patchSetId": 2
