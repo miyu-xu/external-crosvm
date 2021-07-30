@@ -86,6 +86,8 @@ dependencies = [
 name = "audio_streams"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "cros_async",
  "sync",
  "sys_util",
 ]
@@ -152,11 +154,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+<<<<<<< HEAD   (b02b18 Clean-up unused -L flag.)
 name = "cras-sys"
 version = "0.1.0"
 dependencies = [
  "audio_streams",
  "data_model",
+=======
+name = "cloudabi"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
+dependencies = [
+ "bitflags",
+>>>>>>> BRANCH (7bea39 crosvm: O_DIRECT for opening disk image.)
 ]
 
 [[package]]
@@ -217,7 +228,6 @@ dependencies = [
  "p9",
  "protobuf",
  "protos",
- "rand_ish",
  "remain",
  "resources",
  "rutabaga_gfx",
@@ -289,7 +299,6 @@ dependencies = [
  "p9",
  "power_monitor",
  "protos",
- "rand_ish",
  "remain",
  "resources",
  "rutabaga_gfx",
@@ -589,13 +598,6 @@ dependencies = [
 [[package]]
 name = "libcras"
 version = "0.1.0"
-dependencies = [
- "audio_streams",
- "cras-sys",
- "data_model",
- "libc",
- "sys_util",
-]
 
 [[package]]
 name = "libcrosvm_control"
@@ -850,8 +852,124 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD   (b02b18 Clean-up unused -L flag.)
 name = "rand_ish"
 version = "0.1.0"
+=======
+name = "rand"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d71dacdc3c88c1fde3885a3be3fbab9f35724e6ce99467f7d9c5026132184ca"
+dependencies = [
+ "autocfg 0.1.2",
+ "libc",
+ "rand_chacha",
+ "rand_core 0.4.0",
+ "rand_hc",
+ "rand_isaac",
+ "rand_jitter",
+ "rand_os",
+ "rand_pcg",
+ "rand_xorshift",
+ "winapi",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "556d3a1ca6600bfcbab7c7c91ccb085ac7fbbcd70e008a98742e7847f4f7bcef"
+dependencies = [
+ "autocfg 0.1.2",
+ "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a6fdeb83b075e8266dcc8762c22776f6877a63111121f5f8c7411e5be7eed4b"
+dependencies = [
+ "rand_core 0.4.0",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0e7a549d590831370895ab7ba4ea0c1b6b011d106b5ff2da6eee112615e6dc0"
+
+[[package]]
+name = "rand_hc"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b40677c7be09ae76218dc623efbf7b18e34bced3f38883af07bb75630a21bc4"
+dependencies = [
+ "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rand_isaac"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ded997c9d5f13925be2a6fd7e66bf1872597f759fd9dd93513dd7e92e5a5ee08"
+dependencies = [
+ "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rand_jitter"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b9ea758282efe12823e0d952ddb269d2e1897227e464919a554f2a03ef1b832"
+dependencies = [
+ "libc",
+ "rand_core 0.4.0",
+ "winapi",
+]
+
+[[package]]
+name = "rand_os"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7c690732391ae0abafced5015ffb53656abfaec61b342290e5eb56b286a679d"
+dependencies = [
+ "cloudabi",
+ "fuchsia-cprng",
+ "libc",
+ "rand_core 0.4.0",
+ "rdrand",
+ "winapi",
+]
+
+[[package]]
+name = "rand_pcg"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abf9b09b01790cfe0364f52bf32995ea3c39f4d2dd011eac241d2914146d0b44"
+dependencies = [
+ "autocfg 0.1.2",
+ "rand_core 0.4.0",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbf7e9e623549b0e21f6e97cf8ecf247c1a8fd2e8a992ae265314300b2455d5c"
+dependencies = [
+ "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rdrand"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
+dependencies = [
+ "rand_core 0.3.1",
+]
+>>>>>>> BRANCH (7bea39 crosvm: O_DIRECT for opening disk image.)
 
 [[package]]
 name = "remain"

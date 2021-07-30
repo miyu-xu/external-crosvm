@@ -6,6 +6,7 @@ edition = "2018"
 
 [features]
 audio = []
+audio_cras = ["libcras"]
 direct = []
 gpu = ["gpu_display","rutabaga_gfx"]
 tpm = ["protos/trunks", "tpm2"]
@@ -32,7 +33,11 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (b02b18 Clean-up unused -L flag.)
 libcras = { path = "../../adhd/cras/client/libcras" } # ignored by ebuild
+=======
+libcras = { version = "*", optional = true }
+>>>>>>> BRANCH (7bea39 crosvm: O_DIRECT for opening disk image.)
 libvda = { path = "../libvda", optional = true }
 linux_input_sys = { path = "../linux_input_sys" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
@@ -41,7 +46,6 @@ net_util = { path = "../net_util" }
 p9 = { path = "../../vm_tools/p9" }
 power_monitor = { path = "../power_monitor" }
 protos = { path = "../protos", optional = true }
-rand_ish = { path = "../rand_ish" }
 remain = "*"
 resources = { path = "../resources" }
 serde = { version = "1", features = [ "derive" ] }
