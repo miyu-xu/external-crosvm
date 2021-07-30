@@ -74,6 +74,30 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "9a610b1f_a14b3fb1",
+        "filename": "devices/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-07-30T16:14:28Z",
+      "side": 1,
+      "message": "gpu_display is a crate dependency, not a feature. We do want it (which is is why I add it in the patch below) but cargo2android.py can\u0027t handle it.",
+      "parentUuid": "25367add_1366d756",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 15
+      },
+      "revId": "b786864018d8c6d48b501307a138d8b7ffe1cf3d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "0af5e9ae_308abeb1",
         "filename": "devices/patches/Android.bp.patch",
         "patchSetId": 2
