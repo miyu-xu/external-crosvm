@@ -27,7 +27,7 @@ rust_defaults {
 
 //rust_test_host {
 //    name: "bit_field_derive_host_test_bit_field_derive",
-//    defaults: ["bit_field_derive_defaults"],
+//    defaults: ["bit_field_derive_test_defaults"],
 //    test_options: {
 //        unit_test: true,
 //    },
@@ -35,7 +35,7 @@ rust_defaults {
 
 //rust_test {
 //    name: "bit_field_derive_device_test_bit_field_derive",
-//    defaults: ["bit_field_derive_defaults"],
+//    defaults: ["bit_field_derive_test_defaults"],
 //}
 
 rust_proc_macro {
@@ -52,7 +52,7 @@ rust_proc_macro {
 }
 
 // dependent_library ["feature_list"]
-//   proc-macro2-1.0.27 "default,proc-macro"
+//   proc-macro2-1.0.28 "default,proc-macro"
 //   quote-1.0.9 "default,proc-macro"
-//   syn-1.0.73 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
+//   syn-1.0.74 "clone-impls,default,derive,parsing,printing,proc-macro,quote"
 //   unicode-xid-0.2.2 "default"

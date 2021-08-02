@@ -20,7 +20,7 @@ gfxstream = ["gpu", "rutabaga_gfx/gfxstream"]
 
 [dependencies]
 acpi_tables = {path = "../acpi_tables" }
-audio_streams = { path = "../../adhd/audio_streams" } # ignored by ebuild
+audio_streams = { path = "../audio_streams" } # ignored by ebuild
 base = { path = "../base" }
 bit_field = { path = "../bit_field" }
 cros_async = { path = "../cros_async" }
@@ -33,7 +33,7 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
-libcras = { version = "*", optional = true }
+libcras = { path="../libcras_stub", version = "*", optional = true }
 libvda = { path = "../libvda", optional = true }
 linux_input_sys = { path = "../linux_input_sys" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
