@@ -6,9 +6,10 @@ edition = "2018"
 
 [features]
 audio = []
+audio_cras = ["libcras"]
 direct = []
 gpu = ["gpu_display","rutabaga_gfx"]
-tpm = ["protos/trunks", "tpm2"]
+tpm = ["tpm2"]
 usb = []
 video-decoder = []
 video-encoder = []
@@ -32,7 +33,11 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (887958 Can build with libgetopts now.)
 libcras = { path = "../../adhd/cras/client/libcras" } # ignored by ebuild
+=======
+libcras = { version = "*", optional = true }
+>>>>>>> BRANCH (62770b Remove trunks proto from crosvm build)
 libvda = { path = "../libvda", optional = true }
 linux_input_sys = { path = "../linux_input_sys" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
@@ -41,7 +46,6 @@ net_util = { path = "../net_util" }
 p9 = { path = "../../vm_tools/p9" }
 power_monitor = { path = "../power_monitor" }
 protos = { path = "../protos", optional = true }
-rand_ish = { path = "../rand_ish" }
 remain = "*"
 resources = { path = "../resources" }
 serde = { version = "1", features = [ "derive" ] }

@@ -5,8 +5,11 @@
 #[cfg(feature = "plugin")]
 pub use crosvm_plugin_proto::plugin;
 
+<<<<<<< HEAD   (887958 Can build with libgetopts now.)
 #[cfg(feature = "trunks")]
 pub mod trunks;
 
+=======
+>>>>>>> BRANCH (62770b Remove trunks proto from crosvm build)
 #[cfg(feature = "composite-disk")]
 pub use cdisk_spec_proto::cdisk_spec;
