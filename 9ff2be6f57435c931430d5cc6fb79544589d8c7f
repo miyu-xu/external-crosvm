@@ -34,6 +34,24 @@
       "parentUuid": "878bd9be_1745ce0c",
       "revId": "9ff2be6f57435c931430d5cc6fb79544589d8c7f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f894bc48_af4c87f6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-04T18:56:45Z",
+      "side": 1,
+      "message": "Thanks!  I just created https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3071900, which should mostly be a copy of this without the Android.bp changes (and some minor rustfmting).\n\nNote that I wasn\u0027t sure how to compile or test it, so I didn\u0027t do that yet.  I can do so if you want, or perhaps we can let TreeHugger do it?\n\nI did manually modify the Android.bp files here.  The new CL I just created modifies Cargo.toml, so hopefully once that gets into Android cargo2android.py will pick up that part of the change and do it automatically.",
+      "parentUuid": "716076ac_90d0f20e",
+      "revId": "9ff2be6f57435c931430d5cc6fb79544589d8c7f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
