@@ -16,6 +16,24 @@
       "message": "I\u0027m not at all familiar with the crosvm code or the gdbstub crate, so a careful review of this CL would be appreciated.  I did run atest, but I\u0027m not sure how to trust that.\n\nThe upstream 0.4.0 to 0.5.0 transition guide is https://github.com/daniel5151/gdbstub/blob/dev/0.6/docs/transition_guide.md.",
       "revId": "9ff2be6f57435c931430d5cc6fb79544589d8c7f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "716076ac_90d0f20e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-08-04T08:36:24Z",
+      "side": 1,
+      "message": "The code changes should be made in the upstream crosvm repository (https://chromium.googlesource.com/chromiumos/platform/crosvm/) if at all possible, as we regularly merge it here.\n\nDid you manually modify the Android.bp files or were they updated by all2android.sh?",
+      "parentUuid": "878bd9be_1745ce0c",
+      "revId": "9ff2be6f57435c931430d5cc6fb79544589d8c7f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
