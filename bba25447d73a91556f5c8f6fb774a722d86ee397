@@ -33,6 +33,24 @@
       "message": "LGTM. Can you upload a manifest change to drop p9 again from AOSP? ty",
       "revId": "bba25447d73a91556f5c8f6fb774a722d86ee397",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dc0ece77_98dccac5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-08-16T16:36:02Z",
+      "side": 1,
+      "message": "Yes, I\u0027ll send a separate set of changes to do that.",
+      "parentUuid": "4968ca0c_de18e205",
+      "revId": "bba25447d73a91556f5c8f6fb774a722d86ee397",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
