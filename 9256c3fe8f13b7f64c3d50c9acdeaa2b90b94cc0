@@ -16,6 +16,23 @@
       "message": "PTAL",
       "revId": "9256c3fe8f13b7f64c3d50c9acdeaa2b90b94cc0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f772b39f_f9311d94",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2021-08-24T19:39:51Z",
+      "side": 1,
+      "message": "FWIW, I tried to merge from the upstream, but there are some non-trivial issues.",
+      "revId": "9256c3fe8f13b7f64c3d50c9acdeaa2b90b94cc0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
