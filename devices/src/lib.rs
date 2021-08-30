@@ -30,6 +30,7 @@ pub mod usb;
 mod utils;
 pub mod vfio;
 pub mod virtio;
+mod virtfreq;
 
 pub use self::acpi::ACPIPMResource;
 pub use self::bat::{BatteryError, GoldfishBattery};
@@ -61,6 +62,8 @@ pub use self::usb::host_backend::host_backend_device_provider::HostBackendDevice
 pub use self::usb::xhci::xhci_controller::XhciController;
 pub use self::vfio::{VfioContainer, VfioDevice};
 pub use self::virtio::VirtioPciDevice;
+pub use self::virtfreq::VirtFreq;
+pub use self::virtfreq::VCPUHandle;
 
 /// Whether the VM should be run in protected mode or not.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

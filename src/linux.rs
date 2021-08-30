@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use std::thread;
 use std::thread::JoinHandle;
+use std::sync::RwLock;
 
 use libc::{self, c_int, gid_t, uid_t, EINVAL};
 
@@ -45,7 +46,7 @@ use devices::Ac97Dev;
 use devices::ProtectionType;
 use devices::{
     self, IrqChip, IrqEventIndex, KvmKernelIrqChip, PciDevice, VcpuRunState, VfioContainer,
-    VfioDevice, VfioPciDevice, VirtioPciDevice,
+    VfioDevice, VfioPciDevice, VirtioPciDevice, VCPUHandle,
 };
 #[cfg(feature = "usb")]
 use devices::{HostBackendDeviceProvider, XhciController};
@@ -1876,7 +1877,7 @@ fn run_vcpu<V>(
     start_barrier: Arc<Barrier>,
     has_bios: bool,
     io_bus: devices::Bus,
-    mmio_bus: devices::Bus,
+    mut mmio_bus: devices::Bus,
     exit_evt: Event,
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
@@ -1884,10 +1885,13 @@ fn run_vcpu<V>(
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))] to_gdb_tube: Option<
         mpsc::Sender<VcpuDebugStatusMessage>,
     >,
+    vcpu_threads: Arc<RwLock<Vec<VCPUHandle>>>,
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
 {
+    mmio_bus.set_access_id(cpu_id);
+
     thread::Builder::new()
         .name(format!("crosvm_vcpu{}", cpu_id))
         .spawn(move || {
@@ -1909,10 +1913,13 @@ where
                 has_bios,
                 use_hypervisor_signals,
             );
+            {
+                vcpu_threads.write().unwrap()[cpu_id].tid = Some(gettid());
+            }
 
             start_barrier.wait();
 
-            let (vcpu, vcpu_run_handle) = match runnable_vcpu {
+            let (mut vcpu, vcpu_run_handle) = match runnable_vcpu {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed to start vcpu {}: {}", cpu_id, e);
@@ -2652,6 +2659,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             use_hypervisor_signals,
             #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
             to_gdb_channel.clone(),
+            linux.vcpu_handles.clone(),
         )?;
         vcpu_handles.push((handle, to_vcpu_channel));
     }

@@ -14,6 +14,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
@@ -21,7 +22,7 @@ use base::{syslog, AsRawDescriptor, AsRawDescriptors, Event, Tube};
 use devices::virtio::VirtioDevice;
 use devices::{
     Bus, BusDevice, BusError, BusResumeDevice, IrqChip, PciAddress, PciDevice, PciDeviceError,
-    PciInterruptPin, PciRoot, ProtectionType, ProxyDevice,
+    PciInterruptPin, PciRoot, ProtectionType, ProxyDevice, VCPUHandle,
 };
 use hypervisor::{IoEventAddress, Vm};
 use minijail::Minijail;
@@ -120,6 +121,7 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub gdb: Option<(u32, Tube)>,
     /// Devices to be notified before the system resumes from the S3 suspended state.
     pub resume_notify_devices: Vec<Arc<Mutex<dyn BusResumeDevice>>>,
+    pub vcpu_handles: Arc<RwLock<Vec<VCPUHandle>>>,
 }
 
 /// The device and optional jail.

@@ -21,6 +21,8 @@ use crate::AARCH64_GIC_CPUI_SIZE;
 use crate::AARCH64_GIC_DIST_BASE;
 use crate::AARCH64_GIC_DIST_SIZE;
 use crate::AARCH64_GIC_REDIST_SIZE;
+use crate::AARCH64_VIRTFREQ_BASE;
+use crate::AARCH64_VIRTFREQ_SIZE;
 
 // These are RTC related constants
 use crate::AARCH64_RTC_ADDR;
@@ -50,6 +52,9 @@ const PHANDLE_RESTRICTED_DMA_POOL: u32 = 2;
 
 // CPUs are assigned phandles starting with this number.
 const PHANDLE_CPU0: u32 = 0x100;
+
+// OPP tables are assigned phandles starting with this number.
+const PHANDLE_OPP_CLUSTER0: u32 = 0x1000;
 
 // These are specified by the Linux GIC bindings
 const GIC_FDT_IRQ_NUM_CELLS: u32 = 3;
@@ -93,6 +98,15 @@ fn create_resv_memory_node(fdt: &mut FdtWriter, resv_size: Option<u64>) -> Resul
     }
 }
 
+pub fn lookup_cluster_id(cpu_clusters: &Vec<Vec<usize>>, cpu: usize) -> Result<usize> {
+    for (cluster_idx, cluster) in cpu_clusters.iter().enumerate() {
+        if cluster.contains(&cpu) {
+            return Ok(cluster_idx);
+        }
+    }
+    return Err(Error::FdtFileParseError);
+}
+
 fn create_cpu_nodes(
     fdt: &mut FdtWriter,
     num_cpus: u32,
@@ -113,6 +127,12 @@ fn create_cpu_nodes(
         }
         fdt.property_u32("reg", cpu_id)?;
         fdt.property_u32("phandle", PHANDLE_CPU0 + cpu_id)?;
+
+        if cpu_clusters.is_empty() {
+            fdt.property_u32("operating-points-v2", PHANDLE_OPP_CLUSTER0)?;
+        } else {
+            fdt.property_u32("operating-points-v2", PHANDLE_OPP_CLUSTER0 + lookup_cluster_id(&cpu_clusters, cpu_id as usize)? as u32)?;
+        }
 
         if let Some(capacity) = cpu_capacity.get(&(cpu_id as usize)) {
             fdt.property_u32("capacity-dmips-mhz", *capacity)?;
@@ -136,6 +156,39 @@ fn create_cpu_nodes(
     }
 
     fdt.end_node(cpus_node)?;
+
+    // Add opp tables.
+    // TODO(westermann): Make configurable.
+    let frequencies = vec![1000, 128000, 256000, 384000, 512000, 640000, 768000, 896000, 1024000];
+
+    if cpu_clusters.is_empty() {
+        // Set default opp node.
+        let opp_table_node = fdt.begin_node("opp_table0")?;
+        fdt.property_u32("phandle", PHANDLE_OPP_CLUSTER0)?;
+        fdt.property_string("compatible", "operating-points-v2")?;
+
+        for (freq_idx, freq) in frequencies.iter().enumerate() {
+            let opp_node = fdt.begin_node(&format!("opp{}{}", 0, freq_idx))?;
+            fdt.property_u64("opp-hz", *freq)?;
+            fdt.end_node(opp_node)?;
+        }
+        fdt.end_node(opp_table_node)?;
+    } else {
+        for (cluster_idx, cpus) in cpu_clusters.iter().enumerate() {
+            let opp_table_node = fdt.begin_node(&format!("opp_table{}", cluster_idx))?;
+            fdt.property_u32("phandle", PHANDLE_OPP_CLUSTER0 + cluster_idx as u32)?;
+            fdt.property_string("compatible", "operating-points-v2")?;
+            fdt.property_null("opp-shared")?;
+
+            for (freq_idx, freq) in frequencies.iter().enumerate() {
+                let opp_node = fdt.begin_node(&format!("opp{}{}", cluster_idx, freq_idx))?;
+                fdt.property_u64("opp-hz", *freq)?;
+                fdt.end_node(opp_node)?;
+            }
+            fdt.end_node(opp_table_node)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -183,6 +236,17 @@ fn create_timer_node(fdt: &mut FdtWriter, num_cpus: u32) -> Result<()> {
     fdt.property_null("always-on")?;
     fdt.end_node(timer_node)?;
 
+    Ok(())
+}
+
+fn create_virt_cpufreq_node(fdt: &mut FdtWriter) -> Result<()> {
+    let compatible = "pkvm,virt-cpufreq";
+    let vcf_node = fdt.begin_node("cpufreq")?;
+    let reg = [AARCH64_VIRTFREQ_BASE, AARCH64_VIRTFREQ_SIZE];
+
+    fdt.property_string("compatible", compatible)?;
+    fdt.property_array_u64("reg", &reg)?;
+    fdt.end_node(vcf_node)?;
     Ok(())
 }
 
@@ -456,6 +520,7 @@ pub fn create_fdt(
         dma_pool_phandle,
     )?;
     create_rtc_node(&mut fdt)?;
+    create_virt_cpufreq_node(&mut fdt)?;
     // End giant node
     fdt.end_node(root_node)?;
 

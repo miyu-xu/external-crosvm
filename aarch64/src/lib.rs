@@ -8,13 +8,14 @@ use std::fmt::{self, Display};
 use std::io::{self};
 use std::mem::size_of;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use arch::{
     get_serial_cmdline, GetSerialCmdlineError, RunnableLinuxVm, SerialHardware, SerialParameters,
     VmComponents, VmImage,
 };
 use base::{Event, MemoryMappingBuilder};
-use devices::{Bus, BusError, IrqChip, IrqChipAArch64, PciConfigMmio, PciDevice, ProtectionType};
+use devices::{Bus, BusError, IrqChip, IrqChipAArch64, PciConfigMmio, PciDevice, ProtectionType, VirtFreq, VCPUHandle};
 use hypervisor::{DeviceKind, Hypervisor, HypervisorCap, VcpuAArch64, VcpuFeature, VmAArch64};
 use minijail::Minijail;
 use remain::sorted;
@@ -134,6 +135,10 @@ const AARCH64_MMIO_SIZE: u64 = 0x100000;
 // Virtio devices start at SPI interrupt number 3
 const AARCH64_IRQ_BASE: u32 = 3;
 
+// Virtual CPU Fequency Device.
+const AARCH64_VIRTFREQ_BASE: u64 = 0x1040000;
+const AARCH64_VIRTFREQ_SIZE: u64 = 0x1000;
+
 // PMU PPI interrupt, same as qemu
 const AARCH64_PMU_IRQ: u32 = 7;
 
@@ -161,10 +166,12 @@ pub enum Error {
     InitPvtimeError(base::Error),
     InitrdLoadFailure(arch::LoadImageError),
     KernelLoadFailure(arch::LoadImageError),
+    LookupCluster,
     MapPvtimeError(base::Error),
     ProtectVm(base::Error),
     RegisterIrqfd(base::Error),
     RegisterPci(BusError),
+    RegisterVirtFreq(BusError),
     RegisterVsock(arch::DeviceRegistrationError),
     SetDeviceAttr(base::Error),
     SetReg(base::Error),
@@ -200,10 +207,12 @@ impl Display for Error {
             InitPvtimeError(e) => write!(f, "failed to initialize arm pvtime: {}", e),
             InitrdLoadFailure(e) => write!(f, "initrd could not be loaded: {}", e),
             KernelLoadFailure(e) => write!(f, "kernel could not be loaded: {}", e),
+            LookupCluster => write!(f, "looking up cluster failed"),
             MapPvtimeError(e) => write!(f, "failed to map arm pvtime memory: {}", e),
             ProtectVm(e) => write!(f, "failed to protect vm: {}", e),
             RegisterIrqfd(e) => write!(f, "failed to register irq fd: {}", e),
             RegisterPci(e) => write!(f, "error registering PCI bus: {}", e),
+            RegisterVirtFreq(e) => write!(f, "error registering virtual frequency driver: {}", e),
             RegisterVsock(e) => write!(f, "error registering virtual socket device: {}", e),
             SetDeviceAttr(e) => write!(f, "failed to set device attr: {}", e),
             SetReg(e) => write!(f, "failed to set register: {}", e),
@@ -381,6 +390,17 @@ impl arch::LinuxArch for AArch64 {
             .insert(pci_bus.clone(), AARCH64_PCI_CFG_BASE, AARCH64_PCI_CFG_SIZE)
             .map_err(Error::RegisterPci)?;
 
+        let vcpu_handles = Arc::new(RwLock::new(Vec::with_capacity(vcpu_count)));
+        for vcpu in 0..vcpu_count {
+            let cluster_id = fdt::lookup_cluster_id(&components.cpu_clusters , vcpu).map_err(|_| Error::LookupCluster)?;
+            vcpu_handles.write().unwrap().push(VCPUHandle{tid: None, cluster_id});
+        }
+
+        let virt_freq = Arc::new(Mutex::new(VirtFreq::new(components.cpu_clusters.clone(), vcpu_handles.clone())));
+        mmio_bus
+            .insert(virt_freq, AARCH64_VIRTFREQ_BASE, AARCH64_VIRTFREQ_SIZE)
+            .map_err(Error::RegisterVirtFreq)?;
+
         let mut cmdline = Self::get_base_linux_cmdline();
         get_serial_cmdline(&mut cmdline, serial_parameters, "mmio")
             .map_err(Error::GetSerialCmdline)?;
@@ -459,6 +479,7 @@ impl arch::LinuxArch for AArch64 {
             delay_rt: components.delay_rt,
             bat_control: None,
             resume_notify_devices: Vec::new(),
+            vcpu_handles,
         })
     }
 

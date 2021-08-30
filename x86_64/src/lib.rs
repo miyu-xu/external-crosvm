@@ -52,6 +52,7 @@ use std::fs::File;
 use std::io::{self, Seek};
 use std::mem;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::bootparam::boot_params;
 use acpi_tables::sdt::SDT;
@@ -551,6 +552,7 @@ impl arch::LinuxArch for X8664arch {
             rt_cpus: components.rt_cpus,
             delay_rt: components.delay_rt,
             bat_control,
+            vcpu_handles: Arc::new(RwLock::new(Vec::with_capacity(vcpu_count))),
             #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
             gdb: components.gdb,
         })
