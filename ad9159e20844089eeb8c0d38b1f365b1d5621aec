@@ -55,6 +55,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c52942c7_f608f2bd",
+        "filename": "cargo2android.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-31T17:35:10Z",
+      "side": 1,
+      "message": "https://cs.android.com/android/platform/superproject/+/master:build/soong/rust/config/global.go;l\u003d49\n\nIt\u0027s possible something is turning it off or it\u0027s not being applied everywhere, but that would probably be good to know.",
+      "parentUuid": "2ef0ac40_a7672bed",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "db7daa26_cf4239a8",
         "filename": "patches/Android.bp.patch",
         "patchSetId": 1
@@ -84,6 +102,24 @@
       "side": 1,
       "message": "Right. I\u0027m not sure exactly what it does, but I assume it\u0027s important and only relevant for the binary.",
       "parentUuid": "db7daa26_cf4239a8",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c07ee1ed_63e89b08",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-31T17:35:10Z",
+      "side": 1,
+      "message": "Ack.  We could probably modify c2a to handle cases like this, but that seems like a lower priority to me.",
+      "parentUuid": "5e989519_219ad1aa",
       "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
