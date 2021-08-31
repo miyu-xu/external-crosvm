@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6a4b7ae1_ed3c7062",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-31T17:27:56Z",
+      "side": 1,
+      "message": "Thanks!",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "59fe04b9_3ad4bb28",
+        "filename": "cargo2android.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-31T17:27:56Z",
+      "side": 1,
+      "message": "Isn\u0027t this enabled by default for us?  Was something turning it off somewhere?",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "db7daa26_cf4239a8",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-08-31T17:27:56Z",
+      "side": 1,
+      "message": "You can\u0027t use the add-module-block for this since it\u0027s used in other places and not just this one, right?",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
