@@ -71,6 +71,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ae35cd0e_234cc4d1",
+        "filename": "cargo2android.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-09-01T11:31:18Z",
+      "side": 1,
+      "message": "I guess that\u0027s fine then. Removed the setting here.",
+      "parentUuid": "c52942c7_f608f2bd",
+      "revId": "ad9159e20844089eeb8c0d38b1f365b1d5621aec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "db7daa26_cf4239a8",
