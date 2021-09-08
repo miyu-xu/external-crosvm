@@ -16,6 +16,23 @@
       "message": "Ping Alistair",
       "revId": "affce82b6fc85dc67923d737f0e335d505aab2ec",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b75dca0c_50207ea1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2021-09-08T17:32:25Z",
+      "side": 1,
+      "message": "/home/vsoc-01/bin/x86_64-linux-gnu/crosvm: error while loading shared libraries: libcap.so: cannot open shared object file: No such file or directory\n\nthere were problems with host toolchain leaking into the rust build\nI\u0027m guessing you have libcap installed, but the test machines don\u0027t\n",
+      "revId": "affce82b6fc85dc67923d737f0e335d505aab2ec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
