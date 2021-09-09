@@ -33,6 +33,24 @@
       "message": "Please `git rm` this path (as well as the other submodules)",
       "revId": "27f3dce65f0741b21a26dfe6e30bdf01653b1e81",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "337f35eb_60fec6ca",
+        "filename": "tpm2-sys/libtpm2",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2021-09-09T20:59:29Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "1126d1b8_481cc9f9",
+      "revId": "27f3dce65f0741b21a26dfe6e30bdf01653b1e81",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
