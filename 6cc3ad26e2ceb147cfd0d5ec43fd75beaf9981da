@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9b42910a_cf7df0e1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1019983
+      },
+      "writtenOn": "2021-09-10T05:41:07Z",
+      "side": 1,
+      "message": "Presubmit output: `errors.CmdError: Command failed: \u0027git -c core.longpaths\u003dtrue -c gc.auto\u003d0 fetch https://android-review.googlesource.com/a/platform/external/crosvm 915af2bcb321def0227f096bafd6c4b47929e9fa\u0027 from \u0027/mnt/disks/build-disk/git/android/platform/external/crosvm.git\u0027. Error code: 128`. I think that\u0027s an infra failure, not related to this change, so setting presubmit-ready in the hope that that will make it try again.\n",
+      "revId": "6cc3ad26e2ceb147cfd0d5ec43fd75beaf9981da",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
