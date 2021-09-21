@@ -278,6 +278,38 @@ impl arch::LinuxArch for AArch64 {
 
         let mem = vm.get_memory().clone();
 
+        // separate out image loading from other setup to get a specific error for
+        // image loading
+        let mut initrd = None;
+        let image_size = match components.vm_image {
+            VmImage::Bios(ref mut bios) => {
+                arch::load_image(&mem, bios, get_bios_addr(), AARCH64_BIOS_MAX_LEN)
+                    .map_err(Error::BiosLoadFailure)?
+            }
+            VmImage::Kernel(ref mut kernel_image) => {
+                let kernel_size =
+                    arch::load_image(&mem, kernel_image, get_kernel_addr(), u64::max_value())
+                        .map_err(Error::KernelLoadFailure)?;
+                let kernel_end = get_kernel_addr().offset() + kernel_size as u64;
+                initrd = match components.initrd_image {
+                    Some(initrd_file) => {
+                        let mut initrd_file = initrd_file;
+                        let initrd_addr =
+                            (kernel_end + (AARCH64_INITRD_ALIGN - 1)) & !(AARCH64_INITRD_ALIGN - 1);
+                        let initrd_max_size =
+                            components.memory_size - (initrd_addr - AARCH64_PHYS_MEM_START);
+                        let initrd_addr = GuestAddress(initrd_addr);
+                        let initrd_size =
+                            arch::load_image(&mem, &mut initrd_file, initrd_addr, initrd_max_size)
+                                .map_err(Error::InitrdLoadFailure)?;
+                        Some((initrd_addr, initrd_size))
+                    }
+                    None => None,
+                };
+                kernel_size
+            }
+        }
+
         let mut use_pmu = vm
             .get_hypervisor()
             .check_capability(&HypervisorCap::ArmPmuV3);
@@ -296,6 +328,7 @@ impl arch::LinuxArch for AArch64 {
                 vcpu_id,
                 use_pmu,
                 has_bios,
+                image_size,
                 components.protected_vm,
             )?;
             has_pvtime &= vcpu.has_pvtime_support();
@@ -391,37 +424,6 @@ impl arch::LinuxArch for AArch64 {
         let psci_version = vcpus[0].get_psci_version().map_err(Error::GetPsciVersion)?;
         let (pci_device_base, pci_device_size) =
             Self::get_high_mmio_base_size(components.memory_size);
-        let mut initrd = None;
-
-        // separate out image loading from other setup to get a specific error for
-        // image loading
-        match components.vm_image {
-            VmImage::Bios(ref mut bios) => {
-                arch::load_image(&mem, bios, get_bios_addr(), AARCH64_BIOS_MAX_LEN)
-                    .map_err(Error::BiosLoadFailure)?;
-            }
-            VmImage::Kernel(ref mut kernel_image) => {
-                let kernel_size =
-                    arch::load_image(&mem, kernel_image, get_kernel_addr(), u64::max_value())
-                        .map_err(Error::KernelLoadFailure)?;
-                let kernel_end = get_kernel_addr().offset() + kernel_size as u64;
-                initrd = match components.initrd_image {
-                    Some(initrd_file) => {
-                        let mut initrd_file = initrd_file;
-                        let initrd_addr =
-                            (kernel_end + (AARCH64_INITRD_ALIGN - 1)) & !(AARCH64_INITRD_ALIGN - 1);
-                        let initrd_max_size =
-                            components.memory_size - (initrd_addr - AARCH64_PHYS_MEM_START);
-                        let initrd_addr = GuestAddress(initrd_addr);
-                        let initrd_size =
-                            arch::load_image(&mem, &mut initrd_file, initrd_addr, initrd_max_size)
-                                .map_err(Error::InitrdLoadFailure)?;
-                        Some((initrd_addr, initrd_size))
-                    }
-                    None => None,
-                };
-            }
-        }
 
         fdt::create_fdt(
             AARCH64_FDT_MAX_SIZE as usize,
@@ -539,6 +541,7 @@ impl AArch64 {
         vcpu_id: usize,
         use_pmu: bool,
         has_bios: bool,
+        image_size: u64,
         protected_vm: ProtectionType,
     ) -> Result<()> {
         let mut features = vec![VcpuFeature::PsciV0_2];
@@ -564,6 +567,8 @@ impl AArch64 {
                 AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET
             };
             let entry_addr_reg_id = if protected_vm == ProtectionType::Protected {
+                vcpu.set_one_reg(arm64_core_reg!(regs, 2), image_size)
+                    .map_err(Error::SetReg)?;
                 arm64_core_reg!(regs, 1)
             } else {
                 arm64_core_reg!(pc)
