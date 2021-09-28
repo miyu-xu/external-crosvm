@@ -16,6 +16,24 @@
       "message": "Can you cherry-pick the corresponding crosvm change from chromium instead?",
       "revId": "acc126dd7c464de0be75269960a883b5e4a0b5ca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b77adf37_ce2fd268",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-09-28T19:58:34Z",
+      "side": 1,
+      "message": "What is that change?  I\u0027m not at all familiar with the chromium repositories.  I found https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3151109, but that doesn\u0027t actually make this change.",
+      "parentUuid": "13a8499d_da199f98",
+      "revId": "acc126dd7c464de0be75269960a883b5e4a0b5ca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
