@@ -69,6 +69,24 @@
       "message": "I think this file got renamed upstream, so any conflict this introduces should be easily resolved. LGTM.",
       "revId": "acc126dd7c464de0be75269960a883b5e4a0b5ca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5a46ff59_de1131ee",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1208973
+      },
+      "writtenOn": "2021-09-30T17:14:09Z",
+      "side": 1,
+      "message": "Got it.  Thanks!",
+      "parentUuid": "bb5bfd9d_4f8b0df4",
+      "revId": "acc126dd7c464de0be75269960a883b5e4a0b5ca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
