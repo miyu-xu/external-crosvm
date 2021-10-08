@@ -20,4 +20,6 @@ base = { path = "../base" }
 remain = "*"
 sync = { path = "../sync" }
 thiserror = "*"
+#serde = { version = "1", features = [ "derive" ] }
+#serde_json = "*"
 #vulkano = {git = "https:/github.com/vulkano-rs/vulkano.git", optional = true}

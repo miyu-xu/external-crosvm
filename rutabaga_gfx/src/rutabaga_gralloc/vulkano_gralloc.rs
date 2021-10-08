@@ -294,9 +294,16 @@ impl Gralloc for VulkanoGralloc {
                 ))?
                 .0
         };
+        let memory_size = memory_requirements.size as u64;
+        let memory_is_dedicated = device.enabled_extensions().khr_dedicated_allocation
+            && memory_requirements.prefer_dedicated;
+        let memory_is_linear = !info.flags.uses_rendering();
+        let physical_device_uuid = device.physical_device().properties().device_uuid.ok_or(
+            RutabagaError::SpecViolation("vulkan device uuid unavailable"),
+        )?;
 
         reqs.info = info;
-        reqs.size = memory_requirements.size as u64;
+        reqs.size = memory_size;
 
         if memory_type.is_host_visible() {
             if memory_type.is_host_cached() {
@@ -308,7 +315,10 @@ impl Gralloc for VulkanoGralloc {
 
         reqs.vulkan_info = Some(VulkanInfo {
             memory_idx: memory_type.id() as u32,
-            physical_device_idx: device.physical_device().index() as u32,
+            memory_size,
+            physical_device_uuid,
+            is_dedicated_allocation: memory_is_dedicated,
+            is_linear_tiled: true,
         });
 
         Ok(reqs)
@@ -352,14 +362,8 @@ impl Gralloc for VulkanoGralloc {
                 ),
             };
 
-        let dedicated = match device.enabled_extensions().khr_dedicated_allocation {
-            true => {
-                if memory_requirements.prefer_dedicated {
-                    DedicatedAlloc::Image(&unsafe_image)
-                } else {
-                    DedicatedAlloc::None
-                }
-            }
+        let dedicated = match vulkan_info.is_dedicated_allocation {
+            true => DedicatedAlloc::Image(&unsafe_image),
             false => DedicatedAlloc::None,
         };
 
@@ -381,13 +385,13 @@ impl Gralloc for VulkanoGralloc {
         &mut self,
         handle: RutabagaHandle,
         vulkan_info: VulkanInfo,
-        size: u64,
     ) -> RutabagaResult<Box<dyn MappedRegion>> {
         let device = self
             .devices
             .values()
             .find(|device| {
-                device.physical_device().index() as u32 == vulkan_info.physical_device_idx
+                device.physical_device().properties().device_uuid
+                    == Some(vulkan_info.physical_device_uuid)
             })
             .ok_or(RutabagaError::InvalidVulkanInfo)?;
 
@@ -403,12 +407,25 @@ impl Gralloc for VulkanoGralloc {
             _ => return Err(RutabagaError::InvalidRutabagaHandle),
         };
 
-        let device_memory = DeviceMemoryBuilder::new(device.clone(), vulkan_info.memory_idx, size)
-            .import_info(handle.os_handle.into(), handle_type)
-            .build()?;
-        let mapping = DeviceMemoryMapping::new(device.clone(), device_memory.clone(), 0, size, 0)?;
+        let device_memory = DeviceMemoryBuilder::new(
+            device.clone(),
+            vulkan_info.memory_idx,
+            vulkan_info.memory_size,
+        )
+        .import_info(handle.os_handle.into(), handle_type)
+        .build()?;
+        let mapping = DeviceMemoryMapping::new(
+            device.clone(),
+            device_memory.clone(),
+            0,
+            vulkan_info.memory_size,
+            0,
+        )?;
 
-        Ok(Box::new(VulkanoMapping::new(mapping, size.try_into()?)))
+        Ok(Box::new(VulkanoMapping::new(
+            mapping,
+            vulkan_info.memory_size.try_into()?,
+        )))
     }
 }
 
