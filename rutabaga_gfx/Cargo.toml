@@ -18,4 +18,6 @@ data_model = { path = "../data_model" }
 libc = "*"
 base = { path = "../base" }
 sync = { path = "../sync" }
+#serde = { version = "1", features = [ "derive" ] }
+#serde_json = "*"
 #vulkano = {git = "https:/github.com/vulkano-rs/vulkano.git", optional = true}

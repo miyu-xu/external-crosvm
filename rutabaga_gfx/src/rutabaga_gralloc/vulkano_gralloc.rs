@@ -278,9 +278,12 @@ impl Gralloc for VulkanoGralloc {
                 .ok_or(RutabagaError::Unsupported)?
                 .0
         };
+        let memory_size = memory_requirements.size as u64;
+        let memory_is_dedicated = device.loaded_extensions().khr_dedicated_allocation
+            && memory_requirements.prefer_dedicated;
 
         reqs.info = info;
-        reqs.size = memory_requirements.size as u64;
+        reqs.size = memory_size;
 
         if memory_type.is_host_visible() {
             if memory_type.is_host_cached() {
@@ -292,7 +295,10 @@ impl Gralloc for VulkanoGralloc {
 
         reqs.vulkan_info = Some(VulkanInfo {
             memory_idx: memory_type.id() as u32,
+            memory_size,
             physical_device_idx: device.physical_device().index() as u32,
+            is_dedicated_allocation: memory_is_dedicated,
+            is_linear_tiled: true,
         });
 
         Ok(reqs)
@@ -336,14 +342,8 @@ impl Gralloc for VulkanoGralloc {
                 ),
             };
 
-        let dedicated = match device.loaded_extensions().khr_dedicated_allocation {
-            true => {
-                if memory_requirements.prefer_dedicated {
-                    DedicatedAlloc::Image(&unsafe_image)
-                } else {
-                    DedicatedAlloc::None
-                }
-            }
+        let dedicated = match vulkan_info.is_dedicated_allocation {
+            true => DedicatedAlloc::Image(&unsafe_image),
             false => DedicatedAlloc::None,
         };
 
@@ -366,7 +366,6 @@ impl Gralloc for VulkanoGralloc {
         &mut self,
         handle: RutabagaHandle,
         vulkan_info: VulkanInfo,
-        size: u64,
     ) -> RutabagaResult<Box<dyn MappedRegion>> {
         let device = self
             .devices
@@ -388,12 +387,18 @@ impl Gralloc for VulkanoGralloc {
             _ => return Err(RutabagaError::Unsupported),
         };
 
-        let valid_size: usize = size.try_into()?;
+        let valid_size: usize = vulkan_info.memory_size.try_into()?;
         let device_memory =
             DeviceMemoryBuilder::new(device.clone(), vulkan_info.memory_idx, valid_size)
                 .import_info(handle.os_handle.into(), handle_type)
                 .build()?;
-        let mapping = DeviceMemoryMapping::new(device.clone(), device_memory.clone(), 0, size, 0)?;
+        let mapping = DeviceMemoryMapping::new(
+            device.clone(),
+            device_memory.clone(),
+            0,
+            vulkan_info.memory_size,
+            0,
+        )?;
 
         Ok(Box::new(VulkanoMapping::new(mapping, valid_size)))
     }
