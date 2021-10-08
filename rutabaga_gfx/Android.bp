@@ -21,6 +21,7 @@ rust_library {
         "gfxstream",
         "virgl_renderer",
         "virgl_renderer_next",
+        "vulkano",
     ],
     rustlibs: [
         "libbase_rust",
@@ -30,6 +31,7 @@ rust_library {
         "libserde_json",
         "libsync_rust",
         "libthiserror",
+        "libvulkano",
     ],
     proc_macros: ["libremain"],
     shared_libs: ["libgfxstream_backend"],
@@ -62,6 +64,7 @@ rust_defaults {
         "gfxstream",
         "virgl_renderer",
         "virgl_renderer_next",
+        "vulkano",
     ],
     rustlibs: [
         "libbase_rust",
@@ -71,6 +74,7 @@ rust_defaults {
         "libserde_json",
         "libsync_rust",
         "libthiserror",
+        "libvulkano",
     ],
     proc_macros: ["libremain"],
 }
