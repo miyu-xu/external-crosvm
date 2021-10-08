@@ -264,12 +264,9 @@ pub enum VmMemoryRequest {
     /// the mmap system call.
     RegisterVulkanMemoryAtPciBarOffset {
         alloc: Alloc,
-        descriptor: SafeDescriptor,
-        handle_type: u32,
-        memory_idx: u32,
-        physical_device_idx: u32,
+        handle: RutabagaHandle,
+        vulkan_info: VulkanInfo,
         offset: u64,
-        size: u64,
     },
     /// Unregister the given memory slot that was previously registered with `RegisterMemory*`.
     UnregisterMemory(MemSlot),
@@ -338,24 +335,11 @@ impl VmMemoryRequest {
             }
             RegisterVulkanMemoryAtPciBarOffset {
                 alloc,
-                descriptor,
-                handle_type,
-                memory_idx,
-                physical_device_idx,
+                handle,
+                vulkan_info,
                 offset,
-                size,
             } => {
-                let mapped_region = match gralloc.import_and_map(
-                    RutabagaHandle {
-                        os_handle: descriptor,
-                        handle_type,
-                    },
-                    VulkanInfo {
-                        memory_idx,
-                        physical_device_idx,
-                    },
-                    size,
-                ) {
+                let mapped_region = match gralloc.import_and_map(handle, vulkan_info) {
                     Ok(mapped_region) => mapped_region,
                     Err(e) => {
                         error!("gralloc failed to import and map: {}", e);
