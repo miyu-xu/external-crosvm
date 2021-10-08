@@ -194,7 +194,6 @@ pub trait Gralloc {
         &mut self,
         _handle: RutabagaHandle,
         _vulkan_info: VulkanInfo,
-        _size: u64,
     ) -> RutabagaResult<Box<dyn MappedRegion>> {
         Err(RutabagaError::Unsupported)
     }
@@ -331,14 +330,13 @@ impl RutabagaGralloc {
         &mut self,
         handle: RutabagaHandle,
         vulkan_info: VulkanInfo,
-        size: u64,
     ) -> RutabagaResult<Box<dyn MappedRegion>> {
         let gralloc = self
             .grallocs
             .get_mut(&GrallocBackend::Vulkano)
             .ok_or(RutabagaError::InvalidGrallocBackend)?;
 
-        gralloc.import_and_map(handle, vulkan_info, size)
+        gralloc.import_and_map(handle, vulkan_info)
     }
 }
 
