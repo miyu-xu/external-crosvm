@@ -14,7 +14,7 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::null_mut;
 use std::rc::Rc;
 
-use base::{ExternalMapping, ExternalMappingError, ExternalMappingResult};
+use base::{AsRawDescriptor, ExternalMapping, ExternalMappingError, ExternalMappingResult};
 
 use crate::generated::virgl_renderer_bindings::{
     iovec, virgl_box, virgl_renderer_resource_create_args,
@@ -112,6 +112,20 @@ extern "C" {
         out_size: *mut u64,
     ) -> c_int;
     fn stream_renderer_resource_unmap(res_handle: u32) -> c_int;
+
+    fn stream_renderer_ctx_attach_external_resource(
+        ctx_id: u32,
+        res_id: u32,
+        res_width: u32,
+        res_height: u32,
+        res_fourcc_format: u32,
+        res_size: u64,
+        res_is_dedicated_alloc: u32,
+        res_is_linear_tiled: u32,
+        res_memory_handle: c_int) -> c_int;
+    fn stream_renderer_ctx_detach_external_resource(
+        ctx_id: u32,
+        res_id: u32) -> c_int;
 }
 
 /// The virtio-gpu backend state tracker which supports accelerated rendering.
@@ -143,24 +157,50 @@ impl RutabagaContext for GfxstreamContext {
     }
 
     fn attach(&mut self, resource: &mut RutabagaResource) {
-        // The context id and resource id must be valid because the respective instances ensure
-        // their lifetime.
-        unsafe {
-            pipe_virgl_renderer_ctx_attach_resource(
-                self.ctx_id as i32,
-                resource.resource_id as i32,
-            );
+        if let Some(handle) = &resource.handle {
+            if let Some(resource_info) = &resource.info_3d {
+                if let Some(resource_vulkan_info) = &resource.vulkan_info {
+                    unsafe {
+                        stream_renderer_ctx_attach_external_resource(
+                            self.ctx_id,
+                            resource.resource_id,
+                            resource_info.width,
+                            resource_info.height,
+                            resource_info.drm_fourcc,
+                            resource_vulkan_info.memory_size,
+                            resource_vulkan_info.is_dedicated_allocation as u32,
+                            resource_vulkan_info.is_linear_tiled as u32,
+                            handle.os_handle.as_raw_descriptor(),
+                        );
+                    }
+                }
+            }
+        } else {
+            // The context id and resource id must be valid because the respective instances ensure
+            // their lifetime.
+            unsafe {
+                pipe_virgl_renderer_ctx_attach_resource(
+                    self.ctx_id as i32,
+                    resource.resource_id as i32,
+                );
+            }
         }
     }
 
     fn detach(&mut self, resource: &RutabagaResource) {
-        // The context id and resource id must be valid because the respective instances ensure
-        // their lifetime.
-        unsafe {
-            pipe_virgl_renderer_ctx_detach_resource(
-                self.ctx_id as i32,
-                resource.resource_id as i32,
-            );
+        if let Some(handle) = &resource.handle {
+            unsafe {
+                stream_renderer_ctx_detach_external_resource(self.ctx_id, resource.resource_id);
+            }
+        } else {
+            // The context id and resource id must be valid because the respective instances ensure
+            // their lifetime.
+            unsafe {
+                pipe_virgl_renderer_ctx_detach_resource(
+                    self.ctx_id as i32,
+                    resource.resource_id as i32,
+                );
+            }
         }
     }
 }
