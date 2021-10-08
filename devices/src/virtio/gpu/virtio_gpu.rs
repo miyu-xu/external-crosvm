@@ -691,22 +691,19 @@ impl VirtioGpu {
         let map_info = self.rutabaga.map_info(resource_id).map_err(|_| ErrUnspec)?;
         let vulkan_info_opt = self.rutabaga.vulkan_info(resource_id).ok();
 
-        let export = self.rutabaga.export_blob(resource_id);
+        let handle = self.rutabaga.export_blob(resource_id);
 
-        let request = match export {
-            Ok(export) => match vulkan_info_opt {
+        let request = match handle {
+            Ok(handle) => match vulkan_info_opt {
                 Some(vulkan_info) => VmMemoryRequest::RegisterVulkanMemoryAtPciBarOffset {
                     alloc: self.pci_bar,
-                    descriptor: export.os_handle,
-                    handle_type: export.handle_type,
-                    memory_idx: vulkan_info.memory_idx,
-                    physical_device_idx: vulkan_info.physical_device_idx,
+                    handle,
+                    vulkan_info,
                     offset,
-                    size: resource.size,
                 },
                 None => VmMemoryRequest::RegisterFdAtPciBarOffset(
                     self.pci_bar,
-                    export.os_handle,
+                    handle.os_handle,
                     resource.size as usize,
                     offset,
                 ),

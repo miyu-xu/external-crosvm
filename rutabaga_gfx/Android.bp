@@ -27,6 +27,8 @@ rust_library {
         "libbase_rust",
         "libdata_model",
         "liblibc",
+        "libserde",
+        "libserde_json",
         "libsync_rust",
         "libthiserror",
     ],

@@ -580,7 +580,8 @@ impl CrossDomainContext {
 
         if let Some(ref vk_info) = reqs.vulkan_info {
             response.memory_idx = vk_info.memory_idx as i32;
-            response.physical_device_idx = vk_info.physical_device_idx as i32;
+            // TODO: update cross domain protocol to use UUID.
+            // response.physical_device_uuid = vk_info.physical_device_uuid;
         }
 
         if let Some(state) = &self.state {
