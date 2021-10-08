@@ -13,6 +13,7 @@ use std::str::Utf8Error;
 
 use base::{Error as BaseError, ExternalMappingError, SafeDescriptor};
 use data_model::VolatileMemoryError;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "vulkano")]
 use vulkano::device::DeviceCreationError;
@@ -82,10 +83,13 @@ pub struct Resource3DInfo {
 }
 
 /// Memory index and physical device index of the associated VkDeviceMemory.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 pub struct VulkanInfo {
     pub memory_idx: u32,
+    pub memory_size: u64,
     pub physical_device_idx: u32,
+    pub is_dedicated_allocation: bool,
+    pub is_linear_tiled: bool,
 }
 
 /// Rutabaga context init capset id mask (not upstreamed).
@@ -500,6 +504,7 @@ pub const RUTABAGA_FENCE_HANDLE_TYPE_SYNC_FD: u32 = 0x0005;
 pub const RUTABAGE_FENCE_HANDLE_TYPE_OPAQUE_WIN32: u32 = 0x0006;
 
 /// Handle to OS-specific memory or synchronization objects.
+#[derive(Serialize, Deserialize)]
 pub struct RutabagaHandle {
     pub os_handle: SafeDescriptor,
     pub handle_type: u32,

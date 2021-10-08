@@ -26,6 +26,8 @@ rust_library {
         "libbase_rust",
         "libdata_model",
         "liblibc",
+        "libserde",
+        "libserde_json",
         "libsync_rust",
     ],
     shared_libs: ["libgfxstream_backend"],
@@ -63,6 +65,8 @@ rust_defaults {
         "libbase_rust",
         "libdata_model",
         "liblibc",
+        "libserde",
+        "libserde_json",
         "libsync_rust",
     ],
 }
