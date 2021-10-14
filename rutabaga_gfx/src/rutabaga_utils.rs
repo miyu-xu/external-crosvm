@@ -520,7 +520,7 @@ pub const RUTABAGA_FENCE_HANDLE_TYPE_SYNC_FD: u32 = 0x0011;
 pub const RUTABAGE_FENCE_HANDLE_TYPE_OPAQUE_WIN32: u32 = 0x0012;
 
 /// Handle to OS-specific memory or synchronization objects.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RutabagaHandle {
     pub os_handle: SafeDescriptor,
     pub handle_type: u32,
