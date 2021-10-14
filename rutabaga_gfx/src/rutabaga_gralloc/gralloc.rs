@@ -32,9 +32,10 @@ const RUTABAGA_GRALLOC_USE_CAMERA_READ: u32 = 1 << 7;
 #[allow(dead_code)]
 const RUTABAGA_GRALLOC_USE_PROTECTED: u32 = 1 << 8;
 
-/* SW_{WRITE,READ}_RARELY omitted since not even Android uses this much. */
 const RUTABAGA_GRALLOC_USE_SW_READ_OFTEN: u32 = 1 << 9;
+const RUTABAGA_GRALLOC_USE_SW_READ_RARELY: u32 = 1 << 10;
 const RUTABAGA_GRALLOC_USE_SW_WRITE_OFTEN: u32 = 1 << 11;
+const RUTABAGA_GRALLOC_USE_SW_WRITE_RARELY: u32 = 1 << 12;
 
 #[allow(dead_code)]
 const RUTABAGA_GRALLOC_VIDEO_DECODER: u32 = 1 << 13;
@@ -119,6 +120,18 @@ impl RutabagaGrallocFlags {
     #[inline(always)]
     pub fn uses_rendering(self) -> bool {
         self.0 & RUTABAGA_GRALLOC_USE_RENDERING != 0
+    }
+
+    /// Returns true if the texturing flag is set.
+    #[inline(always)]
+    pub fn uses_sw_read(self) -> bool {
+        (self.0 & (RUTABAGA_GRALLOC_USE_SW_READ_OFTEN | RUTABAGA_GRALLOC_USE_SW_READ_RARELY)) != 0
+    }
+
+    /// Returns true if the texturing flag is set.
+    #[inline(always)]
+    pub fn uses_sw_write(self) -> bool {
+        (self.0 & (RUTABAGA_GRALLOC_USE_SW_WRITE_OFTEN | RUTABAGA_GRALLOC_USE_SW_WRITE_RARELY)) != 0
     }
 
     /// Returns true if the memory will accessed by the CPU or an IP block that prefers host
