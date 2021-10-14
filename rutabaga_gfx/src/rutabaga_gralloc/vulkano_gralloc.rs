@@ -155,15 +155,12 @@ impl VulkanoGralloc {
                 .ok_or(RutabagaError::InvalidGrallocGpuType)?
         };
 
-        let usage = match info.flags.uses_rendering() {
-            true => ImageUsage {
-                color_attachment: true,
-                ..ImageUsage::none()
-            },
-            false => ImageUsage {
-                sampled: true,
-                ..ImageUsage::none()
-            },
+        let usage = ImageUsage {
+            color_attachment: info.flags.uses_rendering(),
+            sampled: info.flags.uses_texturing(),
+            transfer_source: info.flags.uses_sw_read(),
+            transfer_destination: info.flags.uses_sw_write(),
+            ..ImageUsage::none()
         };
 
         // Reasonable bounds on image width.
@@ -176,7 +173,10 @@ impl VulkanoGralloc {
             return Err(RutabagaError::InvalidGrallocDimensions);
         }
 
+        let linear_tiling = !info.flags.uses_rendering();
+
         let vulkan_format = info.drm_format.vulkan_format()?;
+        base::error!("vulkano_gralloc::create_image(w:{} h:{} format:{:?} usage:{:?} linear:{})", info.width, info.height, vulkan_format, usage, linear_tiling);
         let (unsafe_image, memory_requirements) = sys::UnsafeImage::new(
             device.clone(),
             usage,
@@ -190,7 +190,7 @@ impl VulkanoGralloc {
             SampleCount::Sample1,
             1, /* mipmap count */
             Sharing::Exclusive::<Empty<_>>,
-            true,  /* linear images only currently */
+            linear_tiling,  /* linear images only currently */
             false, /* not preinitialized */
         )?;
 
@@ -318,7 +318,7 @@ impl Gralloc for VulkanoGralloc {
             memory_size,
             physical_device_uuid,
             is_dedicated_allocation: memory_is_dedicated,
-            is_linear_tiled: true,
+            is_linear_tiled: memory_is_linear,
         });
 
         Ok(reqs)
@@ -373,6 +373,8 @@ impl Gralloc for VulkanoGralloc {
             .build()?;
 
         let descriptor = device_memory.export_fd(handle_type)?.into();
+
+        base::error!("jasonjason vulkano_gralloc::allocate_memory() -> descriptor:{:?}", descriptor);
 
         Ok(RutabagaHandle {
             os_handle: descriptor,
