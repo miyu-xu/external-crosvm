@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::result;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use base::{error, Event, PollToken, RawDescriptor, WaitContext};
@@ -56,11 +58,12 @@ unsafe impl DataInit for virtio_console_config {}
 pub fn handle_input<I: SignalableInterrupt>(
     mem: &GuestMemory,
     interrupt: &I,
-    in_channel: &Receiver<Vec<u8>>,
+    buffer: Arc<Mutex<VecDeque<u8>>>,
     receive_queue: &mut Queue,
 ) -> result::Result<(), ConsoleError> {
     let mut exhausted_queue = false;
 
+    let mut buffer_locked = buffer.lock().unwrap();
     loop {
         let desc = match receive_queue.peek(&mem) {
             Some(d) => d,
@@ -79,18 +82,15 @@ pub fn handle_input<I: SignalableInterrupt>(
             }
         };
 
-        let mut disconnected = false;
-        while writer.available_bytes() > 0 {
-            match in_channel.try_recv() {
-                Ok(data) => {
-                    writer.write_all(&data).unwrap();
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    disconnected = true;
-                    break;
-                }
-            }
+        while writer.available_bytes() > 0 && buffer_locked.len() > 0 {
+            let (buffer_front, buffer_back) = buffer_locked.as_slices();
+            let buffer_chunk = if buffer_front.len() > 0 {
+                buffer_front
+            } else {
+                buffer_back
+            };
+            let written = writer.write(buffer_chunk).unwrap();
+            drop(buffer_locked.drain(..written));
         }
 
         let bytes_written = writer.bytes_written() as u32;
@@ -99,10 +99,6 @@ pub fn handle_input<I: SignalableInterrupt>(
             receive_queue.pop_peeked(&mem);
             receive_queue.add_used(&mem, desc_index, bytes_written);
             receive_queue.trigger_interrupt(&mem, interrupt);
-        }
-
-        if disconnected {
-            return Err(ConsoleError::RxDisconnected);
         }
 
         if bytes_written == 0 {
@@ -174,16 +170,17 @@ fn write_output(output: &mut dyn io::Write, data: &[u8]) -> io::Result<()> {
     output.flush()
 }
 
-/// Starts a thread that reads rx_input and sends the input back via the returned channel.
+/// Starts a thread that reads rx_input and sends the input back via the returned buffer.
 ///
 /// # Arguments
-/// * `rx_input` - Data source that the reader thread will wait on to send data back to the channel
-/// * `in_avail_evt` - Event triggered by the thread when new input is available on the channel
+/// * `rx_input` - Data source that the reader thread will wait on to send data back to the buffer
+/// * `in_avail_evt` - Event triggered by the thread when new input is available on the buffer
 pub fn spawn_input_thread(
     mut rx: Box<dyn io::Read + Send>,
     in_avail_evt: &Event,
-) -> Option<Receiver<Vec<u8>>> {
-    let (send_channel, recv_channel) = channel();
+) -> Option<Arc<Mutex<VecDeque<u8>>>> {
+    let buffer = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+    let buffer_cloned = buffer.clone();
 
     let thread_in_avail_evt = match in_avail_evt.try_clone() {
         Ok(evt) => evt,
@@ -193,8 +190,7 @@ pub fn spawn_input_thread(
         }
     };
 
-    // The input thread runs in detached mode and will exit when channel is disconnected because
-    // the console device has been dropped.
+    // The input thread runs in detached mode.
     let res = thread::Builder::new()
         .name("console_input".to_string())
         .spawn(move || {
@@ -204,9 +200,9 @@ pub fn spawn_input_thread(
                     Ok(0) => break, // Assume the stream of input has ended.
                     Ok(size) => {
                         rx_buf.truncate(size);
-                        if send_channel.send(rx_buf).is_err() {
-                            // The receiver has disconnected.
-                            break;
+                        match buffer.lock() {
+                            Ok(mut buffer_locked) => buffer_locked.extend(rx_buf),
+                            Err(_) => break, // The other side has panicked while holding the lock
                         }
                         thread_in_avail_evt.write(1).unwrap();
                     }
@@ -227,7 +223,7 @@ pub fn spawn_input_thread(
         error!("failed to spawn input thread: {}", e);
         return None;
     }
-    Some(recv_channel)
+    Some(buffer_cloned)
 }
 
 /// Writes the available data from the reader into the given output queue.
@@ -274,7 +270,7 @@ impl Worker {
         // generic way to add an io::Read instance to a poll context (it may not be backed by a file
         // descriptor).  Moving the blocking read call to a separate thread and sending data back to
         // the main worker thread with an event for notification bridges this gap.
-        let mut in_channel = match self.input.take() {
+        let mut in_buffer = match self.input.take() {
             Some(input) => spawn_input_thread(input, &in_avail_evt),
             None => None,
         };
@@ -334,12 +330,17 @@ impl Worker {
                             error!("failed reading receive queue Event: {}", e);
                             break 'wait;
                         }
-                        if let Some(ch) = in_channel.as_ref() {
-                            match handle_input(&self.mem, &self.interrupt, ch, &mut receive_queue) {
+                        if let Some(ch) = in_buffer.as_ref() {
+                            match handle_input(
+                                &self.mem,
+                                &self.interrupt,
+                                ch.clone(),
+                                &mut receive_queue,
+                            ) {
                                 Ok(()) => {}
                                 Err(ConsoleError::RxDisconnected) => {
-                                    // Set in_channel to None so that future handle_input calls exit early.
-                                    in_channel.take();
+                                    // Set in_buffer to None so that future handle_input calls exit early.
+                                    in_buffer.take();
                                 }
                                 // Other console errors are no-ops, so just continue.
                                 Err(_) => {
@@ -353,12 +354,17 @@ impl Worker {
                             error!("failed reading in_avail_evt: {}", e);
                             break 'wait;
                         }
-                        if let Some(ch) = in_channel.as_ref() {
-                            match handle_input(&self.mem, &self.interrupt, ch, &mut receive_queue) {
+                        if let Some(ch) = in_buffer.as_ref() {
+                            match handle_input(
+                                &self.mem,
+                                &self.interrupt,
+                                ch.clone(),
+                                &mut receive_queue,
+                            ) {
                                 Ok(()) => {}
                                 Err(ConsoleError::RxDisconnected) => {
-                                    // Set in_channel to None so that future handle_input calls exit early.
-                                    in_channel.take();
+                                    // Set in_buffer to None so that future handle_input calls exit early.
+                                    in_buffer.take();
                                 }
                                 // Other console errors are no-ops, so just continue.
                                 Err(_) => {
