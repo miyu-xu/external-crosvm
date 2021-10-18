@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use base::{error, info, read_raw_stdin, syslog, AsRawDescriptor, Event, RawDescriptor};
+use base::{error, info, read_raw_stdin, safe_descriptor_from_path, syslog, AsRawDescriptor, Event, RawDescriptor};
 use devices::{Bus, ProtectionType, ProxyDevice, Serial, SerialDevice};
 use minijail::Minijail;
 use sync::Mutex;
@@ -250,11 +250,18 @@ impl SerialParameters {
             }
             SerialType::File => match &self.path {
                 Some(path) => {
-                    let file = OpenOptions::new()
+                    let path = path.as_path();
+                    let file = if let Some(fd) = safe_descriptor_from_path(path).map_err(
+                            |e| Error::FileError(std::io::Error::from_raw_os_error(e.errno())))? {
+                        fd.into()
+                    } else {
+                        OpenOptions::new()
                         .append(true)
                         .create(true)
-                        .open(path.as_path())
-                        .map_err(Error::FileError)?;
+                        .open(path)
+                        .map_err(Error::FileError)?
+                    };
+                    println!("Opened {:?}", &self.path);
                     keep_rds.push(file.as_raw_descriptor());
                     Some(Box::new(file))
                 }
