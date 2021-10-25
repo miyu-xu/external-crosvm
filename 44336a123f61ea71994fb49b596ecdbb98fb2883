@@ -16,6 +16,24 @@
       "message": "Please submit this upstream to https://chromium.googlesource.com/chromiumos/platform/crosvm/, then we\u0027ll merge it down into AOSP.",
       "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d2ec7072_cb8aaf1b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-10-25T11:15:19Z",
+      "side": 1,
+      "message": "I uploaded here because https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3096439 made a big refactoring and I wasn\u0027t sure when we will merge the upstream again. Do crosvm have regular releases, or do we merge from arbitrary ToT (which sounds risky)?\n\nAnyway, uploaded as https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3241083\n\nI hope to land this here as well if the merge is expected to take long.",
+      "parentUuid": "bb2eb0f3_5f5fabe5",
+      "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
