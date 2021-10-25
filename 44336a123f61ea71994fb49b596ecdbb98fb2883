@@ -69,6 +69,24 @@
       "parentUuid": "d2ec7072_cb8aaf1b",
       "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "942562ba_4fb13a49",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-10-25T12:49:31Z",
+      "side": 1,
+      "message": "Thanks. Yeah, this time I had to add a new git project. b/204053409",
+      "parentUuid": "af43cec9_59cc6551",
+      "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
