@@ -87,6 +87,24 @@
       "parentUuid": "af43cec9_59cc6551",
       "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f1895477_110bb23c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-10-25T14:27:53Z",
+      "side": 1,
+      "message": "Unfortunately, all2android.sh didn\u0027t work well. It failed to generate Android.bp, aarch64/Android.bp, and arch/Android.bp. It also skipped updating fuse/Android.bp, gpu_display/Android.bp and some more for no good reason. (It\u0027s perhaps due to the early termination of the script in another directory. I haven\u0027t looked into it.)\n\nIn addition, the upstream merge required me to add 6-7 more changes in external/rust/crates, including the addition of two new crates (tempfile, remove_dir_all). All these are doable (and I will do), but will take some time and I don\u0027t want this topic to be blocked on such a huge (and mostly unrelated) upstream merge effort.",
+      "parentUuid": "942562ba_4fb13a49",
+      "revId": "44336a123f61ea71994fb49b596ecdbb98fb2883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
