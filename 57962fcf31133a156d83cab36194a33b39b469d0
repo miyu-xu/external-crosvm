@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ca9e69dc_8c4dc56d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-10-27T00:54:41Z",
+      "side": 1,
+      "message": "Hi Andrew, I landed this on the upstream. But, as you know, merging the upstream here will take long due to the regression around cargo2android. Furthermore, the upstream recently has made quite big refactorings which forces us to create a few number of git projects in external/rust/crates which again takes time.\n\nMy changes are dependent on this CL and they\u0027ve started to filing up. I would like to land this here first and then revert it just before we do the upstream merge. Does this sound good to you? If so, please approve this change.",
+      "revId": "57962fcf31133a156d83cab36194a33b39b469d0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
