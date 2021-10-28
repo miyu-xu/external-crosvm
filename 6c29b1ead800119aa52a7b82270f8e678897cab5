@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b1a305e5_d774b801",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-10-28T17:58:05Z",
+      "side": 1,
+      "message": "These are purely automated changes due to updates in the cargo2android.py script.",
+      "revId": "6c29b1ead800119aa52a7b82270f8e678897cab5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
