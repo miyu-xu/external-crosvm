@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a856cdc7_5fa481c1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-10-29T14:36:54Z",
+      "side": 1,
+      "message": "This doesn\u0027t yet build due to missing tempfile, but with some fixes all2android.sh works.",
+      "revId": "d6f2dc360b92ffd09ea225889b35ad3e70b61e90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
