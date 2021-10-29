@@ -2,28 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::fmt::{self, Display};
-use std::fs::{File, OpenOptions};
-use std::io::{self, stdin, stdout, ErrorKind};
-use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
 use base::{
     error, info, read_raw_stdin, safe_descriptor_from_path, syslog, AsRawDescriptor, Event,
     RawDescriptor,
 };
 use devices::{Bus, ProtectionType, ProxyDevice, Serial, SerialDevice};
+=======
+use base::Event;
+use devices::serial_device::{SerialHardware, SerialParameters, SerialType};
+use devices::{Bus, ProtectionType, ProxyDevice, Serial};
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)
 use minijail::Minijail;
+use remain::sorted;
 use sync::Mutex;
+use thiserror::Error as ThisError;
 
 use crate::DeviceRegistrationError;
 
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
 #[derive(Debug)]
 pub enum Error {
     CloneEvent(base::Error),
@@ -363,6 +363,8 @@ impl SerialParameters {
     }
 }
 
+=======
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)
 /// Add the default serial parameters for serial ports that have not already been specified.
 ///
 /// This ensures that `serial_parameters` will contain parameters for each of the four PC-style
@@ -427,7 +429,7 @@ pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 ///   All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
     protected_vm: ProtectionType,
-    io_bus: &mut Bus,
+    io_bus: &Bus,
     com_evt_1_3: &Event,
     com_evt_2_4: &Event,
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -448,7 +450,7 @@ pub fn add_serial_devices(
 
         let mut preserved_fds = Vec::new();
         let com = param
-            .create_serial_device::<Serial>(protected_vm, &com_evt, &mut preserved_fds)
+            .create_serial_device::<Serial>(protected_vm, com_evt, &mut preserved_fds)
             .map_err(DeviceRegistrationError::CreateSerialDevice)?;
 
         match serial_jail.as_ref() {
@@ -479,23 +481,13 @@ pub fn add_serial_devices(
     Ok(())
 }
 
-#[derive(Debug)]
+#[sorted]
+#[derive(ThisError, Debug)]
 pub enum GetSerialCmdlineError {
+    #[error("Error appending to cmdline: {0}")]
     KernelCmdline(kernel_cmdline::Error),
+    #[error("Hardware {0} not supported as earlycon")]
     UnsupportedEarlyconHardware(SerialHardware),
-}
-
-impl Display for GetSerialCmdlineError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::GetSerialCmdlineError::*;
-
-        match self {
-            KernelCmdline(e) => write!(f, "error appending to cmdline: {}", e),
-            UnsupportedEarlyconHardware(hw) => {
-                write!(f, "hardware {} not supported as earlycon", hw)
-            }
-        }
-    }
 }
 
 pub type GetSerialCmdlineResult<T> = std::result::Result<T, GetSerialCmdlineError>;

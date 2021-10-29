@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
 // Copyright 2021 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -811,3 +812,5 @@ mod tests {
         dev_bar.wait();
     }
 }
+=======
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)
