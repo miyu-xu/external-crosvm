@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
 [package]
 name = "vhost_user_devices"
 version = "0.1.0"
@@ -50,3 +51,5 @@ default-features = false
 [dev-dependencies]
 data_model = { path = "../data_model" }
 tempfile = { path = "../tempfile" }
+=======
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)

@@ -4,7 +4,19 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+data_model = { path = "../data_model" }
 libc = "*"
 base = { path = "../base" }
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
 tempfile = "*"
+=======
+remain = "*"
+thiserror = "*"
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)
 vm_memory = { path = "../vm_memory" }
+<<<<<<< HEAD   (69cb61 Merge "Changes from latest cargo2android.py.")
+=======
+
+[dev-dependencies]
+tempfile = "3"
+>>>>>>> BRANCH (31ef2d mdbook: Add links to source code at top page)
