@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8d9ad3a8_bb97f2ee",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-11-01T11:06:14Z",
+      "side": 1,
+      "message": "I\u0027ve squashed this into my merge commit so that all the changes from the merge are in one place.",
+      "revId": "304c5aadb463e6ab7205c076e1a7b02656a4b235",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
