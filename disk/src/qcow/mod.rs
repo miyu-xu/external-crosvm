@@ -564,7 +564,7 @@ impl QcowFile {
     /// Creates a new QcowFile at the given path.
     pub fn new(file: File, virtual_size: u64) -> Result<QcowFile> {
         let header = QcowHeader::create_for_size_and_path(virtual_size, None)?;
-        QcowFile::new_from_header(file, header)
+        QcowFile::new_from_header(file, header, 1)
     }
 
     /// Creates a new QcowFile at the given path.
@@ -584,16 +584,20 @@ impl QcowFile {
             .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
         let size = backing_file.get_len().map_err(Error::BackingFileIo)?;
         let header = QcowHeader::create_for_size_and_path(size, Some(backing_file_name))?;
-        let mut result = QcowFile::new_from_header(file, header)?;
+        let mut result = QcowFile::new_from_header(file, header, backing_file_max_nesting_depth)?;
         result.backing_file = Some(backing_file);
         Ok(result)
     }
 
-    fn new_from_header(mut file: File, header: QcowHeader) -> Result<QcowFile> {
+    fn new_from_header(
+        mut file: File,
+        header: QcowHeader,
+        max_nesting_depth: u32,
+    ) -> Result<QcowFile> {
         file.seek(SeekFrom::Start(0)).map_err(Error::SeekingFile)?;
         header.write_to(&mut file)?;
 
-        let mut qcow = Self::from(file, 1)?;
+        let mut qcow = Self::from(file, max_nesting_depth)?;
 
         // Set the refcount for each refcount table cluster.
         let cluster_size = 0x01u64 << qcow.header.cluster_bits;
