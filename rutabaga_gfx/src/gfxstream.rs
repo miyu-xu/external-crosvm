@@ -14,7 +14,7 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr::null_mut;
 use std::rc::Rc;
 
-use base::{AsRawDescriptor, ExternalMapping, ExternalMappingError, ExternalMappingResult};
+use base::{AsRawDescriptor, IntoRawDescriptor, ExternalMapping, ExternalMappingError, ExternalMappingResult};
 
 use crate::generated::virgl_renderer_bindings::{
     iovec, virgl_box, virgl_renderer_resource_create_args,
@@ -119,9 +119,10 @@ extern "C" {
         res_width: u32,
         res_height: u32,
         res_fourcc_format: u32,
-        res_size: u64,
-        res_is_dedicated_alloc: u32,
-        res_is_linear_tiled: u32,
+        res_memory_device_uuid: *const u8 /*uuid[16]*/,
+        res_memory_size: u64,
+        res_memory_is_dedicated_alloc: u32,
+        res_memory_is_linear_tiled: u32,
         res_memory_handle: c_int) -> c_int;
     fn stream_renderer_ctx_detach_external_resource(
         ctx_id: u32,
@@ -160,18 +161,23 @@ impl RutabagaContext for GfxstreamContext {
         if let Some(handle) = &resource.handle {
             if let Some(resource_info) = &resource.info_3d {
                 if let Some(resource_vulkan_info) = &resource.vulkan_info {
-                    unsafe {
-                        stream_renderer_ctx_attach_external_resource(
-                            self.ctx_id,
-                            resource.resource_id,
-                            resource_info.width,
-                            resource_info.height,
-                            resource_info.drm_fourcc,
-                            resource_vulkan_info.memory_size,
-                            resource_vulkan_info.is_dedicated_allocation as u32,
-                            resource_vulkan_info.is_linear_tiled as u32,
-                            handle.os_handle.as_raw_descriptor(),
-                        );
+
+                    if let Ok(resource_transfered_handle) = handle.os_handle.try_clone() {
+
+                        unsafe {
+                            stream_renderer_ctx_attach_external_resource(
+                                self.ctx_id,
+                                resource.resource_id,
+                                resource_info.width,
+                                resource_info.height,
+                                resource_info.drm_fourcc,
+                                resource_vulkan_info.physical_device_uuid.as_ptr(),
+                                resource_vulkan_info.memory_size,
+                                resource_vulkan_info.is_dedicated_allocation as u32,
+                                resource_vulkan_info.is_linear_tiled as u32,
+                                resource_transfered_handle.into_raw_descriptor(),
+                            );
+                        }
                     }
                 }
             }
