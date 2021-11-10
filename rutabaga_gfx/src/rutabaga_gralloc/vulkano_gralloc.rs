@@ -21,8 +21,9 @@ use crate::rutabaga_utils::*;
 
 use vulkano::device::physical::{MemoryType, PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreationError, DeviceExtensions};
+use vulkano::format::Format as VulkanFormat;
 use vulkano::image::{
-    sys, ImageCreateFlags, ImageCreationError, ImageDimensions, ImageUsage, SampleCount,
+    sys, ImageCreateFlags, ImageCreationError, ImageDimensions, ImageType, ImageTiling, ImageUsage, SampleCount,
 };
 
 use vulkano::instance::{Instance, InstanceCreationError, InstanceExtensions, Version};
@@ -134,17 +135,11 @@ impl VulkanoGralloc {
         }))
     }
 
-    // This function is used safely in this module because gralloc does not:
-    //
-    //  (1) bind images to any memory.
-    //  (2) transition the layout of images.
-    //  (3) transfer ownership of images between queues.
-    //
-    // In addition, we trust Vulkano to validate image parameters are within the Vulkan spec.
-    unsafe fn create_image(
+    fn get_supported_tiling(
         &mut self,
-        info: ImageAllocationInfo,
-    ) -> RutabagaResult<(sys::UnsafeImage, MemoryRequirements)> {
+        format: VulkanFormat,
+        usage: ImageUsage,
+    ) -> RutabagaResult<ImageTiling> {
         let device = if self.has_integrated_gpu {
             self.devices
                 .get(&PhysicalDeviceType::IntegratedGpu)
@@ -155,7 +150,43 @@ impl VulkanoGralloc {
                 .ok_or(RutabagaError::InvalidGrallocGpuType)?
         };
 
-        let usage = ImageUsage {
+        if let Ok(_) = device.image_format_properties(
+            format,
+            ImageType::Dim2d,
+            ImageTiling::Optimal,
+            usage,
+            ImageCreateFlags::none(),
+        ) {
+            return Ok(ImageTiling::Optimal);
+        }
+
+        if let Ok(_) = device.image_format_properties(
+            format,
+            ImageType::Dim2d,
+            ImageTiling::Linear,
+            usage,
+            ImageCreateFlags::none(),
+        ) {
+            return Ok(ImageTiling::Linear);
+        }
+
+        return Err(RutabagaError::SpecViolation("unable to find supported tiling mode"));
+    }
+
+    // This function is used safely in this module because gralloc does not:
+    //
+    //  (1) bind images to any memory.
+    //  (2) transition the layout of images.
+    //  (3) transfer ownership of images between queues.
+    //
+    // In addition, we trust Vulkano to validate image parameters are within the Vulkan spec.
+    unsafe fn create_image(
+        &mut self,
+        info: ImageAllocationInfo,
+    ) -> RutabagaResult<(sys::UnsafeImage, MemoryRequirements, ImageTiling)> {
+        let vulkan_format = info.drm_format.vulkan_format()?;
+
+        let vulkan_usage = ImageUsage {
             color_attachment: info.flags.uses_rendering(),
             sampled: info.flags.uses_texturing(),
             transfer_source: info.flags.uses_sw_read(),
@@ -173,13 +204,22 @@ impl VulkanoGralloc {
             return Err(RutabagaError::InvalidGrallocDimensions);
         }
 
-        let linear_tiling = !info.flags.uses_rendering();
+        let vulkan_tiling = self.get_supported_tiling(vulkan_format, vulkan_usage)?;
 
-        let vulkan_format = info.drm_format.vulkan_format()?;
-        base::error!("vulkano_gralloc::create_image(w:{} h:{} format:{:?} usage:{:?} linear:{})", info.width, info.height, vulkan_format, usage, linear_tiling);
+        let device = if self.has_integrated_gpu {
+            self.devices
+                .get(&PhysicalDeviceType::IntegratedGpu)
+                .ok_or(RutabagaError::InvalidGrallocGpuType)?
+        } else {
+            self.devices
+                .get(&PhysicalDeviceType::DiscreteGpu)
+                .ok_or(RutabagaError::InvalidGrallocGpuType)?
+        };
+
+        base::error!("vulkano_gralloc::create_image(w:{} h:{} format:{:?} usage:{:?} tiling:{:?})", info.width, info.height, vulkan_format, vulkan_usage, vulkan_tiling);
         let (unsafe_image, memory_requirements) = sys::UnsafeImage::new(
             device.clone(),
-            usage,
+            vulkan_usage,
             vulkan_format,
             ImageCreateFlags::none(),
             ImageDimensions::Dim2d {
@@ -190,11 +230,11 @@ impl VulkanoGralloc {
             SampleCount::Sample1,
             1, /* mipmap count */
             Sharing::Exclusive::<Empty<_>>,
-            linear_tiling,  /* linear images only currently */
+            vulkan_tiling == ImageTiling::Linear,
             false, /* not preinitialized */
         )?;
 
-        Ok((unsafe_image, memory_requirements))
+        Ok((unsafe_image, memory_requirements, vulkan_tiling))
     }
 }
 
@@ -225,7 +265,7 @@ impl Gralloc for VulkanoGralloc {
     ) -> RutabagaResult<ImageMemoryRequirements> {
         let mut reqs: ImageMemoryRequirements = Default::default();
 
-        let (unsafe_image, memory_requirements) = unsafe { self.create_image(info)? };
+        let (unsafe_image, memory_requirements, tiling) = unsafe { self.create_image(info)? };
 
         let device = if self.has_integrated_gpu {
             self.devices
@@ -242,9 +282,11 @@ impl Gralloc for VulkanoGralloc {
         // Safe because we created the image with the linear bit set and verified the format is
         // not a depth or stencil format.  We are also using the correct image aspect.  Vulkano
         // will panic if we are not.
+        base::error!("jasonjason vulkano_gralloc::get_image_memory_requirements() num_planes:{}", planar_layout.num_planes);
         for plane in 0..planar_layout.num_planes {
             let aspect = info.drm_format.vulkan_image_aspect(plane)?;
             let layout = unsafe { unsafe_image.multiplane_color_layout(aspect) };
+            base::error!("jasonjason vulkano_gralloc::get_image_memory_requirements() plane:{} has layout:{:?}", plane, layout);
             reqs.strides[plane] = layout.row_pitch as u32;
             reqs.offsets[plane] = layout.offset as u32;
         }
@@ -297,7 +339,7 @@ impl Gralloc for VulkanoGralloc {
         let memory_size = memory_requirements.size as u64;
         let memory_is_dedicated = device.enabled_extensions().khr_dedicated_allocation
             && memory_requirements.prefer_dedicated;
-        let memory_is_linear = !info.flags.uses_rendering();
+        let memory_is_linear = tiling == ImageTiling::Linear;
         let physical_device_uuid = device.physical_device().properties().device_uuid.ok_or(
             RutabagaError::SpecViolation("vulkan device uuid unavailable"),
         )?;
@@ -325,7 +367,7 @@ impl Gralloc for VulkanoGralloc {
     }
 
     fn allocate_memory(&mut self, reqs: ImageMemoryRequirements) -> RutabagaResult<RutabagaHandle> {
-        let (unsafe_image, memory_requirements) = unsafe { self.create_image(reqs.info)? };
+        let (unsafe_image, memory_requirements, _tiling) = unsafe { self.create_image(reqs.info)? };
 
         let vulkan_info = reqs.vulkan_info.ok_or(RutabagaError::InvalidVulkanInfo)?;
 
