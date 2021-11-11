@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "852d0b0b_e7f3807c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2021-11-11T01:07:55Z",
+      "side": 1,
+      "message": "Hi Daniel, could you vote for SPR here? This will be reverted again when Alistair\u0027s fix land. aosp/1887226",
+      "revId": "e39fb97ebac92057772748d23904b314a62b7b57",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
