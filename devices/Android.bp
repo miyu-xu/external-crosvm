@@ -93,7 +93,12 @@ rust_test_host {
     test_options: {
         unit_test: true,
     },
-    shared_libs: ["libgfxstream_backend"],
+    shared_libs: [
+        "libgfxstream_backend",
+        "libminijail",
+        "libcap",
+        "libc++",
+    ],
 }
 
 rust_test {
