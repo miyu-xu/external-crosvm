@@ -16,6 +16,24 @@
       "message": "Is there any reason why this isn\u0027t reverted upstream?",
       "revId": "4b8b49f07e9a3537d9a3275c9141df2716afa883",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1dd07bf8_5fefcc9f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2021-12-01T18:38:36Z",
+      "side": 1,
+      "message": "Not one that I can remember. It probably should be reverted upstream too.",
+      "parentUuid": "4cdf6a37_117a25aa",
+      "revId": "4b8b49f07e9a3537d9a3275c9141df2716afa883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
