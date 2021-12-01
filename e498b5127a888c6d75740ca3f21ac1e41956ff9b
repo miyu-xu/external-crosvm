@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "40698af5_6032eb0b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2021-12-01T19:04:57Z",
+      "side": 1,
+      "message": "I don\u0027t know anything about the Android build system, but looks OK to me at first glance.",
+      "revId": "e498b5127a888c6d75740ca3f21ac1e41956ff9b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
