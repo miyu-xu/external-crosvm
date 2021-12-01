@@ -21,6 +21,7 @@ rust_defaults {
     auto_gen_config: true,
     edition: "2018",
     rustlibs: [
+        "libaudio_streams",
         "libcros_async",
         "libdata_model",
         "liblibc",
@@ -58,6 +59,7 @@ rust_library {
     srcs: ["src/lib.rs"],
     edition: "2018",
     rustlibs: [
+        "libaudio_streams",
         "libcros_async",
         "libdata_model",
         "liblibc",
