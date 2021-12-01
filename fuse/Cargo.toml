@@ -10,7 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 base = { path = "../base" }
 bitflags = "1"
-data_model = { path = "../data_model" }
+data_model = { path = "../common/data_model" }
 enumn = { path = "../enumn" }
 libc = "*"
 remain = "0.2"
