@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4cdf6a37_117a25aa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-12-01T17:39:22Z",
+      "side": 1,
+      "message": "Is there any reason why this isn\u0027t reverted upstream?",
+      "revId": "4b8b49f07e9a3537d9a3275c9141df2716afa883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
