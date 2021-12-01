@@ -11,6 +11,7 @@ use std::sync::Arc;
 use base::{error, Event, PollToken, SafeDescriptor, Tube, WaitContext};
 use fuse::filesystem::{FileSystem, ZeroCopyReader, ZeroCopyWriter};
 use sync::Mutex;
+use sys_util::syscall;
 use vm_control::{FsMappingRequest, VmResponse};
 use vm_memory::GuestMemory;
 
@@ -187,19 +188,39 @@ impl<F: FileSystem + Sync> Worker<F> {
         // cases.
         const SECBIT_NO_SETUID_FIXUP: i32 = 1 << 2;
 
+<<<<<<< HEAD   (44e2a9 Merge "[LSC] Add LOCAL_LICENSE_KINDS to external/crosvm")
         // Safe because this doesn't modify any memory and we check the return value.
         let mut securebits = unsafe { libc::prctl(libc::PR_GET_SECUREBITS) };
         if securebits < 0 {
             return Err(Error::GetSecurebits(io::Error::last_os_error()));
         }
+=======
+        // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all targets.
+        #[cfg(target_os = "linux")]
+        {
+            // Safe because this doesn't modify any memory and we check the return value.
+            let mut securebits = syscall!(unsafe { libc::prctl(libc::PR_GET_SECUREBITS) })
+                .map_err(Error::GetSecurebits)?;
+>>>>>>> BRANCH (b3f443 vmm_vhost: Rename features to "vmm" and "device")
 
         securebits |= SECBIT_NO_SETUID_FIXUP;
 
+<<<<<<< HEAD   (44e2a9 Merge "[LSC] Add LOCAL_LICENSE_KINDS to external/crosvm")
         // Safe because this doesn't modify any memory and we check the return value.
         let ret = unsafe { libc::prctl(libc::PR_SET_SECUREBITS, securebits) };
         if ret < 0 {
             return Err(Error::SetSecurebits(io::Error::last_os_error()));
+=======
+            // Safe because this doesn't modify any memory and we check the return value.
+            syscall!(unsafe { libc::prctl(libc::PR_SET_SECUREBITS, securebits) })
+                .map_err(Error::SetSecurebits)?;
+>>>>>>> BRANCH (b3f443 vmm_vhost: Rename features to "vmm" and "device")
         }
+
+        // To avoid extra locking, unshare filesystem attributes from parent. This includes the
+        // current working directory and umask.
+        // Safe because this doesn't modify any memory and we check the return value.
+        syscall!(unsafe { libc::unshare(libc::CLONE_FS) }).map_err(Error::UnshareFromParent)?;
 
         #[derive(PollToken)]
         enum Token {

@@ -10,8 +10,13 @@ path = "src/lib.rs"
 [dependencies]
 base = { path = "../base" }
 bitflags = "1"
+<<<<<<< HEAD   (44e2a9 Merge "[LSC] Add LOCAL_LICENSE_KINDS to external/crosvm")
 data_model = { path = "../data_model" }
 enumn = { path = "../enumn" }
+=======
+data_model = "*"
+enumn = "0.1.0"
+>>>>>>> BRANCH (b3f443 vmm_vhost: Rename features to "vmm" and "device")
 libc = "*"
 remain = "0.2"
 thiserror = "1.0.20"

@@ -2721,6 +2721,7 @@ mod tests {
         let _level1_qcow_file = QcowFile::new_from_backing(
             level1_qcow_file,
             &backing_file_path.to_str().unwrap(),
+<<<<<<< HEAD   (44e2a9 Merge "[LSC] Add LOCAL_LICENSE_KINDS to external/crosvm")
             1000 /* allow deep nesting */,
         )
         .unwrap();
@@ -2730,6 +2731,17 @@ mod tests {
             level2_qcow_file,
             &level1_qcow_file_path.to_str().unwrap(),
             1000 /* allow deep nesting */,
+=======
+            1000, /* allow deep nesting */
+        )
+        .unwrap();
+
+        let level2_qcow_file = tempfile().unwrap();
+        let _level2_qcow_file = QcowFile::new_from_backing(
+            level2_qcow_file,
+            &level1_qcow_file_path.to_str().unwrap(),
+            1000, /* allow deep nesting */
+>>>>>>> BRANCH (b3f443 vmm_vhost: Rename features to "vmm" and "device")
         )
         .expect("failed to create level2 qcow file");
     }
