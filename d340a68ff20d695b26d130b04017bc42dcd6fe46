@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f0c35d64_27feef1f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2021-12-02T17:47:56Z",
+      "side": 1,
+      "message": "Isn\u0027t this usually automatically done by Automerge? I don\u0027t understand the android process that well, so it\u0027s up to you! ",
+      "revId": "d340a68ff20d695b26d130b04017bc42dcd6fe46",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
