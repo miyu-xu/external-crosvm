@@ -34,6 +34,23 @@
       "parentUuid": "4cdf6a37_117a25aa",
       "revId": "4b8b49f07e9a3537d9a3275c9141df2716afa883",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e4cc1e07_f2d52be3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2021-12-02T11:25:25Z",
+      "side": 1,
+      "message": "Okay, cherry-picked to https://crrev.com/c/3310886.",
+      "revId": "4b8b49f07e9a3537d9a3275c9141df2716afa883",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
