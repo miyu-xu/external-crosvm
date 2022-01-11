@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ea152d33_1a66050b",
+        "filename": "seccomp/policy-inliner.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2022-01-11T14:08:53Z",
+      "side": 1,
+      "message": "I can\u0027t say that this is scalable, but we can fix this later.",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 17,
+        "endChar": 15
+      },
+      "revId": "0943e216e035cbdb61727bce13c29ebe0fc69c5b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
