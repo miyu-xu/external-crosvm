@@ -16,6 +16,41 @@
       "message": "I\u0027m not an expert on gfxstream, so I am not sure how this change should be routed - does it need to go to upstream ChromiumOS crosvm or will it be carried by Android indefinitely?",
       "revId": "b61109c38175f7bb7ea3e554d46fdc703d946034",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5f6e48b7_31182ce8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2022-01-12T00:21:19Z",
+      "side": 1,
+      "message": "We\u0027re testing this out as a fix for a problem seen with the latest crosvm merge in aosp/1937559. If this fix turns out to work, we\u0027ll probably add it to that patch series for a quick fix and I will upstream to CrOS after.",
+      "parentUuid": "1cf55854_d30785a7",
+      "revId": "b61109c38175f7bb7ea3e554d46fdc703d946034",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "25ad1be5_b1ec90d6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2022-01-12T00:21:19Z",
+      "side": 1,
+      "message": "We",
+      "revId": "b61109c38175f7bb7ea3e554d46fdc703d946034",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
