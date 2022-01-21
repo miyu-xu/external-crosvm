@@ -33,6 +33,23 @@
       "message": "TreeHugger won\u0027t pass until https://r.android.com/1954536 is in.",
       "revId": "35796168532cd2c727ed1b0d874ad94d2012716d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f986bf0_8d3457e2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-01-21T17:25:29Z",
+      "side": 1,
+      "message": "Presubmit is still failing, I suspect it\u0027s because TreeHugger isn\u0027t using the updated manifest. Trying again...",
+      "revId": "35796168532cd2c727ed1b0d874ad94d2012716d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
