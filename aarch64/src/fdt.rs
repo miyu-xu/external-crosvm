@@ -80,15 +80,33 @@ fn create_resv_memory_node(fdt: &mut FdtWriter, resv_size: Option<u64>) -> Resul
         fdt.property_null("ranges")?;
 
         let restricted_dma_pool = fdt.begin_node("restricted_dma_reserved")?;
-        fdt.property_u32("phandle", PHANDLE_RESTRICTED_DMA_POOL)?;
         fdt.property_string("compatible", "restricted-dma-pool")?;
+        fdt.property_u32("phandle", PHANDLE_RESTRICTED_DMA_POOL)?;
         fdt.property_u64("size", resv_size)?;
         fdt.property_u64("alignment", base::pagesize() as u64)?;
         fdt.end_node(restricted_dma_pool)?;
 
+        let dice_mem = fdt.begin_node("dice")?;
+        fdt.property_string("compatible", "google,open-dice")?;
+        fdt.property_array_u64("reg", &[0x86400000, 0x1000])?;
+        fdt.property_null("no-map")?;
+        fdt.end_node(dice_mem)?;
+
         fdt.end_node(resv_memory_node)?;
         Ok(Some(PHANDLE_RESTRICTED_DMA_POOL))
     } else {
+        let resv_memory_node = fdt.begin_node("reserved-memory")?;
+        fdt.property_u32("#address-cells", 0x2)?;
+        fdt.property_u32("#size-cells", 0x2)?;
+        fdt.property_null("ranges")?;
+
+        let dice_mem = fdt.begin_node("dice")?;
+        fdt.property_string("compatible", "google,open-dice")?;
+        fdt.property_array_u64("reg", &[0x86400000, 0x1000])?;
+        fdt.property_null("no-map")?;
+        fdt.end_node(dice_mem)?;
+
+        fdt.end_node(resv_memory_node)?;
         Ok(None)
     }
 }
