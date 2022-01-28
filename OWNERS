@@ -3,4 +3,9 @@ dtor@chromium.org
 dverkamp@chromium.org
 keiichiw@chromium.org
 denniskempin@google.com
+<<<<<<< HEAD   (357961 Merge remote-tracking branch 'aosp/upstream-main' into maste)
 paulhsia@chromium.org
+=======
+paulhsia@chromium.org
+crosvm-bot@crosvm-packages.iam.gserviceaccount.com
+>>>>>>> BRANCH (e79aba Check KVM_CAP_ARM_PROTECTED_VM after creating a protected VM)

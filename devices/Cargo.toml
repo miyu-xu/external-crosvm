@@ -25,7 +25,12 @@ argh = "0.1.7"
 async-task = "4"
 acpi_tables = {path = "../acpi_tables" }
 anyhow = "*"
+<<<<<<< HEAD   (357961 Merge remote-tracking branch 'aosp/upstream-main' into maste)
 audio_streams = { path = "../common/audio_streams" }
+=======
+audio_streams = "*"
+balloon_control = { path = "../common/balloon_control" }
+>>>>>>> BRANCH (e79aba Check KVM_CAP_ARM_PROTECTED_VM after creating a protected VM)
 base = { path = "../common/base" }
 bit_field = { path = "../bit_field" }
 cros_async = { path = "../common/cros_async" }
