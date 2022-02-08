@@ -111,6 +111,9 @@ pub(super) fn create_base_minijail(
 
 pub(super) fn simple_jail(cfg: &Config, policy: &str) -> Result<Option<Minijail>> {
     if cfg.sandbox {
+        #[cfg(target_os = "android")]
+        let pivot_root: &str = "/apex/com.android.virt/etc/sandbox_dir";
+        #[cfg(not(target_os = "android"))]
         let pivot_root: &str = option_env!("DEFAULT_PIVOT_ROOT").unwrap_or("/var/empty");
         // A directory for a jailed device's pivot root.
         let root_path = Path::new(pivot_root);
