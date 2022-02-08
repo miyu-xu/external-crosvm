@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d404d64d_6888c2df",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1576895
+      },
+      "writtenOn": "2022-02-08T21:40:07Z",
+      "side": 1,
+      "message": "Merged upstream: https://crrev.com/c/3445529.",
+      "revId": "d644cd47115529e5f3a382ad89e495fb8538b5f8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
