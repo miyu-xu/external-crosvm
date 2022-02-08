@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8cb571bd_2cdf9279",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-02-08T12:19:37Z",
+      "side": 1,
+      "message": "This will be overwritten when cargo2android.py is run for the next merge. https://r.android.com/1976528 should make it stick.",
+      "revId": "c4a047e9b2ac6cf2d120e9ab1b354f2823def2b6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
