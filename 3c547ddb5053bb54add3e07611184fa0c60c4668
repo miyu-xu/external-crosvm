@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4968772c_03a2e069",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1576895
+      },
+      "writtenOn": "2022-02-10T17:07:11Z",
+      "side": 1,
+      "message": "Upstream change https://crrev.com/c/3448217 merged.",
+      "revId": "3c547ddb5053bb54add3e07611184fa0c60c4668",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
