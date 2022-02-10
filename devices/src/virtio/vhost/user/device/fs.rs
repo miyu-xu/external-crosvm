@@ -81,14 +81,14 @@ fn jail_and_fork(
     j.gidmap(&gid_map.unwrap_or_else(default_gidmap))?;
     j.run_as_init();
 
-    j.namespace_vfs();
-    j.namespace_net();
+    //j.namespace_vfs();
+    //j.namespace_net();
     j.no_new_privs();
 
     // Only pivot_root if we are not re-using the current root directory.
     if dir_path != Path::new("/") {
         // It's safe to call `namespace_vfs` multiple times.
-        j.namespace_vfs();
+        //j.namespace_vfs();
         j.enter_pivot_root(&dir_path)?;
     }
     j.set_remount_mode(libc::MS_SLAVE);

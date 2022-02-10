@@ -40,24 +40,24 @@ pub(super) fn create_base_minijail(
     let mut j = Minijail::new().context("failed to jail device")?;
 
     if let Some(config) = config {
-        j.namespace_pids();
-        j.namespace_user();
+        //j.namespace_pids();
+        //j.namespace_user();
         j.namespace_user_disable_setgroups();
         if config.limit_caps {
             // Don't need any capabilities.
             j.use_caps(0);
         }
-        if let Some(uid_map) = config.uid_map {
+        /*if let Some(uid_map) = config.uid_map {
             j.uidmap(uid_map).context("error setting UID map")?;
         }
         if let Some(gid_map) = config.gid_map {
             j.gidmap(gid_map).context("error setting GID map")?;
-        }
+        }*/
         // Run in a new mount namespace.
-        j.namespace_vfs();
+        //j.namespace_vfs();
 
         // Run in an empty network namespace.
-        j.namespace_net();
+        //j.namespace_net();
 
         // Don't allow the device to gain new privileges.
         j.no_new_privs();
@@ -96,7 +96,7 @@ pub(super) fn create_base_minijail(
     // Only pivot_root if we are not re-using the current root directory.
     if root != Path::new("/") {
         // It's safe to call `namespace_vfs` multiple times.
-        j.namespace_vfs();
+        //j.namespace_vfs();
         j.enter_pivot_root(root)
             .context("failed to pivot root device")?;
     }
