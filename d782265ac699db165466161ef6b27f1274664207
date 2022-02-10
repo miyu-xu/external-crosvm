@@ -16,6 +16,23 @@
       "message": "This won\u0027t yet build until we get https://github.com/rust-lang/libc/pull/2675 merged, released and into AOSP.",
       "revId": "d782265ac699db165466161ef6b27f1274664207",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9a82f5e9_dd76c865",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-02-10T17:54:35Z",
+      "side": 1,
+      "message": "Cody mentioned that crrev.com/c/3433227 will break CF\u0027s GPU sepolicy, so it might fail presubmit as well. Once the build is working we\u0027ll take a look.",
+      "revId": "d782265ac699db165466161ef6b27f1274664207",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
