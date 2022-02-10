@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "942c3dc3_b3d02096",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-02-10T16:46:10Z",
+      "side": 1,
+      "message": "This won\u0027t yet build until we get https://github.com/rust-lang/libc/pull/2675 merged, released and into AOSP.",
+      "revId": "d782265ac699db165466161ef6b27f1274664207",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
