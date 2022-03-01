@@ -126,6 +126,7 @@ direct = ["devices/direct", "arch/direct", "x86_64/direct"]
 gdb = ["gdbstub", "gdbstub_arch", "arch/gdb", "vm_control/gdb", "x86_64/gdb"]
 gfxstream = ["devices/gfxstream"]
 gpu = ["devices/gpu"]
+hypervisor-gunyah = ["gunyah_sys"]
 libvda = ["devices/libvda"]
 linux-armhf = [
     "composite-disk",
@@ -166,6 +167,7 @@ kernel_cmdline = { path = "kernel_cmdline" }
 kernel_loader = { path = "kernel_loader" }
 kvm = { path = "kvm", optional = true }
 kvm_sys = { path = "kvm_sys", optional = true }
+gunyah_sys = { path = "gunyah_sys", optional = true }
 libc = "0.2.93"
 libcras = "*"
 minijail = "*" # provided by ebuild
