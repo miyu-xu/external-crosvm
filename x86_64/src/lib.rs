@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+
 mod fdt;
 
 const SETUP_DTB: u32 = 2;
@@ -397,7 +399,7 @@ impl arch::LinuxArch for X8664arch {
         SystemAllocator::new(SystemAllocatorConfig {
             io: Some(MemRegion {
                 base: 0xc000,
-                size: 0x1_0000,
+                size: 0x4000,
             }),
             low_mmio: MemRegion {
                 base: END_ADDR_BEFORE_32BITS,
@@ -559,6 +561,7 @@ impl arch::LinuxArch for X8664arch {
             &pci_irqs,
             PCIE_CFG_MMIO_START,
             max_bus,
+            components.force_s2idle,
         )
         .ok_or(Error::CreateAcpi)?;
 

@@ -33,8 +33,7 @@ use devices::virtio::VideoBackendType;
 use devices::Ac97Parameters;
 #[cfg(feature = "direct")]
 use devices::BusRange;
-use devices::IommuDevType;
-use devices::StubPciParameters;
+use devices::{IommuDevType, PciAddress, StubPciParameters};
 use hypervisor::ProtectionType;
 use libc::{getegid, geteuid};
 #[cfg(feature = "gpu")]
@@ -83,6 +82,12 @@ pub struct VhostUserFsOption {
 pub struct VhostUserWlOption {
     pub socket: PathBuf,
     pub vm_tube: PathBuf,
+}
+
+/// Options for virtio-vhost-user proxy device.
+pub struct VvuOption {
+    pub socket: PathBuf,
+    pub addr: Option<PciAddress>,
 }
 
 /// A bind mount for directories in the plugin process.
@@ -429,14 +434,18 @@ pub struct Config {
     pub dmi_path: Option<PathBuf>,
     pub no_legacy: bool,
     pub host_cpu_topology: bool,
+    pub privileged_vm: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
-    pub vvu_proxy: Vec<VhostUserOption>,
+    pub vvu_proxy: Vec<VvuOption>,
     pub coiommu_param: Option<devices::CoIommuParameters>,
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub init_memory: Option<u64>,
     #[cfg(feature = "direct")]
     pub pcie_rp: Vec<PathBuf>,
     pub rng: bool,
+    pub pivot_root: Option<PathBuf>,
+    pub force_s2idle: bool,
+    pub strict_balloon: bool,
 }
 
 impl Default for Config {
@@ -542,6 +551,7 @@ impl Default for Config {
             dmi_path: None,
             no_legacy: false,
             host_cpu_topology: false,
+            privileged_vm: false,
             stub_pci_devices: Vec::new(),
             coiommu_param: None,
             file_backed_mappings: Vec::new(),
@@ -549,6 +559,9 @@ impl Default for Config {
             #[cfg(feature = "direct")]
             pcie_rp: Vec::new(),
             rng: true,
+            pivot_root: None,
+            force_s2idle: false,
+            strict_balloon: false,
         }
     }
 }
