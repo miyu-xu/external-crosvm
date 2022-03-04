@@ -4,6 +4,7 @@
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
+use anyhow::bail;
 use base::{error, Event, RawDescriptor};
 use hypervisor::Datamatch;
 use remain::sorted;
@@ -16,6 +17,7 @@ use crate::pci::pci_configuration::{
     COMMAND_REG_MEMORY_SPACE_MASK, NUM_BAR_REGS, ROM_BAR_REG,
 };
 use crate::pci::{PciAddress, PciInterruptPin};
+use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
 #[cfg(feature = "audio")]
 use crate::virtio::snd::vios_backend::Error as VioSError;
 use crate::{BusAccessInfo, BusDevice};
@@ -23,6 +25,9 @@ use crate::{BusAccessInfo, BusDevice};
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Invalid alignment encountered.
+    #[error("Alignment must be a power of 2")]
+    BadAlignment,
     /// Setup of the device capabilities failed.
     #[error("failed to add capability {0}")]
     CapabilitiesSetup(pci_configuration::Error),
@@ -37,27 +42,41 @@ pub enum Error {
     /// Allocating space for an IO BAR failed.
     #[error("failed to allocate space for an IO BAR, size={0}: {1}")]
     IoAllocationFailed(u64, SystemAllocatorFaliure),
+    /// supports_iommu is false.
+    #[error("Iommu is not supported")]
+    IommuNotSupported,
     /// Registering an IO BAR failed.
     #[error("failed to register an IO BAR, addr={0} err={1}")]
     IoRegistrationFailed(u64, pci_configuration::Error),
-    /// MSIX Allocator encounters out-of-space
-    #[error("Out-of-space detected in MSIX Allocator")]
-    MsixAllocatorOutOfSpace,
-    /// MSIX Allocator encounters overflow
-    #[error("base={base} + size={size} overflows in MSIX Allocator")]
-    MsixAllocatorOverflow { base: u64, size: u64 },
-    /// MSIX Allocator encounters size of zero
-    #[error("Size of zero detected in MSIX Allocator")]
-    MsixAllocatorSizeZero,
+    /// Out-of-space encountered
+    #[error("Out-of-space detected")]
+    OutOfSpace,
+    /// Overflow encountered
+    #[error("base={0} + size={1} overflows")]
+    Overflow(u64, u64),
     /// PCI Address is not allocated.
     #[error("PCI address is not allocated")]
     PciAddressMissing,
     /// PCI Address allocation failure.
     #[error("failed to allocate PCI address")]
     PciAllocationFailed,
+    /// Size of zero encountered
+    #[error("Size of zero detected")]
+    SizeZero,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Pci Bar Range information
+#[derive(Clone)]
+pub struct BarRange {
+    /// pci bar start address
+    pub addr: u64,
+    /// pci bar size
+    pub size: u64,
+    /// pci bar is prefetchable or not, it used to set parent's bridge window
+    pub prefetchable: bool,
+}
 
 pub trait PciDevice: Send {
     /// Returns a label suitable for debug output.
@@ -81,18 +100,15 @@ pub trait PciDevice: Send {
         None
     }
     /// Allocates the needed IO BAR space using the `allocate` function which takes a size and
-    /// returns an address. Returns a Vec of (address, length) tuples.
-    fn allocate_io_bars(&mut self, _resources: &mut SystemAllocator) -> Result<Vec<(u64, u64)>> {
+    /// returns an address. Returns a Vec of BarRange{addr, size, prefetchable}.
+    fn allocate_io_bars(&mut self, _resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
         Ok(Vec::new())
     }
 
-    /// Allocates the needed device BAR space. Returns a Vec of (address, length) tuples.
+    /// Allocates the needed device BAR space. Returns a Vec of BarRange{addr, size, prefetchable}.
     /// Unlike MMIO BARs (see allocate_io_bars), device BARs are not expected to incur VM exits
     /// - these BARs represent normal memory.
-    fn allocate_device_bars(
-        &mut self,
-        _resources: &mut SystemAllocator,
-    ) -> Result<Vec<(u64, u64)>> {
+    fn allocate_device_bars(&mut self, _resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
         Ok(Vec::new())
     }
 
@@ -142,6 +158,25 @@ pub trait PciDevice: Send {
     /// Get the removed children devices under pci bridge
     fn get_removed_children_devices(&self) -> Vec<PciAddress> {
         Vec::new()
+    }
+
+    /// if device is a pci brdige, configure pci bridge window
+    fn configure_bridge_window(
+        &mut self,
+        _resources: &mut SystemAllocator,
+        _bar_ranges: &[BarRange],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Indicates whether the device supports IOMMU
+    fn supports_iommu(&self) -> bool {
+        false
+    }
+
+    /// Sets the IOMMU for the device if `supports_iommu()`
+    fn set_iommu(&mut self, _iommu: IpcMemoryMapper) -> anyhow::Result<()> {
+        bail!("Iommu not supported.");
     }
 }
 
@@ -312,10 +347,10 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     ) -> Option<(u32, PciInterruptPin)> {
         (**self).assign_irq(irq_evt, irq_resample_evt, irq_num)
     }
-    fn allocate_io_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<(u64, u64)>> {
+    fn allocate_io_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
         (**self).allocate_io_bars(resources)
     }
-    fn allocate_device_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<(u64, u64)>> {
+    fn allocate_device_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
         (**self).allocate_device_bars(resources)
     }
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
@@ -354,6 +389,14 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     }
     fn get_removed_children_devices(&self) -> Vec<PciAddress> {
         (**self).get_removed_children_devices()
+    }
+
+    fn configure_bridge_window(
+        &mut self,
+        resources: &mut SystemAllocator,
+        bar_ranges: &[BarRange],
+    ) -> Result<()> {
+        (**self).configure_bridge_window(resources, bar_ranges)
     }
 }
 

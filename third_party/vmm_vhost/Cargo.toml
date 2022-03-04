@@ -18,10 +18,14 @@ vfio-device = []
 
 [dependencies]
 anyhow = "*"
+base = { path = "../../common/base" }
 bitflags = ">=1.0.1"
 data_model = { path = "../../common/data_model" }
 libc = ">=0.2.39"
 remain = "*"
+<<<<<<< HEAD   (412eeb Disable gfxstream and gpu features on device.)
 sys_util = { path = "../../common/sys_util" }
+=======
+>>>>>>> BRANCH (0ae13d Require memoffset version 0.6)
 tempfile = "*"
 thiserror = { version = "1.0.20" }
