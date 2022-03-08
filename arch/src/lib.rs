@@ -97,7 +97,8 @@ pub struct VmComponents {
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub dmi_path: Option<PathBuf>,
-    pub no_legacy: bool,
+    pub no_i8042: bool,
+    pub no_rtc: bool,
     pub host_cpu_topology: bool,
 }
 

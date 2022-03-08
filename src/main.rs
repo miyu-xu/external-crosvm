@@ -2253,8 +2253,17 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             }
             cfg.dmi_path = Some(dmi_path);
         }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        "no-i8042" => {
+            cfg.no_i8042 = true;
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        "no-rtc" => {
+            cfg.no_rtc = true;
+        }
         "no-legacy" => {
-            cfg.no_legacy = true;
+            cfg.no_i8042 = true;
+            cfg.no_rtc = true;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         "host-cpu-topology" => {
@@ -2709,7 +2718,11 @@ iommu=on|off - indicates whether to enable virtio IOMMU for this device"),
 #[cfg(feature = "direct")]
           Argument::value("direct-edge-irq", "irq", "Enable interrupt passthrough"),
           Argument::value("dmi", "DIR", "Directory with smbios_entry_point/DMI files"),
-          Argument::flag("no-legacy", "Don't use legacy KBD/RTC devices emulation"),
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+          Argument::flag("no-i8042", "Don't use i8042/KBD device emulation"),
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+          Argument::flag("no-rtc", "Don't use CMOS/RTC device emulation"),
+          Argument::flag("no-legacy", "Don't emulate legacy devices"),
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
           Argument::flag("host-cpu-topology", "Use mirror cpu topology of Host for Guest VM"),
           Argument::value("stub-pci-device", "DOMAIN:BUS:DEVICE.FUNCTION[,vendor=NUM][,device=NUM][,class=NUM][,subsystem_vendor=NUM][,subsystem_device=NUM][,revision=NUM]", "Comma-separated key=value pairs for setting up a stub PCI device that just enumerates. The first option in the list must specify a PCI address to claim.

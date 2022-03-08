@@ -427,7 +427,8 @@ pub struct Config {
     #[cfg(feature = "direct")]
     pub direct_edge_irq: Vec<u32>,
     pub dmi_path: Option<PathBuf>,
-    pub no_legacy: bool,
+    pub no_i8042: bool,
+    pub no_rtc: bool,
     pub host_cpu_topology: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
     pub vvu_proxy: Vec<VhostUserOption>,
@@ -540,7 +541,8 @@ impl Default for Config {
             #[cfg(feature = "direct")]
             direct_edge_irq: Vec::new(),
             dmi_path: None,
-            no_legacy: false,
+            no_i8042: false,
+            no_rtc: false,
             host_cpu_topology: false,
             stub_pci_devices: Vec::new(),
             coiommu_param: None,

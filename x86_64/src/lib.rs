@@ -482,11 +482,16 @@ impl arch::LinuxArch for X8664arch {
         // Event used to notify crosvm that guest OS is trying to suspend.
         let suspend_evt = Event::new().map_err(Error::CreateEvent)?;
 
-        if !components.no_legacy {
-            Self::setup_legacy_devices(
+        if !components.no_i8042 {
+            Self::setup_legacy_i8042_device(
                 &io_bus,
                 irq_chip.pit_uses_speaker_port(),
                 reset_evt.try_clone().map_err(Error::CloneEvent)?,
+            )?;
+        }
+        if !components.no_rtc {
+            Self::setup_legacy_cmos_device(
+                &io_bus,
                 components.memory_size,
             )?;
         }
@@ -1159,18 +1164,38 @@ impl X8664arch {
         cmdline
     }
 
-    /// Sets up the legacy x86 IO platform devices
+    /// Sets up the legacy x86 i8042/KBD platform device
     ///
     /// # Arguments
     ///
     /// * - `io_bus` - the IO bus object
     /// * - `pit_uses_speaker_port` - does the PIT use port 0x61 for the PC speaker
     /// * - `reset_evt` - the event object which should receive exit events
-    /// * - `mem_size` - the size in bytes of physical ram for the guest
-    fn setup_legacy_devices(
+    fn setup_legacy_i8042_device(
         io_bus: &devices::Bus,
         pit_uses_speaker_port: bool,
         reset_evt: Event,
+    ) -> Result<()> {
+        let i8042 = Arc::new(Mutex::new(devices::I8042Device::new(
+            reset_evt.try_clone().map_err(Error::CloneEvent)?,
+        )));
+
+        if pit_uses_speaker_port {
+            io_bus.insert(i8042, 0x062, 0x3).unwrap();
+        } else {
+            io_bus.insert(i8042, 0x061, 0x4).unwrap();
+        }
+
+        Ok(())
+    }
+
+    /// Sets up the legacy x86 CMOS/RTC platform device
+    /// # Arguments
+    ///
+    /// * - `io_bus` - the IO bus object
+    /// * - `mem_size` - the size in bytes of physical ram for the guest
+    fn setup_legacy_cmos_device(
+        io_bus: &devices::Bus,
         mem_size: u64,
     ) -> Result<()> {
         let mem_regions = arch_memory_regions(mem_size, None);
@@ -1194,16 +1219,6 @@ impl X8664arch {
                 0x2,
             )
             .unwrap();
-
-        let i8042 = Arc::new(Mutex::new(devices::I8042Device::new(
-            reset_evt.try_clone().map_err(Error::CloneEvent)?,
-        )));
-
-        if pit_uses_speaker_port {
-            io_bus.insert(i8042, 0x062, 0x3).unwrap();
-        } else {
-            io_bus.insert(i8042, 0x061, 0x4).unwrap();
-        }
 
         Ok(())
     }
