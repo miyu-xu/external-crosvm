@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8b3e587f_8ca321b0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-03-08T15:24:56Z",
+      "side": 1,
+      "message": "Merged a newer upstream version with `QcowFile` traits back, so https://r.android.com/2007015 is no longer necessary.",
+      "revId": "935d1f05423561525d9e74abf8406daaef4c82e4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
