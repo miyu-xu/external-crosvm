@@ -13,7 +13,12 @@ kernel_cmdline = { path = "../kernel_cmdline" }
 kvm = { path = "../kvm" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (add96e Disable gfxstream and gpu features on device. am: 412eeb11d8)
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
+=======
+memoffset = "0.6"
+minijail = "*"
+>>>>>>> BRANCH (d6a42b Remove duplicated add_vfio_device address parsing)
 remain = "*"
 resources = { path = "../resources" }
 sync = { path = "../common/sync" }

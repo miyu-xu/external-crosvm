@@ -18,10 +18,14 @@ vfio-device = []
 
 [dependencies]
 anyhow = "*"
+base = { path = "../../common/base" }
 bitflags = ">=1.0.1"
 data_model = { path = "../../common/data_model" }
 libc = ">=0.2.39"
 remain = "*"
+<<<<<<< HEAD   (add96e Disable gfxstream and gpu features on device. am: 412eeb11d8)
 sys_util = { path = "../../common/sys_util" }
+=======
+>>>>>>> BRANCH (d6a42b Remove duplicated add_vfio_device address parsing)
 tempfile = "*"
 thiserror = { version = "1.0.20" }

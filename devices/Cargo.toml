@@ -57,8 +57,12 @@ serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
 smallvec = "1.6.1"
 sync = { path = "../common/sync" }
+<<<<<<< HEAD   (add96e Disable gfxstream and gpu features on device. am: 412eeb11d8)
 sys_util = { path = "../common/sys_util" }
 system_api = { path = "../system_api_stub", optional = true }
+=======
+system_api = { version = "*", optional = true }
+>>>>>>> BRANCH (d6a42b Remove duplicated add_vfio_device address parsing)
 thiserror = "1.0.20"
 tpm2 = { path = "../tpm2", optional = true }
 usb_util = { path = "../usb_util" }
