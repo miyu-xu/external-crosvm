@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5fc3ef8a_5e314557",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-03-09T15:06:04Z",
+      "side": 1,
+      "message": "Is reverting a merge like this going to cause issues when we try to merge again?",
+      "revId": "0db46d202d140d88dd146a7c63c8c3502058de0c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
