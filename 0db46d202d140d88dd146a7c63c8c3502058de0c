@@ -16,6 +16,24 @@
       "message": "Is reverting a merge like this going to cause issues when we try to merge again?",
       "revId": "0db46d202d140d88dd146a7c63c8c3502058de0c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "60814278_29e9b7c4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-03-09T15:34:49Z",
+      "side": 1,
+      "message": "It might, this is the first time I revert a merge commit.\n\nThe way I see it is that we are going to have this huge ugly commit undoing every commit the merge commit it reverts brought in. Once we have found a fix (probably in upstream), we\u0027ll revert that revert commit and merge the latest from upstream. This will leave 2 very large commits in the history, masking (in blames) commits pulled in by the reverted merge commit, which isn\u0027t ideal. When doing the last merge, Git should ignore parents of the reverted merge commit as they\u0027re already part of this repo\u0027s history.\n\nIs there a better way to undo the breaking changes?",
+      "parentUuid": "5fc3ef8a_5e314557",
+      "revId": "0db46d202d140d88dd146a7c63c8c3502058de0c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
