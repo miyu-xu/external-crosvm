@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a33664ca_533a841a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-03-10T18:22:08Z",
+      "side": 1,
+      "message": "I think this should be OWNERS.android, because this is a fork of the upstream OWNERS file for Chromium.",
+      "revId": "a63455231ed8227855d68980445b6c681fabd99b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
