@@ -15,6 +15,7 @@ use std::slice;
 use std::sync::Arc;
 use std::u32;
 
+use crate::IommuDevType;
 use base::{
     ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val, warn,
     AsRawDescriptor, Error, Event, FromRawDescriptor, RawDescriptor, SafeDescriptor,
@@ -467,8 +468,8 @@ pub trait VfioCommonTrait: Send + Sync {
     ///  * `sysfspath` - the path to the PCI device, e.g. /sys/bus/pci/devices/0000:02:00.0
     ///  * `iommu_enabled` - whether virtio IOMMU is enabled on this device
     fn vfio_get_container<P: AsRef<Path>>(
-        sysfspath: P,
-        iommu_enabled: bool,
+        iommu_dev: IommuDevType,
+        sysfspath: Option<P>,
     ) -> Result<Arc<Mutex<VfioContainer>>>;
 }
 
@@ -481,17 +482,21 @@ thread_local! {
     // For IOMMU enabled devices, all VFIO groups that share the same IOVA space
     // are managed by one VFIO container
     static IOMMU_CONTAINERS: RefCell<Option<Vec<Arc<Mutex<VfioContainer>>>>> = RefCell::new(Some(Default::default()));
+
+    // One VFIO container is shared by all VFIO devices that
+    // attach to the CoIOMMU device
+    static COIOMMU_CONTAINER: RefCell<Option<Arc<Mutex<VfioContainer>>>> = RefCell::new(None);
 }
 
 pub struct VfioCommonSetup;
 
 impl VfioCommonTrait for VfioCommonSetup {
     fn vfio_get_container<P: AsRef<Path>>(
-        sysfspath: P,
-        iommu_enabled: bool,
+        iommu_dev: IommuDevType,
+        sysfspath: Option<P>,
     ) -> Result<Arc<Mutex<VfioContainer>>> {
-        match iommu_enabled {
-            false => {
+        match iommu_dev {
+            IommuDevType::NoIommu => {
                 // One VFIO container is used for all IOMMU disabled groups
                 NO_IOMMU_CONTAINER.with(|v| {
                     if v.borrow().is_some() {
@@ -507,8 +512,9 @@ impl VfioCommonTrait for VfioCommonSetup {
                     }
                 })
             }
-            true => {
-                let group_id = VfioGroup::get_group_id(&sysfspath)?;
+            IommuDevType::VirtioIommu => {
+                let path = sysfspath.ok_or(VfioError::InvalidPath)?;
+                let group_id = VfioGroup::get_group_id(path)?;
 
                 // One VFIO container is used for all devices belong to one VFIO group
                 IOMMU_CONTAINERS.with(|v| {
@@ -527,6 +533,22 @@ impl VfioCommonTrait for VfioCommonSetup {
                         }
                     } else {
                         Err(VfioError::BorrowVfioContainer)
+                    }
+                })
+            }
+            IommuDevType::CoIommu => {
+                // One VFIO container is used for devices attached to CoIommu
+                COIOMMU_CONTAINER.with(|v| {
+                    if v.borrow().is_some() {
+                        if let Some(ref container) = *v.borrow() {
+                            Ok(container.clone())
+                        } else {
+                            Err(VfioError::BorrowVfioContainer)
+                        }
+                    } else {
+                        let container = Arc::new(Mutex::new(VfioContainer::new()?));
+                        *v.borrow_mut() = Some(container.clone());
+                        Ok(container)
                     }
                 })
             }
@@ -656,6 +678,11 @@ impl VfioDevice {
         })
     }
 
+    /// Returns the file for this device.
+    pub fn dev_file(&self) -> &File {
+        &self.dev
+    }
+
     /// Returns PCI device name, formatted as BUS:DEVICE.FUNCTION string.
     pub fn device_name(&self) -> &String {
         &self.name
@@ -663,7 +690,9 @@ impl VfioDevice {
 
     /// Enable vfio device's irq and associate Irqfd Event with device.
     /// When MSIx is enabled, multi vectors will be supported, so descriptors is vector and the vector
-    /// length is the num of MSIx vectors
+    /// length is the num of MSIx vectors.
+    /// when index = VFIO_PCI_REQ_IRQ_INDEX, kernel vfio will trigger this event when physical device
+    /// is removed.
     pub fn irq_enable(&self, descriptors: &[&Event], index: u32) -> Result<()> {
         let count = descriptors.len();
         let u32_size = mem::size_of::<u32>();
@@ -798,16 +827,16 @@ impl VfioDevice {
         Err(VfioError::VfioDeviceGetInfo(get_error()))
     }
 
-    /// Query interrupt information
-    /// return: Vector of interrupts information, each of which contains flags and index
-    pub fn get_irqs(&self) -> Result<Vec<VfioIrq>> {
+    /// Get and validate VFIO device information.
+    pub fn check_device_info(&self) -> Result<vfio_device_info> {
         let mut dev_info = vfio_device_info {
             argsz: mem::size_of::<vfio_device_info>() as u32,
             flags: 0,
             num_regions: 0,
             num_irqs: 0,
         };
-        // Safe as we are the owner of dev and dev_info which are valid value,
+
+        // Safe as we are the owner of device_file and dev_info which are valid value,
         // and we verify the return value.
         let ret = unsafe {
             ioctl_with_mut_ref(self.device_file(), VFIO_DEVICE_GET_INFO(), &mut dev_info)
@@ -817,6 +846,13 @@ impl VfioDevice {
         }
 
         Self::validate_dev_info(&mut dev_info)?;
+        Ok(dev_info)
+    }
+
+    /// Query interrupt information
+    /// return: Vector of interrupts information, each of which contains flags and index
+    pub fn get_irqs(&self) -> Result<Vec<VfioIrq>> {
+        let dev_info = self.check_device_info()?;
         let mut irqs: Vec<VfioIrq> = Vec::new();
 
         for i in 0..dev_info.num_irqs {

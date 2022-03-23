@@ -4,18 +4,21 @@
 
 mod block;
 mod console;
+#[cfg(feature = "audio_cras")]
+mod cras_snd;
 mod fs;
 #[cfg(feature = "gpu")]
 mod gpu;
 mod handler;
 mod net;
 mod vsock;
-#[cfg(feature = "vvu")]
 mod vvu;
 mod wl;
 
 pub use block::run_block_device;
 pub use console::run_console_device;
+#[cfg(feature = "audio_cras")]
+pub use cras_snd::run_cras_snd_device;
 pub use fs::run_fs_device;
 #[cfg(feature = "gpu")]
 pub use gpu::run_gpu_device;

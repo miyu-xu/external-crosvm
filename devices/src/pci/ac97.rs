@@ -136,7 +136,6 @@ impl Ac97Dev {
             &PciMultimediaSubclass::AudioDevice,
             None, // No Programming interface.
             PciHeaderType::Device,
-            false,  // Multifunction
             0x8086, // Subsystem Vendor ID
             0x1,    // Subsystem ID.
             0,      //  Revision ID.
@@ -312,8 +311,12 @@ impl PciDevice for Ac97Dev {
         self.irq_evt = Some(irq_evt.try_clone().ok()?);
         self.irq_resample_evt = Some(irq_resample_evt.try_clone().ok()?);
         let gsi = irq_num?;
-        self.config_regs.set_irq(gsi as u8, PciInterruptPin::IntA);
-        Some((gsi, PciInterruptPin::IntA))
+        let pin = self.pci_address.map_or(
+            PciInterruptPin::IntA,
+            PciConfiguration::suggested_interrupt_pin,
+        );
+        self.config_regs.set_irq(gsi as u8, pin);
+        Some((gsi, pin))
     }
 
     fn allocate_io_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<(u64, u64)>> {
@@ -436,6 +439,7 @@ impl PciDevice for Ac97Dev {
 mod tests {
     use super::*;
     use audio_streams::shm_streams::MockShmStreamSource;
+    use resources::{MemRegion, SystemAllocatorConfig};
     use vm_memory::GuestAddress;
 
     #[test]
@@ -443,12 +447,23 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(0u64), 4 * 1024 * 1024)]).unwrap();
         let mut ac97_dev =
             Ac97Dev::new(mem, Ac97Backend::NULL, Box::new(MockShmStreamSource::new()));
-        let mut allocator = SystemAllocator::builder()
-            .add_io_addresses(0x1000_0000, 0x1000_0000)
-            .add_low_mmio_addresses(0x2000_0000, 0x1000_0000)
-            .add_high_mmio_addresses(0x3000_0000, 0x1000_0000)
-            .create_allocator(5)
-            .unwrap();
+        let mut allocator = SystemAllocator::new(SystemAllocatorConfig {
+            io: Some(MemRegion {
+                base: 0x1000_0000,
+                size: 0x1000_0000,
+            }),
+            low_mmio: MemRegion {
+                base: 0x2000_0000,
+                size: 0x1000_0000,
+            },
+            high_mmio: MemRegion {
+                base: 0x3000_0000,
+                size: 0x1000_0000,
+            },
+            platform_mmio: None,
+            first_irq: 5,
+        })
+        .unwrap();
         assert!(ac97_dev.allocate_address(&mut allocator).is_ok());
         assert!(ac97_dev.allocate_io_bars(&mut allocator).is_ok());
     }

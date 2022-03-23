@@ -71,6 +71,7 @@ exclude = [
     "common/assertions",
     "common/audio_streams",
     "common/base",
+    "common/sys_util_core",
     "common/cros-fuzz",
     "common/cros_async",
     "common/cros_asyncv2",
@@ -104,7 +105,7 @@ chromeos = ["base/chromeos", "audio_cras", "devices/chromeos"]
 composite-disk = ["protos/composite-disk", "protobuf", "disk/composite-disk"]
 default = ["audio", "gpu", "usb"]
 default-no-sandbox = []
-direct = ["devices/direct"]
+direct = ["devices/direct", "x86_64/direct"]
 gdb = ["gdbstub", "gdbstub_arch", "arch/gdb", "vm_control/gdb", "x86_64/gdb"]
 gfxstream = ["devices/gfxstream"]
 gpu = ["devices/gpu"]
@@ -113,8 +114,8 @@ plugin = ["protos/plugin", "crosvm_plugin", "kvm", "kvm_sys", "protobuf"]
 power-monitor-powerd = ["arch/power-monitor-powerd"]
 tpm = ["devices/tpm"]
 usb = ["devices/usb"]
-video-decoder = ["devices/video-decoder", "libvda"]
-video-encoder = ["devices/video-encoder", "libvda"]
+video-decoder = ["devices/video-decoder"]
+video-encoder = ["devices/video-encoder"]
 virgl_renderer = ["devices/virgl_renderer"]
 virgl_renderer_next = ["rutabaga_gfx/virgl_renderer_next"]
 wl-dmabuf = ["devices/minigbm"]
@@ -172,6 +173,7 @@ base = { path = "common/base" }
 assertions = { path = "common/assertions" }
 audio_streams = { path = "common/audio_streams" }
 base = { path = "common/base" }
+sys_util_core = { path = "common/sys_util_core" }
 cros_async =  { path = "common/cros_async" }
 cros_fuzz = { path = "common/cros-fuzz" } # ignored by ebuild
 data_model = { path = "common/data_model" }

@@ -10,7 +10,7 @@ use remain::sorted;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::pci::PciInterruptPin;
+use crate::pci::{PciAddress, PciInterruptPin};
 
 // The number of 32bit registers in the config space, 256 bytes.
 const NUM_CONFIGURATION_REGISTERS: usize = 64;
@@ -19,7 +19,9 @@ pub const COMMAND_REG: usize = 1;
 pub const COMMAND_REG_IO_SPACE_MASK: u32 = 0x0000_0001;
 pub const COMMAND_REG_MEMORY_SPACE_MASK: u32 = 0x0000_0002;
 const STATUS_REG: usize = 1;
-const STATUS_REG_CAPABILITIES_USED_MASK: u32 = 0x0010_0000;
+pub const STATUS_REG_CAPABILITIES_USED_MASK: u32 = 0x0010_0000;
+pub const HEADER_TYPE_REG: usize = 3;
+pub const HEADER_TYPE_MULTIFUNCTION_MASK: u32 = 0x0080_0000;
 pub const BAR0_REG: usize = 4;
 const BAR_IO_ADDR_MASK: u32 = 0xffff_fffc;
 const BAR_IO_MIN_SIZE: u64 = 4;
@@ -29,9 +31,10 @@ const BAR_ROM_MIN_SIZE: u64 = 2048;
 pub const NUM_BAR_REGS: usize = 7; // 6 normal BARs + expansion ROM BAR.
 pub const ROM_BAR_IDX: PciBarIndex = 6;
 pub const ROM_BAR_REG: usize = 12;
-const CAPABILITY_LIST_HEAD_OFFSET: usize = 0x34;
+pub const CAPABILITY_LIST_HEAD_OFFSET: usize = 0x34;
+pub const PCI_CAP_NEXT_POINTER: usize = 0x1;
 const FIRST_CAPABILITY_OFFSET: usize = 0x40;
-const CAPABILITY_MAX_OFFSET: usize = 255;
+pub const CAPABILITY_MAX_OFFSET: usize = 255;
 
 const INTERRUPT_LINE_PIN_REG: usize = 15;
 
@@ -173,6 +176,20 @@ impl PciSubclass for PciSerialBusSubClass {
     }
 }
 
+/// Subclasses for PciClassCode Other.
+#[allow(dead_code)]
+#[derive(Copy, Clone)]
+#[repr(u8)]
+pub enum PciOtherSubclass {
+    Other = 0xff,
+}
+
+impl PciSubclass for PciOtherSubclass {
+    fn get_register_value(&self) -> u8 {
+        *self as u8
+    }
+}
+
 /// A PCI class programming interface. Each combination of `PciClassCode` and
 /// `PciSubclass` can specify a set of register-level programming interfaces.
 /// This trait is implemented by each programming interface.
@@ -309,7 +326,6 @@ impl PciConfiguration {
         subclass: &dyn PciSubclass,
         programming_interface: Option<&dyn PciProgrammingInterface>,
         header_type: PciHeaderType,
-        multifunction: bool,
         subsystem_vendor_id: u16,
         subsystem_id: u16,
         revision_id: u8,
@@ -350,10 +366,6 @@ impl PciConfiguration {
                 writable_bits[15] = 0xffff_00ff; // Bridge control (r/w), interrupt line (r/w)
             }
         };
-        // Multifunction is indicated by the highest bit in the header_type field.
-        if multifunction {
-            registers[3] |= 0x0080_0000;
-        }
 
         PciConfiguration {
             registers,
@@ -646,6 +658,15 @@ impl PciConfiguration {
         let next = offset + len;
         (next + 3) & !3
     }
+
+    pub fn suggested_interrupt_pin(pci_address: PciAddress) -> PciInterruptPin {
+        match pci_address.func % 4 {
+            0 => PciInterruptPin::IntA,
+            1 => PciInterruptPin::IntB,
+            2 => PciInterruptPin::IntC,
+            _ => PciInterruptPin::IntD,
+        }
+    }
 }
 
 impl PciBarConfiguration {
@@ -751,7 +772,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             None,
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -814,7 +834,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -830,24 +849,6 @@ mod tests {
     }
 
     #[test]
-    fn multifunction() {
-        let cfg = PciConfiguration::new(
-            0x1234,
-            0x5678,
-            PciClassCode::MultimediaController,
-            &PciMultimediaSubclass::AudioController,
-            Some(&TestPI::Test),
-            PciHeaderType::Device,
-            true,
-            0xABCD,
-            0x2468,
-            0,
-        );
-
-        assert!((cfg.read_reg(3) & 0x0080_0000) != 0);
-    }
-
-    #[test]
     fn read_only_bits() {
         let mut cfg = PciConfiguration::new(
             0x1234,
@@ -856,7 +857,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -877,7 +877,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -900,7 +899,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -913,7 +911,7 @@ mod tests {
                 PciBarRegionType::Memory64BitRegion,
                 PciBarPrefetchable::NotPrefetchable,
             )
-            .set_address(0x01234567_89ABCDE0),
+            .set_address(0x0123_4567_89AB_CDE0),
         )
         .expect("add_pci_bar failed");
 
@@ -921,7 +919,7 @@ mod tests {
             cfg.get_bar_type(0),
             Some(PciBarRegionType::Memory64BitRegion)
         );
-        assert_eq!(cfg.get_bar_addr(0), 0x01234567_89ABCDE0);
+        assert_eq!(cfg.get_bar_addr(0), 0x0123_4567_89AB_CDE0);
         assert_eq!(cfg.writable_bits[BAR0_REG + 1], 0xFFFFFFFF);
         assert_eq!(cfg.writable_bits[BAR0_REG + 0], 0xFFFFFFF0);
 
@@ -929,7 +927,7 @@ mod tests {
         assert_eq!(
             bar_iter.next(),
             Some(PciBarConfiguration {
-                addr: 0x01234567_89ABCDE0,
+                addr: 0x0123_4567_89AB_CDE0,
                 size: 0x10,
                 bar_idx: 0,
                 region_type: PciBarRegionType::Memory64BitRegion,
@@ -948,7 +946,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -995,7 +992,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -1039,7 +1035,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -1053,7 +1048,7 @@ mod tests {
                 PciBarRegionType::Memory64BitRegion,
                 PciBarPrefetchable::NotPrefetchable,
             )
-            .set_address(0x01234567_89ABCDE0),
+            .set_address(0x0123_4567_89AB_CDE0),
         )
         .expect("add_pci_bar failed");
 
@@ -1086,7 +1081,7 @@ mod tests {
         assert_eq!(
             bar_iter.next(),
             Some(PciBarConfiguration {
-                addr: 0x01234567_89ABCDE0,
+                addr: 0x0123_4567_89AB_CDE0,
                 size: 0x10,
                 bar_idx: 0,
                 region_type: PciBarRegionType::Memory64BitRegion,
@@ -1123,7 +1118,7 @@ mod tests {
         assert_eq!(
             bar_iter.next(),
             Some(PciBarConfiguration {
-                addr: 0xFFEEDDCC_BBAA9980,
+                addr: 0xFFEE_DDCC_BBAA_9980,
                 size: 0x10,
                 bar_idx: 0,
                 region_type: PciBarRegionType::Memory64BitRegion,
@@ -1162,7 +1157,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,
@@ -1220,7 +1214,6 @@ mod tests {
             &PciMultimediaSubclass::AudioController,
             Some(&TestPI::Test),
             PciHeaderType::Device,
-            false,
             0xABCD,
             0x2468,
             0,

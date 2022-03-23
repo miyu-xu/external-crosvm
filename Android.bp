@@ -43,9 +43,6 @@ rust_binary {
     edition: "2018",
     features: [
         "audio",
-        "default",
-        "gfxstream",
-        "gpu",
         "usb",
     ],
     rustlibs: [
@@ -91,14 +88,16 @@ rust_binary {
         },
     },
     target: {
-        linux_bionic_arm64: {
-            relative_install_path: "aarch64-linux-bionic",
+        host: {
+            features: [
+                "gfxstream",
+                "gpu",
+            ],
         },
         darwin: {
             enabled: false,
         },
-        linux_glibc_x86_64: {
-            relative_install_path: "x86_64-linux-gnu",
+        host_linux: {
             features: [
                 "gdb",
                 "gdbstub",
@@ -108,6 +107,15 @@ rust_binary {
                 "libgdbstub_arch",
                 "libthiserror",
             ],
+        },
+        linux_bionic_arm64: {
+            relative_install_path: "aarch64-linux-bionic",
+        },
+        linux_glibc_x86_64: {
+            relative_install_path: "x86_64-linux-gnu",
+        },
+        linux_musl_x86_64: {
+            relative_install_path: "x86_64-linux-musl",
         },
     },
     ld_flags: [
@@ -131,9 +139,6 @@ rust_test {
     edition: "2018",
     features: [
         "audio",
-        "default",
-        "gfxstream",
-        "gpu",
         "usb",
     ],
     rustlibs: [
@@ -178,7 +183,13 @@ rust_test {
         },
     },
     target: {
-        linux_glibc_x86_64: {
+        host: {
+            features: [
+                "gfxstream",
+                "gpu",
+            ],
+        },
+        host_linux: {
             features: [
                 "gdb",
                 "gdbstub",
@@ -211,9 +222,6 @@ rust_test {
     edition: "2018",
     features: [
         "audio",
-        "default",
-        "gfxstream",
-        "gpu",
         "usb",
     ],
     rustlibs: [
@@ -259,7 +267,13 @@ rust_test {
         },
     },
     target: {
-        linux_glibc_x86_64: {
+        host: {
+            features: [
+                "gfxstream",
+                "gpu",
+            ],
+        },
+        host_linux: {
             features: [
                 "gdb",
                 "gdbstub",
@@ -287,9 +301,6 @@ rust_library {
     edition: "2018",
     features: [
         "audio",
-        "default",
-        "gfxstream",
-        "gpu",
         "usb",
     ],
     rustlibs: [
@@ -334,7 +345,13 @@ rust_library {
         },
     },
     target: {
-        linux_glibc_x86_64: {
+        host: {
+            features: [
+                "gfxstream",
+                "gpu",
+            ],
+        },
+        host_linux: {
             features: [
                 "gdb",
                 "gdbstub",
@@ -358,6 +375,9 @@ rust_defaults {
     enabled: false,
     target: {
         linux_glibc_x86_64: {
+            enabled: true,
+        },
+        linux_musl_x86_64: {
             enabled: true,
         },
         android64: {
