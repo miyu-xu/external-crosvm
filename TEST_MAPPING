@@ -1,0 +1,12 @@
+{
+  "presubmit": [
+    {
+      "name": "MicrodroidHostTestCases"
+    }
+  ],
+  "imports": [
+    {
+      "path": "packages/modules/Virtualization"
+    }
+  ]
+}
