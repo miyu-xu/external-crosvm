@@ -94,6 +94,30 @@
       },
       "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "39faf536_2ec2fa3e",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-03-23T16:37:24Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "f426104d_2d36b869",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 4
+      },
+      "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
