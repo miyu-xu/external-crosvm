@@ -22,6 +22,30 @@
       },
       "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6fce67b1_51c2beba",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-03-23T13:36:07Z",
+      "side": 1,
+      "message": "Right, I wanted to make the presubmit lighter here by dropping higher-level tests (such as CompOS) but it might not be necessary. I\u0027ll let the current presubmit run before uploading a new version.",
+      "parentUuid": "22b357ca_04d63955",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 4
+      },
+      "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
