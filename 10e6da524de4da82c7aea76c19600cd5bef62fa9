@@ -70,6 +70,30 @@
       },
       "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f426104d_2d36b869",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2022-03-23T15:55:19Z",
+      "side": 1,
+      "message": "I think it\u0027s ok to keep the heavier test here given the supposedly low update frequency.  The CompOS test case would be a pressure test, since it uses more memory, block devices, etc.",
+      "parentUuid": "a07292e0_a8603a8f",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 4
+      },
+      "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
