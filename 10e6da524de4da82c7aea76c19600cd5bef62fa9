@@ -46,6 +46,30 @@
       },
       "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a07292e0_a8603a8f",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1060831
+      },
+      "writtenOn": "2022-03-23T13:37:18Z",
+      "side": 1,
+      "message": "I think the only way to do that would be to create a TEST_MAPPING in the microdroid test directory and then import it into the Virtualization one and here.",
+      "parentUuid": "6fce67b1_51c2beba",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 4
+      },
+      "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
