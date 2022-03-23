@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "22b357ca_04d63955",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1060831
+      },
+      "writtenOn": "2022-03-23T13:27:51Z",
+      "side": 1,
+      "message": "I don\u0027t think you need this. The import means you will run all our presubmit tests anyway.",
+      "range": {
+        "startLine": 2,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 4
+      },
+      "revId": "10e6da524de4da82c7aea76c19600cd5bef62fa9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
