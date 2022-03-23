@@ -350,6 +350,7 @@ impl arch::LinuxArch for AArch64 {
         }
 
         if components.protected_vm == ProtectionType::Protected {
+            return Err(Error::Unsupported);
             vm.load_protected_vm_firmware(
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
