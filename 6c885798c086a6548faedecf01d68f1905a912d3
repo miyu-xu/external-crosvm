@@ -80,6 +80,41 @@
       "message": "Is this change needed upstream? If so, is there an upstream version of it? If so, please add a \"Link: \" tag to crrev.com for it.",
       "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ab04871e_30158575",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-03-24T20:27:44Z",
+      "side": 1,
+      "message": "I don\u0027t think we can take this change as-is upstream, but see my other comment for an alternative.",
+      "parentUuid": "d90b7929_665bf64f",
+      "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4ebb3845_a0ea2127",
+        "filename": "devices/src/virtio/virtio_pci_device.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 485,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-03-24T20:27:44Z",
+      "side": 1,
+      "message": "Would it be possible to check for protected VMs at the place supports_iommu() is called instead? I think we should be able to pass in `cfg.protected_vm` to that function and use something like `if pci_dev.supports_iommu() \u0026\u0026 !protected_vm`. (http://cs/chromeos_public/src/platform/crosvm/src/linux/device_helpers.rs;l\u003d1192;rcl\u003d7c2d05f4f72d80034b0437305c7cbc35f988fe74)",
+      "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
