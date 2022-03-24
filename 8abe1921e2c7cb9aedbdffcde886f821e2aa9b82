@@ -22,6 +22,30 @@
       },
       "revId": "8abe1921e2c7cb9aedbdffcde886f821e2aa9b82",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dbe8ea08_9db00f5d",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-24T15:55:20Z",
+      "side": 1,
+      "message": "Yeah, I misunderstood Victor, but verified it doesn\u0027t and updated commit message.",
+      "parentUuid": "b75d1e01_73ee94cf",
+      "range": {
+        "startLine": 11,
+        "startChar": 39,
+        "endLine": 11,
+        "endChar": 54
+      },
+      "revId": "8abe1921e2c7cb9aedbdffcde886f821e2aa9b82",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
