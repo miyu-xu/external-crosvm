@@ -100,6 +100,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e81b744f_55304e30",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-24T20:30:57Z",
+      "side": 1,
+      "message": "Right, I was trying to unblock the merge process, to get us back on track, and handle the mismatch independently.",
+      "parentUuid": "ab04871e_30158575",
+      "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4ebb3845_a0ea2127",
@@ -113,6 +131,24 @@
       "writtenOn": "2022-03-24T20:27:44Z",
       "side": 1,
       "message": "Would it be possible to check for protected VMs at the place supports_iommu() is called instead? I think we should be able to pass in `cfg.protected_vm` to that function and use something like `if pci_dev.supports_iommu() \u0026\u0026 !protected_vm`. (http://cs/chromeos_public/src/platform/crosvm/src/linux/device_helpers.rs;l\u003d1192;rcl\u003d7c2d05f4f72d80034b0437305c7cbc35f988fe74)",
+      "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1ed7e33f_ac7e406b",
+        "filename": "devices/src/virtio/virtio_pci_device.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 485,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-24T20:30:57Z",
+      "side": 1,
+      "message": "This still seems like it would fail if we need an iommu on a device which is protected_vm, right?",
+      "parentUuid": "4ebb3845_a0ea2127",
       "revId": "6c885798c086a6548faedecf01d68f1905a912d3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
