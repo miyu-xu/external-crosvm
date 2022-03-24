@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b75d1e01_73ee94cf",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-03-24T09:56:51Z",
+      "side": 1,
+      "message": "So, if this actually only reverts commit 0db46d202d140, it should bring back the virtio-iommu issue (see b/223546213#comment11) and break protected mode again, right? I\u0027ve submitted aosp/2038673 to try to catch that but it doesn\u0027t seem to be ready yet. If there are fixes upstream, we should submit them through a merge commit on top of this revert and merge it all at once.",
+      "range": {
+        "startLine": 11,
+        "startChar": 39,
+        "endLine": 11,
+        "endChar": 54
+      },
+      "revId": "8abe1921e2c7cb9aedbdffcde886f821e2aa9b82",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
