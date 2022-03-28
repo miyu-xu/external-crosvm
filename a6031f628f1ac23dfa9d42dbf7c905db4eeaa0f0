@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38cef688_30986498",
+        "filename": "gunyah_sys/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2022-03-28T21:40:21Z",
+      "side": 1,
+      "message": "Will remove this.",
+      "revId": "a6031f628f1ac23dfa9d42dbf7c905db4eeaa0f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
