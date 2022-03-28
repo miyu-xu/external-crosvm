@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ec83a1dc_92cf39f4",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-03-28T23:42:50Z",
+      "side": 1,
+      "message": "nit: usually we like to keep this more in alphabetical order for (base, gunyah, std, then vm_memory), but we don\u0027t always get around to that or catch it.",
+      "revId": "8063715558ff1a2100b9cd0ded02a091efc8772f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2bd2c50e_daf7fe05",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 46,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-03-28T23:42:50Z",
+      "side": 1,
+      "message": "as you write all of these impl\u0027s do you want them to be in separate files? I don\u0027t know if the impl\u0027s will be a lot of code. It might be easier to review in separate batches. We can simply not compile in this code until its ready.",
+      "range": {
+        "startLine": 46,
+        "startChar": 0,
+        "endLine": 46,
+        "endChar": 28
+      },
+      "revId": "8063715558ff1a2100b9cd0ded02a091efc8772f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
