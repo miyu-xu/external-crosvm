@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "661e92cb_163c9d7d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1416371
+      },
+      "writtenOn": "2022-03-30T00:00:45Z",
+      "side": 1,
+      "message": "Approved as a stopgap measure until c2a is improved (either sandbox usable for crosvm, or `--cargo_bin` works with prebuilt)",
+      "revId": "bf50de2e0508e78f082a411ae7c0bd5a389d92fe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
