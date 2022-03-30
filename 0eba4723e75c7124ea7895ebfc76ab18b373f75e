@@ -16,6 +16,23 @@
       "message": "presubmit failure appears to be b/227277030",
       "revId": "0eba4723e75c7124ea7895ebfc76ab18b373f75e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "acde957e_09e0a84f",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-03-30T16:27:03Z",
+      "side": 1,
+      "message": "Nit: echoing this for every crate is a bit noisy, maybe just do it once at the top of the script?",
+      "revId": "0eba4723e75c7124ea7895ebfc76ab18b373f75e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
