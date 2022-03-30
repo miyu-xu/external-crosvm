@@ -33,6 +33,24 @@
       "message": "Nit: echoing this for every crate is a bit noisy, maybe just do it once at the top of the script?",
       "revId": "0eba4723e75c7124ea7895ebfc76ab18b373f75e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ba1adf2f_d2f58ff8",
+        "filename": "all2android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-30T17:50:30Z",
+      "side": 1,
+      "message": "Thanks! This script still doesn\u0027t work on ToT (see b/227257377 and email thread/checklist). Will clean things up once everything is working and we are sure we can still use the script.",
+      "parentUuid": "acde957e_09e0a84f",
+      "revId": "0eba4723e75c7124ea7895ebfc76ab18b373f75e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
