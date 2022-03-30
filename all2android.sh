@@ -15,7 +15,7 @@ cargo2android() {
   else
     $C2A --run --device --tests $@
   fi
-  rm -f cargo.out
+  # rm -f cargo.out
   rm -rf target.tmp || /bin/true
 }
 
