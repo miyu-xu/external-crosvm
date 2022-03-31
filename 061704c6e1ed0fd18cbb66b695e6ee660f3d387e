@@ -108,6 +108,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "86cccdc3_98ce7ee7",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 46,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T21:43:30Z",
+      "side": 1,
+      "message": "committed before saving the diff - will add next time or when I rerun all2android.sh",
+      "parentUuid": "21b91237_4b391976",
+      "range": {
+        "startLine": 46,
+        "startChar": 0,
+        "endLine": 46,
+        "endChar": 40
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "596bb385_2f128f6e",
         "filename": "base/base_poll_token_derive/Cargo.toml",
         "patchSetId": 1
@@ -155,6 +179,24 @@
       "side": 1,
       "message": "Right, with one, it didn\u0027t work.",
       "parentUuid": "84928640_7922a8f7",
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c4c579ac_af71e570",
+        "filename": "base/base_poll_token_derive/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T21:43:30Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "096ec2b9_e19516ec",
       "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -207,6 +249,24 @@
       "writtenOn": "2022-03-31T17:25:22Z",
       "side": 1,
       "message": "Does this work now? If not, you might need to copy the cargo2android.json from the old location.",
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f0cb3bc_cd73c28d",
+        "filename": "io_uring/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T21:43:30Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cf48ce77_d5e69938",
       "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
