@@ -176,6 +176,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "add351c1_b63283af",
+        "filename": "disk/Android.bp.rej",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T18:21:37Z",
+      "side": 1,
+      "message": "yeah - the patch did get applied btw - was from a separate build problem, but forgot to upload PS2",
+      "parentUuid": "c54c9aeb_77bca1e0",
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cf48ce77_d5e69938",
