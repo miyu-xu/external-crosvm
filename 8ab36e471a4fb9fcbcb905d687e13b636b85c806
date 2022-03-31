@@ -46,6 +46,30 @@
       },
       "revId": "8ab36e471a4fb9fcbcb905d687e13b636b85c806",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c8d02c1a_e4162a3a",
+        "filename": "common/cros_async/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T18:20:53Z",
+      "side": 0,
+      "message": "ah - cool - I\u0027ll keep the code in both places but drop the Android.bp files",
+      "parentUuid": "f2a584b6_284f85b2",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 9
+      },
+      "revId": "8ab36e471a4fb9fcbcb905d687e13b636b85c806",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
