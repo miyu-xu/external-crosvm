@@ -1,0 +1,90 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8b49db4c_ab784421",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 57,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T16:53:07Z",
+      "side": 1,
+      "message": "the upload script is messing up all the formatting, will setup bpfmt separately and will run in this change",
+      "range": {
+        "startLine": 56,
+        "startChar": 5,
+        "endLine": 57,
+        "endChar": 5
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "60d6d886_f59139e8",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 46,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T16:53:07Z",
+      "side": 1,
+      "message": "this was a manual change",
+      "range": {
+        "startLine": 46,
+        "startChar": 0,
+        "endLine": 46,
+        "endChar": 40
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "596bb385_2f128f6e",
+        "filename": "base/base_poll_token_derive/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T16:53:07Z",
+      "side": 1,
+      "message": "two extra newlines were needed from the parser. Andrew mentioned a similar issue here: b/226645768#comment7",
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0a19faea_fad2d5bd",
+        "filename": "serde_keyvalue/src/key_values.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 245,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-03-31T16:53:07Z",
+      "side": 1,
+      "message": "Required for the Rust code to compile. I believe this is a compiler version issue. Will follow-up seperately with the chisel/defork effort once we have a standard crosvm component and a process for that.",
+      "range": {
+        "startLine": 245,
+        "startChar": 44,
+        "endLine": 245,
+        "endChar": 48
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
