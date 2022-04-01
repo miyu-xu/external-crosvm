@@ -997,10 +997,50 @@ fn map_descriptor(
         .protection(prot)
         .build()
     {
+<<<<<<< HEAD   (e871ee Kokoro merge bot: Rebase merges before uploading)
         Ok(mmap) => Ok(Box::new(mmap)),
         Err(MmapError::SystemCallFailed(e)) => Err(e),
         _ => Err(SysError::new(EINVAL)),
     }
+=======
+        Ok(v) => v,
+        Err(MmapError::SystemCallFailed(e)) => return Err(e),
+        _ => return Err(SysError::new(EINVAL)),
+    };
+
+    let addr = match pci_allocation {
+        Some(pci_allocation) => allocator
+            .mmio_allocator_any()
+            .address_from_pci_offset(pci_allocation.0, pci_allocation.1, size as u64)
+            .map_err(|_e| SysError::new(EINVAL))?,
+        None => {
+            let alloc = allocator.get_anon_alloc();
+            allocator
+                .mmio_allocator_any()
+                .allocate(size as u64, alloc, "vmcontrol_register_memory".to_string())
+                .map_err(|_e| SysError::new(EINVAL))?
+        }
+    };
+
+    let slot = vm.add_memory_region(GuestAddress(addr), Box::new(mmap), false, false)?;
+
+    Ok((addr >> 12, slot))
+}
+
+fn register_host_pointer(
+    vm: &mut impl Vm,
+    allocator: &mut SystemAllocator,
+    mem: Box<dyn MappedRegion>,
+    pci_allocation: (Alloc, u64),
+) -> Result<(u64, MemSlot)> {
+    let addr = allocator
+        .mmio_allocator_any()
+        .address_from_pci_offset(pci_allocation.0, pci_allocation.1, mem.size() as u64)
+        .map_err(|_e| SysError::new(EINVAL))?;
+
+    let slot = vm.add_memory_region(GuestAddress(addr), mem, false, false)?;
+    Ok((addr >> 12, slot))
+>>>>>>> BRANCH (f95198 Merge "OWNERS.android += smoreland@")
 }
 
 impl VmRequest {
