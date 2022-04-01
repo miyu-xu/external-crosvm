@@ -186,10 +186,16 @@ impl CompositeDiskFile {
                 };
                 let comp_file = open_file(
                     &path,
+<<<<<<< HEAD   (e871ee Kokoro merge bot: Rebase merges before uploading)
                     OpenOptions::new().read(true).write(
                         disk.get_read_write_capability()
                             == cdisk_spec::ReadWriteCapability::READ_WRITE,
                     ), // TODO(b/190435784): add support for O_DIRECT.
+=======
+                    disk.get_read_write_capability() != cdisk_spec::ReadWriteCapability::READ_WRITE,
+                    // TODO(b/190435784): add support for O_DIRECT.
+                    false, /*O_DIRECT*/
+>>>>>>> BRANCH (f95198 Merge "OWNERS.android += smoreland@")
                 )
                 .map_err(|e| Error::OpenFile(e.into(), disk.get_file_path().to_string()))?;
                 Ok(ComponentDiskPart {
