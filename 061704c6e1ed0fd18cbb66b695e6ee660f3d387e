@@ -292,6 +292,30 @@
       },
       "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aee177c6_76ad1fc3",
+        "filename": "serde_keyvalue/src/key_values.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 245,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-01T02:05:21Z",
+      "side": 1,
+      "message": "I played with this out of curiosity and it seems like you need at least rustc 1.58 for the upstream version to compile.",
+      "parentUuid": "0a19faea_fad2d5bd",
+      "range": {
+        "startLine": 245,
+        "startChar": 44,
+        "endLine": 245,
+        "endChar": 48
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
