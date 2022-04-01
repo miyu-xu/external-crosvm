@@ -13,6 +13,11 @@ target: {
             "gpu",
         ],
     },
+    android: {
+        shared_libs: [
+            "libprocessgroup",
+        ],
+    },
     host_linux: {
         features: [
             "gdb",
