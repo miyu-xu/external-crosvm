@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "22d8072d_c338eb4d",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 57,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-01T16:42:06Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "8b49db4c_ab784421",
+      "range": {
+        "startLine": 56,
+        "startChar": 5,
+        "endLine": 57,
+        "endChar": 5
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d5295aae_61d98e46",
@@ -120,6 +144,30 @@
       "side": 1,
       "message": "committed before saving the diff - will add next time or when I rerun all2android.sh",
       "parentUuid": "21b91237_4b391976",
+      "range": {
+        "startLine": 46,
+        "startChar": 0,
+        "endLine": 46,
+        "endChar": 40
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "18380f8a_c77415d8",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 46,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-01T16:42:06Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "86cccdc3_98ce7ee7",
       "range": {
         "startLine": 46,
         "startChar": 0,
