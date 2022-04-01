@@ -20,8 +20,12 @@ vfio-device = []
 anyhow = "*"
 base = { path = "../../base" }
 bitflags = ">=1.0.1"
+<<<<<<< HEAD   (e871ee Kokoro merge bot: Rebase merges before uploading)
 cfg-if = "1.0.0"
 data_model= "*"
+=======
+data_model = { path = "../../common/data_model" }
+>>>>>>> BRANCH (f95198 Merge "OWNERS.android += smoreland@")
 libc = ">=0.2.39"
 remain = "*"
 tempfile = "*"
