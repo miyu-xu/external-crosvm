@@ -388,6 +388,30 @@
       },
       "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75ab6c3f_53bbbd49",
+        "filename": "serde_keyvalue/src/key_values.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 245,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-04-01T20:49:11Z",
+      "side": 1,
+      "message": "What version of rustc is Android using? We are only build-testing against the version that the ChromeOS toolchain provides (currently 1.58.1), but if Android is using an older one, we could consider testing this in our kokoro CI scripts.",
+      "parentUuid": "0de7b0e7_2da752b4",
+      "range": {
+        "startLine": 245,
+        "startChar": 44,
+        "endLine": 245,
+        "endChar": 48
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
