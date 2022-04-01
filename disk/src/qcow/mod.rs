@@ -576,7 +576,13 @@ impl QcowFile {
         let backing_path = Path::new(backing_file_name);
         let backing_raw_file = open_file(
             backing_path,
+<<<<<<< HEAD   (e871ee Kokoro merge bot: Rebase merges before uploading)
             OpenOptions::new().read(true), // TODO(b/190435784): add support for O_DIRECT.
+=======
+            true, /*read_only*/
+            // TODO(b/190435784): add support for O_DIRECT.
+            false, /*O_DIRECT*/
+>>>>>>> BRANCH (f95198 Merge "OWNERS.android += smoreland@")
         )
         .map_err(|e| Error::BackingFileIo(e.into()))?;
         let backing_file = create_disk_file(
