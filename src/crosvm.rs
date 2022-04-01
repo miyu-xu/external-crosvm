@@ -464,6 +464,8 @@ pub struct Config {
     pub force_s2idle: bool,
     pub strict_balloon: bool,
     pub mmio_address_ranges: Vec<RangeInclusive<u64>>,
+    #[cfg(target_os = "android")]
+    pub task_profiles: Vec<String>,
 }
 
 impl Default for Config {
@@ -584,6 +586,8 @@ impl Default for Config {
             force_s2idle: false,
             strict_balloon: false,
             mmio_address_ranges: Vec::new(),
+            #[cfg(target_os = "android")]
+            task_profiles: Vec::new(),
         }
     }
 }
