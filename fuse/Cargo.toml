@@ -8,10 +8,14 @@ edition = "2021"
 path = "src/lib.rs"
 
 [dependencies]
-base = "*"
+base = { path = "../common/base" }
 bitflags = "1"
+<<<<<<< HEAD   (e871ee Kokoro merge bot: Rebase merges before uploading)
 crossbeam-utils = "0.8"
 data_model = "*"
+=======
+data_model = { path = "../common/data_model" }
+>>>>>>> BRANCH (f95198 Merge "OWNERS.android += smoreland@")
 enumn = "0.1.0"
 libc = "*"
 remain = "0.2"
