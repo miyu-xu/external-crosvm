@@ -436,6 +436,30 @@
       },
       "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2226edb0_fa298ec9",
+        "filename": "serde_keyvalue/src/key_values.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 245,
+      "author": {
+        "id": 1042276
+      },
+      "writtenOn": "2022-04-05T15:28:03Z",
+      "side": 1,
+      "message": "I found a few versions of Rust toolchain on Android. But I don\u0027t know which version is the default.  Maybe Andrew knows?\n\nhttps://cs.android.com/android/platform/superproject/+/master:prebuilts/rust/linux-x86/\n\nBut anyway, this is a moving target since we can\u0027t sync the Rust version on both (or all) places where crosvm is built.  I\u0027m guessing the problem is similar for crosvm team: a major uprev in the rust ebuild in the Chrome OS repo will require fixing crosvm source (and other Rust-based projects).  And if the fix isn\u0027t backward (forward?) compatible, downstream/Android may need some workaround when they are merging from the crosvm upstream (and perhaps revert the workaround when the toolchain version is consistent again).  Does this sound right?\n\nIt feels easier if crosvm could avoid using the latest language feature right away? (which I\u0027d personally hate if I\u0027m on the team, to be fair :)",
+      "parentUuid": "90dcc260_3d260860",
+      "range": {
+        "startLine": 245,
+        "startChar": 44,
+        "endLine": 245,
+        "endChar": 48
+      },
+      "revId": "061704c6e1ed0fd18cbb66b695e6ee660f3d387e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
