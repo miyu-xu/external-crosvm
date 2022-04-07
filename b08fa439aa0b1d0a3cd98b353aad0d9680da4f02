@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f38fad11_3f69f06b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2022-04-07T21:00:09Z",
+      "side": 1,
+      "message": "I don\u0027t know anything about Android.bp files, I suppose this is fine. Maybe some of the tooling to generate the bp files need updating to do this automatically?",
+      "revId": "b08fa439aa0b1d0a3cd98b353aad0d9680da4f02",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
