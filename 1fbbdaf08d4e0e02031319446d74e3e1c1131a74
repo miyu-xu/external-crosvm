@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6614b399_2dac78b0",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-08T18:56:27Z",
+      "side": 1,
+      "message": "TODO: will test cuttlefish and pkvm as well just in case",
+      "revId": "1fbbdaf08d4e0e02031319446d74e3e1c1131a74",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
