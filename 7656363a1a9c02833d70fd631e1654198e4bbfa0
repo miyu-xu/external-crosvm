@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "32aa31d6_9c2a50ca",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2022-04-08T14:51:35Z",
+      "side": 1,
+      "message": "Looks ok to me, just wondering if those modifications would be overwritten by running cargo2android.",
+      "revId": "7656363a1a9c02833d70fd631e1654198e4bbfa0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
