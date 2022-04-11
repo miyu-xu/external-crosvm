@@ -4,15 +4,11 @@
 
 //! Rust implementation of functionality parallel to libchrome's base/rand_util.h.
 
-use std::thread::sleep;
-use std::time::Duration;
+use std::{thread::sleep, time::Duration};
 
 use libc::{c_uint, c_void};
 
-use crate::{
-    errno::{errno_result, Result},
-    handle_eintr_errno,
-};
+use super::{errno_result, handle_eintr_errno, Result};
 
 /// How long to wait before calling getrandom again if it does not return
 /// enough bytes.

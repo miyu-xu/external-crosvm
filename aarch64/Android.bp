@@ -18,7 +18,7 @@ rust_library {
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
-    edition: "2018",
+    edition: "2021",
     rustlibs: [
         "libarch",
         "libbase_rust",
@@ -29,6 +29,7 @@ rust_library {
         "libkvm",
         "libkvm_sys",
         "liblibc",
+        "libmemoffset",
         "libminijail_rust",
         "libresources",
         "libsync_rust",
@@ -53,4 +54,5 @@ rust_library {
             enabled: false,
         },
     },
+
 }

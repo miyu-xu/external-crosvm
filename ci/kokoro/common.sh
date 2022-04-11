@@ -19,7 +19,7 @@ if [[ ! -z "${DEBUG_SSH_KEY}" ]]; then
 fi
 
 setup_source() {
-  if [ -z "${KOKORO_ARTIFACTS_DIR}/git" ]; then
+  if [ ! -d "${KOKORO_ARTIFACTS_DIR}" ]; then
     echo "This script must be run in kokoro"
     exit 1
   fi
@@ -27,6 +27,16 @@ setup_source() {
   mkdir -p "${KOKORO_ARTIFACTS_DIR}/logs"
 
   cd "${KOKORO_ARTIFACTS_DIR}/git/crosvm"
+
+  # The Kokoro builder has not the required packages from ./tools/install-deps and an old python
+  # version.
+  # Install what is needed to run ./tools/dev_container
+  # Note: This won't be necessary once we switch to a custom Kokoro image (or luci)
+  if command -v pyenv; then
+    pyenv install -v 3.9.5
+    pyenv global 3.9.5
+    pip install argh
+  fi
 
   echo "Rebasing changes to ToT"
   # We cannot use the original origin that kokoro used, as we no longer have
@@ -39,6 +49,9 @@ setup_source() {
   # us from rebasing the changes.
   git checkout -f
   git rebase origin/main
+  if [ $? -ne 0 ]; then
+      return 1
+  fi
 
   echo "Fetching Submodules..."
   git submodule update --init

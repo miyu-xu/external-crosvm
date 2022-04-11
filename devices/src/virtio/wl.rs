@@ -71,7 +71,7 @@ use super::resource_bridge::{
     get_resource_info, BufferInfo, ResourceBridgeError, ResourceInfo, ResourceRequest,
 };
 use super::{Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice, Writer, TYPE_WL};
-use vm_control::{MemSlot, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -345,10 +345,17 @@ impl VmRequester {
     }
 
     fn register_memory(&self, shm: SharedMemory) -> WlResult<(SharedMemory, VmMemoryResponse)> {
-        let request = VmMemoryRequest::RegisterMemory(shm);
+        let request = VmMemoryRequest::RegisterMemory {
+            source: VmMemorySource::SharedMemory(shm),
+            dest: VmMemoryDestination::NewAllocation,
+            read_only: false,
+        };
         let response = self.request(&request)?;
         match request {
-            VmMemoryRequest::RegisterMemory(shm) => Ok((shm, response)),
+            VmMemoryRequest::RegisterMemory {
+                source: VmMemorySource::SharedMemory(shm),
+                ..
+            } => Ok((shm, response)),
             _ => unreachable!(),
         }
     }
@@ -600,15 +607,11 @@ impl WlVfd {
         let vfd_shm =
             SharedMemory::named("virtwl_alloc", size_page_aligned).map_err(WlError::NewAlloc)?;
 
-        let register_request = VmMemoryRequest::RegisterMemory(vfd_shm);
-        let register_response = vm.request(&register_request)?;
+        let (vfd_shm, register_response) = vm.register_memory(vfd_shm)?;
+
         match register_response {
             VmMemoryResponse::RegisterMemory { pfn, slot } => {
                 let mut vfd = WlVfd::default();
-                let vfd_shm = match register_request {
-                    VmMemoryRequest::RegisterMemory(shm) => shm,
-                    _ => unreachable!(),
-                };
                 vfd.guest_shared_memory = Some(vfd_shm);
                 vfd.slot = Some((slot, pfn, vm));
                 Ok(vfd)
@@ -629,6 +632,7 @@ impl WlVfd {
                 width,
                 height,
                 format,
+                dest: VmMemoryDestination::NewAllocation,
             })?;
         match allocate_and_register_gpu_memory_response {
             VmMemoryResponse::AllocateAndRegisterGpuMemory {

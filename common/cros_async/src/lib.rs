@@ -58,6 +58,7 @@
 //! See the docs for `IoSourceExt` if support for kernels <5.4 is required. Focus on `UringSource` if
 //! all systems have support for io_uring.
 
+pub mod audio_streams_async;
 mod blocking;
 mod complete;
 mod event;
@@ -90,11 +91,13 @@ pub use timer::TimerAsync;
 pub use uring_executor::URingExecutor;
 pub use uring_source::UringSource;
 
-use std::future::Future;
-use std::io;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    future::Future,
+    io,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use remain::sorted;
 use thiserror::Error as ThisError;
@@ -403,6 +406,33 @@ pub async fn select6<
     select::Select6::new(f1, f2, f3, f4, f5, f6).await
 }
 
+pub async fn select7<
+    F1: Future + Unpin,
+    F2: Future + Unpin,
+    F3: Future + Unpin,
+    F4: Future + Unpin,
+    F5: Future + Unpin,
+    F6: Future + Unpin,
+    F7: Future + Unpin,
+>(
+    f1: F1,
+    f2: F2,
+    f3: F3,
+    f4: F4,
+    f5: F5,
+    f6: F6,
+    f7: F7,
+) -> (
+    SelectResult<F1>,
+    SelectResult<F2>,
+    SelectResult<F3>,
+    SelectResult<F4>,
+    SelectResult<F5>,
+    SelectResult<F6>,
+    SelectResult<F7>,
+) {
+    select::Select7::new(f1, f2, f3, f4, f5, f6, f7).await
+}
 // Combination helpers to run until all futures are complete.
 
 /// Creates a combinator that runs the two given futures to completion, returning a tuple of the

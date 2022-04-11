@@ -829,10 +829,12 @@ impl Vcpu for KvmVcpu {
                     return Err(Error::new(EINVAL));
                 }
                 let hcall = unsafe { &mut hyperv.u.hcall };
-                if data.len() != std::mem::size_of::<u64>() {
-                    return Err(Error::new(EINVAL));
+                match data.try_into() {
+                    Ok(data) => {
+                        hcall.result = u64::from_ne_bytes(data);
+                    }
+                    _ => return Err(Error::new(EINVAL)),
                 }
-                hcall.result.to_ne_bytes().copy_from_slice(data);
                 Ok(())
             }
             _ => Err(Error::new(EINVAL)),
@@ -1022,8 +1024,9 @@ impl Vcpu for KvmVcpu {
                 let event_flags = unsafe { run.__bindgen_anon_1.system_event.flags };
                 match event_type {
                     KVM_SYSTEM_EVENT_SHUTDOWN => Ok(VcpuExit::SystemEventShutdown),
-                    KVM_SYSTEM_EVENT_RESET => Ok(VcpuExit::SystemEventReset),
+                    KVM_SYSTEM_EVENT_RESET => self.system_event_reset(event_flags),
                     KVM_SYSTEM_EVENT_CRASH => Ok(VcpuExit::SystemEventCrash),
+                    KVM_SYSTEM_EVENT_S2IDLE => Ok(VcpuExit::SystemEventS2Idle),
                     _ => {
                         error!(
                             "Unknown KVM system event {} with flags {}",

@@ -13,6 +13,7 @@ use crate::virtio::video::{
 };
 use base::AsRawDescriptor;
 
+pub mod utils;
 #[cfg(feature = "libvda")]
 pub mod vda;
 
@@ -54,6 +55,10 @@ pub trait DecoderSession {
     ///
     /// The device will emit a `ResetCompleted` event once the reset is done.
     fn reset(&mut self) -> VideoResult<()>;
+
+    /// Immediately release all buffers passed using `use_output_buffer()` and
+    /// `reuse_output_buffer()`.
+    fn clear_output_buffers(&mut self) -> VideoResult<()>;
 
     /// Returns the event pipe on which the availability of events will be signaled. Note that the
     /// returned value is borrowed and only valid as long as the session is alive.

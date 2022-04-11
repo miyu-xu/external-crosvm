@@ -13,7 +13,7 @@ mod kvm;
 pub use self::kvm::KvmKernelIrqChip;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-pub use self::kvm::AARCH64_GIC_NR_IRQS;
+pub use self::kvm::{AARCH64_GIC_NR_IRQS, AARCH64_GIC_NR_SPIS};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use self::kvm::KvmSplitIrqChip;
@@ -134,6 +134,12 @@ pub trait IrqChip: Send {
 
     /// Process any irqs events that were delayed because of any locking issues.
     fn process_delayed_irq_events(&mut self) -> Result<()>;
+
+    /// Return an event which is meant to trigger process of any irqs events that were delayed
+    /// by calling process_delayed_irq_events(). This should be used by the main thread to wait
+    /// for delayed irq event kick. It is process_delayed_irq_events() responsibility to read
+    /// the event as long as there is no more irqs to be serviced.
+    fn irq_delayed_event_token(&self) -> Result<Option<Event>>;
 
     /// Checks if a particular `IrqChipCap` is available.
     fn check_capability(&self, c: IrqChipCap) -> bool;

@@ -8,17 +8,15 @@ use anyhow::{anyhow, bail, Context};
 use argh::FromArgs;
 use async_task::Task;
 use base::{
-    clone_descriptor, error,
-    net::{UnixSeqpacketListener, UnlinkUnixSeqpacketListener},
-    warn, Event, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor, TimerFd, Tube,
+    clone_descriptor, error, warn, Event, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor,
+    TimerFd, Tube, UnixSeqpacketListener, UnlinkUnixSeqpacketListener,
 };
-use cros_async::{AsyncWrapper, EventAsync, Executor, IoSourceExt, TimerAsync};
+use cros_async::{AsyncTube, AsyncWrapper, EventAsync, Executor, IoSourceExt, TimerAsync};
 use futures::{
     future::{select, Either},
     pin_mut,
 };
 use hypervisor::ProtectionType;
-use once_cell::sync::OnceCell;
 use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
@@ -29,8 +27,6 @@ use crate::virtio::{
     vhost::user::device::wl::parse_wayland_sock,
     DescriptorChain, Gpu, GpuDisplayParameters, GpuParameters, Queue, QueueReader, VirtioDevice,
 };
-
-static GPU_EXECUTOR: OnceCell<Executor> = OnceCell::new();
 
 #[derive(Clone)]
 struct SharedReader {
@@ -129,21 +125,18 @@ async fn run_resource_bridge(tube: Box<dyn IoSourceExt<Tube>>, state: Rc<RefCell
         }
 
         if let Err(e) = state.borrow_mut().process_resource_bridge(tube.as_source()) {
-            error!("Failed to process resource bridge: {}", e);
+            error!("Failed to process resource bridge: {:#}", e);
             break;
         }
     }
 }
 
-fn cancel_task<R: 'static>(task: Task<R>) {
-    GPU_EXECUTOR
-        .get()
-        .unwrap()
-        .spawn_local(task.cancel())
-        .detach()
+fn cancel_task<R: 'static>(ex: &Executor, task: Task<R>) {
+    ex.spawn_local(task.cancel()).detach()
 }
 
 struct GpuBackend {
+    ex: Executor,
     gpu: Rc<RefCell<Gpu>>,
     resource_bridges: Arc<Mutex<Vec<Tube>>>,
     acked_protocol_features: u64,
@@ -201,33 +194,40 @@ impl VhostUserBackend for GpuBackend {
     }
 
     fn set_device_request_channel(&mut self, channel: File) -> anyhow::Result<()> {
-        // Safe because the executor is initialized in main() below.
-        let ex = GPU_EXECUTOR.get().expect("Executor not initialized");
-
-        let tube = unsafe { Tube::from_raw_descriptor(channel.into_raw_descriptor()) }
-            .into_async_tube(ex)
-            .context("failed to create AsyncTube")?;
+        let tube = AsyncTube::new(&self.ex, unsafe {
+            Tube::from_raw_descriptor(channel.into_raw_descriptor())
+        })
+        .context("failed to create AsyncTube")?;
 
         // We need a PciAddress in order to initialize the pci bar but this isn't part of the
         // vhost-user protocol. Instead we expect this to be the first message the crosvm main
         // process sends us on the device tube.
         let gpu = Rc::clone(&self.gpu);
-        ex.spawn_local(async move {
-            let response = match tube.next().await {
-                Ok(addr) => gpu.borrow_mut().get_device_bars(addr),
-                Err(e) => {
-                    error!("Failed to get `PciAddr` from tube: {}", e);
-                    return;
+        self.ex
+            .spawn_local(async move {
+                let response = match tube.next().await {
+                    Ok(addr) => gpu.borrow_mut().get_device_bars(addr),
+                    Err(e) => {
+                        error!("Failed to get `PciAddr` from tube: {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = tube.send(response).await {
+                    error!("Failed to send `PciBarConfiguration`: {}", e);
                 }
-            };
 
-            if let Err(e) = tube.send(&response) {
-                error!("Failed to send `PciBarConfiguration`: {}", e);
-            }
+                let device_tube: Tube = match tube.next().await {
+                    Ok(tube) => tube,
+                    Err(e) => {
+                        error!("Failed to get device tube: {}", e);
+                        return;
+                    }
+                };
 
-            gpu.borrow_mut().set_device_tube(tube.into());
-        })
-        .detach();
+                gpu.borrow_mut().set_device_tube(device_tube);
+            })
+            .detach();
 
         Ok(())
     }
@@ -242,7 +242,7 @@ impl VhostUserBackend for GpuBackend {
     ) -> anyhow::Result<()> {
         if let Some(task) = self.workers.get_mut(idx).and_then(Option::take) {
             warn!("Starting new queue handler without stopping old handler");
-            cancel_task(task);
+            cancel_task(&self.ex, task);
         }
 
         match idx {
@@ -253,11 +253,8 @@ impl VhostUserBackend for GpuBackend {
             _ => bail!("attempted to start unknown queue: {}", idx),
         }
 
-        // Safe because the executor is initialized in main() below.
-        let ex = GPU_EXECUTOR.get().expect("Executor not initialized");
-
-        let kick_evt =
-            EventAsync::new(kick_evt.0, ex).context("failed to create EventAsync for kick_evt")?;
+        let kick_evt = EventAsync::new(kick_evt.0, &self.ex)
+            .context("failed to create EventAsync for kick_evt")?;
 
         let reader = SharedReader {
             queue: Arc::new(Mutex::new(queue)),
@@ -281,10 +278,12 @@ impl VhostUserBackend for GpuBackend {
 
         // Start handling the resource bridges if we haven't already.
         for bridge in self.resource_bridges.lock().drain(..) {
-            let tube = ex
+            let tube = self
+                .ex
                 .async_from(bridge)
                 .context("failed to create async tube")?;
-            ex.spawn_local(run_resource_bridge(tube, state.clone()))
+            self.ex
+                .spawn_local(run_resource_bridge(tube, state.clone()))
                 .detach();
         }
 
@@ -297,18 +296,21 @@ impl VhostUserBackend for GpuBackend {
                 })
                 .context("failed to clone inner WaitContext for gpu display")
                 .and_then(|ctx| {
-                    ex.async_from(ctx)
+                    self.ex
+                        .async_from(ctx)
                         .context("failed to create async WaitContext")
                 })?;
 
-            let task = ex.spawn_local(run_display(display, state.clone()));
+            let task = self.ex.spawn_local(run_display(display, state.clone()));
             self.display_worker = Some(task);
         }
 
         let timer = TimerFd::new()
             .context("failed to create TimerFd")
-            .and_then(|t| TimerAsync::new(t, ex).context("failed to create TimerAsync"))?;
-        let task = ex.spawn_local(run_ctrl_queue(reader, mem, kick_evt, timer, state));
+            .and_then(|t| TimerAsync::new(t, &self.ex).context("failed to create TimerAsync"))?;
+        let task = self
+            .ex
+            .spawn_local(run_ctrl_queue(reader, mem, kick_evt, timer, state));
 
         self.workers[idx] = Some(task);
         Ok(())
@@ -316,17 +318,17 @@ impl VhostUserBackend for GpuBackend {
 
     fn stop_queue(&mut self, idx: usize) {
         if let Some(task) = self.workers.get_mut(idx).and_then(Option::take) {
-            cancel_task(task)
+            cancel_task(&self.ex, task)
         }
     }
 
     fn reset(&mut self) {
         if let Some(task) = self.display_worker.take() {
-            cancel_task(task)
+            cancel_task(&self.ex, task)
         }
 
         for task in self.workers.iter_mut().filter_map(Option::take) {
-            cancel_task(task)
+            cancel_task(&self.ex, task)
         }
     }
 }
@@ -410,7 +412,6 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
     }
 
     let ex = Executor::new().context("failed to create executor")?;
-    let _ = GPU_EXECUTOR.set(ex.clone());
 
     // We don't know the order in which other devices are going to connect to the resource bridges
     // so start listening for all of them on separate threads. Any devices that connect after the
@@ -478,6 +479,7 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
     )));
 
     let backend = GpuBackend {
+        ex: ex.clone(),
         gpu,
         resource_bridges,
         acked_protocol_features: 0,

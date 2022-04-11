@@ -23,7 +23,7 @@ rust_test {
     test_options: {
         unit_test: false,
     },
-    edition: "2018",
+    edition: "2021",
     rustlibs: [
         "libbase_rust",
         "libbit_field",
@@ -32,6 +32,7 @@ rust_test {
         "libkvm",
         "libkvm_sys",
         "liblibc",
+        "libmemoffset",
         "libserde",
         "libsync_rust",
         "libvm_memory",
@@ -47,7 +48,7 @@ rust_library {
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
-    edition: "2018",
+    edition: "2021",
     rustlibs: [
         "libbase_rust",
         "libbit_field",
@@ -56,6 +57,7 @@ rust_library {
         "libkvm",
         "libkvm_sys",
         "liblibc",
+        "libmemoffset",
         "libserde",
         "libsync_rust",
         "libvm_memory",

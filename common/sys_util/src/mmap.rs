@@ -5,20 +5,23 @@
 //! The mmap module provides a safe interface to mmap memory and ensures unmap is called when the
 //! mmap object leaves scope.
 
-use std::cmp::min;
-use std::io;
-use std::mem::size_of;
-use std::os::unix::io::AsRawFd;
-use std::ptr::{copy_nonoverlapping, null_mut, read_unaligned, write_unaligned};
+use std::{
+    cmp::min,
+    io,
+    mem::size_of,
+    os::unix::io::AsRawFd,
+    ptr::{copy_nonoverlapping, null_mut, read_unaligned, write_unaligned},
+};
 
-use libc::{self, c_int, c_void, read, write};
+use libc::{
+    c_int, c_void, read, write, {self},
+};
 use remain::sorted;
 use sys_util_core::ExternalMapping;
 
-use data_model::volatile_memory::*;
-use data_model::DataInit;
+use data_model::{volatile_memory::*, DataInit};
 
-use crate::{errno, pagesize};
+use super::{pagesize, Error as ErrnoError};
 
 #[sorted]
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +43,7 @@ pub enum Error {
     #[error("`remove_mapping` is unsupported")]
     RemoveMappingIsUnsupported,
     #[error("mmap related system call failed: {0}")]
-    SystemCallFailed(#[source] errno::Error),
+    SystemCallFailed(#[source] ErrnoError),
     #[error("failed to write from memory to file: {0}")]
     WriteFromMemory(#[source] io::Error),
 }
@@ -166,7 +169,7 @@ impl dyn MappedRegion {
         if ret != -1 {
             Ok(())
         } else {
-            Err(Error::SystemCallFailed(errno::Error::last()))
+            Err(Error::SystemCallFailed(ErrnoError::last()))
         }
     }
 }
@@ -386,7 +389,7 @@ impl MemoryMapping {
         };
         let addr = libc::mmap(addr, size, prot, flags, fd, offset);
         if addr == libc::MAP_FAILED {
-            return Err(Error::SystemCallFailed(errno::Error::last()));
+            return Err(Error::SystemCallFailed(ErrnoError::last()));
         }
         // This is safe because we call madvise with a valid address and size.
         let _ = libc::madvise(addr, size, libc::MADV_DONTDUMP);
@@ -417,7 +420,7 @@ impl MemoryMapping {
             )
         };
         if ret == -1 {
-            Err(Error::SystemCallFailed(errno::Error::last()))
+            Err(Error::SystemCallFailed(ErrnoError::last()))
         } else {
             Ok(())
         }
@@ -435,7 +438,7 @@ impl MemoryMapping {
             )
         };
         if ret == -1 {
-            return Err(Error::SystemCallFailed(errno::Error::last()));
+            return Err(Error::SystemCallFailed(ErrnoError::last()));
         }
         Ok(())
     }
@@ -944,8 +947,7 @@ impl Drop for MemoryMappingArena {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Descriptor;
+    use super::{super::Descriptor, *};
     use data_model::{VolatileMemory, VolatileMemoryError};
     use tempfile::tempfile;
 

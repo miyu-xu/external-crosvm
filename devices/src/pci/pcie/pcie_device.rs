@@ -27,6 +27,14 @@ pub trait PcieDevice: Send {
         None
     }
     fn get_removed_devices(&self) -> Vec<PciAddress>;
+
+    /// Hotplug capability is implemented on this bridge or not.
+    /// Return true, the children pci devices could be connected through hotplug
+    /// Return false, the children pci devices should be connected statically
+    fn hotplug_implemented(&self) -> bool;
+
+    /// Get bridge window size to cover children's mmio size
+    /// (u64, u64) -> (non_prefetchable window size, prefetchable_window_size)
     fn get_bridge_window_size(&self) -> (u64, u64);
 }
 
@@ -246,5 +254,14 @@ impl PmcConfig {
         }
 
         false
+    }
+
+    /// Get device power status
+    pub fn get_power_status(&self) -> PciDevicePower {
+        match self.power_control_status & PMC_POWER_STATE_MASK {
+            PMC_POWER_STATE_D0 => PciDevicePower::D0,
+            PMC_POWER_STATE_D3 => PciDevicePower::D3,
+            _ => PciDevicePower::Unsupported,
+        }
     }
 }
