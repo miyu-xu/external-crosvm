@@ -16,6 +16,23 @@
       "message": "I don\u0027t know anything about Android.bp files, I suppose this is fine. Maybe some of the tooling to generate the bp files need updating to do this automatically?",
       "revId": "b08fa439aa0b1d0a3cd98b353aad0d9680da4f02",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "78ec9392_695ea51f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-11T21:55:17Z",
+      "side": 1,
+      "message": "Hey, is there a way we could add these with patches so that these get auto-generated?",
+      "revId": "b08fa439aa0b1d0a3cd98b353aad0d9680da4f02",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
