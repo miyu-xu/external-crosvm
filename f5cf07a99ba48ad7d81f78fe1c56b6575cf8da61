@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c7a6a58a_d52220cd",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2022-04-12T03:44:45Z",
+      "side": 1,
+      "message": "This is a temporary cherry-pick of https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3574427 until it gets merged by b/228847818",
+      "revId": "f5cf07a99ba48ad7d81f78fe1c56b6575cf8da61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
