@@ -18,6 +18,7 @@ minigbm = ["rutabaga_gfx/minigbm"]
 x = ["gpu_display/x", "rutabaga_gfx/x"]
 virgl_renderer = ["gpu", "rutabaga_gfx/virgl_renderer"]
 gfxstream = ["gpu", "rutabaga_gfx/gfxstream"]
+slirp = []
 
 [dependencies]
 argh = "0.1.7"
@@ -40,8 +41,13 @@ rutabaga_gfx = { path = "../rutabaga_gfx", optional = true }
 hypervisor = { path = "../hypervisor" }
 kvm_sys = { path = "../kvm_sys" }
 libc = "*"
+<<<<<<< HEAD   (c51dac Merge "bpfmt files on upload")
 libcras = { path = "../libcras_stub", optional = true }
 libvda = { path = "../libvda", optional = true }
+=======
+libcras = { version = "*", optional = true }
+libvda = { path = "../media/libvda", optional = true }
+>>>>>>> BRANCH (f62043 virtio_sys: regenerate bindings)
 linux_input_sys = { path = "../linux_input_sys" }
 memoffset = { version = "0.6" }
 minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
