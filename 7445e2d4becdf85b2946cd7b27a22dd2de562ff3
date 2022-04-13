@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "912452ab_230c5402",
+        "filename": "src/linux/android.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-13T23:48:56Z",
+      "side": 1,
+      "message": "can we have a bug for this under b/227629108?",
+      "range": {
+        "startLine": 21,
+        "startChar": 11,
+        "endLine": 21,
+        "endChar": 16
+      },
+      "revId": "7445e2d4becdf85b2946cd7b27a22dd2de562ff3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
