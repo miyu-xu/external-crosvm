@@ -34,6 +34,23 @@
       "parentUuid": "6614b399_2dac78b0",
       "revId": "1fbbdaf08d4e0e02031319446d74e3e1c1131a74",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b2029907_c10b3082",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-13T23:45:33Z",
+      "side": 1,
+      "message": "I did not mean to remove +2",
+      "revId": "1fbbdaf08d4e0e02031319446d74e3e1c1131a74",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
