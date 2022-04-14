@@ -51,6 +51,23 @@
       "message": "I did not mean to remove +2",
       "revId": "1fbbdaf08d4e0e02031319446d74e3e1c1131a74",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c7b431d0_89685260",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2022-04-14T15:33:06Z",
+      "side": 1,
+      "message": "Verified `launch_cvd --gpu_mode\u003dguest_swiftshader` and `launch_cvd --gpu_mode\u003dgfxstream`.",
+      "revId": "1fbbdaf08d4e0e02031319446d74e3e1c1131a74",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
