@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "28f6e64d_0b41d68a",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-14T02:12:46Z",
+      "side": 1,
+      "message": "Yes. I ran it with `lunch oriole_pkvm-userdebug` on `tm-dev`. Let me know if you think it is worth running on `master` as well.",
+      "parentUuid": "068f5c8f_1706724c",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 26
+      },
+      "revId": "7445e2d4becdf85b2946cd7b27a22dd2de562ff3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "912452ab_230c5402",
@@ -37,6 +61,30 @@
       "writtenOn": "2022-04-13T23:48:56Z",
       "side": 1,
       "message": "can we have a bug for this under b/227629108?",
+      "range": {
+        "startLine": 21,
+        "startChar": 11,
+        "endLine": 21,
+        "endChar": 16
+      },
+      "revId": "7445e2d4becdf85b2946cd7b27a22dd2de562ff3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bc727bab_bd28c093",
+        "filename": "src/linux/android.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-14T02:12:46Z",
+      "side": 1,
+      "message": "Filed http://b/229160701. I think this will be fixed within a week since jiyong@ already has the CL ready.",
+      "parentUuid": "912452ab_230c5402",
       "range": {
         "startLine": 21,
         "startChar": 11,
