@@ -45,6 +45,54 @@
       },
       "revId": "c124e69583d850c018eaf43e92b18a80908433c5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bd4555d6_e9d8c320",
+        "filename": "all2android.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-15T21:01:55Z",
+      "side": 1,
+      "message": "Yeah, doesn\u0027t work unfortunately. I wrote some notes about it at https://docs.google.com/document/d/10PkFVRZf_CHpl8KIZ3EkKlOaCuSJE9qogiVC7BPeNpc/edit?resourcekey\u003d0-Rdct4w7Ws4byXd_e8TqWuA\u0026disco\u003dAAAAYE9L2cg. Maybe possible with more effort, but I felt like I was going down a rabbit hole.",
+      "parentUuid": "cfc23922_1bb23dd7",
+      "range": {
+        "startLine": 7,
+        "startChar": 57,
+        "endLine": 7,
+        "endChar": 62
+      },
+      "revId": "c124e69583d850c018eaf43e92b18a80908433c5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "661ea916_15d9ac52",
+        "filename": "all2android.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-04-15T21:01:55Z",
+      "side": 1,
+      "message": "I couldn\u0027t get that to work, unsure why. After I gave up, I convinced myself that it was actually better to be in a separate file, because then I don\u0027t need to add code to make it run on only one crate :)",
+      "parentUuid": "95a655bd_0ff91c2e",
+      "range": {
+        "startLine": 7,
+        "startChar": 69,
+        "endLine": 7,
+        "endChar": 76
+      },
+      "revId": "c124e69583d850c018eaf43e92b18a80908433c5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
