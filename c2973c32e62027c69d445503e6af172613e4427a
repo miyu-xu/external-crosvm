@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a8dfa331_e1b61f94",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2022-04-15T14:20:34Z",
+      "side": 1,
+      "message": "The bash scripting looks fine, but I don\u0027t actually know anything about cargo2android. LGTM if Steven is happy!",
+      "revId": "c2973c32e62027c69d445503e6af172613e4427a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d398c5b4_cd17bd28",
+        "filename": "all2android.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2022-04-15T14:20:34Z",
+      "side": 1,
+      "message": "nit: Maybe `find . -type f -name Cargo.toml` is a bit easier to understand.",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 32
+      },
+      "revId": "c2973c32e62027c69d445503e6af172613e4427a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
