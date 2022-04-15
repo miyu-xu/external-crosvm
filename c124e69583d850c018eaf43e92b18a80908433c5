@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "95a655bd_0ff91c2e",
+        "filename": "all2android.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-15T20:51:26Z",
+      "side": 1,
+      "message": "you can also export a function to keep this all in a file if you want",
+      "range": {
+        "startLine": 7,
+        "startChar": 69,
+        "endLine": 7,
+        "endChar": 76
+      },
+      "revId": "c124e69583d850c018eaf43e92b18a80908433c5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cfc23922_1bb23dd7",
+        "filename": "all2android.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-04-15T20:51:26Z",
+      "side": 1,
+      "message": "did you try running this with `-P$(nproc)`?",
+      "range": {
+        "startLine": 7,
+        "startChar": 57,
+        "endLine": 7,
+        "endChar": 62
+      },
+      "revId": "c124e69583d850c018eaf43e92b18a80908433c5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
