@@ -72,6 +72,7 @@ rust_binary {
         "libserde_keyvalue",
         "libsync_rust",
         "libtempfile",
+        "libterminal_size",
         "libthiserror",
         "libuuid",
         "libvhost",
@@ -180,6 +181,7 @@ rust_test {
         "libserde_keyvalue",
         "libsync_rust",
         "libtempfile",
+        "libterminal_size",
         "libthiserror",
         "libuuid",
         "libvhost",
@@ -205,6 +207,11 @@ rust_test {
                 "gpu",
             ],
         },
+        android: {
+            shared_libs: [
+                "libprocessgroup",
+            ],
+        },
         host_linux: {
             features: [
                 "gdb",
@@ -214,6 +221,9 @@ rust_test {
                 "libgdbstub",
                 "libgdbstub_arch",
                 "libthiserror",
+            ],
+            shared_libs: [
+                "libprocessgroup",
             ],
         },
     },
@@ -269,6 +279,7 @@ rust_test {
         "libserde_keyvalue",
         "libsync_rust",
         "libtempfile",
+        "libterminal_size",
         "libthiserror",
         "libuuid",
         "libvhost",
@@ -294,6 +305,11 @@ rust_test {
                 "gpu",
             ],
         },
+        android: {
+            shared_libs: [
+                "libprocessgroup",
+            ],
+        },
         host_linux: {
             features: [
                 "gdb",
@@ -303,6 +319,9 @@ rust_test {
                 "libgdbstub",
                 "libgdbstub_arch",
                 "libthiserror",
+            ],
+            shared_libs: [
+                "libprocessgroup",
             ],
         },
     },
@@ -351,6 +370,7 @@ rust_library {
         "libserde_keyvalue",
         "libsync_rust",
         "libtempfile",
+        "libterminal_size",
         "libthiserror",
         "libuuid",
         "libvhost",
