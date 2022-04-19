@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f260763c_fa586da9",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 14,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-04-19T22:45:47Z",
+      "side": 1,
+      "message": "This isn\u0027t finished yet.\nCL to get the repo created: https://googleplex-android-review.git.corp.google.com/c/third-party-review/+/17832483\n\nNeeds to make its way to AOSP before presubmits will work here.",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 14,
+        "endChar": 72
+      },
+      "revId": "979ee059df104f80e4ac7606e1f575f086812053",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
