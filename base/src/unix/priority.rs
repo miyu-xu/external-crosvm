@@ -24,6 +24,14 @@ pub fn set_rt_prio_limit(limit: u64) -> Result<()> {
 pub fn set_rt_round_robin(priority: i32) -> Result<()> {
     let sched_param = libc::sched_param {
         sched_priority: priority,
+        #[cfg(target_env = "musl")]
+        sched_ss_low_priority: 0,
+        #[cfg(target_env = "musl")]
+        sched_ss_repl_period: libc::timespec {tv_sec: 0, tv_nsec: 0},
+        #[cfg(target_env = "musl")]
+        sched_ss_init_budget: libc::timespec {tv_sec: 0, tv_nsec: 0},
+        #[cfg(target_env = "musl")]
+        sched_ss_max_repl: 0,
     };
 
     // Safe because the kernel doesn't modify memory that is accessible to the process here.
