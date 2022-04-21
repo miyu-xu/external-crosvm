@@ -185,7 +185,7 @@ impl ProxyDevice {
                     let debug_label_trimmed =
                         &debug_label.as_bytes()[..std::cmp::min(max_len, debug_label.len())];
                     let thread_name = CString::new(debug_label_trimmed).unwrap();
-                    let _ = libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr());
+                    setname(thread_name);
                     device.on_sandboxed();
                     child_proc(child_tube, &mut device);
 
@@ -245,6 +245,20 @@ impl ProxyDevice {
             Ok(r) => Some(r),
         }
     }
+}
+
+#[cfg(not(target_env = "musl"))]
+unsafe fn setname(thread_name: CString) {
+    let _ = libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr());
+}
+
+#[cfg(target_env = "musl")]
+unsafe fn setname(thread_name: CString) {
+    // musl has pthread_setname_np as of 1.1.16, but the rust libc crate for musl does not.
+    extern "C" {
+            pub fn pthread_setname_np(thread: libc::pthread_t, name: *const libc::c_char) -> libc::c_int;
+    }
+    let _ = pthread_setname_np(libc::pthread_self(), thread_name.as_ptr());
 }
 
 impl BusDevice for ProxyDevice {
