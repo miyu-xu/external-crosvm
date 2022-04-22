@@ -38,7 +38,6 @@ mod poll;
 mod priority;
 pub mod rand;
 mod raw_fd;
-pub mod read_dir;
 mod sched;
 pub mod scoped_signal_handler;
 mod shm;
@@ -355,7 +354,7 @@ pub fn wait_for_pid<A: AsRawPid>(pid: A, options: c_int) -> Result<(Option<Pid>,
 /// ```
 /// fn reap_children() {
 ///     loop {
-///         match crate::platform::reap_child() {
+///         match base::platform::reap_child() {
 ///             Ok(0) => println!("no children ready to reap"),
 ///             Ok(pid) => {
 ///                 println!("reaped {}", pid);
