@@ -194,7 +194,7 @@ pub trait LinuxArch {
         ramoops_region: Option<pstore::RamoopsRegion>,
         devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipArch,
-        kvm_vcpu_ids: &mut Vec<usize>,
+        vcpu_ids: &mut Vec<usize>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmArch,
@@ -707,7 +707,7 @@ pub fn add_goldfish_battery(
     match battery_jail.as_ref() {
         Some(jail) => {
             let mut keep_rds = goldfish_bat.keep_rds();
-            syslog::push_fds(&mut keep_rds);
+            syslog::push_descriptors(&mut keep_rds);
             mmio_bus
                 .insert(
                     Arc::new(Mutex::new(

@@ -463,9 +463,13 @@ impl VirtioPciDevice {
 
 impl PciDevice for VirtioPciDevice {
     fn supports_iommu(&self) -> bool {
+<<<<<<< HEAD
         // ANDROID: b/226445312
         // (self.device.features() & (1 << VIRTIO_F_ACCESS_PLATFORM)) != 0
         false
+=======
+        self.device.supports_iommu()
+>>>>>>> aosp/upstream-main
     }
 
     fn debug_label(&self) -> String {
