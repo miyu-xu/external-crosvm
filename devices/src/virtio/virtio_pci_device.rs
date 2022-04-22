@@ -463,9 +463,13 @@ impl VirtioPciDevice {
 
 impl PciDevice for VirtioPciDevice {
     fn supports_iommu(&self) -> bool {
+<<<<<<< HEAD   (cb5b9f Merge "all2android.sh enhancements")
         // ANDROID: b/226445312
         // (self.device.features() & (1 << VIRTIO_F_ACCESS_PLATFORM)) != 0
         false
+=======
+        self.device.supports_iommu()
+>>>>>>> BRANCH (6601d6 vhost-user handler: Upstream Windows handler.rs vmm implemen)
     }
 
     fn debug_label(&self) -> String {

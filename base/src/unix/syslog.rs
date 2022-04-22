@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (cb5b9f Merge "all2android.sh enhancements")
 // Copyright 2017 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -583,3 +584,5 @@ mod tests {
             .expect("error writing string");
     }
 }
+=======
+>>>>>>> BRANCH (6601d6 vhost-user handler: Upstream Windows handler.rs vmm implemen)
