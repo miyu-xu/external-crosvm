@@ -66,7 +66,6 @@ members = [
     "kernel_loader",
     "kvm",
     "kvm_sys",
-    "libcras_stub",
     "linux_input_sys",
     "media/libvda",
     "net_sys",
@@ -77,7 +76,6 @@ members = [
     "resources",
     "rutabaga_gfx",
     "serde_keyvalue",
-    "system_api_stub",
     "tpm2",
     "tpm2-sys",
     "usb_sys",
@@ -164,8 +162,8 @@ data_model = "*"
 devices = { path = "devices" }
 disk = { path = "disk" }
 enumn = "0.1.0"
-gdbstub = { version = "0.5.0", optional = true }
-gdbstub_arch = { version = "0.1.0", optional = true }
+gdbstub = { version = "0.6.1", optional = true }
+gdbstub_arch = { version = "0.2.2", optional = true }
 rutabaga_gfx = { path = "rutabaga_gfx"}
 hypervisor = { path = "hypervisor" }
 kernel_cmdline = { path = "kernel_cmdline" }
@@ -186,6 +184,7 @@ serde_json = "*"
 serde_keyvalue = { path = "serde_keyvalue" }
 sync = { path = "common/sync" }
 tempfile = "3"
+terminal_size = "0.1.17"
 thiserror = { version = "1.0.20" }
 uuid = { version = "0.8.2" }
 vhost = { path = "vhost" }
