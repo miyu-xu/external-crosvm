@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7cf67ba8_a8aa4ed5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-04-23T00:09:39Z",
+      "side": 1,
+      "message": "No need to run presubmits until https://b.corp.google.com/issues/230144261 is resolved and terminal-size is actually in the tree",
+      "revId": "12193eac0539f425f99360ba0e7fdaf6c2df9c00",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
