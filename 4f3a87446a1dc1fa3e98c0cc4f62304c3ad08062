@@ -125,6 +125,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5169d0c1_49e36de6",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1002751
+      },
+      "writtenOn": "2022-04-26T18:03:53Z",
+      "side": 1,
+      "message": "This seems to be intentional: https://github.com/rust-lang/libc/pull/2346#issuecomment-899226540",
+      "parentUuid": "ab4a5959_6d128ebe",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "b026123d_eb4001bb",
         "filename": "base/src/unix/sock_ctrl_msg.rs",
         "patchSetId": 1
@@ -136,6 +154,24 @@
       "writtenOn": "2022-04-26T16:23:26Z",
       "side": 1,
       "message": "Can some of these conversions be done with `.into()` rather than `as _`, to ensure that they are only widening conversions and nothing gets truncated?",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0d57413f_3cc6f8e0",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1002751
+      },
+      "writtenOn": "2022-04-26T18:03:53Z",
+      "side": 1,
+      "message": "Maybe I\u0027m misunderstanding, but blindly replacing `as_` with `into()` doesn\u0027t work:\n```\nerror[E0277]: the trait bound `i32: From\u003cusize\u003e` is not satisfied\n   --\u003e external/crosvm/base/src/unix/sock_ctrl_msg.rs:123:34\n    |\n123 |     msg.msg_iovlen \u003d iovec.len().into();\n    |                                  ^^^^ the trait `From\u003cusize\u003e` is not implemented for `i32`\n    |\n```\n\nTruncating is unavoidable here, musl uses posix\u0027s `int` definition of `msg_iovlen`, not glibc\u0027s `size_t`.",
+      "parentUuid": "b026123d_eb4001bb",
       "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
