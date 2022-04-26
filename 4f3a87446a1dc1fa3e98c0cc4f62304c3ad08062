@@ -52,6 +52,91 @@
       "parentUuid": "68b3f8fa_e812e102",
       "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f5797bb4_920009ef",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-26T16:23:26Z",
+      "side": 1,
+      "message": "If at all possible please submit this upstream to https://chromium.googlesource.com/chromiumos/platform/crosvm/ first and it will be merged down into AOSP.",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "75bc78c5_099c58b7",
+        "filename": "base/src/unix/signal.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 547,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-26T16:23:26Z",
+      "side": 1,
+      "message": "This looks wrong, shouldn\u0027t `as_pthread_t` be fixed to return the correct type?",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ab4a5959_6d128ebe",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-26T16:23:26Z",
+      "side": 1,
+      "message": "That should probably be fixed in the libc crate by making them public.",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b026123d_eb4001bb",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-26T16:23:26Z",
+      "side": 1,
+      "message": "Can some of these conversions be done with `.into()` rather than `as _`, to ensure that they are only widening conversions and nothing gets truncated?",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a8e23e79_0fd53ec4",
+        "filename": "devices/src/proxy.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 257,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-26T16:23:26Z",
+      "side": 1,
+      "message": "Send a patch upstream to the libc crate, they are usually happy to review and merge improvements like this quickly.",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
