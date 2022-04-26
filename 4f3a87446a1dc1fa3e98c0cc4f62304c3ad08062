@@ -90,6 +90,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "925db8c9_c3cf4e37",
+        "filename": "base/src/unix/signal.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 547,
+      "author": {
+        "id": 1002751
+      },
+      "writtenOn": "2022-04-26T17:23:08Z",
+      "side": 1,
+      "message": "See https://github.com/rust-lang/rust/issues/61425 and https://github.com/rust-lang/rust/pull/61428",
+      "parentUuid": "75bc78c5_099c58b7",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "ab4a5959_6d128ebe",
         "filename": "base/src/unix/sock_ctrl_msg.rs",
         "patchSetId": 1
