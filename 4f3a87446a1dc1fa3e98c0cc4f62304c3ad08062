@@ -191,6 +191,24 @@
       "message": "Send a patch upstream to the libc crate, they are usually happy to review and merge improvements like this quickly.",
       "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dc5d370a_f0134880",
+        "filename": "devices/src/proxy.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 257,
+      "author": {
+        "id": 1002751
+      },
+      "writtenOn": "2022-04-26T19:04:46Z",
+      "side": 1,
+      "message": "https://github.com/rust-lang/libc/pull/2768",
+      "parentUuid": "a8e23e79_0fd53ec4",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
