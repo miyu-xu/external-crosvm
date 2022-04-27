@@ -90,6 +90,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "29402fc8_f4541356",
+        "filename": "base/src/unix/priority.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-04-27T21:59:00Z",
+      "side": 1,
+      "message": "I think `MaybeUninit::zeroed()` is the more modern way to write `mem::zeroed`, although it\u0027s a little clunkier in practice. It would probably be cleaner than the chain of `#[cfg]`s in this case and the one mentioned below, though, so +1 from me at least.",
+      "parentUuid": "18eb25ee_915b427f",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "75bc78c5_099c58b7",
         "filename": "base/src/unix/signal.rs",
         "patchSetId": 1
