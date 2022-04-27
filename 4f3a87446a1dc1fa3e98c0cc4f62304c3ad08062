@@ -106,6 +106,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "df3ebf40_9b5ed10b",
+        "filename": "base/src/unix/signal.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 547,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-27T12:25:24Z",
+      "side": 1,
+      "message": "Well that\u0027s a pity. )-:",
+      "parentUuid": "925db8c9_c3cf4e37",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ab4a5959_6d128ebe",
@@ -141,6 +159,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "60dfb1ed_d830af15",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-27T12:25:24Z",
+      "side": 1,
+      "message": ")-:. I\u0027ve commented there suggesting they consider implementing `Default`, but I guess this will have to do.",
+      "parentUuid": "5169d0c1_49e36de6",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b026123d_eb4001bb",
@@ -172,6 +208,24 @@
       "side": 1,
       "message": "Maybe I\u0027m misunderstanding, but blindly replacing `as_` with `into()` doesn\u0027t work:\n```\nerror[E0277]: the trait bound `i32: From\u003cusize\u003e` is not satisfied\n   --\u003e external/crosvm/base/src/unix/sock_ctrl_msg.rs:123:34\n    |\n123 |     msg.msg_iovlen \u003d iovec.len().into();\n    |                                  ^^^^ the trait `From\u003cusize\u003e` is not implemented for `i32`\n    |\n```\n\nTruncating is unavoidable here, musl uses posix\u0027s `int` definition of `msg_iovlen`, not glibc\u0027s `size_t`.",
       "parentUuid": "b026123d_eb4001bb",
+      "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e33c976e_59890f08",
+        "filename": "base/src/unix/sock_ctrl_msg.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-27T12:25:24Z",
+      "side": 1,
+      "message": "Aha okay. I guess it\u0027s pretty unlikely to overflow, but maybe `.try_into().unwrap()` would be safer, so it panics rather than just silently truncating?",
+      "parentUuid": "0d57413f_3cc6f8e0",
       "revId": "4f3a87446a1dc1fa3e98c0cc4f62304c3ad08062",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
