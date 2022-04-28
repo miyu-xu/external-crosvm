@@ -25,6 +25,7 @@ use sync::Mutex;
 use thiserror::Error;
 use vm_control::BatteryType;
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
+use base::info;
 
 mod fdt;
 
@@ -77,6 +78,9 @@ fn get_bios_addr() -> GuestAddress {
     GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET)
 }
 
+fn get_pvm_fw_addr() -> GuestAddress {
+    GuestAddress(AARCH64_PROTECTED_VM_FW_START)
+}
 // Serial device requires 8 bytes of registers;
 const AARCH64_SERIAL_SIZE: u64 = 0x8;
 // This was the speed kvmtool used, not sure if it matters.
@@ -112,6 +116,8 @@ const AARCH64_PMU_IRQ: u32 = 7;
 pub enum Error {
     #[error("bios could not be loaded: {0}")]
     BiosLoadFailure(arch::LoadImageError),
+    #[error("failed to build arm PvmFw memory: {0}")]
+    BuildPvmFwError(base::MmapError),
     #[error("failed to build arm pvtime memory: {0}")]
     BuildPvtimeError(base::MmapError),
     #[error("unable to clone an Event: {0}")]
@@ -151,9 +157,13 @@ pub enum Error {
     #[error("kernel could not be loaded: {0}")]
     KernelLoadFailure(arch::LoadImageError),
     #[error("failed to map arm pvtime memory: {0}")]
+    MapPvmFw(base::Error),
+    #[error("failed to map arm pvtime memory: {0}")]
     MapPvtimeError(base::Error),
     #[error("failed to protect vm: {0}")]
     ProtectVm(base::Error),
+    #[error("pvm_fw could not be loaded: {0}")]
+    PvmFwLoadFailure(arch::LoadImageError),
     #[error("ramoops address is different from high_mmio_base: {0} vs {1}")]
     RamoopsAddress(u64, u64),
     #[error("failed to register irq fd: {0}")]
@@ -318,6 +328,24 @@ impl arch::LinuxArch for AArch64 {
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
             )
             .map_err(Error::ProtectVm)?;
+        } else if components.protected_vm == ProtectionType::UnprotectedWithFirmware {
+            info!("components.protected_vm == ProtectionType::UnprotectedWithFirmware");
+
+            let pvm_fw_mem = MemoryMappingBuilder::new(AARCH64_PROTECTED_VM_FW_MAX_SIZE as usize)
+                .build()
+                .map_err(Error::BuildPvmFwError)?;
+            vm.add_memory_region(
+                get_pvm_fw_addr(),
+                Box::new(pvm_fw_mem),
+                false,
+                false,
+            ).map_err(Error::MapPvmFw)?;
+
+            arch::load_image(&mem, &mut components.pvm_fw.unwrap(), get_pvm_fw_addr(),
+                AARCH64_PROTECTED_VM_FW_MAX_SIZE)
+                .map_err(Error::PvmFwLoadFailure)?;
+            info!("end of components.protected_vm == ProtectionType::UnprotectedWithFirmware");
+            
         }
 
         for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
@@ -607,7 +635,9 @@ impl AArch64 {
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            let entry_addr = if has_bios {
+            let entry_addr = if protected_vm == ProtectionType::UnprotectedWithFirmware {
+                get_pvm_fw_addr()
+            } else if has_bios {
                 get_bios_addr()
             } else {
                 get_kernel_addr()
