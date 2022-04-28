@@ -369,6 +369,8 @@ pub struct Config {
     pub delay_rt: bool,
     pub no_smt: bool,
     pub memory: Option<u64>,
+    /// Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    pub pvm_fw: Option<PathBuf>,
     pub swiotlb: Option<u64>,
     pub hugepages: bool,
     pub memory_file: Option<PathBuf>,
@@ -599,6 +601,7 @@ impl Default for Config {
             userspace_msr: BTreeSet::new(),
             #[cfg(target_os = "android")]
             task_profiles: Vec::new(),
+            pvm_fw: None,
         }
     }
 }
