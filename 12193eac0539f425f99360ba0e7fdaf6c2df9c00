@@ -34,6 +34,24 @@
       "parentUuid": "7cf67ba8_a8aa4ed5",
       "revId": "12193eac0539f425f99360ba0e7fdaf6c2df9c00",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4fcdc32d_8efe60bb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-04-28T15:36:36Z",
+      "side": 1,
+      "message": "Finally see it in downstream branches.",
+      "parentUuid": "0a1ebc20_1b48407d",
+      "revId": "12193eac0539f425f99360ba0e7fdaf6c2df9c00",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
