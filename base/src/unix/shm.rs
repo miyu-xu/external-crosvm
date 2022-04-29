@@ -22,7 +22,7 @@ use super::{errno_result, Error, Result};
 use crate::{AsRawDescriptor, RawDescriptor};
 
 /// A shared memory file descriptor and its size.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SharedMemory {
     #[serde(with = "super::with_as_descriptor")]
     fd: File,
