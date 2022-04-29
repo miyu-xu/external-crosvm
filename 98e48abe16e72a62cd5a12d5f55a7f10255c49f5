@@ -1,0 +1,101 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3d6bec30_b6bfa208",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "pvmfw",
+      "range": {
+        "startLine": 159,
+        "startChar": 31,
+        "endLine": 159,
+        "endChar": 37
+      },
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4adbc83f_ffb20f49",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 165,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "Be consistent about formatting; is it PvmFw or pvm_fw or pvmfw?",
+      "range": {
+        "startLine": 165,
+        "startChar": 13,
+        "endLine": 165,
+        "endChar": 19
+      },
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4f019293_345304ac",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 331,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "It would be nicer to make this a match statement I think.",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6393dbfe_57f0c021",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 639,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "In unprotected-with-firmware mode you still need to set the bios or kernel address in x1, the same as in protected mode.",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c26d13e_741f74fe",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 660,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "You need to do this for unprotected-with-firmware mode too.",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

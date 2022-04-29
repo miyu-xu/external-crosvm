@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6c420393_4dbf9027",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "I will fix these, but posting for the record so I remember.",
+      "revId": "c732b0471e5d5c97de5ecc0844e882571cfbbc88",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9a67b3d2_c1fbf872",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 218,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-04-29T17:05:50Z",
+      "side": 1,
+      "message": "That\u0027s not going to work, the memory will end too low.",
+      "revId": "c732b0471e5d5c97de5ecc0844e882571cfbbc88",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
