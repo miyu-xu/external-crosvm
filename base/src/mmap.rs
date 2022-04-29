@@ -162,20 +162,22 @@ impl<'a> MemoryMappingBuilder<'a> {
                     // Population not supported for new mmaps
                     return Err(MmapError::InvalidArgument);
                 }
-                MemoryMappingBuilder::wrap(SysUtilMmap::new_protection(
-                    self.size,
-                    self.protection.unwrap_or_else(Protection::read_write),
-                ))
+                Ok(MemoryMapping {
+                    mapping: SysUtilMmap::new_protection(
+                        self.size,
+                        self.protection.unwrap_or_else(Protection::read_write),
+                    )?,
+                })
             }
-            Some(descriptor) => {
-                MemoryMappingBuilder::wrap(SysUtilMmap::from_fd_offset_protection_populate(
+            Some(descriptor) => Ok(MemoryMapping {
+                mapping: SysUtilMmap::from_fd_offset_protection_populate(
                     descriptor,
                     self.size,
                     self.offset.unwrap_or(0),
                     self.protection.unwrap_or_else(Protection::read_write),
                     self.populate,
-                ))
-            }
+                )?,
+            }),
         }
     }
 
@@ -194,25 +196,23 @@ impl<'a> MemoryMappingBuilder<'a> {
             return Err(MmapError::InvalidArgument);
         }
         match self.descriptor {
-            None => MemoryMappingBuilder::wrap(SysUtilMmap::new_protection_fixed(
-                addr,
-                self.size,
-                self.protection.unwrap_or_else(Protection::read_write),
-            )),
-            Some(descriptor) => {
-                MemoryMappingBuilder::wrap(SysUtilMmap::from_fd_offset_protection_fixed(
+            None => Ok(MemoryMapping {
+                mapping: SysUtilMmap::new_protection_fixed(
+                    addr,
+                    self.size,
+                    self.protection.unwrap_or_else(Protection::read_write),
+                )?,
+            }),
+            Some(descriptor) => Ok(MemoryMapping {
+                mapping: SysUtilMmap::from_fd_offset_protection_fixed(
                     addr,
                     descriptor,
                     self.size,
                     self.offset.unwrap_or(0),
                     self.protection.unwrap_or_else(Protection::read_write),
-                ))
-            }
+                )?,
+            }),
         }
-    }
-
-    fn wrap(result: Result<SysUtilMmap>) -> Result<MemoryMapping> {
-        result.map(|mapping| MemoryMapping { mapping })
     }
 }
 
