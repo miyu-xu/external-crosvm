@@ -126,7 +126,8 @@ def should_run_executable(executable: Executable, target_arch: Arch):
 def list_common_crates(target_arch: Arch):
     excluded_crates = list(get_workspace_excludes(target_arch))
     for path in COMMON_ROOT.glob("**/Cargo.toml"):
-        if not path.parent.name in excluded_crates:
+        # TODO(b/213147081): remove this once common/cros_async is gone.
+        if not path.parent.name in excluded_crates and path.parent.name != "cros_async":
             yield Crate(name=path.parent.name, path=path.parent)
 
 
@@ -325,6 +326,7 @@ def execute_all(
     repeat: int,
 ):
     """Executes all tests in the `executables` list in parallel."""
+
     executables = [e for e in executables if should_run_executable(e, target.arch)]
     if repeat > 1:
         executables = executables * repeat
@@ -390,7 +392,9 @@ def main():
     os.environ["RUST_BACKTRACE"] = "1"
 
     target = (
-        test_target.TestTarget(args.target) if args.target else test_target.TestTarget.default()
+        test_target.TestTarget(args.target, args.arch)
+        if args.target
+        else test_target.TestTarget.default()
     )
     print("Test target:", target)
 
