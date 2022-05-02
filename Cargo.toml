@@ -1,5 +1,3 @@
-cargo-features = ["named-profiles"]
-
 [package]
 name = "crosvm"
 version = "0.1.0"
