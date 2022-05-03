@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ee6b6e6c_44a8e41a",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-03T11:14:01Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "3d6bec30_b6bfa208",
+      "range": {
+        "startLine": 159,
+        "startChar": 31,
+        "endLine": 159,
+        "endChar": 37
+      },
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4adbc83f_ffb20f49",
@@ -37,6 +61,30 @@
       "writtenOn": "2022-04-29T17:05:50Z",
       "side": 1,
       "message": "Be consistent about formatting; is it PvmFw or pvm_fw or pvmfw?",
+      "range": {
+        "startLine": 165,
+        "startChar": 13,
+        "endLine": 165,
+        "endChar": 19
+      },
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ac15c5a4_61013a0e",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 165,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-03T11:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4adbc83f_ffb20f49",
       "range": {
         "startLine": 165,
         "startChar": 13,
@@ -64,6 +112,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "780da28c_25b63345",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 331,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-03T11:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4f019293_345304ac",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6393dbfe_57f0c021",
@@ -81,6 +147,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9f40e817_f81c9a2c",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 639,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-03T11:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "6393dbfe_57f0c021",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4c26d13e_741f74fe",
@@ -94,6 +178,24 @@
       "writtenOn": "2022-04-29T17:05:50Z",
       "side": 1,
       "message": "You need to do this for unprotected-with-firmware mode too.",
+      "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "47a5ae7d_0a4f1613",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 660,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-03T11:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4c26d13e_741f74fe",
       "revId": "98e48abe16e72a62cd5a12d5f55a7f10255c49f5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
