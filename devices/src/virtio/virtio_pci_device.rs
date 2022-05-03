@@ -463,9 +463,13 @@ impl VirtioPciDevice {
 
 impl PciDevice for VirtioPciDevice {
     fn supports_iommu(&self) -> bool {
+<<<<<<< HEAD   (12193e Merge remote-tracking branch 'aosp/upstream-main' into merge)
         // ANDROID: b/226445312
         // (self.device.features() & (1 << VIRTIO_F_ACCESS_PLATFORM)) != 0
         false
+=======
+        self.device.supports_iommu()
+>>>>>>> BRANCH (3a3d73 virtio_sys: add DataInit for net struct.)
     }
 
     fn debug_label(&self) -> String {

@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (12193e Merge remote-tracking branch 'aosp/upstream-main' into merge)
 [package]
 name = "poll_token_derive"
 version = "0.1.0"
@@ -13,3 +14,5 @@ path = "poll_token_derive.rs"
 proc-macro2 = "^1"
 quote = "^1"
 syn = "^1"
+=======
+>>>>>>> BRANCH (3a3d73 virtio_sys: add DataInit for net struct.)

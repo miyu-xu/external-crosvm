@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (12193e Merge remote-tracking branch 'aosp/upstream-main' into merge)
 // Copyright 2021 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -110,3 +111,5 @@ mod tests {
 //        assert_ne!(&rand, &[0u8; TEST_SIZE]);
 //    }
 }
+=======
+>>>>>>> BRANCH (3a3d73 virtio_sys: add DataInit for net struct.)

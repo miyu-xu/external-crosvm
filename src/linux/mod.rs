@@ -23,7 +23,6 @@ use std::process;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use std::thread;
 
-use devices::virtio::vhost::vsock::{VhostVsockConfig, VhostVsockDeviceParameter};
 use libc;
 
 use acpi_tables::sdt::SDT;
@@ -34,6 +33,7 @@ use base::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListener};
 use devices::serial_device::SerialHardware;
 use devices::vfio::{VfioCommonSetup, VfioCommonTrait};
 use devices::virtio::memory_mapper::MemoryMapperTrait;
+use devices::virtio::vhost::vsock::VhostVsockConfig;
 #[cfg(feature = "gpu")]
 use devices::virtio::{self, EventDevice};
 #[cfg(feature = "audio")]
@@ -407,10 +407,7 @@ fn create_virtio_devices(
 
     if let Some(cid) = cfg.cid {
         let vhost_config = VhostVsockConfig {
-            device: cfg
-                .vhost_vsock_device
-                .clone()
-                .unwrap_or(VhostVsockDeviceParameter::default()),
+            device: cfg.vhost_vsock_device.clone(),
             cid,
         };
         devs.push(create_vhost_vsock_device(cfg, &vhost_config)?);
@@ -483,6 +480,7 @@ fn create_devices(
     #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
     vvu_proxy_device_tubes: &mut Vec<Tube>,
     vvu_proxy_max_sibling_mem_size: u64,
+    iova_max_addr: &mut Option<u64>,
 ) -> DeviceResult<Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>> {
     let mut devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)> = Vec::new();
     let mut balloon_inflate_tube: Option<Tube> = None;
@@ -508,6 +506,10 @@ fn create_devices(
                 vfio_dev.iommu_dev_type(),
             )?;
 
+            *iova_max_addr = Some(max(
+                vfio_pci_device.get_max_iova(),
+                iova_max_addr.unwrap_or(0),
+            ));
             devices.push((vfio_pci_device, jail));
         }
 
@@ -896,6 +898,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         dmi_path: cfg.dmi_path.clone(),
         no_legacy: cfg.no_legacy,
         host_cpu_topology: cfg.host_cpu_topology,
+        itmt: cfg.itmt,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         force_s2idle: cfg.force_s2idle,
     })
@@ -954,6 +957,12 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
 fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).context("failed to create kvm")?;
     let vm = KvmVm::new(&kvm, guest_mem, components.protected_vm).context("failed to create vm")?;
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if cfg.itmt {
+        vm.set_platform_info_read_access(false)
+            .context("failed to disable MSR_PLATFORM_INFO read access")?;
+    }
 
     if !cfg.userspace_msr.is_empty() {
         vm.enable_userspace_msr()
@@ -1290,6 +1299,7 @@ where
 
     let mut iommu_attached_endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>> =
         BTreeMap::new();
+    let mut iova_max_addr: Option<u64> = None;
     let mut devices = create_devices(
         &cfg,
         &mut vm,
@@ -1313,6 +1323,7 @@ where
         render_server_fd,
         &mut vvu_proxy_device_tubes,
         components.memory_size,
+        &mut iova_max_addr,
     )?;
 
     let mut hp_endpoints_ranges: Vec<RangeInclusive<u32>> = Vec::new();
@@ -1345,11 +1356,12 @@ where
         &mut devices,
     )?;
 
-    let iommu_host_tube = if !iommu_attached_endpoints.is_empty() || cfg.virtio_iommu {
+    let iommu_host_tube = if !iommu_attached_endpoints.is_empty() || !hp_endpoints_ranges.is_empty()
+    {
         let (iommu_host_tube, iommu_device_tube) = Tube::pair().context("failed to create tube")?;
         let iommu_dev = create_iommu_device(
             &cfg,
-            (1u64 << vm.get_guest_phys_addr_bits()) - 1,
+            iova_max_addr.unwrap_or(u64::MAX),
             iommu_attached_endpoints,
             hp_endpoints_ranges,
             translate_response_senders,
@@ -1780,6 +1792,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             to_gdb_channel.clone(),
             cfg.per_vm_core_scheduling,
             cfg.host_cpu_topology,
+            cfg.itmt,
             cfg.privileged_vm,
             match vcpu_cgroup_tasks_file {
                 None => None,
