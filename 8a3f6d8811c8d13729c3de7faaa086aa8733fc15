@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f605490b_201fdf10",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-04T18:54:58Z",
+      "side": 1,
+      "message": "Couple questions, not really tied to this review specifically:\n\n1) Should we do anything about removing dependencies on crates? Is there anything in the build system that will tell us about unused Android.bp modules in a specific directory?\nIt seems like it might happen (removing some of that sys_utils stuff), and we will end up with an unused/out of date library in external/rust/crates/.\n2) How did you find those sepolicy issues? Was it easy to see during a test?",
+      "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
