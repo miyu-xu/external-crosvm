@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "79c8b4ba_dab083a2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-04T09:48:01Z",
+      "side": 1,
+      "message": "Submitted upstream as https://crrev.com/c/3623760.",
+      "revId": "8d0d674e3bd1e2aef45c9a17d1573548aedebb75",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
