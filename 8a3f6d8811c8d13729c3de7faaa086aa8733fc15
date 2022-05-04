@@ -34,6 +34,24 @@
       "parentUuid": "f605490b_201fdf10",
       "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1206659b_b54f82d8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-04T21:38:09Z",
+      "side": 1,
+      "message": "Thanks!\n\nre re 1 - I\u0027m talking about the crates that we import into android as third party libraries. They could be dropped as dependencies upstream and we will still keep them around in external/rust/crates/. No runtime benefit from removing them, but they will still be being built/tested/checked out by everyone. I guess all of the third party libraries would have this issue, not just rust crates. Maybe someone else monitors this? I can\u0027t find anything on Moma about removal of third party libraries.",
+      "parentUuid": "52cadb29_5616b854",
+      "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
