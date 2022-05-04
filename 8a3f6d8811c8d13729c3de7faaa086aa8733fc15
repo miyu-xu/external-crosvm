@@ -16,6 +16,24 @@
       "message": "Couple questions, not really tied to this review specifically:\n\n1) Should we do anything about removing dependencies on crates? Is there anything in the build system that will tell us about unused Android.bp modules in a specific directory?\nIt seems like it might happen (removing some of that sys_utils stuff), and we will end up with an unused/out of date library in external/rust/crates/.\n2) How did you find those sepolicy issues? Was it easy to see during a test?",
       "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "52cadb29_5616b854",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-05-04T21:26:27Z",
+      "side": 1,
+      "message": "re 1 - several of the libraries were moved so we remove the Android build artifactshere. The ffi stuff didn\u0027t compile and happened to be unused, so I just disabled it. There might be other stuff, but I\u0027m not really sure what the benefit would be to disable more if it\u0027s not causing any problem, given that this is a downstream branch.\n\nre 2 - it failed presubmit, and there is also a test. I put details in the checklist doc.",
+      "parentUuid": "f605490b_201fdf10",
+      "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
