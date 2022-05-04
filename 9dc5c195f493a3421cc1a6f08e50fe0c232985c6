@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d98e62ce_a91ac0f7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-05-04T20:46:10Z",
+      "side": 1,
+      "message": "Seems fine overall to me",
+      "revId": "9dc5c195f493a3421cc1a6f08e50fe0c232985c6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e3276354_fa8316bd",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 264,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-05-04T20:46:10Z",
+      "side": 1,
+      "message": "Do we want to return this error? Load Kernel seems less specific here and a bit similar to KernelLoadFailure? Maybe we rename this to Error::LoadElfKernel, and update the description above?",
+      "range": {
+        "startLine": 264,
+        "startChar": 59,
+        "endLine": 264,
+        "endChar": 69
+      },
+      "revId": "9dc5c195f493a3421cc1a6f08e50fe0c232985c6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
