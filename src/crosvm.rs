@@ -417,6 +417,7 @@ pub struct Config {
     pub virtio_keyboard: Vec<PathBuf>,
     pub virtio_switches: Vec<PathBuf>,
     pub virtio_input_evdevs: Vec<PathBuf>,
+    pub virtio_iommu: bool,
     pub split_irqchip: bool,
     pub vfio: Vec<VfioCommand>,
     #[cfg(feature = "video-decoder")]
@@ -544,6 +545,7 @@ impl Default for Config {
             virtio_keyboard: Vec::new(),
             virtio_switches: Vec::new(),
             virtio_input_evdevs: Vec::new(),
+            virtio_iommu: false,
             split_irqchip: false,
             vfio: Vec::new(),
             #[cfg(feature = "video-decoder")]
