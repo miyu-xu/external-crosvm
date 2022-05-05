@@ -47,7 +47,6 @@ WIN64_DISABLED_CRATES = [
     "audio_streams",
     "bit_field_derive",
     "bit_field",
-    "cros_async",
     "cros_asyncv2",
     "cros-fuzz",
     "crosvm_control",
@@ -83,7 +82,6 @@ WIN64_DISABLED_CRATES = [
     "rutabaga_gfx",
     "rutabaga_gralloc",
     "sync",
-    "sys_util",
     "system_api_stub",
     "tpm2-sys",
     "tpm2",
@@ -101,7 +99,7 @@ WIN64_DISABLED_CRATES = [
 
 CRATE_OPTIONS: dict[str, list[TestOption]] = {
     "base": [TestOption.SINGLE_THREADED, TestOption.LARGE],
-    "cros_async": [TestOption.LARGE],
+    "cros_async": [TestOption.LARGE, TestOption.DO_NOT_RUN_ARMHF],
     "crosvm": [TestOption.SINGLE_THREADED],
     "crosvm_plugin": [
         TestOption.DO_NOT_BUILD_AARCH64,
@@ -112,30 +110,32 @@ CRATE_OPTIONS: dict[str, list[TestOption]] = {
         TestOption.SINGLE_THREADED,
         TestOption.LARGE,
         TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL,
+        TestOption.DO_NOT_RUN_ARMHF,
     ],
     "disk": [TestOption.DO_NOT_RUN_AARCH64, TestOption.DO_NOT_RUN_ARMHF],  # b/202294155
     "fuzz": [TestOption.DO_NOT_BUILD],
     "hypervisor": [
         TestOption.DO_NOT_RUN_AARCH64,
+        TestOption.DO_NOT_RUN_ARMHF,
         TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL,
     ],  # b/181672912
     "integration_tests": [  # b/180196508
         TestOption.SINGLE_THREADED,
         TestOption.LARGE,
         TestOption.DO_NOT_RUN_AARCH64,
+        TestOption.DO_NOT_RUN_ARMHF,
         TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL,
     ],
     "io_uring": [TestOption.DO_NOT_RUN],  # b/202294403
     "kvm_sys": [TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL],
     "kvm": [
         TestOption.DO_NOT_RUN_AARCH64,
+        TestOption.DO_NOT_RUN_ARMHF,
         TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL,
     ],  # b/181674144
     "libcrosvm_control": [TestOption.DO_NOT_BUILD_ARMHF],  # b/210015864
     "libvda": [TestOption.DO_NOT_BUILD],  # b/202293971
     "rutabaga_gfx": [TestOption.DO_NOT_BUILD_ARMHF],  # b/210015864
-    "sys_util": [TestOption.SINGLE_THREADED],
-    "sys_util_core": [TestOption.SINGLE_THREADED],
     "vhost": [TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL],
     "vm_control": [TestOption.DO_NOT_BUILD_ARMHF],  # b/210015864
 }

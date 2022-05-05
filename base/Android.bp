@@ -26,8 +26,10 @@ rust_test {
     rustlibs: [
         "libaudio_streams",
         "libcfg_if",
+        "libchrono",
         "libdata_model",
         "liblibc",
+        "liblog_rust",
         "libserde",
         "libserde_json",
         "libsmallvec",
@@ -73,8 +75,10 @@ rust_library {
     rustlibs: [
         "libaudio_streams",
         "libcfg_if",
+        "libchrono",
         "libdata_model",
         "liblibc",
+        "liblog_rust",
         "libserde",
         "libserde_json",
         "libsmallvec",

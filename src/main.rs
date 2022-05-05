@@ -6,7 +6,7 @@
 
 pub mod panic_hook;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 use std::default::Default;
 use std::fs::{File, OpenOptions};
@@ -20,7 +20,9 @@ use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
 
-use arch::{set_default_serial_parameters, Pstore, VcpuAffinity};
+use arch::{
+    set_default_serial_parameters, MsrAction, MsrConfig, MsrValueFrom, Pstore, VcpuAffinity,
+};
 use base::{debug, error, getpid, info, kill_process_group, pagesize, reap_child, syslog, warn};
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 use crosvm::platform::GpuRenderServerParameters;
@@ -42,7 +44,6 @@ use devices::virtio::vhost::user::device::{
     run_block_device, run_console_device, run_fs_device, run_net_device, run_vsock_device,
     run_wl_device,
 };
-use devices::virtio::vhost::vsock::VhostVsockDeviceParameter;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::VideoBackendType;
 #[cfg(feature = "gpu")]
@@ -73,6 +74,8 @@ use vm_control::{
     BalloonControlCommand, BatteryType, DiskControlCommand, UsbControlResult, VmRequest,
     VmResponse,
 };
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use x86_64::set_itmt_msr_config;
 
 #[cfg(feature = "scudo")]
 #[global_allocator]
@@ -697,15 +700,9 @@ fn parse_ac97_options(s: &str) -> argument::Result<Ac97Parameters> {
     Ok(ac97_params)
 }
 
-enum MsrAction {
-    Invalid,
-    /// Read MSR value from host CPU0 regardless of current vcpu.
-    ReadFromCPU0,
-}
+fn parse_userspace_msr_options(value: &str) -> argument::Result<(u32, MsrConfig)> {
+    let mut msr_config = MsrConfig::new();
 
-fn parse_userspace_msr_options(value: &str) -> argument::Result<u32> {
-    // TODO(b/215297064): Implement different type of operations, such
-    // as write or reading from the correct CPU.
     let mut options = argument::parse_key_value_options("userspace-msr", value, ',');
     let index: u32 = options
         .next()
@@ -713,23 +710,53 @@ fn parse_userspace_msr_options(value: &str) -> argument::Result<u32> {
             "userspace-msr: expected index",
         )))?
         .key_numeric()?;
-    let mut msr_config = MsrAction::Invalid;
+
     for opt in options {
         match opt.key() {
+            "type" => match opt.value()? {
+                "r" => msr_config.rw_type.read_allow = true,
+                "w" => msr_config.rw_type.write_allow = true,
+                "rw" | "wr" => {
+                    msr_config.rw_type.read_allow = true;
+                    msr_config.rw_type.write_allow = true;
+                }
+                _ => {
+                    return Err(opt.invalid_value_err(String::from("bad type")));
+                }
+            },
             "action" => match opt.value()? {
-                "r0" => msr_config = MsrAction::ReadFromCPU0,
+                // Compatible with the original command line format.
+                // TODO(b:225375705): Deprecate the old cmd format in the future.
+                "r0" => {
+                    msr_config.rw_type.read_allow = true;
+                    msr_config.action = Some(MsrAction::MsrPassthrough);
+                    msr_config.from = MsrValueFrom::RWFromCPU0;
+                }
+                "pass" => msr_config.action = Some(MsrAction::MsrPassthrough),
+                "emu" => msr_config.action = Some(MsrAction::MsrEmulate),
                 _ => return Err(opt.invalid_value_err(String::from("bad action"))),
+            },
+            "from" => match opt.value()? {
+                "cpu0" => msr_config.from = MsrValueFrom::RWFromCPU0,
+                _ => return Err(opt.invalid_value_err(String::from("bad from"))),
             },
             _ => return Err(opt.invalid_key_err()),
         }
     }
 
-    match msr_config {
-        MsrAction::ReadFromCPU0 => Ok(index),
-        _ => Err(argument::Error::UnknownArgument(
-            "userspace-msr action not specified".to_string(),
-        )),
+    if !msr_config.rw_type.read_allow && !msr_config.rw_type.write_allow {
+        return Err(argument::Error::ExpectedArgument(String::from(
+            "userspace-msr: type is required",
+        )));
     }
+
+    if msr_config.action.is_none() {
+        return Err(argument::Error::ExpectedArgument(String::from(
+            "userspace-msr: action is required",
+        )));
+    }
+
+    Ok((index, msr_config))
 }
 
 fn parse_serial_options(s: &str) -> argument::Result<SerialParameters> {
@@ -1081,17 +1108,14 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                     expected: String::from("A vhost-vsock device was already specified"),
                 });
             }
-            cfg.vhost_vsock_device = Some(VhostVsockDeviceParameter::Fd(
-                value
-                    .unwrap()
-                    .parse()
-                    .map_err(|_| argument::Error::InvalidValue {
-                        value: value.unwrap().to_owned(),
-                        expected: String::from(
-                            "this value for `vhost-vsock-fd` needs to be integer",
-                        ),
-                    })?,
-            ));
+            let fd: i32 = value
+                .unwrap()
+                .parse()
+                .map_err(|_| argument::Error::InvalidValue {
+                    value: value.unwrap().to_owned(),
+                    expected: String::from("this value for `vhost-vsock-fd` needs to be integer"),
+                })?;
+            cfg.vhost_vsock_device = Some(PathBuf::from(format!("/proc/self/fd/{}", fd)));
         }
         "vhost-vsock-device" => {
             if cfg.vhost_vsock_device.is_some() {
@@ -1108,7 +1132,7 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
                 });
             }
 
-            cfg.vhost_vsock_device = Some(VhostVsockDeviceParameter::Path(vhost_vsock_device_path));
+            cfg.vhost_vsock_device = Some(vhost_vsock_device_path);
         }
         "vhost-net-device" => {
             let vhost_net_device_path = PathBuf::from(value.unwrap());
@@ -2191,8 +2215,19 @@ fn set_argument(cfg: &mut Config, name: &str, value: Option<&str>) -> argument::
             cfg.no_legacy = true;
         }
         "userspace-msr" => {
-            let index = parse_userspace_msr_options(value.unwrap())?;
-            cfg.userspace_msr.insert(index);
+            let (index, msr_config) = parse_userspace_msr_options(value.unwrap())?;
+            // TODO(b:225375705): MSR configuration must be unique in the future.
+            if let Some(old_config) = cfg.userspace_msr.insert(index, msr_config.clone()) {
+                if old_config != msr_config {
+                    return Err(argument::Error::InvalidValue {
+                        value: value.unwrap().to_owned(),
+                        expected: String::from("Same msr must has the same configuration"),
+                    });
+                }
+            }
+        }
+        "itmt" => {
+            cfg.itmt = true;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         "host-cpu-topology" => {
@@ -2528,6 +2563,60 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
                 ));
             }
         }
+    } else {
+        // TODO(b/215297064): Support generic cpuaffinity if there's a need.
+        if !cfg.userspace_msr.is_empty() {
+            for (_, msr_config) in cfg.userspace_msr.iter() {
+                if msr_config.from == MsrValueFrom::RWFromRunningCPU {
+                    return Err(argument::Error::UnknownArgument(
+                        "`userspace-msr` must set `cpu0` if `host-cpu-topology` is not set"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if cfg.itmt {
+        // ITMT only works on the case each vCPU is 1:1 mapping to a pCPU.
+        // `host-cpu-topology` has already set this 1:1 mapping. If no
+        // `host-cpu-topology`, we need check the cpu affinity setting.
+        if !cfg.host_cpu_topology {
+            // only VcpuAffinity::PerVcpu supports setting cpu affinity
+            // for each vCPU.
+            if let Some(VcpuAffinity::PerVcpu(v)) = &cfg.vcpu_affinity {
+                // ITMT allows more pCPUs than vCPUs.
+                if v.len() != cfg.vcpu_count.unwrap_or(1) {
+                    return Err(argument::Error::ExpectedArgument(
+                        "`itmt` requires affinity to be set for every vCPU.".to_owned(),
+                    ));
+                }
+
+                let mut pcpu_set = BTreeSet::new();
+                for cpus in v.values() {
+                    if cpus.len() != 1 {
+                        return Err(argument::Error::ExpectedArgument(
+                            "`itmt` requires affinity to be set 1 pCPU for 1 vCPU.".to_owned(),
+                        ));
+                    }
+                    // Ensure that each vCPU corresponds to a different pCPU to avoid pCPU sharing,
+                    // otherwise it will seriously affect the ITMT scheduling optimization effect.
+                    if !pcpu_set.insert(cpus[0]) {
+                        return Err(argument::Error::ExpectedArgument(
+                            "`cpu_host` requires affinity to be set different pVPU for each vCPU."
+                                .to_owned(),
+                        ));
+                    }
+                }
+            } else {
+                return Err(argument::Error::ExpectedArgument(
+                    "`itmt` requires affinity to be set for every vCPU.".to_owned(),
+                ));
+            }
+        }
+        set_itmt_msr_config(&mut cfg.userspace_msr).map_err(|e| {
+            argument::Error::UnknownArgument(format!("the cpu doesn't support itmt {}", e))
+        })?;
     }
     if !cfg.balloon && cfg.balloon_control.is_some() {
         return Err(argument::Error::ExpectedArgument(
@@ -2859,12 +2948,19 @@ iommu=on|off - indicates whether to enable virtio IOMMU for this device"),
           Argument::value("direct-gpe", "gpe", "Enable GPE interrupt and register access passthrough"),
           Argument::value("dmi", "DIR", "Directory with smbios_entry_point/DMI files"),
           Argument::flag("no-legacy", "Don't use legacy KBD/RTC devices emulation"),
-          Argument::value("userspace-msr", "INDEX,action=r0", "Userspace MSR handling. Takes INDEX of the MSR and how they are handled.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+          Argument::value("userspace-msr", "INDEX,type=TYPE,action=TYPE,[from=TYPE]",
+                              "Userspace MSR handling. Takes INDEX of the MSR and how they are handled.
 
-                              action=r0 - forward RDMSR to host kernel cpu0.
-"),
+                              type=(r|w|rw|wr) - read/write permission control.
+
+                              action=(pass|emu) - if the control of msr is effective on host.
+
+                              from=(cpu0) - source of msr value. if not set, the source is running CPU."),
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
           Argument::flag("host-cpu-topology", "Use mirror cpu topology of Host for Guest VM, also copy some cpu feature to Guest VM."),
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+          Argument::flag("itmt", "Enable ITMT scheduling feature."),
           Argument::flag("privileged-vm", "Grant this Guest VM certian privileges to manage Host resources, such as power management."),
           Argument::value("stub-pci-device", "DOMAIN:BUS:DEVICE.FUNCTION[,vendor=NUM][,device=NUM][,class=NUM][,subsystem_vendor=NUM][,subsystem_device=NUM][,revision=NUM]", "Comma-separated key=value pairs for setting up a stub PCI device that just enumerates. The first option in the list must specify a PCI address to claim.
                               Optional further parameters
@@ -3021,6 +3117,20 @@ fn powerbtn_vms(mut args: std::env::Args) -> std::result::Result<(), ()> {
     let socket_path = &args.next().unwrap();
     let socket_path = Path::new(&socket_path);
     vms_request(&VmRequest::Powerbtn, socket_path)
+}
+
+fn sleepbtn_vms(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    if args.len() == 0 {
+        print_help("crosvm sleepbtn", "VM_SOCKET...", &[]);
+        println!(
+            "Triggers a sleep button event in the crosvm instance listening on each `VM_SOCKET`
+            given."
+        );
+        return Err(());
+    }
+    let socket_path = &args.next().unwrap();
+    let socket_path = Path::new(&socket_path);
+    vms_request(&VmRequest::Sleepbtn, socket_path)
 }
 
 fn inject_gpe(mut args: std::env::Args) -> std::result::Result<(), ()> {
@@ -3556,6 +3666,7 @@ fn print_usage() {
     println!("    stop - Stops crosvm instances via their control sockets.");
     println!("    suspend - Suspends the crosvm instance.");
     println!("    powerbtn - Triggers a power button event in the crosvm instance.");
+    println!("    sleepbtn - Triggers a sleep button event in the crosvm instance.");
     println!("    gpe - Injects a general-purpose event into the crosvm instance.");
     println!("    usb - Manage attached virtual USB devices.");
     println!("    version - Show package version.");
@@ -3613,6 +3724,7 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
             "stop" => stop_vms(args),
             "suspend" => suspend_vms(args),
             "powerbtn" => powerbtn_vms(args),
+            "sleepbtn" => sleepbtn_vms(args),
             "gpe" => inject_gpe(args),
             "usb" => modify_usb(args),
             "version" => pkg_version(),
@@ -4415,9 +4527,45 @@ mod tests {
 
     #[test]
     fn parse_userspace_msr_options_test() {
-        let index = parse_userspace_msr_options("0x10,action=r0").unwrap();
-        assert_eq!(index, 0x10);
+        let (pass_cpu0_index, pass_cpu0_cfg) =
+            parse_userspace_msr_options("0x10,type=r,action=pass,from=cpu0").unwrap();
+        assert_eq!(pass_cpu0_index, 0x10);
+        assert!(pass_cpu0_cfg.rw_type.read_allow);
+        assert!(!pass_cpu0_cfg.rw_type.write_allow);
+        assert_eq!(
+            *pass_cpu0_cfg.action.as_ref().unwrap(),
+            MsrAction::MsrPassthrough
+        );
+        assert_eq!(pass_cpu0_cfg.from, MsrValueFrom::RWFromCPU0);
+
+        let (pass_cpus_index, pass_cpus_cfg) =
+            parse_userspace_msr_options("0x10,type=rw,action=emu").unwrap();
+        assert_eq!(pass_cpus_index, 0x10);
+        assert!(pass_cpus_cfg.rw_type.read_allow);
+        assert!(pass_cpus_cfg.rw_type.write_allow);
+        assert_eq!(
+            *pass_cpus_cfg.action.as_ref().unwrap(),
+            MsrAction::MsrEmulate
+        );
+        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
+
+        // Compatible with the original command line format.
+        // TODO(b:225375705): Deprecate the old cmd format in the future.
+        let (old_index, old_cfg) = parse_userspace_msr_options("0x10,action=r0").unwrap();
+        assert_eq!(old_index, 0x10);
+        assert!(old_cfg.rw_type.read_allow);
+        assert!(!pass_cpu0_cfg.rw_type.write_allow);
+        assert_eq!(
+            *pass_cpu0_cfg.action.as_ref().unwrap(),
+            MsrAction::MsrPassthrough
+        );
+        assert_eq!(old_cfg.from, MsrValueFrom::RWFromCPU0);
+
         assert!(parse_userspace_msr_options("0x10,action=none").is_err());
+        assert!(parse_userspace_msr_options("0x10,action=pass").is_err());
+        assert!(parse_userspace_msr_options("0x10,type=none").is_err());
+        assert!(parse_userspace_msr_options("0x10,type=rw").is_err());
+        assert!(parse_userspace_msr_options("0x10,type=w,action=pass,from=f").is_err());
         assert!(parse_userspace_msr_options("0x10").is_err());
         assert!(parse_userspace_msr_options("hoge").is_err());
     }
