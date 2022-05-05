@@ -99,9 +99,7 @@ exclude = [
     "common/io_uring",
     "common/p9",
     "common/sync",
-    "common/sys_util",
-    "common/sys_util_core",
-    "common/win_sys_util",
+    "tube_transporter",
     "win_util",
 ]
 
@@ -172,6 +170,8 @@ kvm = { path = "kvm", optional = true }
 kvm_sys = { path = "kvm_sys", optional = true }
 libc = "0.2.93"
 libcras = "*"
+# Compile out trace statements in release builds
+log = { version = "0", features = ["release_max_level_debug"]}
 minijail = "*" # provided by ebuild
 net_util = { path = "net_util" }
 p9 = "*"
@@ -198,6 +198,9 @@ x86_64 = { path = "x86_64" }
 [target.'cfg(any(target_arch = "aarch64", target_arch = "arm"))'.dependencies]
 aarch64 = { path = "aarch64" }
 
+[target.'cfg(windows)'.dependencies]
+tube_transporter = { path = "tube_transporter" }
+
 [dev-dependencies]
 base = { path = "base" }
 lazy_static = "*"
@@ -206,14 +209,12 @@ lazy_static = "*"
 assertions = { path = "common/assertions" }
 audio_streams = { path = "common/audio_streams" }
 base = { path = "base" }
-sys_util_core = { path = "common/sys_util_core" }
 cros_async =  { path = "cros_async" }
 cros_fuzz = { path = "common/cros-fuzz" } # ignored by ebuild
 data_model = { path = "common/data_model" }
 libcras = { path = "libcras_stub" } # ignored by ebuild
 p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
-sys_util = { path = "common/sys_util" }
 system_api = { path = "system_api_stub" } # ignored by ebuild
 wire_format_derive = { path = "common/p9/wire_format_derive" } # ignored by ebuild
 minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
