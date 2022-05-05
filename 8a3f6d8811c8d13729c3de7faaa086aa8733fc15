@@ -52,6 +52,29 @@
       "parentUuid": "52cadb29_5616b854",
       "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "111733eb_d6a6d9db",
+        "filename": "base/src/sys/unix/rand.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 56,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-05-05T02:03:57Z",
+      "side": 1,
+      "message": "This is the problematic line, right? I guess commenting out the tests is enough to fix it because it isn\u0027t used otherwise and so gets optimized out before the linker error would happen?",
+      "range": {
+        "startLine": 52,
+        "startChar": 0,
+        "endLine": 56,
+        "endChar": 13
+      },
+      "revId": "8a3f6d8811c8d13729c3de7faaa086aa8733fc15",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
