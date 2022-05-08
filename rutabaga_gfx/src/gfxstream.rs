@@ -31,12 +31,35 @@ use crate::rutabaga_utils::*;
 
 use data_model::VolatileSlice;
 
+#[repr(C)]
+pub struct VirglRendererGlCtxParam {
+    pub version: c_int,
+    pub shared: bool,
+    pub major_ver: c_int,
+    pub minor_ver: c_int,
+}
+
 // In gfxstream, only write_fence is used (for synchronization of commands delivered)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GfxstreamRendererCallbacks {
+pub struct VirglRendererCallbacks {
     pub version: c_int,
     pub write_fence: unsafe extern "C" fn(cookie: *mut c_void, fence: u32),
+    pub create_gl_context: Option<
+        unsafe extern "C" fn(
+            cookie: *mut c_void,
+            scanout_idx: c_int,
+            param: *mut VirglRendererGlCtxParam,
+        ) -> *mut c_void,
+    >,
+    pub destroy_gl_context: Option<unsafe extern "C" fn(cookie: *mut c_void, ctx: *mut c_void)>,
+    pub make_current: Option<
+        unsafe extern "C" fn(cookie: *mut c_void, scanout_idx: c_int, ctx: *mut c_void) -> c_int,
+    >,
+
+    pub get_drm_fd: Option<unsafe extern "C" fn(cookie: *mut c_void) -> c_int>,
+    pub write_context_fence:
+        Option<unsafe extern "C" fn(cookie: *mut c_void, fence: u64, ctx_idx: u32, ring_idx: u8)>,
 }
 
 #[repr(C)]
@@ -60,7 +83,7 @@ extern "C" {
         display_type: u32,
         renderer_cookie: *mut c_void,
         renderer_flags: i32,
-        renderer_callbacks: *mut GfxstreamRendererCallbacks,
+        renderer_callbacks: *mut VirglRendererCallbacks,
         gfxstream_callbacks: *mut c_void,
     );
 
@@ -204,9 +227,14 @@ impl Drop for GfxstreamContext {
     }
 }
 
-const GFXSTREAM_RENDERER_CALLBACKS: &GfxstreamRendererCallbacks = &GfxstreamRendererCallbacks {
-    version: 1,
+const GFXSTREAM_RENDERER_CALLBACKS: &VirglRendererCallbacks = &VirglRendererCallbacks {
+    version: 3,
     write_fence,
+    create_gl_context: None,
+    destroy_gl_context: None,
+    make_current: None,
+    get_drm_fd: None,
+    write_context_fence: None,
 };
 
 fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
@@ -528,6 +556,7 @@ impl RutabagaComponent for Gfxstream {
         &self,
         ctx_id: u32,
         _context_init: u32,
+        _context_name: Option<&str>,
         _fence_handler: RutabagaFenceHandler,
     ) -> RutabagaResult<Box<dyn RutabagaContext>> {
         const CONTEXT_NAME: &[u8] = b"gpu_renderer";

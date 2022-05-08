@@ -6,19 +6,18 @@
 use std::fs::File;
 use std::io::{ErrorKind, IoSlice, IoSliceMut};
 use std::marker::PhantomData;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
-use sys_util::{AsRawDescriptor, RawDescriptor, ScmSocket};
+use base::{AsRawDescriptor, FromRawDescriptor, RawDescriptor, ScmSocket};
 
 use super::{Error, Result};
 use crate::connection::{Endpoint as EndpointTrait, Listener as ListenerTrait, Req};
 use crate::message::*;
+use crate::{SystemListener, SystemStream};
 
 /// Unix domain socket listener for accepting incoming connections.
 pub struct Listener {
-    fd: UnixListener,
+    fd: SystemListener,
     path: PathBuf,
 }
 
@@ -32,7 +31,7 @@ impl Listener {
         if unlink {
             let _ = std::fs::remove_file(&path);
         }
-        let fd = UnixListener::bind(&path).map_err(Error::SocketError)?;
+        let fd = SystemListener::bind(&path).map_err(Error::SocketError)?;
         Ok(Listener {
             fd,
             path: path.as_ref().to_owned(),
@@ -41,18 +40,18 @@ impl Listener {
 }
 
 impl ListenerTrait for Listener {
-    type Connection = UnixStream;
+    type Connection = SystemStream;
 
     /// Accept an incoming connection.
     ///
     /// # Return:
-    /// * - Some(UnixStream): new UnixStream object if new incoming connection is available.
+    /// * - Some(SystemListener): new SystemListener object if new incoming connection is available.
     /// * - None: no incoming connection available.
     /// * - SocketError: errors from accept().
     fn accept(&mut self) -> Result<Option<Self::Connection>> {
         loop {
             match self.fd.accept() {
-                Ok((socket, _addr)) => return Ok(Some(socket)),
+                Ok((stream, _addr)) => return Ok(Some(stream)),
                 Err(e) => {
                     match e.kind() {
                         // No incoming connection available.
@@ -78,9 +77,9 @@ impl ListenerTrait for Listener {
     }
 }
 
-impl AsRawFd for Listener {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
+impl AsRawDescriptor for Listener {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.fd.as_raw_descriptor()
     }
 }
 
@@ -92,12 +91,12 @@ impl Drop for Listener {
 
 /// Unix domain socket endpoint for vhost-user connection.
 pub struct Endpoint<R: Req> {
-    sock: UnixStream,
+    sock: SystemStream,
     _r: PhantomData<R>,
 }
 
-impl<R: Req> From<UnixStream> for Endpoint<R> {
-    fn from(sock: UnixStream) -> Self {
+impl<R: Req> From<SystemStream> for Endpoint<R> {
+    fn from(sock: SystemStream) -> Self {
         Self {
             sock,
             _r: PhantomData,
@@ -124,7 +123,7 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
     /// * - the new Endpoint object on success.
     /// * - SocketConnect: failed to connect to peer.
     fn connect<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let sock = UnixStream::connect(path).map_err(Error::SocketConnect)?;
+        let sock = SystemStream::connect(path).map_err(Error::SocketConnect)?;
         Ok(Self::from(sock))
     }
 
@@ -136,7 +135,7 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
     /// * - SocketRetry: temporary error caused by signals or short of resources.
     /// * - SocketBroken: the underline socket is broken.
     /// * - SocketError: other socket related errors.
-    fn send_iovec(&mut self, iovs: &[IoSlice], fds: Option<&[RawFd]>) -> Result<usize> {
+    fn send_iovec(&mut self, iovs: &[IoSlice], fds: Option<&[RawDescriptor]>) -> Result<usize> {
         let rfds = match fds {
             Some(rfds) => rfds,
             _ => &[],
@@ -159,6 +158,7 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
     ///
     /// # Return:
     /// * - (number of bytes received, [received files]) on success
+    /// * - Disconnect: the connection is closed.
     /// * - SocketRetry: temporary error caused by signals or short of resources.
     /// * - SocketBroken: the underline socket is broken.
     /// * - SocketError: other socket related errors.
@@ -175,6 +175,11 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
         let mut iovs: Vec<_> = bufs.iter_mut().map(|s| IoSliceMut::new(s)).collect();
         let (bytes, fds) = self.sock.recv_iovecs_with_fds(&mut iovs, &mut fd_array)?;
 
+        // 0-bytes indicates that the connection is closed.
+        if bytes == 0 {
+            return Err(Error::Disconnect);
+        }
+
         let files = match fds {
             0 => None,
             n => {
@@ -183,7 +188,7 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
                     .take(n)
                     .map(|fd| {
                         // Safe because we have the ownership of `fd`.
-                        unsafe { File::from_raw_fd(*fd) }
+                        unsafe { File::from_raw_descriptor(*fd as RawDescriptor) }
                     })
                     .collect();
                 Some(files)
@@ -194,20 +199,14 @@ impl<R: Req> EndpointTrait<R> for Endpoint<R> {
     }
 }
 
-impl<T: Req> AsRawFd for Endpoint<T> {
-    fn as_raw_fd(&self) -> RawFd {
-        self.sock.as_raw_fd()
-    }
-}
-
 impl<T: Req> AsRawDescriptor for Endpoint<T> {
     fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.as_raw_fd()
+        self.sock.as_raw_descriptor()
     }
 }
 
-impl<T: Req> AsMut<UnixStream> for Endpoint<T> {
-    fn as_mut(&mut self) -> &mut UnixStream {
+impl<T: Req> AsMut<SystemStream> for Endpoint<T> {
+    fn as_mut(&mut self) -> &mut SystemStream {
         &mut self.sock
     }
 }
@@ -232,7 +231,7 @@ mod tests {
         path.push("sock");
         let listener = Listener::new(&path, true).unwrap();
 
-        assert!(listener.as_raw_fd() > 0);
+        assert!(listener.as_raw_descriptor() > 0);
     }
 
     #[test]
@@ -293,7 +292,7 @@ mod tests {
         // Normal case for sending/receiving file descriptors
         let buf1 = vec![0x1, 0x2, 0x3, 0x4];
         let len = master
-            .send_slice(IoSlice::new(&buf1[..]), Some(&[fd.as_raw_fd()]))
+            .send_slice(IoSlice::new(&buf1[..]), Some(&[fd.as_raw_descriptor()]))
             .unwrap();
         assert_eq!(len, 4);
 
@@ -317,7 +316,11 @@ mod tests {
         let len = master
             .send_slice(
                 IoSlice::new(&buf1[..]),
-                Some(&[fd.as_raw_fd(), fd.as_raw_fd(), fd.as_raw_fd()]),
+                Some(&[
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                ]),
             )
             .unwrap();
         assert_eq!(len, 4);
@@ -346,7 +349,11 @@ mod tests {
         let len = master
             .send_slice(
                 IoSlice::new(&buf1[..]),
-                Some(&[fd.as_raw_fd(), fd.as_raw_fd(), fd.as_raw_fd()]),
+                Some(&[
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                ]),
             )
             .unwrap();
         assert_eq!(len, 4);
@@ -367,7 +374,11 @@ mod tests {
         let len = master
             .send_slice(
                 IoSlice::new(&buf1[..]),
-                Some(&[fd.as_raw_fd(), fd.as_raw_fd(), fd.as_raw_fd()]),
+                Some(&[
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                ]),
             )
             .unwrap();
         assert_eq!(len, 4);
@@ -403,7 +414,11 @@ mod tests {
         let len = master
             .send_slice(
                 IoSlice::new(&buf1[..]),
-                Some(&[fd.as_raw_fd(), fd.as_raw_fd(), fd.as_raw_fd()]),
+                Some(&[
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                ]),
             )
             .unwrap();
         assert_eq!(len, 4);
@@ -419,7 +434,11 @@ mod tests {
         let len = master
             .send_slice(
                 IoSlice::new(&buf1[..]),
-                Some(&[fd.as_raw_fd(), fd.as_raw_fd(), fd.as_raw_fd()]),
+                Some(&[
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                    fd.as_raw_descriptor(),
+                ]),
             )
             .unwrap();
         assert_eq!(len, 4);

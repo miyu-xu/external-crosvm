@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
+use std::fs::OpenOptions;
+use std::os::unix::prelude::OpenOptionsExt;
+use std::path::PathBuf;
 use std::thread;
 
+use anyhow::Context;
+use base::{error, open_file, warn, AsRawDescriptor, Event, RawDescriptor};
 use data_model::{DataInit, Le64};
-
-use base::{error, warn, AsRawDescriptor, Event, RawDescriptor};
+use serde::Deserialize;
 use vhost::Vhost;
 use vhost::Vsock as VhostVsockHandle;
 use vm_memory::GuestMemory;
@@ -19,6 +22,14 @@ use crate::virtio::{copy_config, Interrupt, Queue, VirtioDevice, TYPE_VSOCK};
 pub const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 3;
 pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
+static VHOST_VSOCK_DEFAULT_PATH: &str = "/dev/vhost-vsock";
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VhostVsockConfig {
+    pub device: Option<PathBuf>,
+    pub cid: u64,
+}
 
 pub struct Vsock {
     worker_kill_evt: Option<Event>,
@@ -32,9 +43,21 @@ pub struct Vsock {
 
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
-    pub fn new(vhost_vsock_file: File, base_features: u64, cid: u64) -> Result<Vsock> {
+    pub fn new(base_features: u64, vhost_config: &VhostVsockConfig) -> anyhow::Result<Vsock> {
+        let device_file = open_file(
+            vhost_config
+                .device
+                .as_ref()
+                .unwrap_or(&PathBuf::from(VHOST_VSOCK_DEFAULT_PATH)),
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK),
+        )
+        .context("failed to open virtual socket device")?;
+
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
-        let handle = VhostVsockHandle::new(vhost_vsock_file);
+        let handle = VhostVsockHandle::new(device_file);
 
         let avail_features = base_features
             | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
@@ -52,7 +75,7 @@ impl Vsock {
             worker_kill_evt: Some(kill_evt.try_clone().map_err(Error::CloneKillEvent)?),
             kill_evt: Some(kill_evt),
             vhost_handle: Some(handle),
-            cid,
+            cid: vhost_config.cid,
             interrupts: Some(interrupts),
             avail_features,
             acked_features: 0,
@@ -212,9 +235,12 @@ impl VirtioDevice for Vsock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::convert::TryInto;
+    use std::result::Result;
+
+    use serde_keyvalue::*;
+
+    use super::*;
 
     #[test]
     fn ack_features() {
@@ -286,5 +312,83 @@ mod tests {
 
         let vsock = Vsock::new_for_testing(cid, features);
         assert_eq!(features, vsock.features());
+    }
+
+    fn from_vsock_arg(options: &str) -> Result<VhostVsockConfig, ParseError> {
+        from_key_values(options)
+    }
+
+    #[test]
+    fn params_from_key_values() {
+        // Path device
+        let params = from_vsock_arg("device=/some/path,cid=56").unwrap();
+        assert_eq!(
+            params,
+            VhostVsockConfig {
+                device: Some("/some/path".into()),
+                cid: 56,
+            }
+        );
+        // No key for path device
+        let params = from_vsock_arg("/some/path,cid=56").unwrap();
+        assert_eq!(
+            params,
+            VhostVsockConfig {
+                device: Some("/some/path".into()),
+                cid: 56,
+            }
+        );
+        // Default device
+        let params = from_vsock_arg("cid=56").unwrap();
+        assert_eq!(
+            params,
+            VhostVsockConfig {
+                device: None,
+                cid: 56,
+            }
+        );
+
+        // No argument
+        assert_eq!(
+            from_vsock_arg("").unwrap_err(),
+            ParseError {
+                kind: ErrorKind::SerdeError("missing field `cid`".into()),
+                pos: 0
+            }
+        );
+        // Missing cid
+        assert_eq!(
+            from_vsock_arg("device=42").unwrap_err(),
+            ParseError {
+                kind: ErrorKind::SerdeError("missing field `cid`".into()),
+                pos: 0,
+            }
+        );
+        // Cid passed twice
+        assert_eq!(
+            from_vsock_arg("cid=42,cid=56").unwrap_err(),
+            ParseError {
+                kind: ErrorKind::SerdeError("duplicate field `cid`".into()),
+                pos: 0,
+            }
+        );
+        // Device passed twice
+        assert_eq!(
+            from_vsock_arg("cid=56,device=42,device=/some/path").unwrap_err(),
+            ParseError {
+                kind: ErrorKind::SerdeError("duplicate field `device`".into()),
+                pos: 0,
+            }
+        );
+        // Invalid argument
+        assert_eq!(
+            from_vsock_arg("invalid=foo").unwrap_err(),
+            ParseError {
+                kind: ErrorKind::SerdeError(
+                    "unknown field `invalid`, expected `device` or `cid`".into()
+                ),
+                pos: 0,
+            }
+        );
     }
 }

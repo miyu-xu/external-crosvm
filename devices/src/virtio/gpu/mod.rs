@@ -119,7 +119,11 @@ impl Default for GpuParameters {
             gfxstream_use_guest_angle: false,
             gfxstream_use_syncfd: true,
             use_vulkan: false,
-            mode: GpuMode::ModeVirglRenderer,
+            mode: if cfg!(feature = "virgl_renderer") {
+                GpuMode::ModeVirglRenderer
+            } else {
+                GpuMode::Mode2D
+            },
             cache_path: None,
             cache_size: None,
             udmabuf: false,
@@ -460,9 +464,14 @@ impl Frontend {
             GpuCommand::GetCapset(info) => self
                 .virtio_gpu
                 .get_capset(info.capset_id.to_native(), info.capset_version.to_native()),
-            GpuCommand::CtxCreate(info) => self
-                .virtio_gpu
-                .create_context(info.hdr.ctx_id.to_native(), info.context_init.to_native()),
+            GpuCommand::CtxCreate(info) => {
+                let context_name: Option<String> = String::from_utf8(info.debug_name.to_vec()).ok();
+                self.virtio_gpu.create_context(
+                    info.hdr.ctx_id.to_native(),
+                    info.context_init.to_native(),
+                    context_name.as_deref(),
+                )
+            }
             GpuCommand::CtxDestroy(info) => {
                 self.virtio_gpu.destroy_context(info.hdr.ctx_id.to_native())
             }
@@ -930,10 +939,10 @@ impl Worker {
             {
                 if should_process {
                     if let Err(e) = self.state.process_resource_bridge(bridge) {
-                        error!("Failed to process resource bridge: {}", e);
+                        error!("Failed to process resource bridge: {:#}", e);
                         error!("Removing that resource bridge from the wait context.");
                         wait_ctx.delete(bridge).unwrap_or_else(|e| {
-                            error!("Failed to remove faulty resource bridge: {}", e)
+                            error!("Failed to remove faulty resource bridge: {:#}", e)
                         });
                     }
                 }

@@ -36,7 +36,7 @@ use sync::Mutex;
 
 use vm_memory::{GuestAddress, GuestMemory};
 
-use vm_control::{MemSlot, VmMemoryRequest, VmMemoryResponse};
+use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
 
 struct VirtioGpuResource {
     resource_id: u32,
@@ -691,44 +691,48 @@ impl VirtioGpu {
         let map_info = self.rutabaga.map_info(resource_id).map_err(|_| ErrUnspec)?;
         let vulkan_info_opt = self.rutabaga.vulkan_info(resource_id).ok();
 
-        let export = self.rutabaga.export_blob(resource_id);
-
-        let request = match export {
-            Ok(export) => match vulkan_info_opt {
-                Some(vulkan_info) => VmMemoryRequest::RegisterVulkanMemoryAtPciBarOffset {
-                    alloc: self.pci_bar,
+        let source = if let Ok(export) = self.rutabaga.export_blob(resource_id) {
+            match vulkan_info_opt {
+                Some(vulkan_info) => VmMemorySource::Vulkan {
                     descriptor: export.os_handle,
                     handle_type: export.handle_type,
                     memory_idx: vulkan_info.memory_idx,
                     physical_device_idx: vulkan_info.physical_device_idx,
-                    offset,
                     size: resource.size,
                 },
-                None => VmMemoryRequest::RegisterFdAtPciBarOffset(
-                    self.pci_bar,
-                    export.os_handle,
-                    resource.size as usize,
-                    offset,
-                ),
-            },
-            Err(_) => {
-                if self.external_blob {
+                None => VmMemorySource::Descriptor {
+                    descriptor: export.os_handle,
+                    offset: 0,
+                    size: resource.size,
+                },
+            }
+        } else {
+            if self.external_blob {
+                return Err(ErrUnspec);
+            }
+
+            let mapping = self.rutabaga.map(resource_id)?;
+            // Scope for lock
+            {
+                let mut map_req = self.map_request.lock();
+                if map_req.is_some() {
                     return Err(ErrUnspec);
                 }
-
-                let mapping = self.rutabaga.map(resource_id)?;
-                // Scope for lock
-                {
-                    let mut map_req = self.map_request.lock();
-                    if map_req.is_some() {
-                        return Err(ErrUnspec);
-                    }
-                    *map_req = Some(mapping);
-                }
-                VmMemoryRequest::RegisterHostPointerAtPciBarOffset(self.pci_bar, offset)
+                *map_req = Some(mapping);
+            }
+            VmMemorySource::ExternalMapping {
+                size: resource.size,
             }
         };
 
+        let request = VmMemoryRequest::RegisterMemory {
+            source,
+            dest: VmMemoryDestination::ExistingAllocation {
+                allocation: self.pci_bar,
+                offset,
+            },
+            read_only: false,
+        };
         self.gpu_device_tube.send(&request)?;
         let response = self.gpu_device_tube.recv()?;
 
@@ -765,8 +769,14 @@ impl VirtioGpu {
     }
 
     /// Creates a rutabaga context.
-    pub fn create_context(&mut self, ctx_id: u32, context_init: u32) -> VirtioGpuResult {
-        self.rutabaga.create_context(ctx_id, context_init)?;
+    pub fn create_context(
+        &mut self,
+        ctx_id: u32,
+        context_init: u32,
+        context_name: Option<&str>,
+    ) -> VirtioGpuResult {
+        self.rutabaga
+            .create_context(ctx_id, context_init, context_name)?;
         Ok(OkNoData)
     }
 

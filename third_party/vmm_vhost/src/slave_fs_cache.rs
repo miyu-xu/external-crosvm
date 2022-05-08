@@ -1,18 +1,18 @@
 // Copyright (C) 2020 Alibaba Cloud. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::{SlaveFsCacheReqSocket, SystemStream};
+use base::{AsRawDescriptor, RawDescriptor};
 use std::io;
 use std::mem;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use super::connection::{socket::Endpoint as SocketEndpoint, EndpointExt};
+use super::connection::EndpointExt;
 use super::message::*;
 use super::{Error, HandlerResult, Result, VhostUserMasterReqHandler};
 
 struct SlaveFsCacheReqInternal {
-    sock: SocketEndpoint<SlaveReq>,
+    sock: SlaveFsCacheReqSocket,
 
     // Protocol feature VHOST_USER_PROTOCOL_F_REPLY_ACK has been negotiated.
     reply_ack_negotiated: bool,
@@ -33,7 +33,7 @@ impl SlaveFsCacheReqInternal {
         &mut self,
         request: SlaveReq,
         fs: &VhostUserFSSlaveMsg,
-        fds: Option<&[RawFd]>,
+        fds: Option<&[RawDescriptor]>,
     ) -> Result<u64> {
         self.check_state()?;
 
@@ -76,12 +76,12 @@ impl SlaveFsCacheReqInternal {
 /// [MasterReqHandler]: struct.MasterReqHandler.html
 #[derive(Clone)]
 pub struct SlaveFsCacheReq {
-    // underlying Unix domain socket for communication
+    // underlying socket for communication
     node: Arc<Mutex<SlaveFsCacheReqInternal>>,
 }
 
 impl SlaveFsCacheReq {
-    fn new(ep: SocketEndpoint<SlaveReq>) -> Self {
+    fn new(ep: SlaveFsCacheReqSocket) -> Self {
         SlaveFsCacheReq {
             node: Arc::new(Mutex::new(SlaveFsCacheReqInternal {
                 sock: ep,
@@ -99,16 +99,16 @@ impl SlaveFsCacheReq {
         &self,
         request: SlaveReq,
         fs: &VhostUserFSSlaveMsg,
-        fds: Option<&[RawFd]>,
+        fds: Option<&[RawDescriptor]>,
     ) -> io::Result<u64> {
         self.node()
             .send_message(request, fs, fds)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
     }
 
-    /// Create a new instance from a `UnixStream` object.
-    pub fn from_stream(sock: UnixStream) -> Self {
-        Self::new(SocketEndpoint::<SlaveReq>::from(sock))
+    /// Create a new instance from a `SystemStream` object.
+    pub fn from_stream(sock: SystemStream) -> Self {
+        Self::new(SlaveFsCacheReqSocket::from(sock))
     }
 
     /// Set the negotiation state of the `VHOST_USER_PROTOCOL_F_REPLY_ACK` protocol feature.
@@ -128,8 +128,12 @@ impl SlaveFsCacheReq {
 
 impl VhostUserMasterReqHandler for SlaveFsCacheReq {
     /// Forward vhost-user-fs map file requests to the slave.
-    fn fs_slave_map(&self, fs: &VhostUserFSSlaveMsg, fd: &dyn AsRawFd) -> HandlerResult<u64> {
-        self.send_message(SlaveReq::FS_MAP, fs, Some(&[fd.as_raw_fd()]))
+    fn fs_slave_map(
+        &self,
+        fs: &VhostUserFSSlaveMsg,
+        fd: &dyn AsRawDescriptor,
+    ) -> HandlerResult<u64> {
+        self.send_message(SlaveReq::FS_MAP, fs, Some(&[fd.as_raw_descriptor()]))
     }
 
     /// Forward vhost-user-fs unmap file requests to the master.
@@ -140,13 +144,13 @@ impl VhostUserMasterReqHandler for SlaveFsCacheReq {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::io::AsRawFd;
 
     use super::*;
+    use crate::connection::Endpoint;
 
     #[test]
     fn test_slave_fs_cache_req_set_failed() {
-        let (p1, _p2) = UnixStream::pair().unwrap();
+        let (p1, _p2) = SystemStream::pair().unwrap();
         let fs_cache = SlaveFsCacheReq::from_stream(p1);
 
         assert!(fs_cache.node().error.is_none());
@@ -156,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_slave_fs_cache_send_failure() {
-        let (p1, p2) = UnixStream::pair().unwrap();
+        let (p1, p2) = SystemStream::pair().unwrap();
         let fs_cache = SlaveFsCacheReq::from_stream(p1);
 
         fs_cache.set_failed(libc::ECONNRESET);
@@ -171,9 +175,9 @@ mod tests {
 
     #[test]
     fn test_slave_fs_cache_recv_negative() {
-        let (p1, p2) = UnixStream::pair().unwrap();
+        let (p1, p2) = SystemStream::pair().unwrap();
         let fs_cache = SlaveFsCacheReq::from_stream(p1);
-        let mut master = SocketEndpoint::<SlaveReq>::from(p2);
+        let mut master = SlaveFsCacheReqSocket::from_connection(p2);
 
         let len = mem::size_of::<VhostUserFSSlaveMsg>();
         let mut hdr = VhostUserMsgHeader::new(
@@ -184,7 +188,7 @@ mod tests {
         let body = VhostUserU64::new(0);
 
         master
-            .send_message(&hdr, &body, Some(&[master.as_raw_fd()]))
+            .send_message(&hdr, &body, Some(&[master.as_raw_descriptor()]))
             .unwrap();
         fs_cache
             .fs_slave_map(&VhostUserFSSlaveMsg::default(), &master)

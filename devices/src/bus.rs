@@ -70,6 +70,12 @@ pub enum BusType {
 pub trait BusDevice: Send {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String;
+
+    /// Returns a unique id per device type suitable for metrics gathering.
+    // TODO(225991065): Remove this default implementation when all of the crate is upstreamed.
+    fn device_id(&self) -> u32 {
+        0
+    }
     /// Reads at `offset` from this device
     fn read(&mut self, offset: BusAccessInfo, data: &mut [u8]) {}
     /// Writes at `offset` into this device
@@ -90,6 +96,15 @@ pub trait BusDevice: Send {
     /// Gets a register from the configuration space. Only used by PCI.
     /// * `reg_idx` - The index of the config register to read.
     fn config_register_read(&self, reg_idx: usize) -> u32 {
+        0
+    }
+    /// Sets a register in the virtual config space. Only used by PCI.
+    /// * `reg_idx` - The index of the config register to modify.
+    /// * `value` - The value to be written.
+    fn virtual_config_register_write(&mut self, reg_idx: usize, value: u32) {}
+    /// Gets a register from the virtual config space. Only used by PCI.
+    /// * `reg_idx` - The index of the config register to read.
+    fn virtual_config_register_read(&self, reg_idx: usize) -> u32 {
         0
     }
     /// Invoked when the device is sandboxed.

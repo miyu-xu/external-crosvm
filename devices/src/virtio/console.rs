@@ -9,7 +9,7 @@ use std::result;
 use std::sync::Arc;
 use std::thread;
 
-use base::{error, Event, PollToken, RawDescriptor, WaitContext};
+use base::{error, Event, FileSync, PollToken, RawDescriptor, WaitContext};
 use data_model::{DataInit, Le16, Le32};
 use hypervisor::ProtectionType;
 use remain::sorted;
@@ -63,23 +63,17 @@ pub fn handle_input<I: SignalableInterrupt>(
     buffer: &mut VecDeque<u8>,
     receive_queue: &mut Queue,
 ) -> result::Result<(), ConsoleError> {
-    let mut exhausted_queue = false;
-
     loop {
-        let desc = match receive_queue.peek(mem) {
-            Some(d) => d,
-            None => {
-                exhausted_queue = true;
-                break;
-            }
-        };
+        let desc = receive_queue
+            .peek(mem)
+            .ok_or(ConsoleError::RxDescriptorsExhausted)?;
         let desc_index = desc.index;
         // TODO(morg): Handle extra error cases as Err(ConsoleError) instead of just returning.
         let mut writer = match Writer::new(mem.clone(), desc) {
             Ok(w) => w,
             Err(e) => {
                 error!("console: failed to create Writer: {}", e);
-                break;
+                return Ok(());
             }
         };
 
@@ -103,14 +97,8 @@ pub fn handle_input<I: SignalableInterrupt>(
         }
 
         if bytes_written == 0 {
-            break;
+            return Ok(());
         }
-    }
-
-    if exhausted_queue {
-        Err(ConsoleError::RxDescriptorsExhausted)
-    } else {
-        Ok(())
     }
 }
 
@@ -170,11 +158,6 @@ struct Worker {
     receive_evt: Event,
     transmit_queue: Queue,
     transmit_evt: Event,
-}
-
-fn write_output(output: &mut dyn io::Write, data: &[u8]) -> io::Result<()> {
-    output.write_all(data)?;
-    output.flush()
 }
 
 /// Starts a thread that reads rx and sends the input back via the returned buffer.
@@ -244,7 +227,8 @@ pub fn process_transmit_request(mut reader: Reader, output: &mut dyn io::Write) 
     let len = reader.available_bytes();
     let mut data = vec![0u8; len];
     reader.read_exact(&mut data)?;
-    write_output(output, &data)?;
+    output.write_all(&data)?;
+    output.flush()?;
     Ok(0)
 }
 
@@ -376,6 +360,8 @@ impl SerialDevice for Console {
         _evt: Event,
         input: Option<Box<dyn io::Read + Send>>,
         output: Option<Box<dyn io::Write + Send>>,
+        _sync: Option<Box<dyn FileSync + Send>>,
+        _out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
         Console {

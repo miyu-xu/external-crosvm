@@ -4,14 +4,15 @@
 
 //! Manages system resources that can be allocated to VMs and their devices.
 
+use std::ops::RangeInclusive;
+
 use remain::sorted;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub use crate::address_allocator::AddressAllocator;
 pub use crate::system_allocator::{MemRegion, MmioType, SystemAllocator, SystemAllocatorConfig};
 
-mod address_allocator;
+pub mod address_allocator;
 mod system_allocator;
 
 /// Used to tag SystemAllocator allocations.
@@ -35,6 +36,8 @@ pub enum Alloc {
     PciBridgePrefetchWindow { bus: u8, dev: u8, func: u8 },
     /// File-backed memory mapping.
     FileBacked(u64),
+    /// virtio vhost user queue with queue id
+    VvuQueue(u8),
 }
 
 #[sorted]
@@ -50,6 +53,8 @@ pub enum Error {
     ExistingAlloc(Alloc),
     #[error("Invalid Alloc: {0:?}")]
     InvalidAlloc(Alloc),
+    #[error("IO port out of range: base:{0} size:{1}")]
+    IOPortOutOfRange(u64, u64),
     #[error("Platform MMIO address range not specified")]
     MissingPlatformMMIOAddresses,
     #[error("No IO address range specified")]
@@ -67,3 +72,9 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Computes the length of a RangeInclusive value. Returns None
+/// if the range is 0..=u64::MAX.
+pub fn range_inclusive_len(r: &RangeInclusive<u64>) -> Option<u64> {
+    (r.end() - r.start()).checked_add(1)
+}

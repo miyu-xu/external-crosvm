@@ -15,11 +15,11 @@ use x86_64::*;
 use std::cell::RefCell;
 use std::cmp::{min, Reverse};
 use std::collections::{BTreeMap, BinaryHeap};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::ffi::CString;
 use std::mem::{size_of, ManuallyDrop};
 use std::os::raw::{c_int, c_ulong, c_void};
-use std::os::unix::{io::AsRawFd, prelude::OsStrExt};
+use std::os::unix::prelude::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::copy_nonoverlapping;
 use std::sync::atomic::AtomicU64;
@@ -623,7 +623,7 @@ impl Vm for KvmVm {
         slot: u32,
         offset: usize,
         size: usize,
-        fd: &dyn AsRawFd,
+        fd: &dyn AsRawDescriptor,
         fd_offset: u64,
         prot: Protection,
     ) -> Result<()> {
@@ -829,10 +829,33 @@ impl Vcpu for KvmVcpu {
                     return Err(Error::new(EINVAL));
                 }
                 let hcall = unsafe { &mut hyperv.u.hcall };
-                if data.len() != std::mem::size_of::<u64>() {
-                    return Err(Error::new(EINVAL));
+                match data.try_into() {
+                    Ok(data) => {
+                        hcall.result = u64::from_ne_bytes(data);
+                    }
+                    _ => return Err(Error::new(EINVAL)),
                 }
-                hcall.result.to_ne_bytes().copy_from_slice(data);
+                Ok(())
+            }
+            KVM_EXIT_X86_RDMSR => {
+                // Safe because the exit_reason (which comes from the kernel) told us which
+                // union field to use.
+                let msr = unsafe { &mut run.__bindgen_anon_1.msr };
+
+                match data.try_into() {
+                    Ok(data) => {
+                        msr.data = u64::from_ne_bytes(data);
+                        msr.error = 0;
+                    }
+                    _ => return Err(Error::new(EINVAL)),
+                }
+                Ok(())
+            }
+            KVM_EXIT_X86_WRMSR => {
+                // Safe because the exit_reason (which comes from the kernel) told us which
+                // union field to use.
+                let msr = unsafe { &mut run.__bindgen_anon_1.msr };
+                msr.error = 0;
                 Ok(())
             }
             _ => Err(Error::new(EINVAL)),
@@ -912,7 +935,7 @@ impl Vcpu for KvmVcpu {
 
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was.
-        let run = unsafe { &*(self.run_mmap.as_ptr() as *const kvm_run) };
+        let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         match run.exit_reason {
             KVM_EXIT_IO => {
                 // Safe because the exit_reason (which comes from the kernel) told us which
@@ -1022,8 +1045,9 @@ impl Vcpu for KvmVcpu {
                 let event_flags = unsafe { run.__bindgen_anon_1.system_event.flags };
                 match event_type {
                     KVM_SYSTEM_EVENT_SHUTDOWN => Ok(VcpuExit::SystemEventShutdown),
-                    KVM_SYSTEM_EVENT_RESET => Ok(VcpuExit::SystemEventReset),
+                    KVM_SYSTEM_EVENT_RESET => self.system_event_reset(event_flags),
                     KVM_SYSTEM_EVENT_CRASH => Ok(VcpuExit::SystemEventCrash),
+                    KVM_SYSTEM_EVENT_S2IDLE => Ok(VcpuExit::SystemEventS2Idle),
                     _ => {
                         error!(
                             "Unknown KVM system event {} with flags {}",
@@ -1032,6 +1056,25 @@ impl Vcpu for KvmVcpu {
                         Err(Error::new(EINVAL))
                     }
                 }
+            }
+            KVM_EXIT_X86_RDMSR => {
+                // Safe because the exit_reason (which comes from the kernel) told us which
+                // union field to use.
+                let msr = unsafe { &mut run.__bindgen_anon_1.msr };
+                let index = msr.index;
+                // By default fail the MSR read unless it was handled later.
+                msr.error = 1;
+                Ok(VcpuExit::RdMsr { index })
+            }
+            KVM_EXIT_X86_WRMSR => {
+                // Safe because the exit_reason (which comes from the kernel) told us which
+                // union field to use.
+                let msr = unsafe { &mut run.__bindgen_anon_1.msr };
+                // By default fail the MSR write.
+                msr.error = 1;
+                let index = msr.index;
+                let data = msr.data;
+                Ok(VcpuExit::WrMsr { index, data })
             }
             r => panic!("unknown kvm exit reason: {}", r),
         }

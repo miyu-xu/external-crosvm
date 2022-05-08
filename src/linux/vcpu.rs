@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
+use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::sync::{mpsc, Arc, Barrier};
 
@@ -19,11 +20,10 @@ use vm_control::*;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use vm_memory::GuestMemory;
 
-use arch::{self, LinuxArch};
-
+use arch::{self, LinuxArch, MsrConfig, MsrExitHandler};
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use {
-    aarch64::AArch64 as Arch,
+    aarch64::{AArch64 as Arch, MsrAArch64 as MsrHandlers},
     devices::IrqChipAArch64 as IrqChipArch,
     hypervisor::{VcpuAArch64 as VcpuArch, VmAArch64 as VmArch},
 };
@@ -31,7 +31,7 @@ use {
 use {
     devices::IrqChipX86_64 as IrqChipArch,
     hypervisor::{VcpuX86_64 as VcpuArch, VmX86_64 as VmArch},
-    x86_64::X8664arch as Arch,
+    x86_64::{msr::MsrHandlers, X8664arch as Arch},
 };
 
 use super::ExitState;
@@ -60,7 +60,7 @@ pub fn setup_vcpu_signal_handler<T: Vcpu>(use_hypervisor_signals: bool) -> Resul
 // Sets up a vcpu and converts it into a runnable vcpu.
 pub fn runnable_vcpu<V>(
     cpu_id: usize,
-    kvm_vcpu_id: usize,
+    vcpu_id: usize,
     vcpu: Option<V>,
     vm: impl VmArch,
     irq_chip: &mut dyn IrqChipArch,
@@ -72,6 +72,7 @@ pub fn runnable_vcpu<V>(
     use_hypervisor_signals: bool,
     enable_per_vm_core_scheduling: bool,
     host_cpu_topology: bool,
+    itmt: bool,
     vcpu_cgroup_tasks_file: Option<File>,
 ) -> Result<(V, VcpuRunHandle)>
 where
@@ -83,7 +84,7 @@ where
             // If vcpu is None, it means this arch/hypervisor requires create_vcpu to be called from
             // the vcpu thread.
             match vm
-                .create_vcpu(kvm_vcpu_id)
+                .create_vcpu(vcpu_id)
                 .context("failed to create vcpu")?
                 .downcast::<V>()
             {
@@ -113,6 +114,7 @@ where
         has_bios,
         no_smt,
         host_cpu_topology,
+        itmt,
     )
     .context("failed to configure vcpu")?;
 
@@ -231,6 +233,32 @@ where
     }
 }
 
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn handle_s2idle_request(_privileged_vm: bool) {}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn handle_s2idle_request(privileged_vm: bool) {
+    const POWER_STATE_FREEZE: &[u8] = b"freeze";
+
+    // For non privileged guests, we silently ignore the suspend request
+    if !privileged_vm {
+        return;
+    }
+
+    let mut power_state = match OpenOptions::new().write(true).open("/sys/power/state") {
+        Ok(s) => s,
+        Err(err) => {
+            error!("Failed on open /sys/power/state: {}", err);
+            return;
+        }
+    };
+
+    if let Err(err) = power_state.write(POWER_STATE_FREEZE) {
+        error!("Failed on writing to /sys/power/state: {}", err);
+        return;
+    }
+}
+
 fn vcpu_loop<V>(
     mut run_mode: VmRunMode,
     cpu_id: usize,
@@ -244,10 +272,12 @@ fn vcpu_loop<V>(
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     use_hypervisor_signals: bool,
+    privileged_vm: bool,
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))] to_gdb_tube: Option<
         mpsc::Sender<VcpuDebugStatusMessage>,
     >,
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))] guest_mem: GuestMemory,
+    msr_handlers: Box<dyn MsrExitHandler>,
 ) -> ExitState
 where
     V: VcpuArch + 'static,
@@ -406,6 +436,16 @@ where
                 }) => {
                     mmio_bus.write(address, &data[..size]);
                 }
+                Ok(VcpuExit::RdMsr { index }) => {
+                    if let Some(data) = msr_handlers.read(index) {
+                        let _ = vcpu.set_data(&data.to_ne_bytes());
+                    }
+                }
+                Ok(VcpuExit::WrMsr { index, data }) => {
+                    if msr_handlers.write(index, data).is_some() {
+                        let _ = vcpu.set_data(&[]);
+                    }
+                }
                 Ok(VcpuExit::IoapicEoi { vector }) => {
                     if let Err(e) = irq_chip.broadcast_eoi(vector) {
                         error!(
@@ -434,6 +474,9 @@ where
                 Ok(VcpuExit::SystemEventCrash) => {
                     info!("system crash event on vcpu {}", cpu_id);
                     return ExitState::Stop;
+                }
+                Ok(VcpuExit::SystemEventS2Idle) => {
+                    handle_s2idle_request(privileged_vm);
                 }
                 #[rustfmt::skip] Ok(VcpuExit::Debug { .. }) => {
                     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
@@ -484,7 +527,7 @@ where
 
 pub fn run_vcpu<V>(
     cpu_id: usize,
-    kvm_vcpu_id: usize,
+    vcpu_id: usize,
     vcpu: Option<V>,
     vm: impl VmArch + 'static,
     mut irq_chip: Box<dyn IrqChipArch + 'static>,
@@ -508,7 +551,10 @@ pub fn run_vcpu<V>(
     >,
     enable_per_vm_core_scheduling: bool,
     host_cpu_topology: bool,
+    itmt: bool,
+    privileged_vm: bool,
     vcpu_cgroup_tasks_file: Option<File>,
+    userspace_msr: BTreeMap<u32, MsrConfig>,
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
@@ -521,11 +567,21 @@ where
             // anything happens before we get to writing the final event.
             let scoped_exit_evt = ScopedEvent::from(exit_evt);
 
+            let mut msr_handlers: MsrHandlers = Default::default();
+            if !userspace_msr.is_empty() {
+                userspace_msr.iter().for_each(|(index, msr_config)| {
+                    if let Err(e) = msr_handlers.add_handler(*index, msr_config.clone(), cpu_id) {
+                        error!("failed to add msr handler {}: {:#}", cpu_id, e);
+                        return;
+                    };
+                });
+            }
+
             #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
             let guest_mem = vm.get_memory().clone();
             let runnable_vcpu = runnable_vcpu(
                 cpu_id,
-                kvm_vcpu_id,
+                vcpu_id,
                 vcpu,
                 vm,
                 irq_chip.as_mut(),
@@ -537,6 +593,7 @@ where
                 use_hypervisor_signals,
                 enable_per_vm_core_scheduling,
                 host_cpu_topology,
+                itmt,
                 vcpu_cgroup_tasks_file,
             );
 
@@ -574,23 +631,29 @@ where
                 requires_pvclock_ctrl,
                 from_main_tube,
                 use_hypervisor_signals,
+                privileged_vm,
                 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
                 to_gdb_tube,
                 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
                 guest_mem,
+                Box::new(msr_handlers),
             );
 
             let exit_evt = scoped_exit_evt.into();
             let final_event = match exit_reason {
-                ExitState::Stop => exit_evt,
-                ExitState::Reset => reset_evt,
-                ExitState::Crash => crash_evt,
+                ExitState::Stop => Some(exit_evt),
+                ExitState::Reset => Some(reset_evt),
+                ExitState::Crash => Some(crash_evt),
+                // vcpu_loop doesn't exit with GuestPanic.
+                ExitState::GuestPanic => None,
             };
-            if let Err(e) = final_event.write(1) {
-                error!(
-                    "failed to send final event {:?} on vcpu {}: {}",
-                    final_event, cpu_id, e
-                )
+            if let Some(final_event) = final_event {
+                if let Err(e) = final_event.write(1) {
+                    error!(
+                        "failed to send final event {:?} on vcpu {}: {}",
+                        final_event, cpu_id, e
+                    )
+                }
             }
         })
         .context("failed to spawn VCPU thread")

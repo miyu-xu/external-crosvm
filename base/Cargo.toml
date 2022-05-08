@@ -1,0 +1,34 @@
+[package]
+name = "base"
+version = "0.1.0"
+authors = ["The Chromium OS Authors"]
+edition = "2021"
+
+[features]
+chromeos = []
+
+[dependencies]
+audio_streams = { path = "../common/audio_streams" }
+base_poll_token_derive = { path = "base_poll_token_derive" }
+data_model = { path = "../common/data_model" }
+
+cfg-if = "*"
+chrono = "*"
+libc = "*"
+log = "0.4"
+remain = "0.2"
+serde = { version = "1", features = [ "derive" ] }
+serde_json = "*"
+smallvec = "1.6.1"
+sync = { path = "../common/sync" }
+thiserror = "1.0.20"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+lazy_static = "*"
+rand = "*"
+winapi = "*"
+win_util = { path = "../win_util"}
+
+[target.'cfg(windows)'.dev-dependencies]
+regex = "*"

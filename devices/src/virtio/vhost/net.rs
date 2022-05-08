@@ -355,8 +355,9 @@ pub mod tests {
     use super::*;
     use crate::virtio::base_features;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
+    use crate::IrqLevelEvent;
     use hypervisor::ProtectionType;
-    use net_util::fakes::FakeTap;
+    use net_util::sys::unix::fakes::FakeTap;
     use std::path::PathBuf;
     use std::result;
     use std::sync::atomic::AtomicUsize;
@@ -417,8 +418,7 @@ pub mod tests {
             guest_memory,
             Interrupt::new(
                 Arc::new(AtomicUsize::new(0)),
-                Event::new().unwrap(),
-                Event::new().unwrap(),
+                IrqLevelEvent::new().unwrap(),
                 None,
                 VIRTIO_MSI_NO_VECTOR,
             ),

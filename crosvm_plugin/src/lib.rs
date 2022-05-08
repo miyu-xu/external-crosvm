@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #![allow(non_camel_case_types)]
 
 //! This module implements the dynamically loaded client library API used by a crosvm plugin,
@@ -61,6 +62,11 @@ const CROSVM_VCPU_EVENT_KIND_IO_ACCESS: u32 = 1;
 const CROSVM_VCPU_EVENT_KIND_PAUSED: u32 = 2;
 const CROSVM_VCPU_EVENT_KIND_HYPERV_HCALL: u32 = 3;
 const CROSVM_VCPU_EVENT_KIND_HYPERV_SYNIC: u32 = 4;
+
+pub const CROSVM_GPU_SERVER_FD_ENV: &str = "CROSVM_GPU_SERVER_FD";
+pub const CROSVM_SOCKET_ENV: &str = "CROSVM_SOCKET";
+#[cfg(feature = "stats")]
+pub const CROSVM_STATS_ENV: &str = "CROSVM_STATS";
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -235,7 +241,7 @@ fn record(_a: Stat) -> u32 {
 #[cfg(feature = "stats")]
 fn printstats() {
     // Unsafe due to racy access - OK for stats
-    if std::env::var("CROSVM_STATS").is_ok() {
+    if std::env::var(CROSVM_STATS_ENV).is_ok() {
         unsafe {
             stats::STATS.print();
         }
@@ -513,8 +519,7 @@ impl crosvm {
             entry.irq_id = route.irq_id;
             match route.kind {
                 CROSVM_IRQ_ROUTE_IRQCHIP => {
-                    let irqchip: &mut MainRequest_SetIrqRouting_Route_Irqchip;
-                    irqchip = entry.mut_irqchip();
+                    let irqchip: &mut MainRequest_SetIrqRouting_Route_Irqchip = entry.mut_irqchip();
                     // Safe because route.kind indicates which union field is valid.
                     irqchip.irqchip = unsafe { route.route.irqchip }.irqchip;
                     irqchip.pin = unsafe { route.route.irqchip }.pin;
@@ -1363,9 +1368,22 @@ fn to_crosvm_rc<T>(r: result::Result<T, c_int>) -> c_int {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn crosvm_get_render_server_fd() -> c_int {
+    let fd = match env::var(CROSVM_GPU_SERVER_FD_ENV) {
+        Ok(v) => v,
+        _ => return -EINVAL,
+    };
+
+    match fd.parse() {
+        Ok(v) if v >= 0 => v,
+        _ => -EINVAL,
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn crosvm_connect(out: *mut *mut crosvm) -> c_int {
     let _u = record(Stat::Connect);
-    let socket_name = match env::var("CROSVM_SOCKET") {
+    let socket_name = match env::var(CROSVM_SOCKET_ENV) {
         Ok(v) => v,
         _ => return -ENOTCONN,
     };

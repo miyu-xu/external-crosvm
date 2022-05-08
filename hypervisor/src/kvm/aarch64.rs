@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use libc::{EINVAL, ENOMEM, ENOSYS, ENXIO};
+use std::convert::TryFrom;
+
+use libc::{EINVAL, ENOMEM, ENOTSUP, ENXIO};
 
 use base::{
-    errno_result, error, ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val, Error,
+    errno_result, error, ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val, warn, Error,
     MemoryMappingBuilder, Result,
 };
 use kvm_sys::*;
@@ -14,8 +16,36 @@ use vm_memory::GuestAddress;
 use super::{Kvm, KvmCap, KvmVcpu, KvmVm};
 use crate::{
     ClockState, DeviceKind, Hypervisor, IrqSourceChip, ProtectionType, PsciVersion, VcpuAArch64,
-    VcpuFeature, Vm, VmAArch64, VmCap,
+    VcpuExit, VcpuFeature, VcpuRegAArch64, Vm, VmAArch64, VmCap, PSCI_0_2,
 };
+
+/// Gives the ID for a register to be used with `set_one_reg`.
+///
+/// Pass the name of a field in `user_pt_regs` to get the corresponding register
+/// ID, e.g. `arm64_core_reg!(pstate)`
+///
+/// To get ID for registers `x0`-`x31`, refer to the `regs` field along with the
+/// register number, e.g. `arm64_core_reg!(regs, 5)` for `x5`. This is different
+/// to work around `offset_of!(kvm_sys::user_pt_regs, regs[$x])` not working.
+#[macro_export]
+macro_rules! arm64_core_reg {
+    ($reg: tt) => {{
+        let off = (memoffset::offset_of!(::kvm_sys::user_pt_regs, $reg) / 4) as u64;
+        ::kvm_sys::KVM_REG_ARM64
+            | ::kvm_sys::KVM_REG_SIZE_U64
+            | ::kvm_sys::KVM_REG_ARM_CORE as u64
+            | off
+    }};
+    (regs, $x: literal) => {{
+        let off = ((memoffset::offset_of!(::kvm_sys::user_pt_regs, regs)
+            + ($x * ::std::mem::size_of::<u64>()))
+            / 4) as u64;
+        ::kvm_sys::KVM_REG_ARM64
+            | ::kvm_sys::KVM_REG_SIZE_U64
+            | ::kvm_sys::KVM_REG_ARM_CORE as u64
+            | off
+    }};
+}
 
 impl Kvm {
     // Compute the machine type, which should be the IPA range for the VM
@@ -117,6 +147,11 @@ impl KvmVm {
             )
         }
     }
+
+    /// Enable userspace msr. This is not available on ARM, just succeed.
+    pub fn enable_userspace_msr(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[repr(C)]
@@ -124,6 +159,8 @@ struct KvmProtectedVmInfo {
     firmware_size: u64,
     reserved: [u64; 7],
 }
+
+struct KvmVcpuRegister(u64);
 
 impl VmAArch64 for KvmVm {
     fn get_hypervisor(&self) -> &dyn Hypervisor {
@@ -161,6 +198,98 @@ impl KvmVcpu {
     /// Arch-specific implementation of `Vcpu::pvclock_ctrl`.  Always returns an error on AArch64.
     pub fn pvclock_ctrl_arch(&self) -> Result<()> {
         Err(Error::new(ENXIO))
+    }
+
+    /// Handles a `KVM_EXIT_SYSTEM_EVENT` with event type `KVM_SYSTEM_EVENT_RESET` with the given
+    /// event flags and returns the appropriate `VcpuExit` value for the run loop to handle.
+    ///
+    /// `event_flags` should be one or more of the `KVM_SYSTEM_EVENT_RESET_FLAG_*` values defined by
+    /// KVM.
+    pub fn system_event_reset(&self, event_flags: u64) -> Result<VcpuExit> {
+        if event_flags & KVM_SYSTEM_EVENT_RESET_FLAG_PSCI_RESET2 != 0 {
+            // Read reset_type and cookie from x1 and x2.
+            let reset_type = self.get_one_reg(VcpuRegAArch64::W1)?;
+            let cookie = self.get_one_reg(VcpuRegAArch64::W2)?;
+            warn!(
+                "PSCI SYSTEM_RESET2 with reset_type={:#x}, cookie={:#x}",
+                reset_type, cookie
+            );
+        }
+        Ok(VcpuExit::SystemEventReset)
+    }
+
+    fn set_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister, data: u64) -> Result<()> {
+        let data_ref = &data as *const u64;
+        let onereg = kvm_one_reg {
+            id: kvm_reg_id.0,
+            addr: data_ref as u64,
+        };
+        // Safe because we allocated the struct and we know the kernel will read exactly the size of
+        // the struct.
+        let ret = unsafe { ioctl_with_ref(self, KVM_SET_ONE_REG(), &onereg) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
+    }
+
+    fn get_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u64> {
+        let val: u64 = 0;
+        let mut onereg = kvm_one_reg {
+            id: kvm_reg_id.0,
+            addr: (&val as *const u64) as u64,
+        };
+
+        // Safe because we allocated the struct and we know the kernel will read exactly the size of
+        // the struct.
+        let ret = unsafe { ioctl_with_ref(self, KVM_GET_ONE_REG(), &mut onereg) };
+        if ret == 0 {
+            Ok(val)
+        } else {
+            return errno_result();
+        }
+    }
+}
+
+impl From<VcpuRegAArch64> for KvmVcpuRegister {
+    fn from(reg: VcpuRegAArch64) -> Self {
+        match reg {
+            VcpuRegAArch64::W0 => Self(arm64_core_reg!(regs, 0)),
+            VcpuRegAArch64::W1 => Self(arm64_core_reg!(regs, 1)),
+            VcpuRegAArch64::W2 => Self(arm64_core_reg!(regs, 2)),
+            VcpuRegAArch64::W3 => Self(arm64_core_reg!(regs, 3)),
+            VcpuRegAArch64::W4 => Self(arm64_core_reg!(regs, 4)),
+            VcpuRegAArch64::W5 => Self(arm64_core_reg!(regs, 5)),
+            VcpuRegAArch64::W6 => Self(arm64_core_reg!(regs, 6)),
+            VcpuRegAArch64::W7 => Self(arm64_core_reg!(regs, 7)),
+            VcpuRegAArch64::W8 => Self(arm64_core_reg!(regs, 8)),
+            VcpuRegAArch64::W9 => Self(arm64_core_reg!(regs, 9)),
+            VcpuRegAArch64::W10 => Self(arm64_core_reg!(regs, 10)),
+            VcpuRegAArch64::W11 => Self(arm64_core_reg!(regs, 11)),
+            VcpuRegAArch64::W12 => Self(arm64_core_reg!(regs, 12)),
+            VcpuRegAArch64::W13 => Self(arm64_core_reg!(regs, 13)),
+            VcpuRegAArch64::W14 => Self(arm64_core_reg!(regs, 14)),
+            VcpuRegAArch64::W15 => Self(arm64_core_reg!(regs, 15)),
+            VcpuRegAArch64::W16 => Self(arm64_core_reg!(regs, 16)),
+            VcpuRegAArch64::W17 => Self(arm64_core_reg!(regs, 17)),
+            VcpuRegAArch64::W18 => Self(arm64_core_reg!(regs, 18)),
+            VcpuRegAArch64::W19 => Self(arm64_core_reg!(regs, 19)),
+            VcpuRegAArch64::W20 => Self(arm64_core_reg!(regs, 20)),
+            VcpuRegAArch64::W21 => Self(arm64_core_reg!(regs, 21)),
+            VcpuRegAArch64::W22 => Self(arm64_core_reg!(regs, 22)),
+            VcpuRegAArch64::W23 => Self(arm64_core_reg!(regs, 23)),
+            VcpuRegAArch64::W24 => Self(arm64_core_reg!(regs, 24)),
+            VcpuRegAArch64::W25 => Self(arm64_core_reg!(regs, 25)),
+            VcpuRegAArch64::W26 => Self(arm64_core_reg!(regs, 26)),
+            VcpuRegAArch64::W27 => Self(arm64_core_reg!(regs, 27)),
+            VcpuRegAArch64::W28 => Self(arm64_core_reg!(regs, 28)),
+            VcpuRegAArch64::W29 => Self(arm64_core_reg!(regs, 29)),
+            VcpuRegAArch64::Lr => Self(arm64_core_reg!(regs, 30)),
+            VcpuRegAArch64::Sp => Self(arm64_core_reg!(sp)),
+            VcpuRegAArch64::Pc => Self(arm64_core_reg!(pc)),
+            VcpuRegAArch64::Pstate => Self(arm64_core_reg!(pstate)),
+        }
     }
 }
 
@@ -279,37 +408,12 @@ impl VcpuAArch64 for KvmVcpu {
         Ok(())
     }
 
-    fn set_one_reg(&self, reg_id: u64, data: u64) -> Result<()> {
-        let data_ref = &data as *const u64;
-        let onereg = kvm_one_reg {
-            id: reg_id,
-            addr: data_ref as u64,
-        };
-        // Safe because we allocated the struct and we know the kernel will read exactly the size of
-        // the struct.
-        let ret = unsafe { ioctl_with_ref(self, KVM_SET_ONE_REG(), &onereg) };
-        if ret == 0 {
-            Ok(())
-        } else {
-            errno_result()
-        }
+    fn set_one_reg(&self, reg_id: VcpuRegAArch64, data: u64) -> Result<()> {
+        self.set_one_kvm_reg(KvmVcpuRegister::from(reg_id), data)
     }
 
-    fn get_one_reg(&self, reg_id: u64) -> Result<u64> {
-        let val: u64 = 0;
-        let mut onereg = kvm_one_reg {
-            id: reg_id,
-            addr: (&val as *const u64) as u64,
-        };
-
-        // Safe because we allocated the struct and we know the kernel will read exactly the size of
-        // the struct.
-        let ret = unsafe { ioctl_with_ref(self, KVM_GET_ONE_REG(), &mut onereg) };
-        if ret == 0 {
-            Ok(val)
-        } else {
-            return errno_result();
-        }
+    fn get_one_reg(&self, reg_id: VcpuRegAArch64) -> Result<u64> {
+        self.get_one_kvm_reg(KvmVcpuRegister::from(reg_id))
     }
 
     fn get_psci_version(&self) -> Result<PsciVersion> {
@@ -317,17 +421,21 @@ impl VcpuAArch64 for KvmVcpu {
         const KVM_REG_ARM_PSCI_VERSION: u64 =
             KVM_REG_ARM64 | (KVM_REG_SIZE_U64 as u64) | (KVM_REG_ARM_FW as u64);
 
-        match self.get_one_reg(KVM_REG_ARM_PSCI_VERSION) {
-            Ok(v) => {
-                let major = (v >> PSCI_VERSION_MAJOR_SHIFT) as u32;
-                let minor = (v as u32) & PSCI_VERSION_MINOR_MASK;
-                Ok(PsciVersion { major, minor })
-            }
-            Err(_) => {
-                // When `KVM_REG_ARM_PSCI_VERSION` is not supported, we can return PSCI 0.2, as vCPU
-                // has been initialized with `KVM_ARM_VCPU_PSCI_0_2` successfully.
-                Ok(PsciVersion { major: 0, minor: 2 })
-            }
+        let version = if let Ok(v) = self.get_one_kvm_reg(KvmVcpuRegister(KVM_REG_ARM_PSCI_VERSION))
+        {
+            let v = u32::try_from(v).map_err(|_| Error::new(EINVAL))?;
+            PsciVersion::try_from(v)?
+        } else {
+            // When `KVM_REG_ARM_PSCI_VERSION` is not supported, we can return PSCI 0.2, as vCPU
+            // has been initialized with `KVM_ARM_VCPU_PSCI_0_2` successfully.
+            PSCI_0_2
+        };
+
+        if version < PSCI_0_2 {
+            // PSCI v0.1 isn't currently supported for guests
+            Err(Error::new(ENOTSUP))
+        } else {
+            Ok(version)
         }
     }
 }

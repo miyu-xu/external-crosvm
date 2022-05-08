@@ -3,17 +3,19 @@
 // found in the LICENSE file.
 
 use crate::pci::{
-    PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode,
+    BarRange, PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode,
     PciConfiguration, PciDevice, PciDeviceError, PciHeaderType, PciInterruptPin,
     PciProgrammingInterface, PciSerialBusSubClass,
 };
+
 use crate::register_space::{Register, RegisterSpace};
 use crate::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use crate::usb::xhci::xhci::Xhci;
 use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use crate::usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XhciRegs};
 use crate::utils::FailHandle;
-use base::{error, AsRawDescriptor, Event, RawDescriptor};
+use crate::IrqLevelEvent;
+use base::{error, AsRawDescriptor, RawDescriptor};
 use resources::{Alloc, MmioType, SystemAllocator};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,8 +82,7 @@ enum XhciControllerState {
     },
     IrqAssigned {
         device_provider: HostBackendDeviceProvider,
-        irq_evt: Event,
-        irq_resample_evt: Event,
+        irq_evt: IrqLevelEvent,
     },
     Initialized {
         mmio: RegisterSpace,
@@ -130,7 +131,6 @@ impl XhciController {
             XhciControllerState::IrqAssigned {
                 device_provider,
                 irq_evt,
-                irq_resample_evt,
             } => {
                 let (mmio, regs) = init_xhci_mmio_space_and_regs();
                 let fail_handle: Arc<dyn FailHandle> = Arc::new(XhciFailHandle::new(&regs));
@@ -139,7 +139,6 @@ impl XhciController {
                     self.mem.clone(),
                     device_provider,
                     irq_evt,
-                    irq_resample_evt,
                     regs,
                 ) {
                     Ok(xhci) => Some(xhci),
@@ -192,11 +191,10 @@ impl PciDevice for XhciController {
             XhciControllerState::IrqAssigned {
                 device_provider,
                 irq_evt,
-                irq_resample_evt,
             } => {
                 let mut keep_rds = device_provider.keep_rds();
-                keep_rds.push(irq_evt.as_raw_descriptor());
-                keep_rds.push(irq_resample_evt.as_raw_descriptor());
+                keep_rds.push(irq_evt.get_trigger().as_raw_descriptor());
+                keep_rds.push(irq_evt.get_resample().as_raw_descriptor());
                 keep_rds
             }
             _ => {
@@ -208,8 +206,7 @@ impl PciDevice for XhciController {
 
     fn assign_irq(
         &mut self,
-        irq_evt: &Event,
-        irq_resample_evt: &Event,
+        irq_evt: &IrqLevelEvent,
         irq_num: Option<u32>,
     ) -> Option<(u32, PciInterruptPin)> {
         let gsi = irq_num?;
@@ -223,7 +220,6 @@ impl PciDevice for XhciController {
                 self.state = XhciControllerState::IrqAssigned {
                     device_provider,
                     irq_evt: irq_evt.try_clone().ok()?,
-                    irq_resample_evt: irq_resample_evt.try_clone().ok()?,
                 }
             }
             _ => {
@@ -236,7 +232,7 @@ impl PciDevice for XhciController {
     fn allocate_io_bars(
         &mut self,
         resources: &mut SystemAllocator,
-    ) -> std::result::Result<Vec<(u64, u64)>, PciDeviceError> {
+    ) -> std::result::Result<Vec<BarRange>, PciDeviceError> {
         let address = self
             .pci_address
             .expect("assign_address must be called prior to allocate_io_bars");
@@ -265,7 +261,11 @@ impl PciDevice for XhciController {
         self.config_regs
             .add_pci_bar(bar0_config)
             .map_err(|e| PciDeviceError::IoRegistrationFailed(bar0_addr, e))?;
-        Ok(vec![(bar0_addr, XHCI_BAR0_SIZE)])
+        Ok(vec![BarRange {
+            addr: bar0_addr,
+            size: XHCI_BAR0_SIZE,
+            prefetchable: false,
+        }])
     }
 
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {

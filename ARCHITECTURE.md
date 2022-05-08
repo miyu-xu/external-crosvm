@@ -51,7 +51,7 @@ separation in case a device becomes compromised by a malicious guest. For exampl
 that is able to allocate MSI routes would not be able to use the same socket to (de)register guest
 memory. During the device initialization stage, each device that requires some aspect of VM control
 will have a constructor that requires the corresponding control socket. The control socket will get
-preserved when the device is sandboxed and and the other side of the socket will be waited on in the
+preserved when the device is sandboxed and the other side of the socket will be waited on in the
 main process's control loop.
 
 The socket exposed by crosvm with the `--socket` command line argument is another form of the VM
@@ -194,8 +194,7 @@ Source code is organized into crates, each with their own unit tests.
 
 - `./src/` - The top-level binary front-end for using crosvm.
 - `aarch64` - Support code specific to 64 bit ARM architectures.
-- `base` - Safe wrappers for small system facilities which provides cross-platform-compatible
-  interfaces. For Linux, this is basically a thin wrapper of `sys_util`.
+- `base` - Safe wrappers for system facilities which provides cross-platform-compatible interfaces.
 - `bin` - Scripts for code health such as wrappers of `rustfmt` and `clippy`.
 - `ci` - Scripts for continuous integration.
 - `cros_async` - Runtime for async/await programming. This crate provides a `Future` executor based
@@ -208,7 +207,8 @@ Source code is organized into crates, each with their own unit tests.
 - `kernel_loader` - Loads elf64 kernel files to a slice of memory.
 - `kvm_sys` - Low-level (mostly) auto-generated structures and constants for using KVM.
 - `kvm` - Unsafe, low-level wrapper code for using `kvm_sys`.
-- `libvda` - Safe wrapper of [libvda], a Chrome OS HW-accelerated video decoding/encoding library.
+- `media/libvda` - Safe wrapper of [libvda], a Chrome OS HW-accelerated video decoding/encoding
+  library.
 - `net_sys` - Low-level (mostly) auto-generated structures and constants for creating TUN/TAP
   devices.
 - `net_util` - Wrapper for creating TUN/TAP devices.
@@ -216,7 +216,6 @@ Source code is organized into crates, each with their own unit tests.
 - `seccomp` - Contains minijail seccomp policy files for each sandboxed device. Because some
   syscalls vary by architecture, the seccomp policies are split by architecture.
 - `sync` - Our version of `std::sync::Mutex` and `std::sync::Condvar`.
-- `sys_util` - Mostly safe wrappers for small system facilities such as `eventfd` or `syslog`.
 - `third_party` - Third-party libraries which we are maintaining on the Chrome OS tree or the AOSP
   tree.
 - `vfio_sys` - Low-level (mostly) auto-generated structures, constants and ioctls for [VFIO].

@@ -2,13 +2,16 @@
 name = "net_util"
 version = "0.1.0"
 authors = ["The Chromium OS Authors"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
+cfg-if = "1.0.0"
 libc = "*"
 data_model = { path = "../common/data_model" }
 net_sys = { path = "../net_sys" }
-base = { path = "../common/base" }
-cros_async = { path = "../common/cros_async" }
+base = { path = "../base" }
+cros_async = { path = "../cros_async" }
 remain = "*"
+serde = { version = "1", features = [ "derive" ] }
 thiserror = "*"
+

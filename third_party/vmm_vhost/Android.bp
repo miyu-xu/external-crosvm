@@ -48,7 +48,7 @@ rust_library {
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
-    edition: "2018",
+    edition: "2021",
     features: [
         "device",
         "vfio-device",
@@ -56,10 +56,11 @@ rust_library {
     ],
     rustlibs: [
         "libanyhow",
+        "libbase_rust",
         "libbitflags",
+        "libcfg_if",
         "libdata_model",
         "liblibc",
-        "libsys_util",
         "libtempfile",
         "libthiserror",
     ],
@@ -79,7 +80,7 @@ rust_test {
     test_options: {
         unit_test: true,
     },
-    edition: "2018",
+    edition: "2021",
     features: [
         "device",
         "vfio-device",
@@ -87,10 +88,11 @@ rust_test {
     ],
     rustlibs: [
         "libanyhow",
+        "libbase_rust",
         "libbitflags",
+        "libcfg_if",
         "libdata_model",
         "liblibc",
-        "libsys_util",
         "libtempfile",
         "libthiserror",
     ],

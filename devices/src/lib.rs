@@ -11,6 +11,7 @@ pub mod direct_io;
 #[cfg(feature = "direct")]
 pub mod direct_irq;
 mod i8042;
+mod irq_event;
 pub mod irqchip;
 mod pci;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -25,6 +26,9 @@ pub mod acpi;
 pub mod bat;
 mod serial;
 pub mod serial_device;
+#[cfg(feature = "tpm")]
+mod software_tpm;
+mod sys;
 #[cfg(feature = "usb")]
 pub mod usb;
 #[cfg(feature = "usb")]
@@ -45,12 +49,14 @@ pub use self::direct_io::{DirectIo, DirectMmio};
 #[cfg(feature = "direct")]
 pub use self::direct_irq::{DirectIrq, DirectIrqError};
 pub use self::i8042::I8042Device;
+pub use self::irq_event::{IrqEdgeEvent, IrqLevelEvent};
 pub use self::irqchip::*;
 #[cfg(feature = "audio")]
 pub use self::pci::{Ac97Backend, Ac97Dev, Ac97Parameters};
 pub use self::pci::{
-    CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy, PciAddress, PciBridge, PciClassCode,
-    PciConfigIo, PciConfigMmio, PciDevice, PciDeviceError, PciInterruptPin, PciRoot, PcieRootPort,
+    BarRange, CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy, PciAddress, PciBridge,
+    PciClassCode, PciConfigIo, PciConfigMmio, PciDevice, PciDeviceError, PciInterruptPin, PciRoot,
+    PciVirtualConfigMmio, PcieHostRootPort, PcieRootPort, PvPanicCode, PvPanicPciDevice,
     StubPciDevice, StubPciParameters, VfioPciDevice,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -63,12 +69,14 @@ pub use self::serial::Serial;
 pub use self::serial_device::{
     Error as SerialError, SerialDevice, SerialHardware, SerialParameters, SerialType,
 };
+#[cfg(feature = "tpm")]
+pub use self::software_tpm::SoftwareTpm;
 #[cfg(feature = "usb")]
 pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 #[cfg(feature = "usb")]
 pub use self::usb::xhci::xhci_controller::XhciController;
 pub use self::vfio::{VfioContainer, VfioDevice};
-pub use self::virtio::VirtioPciDevice;
+pub use self::virtio::{vfio_wrapper, VirtioPciDevice};
 
 /// Request CoIOMMU to unpin a specific range.
 use serde::{Deserialize, Serialize};

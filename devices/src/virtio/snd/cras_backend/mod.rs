@@ -14,7 +14,9 @@ use std::thread;
 
 use anyhow::Context;
 use audio_streams::{SampleFormat, StreamSource};
-use base::{error, warn, Error as SysError, Event, RawDescriptor};
+use base::{
+    error, set_rt_prio_limit, set_rt_round_robin, warn, Error as SysError, Event, RawDescriptor,
+};
 use cros_async::sync::Mutex as AsyncMutex;
 use cros_async::{AsyncError, EventAsync, Executor};
 use data_model::DataInit;
@@ -24,7 +26,6 @@ use futures::channel::{
 };
 use futures::{pin_mut, select, Future, FutureExt, TryFutureExt};
 use libcras::{BoxError, CrasClient, CrasClientType, CrasSocketType};
-use sys_util::{set_rt_prio_limit, set_rt_round_robin};
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
 
@@ -326,7 +327,7 @@ impl<'a> StreamInfo<'a> {
                             self.frame_rate,
                             // See (*)
                             self.period_bytes / frame_size,
-                            &ex,
+                            ex,
                         )
                         .map_err(Error::CreateStream)?
                         .1,
@@ -346,7 +347,7 @@ impl<'a> StreamInfo<'a> {
                                 // See (*)
                                 self.period_bytes / frame_size,
                                 &[],
-                                &ex,
+                                ex,
                             )
                             .map_err(Error::CreateStream)?
                             .1,
@@ -687,7 +688,7 @@ fn run_worker(
 
     let mut evts_async: Vec<EventAsync> = queue_evts
         .into_iter()
-        .map(|e| EventAsync::new(e.0, &ex).expect("Failed to create async event for queue"))
+        .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue"))
         .collect();
 
     let ctrl_queue_evt = evts_async.remove(0);

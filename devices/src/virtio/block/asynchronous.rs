@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::cmp::{max, min};
 use std::io::{self, Write};
 use std::mem::size_of;
 use std::rc::Rc;
@@ -20,12 +19,10 @@ use thiserror::Error as ThisError;
 
 use base::Error as SysError;
 use base::Result as SysResult;
-use base::{
-    error, info, iov_max, warn, AsRawDescriptor, AsyncTube, Event, RawDescriptor, Timer, Tube,
-    TubeError,
-};
+use base::{error, info, warn, AsRawDescriptor, Event, RawDescriptor, Timer, Tube, TubeError};
 use cros_async::{
-    select5, sync::Mutex as AsyncMutex, AsyncError, EventAsync, Executor, SelectResult, TimerAsync,
+    select5, sync::Mutex as AsyncMutex, AsyncError, AsyncTube, EventAsync, Executor, SelectResult,
+    TimerAsync,
 };
 use data_model::DataInit;
 use disk::{AsyncDisk, ToAsyncDisk};
@@ -34,8 +31,8 @@ use vm_memory::GuestMemory;
 
 use super::common::*;
 use crate::virtio::{
-    async_utils, copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader,
-    SignalableInterrupt, VirtioDevice, Writer, TYPE_BLOCK,
+    async_utils, block::sys::*, copy_config, DescriptorChain, DescriptorError, Interrupt, Queue,
+    Reader, SignalableInterrupt, VirtioDevice, Writer, TYPE_BLOCK,
 };
 
 const QUEUE_SIZE: u16 = 256;
@@ -231,13 +228,13 @@ pub async fn process_one_chain<I: SignalableInterrupt>(
 // There is one async task running `handle_queue` per virtio queue in use.
 // Receives messages from the guest and queues a task to complete the operations with the async
 // executor.
-async fn handle_queue(
-    ex: &Executor,
-    mem: &GuestMemory,
+pub async fn handle_queue<I: SignalableInterrupt + Clone + 'static>(
+    ex: Executor,
+    mem: GuestMemory,
     disk_state: Rc<AsyncMutex<DiskState>>,
     queue: Rc<RefCell<Queue>>,
     evt: EventAsync,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: I,
     flush_timer: Rc<RefCell<TimerAsync>>,
     flush_timer_armed: Rc<RefCell<bool>>,
 ) {
@@ -246,11 +243,11 @@ async fn handle_queue(
             error!("Failed to read the next queue event: {}", e);
             continue;
         }
-        while let Some(descriptor_chain) = queue.borrow_mut().pop(mem) {
+        while let Some(descriptor_chain) = queue.borrow_mut().pop(&mem) {
             let queue = Rc::clone(&queue);
             let disk_state = Rc::clone(&disk_state);
             let mem = mem.clone();
-            let interrupt = Rc::clone(&interrupt);
+            let interrupt = interrupt.clone();
             let flush_timer = Rc::clone(&flush_timer);
             let flush_timer_armed = Rc::clone(&flush_timer_armed);
 
@@ -260,7 +257,7 @@ async fn handle_queue(
                     descriptor_chain,
                     disk_state,
                     mem,
-                    &*interrupt.borrow(),
+                    &interrupt,
                     flush_timer,
                     flush_timer_armed,
                 )
@@ -292,8 +289,10 @@ async fn handle_command_tube(
                     }
                 };
 
+                let resp_clone = resp.clone();
                 command_tube
-                    .send(&resp)
+                    .send(resp_clone)
+                    .await
                     .map_err(ExecuteError::SendingResponse)?;
                 if let DiskControlResult::Ok = resp {
                     interrupt.borrow().signal_config_changed();
@@ -399,41 +398,38 @@ fn run_worker(
     let flush_timer = Rc::new(RefCell::new(
         TimerAsync::new(
             // Call try_clone() to share the same underlying FD with the `flush_disk` task.
-            timer.0.try_clone().expect("Failed to clone flush_timer"),
+            timer.try_clone().expect("Failed to clone flush_timer"),
             &ex,
         )
         .expect("Failed to create an async timer"),
     ));
 
-    let queue_handlers =
-        queues
-            .into_iter()
-            .map(|q| Rc::new(RefCell::new(q)))
-            .zip(queue_evts.into_iter().map(|e| {
-                EventAsync::new(e.0, &ex).expect("Failed to create async event for queue")
-            }))
-            .map(|(queue, event)| {
-                // alias some refs so the lifetimes work.
-                let mem = &mem;
-                let disk_state = &disk_state;
-                let interrupt = &interrupt;
-                handle_queue(
-                    &ex,
-                    mem,
-                    Rc::clone(disk_state),
-                    Rc::clone(&queue),
-                    event,
-                    Rc::clone(interrupt),
-                    Rc::clone(&flush_timer),
-                    Rc::clone(&flush_timer_armed),
-                )
-            })
-            .collect::<FuturesUnordered<_>>()
-            .into_future();
+    let queue_handlers = queues
+        .into_iter()
+        .map(|q| Rc::new(RefCell::new(q)))
+        .zip(
+            queue_evts
+                .into_iter()
+                .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue")),
+        )
+        .map(|(queue, event)| {
+            handle_queue(
+                ex.clone(),
+                mem.clone(),
+                Rc::clone(disk_state),
+                Rc::clone(&queue),
+                event,
+                Rc::clone(&interrupt),
+                Rc::clone(&flush_timer),
+                Rc::clone(&flush_timer_armed),
+            )
+        })
+        .collect::<FuturesUnordered<_>>()
+        .into_future();
 
     // Flushes the disk periodically.
-    let flush_timer = TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer");
-    let disk_flush = flush_disk(disk_state.clone(), flush_timer, flush_timer_armed.clone());
+    let flush_timer = TimerAsync::new(timer, &ex).expect("Failed to create an async timer");
+    let disk_flush = flush_disk(disk_state.clone(), flush_timer, flush_timer_armed);
     pin_mut!(disk_flush);
 
     // Exit if the kill event is triggered.
@@ -501,12 +497,7 @@ impl BlockAsync {
 
         let avail_features = build_avail_features(base_features, read_only, sparse, true);
 
-        let seg_max = min(max(iov_max(), 1), u32::max_value() as usize) as u32;
-
-        // Since we do not currently support indirect descriptors, the maximum
-        // number of segments must be smaller than the queue size.
-        // In addition, the request header and status each consume a descriptor.
-        let seg_max = min(seg_max, u32::from(QUEUE_SIZE) - 2);
+        let seg_max = get_seg_max(QUEUE_SIZE);
 
         Ok(BlockAsync {
             kill_evt: None,
@@ -767,7 +758,7 @@ impl VirtioDevice for BlockAsync {
                         let ex = Executor::new().expect("Failed to create an executor");
 
                         let async_control = control_tube
-                            .map(|c| c.into_async_tube(&ex).expect("failed to create async tube"));
+                            .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
                         let async_image = match disk_image.to_async_disk(&ex) {
                             Ok(d) => d,
                             Err(e) => panic!("Failed to create async disk {}", e),
@@ -981,7 +972,7 @@ mod tests {
 
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 
@@ -1051,7 +1042,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
         let disk_state = Rc::new(AsyncMutex::new(DiskState {
@@ -1119,7 +1110,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 

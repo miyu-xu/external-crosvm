@@ -13,7 +13,12 @@ target: {
             "gpu",
         ],
     },
-    linux_glibc_x86_64: {
+    android: {
+        shared_libs: [
+            "libprocessgroup",
+        ],
+    },
+    host_linux: {
         features: [
             "gdb",
             "gdbstub",
@@ -22,6 +27,9 @@ target: {
             "libgdbstub",
             "libgdbstub_arch",
             "libthiserror",
+        ],
+        shared_libs: [
+            "libprocessgroup",
         ],
     },
 },

@@ -36,6 +36,16 @@ pub trait VirtioDevice: Send {
     /// The maximum size of each queue that this device supports.
     fn queue_max_sizes(&self) -> &[u16];
 
+    /// The number of interrupts used by this device.
+    fn num_interrupts(&self) -> usize {
+        self.queue_max_sizes().len()
+    }
+
+    /// Whether this device supports a virtio-iommu.
+    fn supports_iommu(&self) -> bool {
+        false
+    }
+
     /// The set of feature bits that this device supports in addition to the base features.
     fn features(&self) -> u64 {
         0
@@ -108,4 +118,10 @@ pub trait VirtioDevice: Send {
     /// * `addr` - The guest address inside the BAR.
     /// * `data` - The data to write.
     fn write_bar(&mut self, _bar_index: PciBarIndex, _offset: u64, _data: &[u8]) {}
+
+    /// Returns the PCI address where the device will be allocated.
+    /// Returns `None` if any address is good for the device.
+    fn pci_address(&self) -> Option<PciAddress> {
+        None
+    }
 }

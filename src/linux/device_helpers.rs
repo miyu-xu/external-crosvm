@@ -6,18 +6,27 @@ use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fs::{File, OpenOptions};
 use std::net::Ipv4Addr;
+use std::ops::RangeInclusive;
 use std::os::unix::net::UnixListener;
-use std::os::unix::{io::FromRawFd, net::UnixStream, prelude::OpenOptionsExt};
+use std::os::unix::{net::UnixStream, prelude::OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str;
 use std::sync::Arc;
 
+use crate::{
+    Config, DiskOption, TouchDeviceOption, VhostUserFsOption, VhostUserOption, VhostUserWlOption,
+    VvuOption,
+};
 use anyhow::{anyhow, bail, Context, Result};
+use arch::{self, VirtioDeviceStub};
 use base::*;
-use devices::serial_device::SerialParameters;
+use devices::serial_device::{SerialParameters, SerialType};
 use devices::vfio::{VfioCommonSetup, VfioCommonTrait};
+use devices::virtio::ipc_memory_mapper::{create_ipc_mapper, CreateIpcMapperRet};
+use devices::virtio::memory_mapper::{BasicMemoryMapper, MemoryMapperTrait};
 #[cfg(feature = "audio_cras")]
 use devices::virtio::snd::cras_backend::Parameters as CrasSndParameters;
+use devices::virtio::vfio_wrapper::VfioWrapper;
 use devices::virtio::vhost::user::proxy::VirtioVhostUser;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::vmm::Snd as VhostUserSnd;
@@ -26,23 +35,22 @@ use devices::virtio::vhost::user::vmm::{
     Mac80211Hwsim as VhostUserMac80211Hwsim, Net as VhostUserNet, Vsock as VhostUserVsock,
     Wl as VhostUserWl,
 };
+use devices::virtio::vhost::vsock::VhostVsockConfig;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::VideoBackendType;
-use devices::virtio::{self, Console, VirtioDevice};
+use devices::virtio::{self, BalloonMode, Console, VirtioDevice};
 use devices::IommuDevType;
-use devices::{self, PciDevice, VfioContainer, VfioDevice, VfioPciDevice, VfioPlatformDevice};
+#[cfg(feature = "tpm")]
+use devices::SoftwareTpm;
+use devices::{
+    self, BusDeviceObj, PciAddress, PciDevice, VfioDevice, VfioPciDevice, VfioPlatformDevice,
+};
 use hypervisor::Vm;
 use minijail::{self, Minijail};
-use net_util::{MacAddress, Tap};
+use net_util::{sys::unix::Tap, MacAddress};
 use resources::{Alloc, MmioType, SystemAllocator};
 use sync::Mutex;
 use vm_memory::GuestAddress;
-
-use crate::{
-    Config, DiskOption, TouchDeviceOption, VhostUserFsOption, VhostUserOption, VhostUserWlOption,
-    VhostVsockDeviceParameter,
-};
-use arch::{self, VirtioDeviceStub};
 
 use super::jail_helpers::*;
 
@@ -102,7 +110,15 @@ pub fn create_block_device(
     disk: &DiskOption,
     disk_device_tube: Tube,
 ) -> DeviceResult {
-    let raw_image: File = open_file(&disk.path, disk.read_only, disk.o_direct)
+    let mut options = OpenOptions::new();
+    options.read(true).write(!disk.read_only);
+
+    #[cfg(unix)]
+    if disk.o_direct {
+        options.custom_flags(libc::O_DIRECT);
+    }
+
+    let raw_image: File = open_file(&disk.path, &options)
         .with_context(|| format!("failed to load disk image {}", disk.path.display()))?;
     // Lock the disk image to prevent other crosvm instances from using it.
     let lock_op = if disk.read_only {
@@ -129,7 +145,7 @@ pub fn create_block_device(
             .context("failed to create block device")?,
         ) as Box<dyn VirtioDevice>
     } else {
-        let disk_file = disk::create_disk_file(raw_image, disk::MAX_NESTING_DEPTH)
+        let disk_file = disk::create_disk_file(raw_image, disk::MAX_NESTING_DEPTH, &disk.path)
             .context("failed to create virtual disk")?;
         Box::new(
             virtio::Block::new(
@@ -147,7 +163,7 @@ pub fn create_block_device(
 
     Ok(VirtioDeviceStub {
         dev,
-        jail: simple_jail(cfg, "block_device")?,
+        jail: simple_jail(&cfg.jail_config, "block_device")?,
     })
 }
 
@@ -214,18 +230,30 @@ pub fn create_vhost_user_snd_device(cfg: &Config, option: &VhostUserOption) -> D
     })
 }
 
-pub fn create_vvu_proxy_device(cfg: &Config, opt: &VhostUserOption, tube: Tube) -> DeviceResult {
+pub fn create_vvu_proxy_device(
+    cfg: &Config,
+    opt: &VvuOption,
+    tube: Tube,
+    max_sibling_mem_size: u64,
+) -> DeviceResult {
     let listener = UnixListener::bind(&opt.socket).map_err(|e| {
         error!("failed to bind listener for vvu proxy device: {}", e);
         e
     })?;
 
-    let dev = VirtioVhostUser::new(virtio::base_features(cfg.protected_vm), listener, tube)
-        .context("failed to create VVU proxy device")?;
+    let dev = VirtioVhostUser::new(
+        virtio::base_features(cfg.protected_vm),
+        listener,
+        tube,
+        opt.addr,
+        opt.uuid,
+        max_sibling_mem_size,
+    )
+    .context("failed to create VVU proxy device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "vvu_proxy_device")?,
+        jail: simple_jail(&cfg.jail_config, "vvu_proxy_device")?,
     })
 }
 
@@ -235,7 +263,7 @@ pub fn create_rng_device(cfg: &Config) -> DeviceResult {
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "rng_device")?,
+        jail: simple_jail(&cfg.jail_config, "rng_device")?,
     })
 }
 
@@ -247,7 +275,7 @@ pub fn create_cras_snd_device(cfg: &Config, cras_snd: CrasSndParameters) -> Devi
     )
     .context("failed to create cras sound device")?;
 
-    let jail = match simple_jail(&cfg, "cras_snd_device")? {
+    let jail = match simple_jail(&cfg.jail_config, "cras_snd_device")? {
         Some(mut jail) => {
             // Create a tmpfs in the device's root directory for cras_snd_device.
             // The size is 20*1024, or 20 KB.
@@ -276,13 +304,13 @@ pub fn create_cras_snd_device(cfg: &Config, cras_snd: CrasSndParameters) -> Devi
 }
 
 #[cfg(feature = "tpm")]
-pub fn create_tpm_device(cfg: &Config) -> DeviceResult {
+pub fn create_software_tpm_device(cfg: &Config) -> DeviceResult {
     use std::ffi::CString;
     use std::fs;
     use std::process;
 
     let tpm_storage: PathBuf;
-    let mut tpm_jail = simple_jail(cfg, "tpm_device")?;
+    let mut tpm_jail = simple_jail(&cfg.jail_config, "tpm_device")?;
 
     match &mut tpm_jail {
         Some(jail) => {
@@ -316,7 +344,8 @@ pub fn create_tpm_device(cfg: &Config) -> DeviceResult {
         }
     }
 
-    let dev = virtio::Tpm::new(tpm_storage);
+    let backend = SoftwareTpm::new(tpm_storage).context("failed to create SoftwareTpm")?;
+    let dev = virtio::Tpm::new(Arc::new(Mutex::new(backend)));
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -348,7 +377,7 @@ pub fn create_single_touch_device(
     .context("failed to set up input device")?;
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -377,7 +406,7 @@ pub fn create_multi_touch_device(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -403,7 +432,7 @@ pub fn create_trackpad_device(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -422,7 +451,7 @@ pub fn create_mouse_device<T: IntoUnixStream>(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -441,7 +470,7 @@ pub fn create_keyboard_device<T: IntoUnixStream>(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -460,7 +489,7 @@ pub fn create_switches_device<T: IntoUnixStream>(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -476,7 +505,7 @@ pub fn create_vinput_device(cfg: &Config, dev_path: &Path) -> DeviceResult {
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "input_device")?,
+        jail: simple_jail(&cfg.jail_config, "input_device")?,
     })
 }
 
@@ -491,12 +520,17 @@ pub fn create_balloon_device(
         tube,
         inflate_tube,
         init_balloon_size,
+        if cfg.strict_balloon {
+            BalloonMode::Strict
+        } else {
+            BalloonMode::Relaxed
+        },
     )
     .context("failed to create balloon")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "balloon_device")?,
+        jail: simple_jail(&cfg.jail_config, "balloon_device")?,
     })
 }
 
@@ -520,7 +554,7 @@ where
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev) as Box<dyn VirtioDevice>,
-        jail: simple_jail(cfg, policy)?,
+        jail: simple_jail(&cfg.jail_config, policy)?,
     })
 }
 
@@ -636,7 +670,7 @@ pub fn create_wayland_device(
     )
     .context("failed to create wayland device")?;
 
-    let jail = match simple_jail(cfg, "wl_device")? {
+    let jail = match simple_jail(&cfg.jail_config, "wl_device")? {
         Some(mut jail) => {
             // Create a tmpfs in the device's root directory so that we can bind mount the wayland
             // socket directory into it. The size=67108864 is size=64*1024*1024 or size=64MB.
@@ -675,7 +709,7 @@ pub fn create_video_device(
     typ: devices::virtio::VideoDeviceType,
     resource_bridge: Tube,
 ) -> DeviceResult {
-    let jail = match simple_jail(cfg, "video_device")? {
+    let jail = match simple_jail(&cfg.jail_config, "video_device")? {
         Some(mut jail) => {
             match typ {
                 #[cfg(feature = "video-decoder")]
@@ -756,35 +790,15 @@ pub fn register_video_device(
     Ok(())
 }
 
-pub fn create_vhost_vsock_device(cfg: &Config, cid: u64) -> DeviceResult {
+pub fn create_vhost_vsock_device(cfg: &Config, vhost_config: &VhostVsockConfig) -> DeviceResult {
     let features = virtio::base_features(cfg.protected_vm);
 
-    let device_file = match cfg
-        .vhost_vsock_device
-        .as_ref()
-        .unwrap_or(&VhostVsockDeviceParameter::default())
-    {
-        VhostVsockDeviceParameter::Fd(fd) => {
-            let fd = validate_raw_descriptor(*fd)
-                .context("failed to validate fd for virtual socker device")?;
-            // Safe because the `fd` is actually owned by this process and
-            // we have a unique handle to it.
-            unsafe { File::from_raw_fd(fd) }
-        }
-        VhostVsockDeviceParameter::Path(path) => OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-            .open(path)
-            .context("failed to open virtual socket device")?,
-    };
-
-    let dev = virtio::vhost::Vsock::new(device_file, features, cid)
+    let dev = virtio::vhost::Vsock::new(features, vhost_config)
         .context("failed to set up virtual socket device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "vhost_vsock_device")?,
+        jail: simple_jail(&cfg.jail_config, "vhost_vsock_device")?,
     })
 }
 
@@ -799,13 +813,13 @@ pub fn create_fs_device(
 ) -> DeviceResult {
     let max_open_files =
         base::get_max_open_files().context("failed to get max number of open files")?;
-    let j = if cfg.sandbox {
-        let seccomp_policy = cfg.seccomp_policy_dir.join("fs_device");
+    let j = if let Some(jail_config) = &cfg.jail_config {
+        let seccomp_policy = jail_config.seccomp_policy_dir.join("fs_device");
         let config = SandboxConfig {
             limit_caps: false,
             uid_map: Some(uid_map),
             gid_map: Some(gid_map),
-            log_failures: cfg.seccomp_log_failures,
+            log_failures: jail_config.seccomp_log_failures,
             seccomp_policy: &seccomp_policy,
             // We want bind mounts from the parent namespaces to propagate into the fs device's
             // namespace.
@@ -838,13 +852,13 @@ pub fn create_9p_device(
 ) -> DeviceResult {
     let max_open_files =
         base::get_max_open_files().context("failed to get max number of open files")?;
-    let (jail, root) = if cfg.sandbox {
-        let seccomp_policy = cfg.seccomp_policy_dir.join("9p_device");
+    let (jail, root) = if let Some(jail_config) = &cfg.jail_config {
+        let seccomp_policy = jail_config.seccomp_policy_dir.join("9p_device");
         let config = SandboxConfig {
             limit_caps: false,
             uid_map: Some(uid_map),
             gid_map: Some(gid_map),
-            log_failures: cfg.seccomp_log_failures,
+            log_failures: jail_config.seccomp_log_failures,
             seccomp_policy: &seccomp_policy,
             // We want bind mounts from the parent namespaces to propagate into the 9p server's
             // namespace.
@@ -880,8 +894,11 @@ pub fn create_pmem_device(
     index: usize,
     pmem_device_tube: Tube,
 ) -> DeviceResult {
-    let fd = open_file(&disk.path, disk.read_only, false /*O_DIRECT*/)
-        .with_context(|| format!("failed to load disk image {}", disk.path.display()))?;
+    let fd = open_file(
+        &disk.path,
+        OpenOptions::new().read(true).write(!disk.read_only),
+    )
+    .with_context(|| format!("failed to load disk image {}", disk.path.display()))?;
 
     let (disk_size, arena_size) = {
         let metadata = std::fs::metadata(&disk.path).with_context(|| {
@@ -973,26 +990,48 @@ pub fn create_pmem_device(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev) as Box<dyn VirtioDevice>,
-        jail: simple_jail(cfg, "pmem_device")?,
+        jail: simple_jail(&cfg.jail_config, "pmem_device")?,
     })
 }
 
 pub fn create_iommu_device(
     cfg: &Config,
-    phys_max_addr: u64,
-    endpoints: BTreeMap<u32, Arc<Mutex<VfioContainer>>>,
+    iova_max_addr: u64,
+    endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
+    hp_endpoints_ranges: Vec<RangeInclusive<u32>>,
+    translate_response_senders: Option<BTreeMap<u32, Tube>>,
+    translate_request_rx: Option<Tube>,
+    iommu_device_tube: Tube,
 ) -> DeviceResult {
     let dev = virtio::Iommu::new(
         virtio::base_features(cfg.protected_vm),
         endpoints,
-        phys_max_addr,
+        iova_max_addr,
+        hp_endpoints_ranges,
+        translate_response_senders,
+        translate_request_rx,
+        Some(iommu_device_tube),
     )
     .context("failed to create IOMMU device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "iommu_device")?,
+        jail: simple_jail(&cfg.jail_config, "iommu_device")?,
     })
+}
+
+fn add_bind_mounts(param: &SerialParameters, jail: &mut Minijail) -> Result<(), minijail::Error> {
+    if let Some(path) = &param.path {
+        if let SerialType::SystemSerialType = param.type_ {
+            if let Some(parent) = path.as_path().parent() {
+                if parent.exists() {
+                    info!("Bind mounting dir {}", parent.display());
+                    jail.mount_bind(parent, parent, true)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult {
@@ -1002,7 +1041,7 @@ pub fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceRe
         .create_serial_device::<Console>(cfg.protected_vm, &evt, &mut keep_rds)
         .context("failed to create console device")?;
 
-    let jail = match simple_jail(cfg, "serial")? {
+    let jail = match simple_jail(&cfg.jail_config, "serial")? {
         Some(mut jail) => {
             // Create a tmpfs in the device's root directory so that we can bind mount the
             // log socket directory into it.
@@ -1015,7 +1054,7 @@ pub fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceRe
                 "size=67108864",
             )?;
             add_current_user_to_jail(&mut jail)?;
-            let res = param.add_bind_mounts(&mut jail);
+            let res = add_bind_mounts(param, &mut jail);
             if res.is_err() {
                 error!("failed to add bind mounts for console device");
             }
@@ -1037,7 +1076,7 @@ pub fn create_sound_device(path: &Path, cfg: &Config) -> DeviceResult {
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
-        jail: simple_jail(cfg, "vios_audio_device")?,
+        jail: simple_jail(&cfg.jail_config, "vios_audio_device")?,
     })
 }
 
@@ -1048,7 +1087,8 @@ pub fn create_vfio_device(
     control_tubes: &mut Vec<TaggedControlTube>,
     vfio_path: &Path,
     bus_num: Option<u8>,
-    iommu_endpoints: &mut BTreeMap<u32, Arc<Mutex<VfioContainer>>>,
+    guest_address: Option<PciAddress>,
+    iommu_endpoints: &mut BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
     coiommu_endpoints: Option<&mut Vec<u16>>,
     iommu_dev: IommuDevType,
 ) -> DeviceResult<(Box<VfioPciDevice>, Option<Minijail>)> {
@@ -1085,8 +1125,11 @@ pub fn create_vfio_device(
     )
     .context("failed to create vfio device")?;
     let mut vfio_pci_device = Box::new(VfioPciDevice::new(
+        #[cfg(feature = "direct")]
+        vfio_path,
         vfio_device,
         bus_num,
+        guest_address,
         vfio_device_tube_msi,
         vfio_device_tube_msix,
         vfio_device_tube_mem,
@@ -1100,7 +1143,13 @@ pub fn create_vfio_device(
     match iommu_dev {
         IommuDevType::NoIommu => {}
         IommuDevType::VirtioIommu => {
-            iommu_endpoints.insert(endpoint_addr.to_u32(), vfio_container);
+            iommu_endpoints.insert(
+                endpoint_addr.to_u32(),
+                Arc::new(Mutex::new(Box::new(VfioWrapper::new(
+                    vfio_container,
+                    vm.get_memory().clone(),
+                )))),
+            );
         }
         IommuDevType::CoIommu => {
             if let Some(endpoints) = coiommu_endpoints {
@@ -1114,7 +1163,10 @@ pub fn create_vfio_device(
     if hotplug {
         Ok((vfio_pci_device, None))
     } else {
-        Ok((vfio_pci_device, simple_jail(cfg, "vfio_device")?))
+        Ok((
+            vfio_pci_device,
+            simple_jail(&cfg.jail_config, "vfio_device")?,
+        ))
     }
 }
 
@@ -1124,7 +1176,7 @@ pub fn create_vfio_platform_device(
     _resources: &mut SystemAllocator,
     control_tubes: &mut Vec<TaggedControlTube>,
     vfio_path: &Path,
-    _endpoints: &mut BTreeMap<u32, Arc<Mutex<VfioContainer>>>,
+    _endpoints: &mut BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
     iommu_dev: IommuDevType,
 ) -> DeviceResult<(VfioPlatformDevice, Option<Minijail>)> {
     let vfio_container = VfioCommonSetup::vfio_get_container(iommu_dev, Some(vfio_path))
@@ -1143,5 +1195,56 @@ pub fn create_vfio_platform_device(
     .context("Failed to create vfio device")?;
     let vfio_plat_dev = VfioPlatformDevice::new(vfio_device, vfio_device_tube_mem);
 
-    Ok((vfio_plat_dev, simple_jail(cfg, "vfio_platform_device")?))
+    Ok((
+        vfio_plat_dev,
+        simple_jail(&cfg.jail_config, "vfio_platform_device")?,
+    ))
+}
+
+/// Setup for devices with virtio-iommu
+pub fn setup_virtio_access_platform(
+    resources: &mut SystemAllocator,
+    iommu_attached_endpoints: &mut BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
+    devices: &mut [(Box<dyn BusDeviceObj>, Option<Minijail>)],
+) -> DeviceResult<(Option<BTreeMap<u32, Tube>>, Option<Tube>)> {
+    let mut translate_response_senders: Option<
+        BTreeMap<
+            u32, // endpoint id
+            Tube,
+        >,
+    > = None;
+    let mut tube_pair: Option<(Tube, Tube)> = None;
+
+    for dev in devices.iter_mut() {
+        if let Some(pci_dev) = dev.0.as_pci_device_mut() {
+            if pci_dev.supports_iommu() {
+                let endpoint_id = pci_dev
+                    .allocate_address(resources)
+                    .context("failed to allocate resources for pci dev")?
+                    .to_u32();
+                let mapper: Arc<Mutex<Box<dyn MemoryMapperTrait>>> =
+                    Arc::new(Mutex::new(Box::new(BasicMemoryMapper::new(u64::MAX))));
+                let (request_tx, _request_rx) =
+                    tube_pair.get_or_insert_with(|| Tube::pair().unwrap());
+                let CreateIpcMapperRet {
+                    mapper: ipc_mapper,
+                    response_tx,
+                } = create_ipc_mapper(
+                    endpoint_id,
+                    #[allow(deprecated)]
+                    request_tx.try_clone()?,
+                );
+                translate_response_senders
+                    .get_or_insert_with(BTreeMap::new)
+                    .insert(endpoint_id, response_tx);
+                iommu_attached_endpoints.insert(endpoint_id, mapper);
+                pci_dev.set_iommu(ipc_mapper)?;
+            }
+        }
+    }
+
+    Ok((
+        translate_response_senders,
+        tube_pair.map(|(_request_tx, request_rx)| request_rx),
+    ))
 }

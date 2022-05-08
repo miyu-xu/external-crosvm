@@ -4,6 +4,7 @@
 
 use std::cmp;
 use std::collections::{BTreeSet, HashMap};
+use std::ops::RangeInclusive;
 
 use crate::{Alloc, Error, Result};
 
@@ -11,56 +12,59 @@ use crate::{Alloc, Error, Result};
 /// Use `AddressAllocator` whenever an address range needs to be allocated to different users.
 /// Allocations must be uniquely tagged with an Alloc enum, which can be used for lookup.
 /// An human-readable tag String must also be provided for debugging / reference.
-///
-/// # Examples
-///
-/// ```
-/// // Anon is used for brevity. Don't manually instantiate Anon allocs!
-/// # use resources::{Alloc, AddressAllocator};
-///   AddressAllocator::new(0x1000, 0x10000, Some(0x100), None).map(|mut pool| {
-///       assert_eq!(pool.allocate(0x110, Alloc::Anon(0), "caps".to_string()), Ok(0x1000));
-///       assert_eq!(pool.allocate(0x100, Alloc::Anon(1), "cache".to_string()), Ok(0x1200));
-///       assert_eq!(pool.allocate(0x100, Alloc::Anon(2), "etc".to_string()), Ok(0x1300));
-///       assert_eq!(pool.get(&Alloc::Anon(1)), Some(&(0x1200, 0x100, "cache".to_string())));
-///   });
-/// ```
 #[derive(Debug, Eq, PartialEq)]
 pub struct AddressAllocator {
-    pool_base: u64,
-    pool_size: u64,
+    /// The list of pools from which address are allocated. The union
+    /// of all regions from |allocs| and |regions| equals the pools.
+    pools: Vec<RangeInclusive<u64>>,
     min_align: u64,
     preferred_align: u64,
+    /// The region that is allocated.
     allocs: HashMap<Alloc, (u64, u64, String)>,
+    /// The region that is not allocated yet.
     regions: BTreeSet<(u64, u64)>,
 }
 
 impl AddressAllocator {
     /// Creates a new `AddressAllocator` for managing a range of addresses.
-    /// Can return `None` if `pool_base` + `pool_size` overflows a u64 or if alignment isn't a power
-    /// of two.
+    /// Can return an error if `pool` is empty or if alignment isn't a power of two.
     ///
-    /// * `pool_base` - The starting address of the range to manage.
-    /// * `pool_size` - The size of the address range in bytes.
+    /// * `pool` - The address range to allocate from.
     /// * `min_align` - The minimum size of an address region to align to, defaults to four.
     /// * `preferred_align` - The preferred alignment of an address region, used if possible.
     ///
     /// If an allocation cannot be satisfied with the preferred alignment, the minimum alignment
     /// will be used instead.
     pub fn new(
-        pool_base: u64,
-        pool_size: u64,
+        pool: RangeInclusive<u64>,
         min_align: Option<u64>,
         preferred_align: Option<u64>,
     ) -> Result<Self> {
-        if pool_size == 0 {
+        Self::new_from_list(vec![pool], min_align, preferred_align)
+    }
+
+    /// Creates a new `AddressAllocator` for managing a range of addresses.
+    /// Can return `None` if all pools are empty alignment isn't a power of two.
+    ///
+    /// * `pools` - The list of pools to initialize the allocator with.
+    /// * `min_align` - The minimum size of an address region to align to, defaults to four.
+    /// * `preferred_align` - The preferred alignment of an address region, used if possible.
+    ///
+    /// If an allocation cannot be satisfied with the preferred alignment, the minimum alignment
+    /// will be used instead.
+    pub fn new_from_list<T>(
+        pools: T,
+        min_align: Option<u64>,
+        preferred_align: Option<u64>,
+    ) -> Result<Self>
+    where
+        T: IntoIterator<Item = RangeInclusive<u64>>,
+    {
+        let pools: Vec<RangeInclusive<u64>> = pools.into_iter().filter(|p| !p.is_empty()).collect();
+        if pools.is_empty() {
             return Err(Error::PoolSizeZero);
         }
-        let pool_end = pool_base
-            .checked_add(pool_size - 1)
-            .ok_or(Error::PoolOverflow {
-                base: pool_base,
-                size: pool_size,
-            })?;
+
         let min_align = min_align.unwrap_or(4);
         if !min_align.is_power_of_two() || min_align == 0 {
             return Err(Error::BadAlignment);
@@ -72,10 +76,11 @@ impl AddressAllocator {
         }
 
         let mut regions = BTreeSet::new();
-        regions.insert((pool_base, pool_end));
+        for r in pools.iter() {
+            regions.insert((*r.start(), *r.end()));
+        }
         Ok(AddressAllocator {
-            pool_base,
-            pool_size,
+            pools,
             min_align,
             preferred_align,
             allocs: HashMap::new(),
@@ -83,18 +88,11 @@ impl AddressAllocator {
         })
     }
 
-    /// Gets the starting address of the allocator.
+    /// Gets the regions managed by the allocator.
     ///
-    /// This returns the original `pool_base` value provided to `AddressAllocator::new()`.
-    pub fn pool_base(&self) -> u64 {
-        self.pool_base
-    }
-
-    /// Gets the size of the allocator's address range in bytes.
-    ///
-    /// This returns the original `pool_size` value provided to `AddressAllocator::new()`.
-    pub fn pool_size(&self) -> u64 {
-        self.pool_size
+    /// This returns the original `pools` value provided to `AddressAllocator::new()`.
+    pub fn pools(&self) -> &Vec<RangeInclusive<u64>> {
+        &self.pools
     }
 
     fn internal_allocate_with_align(
@@ -206,8 +204,8 @@ impl AddressAllocator {
 
     /// Allocates a range of addresses from the managed region with an optional tag
     /// and required location. Allocation alignment is not enforced.
-    /// Returns OutOfSpace if requested range is not available (e.g. already allocated
-    /// with a different alloc tag).
+    /// Returns OutOfSpace if requested range is not available or ExistingAlloc if the requested
+    /// range overlaps an existing allocation.
     pub fn allocate_at(&mut self, start: u64, size: u64, alloc: Alloc, tag: String) -> Result<()> {
         if self.allocs.contains_key(&alloc) {
             return Err(Error::ExistingAlloc(alloc));
@@ -235,7 +233,13 @@ impl AddressAllocator {
 
                 Ok(())
             }
-            None => Err(Error::OutOfSpace),
+            None => {
+                if let Some(existing_alloc) = self.find_overlapping(start, size) {
+                    Err(Error::ExistingAlloc(existing_alloc))
+                } else {
+                    Err(Error::OutOfSpace)
+                }
+            }
         }
     }
 
@@ -248,19 +252,34 @@ impl AddressAllocator {
 
     /// Release a allocation contains the value.
     pub fn release_containing(&mut self, value: u64) -> Result<()> {
-        let mut alloc = None;
-        for (key, val) in self.allocs.iter() {
-            if value >= val.0 && value < val.0 + val.1 {
-                alloc = Some(*key);
-                break;
-            }
+        if let Some(alloc) = self.find_overlapping(value, 1) {
+            self.release(alloc)
+        } else {
+            Err(Error::OutOfSpace)
+        }
+    }
+
+    // Find an existing allocation that overlaps the region defined by `address` and `size`. If more
+    // than one allocation overlaps the given region, any of them may be returned, since the HashMap
+    // iterator is not ordered in any particular way.
+    fn find_overlapping(&self, start: u64, size: u64) -> Option<Alloc> {
+        if size == 0 {
+            return None;
         }
 
-        if let Some(key) = alloc {
-            return self.release(key);
-        }
+        let end = start.saturating_add(size - 1);
+        self.allocs
+            .iter()
+            .find(|(_, &(alloc_start, alloc_size, _))| {
+                let alloc_end = alloc_start + alloc_size;
+                start < alloc_end && end >= alloc_start
+            })
+            .map(|(&alloc, _)| alloc)
+    }
 
-        Err(Error::OutOfSpace)
+    // Return the max address of the allocated address ranges.
+    pub fn get_max_addr(&self) -> u64 {
+        self.regions.iter().fold(0, |x, (_, end)| x.max(*end))
     }
 
     /// Returns allocation associated with `alloc`, or None if no such allocation exists.
@@ -427,28 +446,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_fails_overflow() {
-        assert!(AddressAllocator::new(u64::max_value(), 0x100, None, None).is_err());
+    fn example() {
+        // Anon is used for brevity. Don't manually instantiate Anon allocs!
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0x100), None).unwrap();
+        assert_eq!(
+            pool.allocate(0x110, Alloc::Anon(0), "caps".to_string()),
+            Ok(0x1000)
+        );
+        assert_eq!(
+            pool.allocate(0x100, Alloc::Anon(1), "cache".to_string()),
+            Ok(0x1200)
+        );
+        assert_eq!(
+            pool.allocate(0x100, Alloc::Anon(2), "etc".to_string()),
+            Ok(0x1300)
+        );
+        assert_eq!(
+            pool.get(&Alloc::Anon(1)),
+            Some(&(0x1200, 0x100, "cache".to_string()))
+        );
     }
 
     #[test]
     fn new_fails_size_zero() {
-        assert!(AddressAllocator::new(0x1000, 0, None, None).is_err());
+        assert!(AddressAllocator::new(RangeInclusive::new(0x1000, 0), None, None).is_err());
     }
 
     #[test]
     fn new_fails_alignment_zero() {
-        assert!(AddressAllocator::new(0x1000, 0x10000, Some(0), None).is_err());
+        assert!(AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0), None).is_err());
     }
 
     #[test]
     fn new_fails_alignment_non_power_of_two() {
-        assert!(AddressAllocator::new(0x1000, 0x10000, Some(200), None).is_err());
+        assert!(
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(200), None).is_err()
+        );
     }
 
     #[test]
     fn allocate_fails_exising_alloc() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate(0x800, Alloc::Anon(0), String::from("bar0")),
             Ok(0x1000)
@@ -461,7 +501,8 @@ mod tests {
 
     #[test]
     fn allocate_fails_not_enough_space() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate(0x800, Alloc::Anon(0), String::from("bar0")),
             Ok(0x1000)
@@ -478,7 +519,8 @@ mod tests {
 
     #[test]
     fn allocate_with_special_alignment() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate(0x10, Alloc::Anon(0), String::from("bar0")),
             Ok(0x1000)
@@ -495,7 +537,9 @@ mod tests {
 
     #[test]
     fn allocate_and_split_allocate_at() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), Some(1), None).unwrap();
+        // 0x1200..0x1a00
         assert_eq!(
             pool.allocate_at(0x1200, 0x800, Alloc::Anon(0), String::from("bar0")),
             Ok(())
@@ -504,19 +548,47 @@ mod tests {
             pool.allocate(0x800, Alloc::Anon(1), String::from("bar1")),
             Err(Error::OutOfSpace)
         );
+        // 0x600..0x2000
         assert_eq!(
             pool.allocate(0x600, Alloc::Anon(2), String::from("bar2")),
             Ok(0x1a00)
         );
+        // 0x1000..0x1200
         assert_eq!(
             pool.allocate(0x200, Alloc::Anon(3), String::from("bar3")),
             Ok(0x1000)
         );
+        // 0x1b00..0x1c00 (overlaps with 0x600..0x2000)
+        assert_eq!(
+            pool.allocate_at(0x1b00, 0x100, Alloc::Anon(4), String::from("bar4")),
+            Err(Error::ExistingAlloc(Alloc::Anon(2)))
+        );
+        // 0x1fff..0x2000 (overlaps with 0x600..0x2000)
+        assert_eq!(
+            pool.allocate_at(0x1fff, 1, Alloc::Anon(5), String::from("bar5")),
+            Err(Error::ExistingAlloc(Alloc::Anon(2)))
+        );
+        // 0x1200..0x1201 (overlaps with 0x1200..0x1a00)
+        assert_eq!(
+            pool.allocate_at(0x1200, 1, Alloc::Anon(6), String::from("bar6")),
+            Err(Error::ExistingAlloc(Alloc::Anon(0)))
+        );
+        // 0x11ff..0x1200 (overlaps with 0x1000..0x1200)
+        assert_eq!(
+            pool.allocate_at(0x11ff, 1, Alloc::Anon(7), String::from("bar7")),
+            Err(Error::ExistingAlloc(Alloc::Anon(3)))
+        );
+        // 0x1100..0x1300 (overlaps with 0x1000..0x1200 and 0x1200..0x1a00)
+        match pool.allocate_at(0x1100, 0x200, Alloc::Anon(8), String::from("bar8")) {
+            Err(Error::ExistingAlloc(Alloc::Anon(0) | Alloc::Anon(3))) => {}
+            x => panic!("unexpected result {:?}", x),
+        }
     }
 
     #[test]
     fn allocate_alignment() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate(0x110, Alloc::Anon(0), String::from("bar0")),
             Ok(0x1000)
@@ -529,7 +601,8 @@ mod tests {
 
     #[test]
     fn allocate_retrieve_alloc() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate(0x110, Alloc::Anon(0), String::from("bar0")),
             Ok(0x1000)
@@ -542,7 +615,8 @@ mod tests {
 
     #[test]
     fn allocate_with_alignment_allocator_alignment() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, Some(0x100), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0x100), None).unwrap();
         assert_eq!(
             pool.allocate_with_align(0x110, Alloc::Anon(0), String::from("bar0"), 0x1),
             Ok(0x1000)
@@ -555,7 +629,8 @@ mod tests {
 
     #[test]
     fn allocate_with_alignment_custom_alignment() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, Some(0x4), None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), Some(0x4), None).unwrap();
         assert_eq!(
             pool.allocate_with_align(0x110, Alloc::Anon(0), String::from("bar0"), 0x100),
             Ok(0x1000)
@@ -568,7 +643,8 @@ mod tests {
 
     #[test]
     fn allocate_with_alignment_no_allocator_alignment() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), None, None).unwrap();
         assert_eq!(
             pool.allocate_with_align(0x110, Alloc::Anon(0), String::from("bar0"), 0x100),
             Ok(0x1000)
@@ -581,7 +657,8 @@ mod tests {
 
     #[test]
     fn allocate_with_alignment_alignment_non_power_of_two() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), None, None).unwrap();
         assert!(pool
             .allocate_with_align(0x110, Alloc::Anon(0), String::from("bar0"), 200)
             .is_err());
@@ -589,7 +666,8 @@ mod tests {
 
     #[test]
     fn allocate_with_release() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), None, None).unwrap();
         assert_eq!(
             pool.allocate_with_align(0x100, Alloc::Anon(0), String::from("bar0"), 0x100),
             Ok(0x1000)
@@ -603,7 +681,8 @@ mod tests {
 
     #[test]
     fn coalescing_and_overlap() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), None, None).unwrap();
         assert!(pool.insert_at(0x3000, 0x1000).is_ok());
         assert!(pool.insert_at(0x1fff, 0x20).is_err());
         assert!(pool.insert_at(0x2ff1, 0x10).is_err());
@@ -617,7 +696,8 @@ mod tests {
 
     #[test]
     fn coalescing_single_addresses() {
-        let mut pool = AddressAllocator::new(0x1000, 0x1000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0x1FFF), None, None).unwrap();
         assert!(pool.insert_at(0x2001, 1).is_ok());
         assert!(pool.insert_at(0x2003, 1).is_ok());
         assert!(pool.insert_at(0x2000, 1).is_ok());
@@ -630,7 +710,8 @@ mod tests {
 
     #[test]
     fn allocate_and_verify_pci_offset() {
-        let mut pool = AddressAllocator::new(0x1000, 0x10000, None, None).unwrap();
+        let mut pool =
+            AddressAllocator::new(RangeInclusive::new(0x1000, 0xFFFF), None, None).unwrap();
         let pci_bar0 = Alloc::PciBar {
             bus: 1,
             dev: 2,
@@ -687,5 +768,16 @@ mod tests {
             pool.address_from_pci_offset(anon, 0x600, 0x100),
             Err(Error::InvalidAlloc(anon))
         );
+    }
+
+    #[test]
+    fn get_max_address_of_ranges() {
+        let ranges = vec![
+            RangeInclusive::new(0x1000, 0xFFFF),
+            RangeInclusive::new(0x20000, 0xFFFFF),
+        ];
+        let pool = AddressAllocator::new_from_list(ranges.into_iter(), None, None).unwrap();
+
+        assert_eq!(pool.get_max_addr(), 0xFFFFF);
     }
 }
