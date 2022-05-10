@@ -629,6 +629,7 @@ impl VfioPciWorker {
                         let request = VmRequest::VfioCommand {
                             vfio_path: sysfs_path,
                             add: false,
+                            hp_interrupt: true,
                         };
                         if self.vm_socket.send(&request).is_ok() {
                             if let Err(e) = self.vm_socket.recv::<VmResponse>() {
@@ -1526,6 +1527,7 @@ impl PciDevice for VfioPciDevice {
                     PciDeviceError::PciAddressParseFailure(self.device.device_name().clone(), e)
                 })?,
             );
+
             if let Some(bus_num) = self.hotplug_bus_number {
                 // Caller specify pcie bus number for hotplug device
                 address.bus = bus_num;
@@ -1534,16 +1536,23 @@ impl PciDevice for VfioPciDevice {
                 address.func = 0;
             }
 
-            if resources.reserve_pci(
-                Alloc::PciBar {
-                    bus: address.bus,
-                    dev: address.dev,
-                    func: address.func,
-                    bar: 0,
-                },
-                self.debug_label(),
-            ) {
-                self.pci_address = Some(address);
+            while address.func < 8 {
+                if resources.reserve_pci(
+                    Alloc::PciBar {
+                        bus: address.bus,
+                        dev: address.dev,
+                        func: address.func,
+                        bar: 0,
+                    },
+                    self.debug_label(),
+                ) {
+                    self.pci_address = Some(address);
+                    break;
+                } else if self.hotplug_bus_number.is_none() {
+                    break;
+                } else {
+                    address.func += 1;
+                }
             }
         }
         self.pci_address.ok_or(PciDeviceError::PciAllocationFailed)
