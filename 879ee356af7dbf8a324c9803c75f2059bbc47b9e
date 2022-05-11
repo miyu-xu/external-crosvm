@@ -22,6 +22,29 @@
       },
       "revId": "879ee356af7dbf8a324c9803c75f2059bbc47b9e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "116fa067_c683ca38",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-05-11T03:57:37Z",
+      "side": 1,
+      "message": "Also ran `cd packages/modules/Virtualization \u0026\u0026 atest --test-mapping` for `lunch oriole_pkvm-userdebug`. \n\nMicrodroidHostTestCases android.virt.test.MicrodroidTestCase#testCustomVirtualMachinePermission failed for me, but I see people in the KVM chat saying that was failing at HEAD for them today so I suspect it is unrelated.",
+      "range": {
+        "startLine": 24,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 21
+      },
+      "revId": "879ee356af7dbf8a324c9803c75f2059bbc47b9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
