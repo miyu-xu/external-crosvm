@@ -86,6 +86,24 @@
       "parentUuid": "91f08e79_0bff5901",
       "revId": "fccf8194386373a5c7cc5bbf627b10ac0216bec7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8ccfe171_fe8724ac",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-05-12T11:22:56Z",
+      "side": 1,
+      "message": "Here is the buganizer -\nhttps://partnerissuetracker.corp.google.com/issues/232360323\n\nI have updated commit text as well with BUG details. Please let me know if anything else is needed.\n\nThanks,\nSahitya.",
+      "parentUuid": "279d872f_2e3e79f6",
+      "revId": "fccf8194386373a5c7cc5bbf627b10ac0216bec7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
