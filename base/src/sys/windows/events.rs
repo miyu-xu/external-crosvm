@@ -4,19 +4,16 @@
 
 use std::{clone::Clone, default::Default, marker::Copy};
 
+pub use super::wait::*;
 use super::{PollToken, RawDescriptor};
 use crate::descriptor::AsRawDescriptor;
-
-#[path = "win/wait.rs"]
-mod wait;
-pub use wait::*;
 
 /// Represents descriptor-token pairs which represent an event which can be triggered in the
 /// EventContext
 #[derive(PartialEq)]
 pub struct EventTrigger<T: PollToken> {
-    token: T,
-    event: RawDescriptor,
+    pub(crate) token: T,
+    pub(crate) event: RawDescriptor,
 }
 
 impl<T: PollToken> EventTrigger<T> {
@@ -57,17 +54,26 @@ impl<T: PollToken> Default for TriggeredEvent<T> {
     }
 }
 
-/// Represents types of events to watch for.
-pub enum EventType {
-    // Used to to temporarily stop waiting for events without
-    // removing the associated descriptor from the WaitContext.
-    // In most cases if a descriptor no longer needs to be
-    // waited on, prefer removing it entirely with
-    // WaitContext#delete
-    None,
-    Read,
-    Write,
-    ReadWrite,
+impl<T: PollToken> TriggeredEvent<T> {
+    /// Gets the token associated in `PollContext::add` with this event.
+    pub fn token(&self) -> T {
+        T::from_raw_token(self.token.as_raw_token())
+    }
+
+    /// True if the `fd` associated with this token in `PollContext::add` is readable.
+    pub fn readable(&self) -> bool {
+        self.is_readable
+    }
+
+    /// True if the `fd` associated with this token in `PollContext::add` is writable.
+    pub fn writable(&self) -> bool {
+        self.is_writable
+    }
+
+    /// True if the `fd` associated with this token in `PollContext::add` has been hungup on.
+    pub fn hungup(&self) -> bool {
+        self.is_hungup
+    }
 }
 
 #[cfg(test)]
@@ -92,11 +98,11 @@ mod tests {
                 match event.token {
                     1 => {
                         evt1.read().unwrap();
-                        ctx.remove(&evt1).unwrap();
+                        ctx.delete(&evt1).unwrap();
                     }
                     2 => {
                         evt2.read().unwrap();
-                        ctx.remove(&evt2).unwrap();
+                        ctx.delete(&evt2).unwrap();
                     }
                     _ => panic!("unexpected token"),
                 };
