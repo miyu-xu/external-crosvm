@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! VM disk image file format I/O.
+
 use std::cmp::min;
 use std::fmt::Debug;
 use std::fs::File;
@@ -14,7 +16,7 @@ use base::{
     get_filesystem_type, info, AsRawDescriptors, FileAllocate, FileReadWriteAtVolatile, FileSetLen,
     FileSync, PunchHole, WriteZeroesAt,
 };
-use cros_async::Executor;
+use cros_async::{AllocateMode, Executor};
 use remain::sorted;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
@@ -372,11 +374,7 @@ impl AsyncDisk for SingleFileDisk {
 
     async fn punch_hole(&self, file_offset: u64, length: u64) -> Result<()> {
         self.inner
-            .fallocate(
-                file_offset,
-                length,
-                (libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE) as u32,
-            )
+            .fallocate(file_offset, length, AllocateMode::PunchHole)
             .await
             .map_err(Error::Fallocate)
     }
@@ -384,11 +382,7 @@ impl AsyncDisk for SingleFileDisk {
     async fn write_zeroes_at(&self, file_offset: u64, length: u64) -> Result<()> {
         if self
             .inner
-            .fallocate(
-                file_offset,
-                length,
-                (libc::FALLOC_FL_ZERO_RANGE | libc::FALLOC_FL_KEEP_SIZE) as u32,
-            )
+            .fallocate(file_offset, length, AllocateMode::ZeroRange)
             .await
             .is_ok()
         {

@@ -115,6 +115,7 @@ pub trait GpeNotify: Send {
 
 pub trait PmResource {
     fn pwrbtn_evt(&mut self) {}
+    fn slpbtn_evt(&mut self) {}
     fn gpe_evt(&mut self, _gpe: u32) {}
     fn register_gpe_notify_dev(&mut self, _gpe: u32, _notify_dev: Arc<Mutex<dyn GpeNotify>>) {}
 }
@@ -967,6 +968,8 @@ pub enum VmRequest {
     Exit,
     /// Trigger a power button event in the guest.
     Powerbtn,
+    /// Trigger a sleep button event in the guest.
+    Sleepbtn,
     /// Suspend the VM's VCPUs until resume.
     Suspend,
     /// Resume the VM's VCPUs that were previously suspended.
@@ -988,7 +991,11 @@ pub enum VmRequest {
     /// Command to set battery.
     BatCommand(BatteryType, BatControlCommand),
     /// Command to add/remove vfio pci device
-    VfioCommand { vfio_path: PathBuf, add: bool },
+    VfioCommand {
+        vfio_path: PathBuf,
+        add: bool,
+        hp_interrupt: bool,
+    },
 }
 
 fn map_descriptor(
@@ -1038,8 +1045,17 @@ impl VmRequest {
                 VmResponse::Ok
             }
             VmRequest::Powerbtn => {
-                if pm.is_some() {
-                    pm.as_ref().unwrap().lock().pwrbtn_evt();
+                if let Some(pm) = pm {
+                    pm.lock().pwrbtn_evt();
+                    VmResponse::Ok
+                } else {
+                    error!("{:#?} not supported", *self);
+                    VmResponse::Err(SysError::new(ENOTSUP))
+                }
+            }
+            VmRequest::Sleepbtn => {
+                if let Some(pm) = pm {
+                    pm.lock().slpbtn_evt();
                     VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
@@ -1206,6 +1222,7 @@ impl VmRequest {
             VmRequest::VfioCommand {
                 vfio_path: _,
                 add: _,
+                hp_interrupt: _,
             } => VmResponse::Ok,
         }
     }

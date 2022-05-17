@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! Virtual machine architecture support code.
+
 pub mod android;
 pub mod fdt;
 pub mod pstore;
@@ -13,6 +15,8 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use libc::sched_getcpu;
 
 use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
@@ -99,10 +103,14 @@ pub struct VmComponents {
     pub dmi_path: Option<PathBuf>,
     pub no_legacy: bool,
     pub host_cpu_topology: bool,
+    pub itmt: bool,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub force_s2idle: bool,
     #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
+    /// A file to load as pVM firmware. Must be `Some` iff
+    /// `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    pub pvm_fw: Option<File>,
 }
 
 /// Holds the elements needed to run a Linux VM. Created by `build_vm`.
@@ -194,7 +202,7 @@ pub trait LinuxArch {
         ramoops_region: Option<pstore::RamoopsRegion>,
         devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipArch,
-        kvm_vcpu_ids: &mut Vec<usize>,
+        vcpu_ids: &mut Vec<usize>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmArch,
@@ -221,6 +229,7 @@ pub trait LinuxArch {
         has_bios: bool,
         no_smt: bool,
         host_cpu_topology: bool,
+        itmt: bool,
     ) -> Result<(), Self::Error>;
 
     /// Configures and add a pci device into vm
@@ -707,7 +716,7 @@ pub fn add_goldfish_battery(
     match battery_jail.as_ref() {
         Some(jail) => {
             let mut keep_rds = goldfish_bat.keep_rds();
-            syslog::push_fds(&mut keep_rds);
+            syslog::push_descriptors(&mut keep_rds);
             mmio_bus
                 .insert(
                     Arc::new(Mutex::new(
@@ -835,4 +844,87 @@ where
         .map_err(LoadImageError::ReadToMemory)?;
 
     Ok((guest_addr, size))
+}
+
+/// Read and write permissions setting
+///
+/// Wrap read_allow and write_allow to store them in MsrHandlers level.
+#[derive(Clone, Copy, Default)]
+pub struct MsrRWType {
+    pub read_allow: bool,
+    pub write_allow: bool,
+}
+
+/// Handler types for userspace-msr
+#[derive(Clone, Debug, PartialEq)]
+pub enum MsrAction {
+    /// Read and write from host directly, and the control of MSR will
+    /// take effect on host.
+    MsrPassthrough,
+    /// Store the dummy value for msr (copy from host or custom values),
+    /// and the control(WRMSR) of MSR won't take effect on host.
+    MsrEmulate,
+}
+
+/// Source CPU of MSR value
+///
+/// Indicate which CPU that user get/set MSRs from/to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MsrValueFrom {
+    /// Read/write MSR value from/into CPU 0.
+    /// The MSR source CPU always be CPU 0.
+    RWFromCPU0,
+    /// Read/write MSR value from/into the running CPU.
+    /// If vCPU migrates to another pcpu, the MSR source CPU will also change.
+    RWFromRunningCPU,
+}
+
+impl MsrValueFrom {
+    /// Get the physical(host) CPU id from MsrValueFrom type.
+    pub fn get_cpu_id(&self) -> usize {
+        match self {
+            MsrValueFrom::RWFromCPU0 => 0,
+            MsrValueFrom::RWFromRunningCPU => {
+                // Safe because the host supports this sys call.
+                (unsafe { sched_getcpu() }) as usize
+            }
+        }
+    }
+}
+
+/// If user doesn't specific CPU0, the default source CPU is running CPU.
+impl Default for MsrValueFrom {
+    fn default() -> Self {
+        MsrValueFrom::RWFromRunningCPU
+    }
+}
+
+/// Config option for userspace-msr handing
+///
+/// MsrConfig will be collected with its corresponding MSR's index.
+/// eg, (msr_index, msr_config)
+#[derive(Clone, Default)]
+pub struct MsrConfig {
+    /// If support RDMSR/WRMSR emulation in crosvm?
+    pub rw_type: MsrRWType,
+    /// Handlers should be used to handling MSR.
+    /// User must set this field.
+    pub action: Option<MsrAction>,
+    /// MSR source CPU.
+    pub from: MsrValueFrom,
+}
+
+impl MsrConfig {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+#[sorted]
+#[derive(Error, Debug)]
+pub enum MsrExitHandlerError {
+    #[error("Fail to create MSR handler")]
+    HandlerCreateFailed,
+    #[error("Error parameter")]
+    InvalidParam,
 }

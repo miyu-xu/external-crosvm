@@ -23,7 +23,6 @@ use std::process;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use std::thread;
 
-use devices::virtio::vhost::vsock::{VhostVsockConfig, VhostVsockDeviceParameter};
 use libc;
 
 use acpi_tables::sdt::SDT;
@@ -34,6 +33,7 @@ use base::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListener};
 use devices::serial_device::SerialHardware;
 use devices::vfio::{VfioCommonSetup, VfioCommonTrait};
 use devices::virtio::memory_mapper::MemoryMapperTrait;
+use devices::virtio::vhost::vsock::VhostVsockConfig;
 #[cfg(feature = "gpu")]
 use devices::virtio::{self, EventDevice};
 #[cfg(feature = "audio")]
@@ -407,10 +407,7 @@ fn create_virtio_devices(
 
     if let Some(cid) = cfg.cid {
         let vhost_config = VhostVsockConfig {
-            device: cfg
-                .vhost_vsock_device
-                .clone()
-                .unwrap_or(VhostVsockDeviceParameter::default()),
+            device: cfg.vhost_vsock_device.clone(),
             cid,
         };
         devs.push(create_vhost_vsock_device(cfg, &vhost_config)?);
@@ -483,6 +480,7 @@ fn create_devices(
     #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
     vvu_proxy_device_tubes: &mut Vec<Tube>,
     vvu_proxy_max_sibling_mem_size: u64,
+    iova_max_addr: &mut Option<u64>,
 ) -> DeviceResult<Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>> {
     let mut devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)> = Vec::new();
     let mut balloon_inflate_tube: Option<Tube> = None;
@@ -508,6 +506,10 @@ fn create_devices(
                 vfio_dev.iommu_dev_type(),
             )?;
 
+            *iova_max_addr = Some(max(
+                vfio_pci_device.get_max_iova(),
+                iova_max_addr.unwrap_or(0),
+            ));
             devices.push((vfio_pci_device, jail));
         }
 
@@ -825,6 +827,14 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
     } else {
         None
     };
+    let pvm_fw_image = if let Some(pvm_fw_path) = &cfg.pvm_fw {
+        Some(
+            open_file(pvm_fw_path, OpenOptions::new().read(true))
+                .with_context(|| format!("failed to open pvm_fw {}", pvm_fw_path.display()))?,
+        )
+    } else {
+        None
+    };
 
     let vm_image = match cfg.executable_path {
         Some(Executable::Kernel(ref kernel_path)) => VmImage::Kernel(
@@ -849,7 +859,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware => {
                 Some(64 * 1024 * 1024)
             }
-            ProtectionType::Unprotected => None,
+            ProtectionType::Unprotected | ProtectionType::UnprotectedWithFirmware => None,
         }
     };
 
@@ -896,8 +906,10 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         dmi_path: cfg.dmi_path.clone(),
         no_legacy: cfg.no_legacy,
         host_cpu_topology: cfg.host_cpu_topology,
+        itmt: cfg.itmt,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         force_s2idle: cfg.force_s2idle,
+        pvm_fw: pvm_fw_image,
     })
 }
 
@@ -908,7 +920,6 @@ pub enum ExitState {
     Crash,
     GuestPanic,
 }
-
 // Remove ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
 // Returns the updated guest memory layout.
 fn punch_holes_in_guest_mem_layout_for_mappings(
@@ -952,23 +963,15 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         .collect()
 }
 
-pub fn run_config(cfg: Config) -> Result<ExitState> {
-    let components = setup_vm_components(&cfg)?;
-
-    let guest_mem_layout =
-        Arch::guest_memory_layout(&components).context("failed to create guest memory layout")?;
-
-    let guest_mem_layout =
-        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings);
-
-    let guest_mem = GuestMemory::new(&guest_mem_layout).context("failed to create guest memory")?;
-    let mut mem_policy = MemoryPolicy::empty();
-    if components.hugepages {
-        mem_policy |= MemoryPolicy::USE_HUGEPAGES;
-    }
-    guest_mem.set_memory_policy(mem_policy);
+fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).context("failed to create kvm")?;
     let vm = KvmVm::new(&kvm, guest_mem, components.protected_vm).context("failed to create vm")?;
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if cfg.itmt {
+        vm.set_platform_info_read_access(false)
+            .context("failed to disable MSR_PLATFORM_INFO read access")?;
+    }
 
     if !cfg.userspace_msr.is_empty() {
         vm.enable_userspace_msr()
@@ -976,7 +979,11 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
     }
 
     // Check that the VM was actually created in protected mode as expected.
-    if cfg.protected_vm != ProtectionType::Unprotected && !vm.check_capability(VmCap::Protected) {
+    if matches!(
+        cfg.protected_vm,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
         bail!("Failed to create protected VM");
     }
     let vm_clone = vm.try_clone().context("failed to clone vm")?;
@@ -1024,6 +1031,29 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
     };
 
     run_vm::<KvmVcpu, KvmVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+}
+
+pub fn run_config(cfg: Config) -> Result<ExitState> {
+    let components = setup_vm_components(&cfg)?;
+
+    let guest_mem_layout =
+        Arch::guest_memory_layout(&components).context("failed to create guest memory layout")?;
+
+    let guest_mem_layout =
+        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings);
+
+    let guest_mem = GuestMemory::new(&guest_mem_layout).context("failed to create guest memory")?;
+    let mut mem_policy = MemoryPolicy::empty();
+    if components.hugepages {
+        mem_policy |= MemoryPolicy::USE_HUGEPAGES;
+    }
+    guest_mem.set_memory_policy(mem_policy);
+
+    if cfg.kvm_device_path.exists() {
+        return run_kvm(cfg, components, guest_mem);
+    };
+
+    Err(anyhow!("No hypervsior available to run VM."))
 }
 
 fn run_vm<Vcpu, V>(
@@ -1282,6 +1312,7 @@ where
 
     let mut iommu_attached_endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>> =
         BTreeMap::new();
+    let mut iova_max_addr: Option<u64> = None;
     let mut devices = create_devices(
         &cfg,
         &mut vm,
@@ -1305,6 +1336,7 @@ where
         render_server_fd,
         &mut vvu_proxy_device_tubes,
         components.memory_size,
+        &mut iova_max_addr,
     )?;
 
     let mut hp_endpoints_ranges: Vec<RangeInclusive<u32>> = Vec::new();
@@ -1341,7 +1373,7 @@ where
         let (iommu_host_tube, iommu_device_tube) = Tube::pair().context("failed to create tube")?;
         let iommu_dev = create_iommu_device(
             &cfg,
-            (1u64 << vm.get_guest_phys_addr_bits()) - 1,
+            iova_max_addr.unwrap_or(u64::MAX),
             iommu_attached_endpoints,
             hp_endpoints_ranges,
             translate_response_senders,
@@ -1379,7 +1411,7 @@ where
     }
 
     // KVM_CREATE_VCPU uses apic id for x86 and uses cpu id for others.
-    let mut kvm_vcpu_ids = Vec::new();
+    let mut vcpu_ids = Vec::new();
 
     #[cfg_attr(not(feature = "direct"), allow(unused_mut))]
     let mut linux = Arch::build_vm::<V, Vcpu>(
@@ -1394,7 +1426,7 @@ where
         ramoops_region,
         devices,
         irq_chip,
-        &mut kvm_vcpu_ids,
+        &mut vcpu_ids,
     )
     .context("the architecture failed to build the vm")?;
 
@@ -1457,7 +1489,7 @@ where
         sigchld_fd,
         Arc::clone(&map_request),
         gralloc,
-        kvm_vcpu_ids,
+        vcpu_ids,
         iommu_host_tube,
     )
 }
@@ -1481,6 +1513,7 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     control_tubes: &mut Vec<TaggedControlTube>,
     iommu_host_tube: &Option<Tube>,
     vfio_path: &Path,
+    hp_interrupt: bool,
 ) -> Result<()> {
     let host_os_str = vfio_path
         .file_name()
@@ -1539,7 +1572,9 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     let host_key = HostHotPlugKey::Vfio { host_addr };
     let mut hp_bus = hp_bus.lock();
     hp_bus.add_hotplug_device(host_key, pci_address);
-    hp_bus.hot_plug(pci_address);
+    if hp_interrupt {
+        hp_bus.hot_plug(pci_address);
+    }
     Ok(())
 }
 
@@ -1548,6 +1583,7 @@ fn remove_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     sys_allocator: &mut SystemAllocator,
     iommu_host_tube: &Option<Tube>,
     vfio_path: &Path,
+    _hp_interrupt: bool,
 ) -> Result<()> {
     let host_os_str = vfio_path
         .file_name()
@@ -1590,6 +1626,7 @@ fn handle_vfio_command<V: VmArch, Vcpu: VcpuArch>(
     iommu_host_tube: &Option<Tube>,
     vfio_path: &Path,
     add: bool,
+    hp_interrupt: bool,
 ) -> VmResponse {
     let ret = if add {
         add_vfio_device(
@@ -1599,9 +1636,16 @@ fn handle_vfio_command<V: VmArch, Vcpu: VcpuArch>(
             add_tubes,
             iommu_host_tube,
             vfio_path,
+            hp_interrupt,
         )
     } else {
-        remove_vfio_device(linux, sys_allocator, iommu_host_tube, vfio_path)
+        remove_vfio_device(
+            linux,
+            sys_allocator,
+            iommu_host_tube,
+            vfio_path,
+            hp_interrupt,
+        )
     };
 
     match ret {
@@ -1630,7 +1674,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     sigchld_fd: SignalFd,
     map_request: Arc<Mutex<Option<ExternalMapping>>>,
     mut gralloc: RutabagaGralloc,
-    kvm_vcpu_ids: Vec<usize>,
+    vcpu_ids: Vec<usize>,
     iommu_host_tube: Option<Tube>,
 ) -> Result<ExitState> {
     #[derive(PollToken)]
@@ -1746,7 +1790,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         };
         let handle = vcpu::run_vcpu(
             cpu_id,
-            kvm_vcpu_ids[cpu_id],
+            vcpu_ids[cpu_id],
             vcpu,
             linux.vm.try_clone().context("failed to clone vm")?,
             linux
@@ -1772,6 +1816,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             to_gdb_channel.clone(),
             cfg.per_vm_core_scheduling,
             cfg.host_cpu_topology,
+            cfg.itmt,
             cfg.privileged_vm,
             match vcpu_cgroup_tasks_file {
                 None => None,
@@ -1918,17 +1963,20 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                 Ok(request) => {
                                     let mut run_mode_opt = None;
                                     let response = match request {
-                                        VmRequest::VfioCommand { vfio_path, add } => {
-                                            handle_vfio_command(
-                                                &mut linux,
-                                                &mut sys_allocator,
-                                                &cfg,
-                                                &mut add_tubes,
-                                                &iommu_host_tube,
-                                                &vfio_path,
-                                                add,
-                                            )
-                                        }
+                                        VmRequest::VfioCommand {
+                                            vfio_path,
+                                            add,
+                                            hp_interrupt,
+                                        } => handle_vfio_command(
+                                            &mut linux,
+                                            &mut sys_allocator,
+                                            &cfg,
+                                            &mut add_tubes,
+                                            &iommu_host_tube,
+                                            &vfio_path,
+                                            add,
+                                            hp_interrupt,
+                                        ),
                                         _ => request.execute(
                                             &mut run_mode_opt,
                                             balloon_host_tube.as_ref(),

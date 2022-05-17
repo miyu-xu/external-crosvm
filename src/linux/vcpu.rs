@@ -2,11 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
-use std::os::unix::fs::FileExt;
-use std::rc::Rc;
 use std::sync::{mpsc, Arc, Barrier};
 
 use std::thread;
@@ -16,17 +14,16 @@ use libc::{self, c_int};
 
 use anyhow::{Context, Result};
 use base::*;
-use devices::{self, IrqChip, VcpuRunState};
-use hypervisor::{Vcpu, VcpuExit, VcpuRunHandle};
+use devices::{self, Bus, IrqChip, VcpuRunState};
+use hypervisor::{IoOperation, IoParams, Vcpu, VcpuExit, VcpuRunHandle};
 use vm_control::*;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use vm_memory::GuestMemory;
 
-use arch::{self, LinuxArch};
-
+use arch::{self, LinuxArch, MsrConfig};
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use {
-    aarch64::AArch64 as Arch,
+    aarch64::{AArch64 as Arch, MsrHandlers},
     devices::IrqChipAArch64 as IrqChipArch,
     hypervisor::{VcpuAArch64 as VcpuArch, VmAArch64 as VmArch},
 };
@@ -34,7 +31,7 @@ use {
 use {
     devices::IrqChipX86_64 as IrqChipArch,
     hypervisor::{VcpuX86_64 as VcpuArch, VmX86_64 as VmArch},
-    x86_64::X8664arch as Arch,
+    x86_64::{msr::MsrHandlers, X8664arch as Arch},
 };
 
 use super::ExitState;
@@ -60,10 +57,39 @@ pub fn setup_vcpu_signal_handler<T: Vcpu>(use_hypervisor_signals: bool) -> Resul
     Ok(())
 }
 
+fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
+    |IoParams {
+         address,
+         mut size,
+         operation: direction,
+     }| match direction {
+        IoOperation::Read => {
+            let mut data = [0u8; 8];
+            if size > data.len() {
+                error!("unsupported Read size of {} bytes", size);
+                size = data.len();
+            }
+            // Ignore the return value of `read()`. If no device exists on the bus at the given
+            // location, return the initial value of data, which is all zeroes.
+            let _ = bus.read(address, &mut data[..size]);
+            Some(data)
+        }
+        IoOperation::Write { data } => {
+            if size > data.len() {
+                error!("unsupported Write size of {} bytes", size);
+                size = data.len()
+            }
+            let data = &data[..size];
+            bus.write(address, data);
+            None
+        }
+    }
+}
+
 // Sets up a vcpu and converts it into a runnable vcpu.
 pub fn runnable_vcpu<V>(
     cpu_id: usize,
-    kvm_vcpu_id: usize,
+    vcpu_id: usize,
     vcpu: Option<V>,
     vm: impl VmArch,
     irq_chip: &mut dyn IrqChipArch,
@@ -75,6 +101,7 @@ pub fn runnable_vcpu<V>(
     use_hypervisor_signals: bool,
     enable_per_vm_core_scheduling: bool,
     host_cpu_topology: bool,
+    itmt: bool,
     vcpu_cgroup_tasks_file: Option<File>,
 ) -> Result<(V, VcpuRunHandle)>
 where
@@ -86,7 +113,7 @@ where
             // If vcpu is None, it means this arch/hypervisor requires create_vcpu to be called from
             // the vcpu thread.
             match vm
-                .create_vcpu(kvm_vcpu_id)
+                .create_vcpu(vcpu_id)
                 .context("failed to create vcpu")?
                 .downcast::<V>()
             {
@@ -116,6 +143,7 @@ where
         has_bios,
         no_smt,
         host_cpu_topology,
+        itmt,
     )
     .context("failed to configure vcpu")?;
 
@@ -263,13 +291,13 @@ fn handle_s2idle_request(privileged_vm: bool) {
 fn vcpu_loop<V>(
     mut run_mode: VmRunMode,
     cpu_id: usize,
-    vcpu: V,
+    mut vcpu: V,
     vcpu_run_handle: VcpuRunHandle,
     irq_chip: Box<dyn IrqChipArch + 'static>,
     run_rt: bool,
     delay_rt: bool,
-    io_bus: devices::Bus,
-    mmio_bus: devices::Bus,
+    io_bus: Bus,
+    mmio_bus: Bus,
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     use_hypervisor_signals: bool,
@@ -393,57 +421,25 @@ where
 
         if !interrupted_by_signal {
             match vcpu.run(&vcpu_run_handle) {
-                Ok(VcpuExit::IoIn { port, mut size }) => {
-                    let mut data = [0; 8];
-                    if size > data.len() {
-                        error!(
-                            "unsupported IoIn size of {} bytes at port {:#x}",
-                            size, port
-                        );
-                        size = data.len();
-                    }
-                    io_bus.read(port as u64, &mut data[..size]);
-                    if let Err(e) = vcpu.set_data(&data[..size]) {
-                        error!(
-                            "failed to set return data for IoIn at port {:#x}: {}",
-                            port, e
-                        );
+                Ok(VcpuExit::Io) => {
+                    if let Err(e) = vcpu.handle_io(&mut bus_io_handler(&io_bus)) {
+                        error!("failed to handle io: {}", e)
                     }
                 }
-                Ok(VcpuExit::IoOut {
-                    port,
-                    mut size,
-                    data,
-                }) => {
-                    if size > data.len() {
-                        error!(
-                            "unsupported IoOut size of {} bytes at port {:#x}",
-                            size, port
-                        );
-                        size = data.len();
+                Ok(VcpuExit::Mmio) => {
+                    if let Err(e) = vcpu.handle_mmio(&mut bus_io_handler(&mmio_bus)) {
+                        error!("failed to handle mmio: {}", e);
                     }
-                    io_bus.write(port as u64, &data[..size]);
-                }
-                Ok(VcpuExit::MmioRead { address, size }) => {
-                    let mut data = [0; 8];
-                    mmio_bus.read(address, &mut data[..size]);
-                    // Setting data for mmio can not fail.
-                    let _ = vcpu.set_data(&data[..size]);
-                }
-                Ok(VcpuExit::MmioWrite {
-                    address,
-                    size,
-                    data,
-                }) => {
-                    mmio_bus.write(address, &data[..size]);
                 }
                 Ok(VcpuExit::RdMsr { index }) => {
                     if let Some(data) = msr_handlers.read(index) {
-                        let _ = vcpu.set_data(&data.to_ne_bytes());
+                        let _ = vcpu.handle_rdmsr(data);
                     }
                 }
-                Ok(VcpuExit::WrMsr { .. }) => {
-                    // TODO(b/215297064): implement MSR write
+                Ok(VcpuExit::WrMsr { index, data }) => {
+                    if msr_handlers.write(index, data).is_some() {
+                        vcpu.handle_wrmsr();
+                    }
                 }
                 Ok(VcpuExit::IoapicEoi { vector }) => {
                     if let Err(e) = irq_chip.broadcast_eoi(vector) {
@@ -524,70 +520,9 @@ where
     }
 }
 
-trait MsrHandling {
-    fn read(&self, index: u32) -> Result<u64>;
-    fn write(&self, index: u32, data: u64) -> Result<()>;
-}
-
-struct ReadPassthrough {
-    dev_msr: std::fs::File,
-}
-
-impl MsrHandling for ReadPassthrough {
-    fn read(&self, index: u32) -> Result<u64> {
-        let mut data = [0; 8];
-        self.dev_msr.read_exact_at(&mut data, index.into())?;
-        Ok(u64::from_ne_bytes(data))
-    }
-
-    fn write(&self, _index: u32, _data: u64) -> Result<()> {
-        // TODO(b/215297064): implement MSR write
-        unimplemented!();
-    }
-}
-
-impl ReadPassthrough {
-    fn new() -> Result<Self> {
-        // TODO(b/215297064): Support reading from other CPUs than 0, should match running CPU.
-        let filename = "/dev/cpu/0/msr";
-        let dev_msr = OpenOptions::new()
-            .read(true)
-            .open(&filename)
-            .context("Cannot open /dev/cpu/0/msr, are you root?")?;
-        Ok(ReadPassthrough { dev_msr })
-    }
-}
-
-/// MSR handler configuration. Per-cpu.
-struct MsrHandlers {
-    handler: BTreeMap<u32, Rc<Box<dyn MsrHandling>>>,
-}
-
-impl MsrHandlers {
-    fn new() -> Self {
-        MsrHandlers {
-            handler: BTreeMap::new(),
-        }
-    }
-
-    fn read(&self, index: u32) -> Option<u64> {
-        if let Some(handler) = self.handler.get(&index) {
-            match handler.read(index) {
-                Ok(data) => Some(data),
-                Err(e) => {
-                    error!("MSR host read failed {:#x} {:?}", index, e);
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    }
-}
-
 pub fn run_vcpu<V>(
     cpu_id: usize,
-    kvm_vcpu_id: usize,
+    vcpu_id: usize,
     vcpu: Option<V>,
     vm: impl VmArch + 'static,
     mut irq_chip: Box<dyn IrqChipArch + 'static>,
@@ -598,8 +533,8 @@ pub fn run_vcpu<V>(
     no_smt: bool,
     start_barrier: Arc<Barrier>,
     has_bios: bool,
-    mut io_bus: devices::Bus,
-    mut mmio_bus: devices::Bus,
+    mut io_bus: Bus,
+    mut mmio_bus: Bus,
     exit_evt: Event,
     reset_evt: Event,
     crash_evt: Event,
@@ -611,9 +546,10 @@ pub fn run_vcpu<V>(
     >,
     enable_per_vm_core_scheduling: bool,
     host_cpu_topology: bool,
+    itmt: bool,
     privileged_vm: bool,
     vcpu_cgroup_tasks_file: Option<File>,
-    userspace_msr: BTreeSet<u32>,
+    userspace_msr: BTreeMap<u32, MsrConfig>,
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
@@ -628,19 +564,11 @@ where
 
             let mut msr_handlers = MsrHandlers::new();
             if !userspace_msr.is_empty() {
-                let read_passthrough: Rc<Box<dyn MsrHandling>> = match ReadPassthrough::new() {
-                    Ok(r) => Rc::new(Box::new(r)),
-                    Err(e) => {
-                        error!(
-                            "failed to create MSR read passthrough handler for vcpu {}: {:#}",
-                            cpu_id, e
-                        );
+                userspace_msr.iter().for_each(|(index, msr_config)| {
+                    if let Err(e) = msr_handlers.add_handler(*index, msr_config.clone(), cpu_id) {
+                        error!("failed to add msr handler {}: {:#}", cpu_id, e);
                         return;
-                    }
-                };
-
-                userspace_msr.iter().for_each(|&index| {
-                    msr_handlers.handler.insert(index, read_passthrough.clone());
+                    };
                 });
             }
 
@@ -648,7 +576,7 @@ where
             let guest_mem = vm.get_memory().clone();
             let runnable_vcpu = runnable_vcpu(
                 cpu_id,
-                kvm_vcpu_id,
+                vcpu_id,
                 vcpu,
                 vm,
                 irq_chip.as_mut(),
@@ -660,6 +588,7 @@ where
                 use_hypervisor_signals,
                 enable_per_vm_core_scheduling,
                 host_cpu_topology,
+                itmt,
                 vcpu_cgroup_tasks_file,
             );
 

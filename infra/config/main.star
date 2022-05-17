@@ -2,6 +2,9 @@
 
 lucicfg.check_version("1.30.9", "Please update depot_tools")
 
+# Use LUCI Scheduler BBv2 names and add Scheduler realms configs.
+lucicfg.enable_experiment("crbug.com/1182002")
+
 lucicfg.config(
     config_dir = "generated",
     tracked_files = ["*.cfg"],
@@ -41,6 +44,31 @@ luci.project(
             groups = "googlers",
         ),
     ],
+    acls = [
+        # Publicly readable.
+        acl.entry(
+            roles = [
+                acl.BUILDBUCKET_READER,
+                acl.LOGDOG_READER,
+                acl.PROJECT_CONFIGS_READER,
+                acl.SCHEDULER_READER,
+            ],
+            groups = "all",
+        ),
+        # Allow committers to use CQ and to force-trigger and stop CI builds.
+        acl.entry(
+            roles = [
+                acl.SCHEDULER_OWNER,
+                acl.CQ_COMMITTER,
+            ],
+            groups = "mdb/crosvm-acl-luci-admin",
+        ),
+        # Group with bots that have write access to the Logdog prefix.
+        acl.entry(
+            roles = acl.LOGDOG_WRITER,
+            groups = "luci-logdog-chromium-writers",
+        ),
+    ],
 )
 
 # Per-service tweaks.
@@ -52,6 +80,7 @@ luci.realm(name = "pools/try")
 
 # Global recipe defaults
 luci.recipe.defaults.cipd_version.set("refs/heads/main")
+luci.recipe.defaults.cipd_package.set("infra/recipe_bundles/chromium.googlesource.com/crosvm/crosvm")
 luci.recipe.defaults.use_python3.set(True)
 
 # The try bucket will include builders which work on pre-commit or pre-review
@@ -59,8 +88,92 @@ luci.recipe.defaults.use_python3.set(True)
 luci.bucket(name = "try")
 
 # The ci bucket will include builders which work on post-commit code.
-luci.bucket(name = "ci")
+luci.bucket(
+    name = "ci",
+    acls = [
+        acl.entry(
+            roles = acl.BUILDBUCKET_TRIGGERER,
+            groups = [
+                "mdb/crosvm-acl-luci-admin",
+            ],
+        ),
+    ],
+)
 
 # The prod bucket will include builders which work on post-commit code and
 # generate executable artifacts used by other users or machines.
 luci.bucket(name = "prod")
+
+# This sets the default CIPD ref to use in builds to get the right version of
+# recipes for the build.
+#
+# The recipe bundler sets CIPD refs equal in name to the git refs that it
+# processed the recipe code from.
+#
+# Note: This will cause all recipe commits to automatically deploy as soon
+# as the recipe bundler compiles them from your refs/heads/main branch.
+cipd_version = "refs/heads/main"
+
+# Example builder to verify configuration
+luci.builder(
+    name = "Example Builder",
+    bucket = "ci",
+    executable = luci.recipe(
+        name = "hello_world",
+    ),
+    schedule = None,
+    service_account = "crosvm-luci-ci-builder@crosvm-infra.iam.gserviceaccount.com",
+)
+
+# Create builders for change verifier
+def verify_builder(bucket):
+    luci.builder(
+        name = "Verify CL",
+        bucket = bucket,
+        executable = luci.recipe(
+            name = "verify_cl",
+        ),
+        service_account = "crosvm-luci-%s-builder@crosvm-infra.iam.gserviceaccount.com" % bucket,
+        dimensions = {
+            "os": "Ubuntu",
+            "cpu": "x86-64",
+            "pool": "luci.crosvm.%s" % bucket,
+        },
+    )
+
+verify_builder("try")
+verify_builder("ci")
+
+# Configure Change Verifier to watch crosvm
+luci.cq(
+    status_host = "chromium-cq-status.appspot.com",
+)
+
+luci.cq_group(
+    name = "main_repo",
+    watch = cq.refset(
+        repo = "https://chromium.googlesource.com/crosvm/crosvm",
+        refs = ["refs/heads/.+"],  # will watch all branches
+    ),
+)
+
+# Attach our "Verify CL" builder to this CQ group.
+luci.cq_tryjob_verifier(
+    builder = "try/Verify CL",
+    cq_group = "main_repo",
+)
+
+# Configure postsubmit tests running in ci pool
+luci.gitiles_poller(
+    name = "main source",
+    bucket = "ci",
+    repo = "https://chromium.googlesource.com/crosvm/crosvm",
+    # triggers = ["ci/Verify CL"],
+)
+luci.console_view(
+    name = "CI builders",
+    repo = "https://chromium.googlesource.com/crosvm/crosvm",
+    entries = [
+        luci.console_view_entry(builder = "ci/Verify CL"),
+    ],
+)

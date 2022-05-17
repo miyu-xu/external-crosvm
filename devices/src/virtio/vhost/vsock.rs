@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::{File, OpenOptions};
-use std::os::unix::prelude::{FromRawFd, OpenOptionsExt};
+use std::fs::OpenOptions;
+use std::os::unix::prelude::OpenOptionsExt;
 use std::path::PathBuf;
 use std::thread;
 
 use anyhow::Context;
-use base::{error, validate_raw_descriptor, warn, AsRawDescriptor, Event, RawDescriptor};
+use base::{error, open_file, warn, AsRawDescriptor, Event, RawDescriptor};
 use data_model::{DataInit, Le64};
 use serde::Deserialize;
 use vhost::Vhost;
 use vhost::Vsock as VhostVsockHandle;
+use virtio_sys::{virtio_config, virtio_ring};
 use vm_memory::GuestMemory;
 
 use super::worker::Worker;
@@ -27,22 +28,8 @@ static VHOST_VSOCK_DEFAULT_PATH: &str = "/dev/vhost-vsock";
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VhostVsockConfig {
-    #[serde(default)]
-    pub device: VhostVsockDeviceParameter,
+    pub device: Option<PathBuf>,
     pub cid: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum VhostVsockDeviceParameter {
-    Path(PathBuf),
-    Fd(RawDescriptor),
-}
-
-impl Default for VhostVsockDeviceParameter {
-    fn default() -> Self {
-        VhostVsockDeviceParameter::Path(PathBuf::from(VHOST_VSOCK_DEFAULT_PATH))
-    }
 }
 
 pub struct Vsock {
@@ -58,31 +45,27 @@ pub struct Vsock {
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
     pub fn new(base_features: u64, vhost_config: &VhostVsockConfig) -> anyhow::Result<Vsock> {
-        let device_file = match &vhost_config.device {
-            VhostVsockDeviceParameter::Fd(fd) => {
-                let fd = validate_raw_descriptor(*fd)
-                    .context("failed to validate fd for virtual socket device")?;
-                // Safe because the `fd` is actually owned by this process and
-                // we have a unique handle to it.
-                unsafe { File::from_raw_fd(fd) }
-            }
-            VhostVsockDeviceParameter::Path(path) => OpenOptions::new()
+        let device_file = open_file(
+            vhost_config
+                .device
+                .as_ref()
+                .unwrap_or(&PathBuf::from(VHOST_VSOCK_DEFAULT_PATH)),
+            OpenOptions::new()
                 .read(true)
                 .write(true)
-                .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-                .open(path)
-                .context("failed to open virtual socket device")?,
-        };
+                .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK),
+        )
+        .context("failed to open virtual socket device")?;
 
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
         let handle = VhostVsockHandle::new(device_file);
 
         let avail_features = base_features
-            | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY
-            | 1 << virtio_sys::vhost::VIRTIO_RING_F_INDIRECT_DESC
-            | 1 << virtio_sys::vhost::VIRTIO_RING_F_EVENT_IDX
+            | 1 << virtio_config::VIRTIO_F_NOTIFY_ON_EMPTY
+            | 1 << virtio_ring::VIRTIO_RING_F_INDIRECT_DESC
+            | 1 << virtio_ring::VIRTIO_RING_F_EVENT_IDX
             | 1 << virtio_sys::vhost::VHOST_F_LOG_ALL
-            | 1 << virtio_sys::vhost::VIRTIO_F_ANY_LAYOUT;
+            | 1 << virtio_config::VIRTIO_F_ANY_LAYOUT;
 
         let mut interrupts = Vec::new();
         for _ in 0..NUM_QUEUES {
@@ -338,30 +321,12 @@ mod tests {
 
     #[test]
     fn params_from_key_values() {
-        // Fd device
-        let params = from_vsock_arg("device=42,cid=56").unwrap();
-        assert_eq!(
-            params,
-            VhostVsockConfig {
-                device: VhostVsockDeviceParameter::Fd(42),
-                cid: 56,
-            }
-        );
-        // No key for fd device
-        let params = from_vsock_arg("42,cid=56").unwrap();
-        assert_eq!(
-            params,
-            VhostVsockConfig {
-                device: VhostVsockDeviceParameter::Fd(42),
-                cid: 56,
-            }
-        );
         // Path device
         let params = from_vsock_arg("device=/some/path,cid=56").unwrap();
         assert_eq!(
             params,
             VhostVsockConfig {
-                device: VhostVsockDeviceParameter::Path("/some/path".into()),
+                device: Some("/some/path".into()),
                 cid: 56,
             }
         );
@@ -370,7 +335,7 @@ mod tests {
         assert_eq!(
             params,
             VhostVsockConfig {
-                device: VhostVsockDeviceParameter::Path("/some/path".into()),
+                device: Some("/some/path".into()),
                 cid: 56,
             }
         );
@@ -379,7 +344,7 @@ mod tests {
         assert_eq!(
             params,
             VhostVsockConfig {
-                device: VhostVsockDeviceParameter::Path(VHOST_VSOCK_DEFAULT_PATH.into()),
+                device: None,
                 cid: 56,
             }
         );
