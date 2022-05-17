@@ -1,3 +1,4 @@
+#![feature(backtrace)]
 // Copyright 2017 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -20,6 +21,8 @@ use std::str::FromStr;
 use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
+use nix::sys::signal;
+use std::backtrace::Backtrace;
 
 use arch::{
     set_default_serial_parameters, MsrAction, MsrConfig, MsrValueFrom, Pstore, VcpuAffinity,
@@ -3308,13 +3311,45 @@ fn print_usage() {
     println!("    version - Show package version.");
     println!("    vfio - add/remove host vfio pci device into guest.");
 }
+/// Best effort printing of backtrace on stack overflow.
+///
+/// Works on my machine, may summon laundry-eating nasal daemons.
+///
+/// PRs to make this more robust are welcome
+pub unsafe fn enable() {
+    let buf = vec![0u128; 4096];
+    let buf = Vec::leak(buf);
+    let stack = libc::stack_t {
+        ss_sp: buf.as_ptr() as *mut libc::c_void,
+        ss_flags: 0,
+        ss_size: buf.len() * std::mem::size_of::<u128>(),
+    };
+    let mut old = libc::stack_t { ss_sp: std::ptr::null_mut(), ss_flags: 0, ss_size: 0 };
 
+    let ret = libc::sigaltstack(&stack, &mut old);
+    assert_eq!(ret, 0, "sigaltstack failed");
+    let sig_action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_sigsegv),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+    signal::sigaction(signal::SIGSEGV, &sig_action).unwrap();
+}
+
+extern "C" fn handle_sigsegv(_: i32) {
+    let backtrace_str = format!("{:?}", Backtrace::capture());
+    info!("Stack Overflow:\n{}", &backtrace_str[0..1000]);
+    std::process::abort();
+} 
 fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
     if let Err(e) = syslog::init() {
         println!("failed to initialize syslog: {}", e);
         return Err(());
     }
 
+    unsafe {
+        enable();
+    }
     panic_hook::set_panic_hook();
 
     let mut args = std::env::args();

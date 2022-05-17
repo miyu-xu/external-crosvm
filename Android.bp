@@ -66,6 +66,7 @@ rust_binary {
         "liblog_rust",
         "libminijail_rust",
         "libnet_util",
+        "libnix",
         "libp9",
         "libresources",
         "librutabaga_gfx",
