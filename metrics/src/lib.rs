@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (7823a5 [LSC] Add LOCAL_LICENSE_KINDS to external/crosvm)
 // Copyright 2022 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -27,3 +28,5 @@ pub use noop::*;
 pub use sys::*;
 
 pub type RequestHandler = NoopMetricsRequestHandler;
+=======
+>>>>>>> BRANCH (df8201 vhost_user: Refactored mod.rs files to match style guide and)

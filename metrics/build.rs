@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (7823a5 [LSC] Add LOCAL_LICENSE_KINDS to external/crosvm)
 // Copyright 2022 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -50,3 +51,5 @@ fn create_gen_file(proto_files: Vec<&str>, out_dir: &str) {
         writeln!(&out, "pub mod {}_proto;", file_stem).expect("failed to write to generated.");
     }
 }
+=======
+>>>>>>> BRANCH (df8201 vhost_user: Refactored mod.rs files to match style guide and)

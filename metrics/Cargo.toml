@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (7823a5 [LSC] Add LOCAL_LICENSE_KINDS to external/crosvm)
 [package]
 name = "metrics"
 version = "0.1.0"
@@ -25,3 +26,5 @@ wmi = { version = "^0.9" }
 
 [build-dependencies]
 protoc-rust = "2.24"
+=======
+>>>>>>> BRANCH (df8201 vhost_user: Refactored mod.rs files to match style guide and)
