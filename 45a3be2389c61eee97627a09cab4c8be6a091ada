@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ee820ffd_335f02be",
+        "filename": "src/crosvm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 450,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-05-17T22:12:13Z",
+      "side": 0,
+      "message": "I\u0027m surprised this conflicted, do we have a bug for resolving the difference, or is it resolved here?",
+      "range": {
+        "startLine": 450,
+        "startChar": 0,
+        "endLine": 450,
+        "endChar": 27
+      },
+      "revId": "45a3be2389c61eee97627a09cab4c8be6a091ada",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
