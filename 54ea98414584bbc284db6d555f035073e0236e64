@@ -46,6 +46,54 @@
       },
       "revId": "54ea98414584bbc284db6d555f035073e0236e64",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a4057db6_37b1d724",
+        "filename": "src/main.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3319,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-17T22:38:16Z",
+      "side": 1,
+      "message": "I could try it out. I was shown this",
+      "parentUuid": "6b0fbacc_4fca3ff4",
+      "range": {
+        "startLine": 3319,
+        "startChar": 14,
+        "endLine": 3319,
+        "endChar": 20
+      },
+      "revId": "54ea98414584bbc284db6d555f035073e0236e64",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ae819842_4c767563",
+        "filename": "src/main.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3319,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-17T22:38:16Z",
+      "side": 1,
+      "message": "I was pointed to this as \"yolo workaround\" for debugging this 😊https://github.com/rust-lang/rust/issues/51405#issuecomment-612069966\n\nI don\u0027t know rust well enough to understand how bad/dangerous any of this is. \nI could try upstreaming something like this with `base::register_signal_handler()`, but I think it\u0027s a general Rust problem, not specifically crosvm: https://users.rust-lang.org/t/getting-backtrace-on-stackoverflow/36004",
+      "parentUuid": "6b0fbacc_4fca3ff4",
+      "range": {
+        "startLine": 3319,
+        "startChar": 14,
+        "endLine": 3319,
+        "endChar": 20
+      },
+      "revId": "54ea98414584bbc284db6d555f035073e0236e64",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
