@@ -81,6 +81,30 @@
       },
       "revId": "cb062a0450c46278fa85878ca27d35b5651988bc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "503b51da_f5e87260",
+        "filename": "devices/src/virtio/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 137,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-05-17T23:05:33Z",
+      "side": 1,
+      "message": "Nice! One minor nit: consider a fix like this in a separate CL in the future since it\u0027s not related to the merge. Ideally you could get that exact same CL upstreamed (and potentially even reviewed before it gets merged in Android).",
+      "parentUuid": "6dc48709_3a68d0a5",
+      "range": {
+        "startLine": 137,
+        "startChar": 0,
+        "endLine": 137,
+        "endChar": 71
+      },
+      "revId": "cb062a0450c46278fa85878ca27d35b5651988bc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
