@@ -22,6 +22,30 @@
       },
       "revId": "54ea98414584bbc284db6d555f035073e0236e64",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6b0fbacc_4fca3ff4",
+        "filename": "src/main.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3319,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-05-17T22:18:14Z",
+      "side": 1,
+      "message": "The idea seems good, but I\u0027d prefer to avoid pulling in the nix crate just for this.\n\nCan we use the existing `base::register_signal_handler()` function (or something in that neighborhood) to do the same thing? https://google.github.io/crosvm/doc/base/sys/unix/signal/fn.register_signal_handler.html\n\n(This should probably also live in the brand-new `src/sys/unix/main.rs` file.)",
+      "parentUuid": "72a0fc53_876747d8",
+      "range": {
+        "startLine": 3319,
+        "startChar": 14,
+        "endLine": 3319,
+        "endChar": 20
+      },
+      "revId": "54ea98414584bbc284db6d555f035073e0236e64",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
