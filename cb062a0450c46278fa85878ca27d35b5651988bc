@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "3a02bfdf_9f08600a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-05-17T22:19:37Z",
+      "side": 1,
+      "message": "The metrics/* files were added in a CL included in last week\u0027s merge and then they reverted it that CL. I think you want to delete them here.",
+      "revId": "cb062a0450c46278fa85878ca27d35b5651988bc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "cbbaf0f6_778b195b",
         "filename": "devices/src/virtio/mod.rs",
         "patchSetId": 1
