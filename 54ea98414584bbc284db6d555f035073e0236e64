@@ -1,5 +1,29 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "72a0fc53_876747d8",
+        "filename": "src/main.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3319,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-05-17T22:13:14Z",
+      "side": 1,
+      "message": "would it be worth adding this (even as the default?) upstream?",
+      "range": {
+        "startLine": 3319,
+        "startChar": 14,
+        "endLine": 3319,
+        "endChar": 20
+      },
+      "revId": "54ea98414584bbc284db6d555f035073e0236e64",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
