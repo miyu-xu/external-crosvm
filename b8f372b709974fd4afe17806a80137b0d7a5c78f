@@ -1,6 +1,23 @@
 {
   "comments": [
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f31439d0_3f370380",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-18T23:13:28Z",
+      "side": 1,
+      "message": "presubmits will fail until b/232390891 is fixed",
+      "revId": "b8f372b709974fd4afe17806a80137b0d7a5c78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2228cc6a_df1d4ffc",
@@ -14,6 +31,30 @@
       "writtenOn": "2022-05-18T22:16:58Z",
       "side": 1,
       "message": "Did we apply a patch that changed upstream?",
+      "range": {
+        "startLine": 1390,
+        "startChar": 69,
+        "endLine": 1390,
+        "endChar": 82
+      },
+      "revId": "b8f372b709974fd4afe17806a80137b0d7a5c78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b4465b0c_0895935d",
+        "filename": "src/linux/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1390,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-18T23:13:28Z",
+      "side": 1,
+      "message": "I didn\u0027t take any extra patches from upstream outside of what came in with the merge. This was started on Monday so it will be missing anything from after that.",
+      "parentUuid": "2228cc6a_df1d4ffc",
       "range": {
         "startLine": 1390,
         "startChar": 69,

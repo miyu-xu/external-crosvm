@@ -22,6 +22,30 @@
       },
       "revId": "df8201cfc6c9729ebe01f454f07f70e9781433f4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ba9f1566_12dc607a",
+        "filename": "devices/src/virtio/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 137,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-05-18T23:13:28Z",
+      "side": -2,
+      "message": "No, it causes infinite recursion since it just ends up back in this function. It causes the stack overflow I had emailed about.",
+      "parentUuid": "a4f41f63_22db6979",
+      "range": {
+        "startLine": 137,
+        "startChar": 12,
+        "endLine": 137,
+        "endChar": 44
+      },
+      "revId": "df8201cfc6c9729ebe01f454f07f70e9781433f4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
