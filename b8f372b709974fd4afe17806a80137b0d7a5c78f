@@ -63,6 +63,30 @@
       },
       "revId": "b8f372b709974fd4afe17806a80137b0d7a5c78f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e621dae7_526f5224",
+        "filename": "src/linux/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1390,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-05-18T23:21:40Z",
+      "side": 1,
+      "message": "I think this is the revert Steven did last time, aosp/2086066. My guess is that we are merging upstream into that revert, and some of the resolution is wrong. Can we double check this file (and other virtio_iommu references) are aligned to upstream (assuming upstream now works). If upstream is still broken, let\u0027s align anyway, and then re-revert the change?",
+      "parentUuid": "b4465b0c_0895935d",
+      "range": {
+        "startLine": 1390,
+        "startChar": 69,
+        "endLine": 1390,
+        "endChar": 82
+      },
+      "revId": "b8f372b709974fd4afe17806a80137b0d7a5c78f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
