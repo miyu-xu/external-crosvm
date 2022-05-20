@@ -40,9 +40,9 @@ pub(super) fn create_base_minijail(
     let mut j = Minijail::new().context("failed to jail device")?;
 
     if let Some(config) = config {
-        j.namespace_pids();
-        j.namespace_user();
-        j.namespace_user_disable_setgroups();
+        // j.namespace_pids();
+        // j.namespace_user();
+        // j.namespace_user_disable_setgroups();
         if config.limit_caps {
             // Don't need any capabilities.
             j.use_caps(0);
@@ -54,7 +54,7 @@ pub(super) fn create_base_minijail(
             j.gidmap(gid_map).context("error setting GID map")?;
         }
         // Run in a new mount namespace.
-        j.namespace_vfs();
+//        j.namespace_vfs();
 
         // Run in an empty network namespace.
         j.namespace_net();
@@ -69,22 +69,23 @@ pub(super) fn create_base_minijail(
         // command-line parameter for an explanation about why the |log_failures|
         // flag forces the use of .policy files (and the build-time alternative to
         // this run-time flag).
-        let bpf_policy_file = config.seccomp_policy.with_extension("bpf");
-        if bpf_policy_file.exists() && !config.log_failures {
-            j.parse_seccomp_program(&bpf_policy_file)
-                .context("failed to parse precompiled seccomp policy")?;
-        } else {
-            // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP,
-            // which will correctly kill the entire device process if a worker
-            // thread commits a seccomp violation.
-            j.set_seccomp_filter_tsync();
-            if config.log_failures {
-                j.log_seccomp_filter_failures();
-            }
-            j.parse_seccomp_filters(&config.seccomp_policy.with_extension("policy"))
-                .context("failed to parse seccomp policy")?;
-        }
-        j.use_seccomp_filter();
+//        let bpf_policy_file = config.seccomp_policy.with_extension("bpf");
+//        if bpf_policy_file.exists() && !config.log_failures {
+//            j.parse_seccomp_program(&bpf_policy_file)
+//                .context("failed to parse precompiled seccomp policy")?;
+//        } else {
+//            // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP,
+//            // which will correctly kill the entire device process if a worker
+//            // thread commits a seccomp violation.
+//            j.set_seccomp_filter_tsync();
+//            if config.log_failures {
+//                j.log_seccomp_filter_failures();
+//            }
+//            j.parse_seccomp_filters(&config.seccomp_policy.with_extension("policy"))
+//                .context("failed to parse seccomp policy")?;
+//        }
+//        j.use_seccomp_filter();
+
         // Don't do init setup.
         j.run_as_init();
         // Set up requested remount mode instead of default MS_PRIVATE.
