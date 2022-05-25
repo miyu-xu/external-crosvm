@@ -996,7 +996,15 @@ impl Gpu {
             .use_guest_angle(gpu_parameters.gfxstream_use_guest_angle)
             .use_syncfd(gpu_parameters.gfxstream_use_syncfd)
             .use_vulkan(gpu_parameters.use_vulkan)
-            .use_async_fence_cb(true);
+            .use_async_fence_cb(true)
+            .ignore_host_gl_errors(gpu_parameters.gfxstream_ignore_host_gl_errors)
+            .native_astc_etc2_texture_decompression(
+                gpu_parameters.gfxstream_native_astc_etc2_texture_decompression,
+            )
+            .bptc_texture_support(gpu_parameters.gfxstream_bptc_texture_support)
+            .s3tc_texture_support(gpu_parameters.gfxstream_s3tc_texture_support)
+            .support_gles31(gpu_parameters.gfxstream_support_gles31)
+            .use_vulkan_swapchain(gpu_parameters.gfxstream_use_vulkan_swapchain);
 
         let mut rutabaga_channels: Vec<RutabagaChannel> = Vec::new();
         for (channel_name, path) in &channels {

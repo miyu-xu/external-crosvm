@@ -400,8 +400,14 @@ const GFXSTREAM_RENDERER_FLAGS_USE_GLX: u32 = 1 << 2;
 const GFXSTREAM_RENDERER_FLAGS_USE_SURFACELESS: u32 = 1 << 3;
 const GFXSTREAM_RENDERER_FLAGS_USE_GLES: u32 = 1 << 4;
 const GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT: u32 = 1 << 5;
+const GFXSTREAM_RENDERER_FLAGS_IGNORE_HOST_GL_ERRORS_BIT: u32 = 1 << 6;
+const GFXSTREAM_RENDERER_FLAGS_NATIVE_TEXTURE_DECOMPRESSION_BIT: u32 = 1 << 7;
+const GFXSTREAM_RENDERER_FLAGS_BPTC_TEXTURE_SUPPORT_BIT: u32 = 1 << 8;
+const GFXSTREAM_RENDERER_FLAGS_ENABLE_GLES31_BIT: u32 = 1 << 9;
+const GFXSTREAM_RENDERER_FLAGS_S3TC_TEXTURE_SUPPORT_BIT: u32 = 1 << 10;
 const GFXSTREAM_RENDERER_FLAGS_NO_SYNCFD_BIT: u32 = 1 << 20;
 const GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE: u32 = 1 << 21;
+const GFXSTREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT: u32 = 1 << 22;
 pub const GFXSTREAM_RENDERER_FLAGS_ASYNC_FENCE_CB: u32 = 1 << 23;
 
 /// gfxstream flag struct.
@@ -460,6 +466,30 @@ impl GfxstreamFlags {
     /// Use async fence completion callback.
     pub fn use_async_fence_cb(self, v: bool) -> GfxstreamFlags {
         self.set_flag(GFXSTREAM_RENDERER_FLAGS_ASYNC_FENCE_CB, v)
+    }
+
+    pub fn ignore_host_gl_errors(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_IGNORE_HOST_GL_ERRORS_BIT, v)
+    }
+
+    pub fn native_astc_etc2_texture_decompression(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_NATIVE_TEXTURE_DECOMPRESSION_BIT, v)
+    }
+
+    pub fn bptc_texture_support(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_BPTC_TEXTURE_SUPPORT_BIT, v)
+    }
+
+    pub fn s3tc_texture_support(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_S3TC_TEXTURE_SUPPORT_BIT, v)
+    }
+
+    pub fn support_gles31(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_ENABLE_GLES31_BIT, v)
+    }
+
+    pub fn use_vulkan_swapchain(self, v: bool) -> GfxstreamFlags {
+        self.set_flag(GFXSTREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT, v)
     }
 }
 

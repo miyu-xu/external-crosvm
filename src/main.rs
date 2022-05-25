@@ -341,7 +341,19 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
     #[cfg(feature = "gfxstream")]
     let mut syncfd_specified = false;
     #[cfg(feature = "gfxstream")]
+    let mut ignore_host_gl_errors_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut native_astc_etc2_texture_decompression_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut bptc_texture_support_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut s3tc_texture_support_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut gles31_specified = false;
+    #[cfg(feature = "gfxstream")]
     let mut angle_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut vulkan_swapchain_specified = false;
 
     let mut display_param_builder: GpuDisplayParametersBuilder = Default::default();
 
@@ -503,6 +515,122 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
                         }
                     }
                 }
+                #[cfg(feature = "gfxstream")]
+                "ignore_host_gl_errors" => {
+                    ignore_host_gl_errors_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_ignore_host_gl_errors = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_ignore_host_gl_errors = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'ignore_host_gl_errors' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "native_astc_etc2_texture_decompression" => {
+                    native_astc_etc2_texture_decompression_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_native_astc_etc2_texture_decompression = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_native_astc_etc2_texture_decompression = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'native_astc_etc2_texture_decompression' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "bptc_texture_support" => {
+                    bptc_texture_support_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_bptc_texture_support = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_bptc_texture_support = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'bptc_texture_support' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "s3tc_texture_support" => {
+                    s3tc_texture_support_specified = true;
+                    gpu_params.gfxstream_s3tc_texture_support = match v {
+                        "true" | "" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 's3tc_texture_support' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "gles3.1" => {
+                    gles31_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_support_gles31 = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_support_gles31 = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'gles3.1' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "vulkan_swapchain" => {
+                    vulkan_swapchain_specified = true;
+                    match v {
+                        "true" | "" => {
+                            gpu_params.gfxstream_use_vulkan_swapchain = true;
+                        }
+                        "false" => {
+                            gpu_params.gfxstream_use_vulkan_swapchain = false;
+                        }
+                        _ => {
+                            return Err(argument::Error::InvalidValue {
+                                value: v.to_string(),
+                                expected: String::from(
+                                    "gpu parameter 'vulkan_swapchain' should be a boolean",
+                                ),
+                            });
+                        }
+                    }
+                }
                 "cache-path" => gpu_params.cache_path = Some(v.to_string()),
                 "cache-size" => gpu_params.cache_size = Some(v.to_string()),
                 "udmabuf" => match v {
@@ -552,12 +680,20 @@ fn parse_gpu_options(s: Option<&str>, gpu_params: &mut GpuParameters) -> argumen
             gpu_params.use_vulkan = true;
         }
 
-        if syncfd_specified || angle_specified {
+        if syncfd_specified
+            || angle_specified
+            || ignore_host_gl_errors_specified
+            || native_astc_etc2_texture_decompression_specified
+            || bptc_texture_support_specified
+            || s3tc_texture_support_specified
+            || gles31_specified
+            || vulkan_swapchain_specified
+        {
             match gpu_params.mode {
                 GpuMode::ModeGfxstream => {}
                 _ => {
                     return Err(argument::Error::UnknownArgument(
-                        "gpu parameter syncfd and angle are only supported for gfxstream backend"
+                        "gpu parameters syncfd, ignore_host_gl_errors, native_astc_etc2_texture_decompression, bptc_texture_support, s3tc_texture_support and gles3.1 are only supported for gfxstream backend"
                             .to_string(),
                     ));
                 }
@@ -2560,6 +2696,18 @@ There is a cost of slightly increased latency the first time the file is accesse
 
                               vulkan[=true|=false] - If the backend should support vulkan
 
+                              ignore_host_gl_errors[=true|=false] - If the gfxstream backend should ignore host gl errors
+
+                              native_astc_etc2_texture_decompression[=true|=false] - If the gfxstream backend should pass etc/astc compressed textures directly to the graphics driver
+
+                              bptc_texture_support[=true|=false] - If the gfxstream backend should advertise bptc support and pass bptc compressed textures directly to the graphics driver
+
+                              s3tc_texture_support[=true|=false] - If the gfxstream backend should advertise s3tc/dxtc support and pass s3tc compressed textures directly to the graphics driver
+
+                              gles3.1[=true|=false] - If the gfxstream backend should advertise support for OpenGL ES 3.1
+
+                              vulkan_swapchain[=true|=false] - If the gfxstream backend should use the Vulkan swapchain to draw on a window
+
                               cache-path=PATH - The path to the virtio-gpu device shader cache.
 
                               cache-size=SIZE - The maximum size of the shader cache."),
@@ -4015,6 +4163,264 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_ignore_host_gl_errors_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,ignore_host_gl_errors=true"))
+                .unwrap()
+                .gfxstream_ignore_host_gl_errors
+        );
+        assert!(
+            parse_gpu_options(Some("ignore_host_gl_errors=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_ignore_host_gl_errors
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,ignore_host_gl_errors=false"))
+                .unwrap()
+                .gfxstream_ignore_host_gl_errors
+        );
+        assert!(
+            !parse_gpu_options(Some("ignore_host_gl_errors=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_ignore_host_gl_errors
+        );
+        assert!(parse_gpu_options(Some(
+            "backend=gfxstream,ignore_host_gl_errors=invalid_value"
+        ))
+        .is_err());
+        assert!(parse_gpu_options(Some(
+            "ignore_host_gl_errors=invalid_value,backend=gfxstream"
+        ))
+        .is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_ignore_host_gl_errors_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=virglrenderer,ignore_host_gl_errors=true")).is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("ignore_host_gl_errors=true,backend=virglrenderer")).is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_native_astc_etc2_texture_decompression_specified() {
+        assert!(
+            parse_gpu_options(Some(
+                "backend=gfxstream,native_astc_etc2_texture_decompression=true"
+            ))
+            .unwrap()
+            .gfxstream_native_astc_etc2_texture_decompression
+        );
+        assert!(
+            parse_gpu_options(Some(
+                "native_astc_etc2_texture_decompression=true,backend=gfxstream"
+            ))
+            .unwrap()
+            .gfxstream_native_astc_etc2_texture_decompression
+        );
+        assert!(
+            !parse_gpu_options(Some(
+                "backend=gfxstream,native_astc_etc2_texture_decompression=false"
+            ))
+            .unwrap()
+            .gfxstream_native_astc_etc2_texture_decompression
+        );
+        assert!(
+            !parse_gpu_options(Some(
+                "native_astc_etc2_texture_decompression=false,backend=gfxstream"
+            ))
+            .unwrap()
+            .gfxstream_native_astc_etc2_texture_decompression
+        );
+        assert!(parse_gpu_options(Some(
+            "backend=gfxstream,native_astc_etc2_texture_decompression=invalid_value"
+        ))
+        .is_err());
+        assert!(parse_gpu_options(Some(
+            "native_astc_etc2_texture_decompression=invalid_value,backend=gfxstream"
+        ))
+        .is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_native_astc_etc2_texture_decompression_specified() {
+        assert!(parse_gpu_options(Some(
+            "backend=virglrenderer,native_astc_etc2_texture_decompression=true"
+        ))
+        .is_err());
+        assert!(parse_gpu_options(Some(
+            "native_astc_etc2_texture_decompression=true,backend=virglrenderer"
+        ))
+        .is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_bptc_texture_support_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,bptc_texture_support=true"))
+                .unwrap()
+                .gfxstream_bptc_texture_support
+        );
+        assert!(
+            parse_gpu_options(Some("bptc_texture_support=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_bptc_texture_support
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,bptc_texture_support=false"))
+                .unwrap()
+                .gfxstream_bptc_texture_support
+        );
+        assert!(
+            !parse_gpu_options(Some("bptc_texture_support=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_bptc_texture_support
+        );
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,bptc_texture_support=invalid_value"))
+                .is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("bptc_texture_support=invalid_value,backend=gfxstream"))
+                .is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_s3tc_texture_support_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,s3tc_texture_support=true"))
+                .unwrap()
+                .gfxstream_s3tc_texture_support
+        );
+        assert!(
+            parse_gpu_options(Some("s3tc_texture_support=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_s3tc_texture_support
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,s3tc_texture_support=false"))
+                .unwrap()
+                .gfxstream_s3tc_texture_support
+        );
+        assert!(
+            !parse_gpu_options(Some("s3tc_texture_support=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_s3tc_texture_support
+        );
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,s3tc_texture_support=invalid_value"))
+                .is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("s3tc_texture_support=invalid_value,backend=gfxstream"))
+                .is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_gles31_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,gles3.1=true"))
+                .unwrap()
+                .gfxstream_support_gles31
+        );
+        assert!(
+            parse_gpu_options(Some("gles3.1=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_support_gles31
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,gles3.1=false"))
+                .unwrap()
+                .gfxstream_support_gles31
+        );
+        assert!(
+            !parse_gpu_options(Some("gles3.1=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_support_gles31
+        );
+        assert!(parse_gpu_options(Some("backend=gfxstream,gles3.1=invalid_value")).is_err());
+        assert!(parse_gpu_options(Some("gles3.1=invalid_value,backend=gfxstream")).is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_gfxstream_with_vulkan_swapchain_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,vulkan_swapchain=true"))
+                .unwrap()
+                .gfxstream_use_vulkan_swapchain
+        );
+        assert!(
+            parse_gpu_options(Some("vulkan_swapchain=true,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_use_vulkan_swapchain
+        );
+        assert!(
+            !parse_gpu_options(Some("backend=gfxstream,vulkan_swapchain=false"))
+                .unwrap()
+                .gfxstream_use_vulkan_swapchain
+        );
+        assert!(
+            !parse_gpu_options(Some("vulkan_swapchain=false,backend=gfxstream"))
+                .unwrap()
+                .gfxstream_use_vulkan_swapchain
+        );
+        assert!(
+            parse_gpu_options(Some("backend=gfxstream,vulkan_swapchain=invalid_value")).is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("vulkan_swapchain=invalid_value,backend=gfxstream")).is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_bptc_texture_support_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=virglrenderer,bptc_texture_support=true")).is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("bptc_texture_support=true,backend=virglrenderer")).is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_s3tc_texture_support_specified() {
+        assert!(
+            parse_gpu_options(Some("backend=virglrenderer,s3tc_texture_support=true")).is_err()
+        );
+        assert!(
+            parse_gpu_options(Some("s3tc_texture_support=true,backend=virglrenderer")).is_err()
+        );
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_gles31_specified() {
+        assert!(parse_gpu_options(Some("backend=virglrenderer,gles3.1=true")).is_err());
+        assert!(parse_gpu_options(Some("gles3.1=true,backend=virglrenderer")).is_err());
+    }
+
+    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
+    #[test]
+    fn parse_gpu_options_not_gfxstream_with_vulkan_swapchain_specified() {
+        assert!(parse_gpu_options(Some("backend=virglrenderer,vulkan_swapchain=true")).is_err());
+        assert!(parse_gpu_options(Some("vulkan_swapchain=true,backend=virglrenderer")).is_err());
     }
 
     #[cfg(feature = "gpu")]
