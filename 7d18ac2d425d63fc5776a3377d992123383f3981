@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b4d404ec_1425152a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-05-25T16:58:00Z",
+      "side": 1,
+      "message": "Is there any reason not to submit these patches directly to upstream crosvm? We have a weekly merge down into AOSP so it won\u0027t take long to get them into AOSP after that, but maintaining AOSP-only patches adds significant maintenance burden.",
+      "revId": "7d18ac2d425d63fc5776a3377d992123383f3981",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
