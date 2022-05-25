@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a3e2cb22_c5e303aa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2022-05-25T17:00:08Z",
+      "side": 1,
+      "message": "Would it make sense to make this change upstream first and then have it merge back to AOSP?\n\nOtherwise looks fine to me.",
+      "revId": "6f43ae8a0e8e591a3e80424d776be16684af2731",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
