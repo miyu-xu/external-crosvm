@@ -2,13 +2,17 @@ use super::GpuMode;
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
-pub const DEFAULT_DISPLAY_HEIGHT: u32 = 1024;
+const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
+const DEFAULT_DISPLAY_HEIGHT: u32 = 1024;
+
+const DEFAULT_VSYNC: u32 = 60;
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct DisplayParameters {
     pub width: u32,
     pub height: u32,
+    pub hidden: bool,
+    pub vsync: u32,
 }
 
 impl Default for DisplayParameters {
@@ -16,6 +20,8 @@ impl Default for DisplayParameters {
         DisplayParameters {
             width: DEFAULT_DISPLAY_WIDTH,
             height: DEFAULT_DISPLAY_HEIGHT,
+            hidden: false,
+            vsync: DEFAULT_VSYNC,
         }
     }
 }

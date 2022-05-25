@@ -36,9 +36,7 @@ use crosvm::{DirectIoOption, HostPcieRootPortParameters};
 use devices::serial_device::{SerialHardware, SerialParameters};
 use devices::virtio::block::block::DiskOption;
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{
-    GpuDisplayParameters, GpuMode, GpuParameters, DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH,
-};
+use devices::virtio::gpu::{GpuDisplayParameters, GpuMode, GpuParameters};
 #[cfg(feature = "audio_cras")]
 use devices::virtio::snd::cras_backend::Error as CrasSndError;
 #[cfg(feature = "audio_cras")]
@@ -228,6 +226,8 @@ fn parse_cpu_capacity(s: &str, cpu_capacity: &mut BTreeMap<usize, u32>) -> argum
 struct GpuDisplayParametersBuilder {
     width: Option<u32>,
     height: Option<u32>,
+    vsync: Option<u32>,
+    hidden: Option<bool>,
     args: Vec<String>,
 }
 
@@ -256,6 +256,37 @@ impl GpuDisplayParametersBuilder {
                     })?;
                 self.height = Some(height);
             }
+            "refresh_rate" => {
+                if let Some(vsync) = self.vsync {
+                    return Err(argument::Error::TooManyArguments(format!(
+                        "refresh_rate was already specified: {}",
+                        vsync
+                    )));
+                }
+                self.vsync = Some(
+                    v.parse::<u32>()
+                        .map_err(|_| argument::Error::InvalidValue {
+                            value: v.to_string(),
+                            expected: String::from(
+                                "gpu parameter 'refresh_rate' must be a valid integer",
+                            ),
+                        })?,
+                );
+            }
+            "hidden" => match v {
+                "true" | "" => {
+                    self.hidden = Some(true);
+                }
+                "false" => {
+                    self.hidden = Some(false);
+                }
+                _ => {
+                    return Err(argument::Error::InvalidValue {
+                        value: v.to_string(),
+                        expected: String::from("gpu parameter 'hidden' should be a boolean"),
+                    });
+                }
+            },
             _ => {
                 return Err(argument::Error::UnknownArgument(format!(
                     "gpu-display parameter {}",
@@ -268,8 +299,9 @@ impl GpuDisplayParametersBuilder {
     }
 
     fn build(&self) -> argument::Result<Option<GpuDisplayParameters>> {
+        let mut display_param = None;
         match (self.width, self.height) {
-            (None, None) => Ok(None),
+            (None, None) => {}
             (None, Some(_)) | (Some(_), None) => {
                 let mut value = self
                     .args
@@ -284,8 +316,21 @@ impl GpuDisplayParametersBuilder {
                     ),
                 });
             }
-            (Some(width), Some(height)) => Ok(Some(GpuDisplayParameters { width, height })),
+            (Some(width), Some(height)) => {
+                let display_param = display_param.get_or_insert(GpuDisplayParameters::default());
+                display_param.width = width;
+                display_param.height = height;
+            }
         }
+        if let Some(vsync) = self.vsync {
+            let display_param = display_param.get_or_insert(GpuDisplayParameters::default());
+            display_param.vsync = vsync;
+        }
+        if let Some(hidden) = self.hidden {
+            let display_param = display_param.get_or_insert(GpuDisplayParameters::default());
+            display_param.hidden = hidden;
+        }
+        Ok(display_param)
     }
 }
 
@@ -2193,10 +2238,7 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     {
         if let Some(gpu_parameters) = cfg.gpu_parameters.as_mut() {
             if gpu_parameters.displays.is_empty() {
-                gpu_parameters.displays.push(GpuDisplayParameters {
-                    width: DEFAULT_DISPLAY_WIDTH,
-                    height: DEFAULT_DISPLAY_HEIGHT,
-                });
+                gpu_parameters.displays.push(Default::default());
             }
 
             let width = gpu_parameters.displays[0].width;

@@ -181,12 +181,9 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")]
     {
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
-            let mut gpu_display_w = virtio::DEFAULT_DISPLAY_WIDTH;
-            let mut gpu_display_h = virtio::DEFAULT_DISPLAY_HEIGHT;
-            if !gpu_parameters.displays.is_empty() {
-                gpu_display_w = gpu_parameters.displays[0].width;
-                gpu_display_h = gpu_parameters.displays[0].height;
-            }
+            assert!(!gpu_parameters.displays.is_empty());
+            let gpu_display_w = gpu_parameters.displays[0].width;
+            let gpu_display_h = gpu_parameters.displays[0].height;
 
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
