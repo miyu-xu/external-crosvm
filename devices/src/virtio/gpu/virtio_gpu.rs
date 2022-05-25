@@ -325,9 +325,10 @@ impl VirtioGpu {
             .iter()
             .enumerate()
             .map(|(display_index, &display_param)| {
+                let (width, height) = display_param.get_virtual_display_size();
                 VirtioGpuScanout::new(
-                    display_param.width,
-                    display_param.height,
+                    width,
+                    height,
                     display_index as u32,
                 )
             })

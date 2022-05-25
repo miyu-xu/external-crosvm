@@ -182,8 +182,7 @@ fn create_virtio_devices(
     {
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
             assert!(!gpu_parameters.displays.is_empty());
-            let gpu_display_w = gpu_parameters.displays[0].width;
-            let gpu_display_h = gpu_parameters.displays[0].height;
+            let (gpu_display_w, gpu_display_h) = gpu_parameters.displays[0].get_virtual_display_size();
 
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {

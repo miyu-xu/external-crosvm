@@ -58,7 +58,10 @@ use crate::pci::{
     PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciCapability,
 };
 
-pub use parameters::{DisplayParameters as GpuDisplayParameters, GpuParameters};
+pub use parameters::GpuParameters;
+use parameters::DisplayDataProvider;
+pub type GpuDisplayParameters = parameters::DisplayParameters<DisplayDataProvider>;
+pub type GpuDisplayMode = parameters::DisplayMode<DisplayDataProvider>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GpuMode {
@@ -1029,8 +1032,7 @@ impl Gpu {
         };
 
         assert!(!gpu_parameters.displays.is_empty());
-        let display_width = gpu_parameters.displays[0].width;
-        let display_height = gpu_parameters.displays[0].height;
+        let (display_width, display_height) = gpu_parameters.displays[0].get_virtual_display_size();
 
         let rutabaga_builder = RutabagaBuilder::new(component)
             .set_display_width(display_width)

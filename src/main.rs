@@ -36,7 +36,7 @@ use crosvm::{DirectIoOption, HostPcieRootPortParameters};
 use devices::serial_device::{SerialHardware, SerialParameters};
 use devices::virtio::block::block::DiskOption;
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{GpuDisplayParameters, GpuMode, GpuParameters};
+use devices::virtio::gpu::{GpuDisplayParameters, GpuMode, GpuParameters, GpuDisplayMode};
 #[cfg(feature = "audio_cras")]
 use devices::virtio::snd::cras_backend::Error as CrasSndError;
 #[cfg(feature = "audio_cras")]
@@ -226,6 +226,7 @@ fn parse_cpu_capacity(s: &str, cpu_capacity: &mut BTreeMap<usize, u32>) -> argum
 struct GpuDisplayParametersBuilder {
     width: Option<u32>,
     height: Option<u32>,
+    display_mode: Option<String>,
     vsync: Option<u32>,
     hidden: Option<bool>,
     args: Vec<String>,
@@ -273,6 +274,15 @@ impl GpuDisplayParametersBuilder {
                         })?,
                 );
             }
+            "display_mode" => {
+                if let Some(display_mode) = &self.display_mode {
+                    return Err(argument::Error::TooManyArguments(format!(
+                        "display_mode was already specified: {}",
+                        display_mode
+                    )));
+                }
+                self.display_mode = Some(String::from(v));
+            }
             "hidden" => match v {
                 "true" | "" => {
                     self.hidden = Some(true);
@@ -300,15 +310,32 @@ impl GpuDisplayParametersBuilder {
 
     fn build(&self) -> argument::Result<Option<GpuDisplayParameters>> {
         let mut display_param = None;
-        match (self.width, self.height) {
-            (None, None) => {}
-            (None, Some(_)) | (Some(_), None) => {
-                let mut value = self
-                    .args
-                    .clone()
-                    .into_iter()
-                    .fold(String::new(), |args_so_far, arg| args_so_far + &arg + ",");
-                value.pop();
+        match self.display_mode.as_deref() {
+            Some("windowed") => display_param = Some(GpuDisplayParameters::default_windowed()),
+            Some("borderless_full_screen") => display_param = Some(GpuDisplayParameters::default_borderless_full_screen()),
+            None => {}
+            Some(display_mode) => return Err(argument::Error::InvalidValue {
+                value: display_mode.to_string(),
+                expected: String::from("gpu parameter 'display_mode' must be either 'borderless_full_screen' or 'windowed'")
+            })
+        }
+        let display_mode = display_param.as_ref().map(|display_param| display_param.display_mode);
+        let mut value = self
+            .args
+            .clone()
+            .into_iter()
+            .fold(String::new(), |args_so_far, arg| args_so_far + &arg + ",");
+        value.pop();
+        match (self.width, self.height, display_mode) {
+            (None, None, _) => {}
+            (Some(_), _, Some(GpuDisplayMode::BorderlessFullScreen(_))) | (_, Some(_), Some(GpuDisplayMode::BorderlessFullScreen(_))) => 
+                return Err(argument::Error::InvalidValue {
+                    value,
+                    expected: String::from(
+                        "width, or height is only supported for windowed display mode"
+                    ),
+                }),
+            (None, Some(_), _) | (Some(_), None, _) => {
                 return Err(argument::Error::InvalidValue {
                     value,
                     expected: String::from(
@@ -316,10 +343,12 @@ impl GpuDisplayParametersBuilder {
                     ),
                 });
             }
-            (Some(width), Some(height)) => {
-                let display_param = display_param.get_or_insert(GpuDisplayParameters::default());
-                display_param.width = width;
-                display_param.height = height;
+            (Some(width), Some(height), _) => {
+                let mut display_param = display_param.get_or_insert(GpuDisplayParameters::default_windowed());
+                display_param.display_mode = GpuDisplayMode::Windowed {
+                    width,
+                    height,
+                };
             }
         }
         if let Some(vsync) = self.vsync {
@@ -2377,8 +2406,7 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
                 gpu_parameters.displays.push(Default::default());
             }
 
-            let width = gpu_parameters.displays[0].width;
-            let height = gpu_parameters.displays[0].height;
+            let (width, height) = gpu_parameters.displays[0].get_virtual_display_size();
 
             if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
                 virtio_multi_touch.set_default_size(width, height);
