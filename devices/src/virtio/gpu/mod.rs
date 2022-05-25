@@ -58,10 +58,7 @@ use crate::pci::{
     PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciCapability,
 };
 
-pub use parameters::{
-    DisplayParameters as GpuDisplayParameters, GpuParameters, DEFAULT_DISPLAY_HEIGHT,
-    DEFAULT_DISPLAY_WIDTH,
-};
+pub use parameters::{DisplayParameters as GpuDisplayParameters, GpuParameters};
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GpuMode {
@@ -1023,12 +1020,9 @@ impl Gpu {
             GpuMode::ModeGfxstream => RutabagaComponentType::Gfxstream,
         };
 
-        let mut display_width = DEFAULT_DISPLAY_WIDTH;
-        let mut display_height = DEFAULT_DISPLAY_HEIGHT;
-        if !gpu_parameters.displays.is_empty() {
-            display_width = gpu_parameters.displays[0].width;
-            display_height = gpu_parameters.displays[0].height;
-        }
+        assert!(!gpu_parameters.displays.is_empty());
+        let display_width = gpu_parameters.displays[0].width;
+        let display_height = gpu_parameters.displays[0].height;
 
         let rutabaga_builder = RutabagaBuilder::new(component)
             .set_display_width(display_width)
