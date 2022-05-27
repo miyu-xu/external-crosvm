@@ -910,6 +910,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         force_s2idle: cfg.force_s2idle,
         pvm_fw: pvm_fw_image,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        pcie_ecam: cfg.pcie_ecam,
     })
 }
 
@@ -1309,6 +1311,22 @@ where
 
         irqs.push(direct_irq);
     }
+
+    // Reserve direct mmio range in advance.
+    #[cfg(feature = "direct")]
+    if let Some(mmio) = &cfg.direct_mmio {
+        for range in mmio.ranges.iter() {
+            sys_allocator
+                .reserve_mmio(range.base, range.len)
+                .with_context(|| {
+                    format!(
+                        "failed to reserved direct mmio: {:x}-{:x}",
+                        range.base,
+                        range.base + range.len - 1,
+                    )
+                })?;
+        }
+    };
 
     let mut iommu_attached_endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>> =
         BTreeMap::new();
