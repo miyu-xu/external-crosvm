@@ -1,0 +1,10 @@
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/debug/deps/io_uring-13c215998f0ff979.rmeta: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/debug/deps/libio_uring-13c215998f0ff979.rlib: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/debug/deps/io_uring-13c215998f0ff979.d: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs:

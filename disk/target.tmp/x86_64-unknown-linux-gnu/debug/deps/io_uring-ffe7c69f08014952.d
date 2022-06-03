@@ -1,0 +1,10 @@
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/x86_64-unknown-linux-gnu/debug/deps/io_uring-ffe7c69f08014952.rmeta: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/x86_64-unknown-linux-gnu/debug/deps/libio_uring-ffe7c69f08014952.rlib: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/x86_64-unknown-linux-gnu/debug/deps/io_uring-ffe7c69f08014952.d: /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs /usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/lib.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/bindings.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/syscalls.rs:
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/io_uring/src/uring.rs:

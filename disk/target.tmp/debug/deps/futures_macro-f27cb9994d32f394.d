@@ -1,0 +1,9 @@
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/debug/deps/libfutures_macro-f27cb9994d32f394.so: /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/lib.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/executor.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/join.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/select.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/stream_select.rs
+
+/usr/local/google/home/khei/android/aosp-master-with-phones2/external/crosvm/disk/target.tmp/debug/deps/futures_macro-f27cb9994d32f394.d: /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/lib.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/executor.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/join.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/select.rs /usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/stream_select.rs
+
+/usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/lib.rs:
+/usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/executor.rs:
+/usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/join.rs:
+/usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/select.rs:
+/usr/local/google/home/khei/.cargo/registry/src/github.com-1ecc6299db9ec823/futures-macro-0.3.21/src/stream_select.rs:
