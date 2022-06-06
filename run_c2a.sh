@@ -22,7 +22,7 @@ if [[ -f "cargo2android.json" ]]; then
   C2A_ARGS+=" --config cargo2android.json"
 else
   # Otherwise, set common flags.
-  C2A_ARGS+=" --run --device --tests --global_defaults=crosvm_defaults --add_workspace"
+  C2A_ARGS+=" --run --device --tests --global_defaults=crosvm_defaults --add_workspace --copy-out"
   # If there are subdirectories with crates, then pass --no-subdir.
   if [ -n "$(find . -mindepth 2 -name "Cargo.toml")" ]; then
     C2A_ARGS+=" --no-subdir"
