@@ -62,6 +62,24 @@
       "message": "is this deleted upstream or do you know if it\u0027s needed to delete it here?",
       "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d51526c8_dbb379d7",
+        "filename": "third_party/virglrenderer",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-06T20:10:38Z",
+      "side": 0,
+      "message": "This is a submodule link upstream, and not a folder. When I merged, I got the conflict message \"deleted by us\"",
+      "parentUuid": "a061f567_15e192b5",
+      "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
