@@ -80,6 +80,24 @@
       "parentUuid": "a061f567_15e192b5",
       "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "da74461c_0b3b2109",
+        "filename": "third_party/virglrenderer",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-06T21:31:08Z",
+      "side": 0,
+      "message": "I\u0027d guess we deleted this because we manage virglrenderer in aosp\u0027s own `external` dir. Wouldn\u0027t want another copy nested inside crosvm. So, I think this makes sense",
+      "parentUuid": "d51526c8_dbb379d7",
+      "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
