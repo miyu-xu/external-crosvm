@@ -79,6 +79,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "1e19d659_dc391902",
+        "filename": "Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-06T21:23:18Z",
+      "side": 1,
+      "message": "libmetrics is missing because of\n\n\u003e Added \u0027{}\u0027 cargo2android.json in metrics/\n\n(from the CL description)\n\nI got the `metrics` crate to build successfully in a previous merge (https://r.android.com/2095127), although I\u0027m not super happy with the solution.\n\nI\u0027m surprised it builds with this commented out. Does main.rs not actually need the `metrics` crate?",
+      "parentUuid": "b07c6bbe_a9767c1c",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d8eeb3a8_c508826f",
         "filename": "disk/Android.bp.rej",
         "patchSetId": 1
@@ -147,6 +165,23 @@
         "endLine": 1003,
         "endChar": 54
       },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dab3c1a1_d8533578",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 55,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-06T21:23:18Z",
+      "side": 1,
+      "message": "IIUC, this is going to leak an FD (`base::clone_descriptor` returns a `RawFd`, so rust isn\u0027t automatically managing it)\n\nif it is actually OK to comment out `virgl_renderer_resource_import_blob`, then I think you might want to comment out the entire body of `import_resource`. or, maybe abort if the first `if` statement turns out false",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
