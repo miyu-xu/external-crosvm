@@ -1,0 +1,101 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7576840e_2f2fb57b",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T20:05:52Z",
+      "side": 1,
+      "message": "we\u0027ll want to rename this (maybe \u0027aosp/master\u0027) OR s/into merge2// or similar",
+      "range": {
+        "startLine": 8,
+        "startChar": 49,
+        "endLine": 8,
+        "endChar": 61
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "eb655c46_ff6bf3c3",
+        "filename": "Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T20:05:52Z",
+      "side": 1,
+      "message": "is this commented out by you?",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0dcf954f_8f35b6a2",
+        "filename": "disk/cargo.out",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T20:05:52Z",
+      "side": 1,
+      "message": "delete this file",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cf55562c_0855dc30",
+        "filename": "metrics/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T20:05:52Z",
+      "side": 1,
+      "message": "nit: avoid adding extra newlines (assuming accident)",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7b48e667_8f944d62",
+        "filename": "rutabaga_gfx/src/rutabaga_core.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1003,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T20:05:52Z",
+      "side": 1,
+      "message": "It seems this line was removed in Android:\nhttps://android-review.googlesource.com/c/platform/external/crosvm/+/2101456\n\nThe upstream CL only adds \u0027push_capset(30);\u0027:\nhttps://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3608703/27/rutabaga_gfx/src/rutabaga_core.rs#1004\n\nCan you check with Cody what\u0027s up with this?",
+      "range": {
+        "startLine": 1003,
+        "startChar": 0,
+        "endLine": 1003,
+        "endChar": 54
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
