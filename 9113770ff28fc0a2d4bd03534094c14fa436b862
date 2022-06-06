@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e4547d3a_16756809",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-06T18:08:03Z",
+      "side": 1,
+      "message": "Hey - I don\u0027t remember if PS1 was, but this is no longer a merge commit. You should reset the CL as a merge commit, so it includes both parents, and then you can reset the resolution to this CL, so that the history is preserved.",
+      "revId": "9113770ff28fc0a2d4bd03534094c14fa436b862",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
