@@ -61,6 +61,41 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b07c6bbe_a9767c1c",
+        "filename": "Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-06-06T20:40:26Z",
+      "side": 1,
+      "message": "`metrics` is a new crosvm crate, so maybe it just needs to be added to a build target somewhere?\n\nhttps://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform/crosvm/metrics/\n\nIt should be basically empty on upstream crosvm builds, but it is needed to provide APIs for crates that are being upstreamed from the Windows port.",
+      "parentUuid": "a14be12b_4999ba7f",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d8eeb3a8_c508826f",
+        "filename": "disk/Android.bp.rej",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-06-06T20:40:26Z",
+      "side": 1,
+      "message": "Is this .rej file meant to be checked in?",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "0dcf954f_8f35b6a2",
         "filename": "disk/cargo.out",
         "patchSetId": 1
