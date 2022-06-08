@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fd0dd289_71927755",
+        "filename": "base/src/sys/unix/syslog.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 63,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "54d2ff19_a18f25cb",
+      "range": {
+        "startLine": 36,
+        "startChar": 0,
+        "endLine": 63,
+        "endChar": 7
+      },
+      "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c2fd7ed5_3dd93830",
@@ -37,6 +61,30 @@
       "writtenOn": "2022-06-06T20:05:52Z",
       "side": 0,
       "message": "and comment this out instead\n\n(so we have the updated test commented out)",
+      "range": {
+        "startLine": 66,
+        "startChar": 4,
+        "endLine": 98,
+        "endChar": 5
+      },
+      "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ffaef7d0_749f864a",
+        "filename": "base/src/sys/unix/syslog.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 98,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "c2fd7ed5_3dd93830",
       "range": {
         "startLine": 66,
         "startChar": 4,
@@ -96,6 +144,24 @@
       "side": 0,
       "message": "I\u0027d guess we deleted this because we manage virglrenderer in aosp\u0027s own `external` dir. Wouldn\u0027t want another copy nested inside crosvm. So, I think this makes sense",
       "parentUuid": "d51526c8_dbb379d7",
+      "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bf059193_95f2a836",
+        "filename": "third_party/virglrenderer",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 0,
+      "message": "Setting as done for now.",
+      "parentUuid": "da74461c_0b3b2109",
       "revId": "2259a2a1f3e2d0d255135b02857663fdd50485d6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }

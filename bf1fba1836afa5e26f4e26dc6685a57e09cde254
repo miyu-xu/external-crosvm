@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "7e03b910_8ed96c7d",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "7576840e_2f2fb57b",
+      "range": {
+        "startLine": 8,
+        "startChar": 49,
+        "endLine": 8,
+        "endChar": 61
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ed212bee_c975367e",
@@ -37,6 +61,24 @@
       "writtenOn": "2022-06-06T21:31:08Z",
       "side": 1,
       "message": "any idea what the warnings were?",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "47d48b92_2685615c",
+        "filename": "Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 38,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "running \"cargo build\" shows the warning:\nwarning: /usr/local/.../external/crosvm/Cargo.toml: file found to be present in multiple build targets: /usr/local/.../external/crosvm/src/main.rs",
+      "parentUuid": "ed212bee_c975367e",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -112,6 +154,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c5308403_3a6b1e33",
+        "filename": "Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "I\u0027m also interested in knowing this actually, re-enabled for now however.",
+      "parentUuid": "1e19d659_dc391902",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d8eeb3a8_c508826f",
@@ -125,6 +185,24 @@
       "writtenOn": "2022-06-06T20:40:26Z",
       "side": 1,
       "message": "Is this .rej file meant to be checked in?",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3e07ab20_434eae68",
+        "filename": "disk/Android.bp.rej",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "Nope! Thank you!",
+      "parentUuid": "d8eeb3a8_c508826f",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -146,6 +224,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "cc91fd9f_171bc96e",
+        "filename": "disk/cargo.out",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "0dcf954f_8f35b6a2",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cf55562c_0855dc30",
@@ -159,6 +255,24 @@
       "writtenOn": "2022-06-06T20:05:52Z",
       "side": 1,
       "message": "nit: avoid adding extra newlines (assuming accident)",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75e88af8_b79acfde",
+        "filename": "metrics/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cf55562c_0855dc30",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -188,6 +302,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "51d6ebe5_7a31b672",
+        "filename": "rutabaga_gfx/src/rutabaga_core.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1003,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "From what I can see, it was added again on May 20th",
+      "parentUuid": "7b48e667_8f944d62",
+      "range": {
+        "startLine": 1003,
+        "startChar": 0,
+        "endLine": 1003,
+        "endChar": 54
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "dab3c1a1_d8533578",
         "filename": "rutabaga_gfx/src/virgl_renderer.rs",
         "patchSetId": 1
@@ -199,6 +337,24 @@
       "writtenOn": "2022-06-06T21:23:18Z",
       "side": 1,
       "message": "IIUC, this is going to leak an FD (`base::clone_descriptor` returns a `RawFd`, so rust isn\u0027t automatically managing it)\n\nif it is actually OK to comment out `virgl_renderer_resource_import_blob`, then I think you might want to comment out the entire body of `import_resource`. or, maybe abort if the first `if` statement turns out false",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ede101e9_54363016",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 55,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T00:18:44Z",
+      "side": 1,
+      "message": "If the first if statement turns out false, aren\u0027t we simply going to exit the function then since there\u0027s no statements outside any of the ifs?",
+      "parentUuid": "dab3c1a1_d8533578",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
