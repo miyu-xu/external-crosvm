@@ -441,6 +441,24 @@
       "parentUuid": "728f42b7_b992c0d9",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "38f28f83_ce3da8be",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 55,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T18:46:31Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "caf33a5e_1811406f",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

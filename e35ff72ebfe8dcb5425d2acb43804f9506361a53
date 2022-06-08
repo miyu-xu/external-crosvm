@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a258de1_6472ee4e",
+        "filename": "metrics/out/generated.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T18:46:31Z",
+      "side": 1,
+      "message": "True... thanks!",
+      "parentUuid": "20bddcff_35cd0b3c",
+      "revId": "e35ff72ebfe8dcb5425d2acb43804f9506361a53",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "63a9f09d_97f1ea8c",
@@ -31,6 +49,30 @@
       "writtenOn": "2022-06-08T15:58:11Z",
       "side": 1,
       "message": "maybe this is a good idea, but i\u0027d recommend just enabling it for \"metrics/\" for now\n\nit can be done per crate by adding a metrics/cargo2android.json file, like in https://android-review.googlesource.com/c/platform/external/crosvm/+/2095127/1/metrics/cargo2android.json",
+      "range": {
+        "startLine": 25,
+        "startChar": 86,
+        "endLine": 25,
+        "endChar": 97
+      },
+      "revId": "e35ff72ebfe8dcb5425d2acb43804f9506361a53",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "760f3e9b_c95eb943",
+        "filename": "run_c2a.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T18:46:31Z",
+      "side": 1,
+      "message": "Thanks! Done!",
+      "parentUuid": "63a9f09d_97f1ea8c",
       "range": {
         "startLine": 25,
         "startChar": 86,
