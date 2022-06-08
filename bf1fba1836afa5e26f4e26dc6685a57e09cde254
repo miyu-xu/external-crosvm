@@ -381,6 +381,24 @@
       "parentUuid": "dab3c1a1_d8533578",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "728f42b7_b992c0d9",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 55,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-08T15:58:11Z",
+      "side": 1,
+      "message": "sorry, by abort, i meant cause a fatal error. if we think this code isn\u0027t needed in android, then we might want to assert it isn\u0027t hit",
+      "parentUuid": "ede101e9_54363016",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
