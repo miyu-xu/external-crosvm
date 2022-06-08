@@ -1,0 +1,61 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2c9a29fe_0c7c8a8d",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-08T19:50:29Z",
+      "side": 1,
+      "message": "move to top of comment block",
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ba55cd9d_679add97",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-08T19:50:29Z",
+      "side": 1,
+      "message": "fix indent",
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "87cc8f4c_010e0412",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-08T19:50:29Z",
+      "side": 1,
+      "message": "is the else branch intentional?",
+      "range": {
+        "startLine": 82,
+        "startChar": 0,
+        "endLine": 83,
+        "endChar": 30
+      },
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
