@@ -326,6 +326,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "0a801281_654ee5ea",
+        "filename": "rutabaga_gfx/src/rutabaga_core.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1003,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T01:04:36Z",
+      "side": 1,
+      "message": "Disregard message above ^ -- push_capset(30) was added.",
+      "parentUuid": "51d6ebe5_7a31b672",
+      "range": {
+        "startLine": 1003,
+        "startChar": 0,
+        "endLine": 1003,
+        "endChar": 54
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "dab3c1a1_d8533578",
         "filename": "rutabaga_gfx/src/virgl_renderer.rs",
         "patchSetId": 1
