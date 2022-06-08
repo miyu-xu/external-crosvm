@@ -38,6 +38,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "eb314fb0_4118c81f",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-06-08T20:38:23Z",
+      "side": 1,
+      "message": "To the top of the comment block like line 56(55). Probably add it before the abort() and mention the abort as well as the commented lines.",
+      "parentUuid": "61fdf27a_c29428d8",
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "ba55cd9d_679add97",
         "filename": "rutabaga_gfx/src/virgl_renderer.rs",
         "patchSetId": 4
