@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "61fdf27a_c29428d8",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T20:27:05Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "2c9a29fe_0c7c8a8d",
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ba55cd9d_679add97",
@@ -54,6 +72,48 @@
         "endLine": 83,
         "endChar": 30
       },
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "434cfa1a_1030d517",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T20:27:05Z",
+      "side": 1,
+      "message": "Moved code to inside the if statement.",
+      "parentUuid": "87cc8f4c_010e0412",
+      "range": {
+        "startLine": 82,
+        "startChar": 0,
+        "endLine": 83,
+        "endChar": 30
+      },
+      "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0f717e51_14fc62af",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T20:27:05Z",
+      "side": 1,
+      "message": "-- No longer valid",
+      "parentUuid": "ba55cd9d_679add97",
       "revId": "5fff415c6cc2878ae0e19afb24ea12a405f88c19",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
