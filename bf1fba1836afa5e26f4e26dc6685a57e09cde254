@@ -348,6 +348,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "24d95687_295f8d71",
+        "filename": "rutabaga_gfx/src/rutabaga_core.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1003,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-06-08T16:10:36Z",
+      "side": 1,
+      "message": "CROSS_DOMAIN is still an experimental feature.\nMagic number 30 is related to CROSS_DOMAIN feature as well, removing.",
+      "parentUuid": "0a801281_654ee5ea",
+      "range": {
+        "startLine": 1003,
+        "startChar": 0,
+        "endLine": 1003,
+        "endChar": 54
+      },
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "dab3c1a1_d8533578",
