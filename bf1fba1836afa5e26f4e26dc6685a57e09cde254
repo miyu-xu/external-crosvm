@@ -423,6 +423,24 @@
       "parentUuid": "ede101e9_54363016",
       "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "caf33a5e_1811406f",
+        "filename": "rutabaga_gfx/src/virgl_renderer.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 55,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-06-08T17:05:58Z",
+      "side": 1,
+      "message": "I vote to comment out the whole chunk after the first if statement if we are commenting out virgl_renderer_resource_import_blob().\nIn this state this function does nothing other than get an FD, fail to close it, and incorrectly set resource.import_mask.\n\n\u003e If the first if statement turns out false\nI think Frederick is talking about the very first if statement on line 49. If we make it past that the rest of the if statements could be true and we would normally being importing a blob. But we are commenting that out and assuming Android doesn\u0027t use it/need it.\nAdding a fatal error/abort here will let us know if that assumption is true. I like it.",
+      "parentUuid": "728f42b7_b992c0d9",
+      "revId": "bf1fba1836afa5e26f4e26dc6685a57e09cde254",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
