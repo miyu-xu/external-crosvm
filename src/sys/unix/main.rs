@@ -10,15 +10,14 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::{path::PathBuf, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+use argh::FromArgs;
 
 use base::{kill_process_group, reap_child, warn};
 #[cfg(feature = "gpu")]
-use devices::virtio::gpu::{GpuDisplayParameters, GpuParameters};
-#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::device::run_gpu_device;
 use devices::virtio::vhost::user::device::{
-    run_console_device, run_fs_device, run_vsock_device, run_wl_device,
+    self, run_console_device, run_fs_device, run_vsock_device, run_wl_device,
 };
 #[cfg(feature = "audio_cras")]
 use devices::virtio::{
@@ -31,9 +30,9 @@ use devices::Ac97Parameters;
 use devices::SerialParameters;
 
 use crate::argument::{self, Argument};
+use crate::crosvm::{Config, SharedDir};
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 use crate::platform::GpuRenderServerParameters;
-use crosvm::{Config, SharedDir};
 
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 fn parse_gpu_render_server_options(s: Option<&str>) -> argument::Result<GpuRenderServerParameters> {
@@ -90,13 +89,9 @@ pub fn is_gpu_backend_deprecated(_backend: &str) -> bool {
     false
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn use_host_cpu_topology() -> bool {
     true
-}
-
-pub fn get_vcpu_count() -> argument::Result<usize> {
-    // Safe because we pass a flag for this call and the host supports this system call
-    Ok(unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) } as usize)
 }
 
 #[cfg(feature = "gfxstream")]
@@ -190,46 +185,6 @@ pub fn get_arguments() -> Vec<Argument> {
 
                               stdin - Direct standard input to this serial device. Can only be given once. Will default to first serial port if not provided.
                               "),
-          #[cfg(feature = "gpu")]
-          Argument::flag_or_value("gpu",
-                                  "[width=INT,height=INT]",
-                                  "(EXPERIMENTAL) Comma separated key=value pairs for setting up a virtio-gpu device
-
-                              Possible key values:
-
-                              backend=(2d|virglrenderer|gfxstream) - Which backend to use for virtio-gpu (determining rendering protocol)
-
-                              context-types=LIST - The list of supported context types, separated by ':' (default: no contexts enabled)
-
-                              width=INT - The width of the virtual display connected to the virtio-gpu.
-
-                              height=INT - The height of the virtual display connected to the virtio-gpu.
-
-                              egl[=true|=false] - If the backend should use a EGL context for rendering.
-
-                              glx[=true|=false] - If the backend should use a GLX context for rendering.
-
-                              surfaceless[=true|=false] - If the backend should use a surfaceless context for rendering.
-
-                              angle[=true|=false] - If the gfxstream backend should use ANGLE (OpenGL on Vulkan) as its native OpenGL driver.
-
-                              syncfd[=true|=false] - If the gfxstream backend should support EGL_ANDROID_native_fence_sync
-
-                              vulkan[=true|=false] - If the backend should support vulkan
-
-                              cache-path=PATH - The path to the virtio-gpu device shader cache.
-
-                              cache-size=SIZE - The maximum size of the shader cache."),
-          #[cfg(feature = "gpu")]
-          Argument::flag_or_value("gpu-display",
-                                  "[width=INT,height=INT]",
-                                  "(EXPERIMENTAL) Comma separated key=value pairs for setting up a display on the virtio-gpu device
-
-                              Possible key values:
-
-                              width=INT - The width of the virtual display connected to the virtio-gpu.
-
-                              height=INT - The height of the virtual display connected to the virtio-gpu."),
           Argument::flag("no-legacy", "Don't use legacy KBD/RTC devices emulation"),
     ]
 }
@@ -580,27 +535,35 @@ pub fn set_arguments(cfg: &mut Config, name: &str, value: Option<&str>) -> argum
                 jail_config.seccomp_log_failures = true;
             }
         }
-        #[cfg(feature = "gpu")]
-        "gpu-display" => {
-            let gpu_parameters = cfg.gpu_parameters.get_or_insert_with(Default::default);
-            parse_gpu_display_options(value, gpu_parameters)?;
-        }
         _ => unreachable!(),
     }
     Ok(())
 }
 
-pub(crate) fn start_device(program_name: &str, device_name: &str, args: &[&str]) -> Result<()> {
-    match device_name {
-        "console" => run_console_device(program_name, args),
+#[derive(FromArgs)]
+#[argh(subcommand)]
+/// Unix Devices
+pub enum DevicesSubcommand {
+    Console(device::ConsoleOptions),
+    #[cfg(feature = "audio_cras")]
+    CrasSnd(device::CrasSndOptions),
+    Fs(device::FsOptions),
+    #[cfg(feature = "gpu")]
+    Gpu(device::GpuOptions),
+    Vsock(device::VsockOptions),
+    Wl(device::WlOptions),
+}
+
+pub(crate) fn start_device(command: DevicesSubcommand) -> Result<()> {
+    match command {
+        DevicesSubcommand::Console(cfg) => run_console_device(cfg),
         #[cfg(feature = "audio_cras")]
-        "cras-snd" => run_cras_snd_device(program_name, args),
-        "fs" => run_fs_device(program_name, args),
+        DevicesSubcommand::CrasSnd(cfg) => run_cras_snd_device(cfg),
+        DevicesSubcommand::Fs(cfg) => run_fs_device(cfg),
         #[cfg(feature = "gpu")]
-        "gpu" => run_gpu_device(program_name, args),
-        "vsock" => run_vsock_device(program_name, args),
-        "wl" => run_wl_device(program_name, args),
-        _ => Err(anyhow!("unknown device name: {}", device_name)),
+        DevicesSubcommand::Gpu(cfg) => run_gpu_device(cfg),
+        DevicesSubcommand::Vsock(cfg) => run_vsock_device(cfg),
+        DevicesSubcommand::Wl(cfg) => run_wl_device(cfg),
     }
 }
 
@@ -716,6 +679,7 @@ pub(crate) fn cleanup() {
         }
     }
 }
+<<<<<<< HEAD   (688bd4 Merge remote-tracking branch 'aosp/upstream-main' into aosp/)
 
 #[cfg(feature = "gpu")]
 fn parse_gpu_display_options(
@@ -846,3 +810,5 @@ fn parse_gpu_display_options(
 //        }
 //    }
 //}
+=======
+>>>>>>> BRANCH (752287 Add new email lists to README.md and book)
