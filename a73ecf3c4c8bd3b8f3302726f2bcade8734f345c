@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "48aea7c4_113c452f",
+        "filename": "argh_helpers/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-06-14T18:07:44Z",
+      "side": 1,
+      "message": "what is this for?",
+      "range": {
+        "startLine": 10,
+        "startChar": 51,
+        "endLine": 10,
+        "endChar": 58
+      },
+      "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
