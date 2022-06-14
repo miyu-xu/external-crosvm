@@ -118,6 +118,30 @@
       },
       "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cbcabc1e_9fafd2e6",
+        "filename": "argh_helpers/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-06-14T18:56:35Z",
+      "side": 1,
+      "message": "\u003e Odd, `cargo build -p argh_helpers` is working for me with a fresh crosvm checkout. Not sure why though, it does seem like it should require \"full\".\n\nYeah, now that I try it again I can\u0027t repro the failure. I know I saw it the first time I tried it this morning :D",
+      "parentUuid": "057da5c1_e2dde12e",
+      "range": {
+        "startLine": 10,
+        "startChar": 51,
+        "endLine": 10,
+        "endChar": 58
+      },
+      "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
