@@ -22,6 +22,30 @@
       },
       "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3d77fa8f_dd2d9814",
+        "filename": "argh_helpers/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-14T18:09:46Z",
+      "side": 1,
+      "message": "https://docs.rs/syn/0.12.15/syn/enum.Item.html\n\n\u003e This type is available if Syn is built with the \"full\" feature.",
+      "parentUuid": "48aea7c4_113c452f",
+      "range": {
+        "startLine": 10,
+        "startChar": 51,
+        "endLine": 10,
+        "endChar": 58
+      },
+      "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
