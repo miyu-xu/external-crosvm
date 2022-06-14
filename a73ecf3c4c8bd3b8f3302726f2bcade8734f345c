@@ -70,6 +70,30 @@
       },
       "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8c8cee75_37ccfda2",
+        "filename": "argh_helpers/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-14T18:21:07Z",
+      "side": 1,
+      "message": "I see - you are suggesting we add it upstream? I know we carry a lot of changes to toml files b/c of the divergent build. Since this is required to build crosvm, it must be building upstream, right?",
+      "parentUuid": "874ef599_e2828c3b",
+      "range": {
+        "startLine": 10,
+        "startChar": 51,
+        "endLine": 10,
+        "endChar": 58
+      },
+      "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
