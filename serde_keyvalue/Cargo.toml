@@ -13,7 +13,11 @@ serde_keyvalue_derive = { path = "serde_keyvalue_derive", optional = true }
 serde = "1"
 thiserror = { version = "1.0.20" }
 remain = "*"
+num-traits = "0.2"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
+<<<<<<< HEAD   (688bd4 Merge remote-tracking branch 'aosp/upstream-main' into aosp/)
 
+=======
+>>>>>>> BRANCH (752287 Add new email lists to README.md and book)

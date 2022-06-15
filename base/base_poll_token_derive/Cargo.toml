@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (688bd4 Merge remote-tracking branch 'aosp/upstream-main' into aosp/)
 [package]
 name = "base_poll_token_derive"
 version = "0.1.0"
@@ -14,3 +15,5 @@ proc-macro2 = "^1"
 quote = "^1"
 syn = "^1"
 
+=======
+>>>>>>> BRANCH (752287 Add new email lists to README.md and book)
