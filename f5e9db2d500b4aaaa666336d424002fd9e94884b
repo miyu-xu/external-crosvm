@@ -22,6 +22,30 @@
       },
       "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "354575ed_9441f6e2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-06-15T23:30:14Z",
+      "side": 1,
+      "message": "Why aren\u0027t the headers safe? Because they could change and break things? Something else?",
+      "parentUuid": "0be5322d_49961c24",
+      "range": {
+        "startLine": 12,
+        "startChar": 14,
+        "endLine": 13,
+        "endChar": 14
+      },
+      "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
