@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0be5322d_49961c24",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-15T22:46:29Z",
+      "side": 1,
+      "message": "it is not super safe btw. Musl has these headers right? I\u0027m wondering if we could add the header to glibc, but I\u0027m okay with this change",
+      "range": {
+        "startLine": 12,
+        "startChar": 14,
+        "endLine": 13,
+        "endChar": 14
+      },
+      "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
