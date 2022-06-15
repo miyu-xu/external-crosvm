@@ -1,9 +1,7 @@
-diff --git b/gpu_display/Android.bp a/gpu_display/Android.bp
---- b/gpu_display/Android.bp
-+++ a/gpu_display/Android.bp
-@@ -32,7 +32,116 @@ rust_library {
-         "liblinux_input_sys",
-         "libthiserror",
+diff --git a/gpu_display/Android.bp b/gpu_display/Android.bp
+--- a/gpu_display/Android.bp
++++ b/gpu_display/Android.bp
+@@ -34,5 +34,118 @@ rust_library {
      ],
      proc_macros: ["libremain"],
      static_libs: ["libdisplay_wl"],
@@ -45,6 +43,10 @@ diff --git b/gpu_display/Android.bp a/gpu_display/Android.bp
 +    // added manually
 +    target: {
 +        host: {
++            include_dirs: [
++                "bionic/libc/kernel/uapi",
++                "bionic/libc/kernel/android/uapi",
++            ],
 +            shared_libs: ["libwayland_client"],
 +        },
 +        android: {
