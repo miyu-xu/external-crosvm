@@ -1,6 +1,23 @@
 {
   "comments": [
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c953f9aa_86d33b89",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-15T15:48:30Z",
+      "side": 1,
+      "message": "retrying for c/p errors - see also b/235098356#comment4",
+      "revId": "a73ecf3c4c8bd3b8f3302726f2bcade8734f345c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "48aea7c4_113c452f",
