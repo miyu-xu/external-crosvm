@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e2e6945e_923b753c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-15T20:27:01Z",
+      "side": 1,
+      "message": "waiting on b/236046512 to re-run presubmit",
+      "revId": "989a286f9cc1ca79ab8074b8f244f8037c72ad4c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
