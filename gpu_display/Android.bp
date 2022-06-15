@@ -71,6 +71,10 @@ cc_library_static {
     // added manually
     target: {
         host: {
+            include_dirs: [
+                "bionic/libc/kernel/uapi",
+                "bionic/libc/kernel/android/uapi",
+            ],
             shared_libs: ["libwayland_client"],
         },
         android: {
