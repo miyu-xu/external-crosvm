@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a4576e8c_21aa232d",
+        "filename": "gpu_display/cargo2android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-15T22:45:20Z",
+      "side": 1,
+      "message": "can you add a license?",
+      "revId": "9e607cbcf667c3ae34fbb35b417c375fd081ddab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
