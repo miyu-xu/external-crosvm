@@ -46,6 +46,30 @@
       },
       "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "19c54482_4fb707e7",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-16T00:22:46Z",
+      "side": 1,
+      "message": "I don\u0027t see a copy of this header in our glibc or musl. The musl website has an FAQ entry warning not to mix the user and kernel headers together in one compilation unit ([link](https://wiki.musl-libc.org/faq.html#:~:text\u003dhurt%2C%20generally%2C%20either).-,Q%3A%20Why%20am%20I%20getting%20%E2%80%9Cerror%3A%20redefinition%20of%20struct%20ethhdr/tcphdr/etc%E2%80%9D%3F,-The%20application%20you%E2%80%99re)), so, I think it is safe to assume they don\u0027t have provide musl compatible kernel headers.\n\nWe do have the \"original\" kernel headers at `external/kernel-headers/`, but there is no Android.bp. I think they are intended to only be used as an input to some bionic tools.\n\nI\u0027m guessing the risk is that bionic might modify the kernel headers assuming it will only be used in an android environment and maybe that could break a glibc/musl build in some subtle way.",
+      "parentUuid": "354575ed_9441f6e2",
+      "range": {
+        "startLine": 12,
+        "startChar": 14,
+        "endLine": 13,
+        "endChar": 14
+      },
+      "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
