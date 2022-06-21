@@ -34,6 +34,24 @@
       "parentUuid": "a4576e8c_21aa232d",
       "revId": "9e607cbcf667c3ae34fbb35b417c375fd081ddab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6fc66966_982f379a",
+        "filename": "gpu_display/cargo2android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-21T22:56:36Z",
+      "side": 1,
+      "message": "nvm - build file - check with bbadour for criteria",
+      "parentUuid": "12cd532f_7f7e8dec",
+      "revId": "9e607cbcf667c3ae34fbb35b417c375fd081ddab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
