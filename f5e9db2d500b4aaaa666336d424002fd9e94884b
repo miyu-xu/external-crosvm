@@ -70,6 +70,30 @@
       },
       "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9d64f2b8_5f367c3b",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-21T22:57:59Z",
+      "side": 1,
+      "message": "Right, for instance, if two fields are in a different order for an ioctl between Android and host, the values might be interpreted in an unsafe way.",
+      "parentUuid": "19c54482_4fb707e7",
+      "range": {
+        "startLine": 12,
+        "startChar": 14,
+        "endLine": 13,
+        "endChar": 14
+      },
+      "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
