@@ -67,6 +67,23 @@
       "message": "And this failure was b/236602028.",
       "revId": "989a286f9cc1ca79ab8074b8f244f8037c72ad4c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75ae0dde_5fd8a042",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-21T21:16:22Z",
+      "side": 1,
+      "message": "This failure is b/236556224",
+      "revId": "989a286f9cc1ca79ab8074b8f244f8037c72ad4c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
