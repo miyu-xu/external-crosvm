@@ -94,6 +94,30 @@
       },
       "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aa43dac6_3e647c01",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-22T16:32:11Z",
+      "side": 1,
+      "message": "Removed the kernel header include upstream https://crrev.com/c/3717525\n\nAbandoning this CL.",
+      "parentUuid": "9d64f2b8_5f367c3b",
+      "range": {
+        "startLine": 12,
+        "startChar": 14,
+        "endLine": 13,
+        "endChar": 14
+      },
+      "revId": "f5e9db2d500b4aaaa666336d424002fd9e94884b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
