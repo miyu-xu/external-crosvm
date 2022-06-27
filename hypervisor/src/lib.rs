@@ -16,6 +16,9 @@ pub mod whpx;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod x86_64;
 
+#[cfg(feature = "gunyah")]
+pub mod gunyah;
+
 use std::os::raw::c_int;
 
 use base::AsRawDescriptor;

@@ -136,6 +136,7 @@ gpu = ["devices/gpu"]
 haxm = ["hypervisor/haxm"]
 whpx = ["devices/whpx", "hypervisor/whpx"]
 vaapi = ["devices/vaapi"]
+gunyah = ["hypervisor/gunyah", "devices/gunyah"]
 libvda = ["devices/libvda"]
 linux-armhf = [
     "composite-disk",

@@ -218,7 +218,7 @@ fn create_serial_node(fdt: &mut FdtWriter, addr: u64, irq: u32) -> Result<()> {
     Ok(())
 }
 
-fn create_serial_nodes(fdt: &mut FdtWriter) -> Result<()> {
+fn create_serial_nodes(fdt: &mut FdtWriter, irqs: &mut Vec<u32>) -> Result<()> {
     // Note that SERIAL_ADDR contains the I/O port addresses conventionally used
     // for serial ports on x86. This uses the same addresses (but on the MMIO bus)
     // to simplify the shared serial code.
@@ -226,6 +226,9 @@ fn create_serial_nodes(fdt: &mut FdtWriter) -> Result<()> {
     create_serial_node(fdt, SERIAL_ADDR[1], AARCH64_SERIAL_2_4_IRQ)?;
     create_serial_node(fdt, SERIAL_ADDR[2], AARCH64_SERIAL_1_3_IRQ)?;
     create_serial_node(fdt, SERIAL_ADDR[3], AARCH64_SERIAL_2_4_IRQ)?;
+
+    irqs.push(AARCH64_SERIAL_1_3_IRQ);
+    irqs.push(AARCH64_SERIAL_2_4_IRQ);
 
     Ok(())
 }
@@ -354,6 +357,7 @@ fn create_pci_nodes(
     cfg: PciConfigRegion,
     ranges: &[PciRange],
     dma_pool_phandle: Option<u32>,
+    irqs: &mut Vec<u32>,
 ) -> Result<()> {
     // Add devicetree nodes describing a PCI generic host controller.
     // See Documentation/devicetree/bindings/pci/host-generic-pci.txt in the kernel
@@ -411,6 +415,8 @@ fn create_pci_nodes(
 
         // INT#(1)
         masks.push(0x7); // allow INTA#-INTD# (1 | 2 | 3 | 4)
+
+        irqs.push(*irq_num);
     }
 
     let pci_node = fdt.begin_node("pci")?;
@@ -433,7 +439,7 @@ fn create_pci_nodes(
     Ok(())
 }
 
-fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
+fn create_rtc_node(fdt: &mut FdtWriter, irqs: &mut Vec<u32>) -> Result<()> {
     // the kernel driver for pl030 really really wants a clock node
     // associated with an AMBA device or it will fail to probe, so we
     // need to make up a clock node to associate with the pl030 rtc
@@ -458,6 +464,7 @@ fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
     fdt.property_u32("clocks", CLK_PHANDLE)?;
     fdt.property_string("clock-names", "apb_pclk")?;
     fdt.end_node(rtc_node)?;
+    irqs.push(AARCH64_RTC_IRQ);
     Ok(())
 }
 
@@ -488,6 +495,60 @@ fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> 
     fdt.property_u32("clock-frequency", vmwdt_cfg.clock_hz)?;
     fdt.property_u32("timeout-sec", vmwdt_cfg.timeout_sec)?;
     fdt.end_node(vmwdt_node)?;
+    Ok(())
+}
+
+fn create_gunyah_nodes(fdt: &mut FdtWriter, irqs: &mut Vec<u32>) -> Result<()> {
+    let vm_config_node = fdt.begin_node("qcom,vm-config")?;
+    fdt.property_string("compatible", "qcom,vm-1.0")?;
+    fdt.property_null("vm-attrs")?;
+    fdt.property_string("image-name", "gvm")?;
+
+    let mem_node = fdt.begin_node("memory")?;
+    fdt.property_u32("#address-cells", 2)?;
+    fdt.property_u32("#size-cells", 2)?;
+    let mut ipa = Vec::new();
+    ipa.push(0x0);
+    ipa.push(0x80000000);
+    fdt.property_array_u32("base-address", &ipa)?;
+    fdt.end_node(mem_node)?;
+
+    let node = fdt.begin_node("vcpus")?;
+    fdt.property_string("affinity", "proxy")?;
+    fdt.end_node(node)?;
+
+    let node = fdt.begin_node("interrupts")?;
+    fdt.property_u32("config", PHANDLE_GIC)?;
+    fdt.end_node(node)?;
+
+
+    let vdev_node = fdt.begin_node("vdevices")?;
+    fdt.property_string("generate", "/hypervisor")?;
+    for irq in irqs.iter() {
+        let dbl_node_name = format!("dbl-{:x}", *irq);
+        let dbl_node = fdt.begin_node(&dbl_node_name)?;
+        fdt.property_string("vdevice-type", "doorbell")?;
+        let path_name = format!("/hypervisor/dbl-{:x}", *irq);
+        fdt.property_string("generate", &path_name)?;
+        fdt.property_u32("qcom,label", *irq)?;
+        fdt.property_null("peer-default")?;
+        fdt.property_null("source-can-clear")?;
+        let mut interrupts = Vec::new();
+        interrupts.push(0); // SPI
+        interrupts.push(*irq); // SPI
+        interrupts.push(0); // Level triggered
+        fdt.property_array_u32("interrupts", &interrupts)?;
+        fdt.end_node(dbl_node)?;
+    }
+
+    let vrtc_node = fdt.begin_node("vrtc")?;
+    fdt.property_string("vdevice-type", "vrtc-pl031");
+    fdt.property_null("peer-default");
+    fdt.property_null("allocate-base");
+    fdt.end_node(vrtc_node)?;
+
+    fdt.end_node(vdev_node)?;
+    fdt.end_node(vm_config_node)?;
     Ok(())
 }
 
@@ -534,6 +595,8 @@ pub fn create_fdt(
     dump_dtb_path: Option<PathBuf>,
 ) -> Result<()> {
     let mut fdt = FdtWriter::new(&[]);
+    // TODO: I'd like to try to use GunyahKernelIrqChip to remember the irqs rather than this irqs vec in create_fdt.
+    let mut irqs: Vec<u32> = Vec::new();
 
     // The whole thing is put into one giant node with some top level properties
     let root_node = fdt.begin_node("")?;
@@ -553,14 +616,16 @@ pub fn create_fdt(
     if use_pmu {
         create_pmu_node(&mut fdt, num_cpus)?;
     }
-    create_serial_nodes(&mut fdt)?;
+    create_serial_nodes(&mut fdt, &mut irqs)?;
     create_psci_node(&mut fdt, &psci_version)?;
-    create_pci_nodes(&mut fdt, pci_irqs, pci_cfg, pci_ranges, dma_pool_phandle)?;
-    create_rtc_node(&mut fdt)?;
+    create_pci_nodes(&mut fdt, pci_irqs, pci_cfg, pci_ranges, dma_pool_phandle, &mut irqs)?;
+    create_rtc_node(&mut fdt, &mut irqs)?;
     if let Some((bat_mmio_base, bat_irq)) = bat_mmio_base_and_irq {
         create_battery_node(&mut fdt, bat_mmio_base, bat_irq)?;
     }
     create_vmwdt_node(&mut fdt, vmwdt_cfg)?;
+    // TODO: move this into hypervisor crate. Open to suggestions on the changes.
+    create_gunyah_nodes(&mut fdt, &mut irqs)?;
     // End giant node
     fdt.end_node(root_node)?;
 

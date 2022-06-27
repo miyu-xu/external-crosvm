@@ -686,6 +686,10 @@ pub struct RunCommand {
     ///         cache.
     ///     cache-size=SIZE - The maximum size of the shader cache
     pub gpu_render_server: Option<GpuRenderServerParameters>,
+    #[cfg(all(unix, feature = "gunyah"))]
+    #[argh(option, long = "gunyah-device", arg_name = "PATH")]
+    /// path to the Gunyah device. (default /dev/gunyah)
+    pub gunyah_device_path: Option<PathBuf>,
     #[argh(switch)]
     /// use mirror cpu topology of Host for Guest VM, also copy some cpu feature to Guest VM
     pub host_cpu_topology: bool,
@@ -1312,6 +1316,11 @@ impl TryFrom<RunCommand> for super::config::Config {
                 return Err(format!("vhost-net-device path {:?} does not exist", p));
             }
             cfg.vhost_net_device_path = p;
+        }
+
+        #[cfg(all(unix, feature = "gunyah"))]
+        if let Some(p) = cmd.gunyah_device_path {
+            cfg.gunyah_device_path = p;
         }
 
         if let Some(p) = cmd.android_fstab {
