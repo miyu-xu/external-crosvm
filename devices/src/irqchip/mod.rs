@@ -51,6 +51,11 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(feature = "gunyah")]
+mod gunyah;
+#[cfg(feature = "gunyah")]
+pub use self::gunyah::GunyahKernelIrqChip;
+
 pub type IrqEventIndex = usize;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

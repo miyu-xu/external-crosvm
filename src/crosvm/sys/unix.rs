@@ -27,6 +27,7 @@ use std::mem;
 use std::ops::RangeInclusive;
 use std::os::unix::prelude::OpenOptionsExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -1224,6 +1225,49 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         .collect()
 }
 
+#[cfg(feature = "gunyah")]
+fn run_gh(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
+    use devices::GunyahKernelIrqChip;
+    use hypervisor::gunyah::{GunyahVcpu, GunyahVm, Gunyah};
+
+    let gh = Gunyah::new_with_path(&&cfg.gunyah_device_path).with_context(|| {
+        format!("failed to open Gunyah device {}", cfg.gunyah_device_path.display())
+    })?;
+    let vm = GunyahVm::new(&gh, guest_mem, components.protected_vm).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protected_vm,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        todo!();
+    }
+
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    // TODO: drop the enum. We don't need like KVM does.
+    enum GunyahIrqChip {
+        Kernel(GunyahKernelIrqChip),
+    }
+
+    impl GunyahIrqChip {
+        fn as_mut(&mut self) -> &mut dyn IrqChipArch {
+            match self {
+                GunyahIrqChip::Kernel(i) => i,
+            }
+        }
+    }
+
+    let ioapic_host_tube = None;
+    let mut irq_chip = GunyahIrqChip::Kernel(
+        GunyahKernelIrqChip::new(vm_clone, components.vcpu_count)
+            .context("failed to create IRQ chip")?,
+    );
+
+    run_vm::<GunyahVcpu, GunyahVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+}
+
 fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).with_context(|| {
         format!(
@@ -1305,8 +1349,15 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
     run_vm::<KvmVcpu, KvmVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(feature = "gunyah")]
+    if cfg.gunyah_device_path.exists() {
+        return Ok(HypervisorKind::Gunyah);
+    }
+    bail!("no hypervisor enabled!");
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
@@ -1329,13 +1380,15 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
     }
     guest_mem.set_memory_policy(mem_policy);
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
         HypervisorKind::Kvm => run_kvm(cfg, components, guest_mem),
+        #[cfg(feature = "gunyah")]
+        HypervisorKind::Gunyah => run_gh(cfg, components, guest_mem),
     }
 }
 

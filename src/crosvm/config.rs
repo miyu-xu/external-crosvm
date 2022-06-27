@@ -62,6 +62,7 @@ cfg_if::cfg_if! {
         use crate::crosvm::sys::GpuRenderServerParameters;
         use libc::{getegid, geteuid};
 
+        static GUNYAH_PATH: &str = "/dev/gunyah";
         static KVM_PATH: &str = "/dev/kvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
         static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
@@ -1208,6 +1209,8 @@ pub struct Config {
     pub gpu_parameters: Option<GpuParameters>,
     #[cfg(all(unix, feature = "gpu"))]
     pub gpu_render_server_parameters: Option<GpuRenderServerParameters>,
+    #[cfg(all(unix, feature = "gunyah"))]
+    pub gunyah_device_path: PathBuf,
     pub host_cpu_topology: bool,
     #[cfg(windows)]
     pub host_guid: Option<String>,
@@ -1404,6 +1407,8 @@ impl Default for Config {
             gpu_parameters: None,
             #[cfg(all(unix, feature = "gpu"))]
             gpu_render_server_parameters: None,
+            #[cfg(all(unix, feature = "gunyah"))]
+            gunyah_device_path: PathBuf::from(GUNYAH_PATH),
             host_cpu_topology: false,
             #[cfg(windows)]
             host_guid: None,

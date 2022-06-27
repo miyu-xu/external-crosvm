@@ -23,6 +23,7 @@ gfxstream = ["gpu", "rutabaga_gfx/gfxstream"]
 slirp = []
 stats = []
 whpx = []
+gunyah = []
 
 [dependencies]
 argh = "0.1.7"
