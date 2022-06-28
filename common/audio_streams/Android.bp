@@ -51,4 +51,8 @@ rust_library {
         "libasync_trait",
         "libremain",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

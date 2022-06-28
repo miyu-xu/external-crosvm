@@ -28,6 +28,7 @@ rust_test {
         "libbase_rust",
         "libdata_model",
         "liblibc",
+        "libresources",
         "libtempfile",
         "libthiserror",
         "libvm_memory",
@@ -48,8 +49,13 @@ rust_library {
         "libbase_rust",
         "libdata_model",
         "liblibc",
+        "libresources",
         "libthiserror",
         "libvm_memory",
     ],
     proc_macros: ["libremain"],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

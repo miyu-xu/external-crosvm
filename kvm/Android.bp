@@ -88,4 +88,8 @@ rust_library {
         "libsync_rust",
         "libvm_memory",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

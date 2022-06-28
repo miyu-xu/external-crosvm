@@ -26,6 +26,7 @@ rust_library {
         "libarch",
         "libassertions",
         "libbase_rust",
+        "libcfg_if",
         "libdata_model",
         "libdevices",
         "libhypervisor",
@@ -41,6 +42,10 @@ rust_library {
         "libvm_memory",
     ],
     proc_macros: ["libremain"],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
     target: {
         host_linux: {
             features: [
@@ -83,6 +88,7 @@ rust_test {
         "libarch",
         "libassertions",
         "libbase_rust",
+        "libcfg_if",
         "libdata_model",
         "libdevices",
         "libhypervisor",
