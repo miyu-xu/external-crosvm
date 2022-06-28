@@ -96,6 +96,10 @@ rust_library {
         "libbase_event_token_derive",
         "libremain",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
     target: {
         android: {
             rustlibs: ["libandroid_log_sys"],

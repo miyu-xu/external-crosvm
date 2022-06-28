@@ -35,6 +35,7 @@ rust_test {
         "libkvm_sys",
         "liblibc",
         "libmemoffset",
+        "libonce_cell",
         "libserde",
         "libsync_rust",
         "libvm_memory",
@@ -62,9 +63,14 @@ rust_library {
         "libkvm_sys",
         "liblibc",
         "libmemoffset",
+        "libonce_cell",
         "libserde",
         "libsync_rust",
         "libvm_memory",
     ],
     proc_macros: ["libenumn"],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

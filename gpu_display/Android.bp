@@ -47,6 +47,10 @@ rust_library {
             ],
         },
     },
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }
 
 cc_library_static {

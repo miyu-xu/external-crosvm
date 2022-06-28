@@ -23,4 +23,8 @@ rust_library {
         "libbase_rust",
         "libdata_model",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }
