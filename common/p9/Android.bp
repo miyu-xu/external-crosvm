@@ -23,6 +23,10 @@ rust_library {
         "liblibc",
     ],
     proc_macros: ["libwire_format_derive"],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }
 
 rust_test {

@@ -25,4 +25,8 @@ rust_library {
         "libmetrics",
         "libserde",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

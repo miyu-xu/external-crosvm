@@ -35,7 +35,6 @@ license {
 rust_binary {
     name: "crosvm",
     defaults: ["crosvm_defaults"],
-    // has rustc warnings
     host_supported: true,
     prefer_rlib: true,
     crate_name: "crosvm",
@@ -72,6 +71,7 @@ rust_binary {
         "libp9",
         "libresources",
         "librutabaga_gfx",
+        "libserde",
         "libserde_json",
         "libserde_keyvalue",
         "libsync_rust",
@@ -145,7 +145,6 @@ rust_binary {
 rust_test {
     name: "crosvm_test_src_main",
     defaults: ["crosvm_defaults"],
-    // has rustc warnings
     host_supported: true,
     crate_name: "crosvm",
     cargo_env_compat: true,
@@ -177,16 +176,17 @@ rust_test {
         "libhypervisor",
         "libkernel_cmdline",
         "libkernel_loader",
-        "liblazy_static",
         "liblibc",
         "liblibcras",
         "liblog_rust",
         "libmetrics",
         "libminijail_rust",
         "libnet_util",
+        "libonce_cell",
         "libp9",
         "libresources",
         "librutabaga_gfx",
+        "libserde",
         "libserde_json",
         "libserde_keyvalue",
         "libsync_rust",

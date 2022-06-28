@@ -25,4 +25,8 @@ rust_ffi_shared {
         "liblibc",
         "libvm_control",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }

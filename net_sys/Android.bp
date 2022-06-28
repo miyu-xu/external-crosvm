@@ -23,4 +23,8 @@ rust_library {
         "libbase_rust",
         "liblibc",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "//apex_available:anyapex",
+    ],
 }
