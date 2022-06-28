@@ -134,6 +134,9 @@ rust_binary {
         linux_musl_x86_64: {
             relative_install_path: "x86_64-linux-musl",
         },
+        linux_musl_arm64: {
+            relative_install_path: "aarch64-linux-musl",
+        },
     },
     ld_flags: [
         "-Wl,--rpath,\\$$ORIGIN",
@@ -261,6 +264,9 @@ rust_defaults {
             enabled: true,
         },
         linux_bionic_arm64: {
+            enabled: true,
+        },
+        linux_musl_arm64: {
             enabled: true,
         },
         darwin: {
