@@ -16,6 +16,24 @@
       "message": "Would it be reasonable to hold off on merging this for a day or two to see if I can get https://r.android.com/2138858 in first? It is a somewhat tricky merge and I haven\u0027t found any good tricks for rebasing a merge commit without redoing nearly all of it again manually.",
       "revId": "b3eb77f722bc60b6b67a57ddee8012bd5f164243",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ed41d4f9_ee556101",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1002751
+      },
+      "writtenOn": "2022-06-29T22:30:13Z",
+      "side": 1,
+      "message": "Sure, although I don\u0027t expect it to conflict with this change since it doesn\u0027t touch the same parts of Android.bp.",
+      "parentUuid": "27f0a647_77c6e6fe",
+      "revId": "b3eb77f722bc60b6b67a57ddee8012bd5f164243",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
