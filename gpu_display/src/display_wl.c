@@ -11,11 +11,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+<<<<<<< HEAD   (400524 [LSC] Add LOCAL_LICENSE_KINDS to external/crosvm)
 // Android edit:
 // #include <linux/input-event-codes.h>
 #ifndef BTN_LEFT
 #define BTN_LEFT 0x110
 #endif
+=======
+>>>>>>> BRANCH (ed071b crosvm: implement lock-guest-memory feature.)
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -33,6 +36,10 @@
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
+
+// BTN_LEFT is copied from linux/input-event-codes.h because the kernel headers
+// aren't readily available in some downstream projects.
+#define BTN_LEFT 0x110
 
 #define DEFAULT_SCALE 2
 #define MAX_BUFFER_COUNT 64

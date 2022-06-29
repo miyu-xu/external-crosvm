@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (400524 [LSC] Add LOCAL_LICENSE_KINDS to external/crosvm)
 // Copyright 2021 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -110,3 +111,5 @@ mod tests {
 //        assert_ne!(&rand, &[0u8; TEST_SIZE]);
 //    }
 }
+=======
+>>>>>>> BRANCH (ed071b crosvm: implement lock-guest-memory feature.)
