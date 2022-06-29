@@ -5,88 +5,39 @@
 //! Runs a virtual machine
 
 pub mod panic_hook;
-pub mod sys;
 
-use std::collections::BTreeMap;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use std::collections::BTreeSet;
-use std::convert::TryFrom;
-use std::default::Default;
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader};
-#[cfg(feature = "direct")]
-use std::ops::RangeInclusive;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::fs::OpenOptions;
+use std::path::Path;
 use std::string::String;
 
-use arch::{
-    set_default_serial_parameters, MsrAction, MsrConfig, MsrFilter, MsrRWType, MsrValueFrom,
-    Pstore, VcpuAffinity,
-};
+use argh::FromArgs;
 use base::syslog::LogConfig;
-use base::{error, getpid, info, pagesize, syslog};
+use base::{error, info, syslog};
 mod crosvm;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64", feature = "direct"))]
-use crosvm::argument::parse_hex_or_decimal;
-use crosvm::{
-    argument::{self, print_help, set_arguments, Argument},
-    platform, BindMount, Config, Executable, FileBackedMappingParameters, GidMap,
-    TouchDeviceOption, VfioCommand, VhostUserFsOption, VhostUserOption, VhostUserWlOption,
-    VvuOption,
-};
-#[cfg(feature = "direct")]
-use crosvm::{DirectIoOption, HostPcieRootPortParameters};
-use devices::serial_device::{SerialHardware, SerialParameters};
-use devices::virtio::block::block::DiskOption;
-#[cfg(feature = "gpu")]
-use devices::virtio::gpu::{
-    GpuDisplayParameters, GpuMode, GpuParameters, DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH,
-};
+#[cfg(feature = "plugin")]
+use crosvm::config::executable_is_plugin;
+use crosvm::config::Config;
+use crosvm::{cmdline, platform};
 use devices::virtio::vhost::user::device::{run_block_device, run_net_device};
-#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
-use devices::virtio::VideoBackendType;
-#[cfg(feature = "direct")]
-use devices::BusRange;
-#[cfg(feature = "audio")]
-use devices::{Ac97Backend, Ac97Parameters};
-use devices::{PciAddress, PciClassCode, StubPciParameters};
-use disk::{self, QcowFile};
+use disk::QcowFile;
 #[cfg(feature = "composite-disk")]
 use disk::{
     create_composite_disk, create_disk_file, create_zero_filler, ImagePartitionType, PartitionInfo,
 };
-use hypervisor::ProtectionType;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use resources::MemRegion;
-use serde_keyvalue::from_key_values;
-use uuid::Uuid;
+mod sys;
 use vm_control::{
     client::{
         do_modify_battery, do_usb_attach, do_usb_detach, do_usb_list, handle_request, vms_request,
         ModifyUsbResult,
     },
-    BalloonControlCommand, BatteryType, DiskControlCommand, UsbControlResult, VmRequest,
-    VmResponse,
+    BalloonControlCommand, DiskControlCommand, UsbControlResult, VmRequest, VmResponse,
 };
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::{set_enable_pnp_data_msr_config, set_itmt_msr_config};
-
-#[cfg(feature = "gpu")]
-use rutabaga_gfx::{calculate_context_mask, RutabagaWsi};
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-const ONE_MB: u64 = 1 << 20;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-const MB_ALIGNED: u64 = ONE_MB - 1;
-// the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 #[cfg(feature = "scudo")]
 #[global_allocator]
 static ALLOCATOR: scudo::GlobalScudoAllocator = scudo::GlobalScudoAllocator;
 
+<<<<<<< HEAD   (eb9d1c ANDROID: Workaround to fix cuttlefish boot on intel 11th gen)
 fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     matches!(executable, Some(Executable::Plugin(_)))
 }
@@ -2324,6 +2275,8 @@ fn validate_arguments(cfg: &mut Config) -> std::result::Result<(), argument::Err
     Ok(())
 }
 
+=======
+>>>>>>> BRANCH (ed071b crosvm: implement lock-guest-memory feature.)
 enum CommandStatus {
     Success,
     VmReset,
@@ -2333,12 +2286,13 @@ enum CommandStatus {
 }
 
 fn run_vm<F: 'static>(
-    args: Vec<String>,
+    cmd: cmdline::RunCommand,
     log_config: LogConfig<F>,
 ) -> std::result::Result<CommandStatus, ()>
 where
     F: Fn(&mut syslog::fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
 {
+<<<<<<< HEAD   (eb9d1c ANDROID: Workaround to fix cuttlefish boot on intel 11th gen)
     let mut arguments =
         vec![Argument::positional("KERNEL", "bzImage of kernel to run"),
           Argument::value("kvm-device", "PATH", "Path to the KVM device. (default /dev/kvm)"),
@@ -2661,8 +2615,10 @@ filter=(default|override) - if the msr is filtered in KVM, whether to override o
     })
     .and_then(|_| validate_arguments(&mut cfg));
 
+=======
+>>>>>>> BRANCH (ed071b crosvm: implement lock-guest-memory feature.)
     if let Err(e) = syslog::init_with(LogConfig {
-        proc_name: if let Some(ref tag) = cfg.syslog_tag {
+        proc_name: if let Some(ref tag) = cmd.syslog_tag {
             tag.clone()
         } else {
             String::from("crosvm")
@@ -2673,9 +2629,9 @@ filter=(default|override) - if the msr is filtered in KVM, whether to override o
         return Err(());
     }
 
-    match match_res {
+    match TryInto::<Config>::try_into(cmd) {
         #[cfg(feature = "plugin")]
-        Ok(()) if executable_is_plugin(&cfg.executable_path) => {
+        Ok(cfg) if executable_is_plugin(&cfg.executable_path) => {
             match crosvm::plugin::run_config(cfg) {
                 Ok(_) => {
                     info!("crosvm and plugin have exited normally");
@@ -2687,7 +2643,7 @@ filter=(default|override) - if the msr is filtered in KVM, whether to override o
                 }
             }
         }
-        Ok(()) => match platform::run_config(cfg) {
+        Ok(cfg) => match platform::run_config(cfg) {
             Ok(platform::ExitState::Stop) => {
                 info!("crosvm has exited normally");
                 Ok(CommandStatus::VmStop)
@@ -2709,10 +2665,6 @@ filter=(default|override) - if the msr is filtered in KVM, whether to override o
                 Err(())
             }
         },
-        Err(argument::Error::PrintHelp) => {
-            print_help("crosvm run", "KERNEL", &arguments[..]);
-            Ok(CommandStatus::Success)
-        }
         Err(e) => {
             error!("{}", e);
             Err(())
@@ -2720,38 +2672,38 @@ filter=(default|override) - if the msr is filtered in KVM, whether to override o
     }
 }
 
-fn stop_vms(cmd: crosvm::StopCommand) -> std::result::Result<(), ()> {
+fn stop_vms(cmd: cmdline::StopCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Exit, cmd.socket_path)
 }
 
-fn suspend_vms(cmd: crosvm::SuspendCommand) -> std::result::Result<(), ()> {
+fn suspend_vms(cmd: cmdline::SuspendCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Suspend, cmd.socket_path)
 }
 
-fn resume_vms(cmd: crosvm::ResumeCommand) -> std::result::Result<(), ()> {
+fn resume_vms(cmd: cmdline::ResumeCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Resume, cmd.socket_path)
 }
 
-fn powerbtn_vms(cmd: crosvm::PowerbtnCommand) -> std::result::Result<(), ()> {
+fn powerbtn_vms(cmd: cmdline::PowerbtnCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Powerbtn, cmd.socket_path)
 }
 
-fn sleepbtn_vms(cmd: crosvm::SleepCommand) -> std::result::Result<(), ()> {
+fn sleepbtn_vms(cmd: cmdline::SleepCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Sleepbtn, cmd.socket_path)
 }
 
-fn inject_gpe(cmd: crosvm::GpeCommand) -> std::result::Result<(), ()> {
+fn inject_gpe(cmd: cmdline::GpeCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Gpe(cmd.gpe), cmd.socket_path)
 }
 
-fn balloon_vms(cmd: crosvm::BalloonCommand) -> std::result::Result<(), ()> {
+fn balloon_vms(cmd: cmdline::BalloonCommand) -> std::result::Result<(), ()> {
     let command = BalloonControlCommand::Adjust {
         num_bytes: cmd.num_bytes,
     };
     vms_request(&VmRequest::BalloonCommand(command), cmd.socket_path)
 }
 
-fn balloon_stats(cmd: crosvm::BalloonStatsCommand) -> std::result::Result<(), ()> {
+fn balloon_stats(cmd: cmdline::BalloonStatsCommand) -> std::result::Result<(), ()> {
     let command = BalloonControlCommand::Stats {};
     let request = &VmRequest::BalloonCommand(command);
     let response = handle_request(request, cmd.socket_path)?;
@@ -2768,7 +2720,7 @@ fn balloon_stats(cmd: crosvm::BalloonStatsCommand) -> std::result::Result<(), ()
     }
 }
 
-fn modify_battery(cmd: crosvm::BatteryCommand) -> std::result::Result<(), ()> {
+fn modify_battery(cmd: cmdline::BatteryCommand) -> std::result::Result<(), ()> {
     do_modify_battery(
         cmd.socket_path,
         &cmd.battery_type,
@@ -2777,9 +2729,9 @@ fn modify_battery(cmd: crosvm::BatteryCommand) -> std::result::Result<(), ()> {
     )
 }
 
-fn modify_vfio(cmd: crosvm::VfioCrosvmCommand) -> std::result::Result<(), ()> {
+fn modify_vfio(cmd: cmdline::VfioCrosvmCommand) -> std::result::Result<(), ()> {
     let (request, socket_path, vfio_path) = match cmd.command {
-        crosvm::VfioSubCommand::Add(c) => {
+        cmdline::VfioSubCommand::Add(c) => {
             let request = VmRequest::VfioCommand {
                 vfio_path: c.vfio_path.clone(),
                 add: true,
@@ -2787,7 +2739,7 @@ fn modify_vfio(cmd: crosvm::VfioCrosvmCommand) -> std::result::Result<(), ()> {
             };
             (request, c.socket_path, c.vfio_path)
         }
-        crosvm::VfioSubCommand::Remove(c) => {
+        cmdline::VfioSubCommand::Remove(c) => {
             let request = VmRequest::VfioCommand {
                 vfio_path: c.vfio_path.clone(),
                 add: true,
@@ -2805,7 +2757,9 @@ fn modify_vfio(cmd: crosvm::VfioCrosvmCommand) -> std::result::Result<(), ()> {
 }
 
 #[cfg(feature = "composite-disk")]
-fn create_composite(cmd: crosvm::CreateCompositeCommand) -> std::result::Result<(), ()> {
+fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result<(), ()> {
+    use std::{fs::File, path::PathBuf};
+
     let composite_image_path = &cmd.path;
     let zero_filler_path = format!("{}.filler", composite_image_path);
     let header_path = format!("{}.header", composite_image_path);
@@ -2909,7 +2863,7 @@ fn create_composite(cmd: crosvm::CreateCompositeCommand) -> std::result::Result<
     Ok(())
 }
 
-fn create_qcow2(cmd: crosvm::CreateQcow2Command) -> std::result::Result<(), ()> {
+fn create_qcow2(cmd: cmdline::CreateQcow2Command) -> std::result::Result<(), ()> {
     if !(cmd.size.is_some() ^ cmd.backing_file.is_some()) {
         println!(
             "Create a new QCOW2 image at `PATH` of either the specified `SIZE` in bytes or
@@ -2944,13 +2898,13 @@ fn create_qcow2(cmd: crosvm::CreateQcow2Command) -> std::result::Result<(), ()> 
     Ok(())
 }
 
-fn start_device(opts: crosvm::DevicesCommand) -> std::result::Result<(), ()> {
+fn start_device(opts: cmdline::DeviceCommand) -> std::result::Result<(), ()> {
     let result = match opts.command {
-        crosvm::DevicesSubcommand::CrossPlatform(command) => match command {
-            crosvm::CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
-            crosvm::CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
+        cmdline::DeviceSubcommand::CrossPlatform(command) => match command {
+            cmdline::CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
+            cmdline::CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
         },
-        crosvm::DevicesSubcommand::Sys(command) => sys::start_device(command),
+        cmdline::DeviceSubcommand::Sys(command) => sys::start_device(command),
     };
 
     result.map_err(|e| {
@@ -2958,9 +2912,9 @@ fn start_device(opts: crosvm::DevicesCommand) -> std::result::Result<(), ()> {
     })
 }
 
-fn disk_cmd(cmd: crosvm::DiskCommand) -> std::result::Result<(), ()> {
+fn disk_cmd(cmd: cmdline::DiskCommand) -> std::result::Result<(), ()> {
     match cmd.command {
-        crosvm::DiskSubcommand::Resize(cmd) => {
+        cmdline::DiskSubcommand::Resize(cmd) => {
             let request = VmRequest::DiskCommand {
                 disk_index: cmd.disk_index,
                 command: DiskControlCommand::Resize {
@@ -2972,30 +2926,29 @@ fn disk_cmd(cmd: crosvm::DiskCommand) -> std::result::Result<(), ()> {
     }
 }
 
-fn make_rt(cmd: crosvm::MakeRTCommand) -> std::result::Result<(), ()> {
+fn make_rt(cmd: cmdline::MakeRTCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::MakeRT, cmd.socket_path)
 }
 
-fn usb_attach(cmd: crosvm::UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
-    let (bus, addr, vid, pid) = cmd.addr;
+fn usb_attach(cmd: cmdline::UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
-    do_usb_attach(cmd.socket_path, bus, addr, vid, pid, dev_path)
+    do_usb_attach(cmd.socket_path, dev_path)
 }
 
-fn usb_detach(cmd: crosvm::UsbDetachCommand) -> ModifyUsbResult<UsbControlResult> {
+fn usb_detach(cmd: cmdline::UsbDetachCommand) -> ModifyUsbResult<UsbControlResult> {
     do_usb_detach(cmd.socket_path, cmd.port)
 }
 
-fn usb_list(cmd: crosvm::UsbListCommand) -> ModifyUsbResult<UsbControlResult> {
+fn usb_list(cmd: cmdline::UsbListCommand) -> ModifyUsbResult<UsbControlResult> {
     do_usb_list(cmd.socket_path)
 }
 
-fn modify_usb(cmd: crosvm::UsbCommand) -> std::result::Result<(), ()> {
+fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
     let result = match cmd.command {
-        crosvm::UsbSubCommand::Attach(cmd) => usb_attach(cmd),
-        crosvm::UsbSubCommand::Detach(cmd) => usb_detach(cmd),
-        crosvm::UsbSubCommand::List(cmd) => usb_list(cmd),
+        cmdline::UsbSubCommand::Attach(cmd) => usb_attach(cmd),
+        cmdline::UsbSubCommand::Detach(cmd) => usb_detach(cmd),
+        cmdline::UsbSubCommand::List(cmd) => usb_list(cmd),
     };
     match result {
         Ok(response) => {
@@ -3025,8 +2978,58 @@ fn pkg_version() -> std::result::Result<(), ()> {
 fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
     panic_hook::set_panic_hook();
 
-    let args: crosvm::CrosvmCmdlineArgs = argh::from_env();
+    let mut args: Vec<String> = Vec::default();
+    // http://b/235882579
+    for arg in std::env::args() {
+        match arg.as_str() {
+            "--host_ip" => {
+                eprintln!("`--host_ip` option is deprecated!");
+                eprintln!("Please use `--host-ip` instead");
+                args.push("--host-ip".to_string());
+            }
+            "--balloon_bias_mib" => {
+                eprintln!("`--balloon_bias_mib` option is deprecated!");
+                eprintln!("Please use `--balloon-bias-mib` instead");
+                args.push("--balloon-bias-mib".to_string());
+            }
+            arg if arg.starts_with("--") => {
+                if let Some((key, value)) = arg.split_once("=") {
+                    eprintln!(
+                        "`{}={}` is deprecated, please use `{} {}`",
+                        key, value, key, value
+                    );
+                    args.push(key.to_string());
+                    args.push(value.to_string());
+                } else {
+                    args.push(arg.to_string());
+                }
+            }
+            arg => args.push(arg.to_string()),
+        }
+    }
+    let switch_or_option = [
+        "--battery",
+        "--video-decoder",
+        "--video-encoder",
+        "--gpu",
+        "--gpu-display",
+    ];
+    for arg in switch_or_option {
+        if let Some(i) = args.iter().position(|a| a == arg) {
+            if i == args.len() - 1 || args[i + 1].starts_with("--") {
+                args.insert(i + 1, "".to_string());
+            }
+        }
+    }
 
+    let args = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let args = match crosvm::cmdline::CrosvmCmdlineArgs::from_args(&["crosvm"], &args[1..]) {
+        Ok(args) => args,
+        Err(e) => {
+            println!("{}", e.output);
+            return Ok(CommandStatus::Success);
+        }
+    };
     let extended_status = args.extended_status;
 
     let log_config = LogConfig {
@@ -3036,35 +3039,35 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
     };
 
     // Past this point, usage of exit is in danger of leaking zombie processes.
-    let ret = if let crosvm::Command::Run(cmd) = args.command {
+    let ret = if let crosvm::cmdline::Command::Run(cmd) = args.command {
         // We handle run_vm separately because it does not simply signal success/error
         // but also indicates whether the guest requested reset or stop.
-        run_vm(cmd.args, log_config)
+        run_vm(cmd, log_config)
     } else {
         if let Err(e) = syslog::init_with(log_config) {
             eprintln!("failed to initialize syslog: {}", e);
             return Err(());
         }
         match args.command {
-            crosvm::Command::Balloon(cmd) => balloon_vms(cmd),
-            crosvm::Command::BalloonStats(cmd) => balloon_stats(cmd),
-            crosvm::Command::Battery(cmd) => modify_battery(cmd),
+            cmdline::Command::Balloon(cmd) => balloon_vms(cmd),
+            cmdline::Command::BalloonStats(cmd) => balloon_stats(cmd),
+            cmdline::Command::Battery(cmd) => modify_battery(cmd),
             #[cfg(feature = "composite-disk")]
-            crosvm::Command::CreateComposite(cmd) => create_composite(cmd),
-            crosvm::Command::CreateQcow2(cmd) => create_qcow2(cmd),
-            crosvm::Command::Device(cmd) => start_device(cmd),
-            crosvm::Command::Disk(cmd) => disk_cmd(cmd),
-            crosvm::Command::MakeRT(cmd) => make_rt(cmd),
-            crosvm::Command::Resume(cmd) => resume_vms(cmd),
-            crosvm::Command::Run(_) => unreachable!(),
-            crosvm::Command::Stop(cmd) => stop_vms(cmd),
-            crosvm::Command::Suspend(cmd) => suspend_vms(cmd),
-            crosvm::Command::Powerbtn(cmd) => powerbtn_vms(cmd),
-            crosvm::Command::Sleepbtn(cmd) => sleepbtn_vms(cmd),
-            crosvm::Command::Gpe(cmd) => inject_gpe(cmd),
-            crosvm::Command::Usb(cmd) => modify_usb(cmd),
-            crosvm::Command::Version(_) => pkg_version(),
-            crosvm::Command::Vfio(cmd) => modify_vfio(cmd),
+            cmdline::Command::CreateComposite(cmd) => create_composite(cmd),
+            cmdline::Command::CreateQcow2(cmd) => create_qcow2(cmd),
+            cmdline::Command::Device(cmd) => start_device(cmd),
+            cmdline::Command::Disk(cmd) => disk_cmd(cmd),
+            cmdline::Command::MakeRT(cmd) => make_rt(cmd),
+            cmdline::Command::Resume(cmd) => resume_vms(cmd),
+            cmdline::Command::Run(_) => unreachable!(),
+            cmdline::Command::Stop(cmd) => stop_vms(cmd),
+            cmdline::Command::Suspend(cmd) => suspend_vms(cmd),
+            cmdline::Command::Powerbtn(cmd) => powerbtn_vms(cmd),
+            cmdline::Command::Sleepbtn(cmd) => sleepbtn_vms(cmd),
+            cmdline::Command::Gpe(cmd) => inject_gpe(cmd),
+            cmdline::Command::Usb(cmd) => modify_usb(cmd),
+            cmdline::Command::Version(_) => pkg_version(),
+            cmdline::Command::Vfio(cmd) => modify_vfio(cmd),
         }
         .map(|_| CommandStatus::Success)
     };
@@ -3091,831 +3094,4 @@ fn main() {
         Err(_) => 1,
     };
     std::process::exit(exit_code);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crosvm::{DEFAULT_TOUCH_DEVICE_HEIGHT, DEFAULT_TOUCH_DEVICE_WIDTH};
-
-    #[test]
-    fn parse_cpu_set_single() {
-        assert_eq!(parse_cpu_set("123").expect("parse failed"), vec![123]);
-    }
-
-    #[test]
-    fn parse_cpu_set_list() {
-        assert_eq!(
-            parse_cpu_set("0,1,2,3").expect("parse failed"),
-            vec![0, 1, 2, 3]
-        );
-    }
-
-    #[test]
-    fn parse_cpu_set_range() {
-        assert_eq!(
-            parse_cpu_set("0-3").expect("parse failed"),
-            vec![0, 1, 2, 3]
-        );
-    }
-
-    #[test]
-    fn parse_cpu_set_list_of_ranges() {
-        assert_eq!(
-            parse_cpu_set("3-4,7-9,18").expect("parse failed"),
-            vec![3, 4, 7, 8, 9, 18]
-        );
-    }
-
-    #[test]
-    fn parse_cpu_set_repeated() {
-        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t conversion.
-        assert_eq!(parse_cpu_set("1,1,1").expect("parse failed"), vec![1, 1, 1]);
-    }
-
-    #[test]
-    fn parse_cpu_set_negative() {
-        // Negative CPU numbers are not allowed.
-        parse_cpu_set("-3").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_cpu_set_reverse_range() {
-        // Ranges must be from low to high.
-        parse_cpu_set("5-2").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_cpu_set_open_range() {
-        parse_cpu_set("3-").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_cpu_set_extra_comma() {
-        parse_cpu_set("0,1,2,").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_cpu_affinity_global() {
-        assert_eq!(
-            parse_cpu_affinity("0,5-7,9").expect("parse failed"),
-            VcpuAffinity::Global(vec![0, 5, 6, 7, 9]),
-        );
-    }
-
-    #[test]
-    fn parse_cpu_affinity_per_vcpu_one_to_one() {
-        let mut expected_map = BTreeMap::new();
-        expected_map.insert(0, vec![0]);
-        expected_map.insert(1, vec![1]);
-        expected_map.insert(2, vec![2]);
-        expected_map.insert(3, vec![3]);
-        assert_eq!(
-            parse_cpu_affinity("0=0:1=1:2=2:3=3").expect("parse failed"),
-            VcpuAffinity::PerVcpu(expected_map),
-        );
-    }
-
-    #[test]
-    fn parse_cpu_affinity_per_vcpu_sets() {
-        let mut expected_map = BTreeMap::new();
-        expected_map.insert(0, vec![0, 1, 2]);
-        expected_map.insert(1, vec![3, 4, 5]);
-        expected_map.insert(2, vec![6, 7, 8]);
-        assert_eq!(
-            parse_cpu_affinity("0=0,1,2:1=3-5:2=6,7-8").expect("parse failed"),
-            VcpuAffinity::PerVcpu(expected_map),
-        );
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_vaild() {
-        parse_ac97_options("backend=cras").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_null_vaild() {
-        parse_ac97_options("backend=null").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_capture_vaild() {
-        parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_client_type() {
-        parse_ac97_options("backend=cras,capture=true,client_type=crosvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=arcvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=none")
-            .expect_err("parse should have failed");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_socket_type() {
-        parse_ac97_options("socket_type=unified").expect("parse should have succeded");
-        parse_ac97_options("socket_type=legacy").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_vios_valid() {
-        parse_ac97_options("backend=vios,server=/path/to/server")
-            .expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_serial_vaild() {
-        parse_serial_options("type=syslog,num=1,console=true,stdin=true")
-            .expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_serial_virtio_console_vaild() {
-        parse_serial_options("type=syslog,num=5,console=true,stdin=true,hardware=virtio-console")
-            .expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_serial_valid_no_num() {
-        parse_serial_options("type=syslog").expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_serial_equals_in_value() {
-        let parsed = parse_serial_options("type=syslog,path=foo=bar==.log")
-            .expect("parse should have succeded");
-        assert_eq!(parsed.path, Some(PathBuf::from("foo=bar==.log")));
-    }
-
-    #[test]
-    fn parse_serial_invalid_type() {
-        parse_serial_options("type=wormhole,num=1").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_invalid_num_upper() {
-        parse_serial_options("type=syslog,num=5").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_invalid_num_lower() {
-        parse_serial_options("type=syslog,num=0").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_virtio_console_invalid_num_lower() {
-        parse_serial_options("type=syslog,hardware=virtio-console,num=0")
-            .expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_invalid_num_string() {
-        parse_serial_options("type=syslog,num=number3").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_invalid_option() {
-        parse_serial_options("type=syslog,speed=lightspeed").expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_serial_invalid_two_stdin() {
-        let mut config = Config::default();
-        set_argument(&mut config, "serial", Some("num=1,type=stdout,stdin=true"))
-            .expect("should parse the first serial argument");
-        set_argument(&mut config, "serial", Some("num=2,type=stdout,stdin=true"))
-            .expect_err("should fail to parse a second serial port connected to stdin");
-    }
-
-    #[test]
-    fn parse_plugin_mount_valid() {
-        let mut config = Config::default();
-        set_argument(
-            &mut config,
-            "plugin-mount",
-            Some("/dev/null:/dev/zero:true"),
-        )
-        .expect("parse should succeed");
-        assert_eq!(config.plugin_mounts[0].src, PathBuf::from("/dev/null"));
-        assert_eq!(config.plugin_mounts[0].dst, PathBuf::from("/dev/zero"));
-        assert!(config.plugin_mounts[0].writable);
-    }
-
-    #[test]
-    fn parse_plugin_mount_valid_shorthand() {
-        let mut config = Config::default();
-        set_argument(&mut config, "plugin-mount", Some("/dev/null")).expect("parse should succeed");
-        assert_eq!(config.plugin_mounts[0].dst, PathBuf::from("/dev/null"));
-        assert!(!config.plugin_mounts[0].writable);
-        set_argument(&mut config, "plugin-mount", Some("/dev/null:/dev/zero"))
-            .expect("parse should succeed");
-        assert_eq!(config.plugin_mounts[1].dst, PathBuf::from("/dev/zero"));
-        assert!(!config.plugin_mounts[1].writable);
-        set_argument(&mut config, "plugin-mount", Some("/dev/null::true"))
-            .expect("parse should succeed");
-        assert_eq!(config.plugin_mounts[2].dst, PathBuf::from("/dev/null"));
-        assert!(config.plugin_mounts[2].writable);
-    }
-
-    #[test]
-    fn parse_plugin_mount_invalid() {
-        let mut config = Config::default();
-        set_argument(&mut config, "plugin-mount", Some("")).expect_err("parse should fail");
-        set_argument(
-            &mut config,
-            "plugin-mount",
-            Some("/dev/null:/dev/null:true:false"),
-        )
-        .expect_err("parse should fail because too many arguments");
-        set_argument(&mut config, "plugin-mount", Some("null:/dev/null:true"))
-            .expect_err("parse should fail because source is not absolute");
-        set_argument(&mut config, "plugin-mount", Some("/dev/null:null:true"))
-            .expect_err("parse should fail because source is not absolute");
-        set_argument(&mut config, "plugin-mount", Some("/dev/null:null:blah"))
-            .expect_err("parse should fail because flag is not boolean");
-    }
-
-    #[test]
-    fn parse_plugin_gid_map_valid() {
-        let mut config = Config::default();
-        set_argument(&mut config, "plugin-gid-map", Some("1:2:3")).expect("parse should succeed");
-        assert_eq!(config.plugin_gid_maps[0].inner, 1);
-        assert_eq!(config.plugin_gid_maps[0].outer, 2);
-        assert_eq!(config.plugin_gid_maps[0].count, 3);
-    }
-
-    #[test]
-    fn parse_plugin_gid_map_valid_shorthand() {
-        let mut config = Config::default();
-        set_argument(&mut config, "plugin-gid-map", Some("1")).expect("parse should succeed");
-        assert_eq!(config.plugin_gid_maps[0].inner, 1);
-        assert_eq!(config.plugin_gid_maps[0].outer, 1);
-        assert_eq!(config.plugin_gid_maps[0].count, 1);
-        set_argument(&mut config, "plugin-gid-map", Some("1:2")).expect("parse should succeed");
-        assert_eq!(config.plugin_gid_maps[1].inner, 1);
-        assert_eq!(config.plugin_gid_maps[1].outer, 2);
-        assert_eq!(config.plugin_gid_maps[1].count, 1);
-        set_argument(&mut config, "plugin-gid-map", Some("1::3")).expect("parse should succeed");
-        assert_eq!(config.plugin_gid_maps[2].inner, 1);
-        assert_eq!(config.plugin_gid_maps[2].outer, 1);
-        assert_eq!(config.plugin_gid_maps[2].count, 3);
-    }
-
-    #[test]
-    fn parse_plugin_gid_map_invalid() {
-        let mut config = Config::default();
-        set_argument(&mut config, "plugin-gid-map", Some("")).expect_err("parse should fail");
-        set_argument(&mut config, "plugin-gid-map", Some("1:2:3:4"))
-            .expect_err("parse should fail because too many arguments");
-        set_argument(&mut config, "plugin-gid-map", Some("blah:2:3"))
-            .expect_err("parse should fail because inner is not a number");
-        set_argument(&mut config, "plugin-gid-map", Some("1:blah:3"))
-            .expect_err("parse should fail because outer is not a number");
-        set_argument(&mut config, "plugin-gid-map", Some("1:2:blah"))
-            .expect_err("parse should fail because count is not a number");
-    }
-
-    #[test]
-    fn single_touch_spec_and_track_pad_spec_default_size() {
-        let mut config = Config::default();
-        config
-            .executable_path
-            .replace(Executable::Kernel(PathBuf::from("kernel")));
-        set_argument(&mut config, "single-touch", Some("/dev/single-touch-test")).unwrap();
-        set_argument(&mut config, "trackpad", Some("/dev/single-touch-test")).unwrap();
-        validate_arguments(&mut config).unwrap();
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT)
-        );
-        assert_eq!(
-            config.virtio_trackpad.first().unwrap().get_size(),
-            (DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT)
-        );
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn single_touch_spec_default_size_from_gpu() {
-        let width = 12345u32;
-        let height = 54321u32;
-        let mut config = Config::default();
-        config
-            .executable_path
-            .replace(Executable::Kernel(PathBuf::from("kernel")));
-        set_argument(&mut config, "single-touch", Some("/dev/single-touch-test")).unwrap();
-        set_argument(
-            &mut config,
-            "gpu",
-            Some(&format!("width={},height={}", width, height)),
-        )
-        .unwrap();
-        validate_arguments(&mut config).unwrap();
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (width, height)
-        );
-    }
-
-    #[test]
-    fn single_touch_spec_and_track_pad_spec_with_size() {
-        let width = 12345u32;
-        let height = 54321u32;
-        let mut config = Config::default();
-        config
-            .executable_path
-            .replace(Executable::Kernel(PathBuf::from("kernel")));
-        set_argument(
-            &mut config,
-            "single-touch",
-            Some(&format!("/dev/single-touch-test:{}:{}", width, height)),
-        )
-        .unwrap();
-        set_argument(
-            &mut config,
-            "trackpad",
-            Some(&format!("/dev/single-touch-test:{}:{}", width, height)),
-        )
-        .unwrap();
-        validate_arguments(&mut config).unwrap();
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (width, height)
-        );
-        assert_eq!(
-            config.virtio_trackpad.first().unwrap().get_size(),
-            (width, height)
-        );
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn single_touch_spec_with_size_independent_from_gpu() {
-        let touch_width = 12345u32;
-        let touch_height = 54321u32;
-        let display_width = 1234u32;
-        let display_height = 5432u32;
-        let mut config = Config::default();
-        config
-            .executable_path
-            .replace(Executable::Kernel(PathBuf::from("kernel")));
-        set_argument(
-            &mut config,
-            "single-touch",
-            Some(&format!(
-                "/dev/single-touch-test:{}:{}",
-                touch_width, touch_height
-            )),
-        )
-        .unwrap();
-        set_argument(
-            &mut config,
-            "gpu",
-            Some(&format!(
-                "width={},height={}",
-                display_width, display_height
-            )),
-        )
-        .unwrap();
-        validate_arguments(&mut config).unwrap();
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (touch_width, touch_height)
-        );
-    }
-
-    #[test]
-    fn virtio_switches() {
-        let mut config = Config::default();
-        config
-            .executable_path
-            .replace(Executable::Kernel(PathBuf::from("kernel")));
-        set_argument(&mut config, "switches", Some("/dev/switches-test")).unwrap();
-        validate_arguments(&mut config).unwrap();
-        assert_eq!(
-            config.virtio_switches.pop().unwrap(),
-            PathBuf::from("/dev/switches-test")
-        );
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_options_default_vulkan_support() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("backend=virglrenderer"), &mut gpu_params).is_ok());
-            assert!(!gpu_params.use_vulkan);
-        }
-
-        #[cfg(feature = "gfxstream")]
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("backend=gfxstream"), &mut gpu_params).is_ok());
-            assert!(gpu_params.use_vulkan);
-        }
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_options_with_vulkan_specified() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("vulkan=true"), &mut gpu_params).is_ok());
-            assert!(gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("backend=virglrenderer,vulkan=true"), &mut gpu_params)
-                    .is_ok()
-            );
-            assert!(gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("vulkan=true,backend=virglrenderer"), &mut gpu_params)
-                    .is_ok()
-            );
-            assert!(gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("vulkan=false"), &mut gpu_params).is_ok());
-            assert!(!gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("backend=virglrenderer,vulkan=false"), &mut gpu_params)
-                    .is_ok()
-            );
-            assert!(!gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("vulkan=false,backend=virglrenderer"), &mut gpu_params)
-                    .is_ok()
-            );
-            assert!(!gpu_params.use_vulkan);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(
-                Some("backend=virglrenderer,vulkan=invalid_value"),
-                &mut gpu_params
-            )
-            .is_err());
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(
-                Some("vulkan=invalid_value,backend=virglrenderer"),
-                &mut gpu_params
-            )
-            .is_err());
-        }
-    }
-
-    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
-    #[test]
-    fn parse_gpu_options_gfxstream_with_syncfd_specified() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("backend=gfxstream,syncfd=true"), &mut gpu_params).is_ok()
-            );
-            assert!(gpu_params.gfxstream_use_syncfd);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("syncfd=true,backend=gfxstream"), &mut gpu_params).is_ok()
-            );
-            assert!(gpu_params.gfxstream_use_syncfd);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("backend=gfxstream,syncfd=false"), &mut gpu_params).is_ok()
-            );
-            assert!(!gpu_params.gfxstream_use_syncfd);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("syncfd=false,backend=gfxstream"), &mut gpu_params).is_ok()
-            );
-            assert!(!gpu_params.gfxstream_use_syncfd);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(
-                Some("backend=gfxstream,syncfd=invalid_value"),
-                &mut gpu_params
-            )
-            .is_err());
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(
-                Some("syncfd=invalid_value,backend=gfxstream"),
-                &mut gpu_params
-            )
-            .is_err());
-        }
-    }
-
-    #[cfg(all(feature = "gpu", feature = "gfxstream"))]
-    #[test]
-    fn parse_gpu_options_not_gfxstream_with_syncfd_specified() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("backend=virglrenderer,syncfd=true"), &mut gpu_params)
-                    .is_err()
-            );
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_options(Some("syncfd=true,backend=virglrenderer"), &mut gpu_params)
-                    .is_err()
-            );
-        }
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_options_gfxstream_with_wsi_specified() {
-        let mut gpu_params: GpuParameters = Default::default();
-        assert!(parse_gpu_options(Some("backend=virglrenderer,wsi=vk"), &mut gpu_params).is_ok());
-        assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
-
-        let mut gpu_params: GpuParameters = Default::default();
-        assert!(parse_gpu_options(Some("wsi=vk,backend=virglrenderer"), &mut gpu_params).is_ok());
-        assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
-
-        let mut gpu_params: GpuParameters = Default::default();
-        assert!(parse_gpu_options(
-            Some("backend=virglrenderer,wsi=invalid_value"),
-            &mut gpu_params
-        )
-        .is_err());
-
-        let mut gpu_params: GpuParameters = Default::default();
-        assert!(parse_gpu_options(
-            Some("wsi=invalid_value,backend=virglrenderer"),
-            &mut gpu_params
-        )
-        .is_err());
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_display_options_valid() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(
-                parse_gpu_display_options(Some("width=500,height=600"), &mut gpu_params).is_ok()
-            );
-            assert_eq!(gpu_params.displays.len(), 1);
-            assert_eq!(gpu_params.displays[0].width, 500);
-            assert_eq!(gpu_params.displays[0].height, 600);
-        }
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_display_options_invalid() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_display_options(Some("width=500"), &mut gpu_params).is_err());
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_display_options(Some("height=500"), &mut gpu_params).is_err());
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_display_options(Some("width"), &mut gpu_params).is_err());
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_display_options(Some("blah"), &mut gpu_params).is_err());
-        }
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn parse_gpu_options_and_gpu_display_options_valid() {
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("2D,width=500,height=600"), &mut gpu_params).is_ok());
-            assert!(
-                parse_gpu_display_options(Some("width=700,height=800"), &mut gpu_params).is_ok()
-            );
-            assert_eq!(gpu_params.displays.len(), 2);
-            assert_eq!(gpu_params.displays[0].width, 500);
-            assert_eq!(gpu_params.displays[0].height, 600);
-            assert_eq!(gpu_params.displays[1].width, 700);
-            assert_eq!(gpu_params.displays[1].height, 800);
-        }
-        {
-            let mut gpu_params: GpuParameters = Default::default();
-            assert!(parse_gpu_options(Some("2D"), &mut gpu_params).is_ok());
-            assert!(
-                parse_gpu_display_options(Some("width=700,height=800"), &mut gpu_params).is_ok()
-            );
-            assert_eq!(gpu_params.displays.len(), 1);
-            assert_eq!(gpu_params.displays[0].width, 700);
-            assert_eq!(gpu_params.displays[0].height, 800);
-        }
-    }
-
-    #[test]
-    fn parse_battery_vaild() {
-        parse_battery_options(Some("type=goldfish")).expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_battery_vaild_no_type() {
-        parse_battery_options(None).expect("parse should have succeded");
-    }
-
-    #[test]
-    fn parse_battery_invaild_parameter() {
-        parse_battery_options(Some("tyep=goldfish")).expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_battery_invaild_type_value() {
-        parse_battery_options(Some("type=xxx")).expect_err("parse should have failed");
-    }
-
-    #[test]
-    fn parse_stub_pci() {
-        let params = parse_stub_pci_parameters(Some("0000:01:02.3,vendor=0xfffe,device=0xfffd,class=0xffc1c2,subsystem_vendor=0xfffc,subsystem_device=0xfffb,revision=0xa")).unwrap();
-        assert_eq!(params.address.bus, 1);
-        assert_eq!(params.address.dev, 2);
-        assert_eq!(params.address.func, 3);
-        assert_eq!(params.vendor_id, 0xfffe);
-        assert_eq!(params.device_id, 0xfffd);
-        assert_eq!(params.class as u8, PciClassCode::Other as u8);
-        assert_eq!(params.subclass, 0xc1);
-        assert_eq!(params.programming_interface, 0xc2);
-        assert_eq!(params.subsystem_vendor_id, 0xfffc);
-        assert_eq!(params.subsystem_device_id, 0xfffb);
-        assert_eq!(params.revision_id, 0xa);
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_valid() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        let params = parse_direct_io_options(Some("/dev/zero@1,100-110")).unwrap();
-        assert_eq!(params.path.to_str(), Some("/dev/zero"));
-        assert_eq!(params.ranges[0], BusRange { base: 1, len: 1 });
-        assert_eq!(params.ranges[1], BusRange { base: 100, len: 11 });
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_hex() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        let params = parse_direct_io_options(Some("/dev/zero@1,0x10,100-110,0x10-0x20")).unwrap();
-        assert_eq!(params.path.to_str(), Some("/dev/zero"));
-        assert_eq!(params.ranges[0], BusRange { base: 1, len: 1 });
-        assert_eq!(params.ranges[1], BusRange { base: 0x10, len: 1 });
-        assert_eq!(params.ranges[2], BusRange { base: 100, len: 11 });
-        assert_eq!(
-            params.ranges[3],
-            BusRange {
-                base: 0x10,
-                len: 0x11
-            }
-        );
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_invalid() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        assert!(parse_direct_io_options(Some("/dev/zero@0y10"))
-            .unwrap_err()
-            .to_string()
-            .contains("invalid base range value"));
-
-        assert!(parse_direct_io_options(Some("/dev/zero@"))
-            .unwrap_err()
-            .to_string()
-            .contains("invalid base range value"));
-    }
-
-    #[test]
-    fn parse_file_backed_mapping_valid() {
-        let params = parse_file_backed_mapping(Some(
-            "addr=0x1000,size=0x2000,path=/dev/mem,offset=0x3000,ro,rw,sync",
-        ))
-        .unwrap();
-        assert_eq!(params.address, 0x1000);
-        assert_eq!(params.size, 0x2000);
-        assert_eq!(params.path, PathBuf::from("/dev/mem"));
-        assert_eq!(params.offset, 0x3000);
-        assert!(params.writable);
-        assert!(params.sync);
-    }
-
-    #[test]
-    fn parse_file_backed_mapping_incomplete() {
-        assert!(parse_file_backed_mapping(Some("addr=0x1000,size=0x2000"))
-            .unwrap_err()
-            .to_string()
-            .contains("required"));
-        assert!(parse_file_backed_mapping(Some("size=0x2000,path=/dev/mem"))
-            .unwrap_err()
-            .to_string()
-            .contains("required"));
-        assert!(parse_file_backed_mapping(Some("addr=0x1000,path=/dev/mem"))
-            .unwrap_err()
-            .to_string()
-            .contains("required"));
-    }
-
-    #[test]
-    fn parse_file_backed_mapping_unaligned() {
-        assert!(
-            parse_file_backed_mapping(Some("addr=0x1001,size=0x2000,path=/dev/mem"))
-                .unwrap_err()
-                .to_string()
-                .contains("aligned")
-        );
-        assert!(
-            parse_file_backed_mapping(Some("addr=0x1000,size=0x2001,path=/dev/mem"))
-                .unwrap_err()
-                .to_string()
-                .contains("aligned")
-        );
-    }
-
-    #[test]
-    fn parse_file_backed_mapping_align() {
-        let params =
-            parse_file_backed_mapping(Some("addr=0x3042,size=0xff0,path=/dev/mem,align")).unwrap();
-        assert_eq!(params.address, 0x3000);
-        assert_eq!(params.size, 0x2000);
-    }
-
-    #[test]
-    fn parse_userspace_msr_options_test() {
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=w,action=pass,filter=yes").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::WriteOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Override);
-
-        let (_, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=w,action=pass,filter=default").unwrap();
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Default);
-
-        let (_, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=w,action=pass,filter=override").unwrap();
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Override);
-
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=r,action=pass,from=cpu0").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::ReadOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.from, MsrValueFrom::RWFromCPU0);
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Default);
-
-        let (pass_cpus_index, pass_cpus_cfg) =
-            parse_userspace_msr_options("0x10,type=rw,action=emu").unwrap();
-        assert_eq!(pass_cpus_index, 0x10);
-        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
-        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrEmulate);
-        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
-
-        assert!(parse_userspace_msr_options("0x10,action=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,action=pass").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=rw").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=w,action=pass,from=f").is_err());
-        assert!(parse_userspace_msr_options("0x10").is_err());
-        assert!(parse_userspace_msr_options("hoge").is_err());
-    }
 }
