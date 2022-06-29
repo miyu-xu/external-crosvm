@@ -76,6 +76,7 @@ members = [
     "serde_keyvalue",
     "tpm2",
     "tpm2-sys",
+    "tracing",
     "usb_sys",
     "usb_util",
     "vfio_sys",
@@ -107,8 +108,10 @@ all-linux = [
     # TODO(b/203105868): Enable remaining features on linux builds.
     "composite-disk",
     "default",
+    "ffmpeg",
     "gdb",
     "tpm",
+    "video-decoder",
     "virgl_renderer_next",
     "virgl_renderer",
     "x",
@@ -126,6 +129,7 @@ gdb = ["gdbstub", "gdbstub_arch", "arch/gdb", "vm_control/gdb", "x86_64/gdb"]
 gfxstream = ["devices/gfxstream"]
 gpu = ["devices/gpu"]
 haxm = ["hypervisor/haxm"]
+whpx = ["devices/whpx", "hypervisor/whpx"]
 libvda = ["devices/libvda"]
 linux-armhf = [
     "composite-disk",
@@ -185,8 +189,9 @@ protos = { path = "protos", optional = true }
 remain = "*"
 resources = { path = "resources" }
 scudo = { version = "0.1", optional = true }
+serde = "*"
 serde_json = "*"
-serde_keyvalue = { path = "serde_keyvalue" }
+serde_keyvalue = { path = "serde_keyvalue", features = ["argh_derive"] }
 sync = { path = "common/sync" }
 tempfile = "3"
 terminal_size = "0.1.17"
@@ -207,8 +212,13 @@ aarch64 = { path = "aarch64" }
 tube_transporter = { path = "tube_transporter" }
 
 [dev-dependencies]
+<<<<<<< HEAD   (eb9d1c ANDROID: Workaround to fix cuttlefish boot on intel 11th gen)
 base = { path = "base" }
 lazy_static = "*"
+=======
+base = "*"
+once_cell = "1.7"
+>>>>>>> BRANCH (ed071b crosvm: implement lock-guest-memory feature.)
 
 [patch.crates-io]
 assertions = { path = "common/assertions" }
