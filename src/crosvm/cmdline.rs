@@ -1092,6 +1092,9 @@ pub struct RunCommand {
     #[argh(option, long = "evdev", arg_name = "PATH")]
     /// path to an event device node. The device will be grabbed (unusable from the host) and made available to the guest with the same configuration it shows on the host
     pub virtio_input_evdevs: Vec<PathBuf>,
+    #[argh(switch, long = "virtio-iommu")]
+    /// add a virtio-iommu device
+    pub virtio_iommu: bool,
     #[argh(option, long = "keyboard", arg_name = "PATH")]
     /// path to a socket from where to read keyboard input events and write status updates to
     pub virtio_keyboard: Vec<PathBuf>,
@@ -1407,6 +1410,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.virtio_keyboard = cmd.virtio_keyboard;
         cfg.virtio_switches = cmd.virtio_switches;
         cfg.virtio_input_evdevs = cmd.virtio_input_evdevs;
+
+        cfg.virtio_iommu = cmd.virtio_iommu;
 
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
