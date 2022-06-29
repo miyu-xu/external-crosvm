@@ -16,6 +16,24 @@
       "message": "Whoops, I jumped the gun a bit. I had to rebase and forgot to do a full rebuild after. Fixing the build errors now.",
       "revId": "dbbc8e4ecf32f4cdcf18cf6168a1689ffbc8ae8c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2a6edc27_a1c8f2c5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-06-29T19:22:37Z",
+      "side": 1,
+      "message": "Build is fixed for CF now. Still going through the slower manual testing steps, but should be ready enough to review.\n\n(before I submit, the final CL in this chain will be swapped out for an upstream cherry pick once it is available)",
+      "parentUuid": "77c0adf7_f4d6477c",
+      "revId": "dbbc8e4ecf32f4cdcf18cf6168a1689ffbc8ae8c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
