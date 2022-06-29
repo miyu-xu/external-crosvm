@@ -2,15 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(any(unix, feature = "haxm"))]
+use std::arch::x86_64::_rdtsc;
+
+#[cfg(any(feature = "haxm"))]
+use std::arch::x86_64::__cpuid;
+
 use serde::{Deserialize, Serialize};
 
 use base::{error, Result};
 use bit_field::*;
 use downcast_rs::impl_downcast;
 
-use vm_memory::GuestAddress;
-
 use crate::{Hypervisor, IrqRoute, IrqSource, IrqSourceChip, Vcpu, Vm};
+use vm_memory::GuestAddress;
 
 /// A trait for managing cpuids for an x86_64 hypervisor and for checking its capabilities.
 pub trait HypervisorX86_64: Hypervisor {
@@ -99,9 +104,74 @@ pub trait VcpuX86_64: Vcpu {
 
     /// Sets up debug registers and configure vcpu for handling guest debug events.
     fn set_guest_debug(&self, addrs: &[GuestAddress], enable_singlestep: bool) -> Result<()>;
+
+    /// This function should be called after `Vcpu::run` returns `VcpuExit::Cpuid`, and `entry`
+    /// should represent the result of emulating the CPUID instruction. The `handle_cpuid` function
+    /// will then set the appropriate registers on the vcpu.
+    fn handle_cpuid(&mut self, entry: &CpuIdEntry) -> Result<()>;
+
+    /// Get the guest->host TSC offset
+    fn get_tsc_offset(&self) -> Result<u64>;
+
+    /// Set the guest->host TSC offset
+    fn set_tsc_offset(&self, offset: u64) -> Result<()>;
 }
 
 impl_downcast!(VcpuX86_64);
+
+// TSC MSR
+pub const MSR_IA32_TSC: u32 = 0x00000010;
+
+/// Implementation of get_tsc_offset that uses VcpuX86_64::get_msrs.
+#[cfg(any(unix, feature = "haxm"))]
+pub(crate) fn get_tsc_offset_from_msr(vcpu: &impl VcpuX86_64) -> Result<u64> {
+    let mut regs = vec![Register {
+        id: crate::MSR_IA32_TSC,
+        value: 0,
+    }];
+
+    // Safe because _rdtsc takes no arguments
+    let host_before_tsc = unsafe { _rdtsc() };
+
+    // get guest TSC value from our hypervisor
+    vcpu.get_msrs(&mut regs)?;
+
+    // Safe because _rdtsc takes no arguments
+    let host_after_tsc = unsafe { _rdtsc() };
+
+    // Average the before and after host tsc to get the best value
+    let host_tsc = ((host_before_tsc as u128 + host_after_tsc as u128) / 2) as u64;
+
+    Ok(regs[0].value.wrapping_sub(host_tsc))
+}
+
+/// Implementation of get_tsc_offset that uses VcpuX86_64::get_msrs.
+#[cfg(any(unix, feature = "haxm"))]
+pub(crate) fn set_tsc_offset_via_msr(vcpu: &impl VcpuX86_64, offset: u64) -> Result<()> {
+    // Safe because _rdtsc takes no arguments
+    let host_tsc = unsafe { _rdtsc() };
+
+    let regs = vec![Register {
+        id: crate::MSR_IA32_TSC,
+        value: host_tsc.wrapping_add(offset),
+    }];
+
+    // set guest TSC value from our hypervisor
+    vcpu.set_msrs(&regs)
+}
+
+/// Gets host cpu max physical address bits.
+#[cfg(feature = "haxm")]
+pub(crate) fn host_phys_addr_bits() -> u8 {
+    let highest_ext_function = unsafe { __cpuid(0x80000000) };
+    if highest_ext_function.eax >= 0x80000008 {
+        let addr_size = unsafe { __cpuid(0x80000008) };
+        // Low 8 bits of 0x80000008 leaf: host physical address size in bits.
+        addr_size.eax as u8
+    } else {
+        36
+    }
+}
 
 /// A CpuId Entry contains supported feature information for the given processor.
 /// This can be modified by the hypervisor to pass additional information to the guest kernel

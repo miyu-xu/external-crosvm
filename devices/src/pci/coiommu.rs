@@ -9,11 +9,10 @@
 //! so it can only be used for the TRUSTED passthrough devices.
 //!
 //! CoIOMMU is presented at KVM forum 2020:
-//! https://kvmforum2020.sched.com/event/eE2z/a-virtual-iommu-with-cooperative
-//! -dma-buffer-tracking-yu-zhang-intel
+//! <https://kvmforum2020.sched.com/event/eE2z/a-virtual-iommu-with-cooperative-dma-buffer-tracking-yu-zhang-intel>
 //!
 //! Also presented at usenix ATC20:
-//! https://www.usenix.org/conference/atc20/presentation/tian
+//! <https://www.usenix.org/conference/atc20/presentation/tian>
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
@@ -27,7 +26,7 @@ use std::{fmt, mem, thread};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base::{
-    error, info, AsRawDescriptor, Event, MemoryMapping, MemoryMappingBuilder, PollToken,
+    error, info, AsRawDescriptor, Event, EventToken, MemoryMapping, MemoryMappingBuilder,
     RawDescriptor, SafeDescriptor, SharedMemory, Timer, Tube, TubeError, WaitContext,
 };
 use data_model::DataInit;
@@ -495,7 +494,7 @@ impl PinWorker {
     }
 
     fn run(&mut self, kill_evt: Event) {
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             Kill,
             Pin { index: usize },
@@ -651,7 +650,7 @@ impl UnpinWorker {
     }
 
     fn run(&mut self, kill_evt: Event) {
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             UnpinTimer,
             UnpinReq,
@@ -722,7 +721,7 @@ impl UnpinWorker {
                     Token::UnpinTimer => {
                         self.unpin_pages();
                         if let Some(timer) = &mut unpin_timer {
-                            if let Err(e) = timer.wait() {
+                            if let Err(e) = timer.mark_waited() {
                                 error!(
                                     "{}: failed to clear unpin timer: {}",
                                     self.debug_label(),
@@ -993,7 +992,7 @@ impl CoIommuDev {
         );
 
         // notifymap_mem is used as Bar2 for Guest to check if request is completed by coIOMMU.
-        let notifymap_mem = SharedMemory::named("coiommu_notifymap", COIOMMU_NOTIFYMAP_SIZE as u64)
+        let notifymap_mem = SharedMemory::new("coiommu_notifymap", COIOMMU_NOTIFYMAP_SIZE as u64)
             .context(Error::CreateSharedMemory)?;
         let notifymap_mmap = Arc::new(
             MemoryMappingBuilder::new(COIOMMU_NOTIFYMAP_SIZE)
@@ -1004,7 +1003,7 @@ impl CoIommuDev {
 
         // topologymap_mem is used as Bar4 for Guest to check which device is on top of coIOMMU.
         let topologymap_mem =
-            SharedMemory::named("coiommu_topologymap", COIOMMU_TOPOLOGYMAP_SIZE as u64)
+            SharedMemory::new("coiommu_topologymap", COIOMMU_TOPOLOGYMAP_SIZE as u64)
                 .context(Error::CreateSharedMemory)?;
         let topologymap_mmap = Arc::new(
             MemoryMappingBuilder::new(COIOMMU_TOPOLOGYMAP_SIZE)

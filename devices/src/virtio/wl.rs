@@ -54,7 +54,7 @@ use data_model::*;
 use base::ioctl_iow_nr;
 use base::{
     error, ioctl_iowr_nr, ioctl_with_ref, pipe, round_up_to_page_size, warn, AsRawDescriptor,
-    Error, Event, EventType, FileFlags, FromRawDescriptor, PollToken, RawDescriptor, Result,
+    Error, Event, EventToken, EventType, FileFlags, FromRawDescriptor, RawDescriptor, Result,
     ScmSocket, SharedMemory, SharedMemoryUnix, Tube, TubeError, WaitContext,
 };
 #[cfg(feature = "gpu")]
@@ -70,7 +70,7 @@ use vm_control::GpuMemoryDesc;
 use super::resource_bridge::{
     get_resource_info, BufferInfo, ResourceBridgeError, ResourceInfo, ResourceRequest,
 };
-use super::{Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice, Writer, TYPE_WL};
+use super::{DeviceType, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice, Writer};
 use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
@@ -605,7 +605,7 @@ impl WlVfd {
     fn allocate(vm: VmRequester, size: u64) -> WlResult<WlVfd> {
         let size_page_aligned = round_up_to_page_size(size as usize) as u64;
         let vfd_shm =
-            SharedMemory::named("virtwl_alloc", size_page_aligned).map_err(WlError::NewAlloc)?;
+            SharedMemory::new("virtwl_alloc", size_page_aligned).map_err(WlError::NewAlloc)?;
 
         let (vfd_shm, register_response) = vm.register_memory(vfd_shm)?;
 
@@ -642,8 +642,8 @@ impl WlVfd {
                 desc,
             } => {
                 let mut vfd = WlVfd::default();
-                let vfd_shm =
-                    SharedMemory::from_safe_descriptor(descriptor).map_err(WlError::NewAlloc)?;
+                let vfd_shm = SharedMemory::from_safe_descriptor(descriptor, None)
+                    .map_err(WlError::NewAlloc)?;
                 vfd.guest_shared_memory = Some(vfd_shm);
                 vfd.slot = Some((slot, pfn, vm));
                 vfd.is_dmabuf = true;
@@ -1492,7 +1492,7 @@ impl WlState {
     }
 }
 
-#[derive(ThisError, Debug)]
+#[derive(ThisError, Debug, PartialEq)]
 #[error("no descriptors available in queue")]
 pub struct DescriptorsExhausted;
 
@@ -1648,7 +1648,7 @@ impl Worker {
     fn run(&mut self, mut queue_evts: Vec<Event>, kill_evt: Event) {
         let in_queue_evt = queue_evts.remove(0);
         let out_queue_evt = queue_evts.remove(0);
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             InQueue,
             OutQueue,
@@ -1799,8 +1799,8 @@ impl VirtioDevice for Wl {
         keep_rds
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_WL
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Wl
     }
 
     fn queue_max_sizes(&self) -> &[u16] {

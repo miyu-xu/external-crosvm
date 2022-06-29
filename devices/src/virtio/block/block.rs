@@ -14,7 +14,7 @@ use std::u32;
 use base::Error as SysError;
 use base::Result as SysResult;
 use base::{
-    error, info, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, Timer, Tube, WaitContext,
+    error, info, warn, AsRawDescriptor, Event, EventToken, RawDescriptor, Timer, Tube, WaitContext,
 };
 use data_model::DataInit;
 use disk::DiskFile;
@@ -28,8 +28,8 @@ use vm_memory::GuestMemory;
 
 use super::common::*;
 use crate::virtio::{
-    block::sys::*, copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader,
-    SignalableInterrupt, VirtioDevice, Writer, TYPE_BLOCK,
+    block::sys::*, copy_config, DescriptorChain, DescriptorError, DeviceType, Interrupt, Queue,
+    Reader, SignalableInterrupt, VirtioDevice, Writer,
 };
 
 const QUEUE_SIZE: u16 = 256;
@@ -146,6 +146,19 @@ pub struct DiskOption {
     pub block_size: u32,
     #[serde(default, deserialize_with = "deserialize_disk_id")]
     pub id: Option<[u8; DISK_ID_LEN]>,
+}
+
+impl Default for DiskOption {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from(""),
+            read_only: true,
+            sparse: false,
+            o_direct: false,
+            block_size: 512,
+            id: None,
+        }
+    }
 }
 
 struct Worker {
@@ -278,7 +291,7 @@ impl Worker {
     }
 
     fn run(&mut self, queue_evt: Event, kill_evt: Event) {
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             FlushTimer,
             QueueAvailable,
@@ -337,7 +350,7 @@ impl Worker {
                             error!("Failed to flush the disk: {}", e);
                             break 'wait;
                         }
-                        if let Err(e) = flush_timer.wait() {
+                        if let Err(e) = flush_timer.mark_waited() {
                             error!("Failed to clear flush timer: {}", e);
                             break 'wait;
                         }
@@ -637,8 +650,8 @@ impl VirtioDevice for Block {
         self.avail_features
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_BLOCK
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Block
     }
 
     fn queue_max_sizes(&self) -> &[u16] {

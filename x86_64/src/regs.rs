@@ -21,6 +21,9 @@ pub enum Error {
     /// Failed to get sregs for this cpu.
     #[error("failed to get sregs for this cpu: {0}")]
     GetSRegsIoctlFailed(base::Error),
+    /// Failed to get base registers for this cpu.
+    #[error("failed to get base registers for this cpu: {0}")]
+    GettingRegistersIoctl(base::Error),
     /// Setting up msrs failed.
     #[error("setting up msrs failed: {0}")]
     MsrIoctlFailed(base::Error),
@@ -220,7 +223,7 @@ pub fn setup_fpu(vcpu: &dyn VcpuX86_64) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `vcpu` - Structure for the vcpu that holds the vcpu fd.
+/// * `vcpu` - Structure for the vcpu that holds the vcpu descriptor.
 /// * `boot_ip` - Starting instruction pointer.
 /// * `boot_sp` - Starting stack pointer.
 /// * `boot_si` - Must point to zero page address per Linux ABI.
@@ -347,6 +350,46 @@ pub fn setup_sregs(mem: &GuestMemory, vcpu: &dyn VcpuX86_64) -> Result<()> {
     vcpu.set_sregs(&sregs).map_err(Error::SetSRegsIoctlFailed)?;
 
     Ok(())
+}
+
+/// Configures a CPU to be pointed at the i386 reset vector.
+///
+/// The reset vector is the default location a CPU will go to find the first instruction it will
+/// execute after a reset. On i386, the reset vector means the RIP is set to 0xfff0 the CS base is
+/// set to 0xffff0000, and the CS selector is set to 0xf000.
+///
+/// When using a BIOS, each of the VCPUs should be pointed at the reset vector before execution
+/// begins.
+///
+/// # Arguments
+/// * `vcpu` - the VCPU to configure.
+pub fn set_reset_vector(vcpu: &dyn VcpuX86_64) -> Result<()> {
+    let mut sregs = vcpu.get_sregs().map_err(Error::GetSRegsIoctlFailed)?;
+    let mut regs = vcpu.get_regs().map_err(Error::GettingRegistersIoctl)?;
+
+    regs.rip = 0xfff0;
+    sregs.cs.base = 0xffff0000;
+    sregs.cs.selector = 0xf000;
+
+    vcpu.set_sregs(&sregs).map_err(Error::SetSRegsIoctlFailed)?;
+    vcpu.set_regs(&regs).map_err(Error::SettingRegistersIoctl)?;
+
+    Ok(())
+}
+
+/// Configures a CPU so its MSRs are reset to their default value.
+///
+/// Currently only sets IA32_TSC to 0.
+///
+/// # Arguments
+/// * `vcpu` - the VCPU to configure.
+pub fn reset_msrs(vcpu: &dyn VcpuX86_64) -> Result<()> {
+    let msrs = vec![Register {
+        id: crate::msr_index::MSR_IA32_TSC,
+        value: 0x0,
+    }];
+
+    vcpu.set_msrs(&msrs).map_err(Error::MsrIoctlFailed)
 }
 
 #[cfg(test)]

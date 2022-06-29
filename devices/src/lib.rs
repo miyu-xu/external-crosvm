@@ -6,6 +6,8 @@
 
 mod bus;
 mod cmos;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod debugcon;
 #[cfg(feature = "direct")]
 pub mod direct_io;
 #[cfg(feature = "direct")]
@@ -29,6 +31,8 @@ pub mod serial_device;
 #[cfg(feature = "tpm")]
 mod software_tpm;
 mod sys;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub mod tsc;
 #[cfg(feature = "usb")]
 pub mod usb;
 #[cfg(feature = "usb")]
@@ -44,6 +48,8 @@ pub use self::bus::{
     HostHotPlugKey, HotPlugBus,
 };
 pub use self::cmos::Cmos;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use self::debugcon::Debugcon;
 #[cfg(feature = "direct")]
 pub use self::direct_io::{DirectIo, DirectMmio};
 #[cfg(feature = "direct")]
@@ -54,10 +60,10 @@ pub use self::irqchip::*;
 #[cfg(feature = "audio")]
 pub use self::pci::{Ac97Backend, Ac97Dev, Ac97Parameters};
 pub use self::pci::{
-    BarRange, CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy, PciAddress, PciBridge,
-    PciClassCode, PciConfigIo, PciConfigMmio, PciDevice, PciDeviceError, PciInterruptPin, PciRoot,
-    PciVirtualConfigMmio, PcieHostRootPort, PcieRootPort, PvPanicCode, PvPanicPciDevice,
-    StubPciDevice, StubPciParameters, VfioPciDevice,
+    BarRange, CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy, PciAddress, PciAddressError,
+    PciBridge, PciClassCode, PciConfigIo, PciConfigMmio, PciDevice, PciDeviceError,
+    PciInterruptPin, PciRoot, PciVirtualConfigMmio, PcieHostRootPort, PcieRootPort, PvPanicCode,
+    PvPanicPciDevice, StubPciDevice, StubPciParameters, VfioPciDevice,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use self::pit::{Pit, PitError};

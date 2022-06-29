@@ -127,7 +127,7 @@ pub fn create_guest_memory(
             region.memory_size,
             GuestAddress(region.guest_phys_addr),
             region.mmap_offset,
-            Arc::new(SharedMemory::from_safe_descriptor(SafeDescriptor::from(file)).unwrap()),
+            Arc::new(SharedMemory::from_safe_descriptor(SafeDescriptor::from(file), None).unwrap()),
         )
         .map_err(|e| {
             error!("failed to create a memory region: {}", e);
@@ -825,9 +825,7 @@ mod tests {
         });
 
         // Device side
-        let handler = Arc::new(std::sync::Mutex::new(DeviceRequestHandler::new(
-            FakeBackend::new(),
-        )));
+        let handler = std::sync::Mutex::new(DeviceRequestHandler::new(FakeBackend::new()));
         let mut listener = SlaveListener::<SocketEndpoint<_>, _>::new(listener, handler).unwrap();
 
         // Notify listener is ready.
