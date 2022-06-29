@@ -215,6 +215,7 @@ check_location
 gen_license >Android.bp
 gen_license \# >crosvm_seccomp_policy_product_packages.mk
 gen_blueprint_boilerplate >>Android.bp
+bpfmt -w Android.bp || /bin/true
 gen_blueprint_arch_policy_files "${seccomp_archs[@]}" >>Android.bp
 gen_crosvm_seccomp_policy_product_packages_mk_fragment \
   "${seccomp_archs[@]}" >>crosvm_seccomp_policy_product_packages.mk
