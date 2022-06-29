@@ -34,6 +34,29 @@
       "parentUuid": "27f0a647_77c6e6fe",
       "revId": "b3eb77f722bc60b6b67a57ddee8012bd5f164243",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b9df2fd9_0a70b47f",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-29T23:58:43Z",
+      "side": 1,
+      "message": "could you add it here as well?",
+      "range": {
+        "startLine": 33,
+        "startChar": 0,
+        "endLine": 35,
+        "endChar": 11
+      },
+      "revId": "b3eb77f722bc60b6b67a57ddee8012bd5f164243",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
