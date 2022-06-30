@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b6b1e096_039a0453",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 43,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-30T00:13:16Z",
+      "side": 1,
+      "message": "fyi b/174862583#comment41 btw - we really shouldn\u0027t have these, but it\u0027s okay for now",
+      "revId": "f7b8566e2daa83c5f3241c3276780240998883ef",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
