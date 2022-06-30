@@ -46,6 +46,30 @@
       },
       "revId": "3d419f360aa42efc0f914435cd10371a281e2269",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7f56fdbb_4167202e",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-06-30T00:50:43Z",
+      "side": 1,
+      "message": "works - typed this comment before I realized it was a cherry-pick. Might be worth it to add it as well so that the bug auto-updates",
+      "parentUuid": "8e3a4228_f462b2d8",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 9,
+        "endChar": 15
+      },
+      "revId": "3d419f360aa42efc0f914435cd10371a281e2269",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
