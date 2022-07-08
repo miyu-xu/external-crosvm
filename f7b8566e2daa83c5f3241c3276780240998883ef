@@ -16,6 +16,24 @@
       "message": "fyi b/174862583#comment41 btw - we really shouldn\u0027t have these, but it\u0027s okay for now",
       "revId": "f7b8566e2daa83c5f3241c3276780240998883ef",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "def9d0af_45d4d395",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 43,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-08T23:42:52Z",
+      "side": 1,
+      "message": "tracking in http://b/238440998",
+      "parentUuid": "b6b1e096_039a0453",
+      "revId": "f7b8566e2daa83c5f3241c3276780240998883ef",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
