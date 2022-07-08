@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "cf2c9030_60d29389",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-08T18:08:37Z",
+      "side": 1,
+      "message": "I think a revert commit would be better, but they already submitted changes on top of it, so there are merge conflicts. In this specific case, the local modifications seemed a lot simpler than doing multiple reverts.",
+      "parentUuid": "695abad0_8efc4018",
+      "revId": "e30045f4cf9528e4bb2ded078f5fc4253603d734",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "7c13b6c0_a9fc64f1",
@@ -31,6 +49,30 @@
       "writtenOn": "2022-07-08T17:45:21Z",
       "side": 1,
       "message": "Should we delete this line or add a TODO(b/..) here?",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 60
+      },
+      "revId": "e30045f4cf9528e4bb2ded078f5fc4253603d734",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fd9f5525_b0e1125b",
+        "filename": "src/crosvm/linux/device_helpers.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-08T18:08:37Z",
+      "side": 1,
+      "message": "Deleted + added a todo elsewhere in the file.",
+      "parentUuid": "7c13b6c0_a9fc64f1",
       "range": {
         "startLine": 25,
         "startChar": 0,
