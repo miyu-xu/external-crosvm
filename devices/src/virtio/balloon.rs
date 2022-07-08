@@ -59,6 +59,7 @@ const VIRTIO_BALLOON_PF_SIZE: u64 = 1 << VIRTIO_BALLOON_PFN_SHIFT;
 const VIRTIO_BALLOON_F_MUST_TELL_HOST: u32 = 0; // Tell before reclaiming pages
 const VIRTIO_BALLOON_F_STATS_VQ: u32 = 1; // Stats reporting enabled
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2; // Deflate balloon on OOM
+const VIRTIO_BALLOON_F_PAGE_REPORTING: u32 = 5; // Page reporting virtqueue
 
 // These feature bits are part of the proposal:
 //  https://lists.oasis-open.org/archives/virtio-comment/202201/msg00139.html
@@ -605,6 +606,7 @@ impl Balloon {
             | 1 << VIRTIO_BALLOON_F_MUST_TELL_HOST
             | 1 << VIRTIO_BALLOON_F_STATS_VQ
             | 1 << VIRTIO_BALLOON_F_EVENTS_VQ
+            | 1 << VIRTIO_BALLOON_F_PAGE_REPORTING
             | if mode == BalloonMode::Strict {
                 1 << VIRTIO_BALLOON_F_RESPONSIVE_DEVICE
             } else {
