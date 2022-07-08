@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a0a0bb16_8e74d816",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-08T18:19:35Z",
+      "side": 1,
+      "message": "Tracking real fix in http://b/238440998.",
+      "revId": "48c632dc189f32172b440cabed23d9a79099c3bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
