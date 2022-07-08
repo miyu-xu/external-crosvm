@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "695abad0_8efc4018",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-07-08T17:45:21Z",
+      "side": 1,
+      "message": "Is it easier/safer to revert the entire problem commit instead of making these specific changes?\nDo we have a general rule of thumb for handling issues with upstream commits?",
+      "revId": "e30045f4cf9528e4bb2ded078f5fc4253603d734",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7c13b6c0_a9fc64f1",
+        "filename": "src/crosvm/linux/device_helpers.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-07-08T17:45:21Z",
+      "side": 1,
+      "message": "Should we delete this line or add a TODO(b/..) here?",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 60
+      },
+      "revId": "e30045f4cf9528e4bb2ded078f5fc4253603d734",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
