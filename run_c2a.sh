@@ -16,7 +16,9 @@ if ! [ -x "$(command -v bpfmt)" ]; then
   exit 1
 fi
 
-C2A_ARGS=""
+# C2A gives visibility to all APEXs by default. Restrict to "platform" (the
+# Soong default).
+C2A_ARGS="--apex-available //apex_available:platform"
 if [[ -f "cargo2android.json" ]]; then
   # If the crate has a cargo2android config, let it handle all the flags.
   C2A_ARGS+=" --config cargo2android.json"
