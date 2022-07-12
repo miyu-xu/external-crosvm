@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0e916d95_d1b7627a",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 44,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-07-12T23:16:15Z",
+      "side": 1,
+      "message": "nit: we could also not have this at all (it\u0027s the default), but this works.",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 44,
+        "endChar": 6
+      },
+      "revId": "aecbce523f03f1360499ab41fe95603843833f25",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "675eba0f_8400019b",
+        "filename": "metrics/out/generated.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-07-12T23:16:15Z",
+      "side": 1,
+      "message": "note",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 148
+      },
+      "revId": "aecbce523f03f1360499ab41fe95603843833f25",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
