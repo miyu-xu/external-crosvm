@@ -16,6 +16,23 @@
       "message": "(this is a cherry pick of https://crrev.com/c/3756726)",
       "revId": "c33d178e85137ba993e2eafbb5e9e807010e89fc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b8dacaeb_ca422b4c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-07-12T18:28:12Z",
+      "side": 1,
+      "message": "I always put dependent CLs in the same topic. I\u0027m not actually sure if it\u0027s required...\nI just assume if someone goes to revert this CL and sees it\u0027s in the same topic as parent they will know to revert both.\nMaybe the \"Submitted together\" is good enough. ",
+      "revId": "c33d178e85137ba993e2eafbb5e9e807010e89fc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
