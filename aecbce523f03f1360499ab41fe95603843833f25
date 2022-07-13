@@ -45,6 +45,30 @@
       },
       "revId": "aecbce523f03f1360499ab41fe95603843833f25",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2f65a073_7a5911c6",
+        "filename": "metrics/out/generated.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-13T18:24:06Z",
+      "side": 1,
+      "message": "Reverted\n\nThis was a mistake. Have to manually revert this each time we run c2a for this crate. I\u0027ll try to automate it.",
+      "parentUuid": "675eba0f_8400019b",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 148
+      },
+      "revId": "aecbce523f03f1360499ab41fe95603843833f25",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
