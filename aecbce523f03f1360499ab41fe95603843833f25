@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c39b33c5_b920a9f3",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 44,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-13T18:26:27Z",
+      "side": 1,
+      "message": "I agree, but it requires some changes to cargo2android and ranks a bit low priority to me right now.",
+      "parentUuid": "0e916d95_d1b7627a",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 44,
+        "endChar": 6
+      },
+      "revId": "aecbce523f03f1360499ab41fe95603843833f25",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "675eba0f_8400019b",
