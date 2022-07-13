@@ -1186,7 +1186,7 @@ pub fn create_console_device(
         .create_serial_device::<AsyncConsole>(protected_vm, &evt, &mut keep_rds)
         .context("failed to create console device")?;
 
-    let jail = match simple_jail(jail_config, "serial")? {
+    let jail = match simple_jail(jail_config, "serial_device")? {
         Some(mut jail) => {
             // Create a tmpfs in the device's root directory so that we can bind mount the
             // log socket directory into it.
