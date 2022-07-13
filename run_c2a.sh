@@ -40,3 +40,9 @@ rm -rf target.tmp || /bin/true
 if [[ -f "Android.bp" ]]; then
   bpfmt -w Android.bp || /bin/true
 fi
+
+# Fix workstation specific path in "metrics" crate's generated files.
+# TODO(b/232150148): Find a better solution for protobuf generated files.
+if [[ `basename $1` == "metrics" ]]; then
+  sed --in-place 's/path = ".*\/out/path = "./' out/generated.rs
+fi
