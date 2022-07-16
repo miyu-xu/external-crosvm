@@ -84,7 +84,7 @@ rust_defaults {
 rust_binary {
     name: "crosvm",
     defaults: ["crosvm_defaults"],
-    host_supported: true,
+    host_supported: false,
     prefer_rlib: true,
     crate_name: "crosvm",
     srcs: ["src/main.rs"],
