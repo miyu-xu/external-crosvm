@@ -37,6 +37,7 @@ rust_test {
         "libballoon_control",
         "libbase_rust",
         "libbit_field",
+        "libbytes",
         "libcfg_if",
         "libcrc32fast",
         "libcros_async",
