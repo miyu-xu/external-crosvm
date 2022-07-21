@@ -2,19 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+cfg_if::cfg_if! {
+    if #[cfg(unix)] {
+        use std::net;
+
+        use base::RawDescriptor;
+        #[cfg(feature = "gpu")]
+        use devices::virtio::GpuDisplayParameters;
+        use devices::virtio::vhost::user::device::parse_wayland_sock;
+
+        #[cfg(feature = "gpu")]
+        use super::sys::config::parse_gpu_display_options;
+        use super::sys::config::{
+            parse_coiommu_params, VfioCommand, parse_vfio, parse_vfio_platform,
+        };
+        use super::config::SharedDir;
+    }
+}
+
 use std::collections::BTreeMap;
-use std::net;
-use std::os::unix::prelude::RawFd;
 use std::path::PathBuf;
 
-use super::config::*;
-#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
-use super::platform::GpuRenderServerParameters;
-use super::sys::config::parse_coiommu_params;
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 use super::sys::config::parse_gpu_render_server_options;
+<<<<<<< HEAD   (97fe6d ANDROID: crosvm: Reduce diff in syslog test)
 #[cfg(feature = "gpu")]
 use super::sys::config::{parse_gpu_display_options, parse_gpu_options};
+=======
+#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
+use super::sys::GpuRenderServerParameters;
+>>>>>>> BRANCH (e2f7c0 crosvm: Fix cross-compile in dev container)
 
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use super::config::parse_video_options;
@@ -25,12 +42,9 @@ use arch::VcpuAffinity;
 use argh::FromArgs;
 use base::getpid;
 use devices::virtio::block::block::DiskOption;
-#[cfg(feature = "audio_cras")]
-use devices::virtio::cras_backend::Parameters as CrasSndParameters;
+#[cfg(feature = "audio")]
+use devices::virtio::common_backend::Parameters as SndParameters;
 use devices::virtio::vhost::user::device;
-use devices::virtio::vhost::user::device::parse_wayland_sock;
-#[cfg(feature = "gpu")]
-use devices::virtio::GpuDisplayParameters;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::VideoBackendType;
 #[cfg(feature = "audio")]
@@ -41,6 +55,27 @@ use devices::StubPciParameters;
 use hypervisor::ProtectionType;
 use resources::AddressRange;
 use vm_control::BatteryType;
+
+#[cfg(feature = "gpu")]
+use super::sys::config::parse_gpu_options;
+#[cfg(feature = "audio")]
+use crate::crosvm::config::parse_ac97_options;
+use crate::crosvm::config::{
+    numbered_disk_option, parse_battery_options, parse_bus_id_addr, parse_cpu_affinity,
+    parse_cpu_capacity, parse_cpu_set, parse_file_backed_mapping, parse_mmio_address_range,
+    parse_pstore, parse_serial_options, parse_stub_pci_parameters, Executable,
+    FileBackedMappingParameters, TouchDeviceOption, VhostUserFsOption, VhostUserOption,
+    VhostUserWlOption, VvuOption,
+};
+#[cfg(feature = "direct")]
+use crate::crosvm::config::{
+    parse_direct_io_options, parse_pcie_root_port_params, DirectIoOption,
+    HostPcieRootPortParameters,
+};
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use crate::crosvm::config::{parse_memory_region, parse_userspace_msr_options};
+#[cfg(feature = "plugin")]
+use crate::crosvm::config::{parse_plugin_mount_option, BindMount, GidMap};
 
 #[derive(FromArgs)]
 /// crosvm
@@ -61,7 +96,7 @@ pub struct CrosvmCmdlineArgs {
 #[allow(clippy::large_enum_variant)]
 #[derive(FromArgs)]
 #[argh(subcommand)]
-pub enum Command {
+pub enum CrossPlatformCommands {
     Balloon(BalloonCommand),
     BalloonStats(BalloonStatsCommand),
     Battery(BatteryCommand),
@@ -81,6 +116,13 @@ pub enum Command {
     Usb(UsbCommand),
     Version(VersionCommand),
     Vfio(VfioCrosvmCommand),
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(argh_helpers::FlattenSubcommand)]
+pub enum Command {
+    CrossPlatform(CrossPlatformCommands),
+    Sys(super::sys::cmdline::Commands),
 }
 
 #[derive(FromArgs)]
@@ -460,18 +502,23 @@ pub struct RunCommand {
         num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]",
         long = "cras-snd"
     )]
-    /// comma separated key=value pairs for setting up cras snd
+    /// comma separated key=value pairs for setting up virtio snd
     /// devices.
     /// Possible key values:
-    ///     capture - Enable audio capture. Default to false.
-    ///     client_type - Set specific client type for cras backend.
-    ///     num_output_devices - Set number of output PCM devices.
-    ///     num_input_devices - Set number of input PCM devices.
-    ///     num_output_streams - Set number of output PCM streams
+    ///     capture=(false,true) - Disable/enable audio capture.
+    ///         Default is false.
+    ///     client_type=(crosvm,arcvm,borealis) - Set specific
+    ///         client type for cras backend. Default is crosvm.
+    ///     socket_type=(legacy,unified) Set specific socket type
+    ///         for cras backend. Default is unified.
+    ///     num_output_devices=INT - Set number of output PCM
+    ///         devices.
+    ///     num_input_devices=INT - Set number of input PCM devices.
+    ///     num_output_streams=INT - Set number of output PCM
+    ///         streams per device.
+    ///     num_input_streams=INT - Set number of input PCM streams
     ///         per device.
-    ///     num_input_streams - Set number of input PCM streams
-    ///         per device.
-    pub cras_snds: Vec<CrasSndParameters>,
+    pub cras_snds: Vec<SndParameters>,
     #[argh(switch)]
     /// don't set VCPUs real-time until make-rt command is run
     pub delay_rt: bool,
@@ -583,6 +630,7 @@ pub struct RunCommand {
     ///        to the virtio-gpu.
     ///     height=INT - The height of the virtual display
     ///        connected to the virtio-gpu
+    #[cfg(unix)]
     pub gpu_display: Vec<GpuDisplayParameters>,
     #[cfg(feature = "gpu")]
     #[argh(option, long = "gpu", from_str_fn(parse_gpu_options))]
@@ -647,12 +695,11 @@ pub struct RunCommand {
     #[argh(switch)]
     /// allow to enable ITMT scheduling feature in VM. The success of enabling depends on HWP and ACPI CPPC support on hardware
     pub itmt: bool,
-    #[argh(option)]
-    /// jail config
-    pub jail_config: Option<JailConfig>,
+    #[cfg(unix)]
     #[argh(option, long = "kvm-device", arg_name = "PATH")]
     /// path to the KVM device. (default /dev/kvm)
     pub kvm_device_path: Option<PathBuf>,
+    #[cfg(unix)]
     #[argh(switch)]
     /// disable host swap on guest VM pages.
     pub lock_guest_memory: bool,
@@ -685,10 +732,6 @@ pub struct RunCommand {
     #[argh(switch)]
     /// don't use legacy KBD devices emulation
     pub no_i8042: bool,
-    #[cfg(unix)]
-    #[argh(switch)]
-    /// don't use legacy KBD/RTC devices emulation
-    pub no_legacy: bool,
     #[argh(switch)]
     /// don't create RNG device in the guest
     pub no_rng: bool,
@@ -847,7 +890,6 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     /// path to seccomp .policy files
     pub seccomp_policy_dir: Option<PathBuf>,
-    #[cfg(unix)]
     #[argh(
         option,
         long = "serial",
@@ -876,6 +918,7 @@ pub struct RunCommand {
     ///        Can only be given once. Will default to first serial
     ///        port if not provided.
     pub serial_parameters: Vec<SerialParameters>,
+    #[cfg(unix)]
     #[argh(
         option,
         long = "shared-dir",
@@ -973,7 +1016,7 @@ pub struct RunCommand {
     #[cfg(unix)]
     #[argh(option)]
     /// file descriptor for configured tap device. A different virtual network card will be added each time this argument is given
-    pub tap_fd: Vec<RawFd>,
+    pub tap_fd: Vec<RawDescriptor>,
     #[cfg(unix)]
     #[argh(option)]
     /// name of a configured persistent TAP interface to use for networking. A different virtual network card will be added each time this argument is given
@@ -1012,6 +1055,7 @@ pub struct RunCommand {
     #[argh(option, long = "cpus", short = 'c')]
     /// number of VCPUs. (default: 1)
     pub vcpu_count: Option<usize>,
+    #[cfg(unix)]
     #[argh(
         option,
         arg_name = "PATH[,guest-address=auto|<BUS:DEVICE.FUNCTION>][,iommu=on|off]",
@@ -1026,12 +1070,14 @@ pub struct RunCommand {
     ///     iommu=on|off - indicates whether to enable virtio IOMMU
     ///        for this device
     pub vfio: Vec<VfioCommand>,
+    #[cfg(unix)]
     #[argh(option, arg_name = "PATH", from_str_fn(parse_vfio_platform))]
     /// path to sysfs of platform pass through
     pub vfio_platform: Vec<VfioCommand>,
     #[argh(switch)]
     /// use vhost for networking
     pub vhost_net: bool,
+    #[cfg(unix)]
     #[argh(option, long = "vhost-net-device", arg_name = "PATH")]
     /// path to the vhost-net device. (default /dev/vhost-net)
     pub vhost_net_device_path: Option<PathBuf>,
@@ -1070,7 +1116,7 @@ pub struct RunCommand {
     #[cfg(unix)]
     #[argh(option, arg_name = "FD")]
     /// open FD to the vhost-vsock device, mutually exclusive with vhost-vsock-device
-    pub vhost_vsock_fd: Option<RawFd>,
+    pub vhost_vsock_fd: Option<RawDescriptor>,
     #[cfg(feature = "video-decoder")]
     #[argh(
         option,
@@ -1079,7 +1125,7 @@ pub struct RunCommand {
         from_str_fn(parse_video_options)
     )]
     /// (EXPERIMENTAL) enable virtio-video decoder device
-    // Possible backend values: libvda, ffmpeg
+    /// Possible backend values: libvda, ffmpeg, vaapi
     pub video_dec: Option<VideoBackendType>,
     #[cfg(feature = "video-encoder")]
     #[argh(
@@ -1109,6 +1155,32 @@ pub struct RunCommand {
     #[argh(option, long = "single-touch", arg_name = "PATH:WIDTH:HEIGHT")]
     /// path to a socket from where to read single touch input events (such as those from a touchscreen) and write status updates to, optionally followed by width and height (defaults to 800x1280)
     pub virtio_single_touch: Vec<TouchDeviceOption>,
+    #[cfg(feature = "audio")]
+    #[argh(
+        option,
+        arg_name = "[capture=true,backend=BACKEND,num_output_devices=1,
+        num_input_devices=1,num_output_streams=1,num_input_streams=1]",
+        long = "virtio-snd"
+    )]
+    /// comma separated key=value pairs for setting up virtio snd
+    /// devices.
+    /// Possible key values:
+    ///     capture=(false,true) - Disable/enable audio capture.
+    ///         Default is false.
+    ///     backend=(null,[cras]) - Which backend to use for
+    ///         virtio-snd.
+    ///     client_type=(crosvm,arcvm,borealis) - Set specific
+    ///         client type for cras backend. Default is crosvm.
+    ///     socket_type=(legacy,unified) Set specific socket type
+    ///         for cras backend. Default is unified.
+    ///     num_output_devices=INT - Set number of output PCM
+    ///         devices.
+    ///     num_input_devices=INT - Set number of input PCM devices.
+    ///     num_output_streams=INT - Set number of output PCM
+    ///         streams per device.
+    ///     num_input_streams=INT - Set number of input PCM streams
+    ///         per device.
+    pub virtio_snds: Vec<SndParameters>,
     #[argh(option, long = "switches", arg_name = "PATH")]
     /// path to a socket from where to read switch input events and write status updates to
     pub virtio_switches: Vec<PathBuf>,
@@ -1131,6 +1203,7 @@ pub struct RunCommand {
     ///     uuid=UUID - UUID which will be stored in VVU PCI config
     ///        space that is readable from guest userspace
     pub vvu_proxy: Vec<VvuOption>,
+    #[cfg(unix)]
     #[argh(
         option,
         long = "wayland-sock",
@@ -1156,10 +1229,12 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.executable_path = Some(Executable::Kernel(p));
         }
 
+        #[cfg(unix)]
         if let Some(p) = cmd.kvm_device_path {
             cfg.kvm_device_path = p;
         }
 
+        #[cfg(unix)]
         if let Some(p) = cmd.vhost_net_device_path {
             if !p.exists() {
                 return Err(format!("vhost-net-device path {:?} does not exist", p));
@@ -1175,6 +1250,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.params.extend(cmd.params);
+
+        cfg.per_vm_core_scheduling = cmd.per_vm_core_scheduling;
 
         cfg.vcpu_count = cmd.vcpu_count;
 
@@ -1205,7 +1282,10 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.hugepages = cmd.hugepages;
 
-        cfg.lock_guest_memory = cmd.lock_guest_memory;
+        #[cfg(unix)]
+        {
+            cfg.lock_guest_memory = cmd.lock_guest_memory;
+        }
 
         #[cfg(feature = "audio")]
         {
@@ -1321,6 +1401,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.pstore = cmd.pstore;
 
+        #[cfg(unix)]
         for (name, params) in cmd.wayland_socket_paths {
             if cfg.wayland_socket_paths.contains_key(&name) {
                 return Err(format!("wayland socket name already used: '{}'", name));
@@ -1451,9 +1532,18 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.rng = !cmd.no_rng;
         cfg.balloon = !cmd.no_balloon;
 
+        #[cfg(feature = "audio")]
+        {
+            cfg.virtio_snds = cmd.virtio_snds;
+        }
         #[cfg(feature = "audio_cras")]
         {
-            cfg.cras_snds = cmd.cras_snds;
+            // cmd.cras_snds is the old parameter for virtio snd with cras backend.
+            cfg.virtio_snds
+                .extend(cmd.cras_snds.into_iter().map(|s| SndParameters {
+                    backend: devices::virtio::snd::common_backend::StreamSourceBackend::CRAS,
+                    ..s
+                }));
         }
 
         #[cfg(feature = "gpu")]
@@ -1463,9 +1553,6 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         #[cfg(unix)]
         {
-            cfg.no_i8042 = cmd.no_legacy;
-            cfg.no_rtc = cmd.no_legacy;
-
             if cmd.vhost_vsock_device.is_some() && cmd.vhost_vsock_fd.is_some() {
                 return Err(
                     "Only one of vhost-vsock-device vhost-vsock-fd has to be specified".to_string(),
@@ -1497,7 +1584,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             if let Some(d) = cmd.seccomp_policy_dir {
                 cfg.jail_config
                     .get_or_insert_with(Default::default)
-                    .seccomp_policy_dir = d;
+                    .seccomp_policy_dir = Some(d);
             }
 
             if cmd.seccomp_log_failures {
@@ -1571,8 +1658,8 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.force_s2idle = cmd.s2idle;
             cfg.pcie_ecam = cmd.pcie_ecam;
             cfg.pci_low_start = cmd.pci_low_start;
-            cfg.no_i8042 |= cmd.no_i8042;
-            cfg.no_rtc |= cmd.no_rtc;
+            cfg.no_i8042 = cmd.no_i8042;
+            cfg.no_rtc = cmd.no_rtc;
 
             for (index, msr_config) in cmd.userspace_msr {
                 if cfg.userspace_msr.insert(index, msr_config).is_some() {
@@ -1643,8 +1730,11 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.task_profiles = cmd.task_profiles;
         }
 
-        cfg.vfio.extend(cmd.vfio);
-        cfg.vfio.extend(cmd.vfio_platform);
+        #[cfg(unix)]
+        {
+            cfg.vfio.extend(cmd.vfio);
+            cfg.vfio.extend(cmd.vfio_platform);
+        }
 
         // Now do validation of constructed config
         super::config::validate_config(&mut cfg)?;

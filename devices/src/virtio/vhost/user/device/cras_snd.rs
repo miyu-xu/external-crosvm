@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use argh::FromArgs;
-use base::{warn, Event};
+use base::{error, warn, Event};
 use cros_async::{sync::Mutex as AsyncMutex, EventAsync, Executor};
 use data_model::DataInit;
 use futures::channel::mpsc;
@@ -16,17 +16,18 @@ use hypervisor::ProtectionType;
 use once_cell::sync::OnceCell;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::connection::socket::{Endpoint as SocketEndpoint, Listener as SocketListener};
 use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
 
-use crate::virtio::snd::cras_backend::{
+use crate::virtio::snd::common_backend::{
     async_funcs::{handle_ctrl_queue, handle_pcm_queue, send_pcm_response_worker},
     hardcoded_snd_data, hardcoded_virtio_snd_config, Parameters, PcmResponse, SndData, StreamInfo,
     MAX_QUEUE_NUM, MAX_VRING_LEN,
 };
+use crate::virtio::snd::cras_backend::create_cras_stream_source_generators;
 use crate::virtio::snd::layout::virtio_snd_config;
-use crate::virtio::vhost::user::device::handler::{
-    DeviceRequestHandler, Doorbell, VhostUserBackend,
+use crate::virtio::vhost::user::device::{
+    handler::{sys::Doorbell, VhostUserBackend},
+    listener::{sys::VhostUserListener, VhostUserListenerTrait},
 };
 use crate::virtio::{self, copy_config};
 
@@ -46,8 +47,7 @@ struct CrasSndBackend {
     workers: [Option<AbortHandle>; MAX_QUEUE_NUM],
     response_workers: [Option<AbortHandle>; 2], // tx and rx
     snd_data: Rc<SndData>,
-    streams: Rc<AsyncMutex<Vec<AsyncMutex<StreamInfo<'static>>>>>,
-    params: Parameters,
+    streams: Rc<AsyncMutex<Vec<AsyncMutex<StreamInfo>>>>,
     tx_send: mpsc::UnboundedSender<PcmResponse>,
     rx_send: mpsc::UnboundedSender<PcmResponse>,
     tx_recv: Option<mpsc::UnboundedReceiver<PcmResponse>>,
@@ -62,8 +62,19 @@ impl CrasSndBackend {
 
         let snd_data = hardcoded_snd_data(&params);
 
-        let mut streams: Vec<AsyncMutex<StreamInfo>> = Vec::new();
-        streams.resize_with(snd_data.pcm_info_len(), Default::default);
+        let generators = create_cras_stream_source_generators(&params, &snd_data);
+        if snd_data.pcm_info_len() != generators.len() {
+            error!(
+                "snd: expected {} stream source generators, got {}",
+                snd_data.pcm_info_len(),
+                generators.len(),
+            )
+        }
+
+        let streams = generators
+            .into_iter()
+            .map(|generator| AsyncMutex::new(StreamInfo::new(generator)))
+            .collect();
         let streams = Rc::new(AsyncMutex::new(streams));
 
         let (tx_send, tx_recv) = mpsc::unbounded();
@@ -78,7 +89,6 @@ impl CrasSndBackend {
             response_workers: Default::default(),
             snd_data: Rc::new(snd_data),
             streams,
-            params,
             tx_send,
             rx_send,
             tx_recv: Some(tx_recv),
@@ -170,12 +180,11 @@ impl VhostUserBackend for CrasSndBackend {
                 let snd_data = self.snd_data.clone();
                 let tx_send = self.tx_send.clone();
                 let rx_send = self.rx_send.clone();
-                let params = self.params.clone();
                 ex.spawn_local(Abortable::new(
                     async move {
                         handle_ctrl_queue(
                             &ex, &mem, &streams, &*snd_data, queue, kick_evt, &doorbell, tx_send,
-                            rx_send, &params,
+                            rx_send,
                         )
                         .await
                     },
@@ -266,18 +275,14 @@ pub fn run_cras_snd_device(opts: Options) -> anyhow::Result<()> {
         .unwrap_or("".to_string())
         .parse::<Parameters>()?;
 
-    let snd_device = CrasSndBackend::new(params)?;
-
-    // Create and bind unix socket
-    let listener = SocketListener::new(opts.socket, true /* unlink */)?;
-
-    let handler = DeviceRequestHandler::new(Box::new(snd_device));
+    let snd_device = Box::new(CrasSndBackend::new(params)?);
 
     // Child, we can continue by spawning the executor and set up the device
     let ex = Executor::new().context("Failed to create executor")?;
 
     let _ = SND_EXECUTOR.set(ex.clone());
 
+    let listener = VhostUserListener::new_socket(&opts.socket, None)?;
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    ex.run_until(handler.run_with_listener::<SocketEndpoint<_>>(listener, &ex))?
+    ex.run_until(listener.run_backend(snd_device, &ex))?
 }

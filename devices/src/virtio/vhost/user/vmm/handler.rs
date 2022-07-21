@@ -5,8 +5,9 @@
 mod sys;
 
 use std::io::Write;
+use std::thread;
 
-use base::{AsRawDescriptor, Event, Tube};
+use base::{error, AsRawDescriptor, Event, Tube};
 use vm_memory::GuestMemory;
 use vmm_vhost::message::{
     VhostUserConfigFlags, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
@@ -14,6 +15,7 @@ use vmm_vhost::message::{
 use vmm_vhost::{VhostBackend, VhostUserMaster, VhostUserMemoryRegionInfo, VringConfigData};
 
 use crate::virtio::vhost::user::vmm::handler::sys::SocketMaster;
+use crate::virtio::vhost::user::vmm::worker::Worker;
 use crate::virtio::vhost::user::vmm::{Error, Result};
 use crate::virtio::{Interrupt, Queue};
 
@@ -178,13 +180,13 @@ impl VhostUserHandler {
             queue_size: queue.actual_size(),
             flags: 0u32,
             desc_table_addr: mem
-                .get_host_address(queue.desc_table)
+                .get_host_address(queue.desc_table())
                 .map_err(Error::GetHostAddress)? as u64,
             used_ring_addr: mem
-                .get_host_address(queue.used_ring)
+                .get_host_address(queue.used_ring())
                 .map_err(Error::GetHostAddress)? as u64,
             avail_ring_addr: mem
-                .get_host_address(queue.avail_ring)
+                .get_host_address(queue.avail_ring())
                 .map_err(Error::GetHostAddress)? as u64,
             log_addr: None,
         };
@@ -212,12 +214,13 @@ impl VhostUserHandler {
     /// Activates vrings.
     pub fn activate(
         &mut self,
-        mem: &GuestMemory,
-        interrupt: &Interrupt,
-        queues: &[Queue],
-        queue_evts: &[Event],
-    ) -> Result<()> {
-        self.set_mem_table(mem)?;
+        mem: GuestMemory,
+        interrupt: Interrupt,
+        queues: Vec<Queue>,
+        queue_evts: Vec<Event>,
+        label: &str,
+    ) -> Result<(thread::JoinHandle<()>, Event)> {
+        self.set_mem_table(&mem)?;
 
         let msix_config_opt = interrupt
             .get_msix_config()
@@ -228,12 +231,31 @@ impl VhostUserHandler {
         for (queue_index, queue) in queues.iter().enumerate() {
             let queue_evt = &queue_evts[queue_index];
             let irqfd = msix_config
-                .get_irqfd(queue.vector as usize)
+                .get_irqfd(queue.vector() as usize)
                 .unwrap_or_else(|| interrupt.get_interrupt_evt());
-            self.activate_vring(mem, queue_index, queue, queue_evt, irqfd)?;
+            self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd)?;
         }
 
-        Ok(())
+        drop(msix_config);
+
+        let label = format!("vhost_user_virtio_{}", label);
+        let kill_evt = Event::new().map_err(Error::CreateEvent)?;
+        let self_kill_evt = kill_evt.try_clone().map_err(Error::CreateEvent)?;
+        thread::Builder::new()
+            .name(label.clone())
+            .spawn(move || {
+                let mut worker = Worker {
+                    queues,
+                    mem,
+                    kill_evt,
+                };
+
+                if let Err(e) = worker.run(interrupt) {
+                    error!("failed to start {} worker: {}", label, e);
+                }
+            })
+            .map(|worker_result| (worker_result, self_kill_evt))
+            .map_err(Error::SpawnWorker)
     }
 
     /// Deactivates all vrings.
