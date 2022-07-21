@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::pci::CrosvmDeviceId;
-use crate::{BusAccessInfo, BusDevice, BusDeviceSync, BusRange, DeviceId};
+use crate::{BusAccessInfo, BusDevice, BusDeviceSync, BusRange};
 use base::{
     error, pagesize, round_up_to_page_size, MemoryMapping, MemoryMappingBuilder, Protection,
 };
@@ -45,10 +44,6 @@ impl DirectIo {
 }
 
 impl BusDevice for DirectIo {
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::DirectIo.into()
-    }
-
     fn debug_label(&self) -> String {
         "direct-io".to_string()
     }
@@ -176,10 +171,6 @@ impl DirectMmio {
 }
 
 impl BusDevice for DirectMmio {
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::DirectMmio.into()
-    }
-
     fn debug_label(&self) -> String {
         "direct-mmio".to_string()
     }

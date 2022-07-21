@@ -6,7 +6,6 @@
   "device": true,
   "features": "audio,usb",
   "global_defaults": "crosvm_defaults",
-  "no_presubmit": true,
   "no-pkg-vers": true,
   "no-subdir": true,
   "patch": "patches/Android.bp.patch",

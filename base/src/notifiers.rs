@@ -10,12 +10,6 @@ pub trait ReadNotifier {
     fn get_read_notifier(&self) -> &dyn AsRawDescriptor;
 }
 
-impl ReadNotifier for std::fs::File {
-    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
-        self
-    }
-}
-
 pub trait CloseNotifier {
     /// Gets a descriptor that can be used in EventContext to wait for the closed event.
     fn get_close_notifier(&self) -> &dyn AsRawDescriptor;

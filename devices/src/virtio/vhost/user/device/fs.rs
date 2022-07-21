@@ -27,9 +27,6 @@ use crate::virtio::fs::passthrough::PassthroughFs;
 use crate::virtio::fs::{process_fs_queue, virtio_fs_config, FS_MAX_TAG_LEN};
 use crate::virtio::vhost::user::device::handler::{Doorbell, VhostUserBackend};
 
-const MAX_QUEUE_NUM: usize = 2; /* worker queue and high priority queue */
-const MAX_VRING_LEN: u16 = 1024;
-
 async fn handle_fs_queue(
     mut queue: virtio::Queue,
     mem: GuestMemory,
@@ -60,7 +57,7 @@ struct FsBackend {
     avail_features: u64,
     acked_features: u64,
     acked_protocol_features: VhostUserProtocolFeatures,
-    workers: [Option<AbortHandle>; MAX_QUEUE_NUM],
+    workers: [Option<AbortHandle>; Self::MAX_QUEUE_NUM],
     keep_rds: Vec<RawDescriptor>,
 }
 
@@ -104,13 +101,10 @@ impl FsBackend {
 }
 
 impl VhostUserBackend for FsBackend {
-    fn max_queue_num(&self) -> usize {
-        return MAX_QUEUE_NUM;
-    }
+    const MAX_QUEUE_NUM: usize = 2; /* worker queue and high priority queue */
+    const MAX_VRING_LEN: u16 = 1024;
 
-    fn max_vring_len(&self) -> u16 {
-        return MAX_VRING_LEN;
-    }
+    type Error = anyhow::Error;
 
     fn features(&self) -> u64 {
         self.avail_features

@@ -5,7 +5,16 @@
 use std::path::Path;
 use std::thread::JoinHandle;
 
-use crate::{client::HandleRequestResult, VmRequest};
+use base::RawDescriptor;
+
+use crate::{
+    client::{HandleRequestResult, ModifyUsbError, ModifyUsbResult},
+    VmRequest,
+};
+
+pub(crate) fn raw_descriptor_from_path(_path: &Path) -> ModifyUsbResult<RawDescriptor> {
+    Err(ModifyUsbError::SocketFailed)
+}
 
 // TODO(b/145563346): Make this work on Windows
 pub fn handle_request<T: AsRef<Path> + std::fmt::Debug>(

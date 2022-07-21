@@ -49,9 +49,8 @@
 //!
 //! [log-crate-url]: https://docs.rs/log/
 
-use std::{fmt::Display, io, io::Write};
+use std::{fmt::Display, io};
 
-use chrono::Local;
 use once_cell::sync::OnceCell;
 use remain::sorted;
 use serde::{Deserialize, Serialize};
@@ -248,25 +247,8 @@ impl State {
         builder.parse(cfg.filter);
         let filter = builder.build();
 
-        let create_formatted_builder = || {
-            let mut builder = env_logger::Builder::new();
-
-            // Output log lines w/ local ISO 8601 timestamps.
-            builder.format(|buf, record| {
-                writeln!(
-                    buf,
-                    "[{} {:5} {}] {}",
-                    Local::now().format("%Y-%m-%dT%H:%M:%S%.9f%:z"),
-                    record.level(),
-                    record.module_path().unwrap_or("<missing module path>"),
-                    record.args()
-                )
-            });
-            builder
-        };
-
         if cfg.stderr {
-            let mut builder = create_formatted_builder();
+            let mut builder = env_logger::Builder::new();
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Stderr);
             loggers.push(Box::new(builder.build()));
@@ -277,7 +259,7 @@ impl State {
         }
 
         if let Some(file) = cfg.pipe {
-            let mut builder = create_formatted_builder();
+            let mut builder = env_logger::Builder::new();
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Pipe(Box::new(file)));
             // https://github.com/env-logger-rs/env_logger/issues/208

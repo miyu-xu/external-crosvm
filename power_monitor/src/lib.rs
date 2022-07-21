@@ -7,11 +7,10 @@
 //! <https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/power_manager/README.md>
 
 use std::error::Error;
-
-use base::RawDescriptor;
+use std::os::unix::io::RawFd;
 
 pub trait PowerMonitor {
-    fn poll_fd(&self) -> RawDescriptor;
+    fn poll_fd(&self) -> RawFd;
     fn read_message(&mut self) -> std::result::Result<Option<PowerData>, Box<dyn Error>>;
 }
 

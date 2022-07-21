@@ -27,7 +27,7 @@ use std::{fmt, mem, thread};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base::{
     error, info, AsRawDescriptor, Event, EventToken, MemoryMapping, MemoryMappingBuilder,
-    Protection, RawDescriptor, SafeDescriptor, SharedMemory, Timer, Tube, TubeError, WaitContext,
+    RawDescriptor, SafeDescriptor, SharedMemory, Timer, Tube, TubeError, WaitContext,
 };
 use data_model::DataInit;
 use hypervisor::Datamatch;
@@ -1072,7 +1072,7 @@ impl CoIommuDev {
         size: usize,
         offset: u64,
         gpa: u64,
-        prot: Protection,
+        read_only: bool,
     ) -> Result<()> {
         let request = VmMemoryRequest::RegisterMemory {
             source: VmMemorySource::Descriptor {
@@ -1081,7 +1081,7 @@ impl CoIommuDev {
                 size: size as u64,
             },
             dest: VmMemoryDestination::GuestPhysicalAddress(gpa),
-            prot,
+            read_only,
         };
         self.send_msg(&request)
     }
@@ -1097,7 +1097,7 @@ impl CoIommuDev {
                 COIOMMU_NOTIFYMAP_SIZE,
                 0,
                 gpa,
-                Protection::read_write(),
+                false,
             ) {
                 Ok(_) => {}
                 Err(e) => {
@@ -1112,7 +1112,7 @@ impl CoIommuDev {
                 COIOMMU_TOPOLOGYMAP_SIZE,
                 0,
                 gpa,
-                Protection::read(),
+                true,
             ) {
                 Ok(_) => {}
                 Err(e) => {

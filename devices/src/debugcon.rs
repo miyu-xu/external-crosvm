@@ -7,9 +7,8 @@ use std::io::{self, Write};
 use base::{error, Event, FileSync, RawDescriptor, Result};
 use hypervisor::ProtectionType;
 
-use crate::pci::CrosvmDeviceId;
 use crate::serial_device::SerialInput;
-use crate::{BusAccessInfo, BusDevice, DeviceId, SerialDevice};
+use crate::{BusAccessInfo, BusDevice, SerialDevice};
 
 const BOCHS_DEBUGCON_READBACK: u8 = 0xe9;
 
@@ -32,10 +31,6 @@ impl SerialDevice for Debugcon {
 }
 
 impl BusDevice for Debugcon {
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::DebugConsole.into()
-    }
-
     fn debug_label(&self) -> String {
         "debugcon".to_owned()
     }

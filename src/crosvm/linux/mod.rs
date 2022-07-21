@@ -23,7 +23,6 @@ use std::process;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use std::thread;
 
-use devices::virtio::BalloonMode;
 use libc;
 
 use acpi_tables::sdt::SDT;
@@ -40,9 +39,8 @@ use devices::virtio::{self, EventDevice};
 #[cfg(feature = "audio")]
 use devices::Ac97Dev;
 use devices::{
-    self, BusDeviceObj, HostHotPlugKey, HotPlugBus, IrqEventIndex, IrqEventSource,
-    KvmKernelIrqChip, PciAddress, PciDevice, PvPanicCode, PvPanicPciDevice, StubPciDevice,
-    VirtioPciDevice,
+    self, BusDeviceObj, HostHotPlugKey, HotPlugBus, IrqEventIndex, KvmKernelIrqChip, PciAddress,
+    PciDevice, PvPanicCode, PvPanicPciDevice, StubPciDevice, VirtioPciDevice,
 };
 use devices::{CoIommuDev, IommuDevType};
 #[cfg(feature = "usb")]
@@ -50,28 +48,26 @@ use devices::{HostBackendDeviceProvider, XhciController};
 use hypervisor::kvm::{Kvm, KvmVcpu, KvmVm};
 use hypervisor::{HypervisorCap, ProtectionType, Vm, VmCap};
 use minijail::{self, Minijail};
-#[cfg(feature = "direct")]
-use resources::Error as ResourceError;
-use resources::{AddressRange, Alloc, SystemAllocator};
+use resources::{Alloc, SystemAllocator};
 use rutabaga_gfx::RutabagaGralloc;
 use sync::{Condvar, Mutex};
 use vm_control::*;
 use vm_memory::{GuestAddress, GuestMemory, MemoryPolicy};
 
-use crate::crosvm::config::{
-    Config, Executable, FileBackedMappingParameters, SharedDir, SharedDirKind, VfioType,
-};
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use crate::crosvm::gdb::{gdb_thread, GdbStub};
+use crate::crosvm::{
+    Config, Executable, FileBackedMappingParameters, SharedDir, SharedDirKind, VfioType,
+};
 use arch::{
     self, LinuxArch, RunnableLinuxVm, VcpuAffinity, VirtioDeviceStub, VmComponents, VmImage,
 };
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use {
-    crate::crosvm::config::HostPcieRootPortParameters,
+    crate::crosvm::HostPcieRootPortParameters,
     devices::{
-        IrqChipX86_64 as IrqChipArch, KvmSplitIrqChip, PciBridge, PcieHostPort, PcieRootPort,
+        IrqChipX86_64 as IrqChipArch, KvmSplitIrqChip, PciBridge, PcieHostRootPort, PcieRootPort,
     },
     hypervisor::{VcpuX86_64 as VcpuArch, VmX86_64 as VmArch},
     x86_64::msr::get_override_msr_list,
@@ -137,8 +133,7 @@ fn create_virtio_devices(
 
     for opt in &cfg.vvu_proxy {
         devs.push(create_vvu_proxy_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
+            cfg,
             opt,
             vvu_proxy_device_tubes.remove(0),
             vvu_proxy_max_sibling_mem_size,
@@ -162,9 +157,7 @@ fn create_virtio_devices(
         }
 
         devs.push(create_wayland_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            &cfg.wayland_socket_paths,
+            cfg,
             wayland_device_tube,
             wl_resource_bridge,
         )?);
@@ -262,33 +255,27 @@ fn create_virtio_devices(
         .iter()
         .filter(|(_k, v)| v.hardware == SerialHardware::VirtioConsole)
     {
-        let dev = create_console_device(cfg.protected_vm, &cfg.jail_config, param)?;
+        let dev = create_console_device(cfg, param)?;
         devs.push(dev);
     }
 
     for disk in &cfg.disks {
         let disk_device_tube = disk_device_tubes.remove(0);
-        devs.push(create_block_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            disk,
-            disk_device_tube,
-        )?);
+        devs.push(create_block_device(cfg, disk, disk_device_tube)?);
     }
 
     for blk in &cfg.vhost_user_blk {
-        devs.push(create_vhost_user_block_device(cfg.protected_vm, blk)?);
+        devs.push(create_vhost_user_block_device(cfg, blk)?);
     }
 
     for console in &cfg.vhost_user_console {
-        devs.push(create_vhost_user_console_device(cfg.protected_vm, console)?);
+        devs.push(create_vhost_user_console_device(cfg, console)?);
     }
 
     for (index, pmem_disk) in cfg.pmem_devices.iter().enumerate() {
         let pmem_device_tube = pmem_device_tubes.remove(0);
         devs.push(create_pmem_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
+            cfg,
             vm,
             resources,
             pmem_disk,
@@ -298,33 +285,19 @@ fn create_virtio_devices(
     }
 
     if cfg.rng {
-        devs.push(create_rng_device(cfg.protected_vm, &cfg.jail_config)?);
+        devs.push(create_rng_device(cfg)?);
     }
 
     #[cfg(feature = "tpm")]
     {
         if cfg.software_tpm {
-            devs.push(create_software_tpm_device(
-                cfg.protected_vm,
-                &cfg.jail_config,
-            )?);
-        }
-    }
-
-    #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
-    {
-        if cfg.vtpm_proxy {
-            devs.push(create_vtpm_proxy_device(
-                cfg.protected_vm,
-                &cfg.jail_config,
-            )?);
+            devs.push(create_software_tpm_device(cfg)?);
         }
     }
 
     for (idx, single_touch_spec) in cfg.virtio_single_touch.iter().enumerate() {
         devs.push(create_single_touch_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
+            cfg,
             single_touch_spec,
             idx as u32,
         )?);
@@ -332,66 +305,35 @@ fn create_virtio_devices(
 
     for (idx, multi_touch_spec) in cfg.virtio_multi_touch.iter().enumerate() {
         devs.push(create_multi_touch_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
+            cfg,
             multi_touch_spec,
             idx as u32,
         )?);
     }
 
     for (idx, trackpad_spec) in cfg.virtio_trackpad.iter().enumerate() {
-        devs.push(create_trackpad_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            trackpad_spec,
-            idx as u32,
-        )?);
+        devs.push(create_trackpad_device(cfg, trackpad_spec, idx as u32)?);
     }
 
     for (idx, mouse_socket) in cfg.virtio_mice.iter().enumerate() {
-        devs.push(create_mouse_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            mouse_socket,
-            idx as u32,
-        )?);
+        devs.push(create_mouse_device(cfg, mouse_socket, idx as u32)?);
     }
 
     for (idx, keyboard_socket) in cfg.virtio_keyboard.iter().enumerate() {
-        devs.push(create_keyboard_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            keyboard_socket,
-            idx as u32,
-        )?);
+        devs.push(create_keyboard_device(cfg, keyboard_socket, idx as u32)?);
     }
 
     for (idx, switches_socket) in cfg.virtio_switches.iter().enumerate() {
-        devs.push(create_switches_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            switches_socket,
-            idx as u32,
-        )?);
+        devs.push(create_switches_device(cfg, switches_socket, idx as u32)?);
     }
 
     for dev_path in &cfg.virtio_input_evdevs {
-        devs.push(create_vinput_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            dev_path,
-        )?);
+        devs.push(create_vinput_device(cfg, dev_path)?);
     }
 
     if let Some(balloon_device_tube) = balloon_device_tube {
         devs.push(create_balloon_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            if cfg.strict_balloon {
-                BalloonMode::Strict
-            } else {
-                BalloonMode::Relaxed
-            },
+            cfg,
             balloon_device_tube,
             balloon_inflate_tube,
             init_balloon_size,
@@ -400,13 +342,7 @@ fn create_virtio_devices(
 
     // We checked above that if the IP is defined, then the netmask is, too.
     for tap_fd in &cfg.tap_fd {
-        devs.push(create_tap_net_device_from_fd(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            *tap_fd,
-        )?);
+        devs.push(create_tap_net_device_from_fd(cfg, *tap_fd)?);
     }
 
     if let (Some(host_ip), Some(netmask), Some(mac_address)) =
@@ -416,15 +352,7 @@ fn create_virtio_devices(
             bail!("vhost-user-net cannot be used with any of --host_ip, --netmask or --mac");
         }
         devs.push(create_net_device_from_config(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            if cfg.vhost_net {
-                Some(cfg.vhost_net_device_path.clone())
-            } else {
-                None
-            },
+            cfg,
             host_ip,
             netmask,
             mac_address,
@@ -432,35 +360,25 @@ fn create_virtio_devices(
     }
 
     for tap_name in &cfg.tap_name {
-        devs.push(create_tap_net_device_from_name(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            tap_name.as_bytes(),
-        )?);
+        devs.push(create_tap_net_device_from_name(cfg, tap_name.as_bytes())?);
     }
 
     for net in &cfg.vhost_user_net {
-        devs.push(create_vhost_user_net_device(cfg.protected_vm, net)?);
+        devs.push(create_vhost_user_net_device(cfg, net)?);
     }
 
     for vsock in &cfg.vhost_user_vsock {
-        devs.push(create_vhost_user_vsock_device(cfg.protected_vm, vsock)?);
+        devs.push(create_vhost_user_vsock_device(cfg, vsock)?);
     }
 
     for opt in &cfg.vhost_user_wl {
-        devs.push(create_vhost_user_wl_device(cfg.protected_vm, opt)?);
+        devs.push(create_vhost_user_wl_device(cfg, opt)?);
     }
 
     #[cfg(feature = "audio_cras")]
     {
         for cras_snd in &cfg.cras_snds {
-            devs.push(create_cras_snd_device(
-                cfg.protected_vm,
-                &cfg.jail_config,
-                cras_snd.clone(),
-            )?);
+            devs.push(create_cras_snd_device(cfg, cras_snd.clone())?);
         }
     }
 
@@ -471,8 +389,7 @@ fn create_virtio_devices(
                 video_dec_backend,
                 &mut devs,
                 video_dec_tube,
-                cfg.protected_vm,
-                &cfg.jail_config,
+                cfg,
                 devices::virtio::VideoDeviceType::Decoder,
             )?;
         }
@@ -485,8 +402,7 @@ fn create_virtio_devices(
                 video_enc_backend,
                 &mut devs,
                 video_enc_tube,
-                cfg.protected_vm,
-                &cfg.jail_config,
+                cfg,
                 devices::virtio::VideoDeviceType::Encoder,
             )?;
         }
@@ -497,26 +413,16 @@ fn create_virtio_devices(
             device: cfg.vhost_vsock_device.clone(),
             cid,
         };
-        devs.push(create_vhost_vsock_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            &vhost_config,
-        )?);
+        devs.push(create_vhost_vsock_device(cfg, &vhost_config)?);
     }
 
     for vhost_user_fs in &cfg.vhost_user_fs {
-        devs.push(create_vhost_user_fs_device(
-            cfg.protected_vm,
-            vhost_user_fs,
-        )?);
+        devs.push(create_vhost_user_fs_device(cfg, vhost_user_fs)?);
     }
 
     #[cfg(feature = "audio")]
     for vhost_user_snd in &cfg.vhost_user_snd {
-        devs.push(create_vhost_user_snd_device(
-            cfg.protected_vm,
-            vhost_user_snd,
-        )?);
+        devs.push(create_vhost_user_snd_device(cfg, vhost_user_snd)?);
     }
 
     for shared_dir in &cfg.shared_dirs {
@@ -533,44 +439,23 @@ fn create_virtio_devices(
         let dev = match kind {
             SharedDirKind::FS => {
                 let device_tube = fs_device_tubes.remove(0);
-                create_fs_device(
-                    cfg.protected_vm,
-                    &cfg.jail_config,
-                    uid_map,
-                    gid_map,
-                    src,
-                    tag,
-                    fs_cfg.clone(),
-                    device_tube,
-                )?
+                create_fs_device(cfg, uid_map, gid_map, src, tag, fs_cfg.clone(), device_tube)?
             }
-            SharedDirKind::P9 => create_9p_device(
-                cfg.protected_vm,
-                &cfg.jail_config,
-                uid_map,
-                gid_map,
-                src,
-                tag,
-                p9_cfg.clone(),
-            )?,
+            SharedDirKind::P9 => create_9p_device(cfg, uid_map, gid_map, src, tag, p9_cfg.clone())?,
         };
         devs.push(dev);
     }
 
     if let Some(vhost_user_mac80211_hwsim) = &cfg.vhost_user_mac80211_hwsim {
         devs.push(create_vhost_user_mac80211_hwsim_device(
-            cfg.protected_vm,
+            cfg,
             vhost_user_mac80211_hwsim,
         )?);
     }
 
     #[cfg(feature = "audio")]
     if let Some(path) = &cfg.sound {
-        devs.push(create_sound_device(
-            path,
-            cfg.protected_vm,
-            &cfg.jail_config,
-        )?);
+        devs.push(create_sound_device(path, cfg)?);
     }
 
     Ok(devs)
@@ -611,7 +496,7 @@ fn create_devices(
         {
             let vfio_path = &vfio_dev.vfio_path;
             let (vfio_pci_device, jail, viommu_mapper) = create_vfio_device(
-                &cfg.jail_config,
+                cfg,
                 vm,
                 resources,
                 control_tubes,
@@ -647,7 +532,7 @@ fn create_devices(
         {
             let vfio_path = &vfio_dev.vfio_path;
             let (vfio_plat_dev, jail) = create_vfio_platform_device(
-                &cfg.jail_config,
+                cfg,
                 vm,
                 resources,
                 control_tubes,
@@ -705,10 +590,7 @@ fn create_devices(
             )
             .context("failed to create coiommu device")?;
 
-            devices.push((
-                Box::new(dev),
-                simple_jail(&cfg.jail_config, "coiommu_device")?,
-            ));
+            devices.push((Box::new(dev), simple_jail(&cfg.jail_config, "coiommu")?));
         }
     }
 
@@ -736,13 +618,8 @@ fn create_devices(
     for stub in stubs {
         let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
         control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
-        let dev = VirtioPciDevice::new(
-            vm.get_memory().clone(),
-            stub.dev,
-            msi_device_tube,
-            cfg.disable_virtio_intx,
-        )
-        .context("failed to create virtio pci dev")?;
+        let dev = VirtioPciDevice::new(vm.get_memory().clone(), stub.dev, msi_device_tube)
+            .context("failed to create virtio pci dev")?;
         let dev = Box::new(dev) as Box<dyn BusDeviceObj>;
         devices.push((dev, stub.jail));
     }
@@ -759,10 +636,7 @@ fn create_devices(
     if cfg.usb {
         // Create xhci controller.
         let usb_controller = Box::new(XhciController::new(vm.get_memory().clone(), usb_provider));
-        devices.push((
-            usb_controller,
-            simple_jail(&cfg.jail_config, "xhci_device")?,
-        ));
+        devices.push((usb_controller, simple_jail(&cfg.jail_config, "xhci")?));
     }
 
     for params in &cfg.stub_pci_devices {
@@ -806,10 +680,9 @@ fn create_file_backed_mappings(
             .build()
             .context("failed to map backing file for file-backed mapping")?;
 
-        let mapping_range = AddressRange::from_start_and_size(mapping.address, mapping.size)
-            .context("failed to convert to AddressRange")?;
         match resources.mmio_allocator_any().allocate_at(
-            mapping_range,
+            mapping.address,
+            mapping.size,
             Alloc::FileBacked(mapping.address),
             "file-backed mapping".to_owned(),
         ) {
@@ -897,7 +770,7 @@ fn create_pcie_root_port(
         // reserve the host pci BDF and create a virtual pcie RP with some attrs same as host
         for host_pcie in host_pcie_rp.iter() {
             let (vm_host_tube, vm_device_tube) = Tube::pair().context("failed to create tube")?;
-            let pcie_host = PcieHostPort::new(host_pcie.host_path.as_path(), vm_device_tube)?;
+            let pcie_host = PcieHostRootPort::new(host_pcie.host_path.as_path(), vm_device_tube)?;
             let bus_range = pcie_host.get_bus_range();
             let mut slot_implemented = true;
             for i in bus_range.secondary..=bus_range.subordinate {
@@ -1047,8 +920,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
         gdb: None,
         dmi_path: cfg.dmi_path.clone(),
-        no_i8042: cfg.no_i8042,
-        no_rtc: cfg.no_rtc,
+        no_legacy: cfg.no_legacy,
         host_cpu_topology: cfg.host_cpu_topology,
         itmt: cfg.itmt,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -1200,10 +1072,6 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
     let mut mem_policy = MemoryPolicy::empty();
     if components.hugepages {
         mem_policy |= MemoryPolicy::USE_HUGEPAGES;
-    }
-
-    if cfg.lock_guest_memory {
-        mem_policy |= MemoryPolicy::LOCK_GUEST_MEMORY;
     }
     guest_mem.set_memory_policy(mem_policy);
 
@@ -1427,16 +1295,8 @@ where
         if !sys_allocator.reserve_irq(*irq) {
             warn!("irq {} already reserved.", irq);
         }
-        use devices::CrosvmDeviceId;
-        let irq_event_source = IrqEventSource {
-            device_id: CrosvmDeviceId::DirectIo.into(),
-            queue_id: 0,
-            device_name: format!("direct edge irq {}", irq),
-        };
         let irq_evt = devices::IrqLevelEvent::new().context("failed to create event")?;
-        irq_chip
-            .register_level_irq_event(*irq, &irq_evt, irq_event_source)
-            .unwrap();
+        irq_chip.register_level_irq_event(*irq, &irq_evt).unwrap();
         let direct_irq = devices::DirectIrq::new_level(&irq_evt)
             .context("failed to enable interrupt forwarding")?;
         direct_irq
@@ -1450,16 +1310,8 @@ where
         if !sys_allocator.reserve_irq(*irq) {
             warn!("irq {} already reserved.", irq);
         }
-        use devices::CrosvmDeviceId;
-        let irq_event_source = IrqEventSource {
-            device_id: CrosvmDeviceId::DirectIo.into(),
-            queue_id: 0,
-            device_name: format!("direct level irq {}", irq),
-        };
         let irq_evt = devices::IrqEdgeEvent::new().context("failed to create event")?;
-        irq_chip
-            .register_edge_irq_event(*irq, &irq_evt, irq_event_source)
-            .unwrap();
+        irq_chip.register_edge_irq_event(*irq, &irq_evt).unwrap();
         let direct_irq = devices::DirectIrq::new_edge(&irq_evt)
             .context("failed to enable interrupt forwarding")?;
         direct_irq
@@ -1472,9 +1324,8 @@ where
     #[cfg(feature = "direct")]
     if let Some(mmio) = &cfg.direct_mmio {
         for range in mmio.ranges.iter() {
-            AddressRange::from_start_and_size(range.base, range.len)
-                .ok_or(ResourceError::OutOfSpace)
-                .and_then(|range| sys_allocator.reserve_mmio(range))
+            sys_allocator
+                .reserve_mmio(range.base, range.len)
                 .with_context(|| {
                     format!(
                         "failed to reserved direct mmio: {:x}-{:x}",
@@ -1549,8 +1400,7 @@ where
     let iommu_host_tube = if !iommu_attached_endpoints.is_empty() || cfg.virtio_iommu {
         let (iommu_host_tube, iommu_device_tube) = Tube::pair().context("failed to create tube")?;
         let iommu_dev = create_iommu_device(
-            cfg.protected_vm,
-            &cfg.jail_config,
+            &cfg,
             iova_max_addr.unwrap_or(u64::MAX),
             iommu_attached_endpoints,
             hp_endpoints_ranges,
@@ -1561,13 +1411,8 @@ where
 
         let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
         control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
-        let mut dev = VirtioPciDevice::new(
-            vm.get_memory().clone(),
-            iommu_dev.dev,
-            msi_device_tube,
-            cfg.disable_virtio_intx,
-        )
-        .context("failed to create virtio pci dev")?;
+        let mut dev = VirtioPciDevice::new(vm.get_memory().clone(), iommu_dev.dev, msi_device_tube)
+            .context("failed to create virtio pci dev")?;
         // early reservation for viommu.
         dev.allocate_address(&mut sys_allocator)
             .context("failed to allocate resources early for virtio pci dev")?;
@@ -1602,14 +1447,14 @@ where
         &vm_evt_wrtube,
         &mut sys_allocator,
         &cfg.serial_parameters,
-        simple_jail(&cfg.jail_config, "serial_device")?,
+        simple_jail(&cfg.jail_config, "serial")?,
         battery,
         vm,
         ramoops_region,
         devices,
         irq_chip,
         &mut vcpu_ids,
-        simple_jail(&cfg.jail_config, "serial_device")?,
+        simple_jail(&cfg.jail_config, "serial")?,
     )
     .context("the architecture failed to build the vm")?;
 
@@ -1635,7 +1480,7 @@ where
             linux
                 .io_bus
                 .insert_sync(direct_io.clone(), range.base, range.len)
-                .context("Error with pmio")?;
+                .unwrap();
         }
     };
 
@@ -1650,7 +1495,7 @@ where
             linux
                 .mmio_bus
                 .insert_sync(direct_mmio.clone(), range.base, range.len)
-                .context("Error with mmio")?;
+                .unwrap();
         }
     };
 
@@ -1707,7 +1552,7 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     let (hp_bus, bus_num) = get_hp_bus(linux, host_addr)?;
 
     let (vfio_pci_device, jail, viommu_mapper) = create_vfio_device(
-        &cfg.jail_config,
+        cfg,
         &linux.vm,
         sys_allocator,
         control_tubes,
@@ -1962,7 +1807,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cpu_id,
             vcpu_ids[cpu_id],
             vcpu,
-            linux.vcpu_init,
             linux.vm.try_clone().context("failed to clone vm")?,
             linux
                 .irq_chip
@@ -1989,7 +1833,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cfg.host_cpu_topology,
             cfg.enable_pnp_data,
             cfg.itmt,
-            cfg.force_calibrated_tsc_leaf,
             cfg.privileged_vm,
             match vcpu_cgroup_tasks_file {
                 None => None,
@@ -2228,15 +2071,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                         let irq_chip = &mut linux.irq_chip;
                                         request.execute(
                                             |setup| match setup {
-                                                IrqSetup::Event(irq, ev, device_id, queue_id, device_name) => {
+                                                IrqSetup::Event(irq, ev, _, _, _) => {
                                                     let irq_evt = devices::IrqEdgeEvent::from_event(ev.try_clone()?);
-                                                    let source = IrqEventSource{
-                                                        device_id: device_id.try_into().expect("Invalid device_id"),
-                                                        queue_id,
-                                                        device_name,
-                                                    };
                                                     if let Some(event_index) = irq_chip
-                                                        .register_edge_irq_event(irq, &irq_evt, source)?
+                                                        .register_edge_irq_event(irq, &irq_evt)?
                                                     {
                                                         match wait_ctx.add(
                                                             ev,
@@ -2322,7 +2160,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                     },
                                 )
                                 .context(
-                                    "failed to add hotplug vfio-pci descriptor to wait context",
+                                    "failed to add hotplug vfio-pci descriptor ot wait context",
                                 )?;
                         }
                         control_tubes.append(&mut add_tubes);

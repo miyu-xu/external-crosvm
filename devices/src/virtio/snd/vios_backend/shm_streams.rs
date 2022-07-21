@@ -18,14 +18,13 @@ use audio_streams::shm_streams::{
 use audio_streams::{BoxError, SampleFormat, StreamDirection, StreamEffect};
 
 use base::{
-    error, Error as SysError, MemoryMapping, MemoryMappingBuilder, RawDescriptor, SharedMemory,
-    SharedMemoryUnix,
+    error, Error as SysError, MemoryMapping, MemoryMappingBuilder, SharedMemory, SharedMemoryUnix,
 };
 use data_model::VolatileMemory;
 use sync::Mutex;
 
 use std::fs::File;
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -172,7 +171,7 @@ impl ShmStreamSource<base::Error> for VioSShmStreamSource {
     /// Returns any open file descriptors needed by the implementation.
     /// This list helps users of the ShmStreamSource enter Linux jails without
     /// closing needed file descriptors.
-    fn keep_fds(&self) -> Vec<RawDescriptor> {
+    fn keep_fds(&self) -> Vec<RawFd> {
         self.vios_client.keep_fds()
     }
 }

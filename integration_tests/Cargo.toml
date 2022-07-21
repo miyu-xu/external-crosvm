@@ -5,12 +5,8 @@ authors = ["The Chromium OS Authors"]
 edition = "2021"
 
 [dev-dependencies]
-anyhow = "*"
+tempfile = "3"
 arch = { path = "../arch" }
 base = "*"
-cfg-if = "*"
 libc = "0.2.65"
-tempfile = "3"
-
-[features]
-direct = []
+anyhow = "*"

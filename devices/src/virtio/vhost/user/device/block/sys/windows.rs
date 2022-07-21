@@ -82,6 +82,8 @@ pub(in crate::virtio::vhost::user::device::block) fn start_device(
 
     tracing::init();
 
+    base::syslog::init().context("failed to initialize syslog")?;
+
     let raw_transport_tube = opts.bootstrap as RawDescriptor;
 
     let mut tubes = read_from_tube_transporter(raw_transport_tube)?;
@@ -137,7 +139,7 @@ pub(in crate::virtio::vhost::user::device::block) fn start_device(
     }
 
     // This is basically the event loop.
-    let handler = DeviceRequestHandler::new(Box::new(block));
+    let handler = DeviceRequestHandler::new(block);
 
     if let Err(e) = ex.run_until(handler.run(vhost_user_tube, exit_event, &ex)) {
         bail!("error occurred: {}", e);

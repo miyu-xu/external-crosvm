@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::bus::ConfigWriteResult;
-use crate::pci::{CrosvmDeviceId, PciAddress};
-use crate::{BusAccessInfo, BusDevice, BusRange, BusType, DeviceId};
+use crate::pci::PciAddress;
+use crate::{BusAccessInfo, BusDevice, BusRange, BusType};
 
 /// Errors for proxy devices.
 #[sorted]
@@ -248,10 +248,6 @@ impl ProxyDevice {
 }
 
 impl BusDevice for ProxyDevice {
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::ProxyDevice.into()
-    }
-
     fn debug_label(&self) -> String {
         self.debug_label.clone()
     }
@@ -354,8 +350,6 @@ impl Drop for ProxyDevice {
 /// the process.
 #[cfg(test)]
 mod tests {
-    use crate::pci::PciId;
-
     use super::*;
 
     /// A simple test echo device that outputs the same u8 that was written to it.
@@ -369,10 +363,6 @@ mod tests {
         }
     }
     impl BusDevice for EchoDevice {
-        fn device_id(&self) -> DeviceId {
-            PciId::new(0, 0).into()
-        }
-
         fn debug_label(&self) -> String {
             "EchoDevice".to_owned()
         }

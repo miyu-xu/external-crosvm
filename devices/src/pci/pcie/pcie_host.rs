@@ -32,6 +32,8 @@ use crate::pci::pcie::pci_bridge::{
     BR_PREF_MEM_LIMIT_HIGH_REG, BR_PREF_MEM_LOW_REG, BR_WINDOW_ALIGNMENT,
 };
 
+use crate::pci::pcie::*;
+
 // Host Pci device's sysfs config file
 struct PciHostConfig {
     config_file: File,
@@ -237,7 +239,7 @@ const PCI_BASE_CLASS_CODE: u64 = 0x0B;
 const PCI_SUB_CLASS_CODE: u64 = 0x0A;
 
 /// Pcie root port device has a corresponding host pcie root port.
-pub struct PcieHostPort {
+pub struct PcieHostRootPort {
     host_config: PciHostConfig,
     host_name: String,
     hotplug_in_process: Arc<Mutex<bool>>,
@@ -249,8 +251,8 @@ pub struct PcieHostPort {
     header_type_reg: Option<u32>,
 }
 
-impl PcieHostPort {
-    /// Create PcieHostPort, host_syfsfs_patch specify host pcie port
+impl PcieHostRootPort {
+    /// Create PcieHostRootPort, host_syfsfs_patch specify host pcie root port
     /// sysfs path.
     pub fn new(host_sysfs_path: &Path, socket: Tube) -> Result<Self> {
         let host_config = PciHostConfig::new(host_sysfs_path)?;
@@ -288,9 +290,14 @@ impl PcieHostPort {
             return Err(anyhow!("host {} isn't pcie device", host_name));
         }
 
+        let device_cap: u8 = host_config.read_config(pcie_cap_reg as u64 + PCIE_CAP_VERSION as u64);
+        if (device_cap >> PCIE_TYPE_SHIFT) != PcieDevicePortType::RootPort as u8 {
+            return Err(anyhow!("host {} isn't pcie root port", host_name));
+        }
+
         #[cfg(feature = "direct")]
         let (sysfs_path, header_type_reg) =
-            match PcieHostPort::coordinated_pm(host_sysfs_path, true) {
+            match PcieHostRootPort::coordinated_pm(host_sysfs_path, true) {
                 Ok(_) => {
                     // Cache the dword at offset 0x0c (cacheline size, latency timer,
                     // header type, BIST).
@@ -308,7 +315,7 @@ impl PcieHostPort {
                 }
             };
 
-        Ok(PcieHostPort {
+        Ok(PcieHostRootPort {
             host_config,
             host_name,
             hotplug_in_process: Arc::new(Mutex::new(false)),
@@ -471,10 +478,10 @@ impl PcieHostPort {
 }
 
 #[cfg(feature = "direct")]
-impl Drop for PcieHostPort {
+impl Drop for PcieHostRootPort {
     fn drop(&mut self) {
         if self.sysfs_path.is_some() {
-            let _ = PcieHostPort::coordinated_pm(self.sysfs_path.as_ref().unwrap(), false);
+            let _ = PcieHostRootPort::coordinated_pm(self.sysfs_path.as_ref().unwrap(), false);
         }
     }
 }

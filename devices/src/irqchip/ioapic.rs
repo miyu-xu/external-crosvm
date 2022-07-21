@@ -8,8 +8,7 @@
 
 use super::IrqEvent;
 use crate::bus::BusAccessInfo;
-use crate::pci::CrosvmDeviceId;
-use crate::{BusDevice, DeviceId, IrqEventSource};
+use crate::BusDevice;
 use base::{error, warn, Error, Event, Result, Tube, TubeError};
 use hypervisor::{
     IoapicRedirectionTableEntry, IoapicState, MsiAddressMessage, MsiDataMessage, TriggerMode,
@@ -89,10 +88,6 @@ pub struct Ioapic {
 impl BusDevice for Ioapic {
     fn debug_label(&self) -> String {
         "userspace IOAPIC".to_string()
-    }
-
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::Ioapic.into()
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
@@ -178,11 +173,6 @@ impl Ioapic {
                 gsi: gsi as u32,
                 event,
                 resample_event: None,
-                source: IrqEventSource {
-                    device_id: CrosvmDeviceId::DirectGsi.into(),
-                    queue_id: 0,
-                    device_name: "direct_gsi".into(),
-                },
             });
         }
         Ok(())
@@ -403,16 +393,15 @@ impl Ioapic {
         // irq line, when the guest first sets up the ioapic with a valid route. If the guest
         // later reconfigures an ioapic irq line, the same GSI and event are reused, and we change
         // the GSI's route to the new MSI data+addr destination.
-        let name = self.debug_label();
         let gsi = if let Some(evt) = &self.out_events[index] {
             evt.gsi
         } else {
             let event = Event::new().map_err(IoapicError::CreateEvent)?;
             let request = VmIrqRequest::AllocateOneMsi {
                 irqfd: event,
-                device_id: self.device_id().into(),
-                queue_id: index, // Use out_events index as queue_id for outgoing ioapic MSIs
-                device_name: name.clone(),
+                device_id: self.device_id(),
+                queue_id: index,
+                device_name: self.debug_label(),
             };
             self.irq_tube
                 .send(&request)
@@ -430,14 +419,6 @@ impl Ioapic {
                             _ => unreachable!(),
                         },
                         resample_event: None,
-                        // This source isn't currently used for anything, we already sent the
-                        // relevant source information to the main thread via the AllocateOneMsi
-                        // request, but we populate it anyways for debugging.
-                        source: IrqEventSource {
-                            device_id: self.device_id(),
-                            queue_id: index,
-                            device_name: name,
-                        },
                     });
                     gsi
                 }
@@ -539,11 +520,6 @@ mod tests {
             gsi: NUM_IOAPIC_PINS as u32,
             event: Event::new().unwrap(),
             resample_event: None,
-            source: IrqEventSource {
-                device_id: ioapic.device_id(),
-                queue_id: irq,
-                device_name: ioapic.debug_label(),
-            },
         });
         ioapic
     }

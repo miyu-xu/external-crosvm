@@ -14,8 +14,9 @@ use crate::virtio::SignalableInterrupt;
 /// Doorbell region in the VVU device's additional BAR.
 /// Writing to this area will sends a signal to the sibling VM's vhost-user device.
 pub struct DoorbellRegion {
-    addr: u64,
-    mmap: MemoryMapping,
+    pub index: u8,
+    pub addr: u64,
+    pub mmap: MemoryMapping,
 }
 
 impl DoorbellRegion {
@@ -40,7 +41,13 @@ impl DoorbellRegion {
                 error!("Failed to mmap vfio memory region: {}", e);
                 VhostError::InvalidOperation
             })?;
-        Ok(DoorbellRegion { addr, mmap })
+        let doorbell = DoorbellRegion {
+            index: queue_index,
+            addr,
+            mmap,
+        };
+
+        Ok(doorbell)
     }
 }
 

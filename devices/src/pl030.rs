@@ -6,8 +6,7 @@ use base::warn;
 use std::convert::TryFrom;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::pci::CrosvmDeviceId;
-use crate::{BusAccessInfo, BusDevice, DeviceId, IrqEdgeEvent};
+use crate::{BusAccessInfo, BusDevice, IrqEdgeEvent};
 
 // Register offsets
 // Data register
@@ -72,10 +71,6 @@ impl Pl030 {
 }
 
 impl BusDevice for Pl030 {
-    fn device_id(&self) -> DeviceId {
-        CrosvmDeviceId::Pl030.into()
-    }
-
     fn debug_label(&self) -> String {
         "Pl030".to_owned()
     }

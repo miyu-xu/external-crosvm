@@ -16,10 +16,14 @@ use std::time::Duration;
 
 use base::{ioctl, AsRawDescriptor};
 use net_util::TapTCommon;
-use once_cell::sync::Lazy;
 use tempfile::tempfile;
 
-static TAP_AVAILABLE: Lazy<bool> = Lazy::new(|| net_util::sys::unix::Tap::new(true, false).is_ok());
+lazy_static::lazy_static! {
+    static ref TAP_AVAILABLE: bool = {
+        use net_util::TapT;
+        net_util::sys::unix::Tap::new(true, false).is_ok()
+    };
+}
 
 struct RemovePath(PathBuf);
 impl Drop for RemovePath {
@@ -105,7 +109,7 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
 
     if *TAP_AVAILABLE {
         cmd.args(&[
-            "--host-ip",
+            "--host_ip",
             "100.115.92.5",
             "--netmask",
             "255.255.255.252",

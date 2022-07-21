@@ -39,7 +39,7 @@ use vm_memory::{GuestMemory, MemoryPolicy};
 
 use self::process::*;
 use self::vcpu::*;
-use crate::{crosvm::config::Executable, Config};
+use crate::{Config, Executable};
 
 const MAX_DATAGRAM_SIZE: usize = 4096;
 const MAX_VCPU_DATAGRAM_SIZE: usize = 0x40000;

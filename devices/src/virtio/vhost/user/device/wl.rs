@@ -28,9 +28,6 @@ use crate::virtio::vhost::user::device::handler::{
 };
 use crate::virtio::{base_features, wl, Queue};
 
-const MAX_QUEUE_NUM: usize = wl::QUEUE_SIZES.len();
-const MAX_VRING_LEN: u16 = wl::QUEUE_SIZE;
-
 async fn run_out_queue(
     mut queue: Queue,
     mem: GuestMemory,
@@ -86,7 +83,7 @@ struct WlBackend {
     features: u64,
     acked_features: u64,
     wlstate: Option<Rc<RefCell<wl::WlState>>>,
-    workers: [Option<AbortHandle>; MAX_QUEUE_NUM],
+    workers: [Option<AbortHandle>; Self::MAX_QUEUE_NUM],
 }
 
 impl WlBackend {
@@ -116,13 +113,10 @@ impl WlBackend {
 }
 
 impl VhostUserBackend for WlBackend {
-    fn max_queue_num(&self) -> usize {
-        return MAX_QUEUE_NUM;
-    }
+    const MAX_QUEUE_NUM: usize = wl::QUEUE_SIZES.len();
+    const MAX_VRING_LEN: u16 = wl::QUEUE_SIZE;
 
-    fn max_vring_len(&self) -> u16 {
-        return MAX_VRING_LEN;
-    }
+    type Error = anyhow::Error;
 
     fn features(&self) -> u64 {
         self.features
@@ -257,7 +251,7 @@ impl VhostUserBackend for WlBackend {
     }
 }
 
-pub fn parse_wayland_sock(value: &str) -> Result<(String, PathBuf), String> {
+pub(crate) fn parse_wayland_sock(value: &str) -> Result<(String, PathBuf), String> {
     let mut components = value.split(',');
     let path = PathBuf::from(match components.next() {
         None => return Err("missing socket path".to_string()),
@@ -339,12 +333,12 @@ pub fn run_wl_device(opts: Options) -> anyhow::Result<()> {
         .accept()
         .map(Tube::new)
         .context("failed to accept vm socket connection")?;
-    let handler = DeviceRequestHandler::new(Box::new(WlBackend::new(
+    let handler = DeviceRequestHandler::new(WlBackend::new(
         &ex,
         wayland_paths,
         vm_socket,
         resource_bridge,
-    )));
+    ));
 
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
     ex.run_until(handler.run(socket, &ex))?

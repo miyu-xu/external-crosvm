@@ -24,10 +24,6 @@ rust_library {
         "libcdisk_spec_proto",
         "libprotobuf",
     ],
-    apex_available: [
-        "//apex_available:platform",
-        "//apex_available:anyapex",
-    ],
 }
 
 rust_protobuf {

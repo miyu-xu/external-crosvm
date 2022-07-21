@@ -138,8 +138,8 @@ def exclude_crosvm(target_arch: Arch):
 def cargo(
     cargo_command: str,
     cwd: Path,
-    flags: List[str],
-    env: Dict[str, str],
+    flags: list[str],
+    env: dict[str, str],
     build_arch: Arch,
 ) -> Iterable[Executable]:
     """
@@ -207,7 +207,7 @@ def cargo(
 
 
 def cargo_build_executables(
-    flags: List[str],
+    flags: list[str],
     build_arch: Arch,
     cwd: Path = Path("."),
     env: Dict[str, str] = {},
@@ -221,23 +221,20 @@ def cargo_build_executables(
     yield from cargo("test", cwd, ["--no-run", *flags], env, build_arch)
 
 
-def build_common_crate(build_env: Dict[str, str], build_arch: Arch, crate: Crate):
+def build_common_crate(build_env: dict[str, str], build_arch: Arch, crate: Crate):
     print(f"Building tests for: common/{crate.name}")
     return list(cargo_build_executables([], build_arch, env=build_env, cwd=crate.path))
 
 
-def build_all_binaries(target: TestTarget, build_arch: Arch, crosvm_direct: bool):
+def build_all_binaries(target: TestTarget, build_arch: Arch):
     """Discover all crates and build them."""
     build_env = os.environ.copy()
     build_env.update(test_target.get_cargo_env(target, build_arch))
 
     print("Building crosvm workspace")
-    features = BUILD_FEATURES[build_arch]
-    if crosvm_direct:
-        features += ",direct"
     yield from cargo_build_executables(
         [
-            "--features=" + features,
+            "--features=" + BUILD_FEATURES[build_arch],
             "--verbose",
             "--workspace",
             *[f"--exclude={crate}" for crate in get_workspace_excludes(build_arch)],
@@ -282,7 +279,7 @@ def execute_test(target: TestTarget, executable: Executable):
     Test output is hidden unless the test fails or VERBOSE mode is enabled.
     """
     options = CRATE_OPTIONS.get(executable.crate_name, [])
-    args: List[str] = []
+    args: list[str] = []
     if TestOption.SINGLE_THREADED in options:
         args += ["--test-threads=1"]
 
@@ -324,7 +321,7 @@ def execute_test(target: TestTarget, executable: Executable):
 
 
 def execute_all(
-    executables: List[Executable],
+    executables: list[Executable],
     target: test_target.TestTarget,
     repeat: int,
 ):
@@ -353,7 +350,7 @@ def execute_all(
     print()
 
 
-def find_crosvm_binary(executables: List[Executable]):
+def find_crosvm_binary(executables: list[Executable]):
     for executable in executables:
         if not executable.is_test and executable.cargo_target == "crosvm":
             return executable
@@ -371,7 +368,6 @@ def main():
     )
     parser.add_argument(
         "--target",
-        default="host",
         help="Execute tests on the selected target. See ./tools/set_test_target",
     )
     parser.add_argument(
@@ -381,10 +377,6 @@ def main():
     )
     parser.add_argument(
         "--build-only",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--crosvm-direct",
         action="store_true",
     )
     parser.add_argument(
@@ -414,7 +406,7 @@ def main():
         testvm.build_if_needed(target.vm)
         testvm.up(target.vm)
 
-    executables = list(build_all_binaries(target, build_arch, args.crosvm_direct))
+    executables = list(build_all_binaries(target, build_arch))
 
     if args.build_only:
         print("Not running tests as requested.")

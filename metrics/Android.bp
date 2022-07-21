@@ -39,8 +39,4 @@ rust_library {
         "libprotobuf",
         "libserde",
     ],
-    apex_available: [
-        "//apex_available:platform",
-        "//apex_available:anyapex",
-    ],
 }

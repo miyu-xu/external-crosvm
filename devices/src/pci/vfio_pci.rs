@@ -17,8 +17,8 @@ use std::u32;
 use sync::Mutex;
 
 use base::{
-    error, pagesize, warn, AsRawDescriptor, AsRawDescriptors, Event, EventToken, Protection,
-    RawDescriptor, Tube, WaitContext,
+    error, pagesize, warn, AsRawDescriptor, AsRawDescriptors, Event, EventToken, RawDescriptor,
+    Tube, WaitContext,
 };
 use hypervisor::{Datamatch, MemSlot};
 
@@ -915,7 +915,7 @@ impl VfioPciDevice {
                             size: mmap_size,
                         },
                         dest: VmMemoryDestination::GuestPhysicalAddress(guest_map_start),
-                        prot: Protection::read_write(),
+                        read_only: false,
                     })
                     .is_err()
                 {

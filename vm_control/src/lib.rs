@@ -186,6 +186,10 @@ pub enum DiskControlResult {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum UsbControlCommand {
     AttachDevice {
+        bus: u8,
+        addr: u8,
+        vid: u16,
+        pid: u16,
         #[serde(with = "with_as_descriptor")]
         file: File,
     },
@@ -276,16 +280,16 @@ impl VmMemorySource {
         self,
         map_request: Arc<Mutex<Option<ExternalMapping>>>,
         gralloc: &mut RutabagaGralloc,
-        prot: Protection,
+        read_only: bool,
     ) -> Result<(Box<dyn MappedRegion>, u64)> {
         let (mem_region, size) = match self {
             VmMemorySource::Descriptor {
                 descriptor,
                 offset,
                 size,
-            } => (map_descriptor(&descriptor, offset, size, prot)?, size),
+            } => (map_descriptor(&descriptor, offset, size, read_only)?, size),
             VmMemorySource::SharedMemory(shm) => {
-                (map_descriptor(&shm, 0, shm.size(), prot)?, shm.size())
+                (map_descriptor(&shm, 0, shm.size(), read_only)?, shm.size())
             }
             VmMemorySource::Vulkan {
                 descriptor,
@@ -367,7 +371,7 @@ pub enum VmMemoryRequest {
         /// Where to map the memory in the guest.
         dest: VmMemoryDestination,
         /// Whether to map the memory read only (true) or read-write (false).
-        prot: Protection,
+        read_only: bool,
     },
     /// Allocate GPU buffer of a given size/format and register the memory into guest address space.
     /// The response variant is `VmResponse::AllocateAndRegisterGpuMemory`
@@ -411,10 +415,14 @@ impl VmMemoryRequest {
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match self {
-            RegisterMemory { source, dest, prot } => {
+            RegisterMemory {
+                source,
+                dest,
+                read_only,
+            } => {
                 // Correct on Windows because callers of this IPC guarantee descriptor is a mapping
                 // handle.
-                let (mapped_region, size) = match source.map(map_request, gralloc, prot) {
+                let (mapped_region, size) = match source.map(map_request, gralloc, read_only) {
                     Ok((region, size)) => (region, size),
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
@@ -424,12 +432,7 @@ impl VmMemoryRequest {
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
 
-                let slot = match vm.add_memory_region(
-                    guest_addr,
-                    mapped_region,
-                    prot == Protection::read(),
-                    false,
-                ) {
+                let slot = match vm.add_memory_region(guest_addr, mapped_region, read_only, false) {
                     Ok(slot) => slot,
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
@@ -535,7 +538,7 @@ impl VmMemoryRequest {
         let descriptor =
             unsafe { SafeDescriptor::from_raw_descriptor(handle.os_handle.into_raw_descriptor()) };
 
-        let mapped_region = map_descriptor(&descriptor, 0, reqs.size, Protection::read_write())?;
+        let mapped_region = map_descriptor(&descriptor, 0, reqs.size, false)?;
         Ok((mapped_region, reqs.size, descriptor, desc))
     }
 }
@@ -915,9 +918,14 @@ fn map_descriptor(
     descriptor: &dyn AsRawDescriptor,
     offset: u64,
     size: u64,
-    prot: Protection,
+    read_only: bool,
 ) -> Result<Box<dyn MappedRegion>> {
     let size: usize = size.try_into().map_err(|_e| SysError::new(ERANGE))?;
+    let prot = if read_only {
+        Protection::read()
+    } else {
+        Protection::read_write()
+    };
     match MemoryMappingBuilder::new(size)
         .from_descriptor(descriptor)
         .offset(offset)

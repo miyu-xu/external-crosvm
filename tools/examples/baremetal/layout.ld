@@ -3,6 +3,7 @@ ENTRY(_start)
 /* Crosvm will load our code into 0x200000 + paddr */
 MEMORY {
     VMA : ORIGIN = 0x00200000, LENGTH = 0x200000
+    RAM : ORIGIN = 0x00000000, LENGTH = 0x200000
 }
 
 SECTIONS {
@@ -12,7 +13,7 @@ SECTIONS {
   {
       _stack_end = . ;
       *(.boot)
-  }> VMA
+  }> VMA AT>RAM
 
   .kernel :
   {
@@ -21,7 +22,7 @@ SECTIONS {
     *(.rodata .rodata.*)
     *(.data .data.*)
     *(.bss .bss.*)
-  }> VMA
+  }> VMA AT>RAM
 
   DISCARD/ :
   {
