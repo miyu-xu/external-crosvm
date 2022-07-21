@@ -30,8 +30,9 @@ pub use event::{Event, EventReadResult};
 pub use external_mapping::{
     Error as ExternalMappingError, ExternalMapping, Result as ExternalMappingResult,
 };
-pub use mmap::{MemoryMapping, MemoryMappingBuilder};
+pub use mmap::{MappedRegion, MemoryMapping, MemoryMappingBuilder};
 pub use notifiers::{CloseNotifier, ReadNotifier};
+pub use platform::gmtime_secure;
 pub use platform::ioctl::{
     ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
     IoctlNr,
@@ -101,7 +102,6 @@ cfg_if::cfg_if! {
             DuplicateHandleRequest, DuplicateHandleResponse, DuplicateHandleTube,
         };
         pub use platform::{set_audio_thread_priorities, thread};
-        pub use platform::gmtime_secure;
     } else {
         compile_error!("Unsupported platform");
     }
@@ -116,7 +116,7 @@ pub use platform::{
 
 use uuid::Uuid;
 
-pub use platform::Protection;
+pub use mmap::Protection;
 pub(crate) use platform::{file_punch_hole, file_write_zeroes_at};
 pub use platform::{get_cpu_affinity, set_cpu_affinity};
 pub use platform::{with_as_descriptor, with_raw_descriptor, RawDescriptor, INVALID_DESCRIPTOR};
@@ -131,7 +131,7 @@ pub use platform::platform_timer_resolution::enable_high_res_timers;
 pub use platform::{get_filesystem_type, open_file};
 pub use platform::{number_of_logical_cores, pagesize, round_up_to_page_size};
 pub use platform::{FileReadWriteAtVolatile, FileReadWriteVolatile, FileSetLen, FileSync};
-pub use platform::{MappedRegion, MemoryMappingArena, MmapError};
+pub use platform::{MemoryMappingArena, MmapError};
 
 pub use log::{debug, error, info, trace, warn};
 

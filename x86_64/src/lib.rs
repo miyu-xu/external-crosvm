@@ -110,6 +110,8 @@ pub enum Error {
     Cmdline(kernel_cmdline::Error),
     #[error("failed to configure hotplugged pci device: {0}")]
     ConfigurePciDevice(arch::DeviceRegistrationError),
+    #[error("failed to configure segment registers: {0}")]
+    ConfigureSegments(regs::Error),
     #[error("error configuring the system")]
     ConfigureSystem,
     #[error("unable to create ACPI tables")]
@@ -184,19 +186,21 @@ pub enum Error {
     #[error("failed to set up cpuid: {0}")]
     SetupCpuid(cpuid::Error),
     #[error("failed to set up FPU: {0}")]
-    SetupFpu(regs::Error),
+    SetupFpu(base::Error),
     #[error("failed to set up guest memory: {0}")]
     SetupGuestMemory(GuestMemoryError),
     #[error("failed to set up mptable: {0}")]
     SetupMptable(mptable::Error),
     #[error("failed to set up MSRs: {0}")]
-    SetupMsrs(regs::Error),
+    SetupMsrs(base::Error),
+    #[error("failed to set up page tables: {0}")]
+    SetupPageTables(regs::Error),
     #[error("failed to set up registers: {0}")]
     SetupRegs(regs::Error),
     #[error("failed to set up SMBIOS: {0}")]
     SetupSmbios(smbios::Error),
     #[error("failed to set up sregs: {0}")]
-    SetupSregs(regs::Error),
+    SetupSregs(base::Error),
     #[error("failed to translate virtual address")]
     TranslatingVirtAddr,
     #[error("protected VMs not supported on x86_64")]
@@ -698,8 +702,11 @@ impl arch::LinuxArch for X8664arch {
                 .map_err(Error::Cmdline)?;
         }
 
-        let mut vcpu_init = VcpuInitX86_64::default();
+        let pci_start = read_pci_mmio_before_32bit().start;
 
+        let mut vcpu_init = vec![VcpuInitX86_64::default(); vcpu_count];
+
+        let mut msrs;
         match components.vm_image {
             VmImage::Bios(ref mut bios) => {
                 // Allow a bios to hardcode CMDLINE_OFFSET and read the kernel command line from it.
@@ -709,8 +716,9 @@ impl arch::LinuxArch for X8664arch {
                     &CString::new(cmdline).unwrap(),
                 )
                 .map_err(Error::LoadCmdline)?;
-                Self::load_bios(&mem, bios)?
-                // RIP and CS will be configured by `set_reset_vector()` later.
+                Self::load_bios(&mem, bios)?;
+                msrs = regs::default_msrs();
+                // The default values for `Regs` and `Sregs` already set up the reset vector.
             }
             VmImage::Kernel(ref mut kernel_image) => {
                 let (params, kernel_end, kernel_entry) = Self::load_kernel(&mem, kernel_image)?;
@@ -724,12 +732,26 @@ impl arch::LinuxArch for X8664arch {
                     params,
                 )?;
 
-                // Configure the VCPU for the Linux/x86 64-bit boot protocol.
+                // Configure the bootstrap VCPU for the Linux/x86 64-bit boot protocol.
                 // <https://www.kernel.org/doc/html/latest/x86/boot.html>
-                vcpu_init.regs.rip = kernel_entry.offset();
-                vcpu_init.regs.rsp = BOOT_STACK_POINTER;
-                vcpu_init.regs.rsi = ZERO_PAGE_OFFSET;
+                vcpu_init[0].regs.rip = kernel_entry.offset();
+                vcpu_init[0].regs.rsp = BOOT_STACK_POINTER;
+                vcpu_init[0].regs.rsi = ZERO_PAGE_OFFSET;
+
+                msrs = regs::long_mode_msrs();
+                msrs.append(&mut regs::mtrr_msrs(&vm, pci_start));
+
+                // Set up long mode and enable paging.
+                regs::configure_segments_and_sregs(&mem, &mut vcpu_init[0].sregs)
+                    .map_err(Error::ConfigureSegments)?;
+                regs::setup_page_tables(&mem, &mut vcpu_init[0].sregs)
+                    .map_err(Error::SetupPageTables)?;
             }
+        }
+
+        // Initialize MSRs for all VCPUs.
+        for vcpu in vcpu_init.iter_mut() {
+            vcpu.msrs = msrs.clone();
         }
 
         Ok(RunnableLinuxVm {
@@ -762,10 +784,10 @@ impl arch::LinuxArch for X8664arch {
         hypervisor: &dyn HypervisorX86_64,
         irq_chip: &mut dyn IrqChipX86_64,
         vcpu: &mut dyn VcpuX86_64,
-        vcpu_init: &VcpuInitX86_64,
+        vcpu_init: VcpuInitX86_64,
         vcpu_id: usize,
         num_cpus: usize,
-        has_bios: bool,
+        _has_bios: bool,
         no_smt: bool,
         host_cpu_topology: bool,
         enable_pnp_data: bool,
@@ -788,17 +810,33 @@ impl arch::LinuxArch for X8664arch {
             .map_err(Error::SetupCpuid)?;
         }
 
-        if has_bios {
-            regs::set_reset_vector(vcpu).map_err(Error::SetupRegs)?;
-            regs::reset_msrs(vcpu).map_err(Error::SetupMsrs)?;
-            return Ok(());
-        }
-
-        let guest_mem = vm.get_memory();
-        regs::setup_msrs(vm, vcpu, read_pci_mmio_before_32bit().start).map_err(Error::SetupMsrs)?;
         vcpu.set_regs(&vcpu_init.regs).map_err(Error::WriteRegs)?;
-        regs::setup_fpu(vcpu).map_err(Error::SetupFpu)?;
-        regs::setup_sregs(guest_mem, vcpu).map_err(Error::SetupSregs)?;
+
+        vcpu.set_sregs(&vcpu_init.sregs)
+            .map_err(Error::SetupSregs)?;
+
+        vcpu.set_fpu(&vcpu_init.fpu).map_err(Error::SetupFpu)?;
+
+        let vcpu_supported_var_mtrrs = regs::vcpu_supported_variable_mtrrs(vcpu);
+        let num_var_mtrrs = regs::count_variable_mtrrs(&vcpu_init.msrs);
+        let msrs = if num_var_mtrrs > vcpu_supported_var_mtrrs {
+            warn!(
+                "Too many variable MTRR entries ({} required, {} supported),
+                please check pci_start addr, guest with pass through device may be very slow",
+                num_var_mtrrs, vcpu_supported_var_mtrrs,
+            );
+            // Filter out the MTRR entries from the MSR list.
+            vcpu_init
+                .msrs
+                .into_iter()
+                .filter(|&msr| !regs::is_mtrr_msr(msr.id))
+                .collect()
+        } else {
+            vcpu_init.msrs
+        };
+
+        vcpu.set_msrs(&msrs).map_err(Error::SetupMsrs)?;
+
         interrupts::set_lint(vcpu_id, irq_chip).map_err(Error::SetLint)?;
 
         Ok(())
@@ -1443,8 +1481,9 @@ impl X8664arch {
 
         let bat_control = if let Some(battery_type) = battery.0 {
             match battery_type {
+                #[cfg(unix)]
                 BatteryType::Goldfish => {
-                    let (control_tube, _mmio_base) = arch::add_goldfish_battery(
+                    let (control_tube, _mmio_base) = arch::sys::unix::add_goldfish_battery(
                         &mut amls, battery.1, mmio_bus, irq_chip, sci_irq, resources,
                     )
                     .map_err(Error::CreateBatDevices)?;
