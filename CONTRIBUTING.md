@@ -95,7 +95,7 @@ git push origin HEAD:refs/for/main
 
 Your change must be reviewed and approved by one of [crosvm owners].
 
-### Presubmit checking {#presubmit}
+### Presubmit checking
 
 Once your change is reviewed, it will need to go through two layers of presubmit checks.
 
@@ -134,7 +134,7 @@ mdbook build
 
 [chrome os contributing guide]: https://chromium.googlesource.com/chromiumos/docs/+/HEAD/contributing.md
 [crosvm component]: https://chromium-review.googlesource.com/q/project:chromiumos%252Fplatform%252Fcrosvm
-[crosvm owners]: https://chromium.googlesource.com/chromiumos/platform/crosvm/+/HEAD/OWNERS
+[crosvm owners]: https://chromium.googlesource.com/crosvm/crosvm/+/HEAD/OWNERS
 [gerrit's change-id hook]: https://gerrit-review.googlesource.com/Documentation/user-changeid.html
 [github mirror]: https://github.com/google/crosvm
 [google markdown style guide]: https://github.com/google/styleguide/blob/gh-pages/docguide/style.md

@@ -21,10 +21,14 @@ mod virtio_pci_common_config;
 mod virtio_pci_device;
 
 pub mod block;
+pub mod console;
 pub mod resource_bridge;
+#[cfg(feature = "audio")]
+pub mod snd;
 pub mod vhost;
 
 pub use self::block::*;
+pub use self::console::*;
 pub use self::descriptor_utils::Error as DescriptorError;
 pub use self::descriptor_utils::*;
 pub use self::input::*;
@@ -45,16 +49,12 @@ cfg_if::cfg_if! {
         mod pmem;
         pub mod wl;
 
-        pub mod console;
         pub mod fs;
         #[cfg(feature = "gpu")]
         pub mod gpu;
         pub mod net;
-        #[cfg(feature = "audio")]
-        pub mod snd;
 
         pub use self::balloon::*;
-        pub use self::console::*;
         #[cfg(feature = "gpu")]
         pub use self::gpu::*;
         pub use self::iommu::sys::unix::vfio_wrapper;

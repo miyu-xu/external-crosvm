@@ -408,7 +408,7 @@ impl arch::LinuxArch for AArch64 {
             .into_iter()
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
-        let mut platform_pid_debug_label_map = arch::generate_platform_bus(
+        let mut platform_pid_debug_label_map = arch::sys::unix::generate_platform_bus(
             platform_devices,
             irq_chip.as_irq_chip_mut(),
             &mmio_bus,
@@ -483,7 +483,7 @@ impl arch::LinuxArch for AArch64 {
             Some(BatteryType::Goldfish) => {
                 // a dummy AML buffer. Aarch64 crosvm doesn't use ACPI.
                 let mut amls = Vec::new();
-                let (control_tube, mmio_base) = arch::add_goldfish_battery(
+                let (control_tube, mmio_base) = arch::sys::unix::add_goldfish_battery(
                     &mut amls,
                     bat_jail,
                     &mmio_bus,
@@ -525,11 +525,13 @@ impl arch::LinuxArch for AArch64 {
         )
         .map_err(Error::CreateFdt)?;
 
+        let vcpu_init = vec![VcpuInitAArch64::default(); vcpu_count];
+
         Ok(RunnableLinuxVm {
             vm,
             vcpu_count,
             vcpus: Some(vcpus),
-            vcpu_init: VcpuInitAArch64 {},
+            vcpu_init,
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
@@ -553,7 +555,7 @@ impl arch::LinuxArch for AArch64 {
         _hypervisor: &dyn Hypervisor,
         _irq_chip: &mut dyn IrqChipAArch64,
         _vcpu: &mut dyn VcpuAArch64,
-        _vcpu_init: &VcpuInitAArch64,
+        _vcpu_init: VcpuInitAArch64,
         _vcpu_id: usize,
         _num_cpus: usize,
         _has_bios: bool,
