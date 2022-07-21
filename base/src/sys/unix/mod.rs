@@ -26,6 +26,7 @@ mod eventfd;
 mod file_flags;
 pub mod file_traits;
 mod get_filesystem_type;
+mod gmtime;
 mod mmap;
 pub mod net;
 mod netlink;
@@ -59,6 +60,7 @@ pub use descriptor::*;
 pub use eventfd::{EventFd as Event, EventFd, EventReadResult};
 pub use file_flags::*;
 pub use get_filesystem_type::*;
+pub use gmtime::*;
 pub use ioctl::*;
 pub use mmap::*;
 pub use netlink::*;
@@ -103,6 +105,8 @@ use libc::{
     c_int, c_long, fcntl, pipe2, syscall, sysconf, waitpid, SYS_getpid, SYS_gettid, EINVAL,
     F_GETFL, F_SETFL, O_CLOEXEC, SIGKILL, WNOHANG, _SC_IOV_MAX, _SC_PAGESIZE,
 };
+
+pub(crate) use libc::{PROT_READ, PROT_WRITE};
 
 /// Re-export libc types that are part of the API.
 pub type Pid = libc::pid_t;
@@ -628,7 +632,7 @@ pub fn get_max_open_files() -> Result<u64> {
 /// Returns the number of online logical cores on the system.
 pub fn number_of_logical_cores() -> Result<usize> {
     // Safe because we pass a flag for this call and the host supports this system call
-    Ok(unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) } as usize)
+    Ok(unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) } as usize)
 }
 
 #[cfg(test)]

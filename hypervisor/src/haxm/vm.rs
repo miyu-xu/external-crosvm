@@ -97,7 +97,7 @@ impl HaxmVm {
     pub fn register_log_file(&self, path: &str) -> Result<()> {
         // The IOCTL here is only avilable on internal fork of HAXM and only works on Windows.
         #[cfg(windows)]
-        if USE_GHAXM.load(Ordering::Relaxed) {
+        if get_use_ghaxm() {
             let mut log_file = hax_log_file::default();
 
             // Although it would be more efficient to do this check prior to allocating the log_file
@@ -182,13 +182,8 @@ impl Vm for HaxmVm {
         })
     }
 
-    fn check_capability(&self, c: VmCap) -> bool {
-        match c {
-            // under haxm, guests rely on this leaf to calibrate their
-            // clocksource.
-            VmCap::CalibratedTscLeafRequired => true,
-            _ => false,
-        }
+    fn check_capability(&self, _c: VmCap) -> bool {
+        false
     }
 
     fn get_memory(&self) -> &GuestMemory {
