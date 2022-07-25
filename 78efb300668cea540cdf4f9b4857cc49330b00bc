@@ -16,6 +16,24 @@
       "message": "Did you run into an issue because of this?\n\nMy understanding is that cargo assigns all optional dependencies (e.g. `gdbstub \u003d { version \u003d \"0.6.1\", optional \u003d true }`) a corresponding feature that is used to control whether the dependency is enabled, so this is a valid feature. We don\u0027t technically need it, but the script that generates the Android.bp files from cargo isn\u0027t smart enough to trim them out and they are harmless AFAIK.\n\nAs is, this change would get reverted next time we run the cargo2android tool.",
       "revId": "78efb300668cea540cdf4f9b4857cc49330b00bc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8b1464a6_3dff7167",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-07-25T16:52:54Z",
+      "side": 1,
+      "message": "Oh, it might actually be coming the from https://android.googlesource.com/platform/external/crosvm/+/refs/changes/86/2162286/1/cargo2android_module.bp. Can you delete it from there as well?",
+      "parentUuid": "8b4c1ef8_87017ca6",
+      "revId": "78efb300668cea540cdf4f9b4857cc49330b00bc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
