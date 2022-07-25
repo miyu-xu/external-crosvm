@@ -29,7 +29,7 @@ use remain::sorted;
 use resources::{AddressRange, SystemAllocator, SystemAllocatorConfig};
 use sync::Mutex;
 use thiserror::Error;
-use vm_control::{BatControl, BatteryType};
+use vm_control::BatteryType;
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 mod fdt;
@@ -116,8 +116,6 @@ const AARCH64_PMU_IRQ: u32 = 7;
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("failed to allocate IRQ number")]
-    AllocateIrq,
     #[error("bios could not be loaded: {0}")]
     BiosLoadFailure(arch::LoadImageError),
     #[error("failed to build arm pvtime memory: {0}")]
@@ -128,8 +126,6 @@ pub enum Error {
     CloneIrqChip(base::Error),
     #[error("the given kernel command line was invalid: {0}")]
     Cmdline(kernel_cmdline::Error),
-    #[error("unable to create battery devices: {0}")]
-    CreateBatDevices(arch::DeviceRegistrationError),
     #[error("unable to make an Event: {0}")]
     CreateEvent(base::Error),
     #[error("FDT could not be created: {0}")]
@@ -241,7 +237,7 @@ impl arch::LinuxArch for AArch64 {
         system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
-        (bat_type, bat_jail): (&Option<BatteryType>, Option<Minijail>),
+        _battery: (&Option<BatteryType>, Option<Minijail>),
         mut vm: V,
         ramoops_region: Option<arch::pstore::RamoopsRegion>,
         devs: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
@@ -478,31 +474,6 @@ impl arch::LinuxArch for AArch64 {
             })
             .collect();
 
-        let bat_irq = system_allocator.allocate_irq().ok_or(Error::AllocateIrq)?;
-        let (bat_control, bat_mmio_base) = match bat_type {
-            Some(BatteryType::Goldfish) => {
-                // a dummy AML buffer. Aarch64 crosvm doesn't use ACPI.
-                let mut amls = Vec::new();
-                let (control_tube, mmio_base) = arch::add_goldfish_battery(
-                    &mut amls,
-                    bat_jail,
-                    &mmio_bus,
-                    irq_chip.as_irq_chip_mut(),
-                    bat_irq,
-                    system_allocator,
-                )
-                .map_err(Error::CreateBatDevices)?;
-                (
-                    Some(BatControl {
-                        type_: BatteryType::Goldfish,
-                        control_tube,
-                    }),
-                    mmio_base,
-                )
-            }
-            None => (None, 0),
-        };
-
         fdt::create_fdt(
             AARCH64_FDT_MAX_SIZE as usize,
             &mem,
@@ -520,8 +491,6 @@ impl arch::LinuxArch for AArch64 {
             use_pmu,
             psci_version,
             components.swiotlb,
-            bat_mmio_base,
-            bat_irq,
         )
         .map_err(Error::CreateFdt)?;
 
@@ -540,7 +509,7 @@ impl arch::LinuxArch for AArch64 {
             suspend_evt,
             rt_cpus: components.rt_cpus,
             delay_rt: components.delay_rt,
-            bat_control,
+            bat_control: None,
             pm: None,
             resume_notify_devices: Vec::new(),
             root_config: pci_root,
