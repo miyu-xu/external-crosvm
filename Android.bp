@@ -114,7 +114,6 @@ rust_binary {
         host_linux: {
             features: [
                 "gdb",
-                "gdbstub",
             ],
             rustlibs: [
                 "libgdbstub",
@@ -229,7 +228,6 @@ rust_test {
         host_linux: {
             features: [
                 "gdb",
-                "gdbstub",
             ],
             rustlibs: [
                 "libgdbstub",
