@@ -34,6 +34,24 @@
       "parentUuid": "8b4c1ef8_87017ca6",
       "revId": "78efb300668cea540cdf4f9b4857cc49330b00bc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "081eaa1e_edf1e4b2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-07-25T16:58:50Z",
+      "side": 1,
+      "message": "No issue, was just wondering why it was there as it seemed pointless (as I commented, I thought the library was already being added through `rustlibs`) and it looked like it had been added manually; thanks for clearing this up!\n\nFYI, once GDB support on AArch64 is merged upstream, we\u0027ll also need that crate in Android anyway.",
+      "parentUuid": "8b1464a6_3dff7167",
+      "revId": "78efb300668cea540cdf4f9b4857cc49330b00bc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
