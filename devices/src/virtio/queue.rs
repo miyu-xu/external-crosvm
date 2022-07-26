@@ -10,7 +10,7 @@ use std::sync::Arc;
 use sync::Mutex;
 
 use anyhow::{bail, Context};
-use base::error;
+use base::{error, warn, Protection};
 use cros_async::{AsyncError, EventAsync};
 use data_model::{DataInit, Le16, Le32, Le64};
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
@@ -18,7 +18,7 @@ use vm_memory::{GuestAddress, GuestMemory};
 
 use super::{SignalableInterrupt, VIRTIO_MSI_NO_VECTOR};
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
-use crate::virtio::memory_mapper::{MemRegion, Permission, Translate};
+use crate::virtio::memory_mapper::MemRegion;
 use crate::virtio::memory_util::{
     is_valid_wrapper, read_obj_from_addr_wrapper, write_obj_at_addr_wrapper,
 };
@@ -153,7 +153,7 @@ impl DescriptorChain {
             Ok(vec![MemRegion {
                 gpa: self.addr,
                 len: self.len.try_into().expect("u32 doesn't fit in usize"),
-                perm: Permission::RW,
+                prot: Protection::read_write(),
             }])
         }
     }
@@ -254,27 +254,35 @@ impl<'a, 'b> Iterator for AvailIter<'a, 'b> {
 
 #[derive(Clone)]
 /// A virtio queue's parameters.
+///
+/// WARNING: it is NOT safe to clone and then use n>1 Queue(s) to interact with the same virtqueue.
+/// That will prevent descriptor index tracking from being accurate, which can cause incorrect
+/// interrupt masking.
+/// TODO(b/201119859) drop Clone from this struct.
 pub struct Queue {
     /// The maximal size in elements offered by the device
     pub max_size: u16,
 
     /// The queue size in elements the driver selected
-    pub size: u16,
+    size: u16,
 
     /// Inidcates if the queue is finished with configuration
-    pub ready: bool,
+    ready: bool,
+
+    /// Indicates that a ready queue's configuration has been validated successfully.
+    validated: bool,
 
     /// MSI-X vector for the queue. Don't care for INTx
-    pub vector: u16,
+    vector: u16,
 
     /// Guest physical address of the descriptor table
-    pub desc_table: GuestAddress,
+    desc_table: GuestAddress,
 
     /// Guest physical address of the available ring
-    pub avail_ring: GuestAddress,
+    avail_ring: GuestAddress,
 
     /// Guest physical address of the used ring
-    pub used_ring: GuestAddress,
+    used_ring: GuestAddress,
 
     pub next_avail: Wrapping<u16>,
     pub next_used: Wrapping<u16>,
@@ -291,6 +299,22 @@ pub struct Queue {
     iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
 }
 
+macro_rules! accessors {
+    ($var:ident, $t:ty, $setter:ident) => {
+        pub fn $var(&self) -> $t {
+            self.$var
+        }
+
+        pub fn $setter(&mut self, val: $t) {
+            if self.ready {
+                warn!("ignoring write to {} on ready queue", stringify!($var));
+                return;
+            }
+            self.$var = val;
+        }
+    };
+}
+
 impl Queue {
     /// Constructs an empty virtio queue with the given `max_size`.
     pub fn new(max_size: u16) -> Queue {
@@ -298,6 +322,7 @@ impl Queue {
             max_size,
             size: max_size,
             ready: false,
+            validated: false,
             vector: VIRTIO_MSI_NO_VECTOR,
             desc_table: GuestAddress(0),
             avail_ring: GuestAddress(0),
@@ -311,6 +336,13 @@ impl Queue {
         }
     }
 
+    accessors!(vector, u16, set_vector);
+    accessors!(size, u16, set_size);
+    accessors!(ready, bool, set_ready);
+    accessors!(desc_table, GuestAddress, set_desc_table);
+    accessors!(avail_ring, GuestAddress, set_avail_ring);
+    accessors!(used_ring, GuestAddress, set_used_ring);
+
     /// Return the actual size of the queue, as the driver may not set up a
     /// queue as big as the device allows.
     pub fn actual_size(&self) -> u16 {
@@ -320,6 +352,7 @@ impl Queue {
     /// Reset queue to a clean state
     pub fn reset(&mut self) {
         self.ready = false;
+        self.validated = false;
         self.size = self.max_size;
         self.vector = VIRTIO_MSI_NO_VECTOR;
         self.desc_table = GuestAddress(0);
@@ -340,7 +373,19 @@ impl Queue {
         self.last_used = Wrapping(0);
     }
 
-    pub fn is_valid(&self, mem: &GuestMemory) -> bool {
+    pub fn is_valid(&mut self, mem: &GuestMemory) -> bool {
+        if !self.ready {
+            error!("attempt to use virtio queue that is not marked ready");
+            return false;
+        }
+
+        if !self.validated {
+            self.validate(mem);
+        }
+        self.validated
+    }
+
+    fn validate(&mut self, mem: &GuestMemory) {
         let queue_size = self.actual_size() as usize;
         let desc_table = self.desc_table;
         let desc_table_size = 16 * queue_size;
@@ -348,22 +393,17 @@ impl Queue {
         let avail_ring_size = 6 + 2 * queue_size;
         let used_ring = self.used_ring;
         let used_ring_size = 6 + 8 * queue_size;
-        if !self.ready {
-            error!("attempt to use virtio queue that is not marked ready");
-            return false;
-        } else if self.size > self.max_size || self.size == 0 || (self.size & (self.size - 1)) != 0
-        {
+        if self.size > self.max_size || self.size == 0 || (self.size & (self.size - 1)) != 0 {
             error!("virtio queue with invalid size: {}", self.size);
-            return false;
+            return;
         }
 
-        let iommu = self.iommu.as_ref().map(|i| i.lock());
         for (addr, size, name) in [
             (desc_table, desc_table_size, "descriptor table"),
             (avail_ring, avail_ring_size, "available ring"),
             (used_ring, used_ring_size, "used ring"),
         ] {
-            match is_valid_wrapper(mem, &iommu, addr, size as u64) {
+            match is_valid_wrapper(mem, &self.iommu, addr, size as u64) {
                 Ok(valid) => {
                     if !valid {
                         error!(
@@ -372,16 +412,16 @@ impl Queue {
                             addr.offset(),
                             size,
                         );
-                        return false;
+                        return;
                     }
                 }
                 Err(e) => {
                     error!("is_valid failed: {:#}", e);
-                    return false;
+                    return;
                 }
             }
         }
-        true
+        self.validated = true;
     }
 
     // Get the index of the first available descriptor chain in the available ring
@@ -585,119 +625,128 @@ impl Queue {
         }
     }
 
-    // Check whether guest enable interrupt injection or not.
-    //
-    // This function implements VIRTIO_RING_F_EVENT_IDX, otherwise known as
-    // interrupt suppression. The virtio spec provides the driver with a field,
-    // used_event, which says that once we write that descriptor (or several
-    // in the case of a flurry of add_used calls), we should send a
-    // notification. Because the values involved wrap around u16::MAX, and to
-    // avoid checking the condition on every add_used call, the math is a little
-    // complicated.
-    //
-    // The critical inequality is:
-    //      (next_used - 1) - used_event < next_used - last_used
-    //
-    // For illustration purposes, we label it as A < B, where
-    // A = (next_used -1) - used_event, and B = next_used - last_used.
-    //
-    // A and B represent two distances, measured in a wrapping ring of size
-    // u16::MAX. In the "send intr" case, the inequality is true. In the
-    // "don't send intr" case, the inequality is false. We must be very careful
-    // in assigning a direction to the ring, so that when we
-    // graph the subtraction operations, we are measuring the right distance
-    // (similar to how DC circuits are analyzed).
-    //
-    // The two distances are as follows:
-    //  * A is the distance between the driver's requested notification point,
-    //    and the current position in the ring.
-    //
-    //  * B is the distance between the last time we notified the guest,
-    //    and the current position in the ring.
-    //
-    // If we graph these distances for the situation where we want to notify
-    // the guest, and when we don't want to notify the guest, we see that
-    // A < B becomes true the moment next_used - 1 passes used_event. See the
-    // graphs at the bottom of this comment block for a more visual explanation.
-    //
-    // Once an interrupt is sent, we have a final useful property: last_used
-    // moves up next_used, which causes the inequality to be false. Thus, we
-    // won't send notifications again until used_event is moved forward by the
-    // driver.
-    //
-    // Finally, let's talk about a couple of ways to write this inequality
-    // that don't work, and critically, explain *why*.
-    //
-    // First, a naive reading of the virtio spec might lead us to ask: why not
-    // just use the following inequality:
-    //
-    //      next_used - 1 >= used_event
-    //
-    // because that's much simpler, right? The trouble is that the ring wraps,
-    // so it could be that a smaller index is actually ahead of a larger one.
-    // That's why we have to use distances in the ring instead.
-    //
-    // Second, one might look at the correct inequality:
-    //      (next_used - 1) - used_event < next_used - last_used
-    //
-    // And try to simplify it to:
-    //      last_used - 1 < used_event
-    //
-    // Functionally, this won't work because next_used isn't present at all
-    // anymore. (Notifications will never be sent.) But why is that? The algebra
-    // here *appears* to work out, but all semantic meaning is lost. There are
-    // two explanations for why this happens:
-    // * The intuitive one: the terms in the inequality are not actually
-    //   separable; in other words, (next_used - last_used) is an inseparable
-    //   term, so subtracting next_used from both sides of the original
-    //   inequality and zeroing them out is semantically invalid. But why aren't
-    //   they separable? See below.
-    // * The theoretical one: canceling like terms relies a vector space law:
-    //   a + x = b + x => a = b (cancellation law). For congruences / equality
-    //   under modulo, this law is satisfied, but for inequalities under mod, it
-    //   is not; therefore, we cannot cancel like terms.
-    //
-    // ┌──────────────────────────────────┐
-    // │                                  │
-    // │                                  │
-    // │                                  │
-    // │           ┌────────────  next_used - 1
-    // │           │A                   x
-    // │           │       ┌────────────x────────────┐
-    // │           │       │            x            │
-    // │           │       │                         │
-    // │           │       │               │         │
-    // │           │       │               │         │
-    // │     used_event  xxxx        + ◄───┘       xxxxx last_used
-    // │                   │                         │      │
-    // │                   │        Send intr        │      │
-    // │                   │                         │      │
-    // │                   └─────────────────────────┘      │
-    // │                                                    │
-    // │ B                                                  │
-    // └────────────────────────────────────────────────────┘
-    //
-    //             ┌───────────────────────────────────────────────────┐
-    //             │                                                 A │
-    //             │       ┌────────────────────────┐                  │
-    //             │       │                        │                  │
-    //             │       │                        │                  │
-    //             │       │              │         │                  │
-    //             │       │              │         │                  │
-    //       used_event  xxxx             │       xxxxx last_used      │
-    //                     │        + ◄───┘         │       │          │
-    //                     │                        │       │          │
-    //                     │     Don't send intr    │       │          │
-    //                     │                        │       │          │
-    //                     └───────────x────────────┘       │          │
-    //                                 x                    │          │
-    //                              next_used - 1           │          │
-    //                              │  │                  B │          │
-    //                              │  └────────────────────┘          │
-    //                              │                                  │
-    //                              └──────────────────────────────────┘
-    //
-    fn available_interrupt_enabled(&self, mem: &GuestMemory) -> bool {
+    /// Returns if the queue should have an interrupt sent based on its state.
+    ///
+    /// This function implements `VIRTIO_RING_F_EVENT_IDX`, otherwise known as
+    /// interrupt suppression. The virtio spec provides the driver with a field,
+    /// `used_event`, which says that once we write that descriptor (or several
+    /// in the case of a flurry of `add_used` calls), we should send a
+    /// notification. Because the values involved wrap around `u16::MAX`, and to
+    /// avoid checking the condition on every `add_used` call, the math is a
+    /// little complicated.
+    ///
+    /// The critical inequality is:
+    /// ```text
+    ///      (next_used - 1) - used_event < next_used - last_used
+    /// ```
+    ///
+    /// For illustration purposes, we label it as `A < B`, where
+    /// `A = (next_used -1) - used_event`, and `B = next_used - last_used`.
+    ///
+    /// `A` and `B` represent two distances, measured in a wrapping ring of size
+    /// `u16::MAX`. In the "send intr" case, the inequality is true. In the
+    /// "don't send intr" case, the inequality is false. We must be very careful
+    /// in assigning a direction to the ring, so that when we
+    /// graph the subtraction operations, we are measuring the right distance
+    /// (similar to how DC circuits are analyzed).
+    ///
+    /// The two distances are as follows:
+    ///  * `A` is the distance between the driver's requested notification
+    ///    point, and the current position in the ring.
+    ///
+    ///  * `B` is the distance between the last time we notified the guest,
+    ///    and the current position in the ring.
+    ///
+    /// If we graph these distances for the situation where we want to notify
+    /// the guest, and when we don't want to notify the guest, we see that
+    /// `A < B` becomes true the moment `next_used - 1` passes `used_event`. See
+    /// the graphs at the bottom of this comment block for a more visual
+    /// explanation.
+    ///
+    /// Once an interrupt is sent, we have a final useful property: last_used
+    /// moves up next_used, which causes the inequality to be false. Thus, we
+    /// won't send notifications again until `used_event` is moved forward by
+    /// the driver.
+    ///
+    /// Finally, let's talk about a couple of ways to write this inequality
+    /// that don't work, and critically, explain *why*.
+    ///
+    /// First, a naive reading of the virtio spec might lead us to ask: why not
+    /// just use the following inequality:
+    /// ```text
+    ///      next_used - 1 >= used_event
+    /// ```
+    ///
+    /// because that's much simpler, right? The trouble is that the ring wraps,
+    /// so it could be that a smaller index is actually ahead of a larger one.
+    /// That's why we have to use distances in the ring instead.
+    ///
+    /// Second, one might look at the correct inequality:
+    /// ```text
+    ///      (next_used - 1) - used_event < next_used - last_used
+    /// ```
+    ///
+    /// And try to simplify it to:
+    /// ```text
+    ///      last_used - 1 < used_event
+    /// ```
+    ///
+    /// Functionally, this won't work because next_used isn't present at all
+    /// anymore. (Notifications will never be sent.) But why is that? The algebra
+    /// here *appears* to work out, but all semantic meaning is lost. There are
+    /// two explanations for why this happens:
+    /// * The intuitive one: the terms in the inequality are not actually
+    ///   separable; in other words, (next_used - last_used) is an inseparable
+    ///   term, so subtracting next_used from both sides of the original
+    ///   inequality and zeroing them out is semantically invalid. But why aren't
+    ///   they separable? See below.
+    /// * The theoretical one: canceling like terms relies a vector space law:
+    ///   a + x = b + x => a = b (cancellation law). For congruences / equality
+    ///   under modulo, this law is satisfied, but for inequalities under mod, it
+    ///   is not; therefore, we cannot cancel like terms.
+    ///
+    /// ```text
+    /// ┌──────────────────────────────────┐
+    /// │                                  │
+    /// │                                  │
+    /// │                                  │
+    /// │           ┌────────────  next_used - 1
+    /// │           │A                   x
+    /// │           │       ┌────────────x────────────┐
+    /// │           │       │            x            │
+    /// │           │       │                         │
+    /// │           │       │               │         │
+    /// │           │       │               │         │
+    /// │     used_event  xxxx        + ◄───┘       xxxxx last_used
+    /// │                   │                         │      │
+    /// │                   │        Send intr        │      │
+    /// │                   │                         │      │
+    /// │                   └─────────────────────────┘      │
+    /// │                                                    │
+    /// │ B                                                  │
+    /// └────────────────────────────────────────────────────┘
+    ///
+    ///             ┌───────────────────────────────────────────────────┐
+    ///             │                                                 A │
+    ///             │       ┌────────────────────────┐                  │
+    ///             │       │                        │                  │
+    ///             │       │                        │                  │
+    ///             │       │              │         │                  │
+    ///             │       │              │         │                  │
+    ///       used_event  xxxx             │       xxxxx last_used      │
+    ///                     │        + ◄───┘         │       │          │
+    ///                     │                        │       │          │
+    ///                     │     Don't send intr    │       │          │
+    ///                     │                        │       │          │
+    ///                     └───────────x────────────┘       │          │
+    ///                                 x                    │          │
+    ///                              next_used - 1           │          │
+    ///                              │  │                  B │          │
+    ///                              │  └────────────────────┘          │
+    ///                              │                                  │
+    ///                              └──────────────────────────────────┘
+    /// ```
+    fn queue_wants_interrupt(&self, mem: &GuestMemory) -> bool {
         if self.features & ((1u64) << VIRTIO_RING_F_EVENT_IDX) != 0 {
             let used_event = self.get_used_event(mem);
             self.next_used - used_event - Wrapping(1) < self.next_used - self.last_used
@@ -714,7 +763,7 @@ impl Queue {
         mem: &GuestMemory,
         interrupt: &dyn SignalableInterrupt,
     ) -> bool {
-        if self.available_interrupt_enabled(mem) {
+        if self.queue_wants_interrupt(mem) {
             self.last_used = self.next_used;
             interrupt.signal_used_queue(self.vector);
             true
@@ -738,6 +787,7 @@ mod tests {
     use super::super::Interrupt;
     use super::*;
     use crate::IrqLevelEvent;
+    use memoffset::offset_of;
     use std::convert::TryInto;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
@@ -844,10 +894,8 @@ mod tests {
             10,
         );
 
-        // Calculating the offset of used_event within Avail structure
-        #[allow(deref_nullptr)]
-        let used_event_offset: u64 =
-            unsafe { &(*(::std::ptr::null::<Avail>())).used_event as *const _ as u64 };
+        // Offset of used_event within Avail structure
+        let used_event_offset = offset_of!(Avail, used_event) as u64;
         let used_event_address = GuestAddress(AVAIL_OFFSET + used_event_offset);
 
         // Assume driver submit 0x100 req to device,
@@ -920,10 +968,8 @@ mod tests {
             10,
         );
 
-        // Calculating the offset of used_event within Avail structure
-        #[allow(deref_nullptr)]
-        let used_event_offset: u64 =
-            unsafe { &(*(::std::ptr::null::<Avail>())).used_event as *const _ as u64 };
+        // Offset of used_event within Avail structure
+        let used_event_offset = offset_of!(Avail, used_event) as u64;
         let used_event_address = GuestAddress(AVAIL_OFFSET + used_event_offset);
 
         // Assume driver submit 0x100 req to device,

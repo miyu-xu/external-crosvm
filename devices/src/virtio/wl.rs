@@ -28,6 +28,7 @@
 //! the virtio queue, and routing messages in and out of `WlState`. Possible events include the kill
 //! event, available descriptors on the `in` or `out` queue, and incoming data on any vfd's socket.
 
+use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap as Map, BTreeSet as Set, VecDeque};
 use std::convert::From;
@@ -48,30 +49,38 @@ use std::time::Duration;
 #[cfg(feature = "minigbm")]
 use libc::{EBADF, EINVAL};
 
+use anyhow::Context;
 use data_model::*;
 
 #[cfg(feature = "minigbm")]
 use base::ioctl_iow_nr;
-use base::{
-    error, ioctl_iowr_nr, ioctl_with_ref, pipe, round_up_to_page_size, warn, AsRawDescriptor,
-    Error, Event, EventToken, EventType, FileFlags, FromRawDescriptor, Protection, RawDescriptor,
-    Result, ScmSocket, SharedMemory, SharedMemoryUnix, Tube, TubeError, WaitContext,
-};
 #[cfg(feature = "gpu")]
-use base::{IntoRawDescriptor, SafeDescriptor};
+use base::IntoRawDescriptor;
+use base::{
+    error, ioctl_iowr_nr, ioctl_with_ref, pagesize, pipe, round_up_to_page_size, warn,
+    AsRawDescriptor, Error, Event, EventToken, EventType, FileFlags, FromRawDescriptor, Protection,
+    RawDescriptor, Result, SafeDescriptor, ScmSocket, SharedMemory, SharedMemoryUnix, Tube,
+    TubeError, WaitContext,
+};
 use remain::sorted;
-use thiserror::Error as ThisError;
-use vm_memory::{GuestMemory, GuestMemoryError};
-
+use resources::{address_allocator::AddressAllocator, AddressRange, Alloc};
 #[cfg(feature = "minigbm")]
-use vm_control::GpuMemoryDesc;
+use rutabaga_gfx::{
+    DrmFormat, ImageAllocationInfo, ImageMemoryRequirements, RutabagaError, RutabagaGralloc,
+    RutabagaGrallocFlags,
+};
+use thiserror::Error as ThisError;
+use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 #[cfg(feature = "gpu")]
 use super::resource_bridge::{
     get_resource_info, BufferInfo, ResourceBridgeError, ResourceInfo, ResourceRequest,
 };
-use super::{DeviceType, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice, Writer};
-use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
+use super::{
+    DeviceType, Interrupt, Queue, Reader, SharedMemoryMapper, SharedMemoryRegion,
+    SignalableInterrupt, VirtioDevice, Writer,
+};
+use vm_control::VmMemorySource;
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -105,6 +114,7 @@ const VIRTIO_WL_VFD_CONTROL: u32 = 0x4;
 const VIRTIO_WL_VFD_FENCE: u32 = 0x8;
 pub const VIRTIO_WL_F_TRANS_FLAGS: u32 = 0x01;
 pub const VIRTIO_WL_F_SEND_FENCES: u32 = 0x02;
+pub const VIRTIO_WL_F_USE_SHMEM: u32 = 0x03;
 
 pub const QUEUE_SIZE: u16 = 256;
 pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
@@ -151,10 +161,25 @@ fn is_fence(f: &File) -> bool {
     unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO(), &info) == 0 }
 }
 
+#[cfg(feature = "minigbm")]
+#[derive(Debug, Default)]
+struct GpuMemoryPlaneDesc {
+    stride: u32,
+    offset: u32,
+}
+
+#[cfg(feature = "minigbm")]
+#[derive(Debug, Default)]
+struct GpuMemoryDesc {
+    planes: [GpuMemoryPlaneDesc; 3],
+}
+
 const VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL: u32 = 0;
 const VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU: u32 = 1;
 const VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_FENCE: u32 = 2;
 const VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_SIGNALED_FENCE: u32 = 3;
+
+const VIRTIO_WL_PFN_SHIFT: u32 = 12;
 
 fn encode_vfd_new(
     writer: &mut Writer,
@@ -289,6 +314,9 @@ enum WlError {
     DmabufSync(io::Error),
     #[error("failed to create shared memory from descriptor: {0}")]
     FromSharedMemory(Error),
+    #[error("gralloc error: {0}")]
+    #[cfg(feature = "minigbm")]
+    GrallocError(#[from] RutabagaError),
     #[error("access violation in guest memory: {0}")]
     GuestMemory(#[from] GuestMemoryError),
     #[error("invalid string: {0}")]
@@ -305,6 +333,8 @@ enum WlError {
     RecvVfd(Error),
     #[error("failed to send on a socket: {0}")]
     SendVfd(Error),
+    #[error("shmem mapper failure: {0}")]
+    ShmemMapperError(anyhow::Error),
     #[error("failed to connect socket: {0}")]
     SocketConnect(io::Error),
     #[error("failed to set socket as non-blocking: {0}")]
@@ -327,36 +357,153 @@ enum WlError {
 
 type WlResult<T> = result::Result<T, WlError>;
 
+pub const WL_SHMEM_ID: u8 = 0;
+pub const WL_SHMEM_SIZE: u64 = 1 << 32;
+
+struct VmRequesterState {
+    mapper: Box<dyn SharedMemoryMapper>,
+    #[cfg(feature = "minigbm")]
+    gralloc: RutabagaGralloc,
+
+    // Allocator for shm address space
+    address_allocator: AddressAllocator,
+
+    // Map of existing mappings in the shm address space
+    allocs: Map<u64 /* offset */, Alloc>,
+
+    // The id for the next shmem allocation
+    next_alloc: usize,
+}
+
 #[derive(Clone)]
 struct VmRequester {
-    inner: Rc<Tube>,
+    state: Rc<RefCell<VmRequesterState>>,
 }
 
 impl VmRequester {
-    fn new(vm_socket: Tube) -> VmRequester {
+    fn new(
+        mapper: Box<dyn SharedMemoryMapper>,
+        #[cfg(feature = "minigbm")] gralloc: RutabagaGralloc,
+    ) -> VmRequester {
         VmRequester {
-            inner: Rc::new(vm_socket),
+            state: Rc::new(RefCell::new(VmRequesterState {
+                mapper,
+                #[cfg(feature = "minigbm")]
+                gralloc,
+                address_allocator: AddressAllocator::new(
+                    AddressRange::from_start_and_size(0, WL_SHMEM_SIZE).unwrap(),
+                    Some(pagesize() as u64),
+                    None,
+                )
+                .expect("failed to create allocator"),
+                allocs: Map::new(),
+                next_alloc: 0,
+            })),
         }
     }
 
-    fn request(&self, request: &VmMemoryRequest) -> WlResult<VmMemoryResponse> {
-        self.inner.send(&request).map_err(WlError::VmControl)?;
-        self.inner.recv().map_err(WlError::VmControl)
+    fn unregister_memory(&self, offset: u64) -> WlResult<()> {
+        let mut state = self.state.borrow_mut();
+        state
+            .mapper
+            .remove_mapping(offset)
+            .map_err(WlError::ShmemMapperError)?;
+        let alloc = state
+            .allocs
+            .remove(&offset)
+            .context("unknown offset")
+            .map_err(WlError::ShmemMapperError)?;
+        state
+            .address_allocator
+            .release(alloc)
+            .expect("corrupt address space");
+        Ok(())
     }
 
-    fn register_memory(&self, shm: SharedMemory) -> WlResult<(SharedMemory, VmMemoryResponse)> {
-        let request = VmMemoryRequest::RegisterMemory {
-            source: VmMemorySource::SharedMemory(shm),
-            dest: VmMemoryDestination::NewAllocation,
-            prot: Protection::read_write(),
+    #[cfg(feature = "minigbm")]
+    fn allocate_and_register_gpu_memory(
+        &self,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> WlResult<(u64, SafeDescriptor, ImageMemoryRequirements)> {
+        let mut state = self.state.borrow_mut();
+
+        let img = ImageAllocationInfo {
+            width,
+            height,
+            drm_format: DrmFormat::from(format),
+            // Linear layout is a requirement as virtio wayland guest expects
+            // this for CPU access to the buffer. Scanout and texturing are
+            // optional as the consumer (wayland compositor) is expected to
+            // fall-back to a less efficient mechanisms for presentation if
+            // neccesary. In practice, linear buffers for commonly used formats
+            // will also support scanout and texturing.
+            flags: RutabagaGrallocFlags::empty().use_linear(true),
         };
-        let response = self.request(&request)?;
-        match request {
-            VmMemoryRequest::RegisterMemory {
-                source: VmMemorySource::SharedMemory(shm),
-                ..
-            } => Ok((shm, response)),
-            _ => unreachable!(),
+
+        let reqs = state
+            .gralloc
+            .get_image_memory_requirements(img)
+            .map_err(WlError::GrallocError)?;
+        let handle = state
+            .gralloc
+            .allocate_memory(reqs)
+            .map_err(WlError::GrallocError)?;
+        drop(state);
+
+        self.register_memory(
+            handle
+                .os_handle
+                .try_clone()
+                .context("failed to dup gfx handle")
+                .map_err(WlError::ShmemMapperError)?,
+            reqs.size,
+        )
+        .map(|info| (info, handle.os_handle, reqs))
+    }
+
+    fn register_shmem(&self, shm: &SharedMemory) -> WlResult<u64> {
+        self.register_memory(
+            SafeDescriptor::try_from(shm as &dyn AsRawDescriptor)
+                .context("failed to create safe descriptor")
+                .map_err(WlError::ShmemMapperError)?,
+            shm.size(),
+        )
+    }
+
+    fn register_memory(&self, descriptor: SafeDescriptor, size: u64) -> WlResult<u64> {
+        let mut state = self.state.borrow_mut();
+        let size = round_up_to_page_size(size as usize) as u64;
+        let source = VmMemorySource::Descriptor {
+            descriptor,
+            offset: 0,
+            size,
+        };
+        let alloc = Alloc::Anon(state.next_alloc);
+        state.next_alloc += 1;
+        let offset = state
+            .address_allocator
+            .allocate(size, alloc, "virtio-wl".to_owned())
+            .context("failed to allocate offset")
+            .map_err(WlError::ShmemMapperError)?;
+
+        match state
+            .mapper
+            .add_mapping(source, offset, Protection::read_write())
+        {
+            Ok(()) => {
+                state.allocs.insert(offset, alloc);
+                Ok(offset)
+            }
+            Err(e) => {
+                // We just allocated it ourselves, it must exist.
+                state
+                    .address_allocator
+                    .release(alloc)
+                    .expect("corrupt address space");
+                Err(WlError::ShmemMapperError(e))
+            }
         }
     }
 }
@@ -568,7 +715,7 @@ struct WlVfd {
     guest_shared_memory: Option<SharedMemory>,
     remote_pipe: Option<File>,
     local_pipe: Option<(u32 /* flags */, File)>,
-    slot: Option<(MemSlot, u64 /* pfn */, VmRequester)>,
+    slot: Option<(u64 /* offset */, VmRequester)>,
     #[cfg(feature = "minigbm")]
     is_dmabuf: bool,
     fence: Option<File>,
@@ -581,8 +728,8 @@ impl fmt::Debug for WlVfd {
         if let Some(s) = &self.socket {
             write!(f, " socket: {}", s.as_raw_descriptor())?;
         }
-        if let Some((slot, pfn, _)) = &self.slot {
-            write!(f, " slot: {} pfn: {}", slot, pfn)?;
+        if let Some((offset, _)) = &self.slot {
+            write!(f, " offset: {}", offset)?;
         }
         if let Some(s) = &self.remote_pipe {
             write!(f, " remote: {}", s.as_raw_descriptor())?;
@@ -607,17 +754,12 @@ impl WlVfd {
         let vfd_shm =
             SharedMemory::new("virtwl_alloc", size_page_aligned).map_err(WlError::NewAlloc)?;
 
-        let (vfd_shm, register_response) = vm.register_memory(vfd_shm)?;
+        let offset = vm.register_shmem(&vfd_shm)?;
 
-        match register_response {
-            VmMemoryResponse::RegisterMemory { pfn, slot } => {
-                let mut vfd = WlVfd::default();
-                vfd.guest_shared_memory = Some(vfd_shm);
-                vfd.slot = Some((slot, pfn, vm));
-                Ok(vfd)
-            }
-            _ => Err(WlError::VmBadResponse),
-        }
+        let mut vfd = WlVfd::default();
+        vfd.guest_shared_memory = Some(vfd_shm);
+        vfd.slot = Some((offset, vm));
+        Ok(vfd)
     }
 
     #[cfg(feature = "minigbm")]
@@ -627,30 +769,23 @@ impl WlVfd {
         height: u32,
         format: u32,
     ) -> WlResult<(WlVfd, GpuMemoryDesc)> {
-        let allocate_and_register_gpu_memory_response =
-            vm.request(&VmMemoryRequest::AllocateAndRegisterGpuMemory {
-                width,
-                height,
-                format,
-                dest: VmMemoryDestination::NewAllocation,
-            })?;
-        match allocate_and_register_gpu_memory_response {
-            VmMemoryResponse::AllocateAndRegisterGpuMemory {
-                descriptor,
-                pfn,
-                slot,
-                desc,
-            } => {
-                let mut vfd = WlVfd::default();
-                let vfd_shm = SharedMemory::from_safe_descriptor(descriptor, None)
-                    .map_err(WlError::NewAlloc)?;
-                vfd.guest_shared_memory = Some(vfd_shm);
-                vfd.slot = Some((slot, pfn, vm));
-                vfd.is_dmabuf = true;
-                Ok((vfd, desc))
+        let (offset, desc, reqs) = vm.allocate_and_register_gpu_memory(width, height, format)?;
+        let mut vfd = WlVfd::default();
+        let vfd_shm =
+            SharedMemory::from_safe_descriptor(desc, Some(reqs.size)).map_err(WlError::NewAlloc)?;
+
+        let mut desc = GpuMemoryDesc::default();
+        for i in 0..3 {
+            desc.planes[i] = GpuMemoryPlaneDesc {
+                stride: reqs.strides[i],
+                offset: reqs.offsets[i],
             }
-            _ => Err(WlError::VmBadResponse),
         }
+
+        vfd.guest_shared_memory = Some(vfd_shm);
+        vfd.slot = Some((offset, vm));
+        vfd.is_dmabuf = true;
+        Ok((vfd, desc))
     }
 
     #[cfg(feature = "minigbm")]
@@ -699,17 +834,12 @@ impl WlVfd {
         // fails, we assume it's a socket or pipe with read/write semantics.
         if descriptor.seek(SeekFrom::End(0)).is_ok() {
             let shm = SharedMemory::from_file(descriptor).map_err(WlError::FromSharedMemory)?;
-            let (shm, register_response) = vm.register_memory(shm)?;
+            let offset = vm.register_shmem(&shm)?;
 
-            match register_response {
-                VmMemoryResponse::RegisterMemory { pfn, slot } => {
-                    let mut vfd = WlVfd::default();
-                    vfd.guest_shared_memory = Some(shm);
-                    vfd.slot = Some((slot, pfn, vm));
-                    Ok(vfd)
-                }
-                _ => Err(WlError::VmBadResponse),
-            }
+            let mut vfd = WlVfd::default();
+            vfd.guest_shared_memory = Some(shm);
+            vfd.slot = Some((offset, vm));
+            Ok(vfd)
         } else if is_fence(&descriptor) {
             let mut vfd = WlVfd::default();
             vfd.is_fence = true;
@@ -751,9 +881,9 @@ impl WlVfd {
         flags
     }
 
-    // Page frame number in the guest this VFD was mapped at.
-    fn pfn(&self) -> Option<u64> {
-        self.slot.as_ref().map(|s| s.1)
+    // Offset within the shared memory region this VFD was mapped at.
+    fn offset(&self) -> Option<u64> {
+        self.slot.as_ref().map(|s| s.0)
     }
 
     // Size in bytes of the shared memory VFD.
@@ -853,8 +983,8 @@ impl WlVfd {
     }
 
     fn close(&mut self) -> WlResult<()> {
-        if let Some((slot, _, vm)) = self.slot.take() {
-            vm.request(&VmMemoryRequest::UnregisterMemory(slot))?;
+        if let Some((offset, vm)) = self.slot.take() {
+            vm.unregister_memory(offset)?;
         }
         self.socket = None;
         self.remote_pipe = None;
@@ -891,20 +1021,27 @@ pub struct WlState {
     #[cfg(feature = "gpu")]
     signaled_fence: Option<SafeDescriptor>,
     use_send_vfd_v2: bool,
+    address_offset: u64,
 }
 
 impl WlState {
     /// Create a new `WlState` instance for running a virtio-wl device.
     pub fn new(
         wayland_paths: Map<String, PathBuf>,
-        vm_tube: Tube,
+        mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
         resource_bridge: Option<Tube>,
+        #[cfg(feature = "minigbm")] gralloc: RutabagaGralloc,
+        address_offset: u64,
     ) -> WlState {
         WlState {
             wayland_paths,
-            vm: VmRequester::new(vm_tube),
+            vm: VmRequester::new(
+                mapper,
+                #[cfg(feature = "minigbm")]
+                gralloc,
+            ),
             resource_bridge,
             wait_ctx: WaitContext::new().expect("failed to create WaitContext"),
             use_transition_flags,
@@ -917,6 +1054,7 @@ impl WlState {
             #[cfg(feature = "gpu")]
             signaled_fence: None,
             use_send_vfd_v2,
+            address_offset,
         }
     }
 
@@ -979,21 +1117,19 @@ impl WlState {
             return Ok(WlResp::Err(Box::from("invalid flags")));
         }
 
-        match self.vfds.entry(id) {
-            Entry::Vacant(entry) => {
-                let vfd = WlVfd::allocate(self.vm.clone(), size as u64)?;
-                let resp = WlResp::VfdNew {
-                    id,
-                    flags,
-                    pfn: vfd.pfn().unwrap_or_default(),
-                    size: vfd.size().unwrap_or_default() as u32,
-                    resp: true,
-                };
-                entry.insert(vfd);
-                Ok(resp)
-            }
-            Entry::Occupied(_) => Ok(WlResp::InvalidId),
+        if self.vfds.contains_key(&id) {
+            return Ok(WlResp::InvalidId);
         }
+        let vfd = WlVfd::allocate(self.vm.clone(), size as u64)?;
+        let resp = WlResp::VfdNew {
+            id,
+            flags,
+            pfn: self.compute_pfn(&vfd.offset()),
+            size: vfd.size().unwrap_or_default() as u32,
+            resp: true,
+        };
+        self.vfds.insert(id, vfd);
+        Ok(resp)
     }
 
     #[cfg(feature = "minigbm")]
@@ -1002,21 +1138,19 @@ impl WlState {
             return Ok(WlResp::InvalidId);
         }
 
-        match self.vfds.entry(id) {
-            Entry::Vacant(entry) => {
-                let (vfd, desc) = WlVfd::dmabuf(self.vm.clone(), width, height, format)?;
-                let resp = WlResp::VfdNewDmabuf {
-                    id,
-                    flags: 0,
-                    pfn: vfd.pfn().unwrap_or_default(),
-                    size: vfd.size().unwrap_or_default() as u32,
-                    desc,
-                };
-                entry.insert(vfd);
-                Ok(resp)
-            }
-            Entry::Occupied(_) => Ok(WlResp::InvalidId),
+        if self.vfds.contains_key(&id) {
+            return Ok(WlResp::InvalidId);
         }
+        let (vfd, desc) = WlVfd::dmabuf(self.vm.clone(), width, height, format)?;
+        let resp = WlResp::VfdNewDmabuf {
+            id,
+            flags: 0,
+            pfn: self.compute_pfn(&vfd.offset()),
+            size: vfd.size().unwrap_or_default() as u32,
+            desc,
+        };
+        self.vfds.insert(id, vfd);
+        Ok(resp)
     }
 
     #[cfg(feature = "minigbm")]
@@ -1420,7 +1554,7 @@ impl WlState {
                             Some(vfd) => Some(WlResp::VfdNew {
                                 id,
                                 flags: vfd.flags(self.use_transition_flags),
-                                pfn: vfd.pfn().unwrap_or_default(),
+                                pfn: self.compute_pfn(&vfd.offset()),
                                 size: vfd.size().unwrap_or_default() as u32,
                                 resp: false,
                             }),
@@ -1489,6 +1623,11 @@ impl WlState {
             }
         }
         self.in_queue.pop_front();
+    }
+
+    fn compute_pfn(&self, offset: &Option<u64>) -> u64 {
+        let addr = offset.map_or(0, |o| o + self.address_offset);
+        addr >> VIRTIO_WL_PFN_SHIFT
     }
 }
 
@@ -1625,10 +1764,12 @@ impl Worker {
         in_queue: Queue,
         out_queue: Queue,
         wayland_paths: Map<String, PathBuf>,
-        vm_tube: Tube,
+        mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
         resource_bridge: Option<Tube>,
+        #[cfg(feature = "minigbm")] gralloc: RutabagaGralloc,
+        address_offset: u64,
     ) -> Worker {
         Worker {
             interrupt,
@@ -1637,10 +1778,13 @@ impl Worker {
             out_queue,
             state: WlState::new(
                 wayland_paths,
-                vm_tube,
+                mapper,
                 use_transition_flags,
                 use_send_vfd_v2,
                 resource_bridge,
+                #[cfg(feature = "minigbm")]
+                gralloc,
+                address_offset,
             ),
         }
     }
@@ -1745,29 +1889,45 @@ pub struct Wl {
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<()>>,
     wayland_paths: Map<String, PathBuf>,
-    vm_socket: Option<Tube>,
+    mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridge: Option<Tube>,
     use_transition_flags: bool,
     use_send_vfd_v2: bool,
+    use_shmem: bool,
     base_features: u64,
+    #[cfg(feature = "minigbm")]
+    gralloc: Option<RutabagaGralloc>,
+    address_offset: Option<u64>,
 }
 
 impl Wl {
     pub fn new(
         base_features: u64,
         wayland_paths: Map<String, PathBuf>,
-        vm_tube: Tube,
         resource_bridge: Option<Tube>,
     ) -> Result<Wl> {
+        #[cfg(feature = "minigbm")]
+        let gralloc = match RutabagaGralloc::new() {
+            Ok(g) => g,
+            Err(e) => {
+                error!("failed to initialize gralloc {:?}", e);
+                return Err(Error::new(libc::EIO));
+            }
+        };
+
         Ok(Wl {
             kill_evt: None,
             worker_thread: None,
             wayland_paths,
-            vm_socket: Some(vm_tube),
+            mapper: None,
             resource_bridge,
             use_transition_flags: false,
             use_send_vfd_v2: false,
+            use_shmem: false,
             base_features,
+            #[cfg(feature = "minigbm")]
+            gralloc: Some(gralloc),
+            address_offset: None,
         })
     }
 }
@@ -1789,11 +1949,20 @@ impl VirtioDevice for Wl {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         let mut keep_rds = Vec::new();
 
-        if let Some(vm_socket) = &self.vm_socket {
-            keep_rds.push(vm_socket.as_raw_descriptor());
+        if let Some(mapper) = &self.mapper {
+            if let Some(raw_descriptor) = mapper.as_raw_descriptor() {
+                keep_rds.push(raw_descriptor);
+            }
         }
         if let Some(resource_bridge) = &self.resource_bridge {
             keep_rds.push(resource_bridge.as_raw_descriptor());
+        }
+        #[cfg(feature = "minigbm")]
+        if let Some(gralloc) = &self.gralloc {
+            match gralloc.try_as_raw_descriptors() {
+                Ok(mut rds) => keep_rds.append(&mut rds),
+                Err(e) => error!("failed to get gralloc fds {:?}", e),
+            }
         }
 
         keep_rds
@@ -1808,7 +1977,10 @@ impl VirtioDevice for Wl {
     }
 
     fn features(&self) -> u64 {
-        self.base_features | 1 << VIRTIO_WL_F_TRANS_FLAGS | 1 << VIRTIO_WL_F_SEND_FENCES
+        self.base_features
+            | 1 << VIRTIO_WL_F_TRANS_FLAGS
+            | 1 << VIRTIO_WL_F_SEND_FENCES
+            | 1 << VIRTIO_WL_F_USE_SHMEM
     }
 
     fn ack_features(&mut self, value: u64) {
@@ -1817,6 +1989,9 @@ impl VirtioDevice for Wl {
         }
         if value & (1 << VIRTIO_WL_F_SEND_FENCES) != 0 {
             self.use_send_vfd_v2 = true;
+        }
+        if value & (1 << VIRTIO_WL_F_USE_SHMEM) != 0 {
+            self.use_shmem = true;
         }
     }
 
@@ -1840,11 +2015,21 @@ impl VirtioDevice for Wl {
         };
         self.kill_evt = Some(self_kill_evt);
 
-        if let Some(vm_socket) = self.vm_socket.take() {
+        if let Some(mapper) = self.mapper.take() {
             let wayland_paths = self.wayland_paths.clone();
             let use_transition_flags = self.use_transition_flags;
             let use_send_vfd_v2 = self.use_send_vfd_v2;
             let resource_bridge = self.resource_bridge.take();
+            #[cfg(feature = "minigbm")]
+            let gralloc = self
+                .gralloc
+                .take()
+                .expect("gralloc already passed to worker");
+            let address_offset = if !self.use_shmem {
+                self.address_offset.expect("missing address offset")
+            } else {
+                0
+            };
             let worker_result =
                 thread::Builder::new()
                     .name("virtio_wl".to_string())
@@ -1855,10 +2040,13 @@ impl VirtioDevice for Wl {
                             queues.remove(0),
                             queues.remove(0),
                             wayland_paths,
-                            vm_socket,
+                            mapper,
                             use_transition_flags,
                             use_send_vfd_v2,
                             resource_bridge,
+                            #[cfg(feature = "minigbm")]
+                            gralloc,
+                            address_offset,
                         )
                         .run(queue_evts, kill_evt);
                     });
@@ -1873,5 +2061,20 @@ impl VirtioDevice for Wl {
                 }
             }
         }
+    }
+
+    fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
+        Some(SharedMemoryRegion {
+            id: WL_SHMEM_ID,
+            length: WL_SHMEM_SIZE,
+        })
+    }
+
+    fn set_shared_memory_region_base(&mut self, shmem_base: GuestAddress) {
+        self.address_offset = Some(shmem_base.0);
+    }
+
+    fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
+        self.mapper = Some(mapper);
     }
 }
