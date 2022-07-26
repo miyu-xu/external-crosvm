@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{io::stdin, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, bail, Context};
 use base::{error, Event, Terminal};
@@ -20,8 +20,11 @@ use crate::{
         self,
         console::{asynchronous::ConsoleDevice, virtio_console_config},
         copy_config,
-        vhost::user::device::handler::{DeviceRequestHandler, Doorbell, VhostUserBackend},
-        vhost::user::device::vvu::pci::VvuPciDevice,
+        vhost::user::device::{
+            handler::{sys::Doorbell, VhostUserBackend},
+            listener::{sys::VhostUserListener, VhostUserListenerTrait},
+            VhostUserDevice,
+        },
     },
     SerialHardware, SerialParameters, SerialType,
 };
@@ -29,35 +32,66 @@ use crate::{
 const MAX_QUEUE_NUM: usize = 2 /* transmit and receive queues */;
 const MAX_VRING_LEN: u16 = 256;
 
-struct ConsoleBackend {
-    ex: Executor,
-    device: ConsoleDevice,
-    acked_features: u64,
-    acked_protocol_features: VhostUserProtocolFeatures,
+/// Console device for use with vhost-user. Will set stdin back to canon mode if we are getting
+/// input from it.
+pub struct VhostUserConsoleDevice {
+    console: ConsoleDevice,
+    /// Whether we should set stdin to raw mode because we are getting user input from there.
+    raw_stdin: bool,
 }
 
-impl ConsoleBackend {
-    fn new(ex: &Executor, device: ConsoleDevice) -> Self {
-        Self {
-            ex: ex.clone(),
-            device,
-            acked_features: 0,
-            acked_protocol_features: VhostUserProtocolFeatures::empty(),
+impl Drop for VhostUserConsoleDevice {
+    fn drop(&mut self) {
+        if self.raw_stdin {
+            // Restore terminal capabilities back to what they were before
+            match std::io::stdin().set_canon_mode() {
+                Ok(()) => (),
+                Err(e) => error!("failed to restore canonical mode for terminal: {:#}", e),
+            }
         }
     }
 }
 
-impl VhostUserBackend for ConsoleBackend {
+impl VhostUserDevice for VhostUserConsoleDevice {
     fn max_queue_num(&self) -> usize {
         return MAX_QUEUE_NUM;
     }
 
+    fn into_backend(self: Box<Self>, ex: &Executor) -> anyhow::Result<Box<dyn VhostUserBackend>> {
+        if self.raw_stdin {
+            // Set stdin() to raw mode so we can send over individual keystrokes unbuffered
+            std::io::stdin()
+                .set_raw_mode()
+                .context("failed to set terminal in raw mode")?;
+        }
+
+        Ok(Box::new(ConsoleBackend {
+            device: *self,
+            acked_features: 0,
+            acked_protocol_features: VhostUserProtocolFeatures::empty(),
+            ex: ex.clone(),
+        }))
+    }
+}
+
+struct ConsoleBackend {
+    device: VhostUserConsoleDevice,
+    acked_features: u64,
+    acked_protocol_features: VhostUserProtocolFeatures,
+    ex: Executor,
+}
+
+impl VhostUserBackend for ConsoleBackend {
+    fn max_queue_num(&self) -> usize {
+        self.device.max_queue_num()
+    }
+
     fn max_vring_len(&self) -> u16 {
-        return MAX_VRING_LEN;
+        MAX_VRING_LEN
     }
 
     fn features(&self) -> u64 {
-        self.device.avail_features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
+        self.device.console.avail_features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
     }
 
     fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
@@ -120,10 +154,12 @@ impl VhostUserBackend for ConsoleBackend {
             // ReceiveQueue
             0 => self
                 .device
+                .console
                 .start_receive_queue(&self.ex, mem, queue, doorbell, kick_evt),
             // TransmitQueue
             1 => self
                 .device
+                .console
                 .start_transmit_queue(&self.ex, mem, queue, doorbell, kick_evt),
             _ => bail!("attempted to start unknown queue: {}", idx),
         }
@@ -132,12 +168,12 @@ impl VhostUserBackend for ConsoleBackend {
     fn stop_queue(&mut self, idx: usize) {
         match idx {
             0 => {
-                if let Err(e) = self.device.stop_receive_queue() {
+                if let Err(e) = self.device.console.stop_receive_queue() {
                     error!("error while stopping rx queue: {}", e);
                 }
             }
             1 => {
-                if let Err(e) = self.device.stop_transmit_queue() {
+                if let Err(e) = self.device.console.stop_transmit_queue() {
                     error!("error while stopping tx queue: {}", e);
                 }
             }
@@ -198,31 +234,19 @@ pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
         Err(e) => bail!(e),
     };
     let ex = Executor::new().context("Failed to create executor")?;
-    let backend = ConsoleBackend::new(&ex, console);
-    let max_queue_num = backend.max_queue_num();
-    let handler = DeviceRequestHandler::new(Box::new(backend));
+    let console = Box::new(VhostUserConsoleDevice {
+        console,
+        raw_stdin: true,
+    });
+    let backend = console.into_backend(&ex)?;
 
-    // Set stdin() in raw mode so we can send over individual keystrokes unbuffered
-    stdin()
-        .set_raw_mode()
-        .context("Failed to set terminal raw mode")?;
+    let listener = VhostUserListener::new_from_socket_or_vfio(
+        &opts.socket,
+        &opts.vfio,
+        backend.max_queue_num(),
+        None,
+    )?;
 
-    let res = match (opts.socket, opts.vfio) {
-        (Some(socket), None) => {
-            // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-            ex.run_until(handler.run(socket, &ex))?
-        }
-        (None, Some(vfio)) => {
-            let device = VvuPciDevice::new(&vfio, max_queue_num)?;
-            ex.run_until(handler.run_vvu(device, &ex))?
-        }
-        _ => Err(anyhow!("exactly one of `--socket` or `--vfio` is required")),
-    };
-
-    // Restore terminal capabilities back to what they were before
-    stdin()
-        .set_canon_mode()
-        .context("Failed to restore canonical mode for terminal")?;
-
-    res
+    // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
+    ex.run_until(listener.run_backend(backend, &ex))?
 }

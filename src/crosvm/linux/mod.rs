@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (cc8bcd Revert "Revert "aarch64: Add Goldfish battery to aarch64 cro)
 // Copyright 2017 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -2557,3 +2558,5 @@ mod tests {
         );
     }
 }
+=======
+>>>>>>> BRANCH (92e4fc aarch64: Don't add goldfish battery to fdt when not present)

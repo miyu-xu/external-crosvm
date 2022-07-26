@@ -2,24 +2,49 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr, time::Duration};
 
-use devices::SerialParameters;
+use devices::{IommuDevType, PciAddress, SerialParameters};
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "gpu")]
+<<<<<<< HEAD   (cc8bcd Revert "Revert "aarch64: Add Goldfish battery to aarch64 cro)
 use devices::virtio::{GpuDisplayParameters, GpuParameters};
 
 use crate::crosvm::config::Config;
 #[cfg(feature = "gpu")]
 use crate::crosvm::{argument, argument::parse_hex_or_decimal, config::invalid_value_err};
+=======
+use devices::virtio::{
+    GpuDisplayParameters, GpuParameters, DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH,
+};
+
+use crate::crosvm::config::{invalid_value_err, Config};
+#[cfg(feature = "gpu")]
+use crate::crosvm::{argument, argument::parse_hex_or_decimal};
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum HypervisorKind {
+    Kvm,
+}
+
+impl FromStr for HypervisorKind {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "kvm" => Ok(HypervisorKind::Kvm),
+            _ => Err("invalid hypervisor backend"),
+        }
+    }
+}
+>>>>>>> BRANCH (92e4fc aarch64: Don't add goldfish battery to fdt when not present)
 
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 pub fn parse_gpu_render_server_options(
     s: &str,
-) -> Result<crate::crosvm::platform::GpuRenderServerParameters, String> {
-    use std::{path::PathBuf, str::FromStr};
-
-    use crate::crosvm::{config::invalid_value_err, platform::GpuRenderServerParameters};
+) -> Result<crate::crosvm::sys::GpuRenderServerParameters, String> {
+    use crate::crosvm::sys::GpuRenderServerParameters;
 
     let mut path: Option<PathBuf> = None;
     let mut cache_path = None;
@@ -62,8 +87,6 @@ pub fn parse_ac97_options(
     key: &str,
     #[allow(unused_variables)] value: &str,
 ) -> Result<(), String> {
-    use std::{path::PathBuf, str::FromStr};
-
     match key {
         #[cfg(feature = "audio_cras")]
         "client_type" => {
@@ -257,6 +280,7 @@ pub fn parse_gpu_options(s: &str) -> Result<GpuParameters, String> {
     use devices::virtio::GpuMode;
     use rutabaga_gfx::RutabagaWsi;
 
+<<<<<<< HEAD   (cc8bcd Revert "Revert "aarch64: Add Goldfish battery to aarch64 cro)
     use crate::crosvm::sys::config::is_gpu_backend_deprecated;
 
     #[cfg(feature = "gfxstream")]
@@ -646,6 +670,475 @@ mod tests {
         }
         {
             assert!(parse_gpu_options("syncfd=true,backend=virglrenderer").is_err());
+=======
+    #[cfg(feature = "gfxstream")]
+    let mut vulkan_specified = false;
+    #[cfg(feature = "gfxstream")]
+    let mut angle_specified = false;
+
+    let mut display_param_builder: GpuDisplayParametersBuilder = Default::default();
+    let mut gpu_params = GpuParameters::default();
+
+    for frag in s.split(',') {
+        let mut rest: Option<&str> = None;
+        let mut kv = frag.split('=');
+        let k = kv.next().unwrap_or("");
+        let v = kv.next().unwrap_or("");
+        match k {
+            // Deprecated: Specifying --gpu=<mode> Not great as the mode can be set multiple
+            // times if the user specifies several modes (--gpu=2d,virglrenderer,gfxstream)
+            "2d" | "2D" => {
+                gpu_params.mode = GpuMode::Mode2D;
+            }
+            "3d" | "3D" | "virglrenderer" => {
+                gpu_params.mode = GpuMode::ModeVirglRenderer;
+            }
+            #[cfg(feature = "gfxstream")]
+            "gfxstream" => {
+                gpu_params.mode = GpuMode::ModeGfxstream;
+            }
+            // Preferred: Specifying --gpu,backend=<mode>
+            "backend" => match v {
+                "2d" | "2D" => {
+                    if is_gpu_backend_deprecated(v) {
+                        return Err(invalid_value_err(
+                            v,
+                            "this backend type is deprecated, please use gfxstream.",
+                        ));
+                    } else {
+                        gpu_params.mode = GpuMode::Mode2D;
+                    }
+                }
+                "3d" | "3D" | "virglrenderer" => {
+                    if is_gpu_backend_deprecated(v) {
+                        return Err(invalid_value_err(
+                            v,
+                            "this backend type is deprecated, please use gfxstream.",
+                        ));
+                    } else {
+                        gpu_params.mode = GpuMode::ModeVirglRenderer;
+                    }
+                }
+                #[cfg(feature = "gfxstream")]
+                "gfxstream" => {
+                    gpu_params.mode = GpuMode::ModeGfxstream;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        #[cfg(feature = "gfxstream")]
+                        "gpu parameter 'backend' should be one of (2d|virglrenderer|gfxstream)",
+                        #[cfg(not(feature = "gfxstream"))]
+                        "gpu parameter 'backend' should be one of (2d|3d)",
+                    ));
+                }
+            },
+            "egl" => match v {
+                "true" | "" => {
+                    gpu_params.renderer_use_egl = true;
+                }
+                "false" => {
+                    gpu_params.renderer_use_egl = false;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        "gpu parameter 'egl' should be a boolean",
+                    ));
+                }
+            },
+            "gles" => match v {
+                "true" | "" => {
+                    gpu_params.renderer_use_gles = true;
+                }
+                "false" => {
+                    gpu_params.renderer_use_gles = false;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        "gpu parameter 'gles' should be a boolean",
+                    ));
+                }
+            },
+            "glx" => match v {
+                "true" | "" => {
+                    gpu_params.renderer_use_glx = true;
+                }
+                "false" => {
+                    gpu_params.renderer_use_glx = false;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        "gpu parameter 'glx' should be a boolean",
+                    ));
+                }
+            },
+            "surfaceless" => match v {
+                "true" | "" => {
+                    gpu_params.renderer_use_surfaceless = true;
+                }
+                "false" => {
+                    gpu_params.renderer_use_surfaceless = false;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        "gpu parameter 'surfaceless' should be a boolean",
+                    ));
+                }
+            },
+            #[cfg(feature = "gfxstream")]
+            "angle" => {
+                angle_specified = true;
+                match v {
+                    "true" | "" => {
+                        gpu_params.gfxstream_use_guest_angle = true;
+                    }
+                    "false" => {
+                        gpu_params.gfxstream_use_guest_angle = false;
+                    }
+                    _ => {
+                        return Err(invalid_value_err(
+                            v,
+                            "gpu parameter 'angle' should be a boolean",
+                        ));
+                    }
+                }
+            }
+            "vulkan" => {
+                #[cfg(feature = "gfxstream")]
+                {
+                    vulkan_specified = true;
+                }
+                match v {
+                    "true" | "" => {
+                        gpu_params.use_vulkan = true;
+                    }
+                    "false" => {
+                        gpu_params.use_vulkan = false;
+                    }
+                    _ => {
+                        return Err(invalid_value_err(
+                            v,
+                            "gpu parameter 'vulkan' should be a boolean",
+                        ));
+                    }
+                }
+            }
+            "wsi" => match v {
+                "vk" => {
+                    gpu_params.wsi = Some(RutabagaWsi::Vulkan);
+                }
+                _ => {
+                    return Err(invalid_value_err(v, "gpu parameter 'wsi' should be vk"));
+                }
+            },
+            "cache-path" => gpu_params.cache_path = Some(v.to_string()),
+            "cache-size" => gpu_params.cache_size = Some(v.to_string()),
+            "pci-bar-size" => {
+                let size = parse_hex_or_decimal(v).map_err(|_| {
+                    "gpu parameter `pci-bar-size` must be a valid hex or decimal value"
+                })?;
+                gpu_params.pci_bar_size = size;
+            }
+            "udmabuf" => match v {
+                "true" | "" => {
+                    gpu_params.udmabuf = true;
+                }
+                "false" => {
+                    gpu_params.udmabuf = false;
+                }
+                _ => {
+                    return Err(invalid_value_err(
+                        v,
+                        "gpu parameter 'udmabuf' should be a boolean",
+                    ));
+                }
+            },
+            "context-types" => {
+                let context_types: Vec<String> = v.split(':').map(|s| s.to_string()).collect();
+                gpu_params.context_mask = rutabaga_gfx::calculate_context_mask(context_types);
+            }
+            "" => {}
+            _ => {
+                rest = Some(frag);
+            }
+        }
+        if let Some(arg) = rest.take() {
+            match display_param_builder.parse(arg) {
+                Ok(()) => {}
+                Err(argument::Error::UnknownArgument(_)) => {
+                    rest = Some(arg);
+                }
+                Err(err) => return Err(err.to_string()),
+            }
+        }
+        if let Some(arg) = rest.take() {
+            return Err(format!("unknown gpu parameter {}", arg));
+        }
+    }
+
+    if let Some(display_param) = display_param_builder.build()?.take() {
+        gpu_params.displays.push(display_param);
+    }
+
+    #[cfg(feature = "gfxstream")]
+    {
+        if !vulkan_specified && gpu_params.mode == GpuMode::ModeGfxstream {
+            gpu_params.use_vulkan = use_vulkan();
+        }
+
+        if angle_specified {
+            match gpu_params.mode {
+                GpuMode::ModeGfxstream => {}
+                _ => {
+                    return Err(
+                        "gpu parameter angle is only supported for gfxstream backend".to_string(),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(gpu_params)
+}
+
+#[cfg(feature = "gpu")]
+pub fn parse_gpu_display_options(s: &str) -> Result<GpuDisplayParameters, String> {
+    let mut display_param_builder: GpuDisplayParametersBuilder = Default::default();
+
+    for arg in s.split(',') {
+        display_param_builder
+            .parse(arg)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let display_param = display_param_builder.build()?;
+    let display_param = display_param.ok_or_else(|| {
+        invalid_value_err(s, "gpu-display must include both 'width' and 'height'")
+    })?;
+
+    Ok(display_param)
+}
+
+#[cfg(feature = "gpu")]
+pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
+    if let Some(gpu_parameters) = cfg.gpu_parameters.as_mut() {
+        if !gpu_parameters.pci_bar_size.is_power_of_two() {
+            return Err(format!(
+                "gpu parameter `pci-bar-size` must be a power of two but is {}",
+                gpu_parameters.pci_bar_size
+            ));
+        }
+        if gpu_parameters.displays.is_empty() {
+            gpu_parameters.displays.push(GpuDisplayParameters {
+                width: DEFAULT_DISPLAY_WIDTH,
+                height: DEFAULT_DISPLAY_HEIGHT,
+            });
+        }
+
+        let width = gpu_parameters.displays[0].width;
+        let height = gpu_parameters.displays[0].height;
+
+        if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
+            virtio_multi_touch.set_default_size(width, height);
+        }
+        if let Some(virtio_single_touch) = cfg.virtio_single_touch.first_mut() {
+            virtio_single_touch.set_default_size(width, height);
+        }
+    }
+    Ok(())
+}
+
+/// Vfio device type, recognized based on command line option.
+#[derive(Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum VfioType {
+    Pci,
+    Platform,
+}
+
+impl FromStr for VfioType {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use VfioType::*;
+        match s {
+            "vfio" => Ok(Pci),
+            "vfio-platform" => Ok(Platform),
+            _ => Err("invalid vfio device type, must be 'vfio|vfio-platform'"),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+/// VFIO device structure for creating a new instance based on command line options.
+pub struct VfioCommand {
+    pub vfio_path: PathBuf,
+    pub dev_type: VfioType,
+    pub params: BTreeMap<String, String>,
+}
+
+pub fn parse_vfio(s: &str) -> Result<VfioCommand, String> {
+    VfioCommand::new(VfioType::Pci, s)
+}
+
+pub fn parse_vfio_platform(s: &str) -> Result<VfioCommand, String> {
+    VfioCommand::new(VfioType::Platform, s)
+}
+
+impl VfioCommand {
+    pub fn new(dev_type: VfioType, path: &str) -> Result<VfioCommand, String> {
+        let mut param = path.split(',');
+        let vfio_path = PathBuf::from(
+            param
+                .next()
+                .ok_or_else(|| invalid_value_err(path, "missing vfio path"))?,
+        );
+
+        if !vfio_path.exists() {
+            return Err(invalid_value_err(path, "the vfio path does not exist"));
+        }
+        if !vfio_path.is_dir() {
+            return Err(invalid_value_err(path, "the vfio path should be directory"));
+        }
+
+        let mut params = BTreeMap::new();
+        for p in param {
+            let mut kv = p.splitn(2, '=');
+            if let (Some(kind), Some(value)) = (kv.next(), kv.next()) {
+                Self::validate_params(kind, value)?;
+                params.insert(kind.to_owned(), value.to_owned());
+            };
+        }
+        Ok(VfioCommand {
+            vfio_path,
+            params,
+            dev_type,
+        })
+    }
+
+    fn validate_params(kind: &str, value: &str) -> Result<(), String> {
+        match kind {
+            "guest-address" => {
+                if value.eq_ignore_ascii_case("auto") || PciAddress::from_str(value).is_ok() {
+                    Ok(())
+                } else {
+                    Err(invalid_value_err(
+                        format!("{}={}", kind, value),
+                        "option must be `guest-address=auto|<BUS:DEVICE.FUNCTION>`",
+                    ))
+                }
+            }
+            "iommu" => {
+                if IommuDevType::from_str(value).is_ok() {
+                    Ok(())
+                } else {
+                    Err(invalid_value_err(
+                        format!("{}={}", kind, value),
+                        "option must be `iommu=viommu|coiommu|off`",
+                    ))
+                }
+            }
+            _ => Err(invalid_value_err(
+                format!("{}={}", kind, value),
+                "option must be `guest-address=<val>` and/or `iommu=<val>`",
+            )),
+        }
+    }
+
+    pub fn get_type(&self) -> VfioType {
+        self.dev_type
+    }
+
+    pub fn guest_address(&self) -> Option<PciAddress> {
+        self.params
+            .get("guest-address")
+            .and_then(|addr| PciAddress::from_str(addr).ok())
+    }
+
+    pub fn iommu_dev_type(&self) -> IommuDevType {
+        if let Some(iommu) = self.params.get("iommu") {
+            if let Ok(v) = IommuDevType::from_str(iommu) {
+                return v;
+            }
+        }
+        IommuDevType::NoIommu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crosvm::config::{DEFAULT_TOUCH_DEVICE_HEIGHT, DEFAULT_TOUCH_DEVICE_WIDTH};
+
+    use argh::FromArgs;
+    use std::path::PathBuf;
+
+    #[cfg(feature = "audio")]
+    use crate::crosvm::config::parse_ac97_options;
+    use crate::crosvm::config::BindMount;
+
+    #[cfg(feature = "audio_cras")]
+    #[test]
+    fn parse_ac97_socket_type() {
+        parse_ac97_options("socket_type=unified").expect("parse should have succeded");
+        parse_ac97_options("socket_type=legacy").expect("parse should have succeded");
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn parse_gpu_options_default_vulkan_support() {
+        {
+            let gpu_params: GpuParameters = parse_gpu_options("backend=virglrenderer").unwrap();
+            assert!(!gpu_params.use_vulkan);
+        }
+
+        #[cfg(feature = "gfxstream")]
+        {
+            let gpu_params: GpuParameters = parse_gpu_options("backend=gfxstream").unwrap();
+            assert!(gpu_params.use_vulkan);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn parse_gpu_options_with_vulkan_specified() {
+        {
+            let gpu_params: GpuParameters = parse_gpu_options("vulkan=true").unwrap();
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let gpu_params: GpuParameters =
+                parse_gpu_options("backend=virglrenderer,vulkan=true").unwrap();
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let gpu_params: GpuParameters =
+                parse_gpu_options("vulkan=true,backend=virglrenderer").unwrap();
+            assert!(gpu_params.use_vulkan);
+        }
+        {
+            let gpu_params: GpuParameters = parse_gpu_options("vulkan=false").unwrap();
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            let gpu_params: GpuParameters =
+                parse_gpu_options("backend=virglrenderer,vulkan=false").unwrap();
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            let gpu_params: GpuParameters =
+                parse_gpu_options("vulkan=false,backend=virglrenderer").unwrap();
+            assert!(!gpu_params.use_vulkan);
+        }
+        {
+            assert!(parse_gpu_options("backend=virglrenderer,vulkan=invalid_value").is_err());
+        }
+        {
+            assert!(parse_gpu_options("vulkan=invalid_value,backend=virglrenderer").is_err());
+>>>>>>> BRANCH (92e4fc aarch64: Don't add goldfish battery to fdt when not present)
         }
     }
 
