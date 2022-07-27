@@ -737,11 +737,6 @@ impl VcpuState {
             // HAXM does not support setting cr8
             cr8: 0,
             efer: self.state._efer as u64,
-            // apic_base is part of haxm_tunnel structure
-            apic_base: 0,
-            // interrupt bitmap is really part of the APIC state, which can be gotten via
-            // get_lapic_state.  TODO: remove from Sregs?
-            interrupt_bitmap: [0; 4],
         }
     }
 
@@ -1067,8 +1062,8 @@ mod tests {
         for entry in &mut cpuid.cpu_id_entries {
             if entry.function == 1 {
                 // Disable XSAVE and OSXSAVE
-                entry.ecx &= !(1 << 26);
-                entry.ecx &= !(1 << 27);
+                entry.cpuid.ecx &= !(1 << 26);
+                entry.cpuid.ecx &= !(1 << 27);
             }
         }
 
