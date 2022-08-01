@@ -6,14 +6,20 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 
-use arch::fdt::{Error, FdtWriter, Result};
+use arch::fdt::Error;
+use arch::fdt::FdtWriter;
+use arch::fdt::Result;
 use arch::SERIAL_ADDR;
-use devices::{PciAddress, PciInterruptPin};
-use hypervisor::{PsciVersion, PSCI_0_2, PSCI_1_0};
-use vm_memory::{GuestAddress, GuestMemory};
-
-// This is the start of DRAM in the physical address space.
-use crate::AARCH64_PHYS_MEM_START;
+// This is a Battery related constant
+use devices::bat::GOLDFISHBAT_MMIO_LEN;
+use devices::pl030::PL030_AMBA_ID;
+use devices::PciAddress;
+use devices::PciInterruptPin;
+use hypervisor::PsciVersion;
+use hypervisor::PSCI_0_2;
+use hypervisor::PSCI_1_0;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 // These are GIC address-space location constants.
 use crate::AARCH64_GIC_CPUI_BASE;
@@ -21,23 +27,18 @@ use crate::AARCH64_GIC_CPUI_SIZE;
 use crate::AARCH64_GIC_DIST_BASE;
 use crate::AARCH64_GIC_DIST_SIZE;
 use crate::AARCH64_GIC_REDIST_SIZE;
-
+// This is the start of DRAM in the physical address space.
+use crate::AARCH64_PHYS_MEM_START;
+use crate::AARCH64_PMU_IRQ;
 // These are RTC related constants
 use crate::AARCH64_RTC_ADDR;
 use crate::AARCH64_RTC_IRQ;
 use crate::AARCH64_RTC_SIZE;
-use devices::pl030::PL030_AMBA_ID;
-
-// This is a Battery related constant
-use devices::bat::GOLDFISHBAT_MMIO_LEN;
-
 // These are serial device related constants.
 use crate::AARCH64_SERIAL_1_3_IRQ;
 use crate::AARCH64_SERIAL_2_4_IRQ;
 use crate::AARCH64_SERIAL_SIZE;
 use crate::AARCH64_SERIAL_SPEED;
-
-use crate::AARCH64_PMU_IRQ;
 
 // This is an arbitrary number to specify the node for the GIC.
 // If we had a more complex interrupt architecture, then we'd need an enum for
@@ -479,9 +480,9 @@ fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> 
     let vmwdt_name = format!("vmwdt@{:x}", vmwdt_cfg.base);
     let reg = [vmwdt_cfg.base, vmwdt_cfg.size];
     let vmwdt_node = fdt.begin_node(&vmwdt_name)?;
-    fdt.property_string("compatible", "qemu,vm-watchdog")?;
+    fdt.property_string("compatible", "qemu,vcpu-stall-detector")?;
     fdt.property_array_u64("reg", &reg)?;
-    fdt.property_u32("clock", vmwdt_cfg.clock_hz)?;
+    fdt.property_u32("clock-frequency", vmwdt_cfg.clock_hz)?;
     fdt.property_u32("timeout-sec", vmwdt_cfg.timeout_sec)?;
     fdt.end_node(vmwdt_node)?;
     Ok(())

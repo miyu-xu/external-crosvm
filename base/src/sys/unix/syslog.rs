@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-pub use super::{target_os::syslog::PlatformSyslog, RawDescriptor};
+pub use super::target_os::syslog::PlatformSyslog;
+pub use super::RawDescriptor;
 
 #[cfg(test)]
 mod tests {
-    use crate::syslog::*;
-
     #[cfg(not(target_os = "android"))]  // ANDROID: b/227789997
     use libc::{shm_open, shm_unlink, O_CREAT, O_EXCL, O_RDWR};
 
@@ -17,6 +16,8 @@ mod tests {
         io::{Read, Seek, SeekFrom},
         os::unix::io::FromRawFd,
     };
+
+    use crate::syslog::*;
 
     #[test]
     fn fds() {
