@@ -1,6 +1,52 @@
 {
   "comments": [
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "562e2e82_da94816f",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-02T00:14:34Z",
+      "side": 1,
+      "message": "ANDROID:",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 7
+      },
+      "revId": "5ea519502618801fcdf5f3469209cc41d4b8b0ed",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "39335637_19591ae1",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-02T00:14:34Z",
+      "side": 1,
+      "message": "Can you upload this now? If it gets accepted and TH isn\u0027t passed yet, this could be updated to be the final version which is taken upstream.\n\nnit: all \u0027ANDROID\u0027 CLs have this property, so calling it out here may imply it is not true of other CLs. I\u0027d admit this callout in that case (though I would be in favor of always including the upstreaming bug in a commit).",
+      "range": {
+        "startLine": 10,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 29
+      },
+      "revId": "5ea519502618801fcdf5f3469209cc41d4b8b0ed",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "a2b4c390_3ea71677",
