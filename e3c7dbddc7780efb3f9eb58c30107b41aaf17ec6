@@ -52,6 +52,29 @@
       "parentUuid": "4c1ebfb4_e639c1b1",
       "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "39665434_4347fdba",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-02T01:18:46Z",
+      "side": 1,
+      "message": "do you remember why this is needed?",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d6a0b274_6f9bb7bc",
+        "filename": "base/src/sys/unix/syslog.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-02T01:18:46Z",
+      "side": 0,
+      "message": "ah, i didn\u0027t manage to upstream this in time :(\n\nsomething like below would be more sync with upstream, but i can fix it up later\n\n```\n#[cfg(test)]\nmod tests {\n    use std::ffi::CStr;\n    use std::fs::File;\n    use std::io::Read;\n    use std::io::Seek;\n    use std::io::SeekFrom;\n    use std::os::unix::io::FromRawFd;\n\n    cfg_if::cfg_if! {\n        // ANDROID: b/227789997\n        if #[cfg(not(target_os \u003d \"android\"))] {\n            use libc::shm_open;\n            use libc::shm_unlink;\n            use libc::O_CREAT;\n            use libc::O_EXCL;\n            use libc::O_RDWR;\n        }\n    }\n\n    use crate::syslog::*;\n    #[test]\n    fn fds() {\n```",
+      "revId": "c7ea63f5896b06b3f254b60d86aa06f9b6f81b87",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
