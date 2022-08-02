@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "03a134cc_49363c24",
+        "filename": "third_party/minigbm",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-02T00:14:59Z",
+      "side": 1,
+      "message": "do we have a bug for updating all of these now that we decided to go with symlinks?",
+      "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
