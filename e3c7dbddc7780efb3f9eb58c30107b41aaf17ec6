@@ -16,6 +16,24 @@
       "message": "do we have a bug for updating all of these now that we decided to go with symlinks?",
       "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c1ebfb4_e639c1b1",
+        "filename": "third_party/minigbm",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-08-02T00:25:49Z",
+      "side": 1,
+      "message": "b/241024906",
+      "parentUuid": "03a134cc_49363c24",
+      "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
