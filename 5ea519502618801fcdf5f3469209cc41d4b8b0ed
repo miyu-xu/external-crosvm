@@ -95,6 +95,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "34f9f8dd_6c26bae8",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-02T01:04:19Z",
+      "side": 1,
+      "message": "You end up having to \"redo the merge\". If you are careful to put only the conflict resolution in the merge commit, then that can end up being easy, depending on how much changed upstream.",
+      "parentUuid": "fb7b0d08_bc5aa837",
+      "range": {
+        "startLine": 10,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 29
+      },
+      "revId": "5ea519502618801fcdf5f3469209cc41d4b8b0ed",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "a2b4c390_3ea71677",
