@@ -18,10 +18,16 @@ pub mod x86_64;
 
 use std::os::raw::c_int;
 
-use serde::{Deserialize, Serialize};
-
-use base::{AsRawDescriptor, Event, MappedRegion, Protection, Result, SafeDescriptor};
-use vm_memory::{GuestAddress, GuestMemory};
+use base::AsRawDescriptor;
+use base::Event;
+use base::MappedRegion;
+use base::Protection;
+use base::Result;
+use base::SafeDescriptor;
+use serde::Deserialize;
+use serde::Serialize;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use crate::aarch64::*;
@@ -213,7 +219,8 @@ impl VcpuRunHandle {
     /// `drop_fn`.
     pub fn new(drop_fn: fn()) -> Self {
         // Creates a probably unique number with a hash of the current thread id and epoch time.
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hash;
+        use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::time::Instant::now().hash(&mut hasher);
         std::thread::current().id().hash(&mut hasher);
@@ -383,7 +390,7 @@ pub enum Datamatch {
 }
 
 /// A reason why a VCPU exited. One of these returns every time `Vcpu::run` is called.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum VcpuExit {
     /// An io instruction needs to be emulated.
     /// vcpu handle_io should be called to handle the io operation

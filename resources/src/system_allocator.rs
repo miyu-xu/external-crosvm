@@ -6,8 +6,12 @@ use std::collections::BTreeMap;
 
 use base::pagesize;
 
-use crate::address_allocator::{AddressAllocator, AddressAllocatorSet};
-use crate::{AddressRange, Alloc, Error, Result};
+use crate::address_allocator::AddressAllocator;
+use crate::address_allocator::AddressAllocatorSet;
+use crate::AddressRange;
+use crate::Alloc;
+use crate::Error;
+use crate::Result;
 
 /// Manages allocating system resources such as address space and interrupt numbers.
 
@@ -413,7 +417,13 @@ mod tests {
             ),
             Ok(())
         );
-        assert_eq!(a.mmio_allocator(MmioType::Low).release(id), Ok(()));
+        assert_eq!(
+            a.mmio_allocator(MmioType::Low).release(id),
+            Ok(AddressRange {
+                start: 0x3000_5000,
+                end: 0x30009fff
+            })
+        );
         assert_eq!(
             a.reserve_mmio(AddressRange {
                 start: 0x3000_2000,

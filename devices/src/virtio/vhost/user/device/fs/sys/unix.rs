@@ -3,18 +3,22 @@
 // found in the LICENSE file.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::{bail, Context};
-use base::{get_max_open_files, RawDescriptor};
+use anyhow::bail;
+use anyhow::Context;
+use base::get_max_open_files;
+use base::RawDescriptor;
 use cros_async::Executor;
-use minijail::{self, Minijail};
+use minijail::Minijail;
+use minijail::{self};
 
-use crate::virtio::vhost::user::device::fs::{FsBackend, Options};
-use crate::virtio::vhost::user::device::{
-    handler::VhostUserBackend,
-    listener::{sys::VhostUserListener, VhostUserListenerTrait},
-};
+use crate::virtio::vhost::user::device::fs::FsBackend;
+use crate::virtio::vhost::user::device::fs::Options;
+use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
+use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 
 fn default_uidmap() -> String {
     let euid = unsafe { libc::geteuid() };
@@ -79,8 +83,6 @@ fn jail_and_fork(
 /// Starts a vhost-user fs device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn start_device(opts: Options) -> anyhow::Result<()> {
-    base::syslog::init().context("Failed to initialize syslog")?;
-
     let ex = Executor::new().context("Failed to create executor")?;
     let fs_device = Box::new(FsBackend::new(&ex, &opts.tag)?);
 

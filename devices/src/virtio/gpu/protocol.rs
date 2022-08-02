@@ -7,32 +7,38 @@
 
 use std::cmp::min;
 use std::convert::From;
-use std::fmt::{self, Display};
-use std::io::{self, Write};
+use std::fmt::Display;
+use std::fmt::{self};
+use std::io::Write;
+use std::io::{self};
 use std::marker::PhantomData;
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of;
+use std::mem::size_of_val;
 use std::str::from_utf8;
 
-use super::super::DescriptorError;
-use super::{Reader, Writer};
 use base::Error as BaseError;
-use base::{ExternalMappingError, TubeError};
-use data_model::{DataInit, Le32, Le64};
+use base::ExternalMappingError;
+use base::TubeError;
+use data_model::DataInit;
+use data_model::Le32;
+use data_model::Le64;
 use gpu_display::GpuDisplayError;
 use remain::sorted;
 use rutabaga_gfx::RutabagaError;
 use thiserror::Error;
-
 use vm_memory::udmabuf::UdmabufError;
 
-pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
-pub const VIRTIO_GPU_F_EDID: u32 = 1;
-pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
-pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
-pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
-/* The following capabilities are not upstreamed. */
-pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
-pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
+pub use super::super::device_constants::gpu::virtio_gpu_config;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_CONTEXT_INIT;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_CREATE_GUEST_HANDLE;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_EDID;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_RESOURCE_BLOB;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_RESOURCE_SYNC;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_RESOURCE_UUID;
+pub use super::super::device_constants::gpu::VIRTIO_GPU_F_VIRGL;
+use super::super::DescriptorError;
+use super::Reader;
+use super::Writer;
 
 pub const VIRTIO_GPU_UNDEFINED: u32 = 0x0;
 
@@ -501,17 +507,6 @@ unsafe impl DataInit for virtio_gpu_resp_resource_plane_info {}
 pub const PLANE_INFO_MAX_COUNT: usize = 4;
 
 pub const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
-
-#[derive(Copy, Clone, Debug, Default)]
-#[repr(C)]
-pub struct virtio_gpu_config {
-    pub events_read: Le32,
-    pub events_clear: Le32,
-    pub num_scanouts: Le32,
-    pub num_capsets: Le32,
-}
-
-unsafe impl DataInit for virtio_gpu_config {}
 
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]

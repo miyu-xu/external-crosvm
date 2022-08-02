@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use anyhow::Result;
-
-#[cfg(feature = "virgl_renderer")]
-use anyhow::bail;
 #[cfg(feature = "virgl_renderer")]
 use std::env;
 #[cfg(feature = "virgl_renderer")]
@@ -18,7 +14,15 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[cfg(feature = "virgl_renderer")]
+<<<<<<< HEAD   (ccd5eb ANDROID: crosvm: Update seccomp policies)
 const MINIGBM_SRC: &str = "../../minigbm";
+=======
+use anyhow::bail;
+use anyhow::Result;
+
+#[cfg(feature = "virgl_renderer")]
+const MINIGBM_SRC: &str = "../third_party/minigbm";
+>>>>>>> BRANCH (528777 integration_tests: Don't run fixture.rs as a test)
 #[cfg(feature = "virgl_renderer")]
 const VIRGLRENDERER_SRC: &str = "../../virglrenderer";
 

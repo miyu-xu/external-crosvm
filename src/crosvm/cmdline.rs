@@ -26,13 +26,6 @@ cfg_if::cfg_if! {
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
-use super::sys::config::parse_gpu_render_server_options;
-#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
-use super::sys::GpuRenderServerParameters;
-
-#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
-use super::config::parse_video_options;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrConfig;
 use arch::Pstore;
@@ -55,26 +48,54 @@ use hypervisor::ProtectionType;
 use resources::AddressRange;
 use vm_control::BatteryType;
 
+#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
+use super::config::parse_video_options;
 #[cfg(feature = "gpu")]
 use super::sys::config::parse_gpu_options;
+#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
+use super::sys::config::parse_gpu_render_server_options;
+#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
+use super::sys::GpuRenderServerParameters;
+use crate::crosvm::config::numbered_disk_option;
 #[cfg(feature = "audio")]
 use crate::crosvm::config::parse_ac97_options;
-use crate::crosvm::config::{
-    numbered_disk_option, parse_battery_options, parse_bus_id_addr, parse_cpu_affinity,
-    parse_cpu_capacity, parse_cpu_set, parse_file_backed_mapping, parse_mmio_address_range,
-    parse_pflash_parameters, parse_pstore, parse_serial_options, parse_stub_pci_parameters,
-    Executable, FileBackedMappingParameters, HypervisorKind, TouchDeviceOption, VhostUserFsOption,
-    VhostUserOption, VhostUserWlOption, VvuOption,
-};
+use crate::crosvm::config::parse_battery_options;
+use crate::crosvm::config::parse_bus_id_addr;
+use crate::crosvm::config::parse_cpu_affinity;
+use crate::crosvm::config::parse_cpu_capacity;
+use crate::crosvm::config::parse_cpu_set;
 #[cfg(feature = "direct")]
-use crate::crosvm::config::{
-    parse_direct_io_options, parse_pcie_root_port_params, DirectIoOption,
-    HostPcieRootPortParameters,
-};
+use crate::crosvm::config::parse_direct_io_options;
+use crate::crosvm::config::parse_file_backed_mapping;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use crate::crosvm::config::{parse_memory_region, parse_userspace_msr_options};
+use crate::crosvm::config::parse_memory_region;
+use crate::crosvm::config::parse_mmio_address_range;
+#[cfg(feature = "direct")]
+use crate::crosvm::config::parse_pcie_root_port_params;
+use crate::crosvm::config::parse_pflash_parameters;
 #[cfg(feature = "plugin")]
-use crate::crosvm::config::{parse_plugin_mount_option, BindMount, GidMap};
+use crate::crosvm::config::parse_plugin_mount_option;
+use crate::crosvm::config::parse_pstore;
+use crate::crosvm::config::parse_serial_options;
+use crate::crosvm::config::parse_stub_pci_parameters;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use crate::crosvm::config::parse_userspace_msr_options;
+#[cfg(feature = "plugin")]
+use crate::crosvm::config::BindMount;
+#[cfg(feature = "direct")]
+use crate::crosvm::config::DirectIoOption;
+use crate::crosvm::config::Executable;
+use crate::crosvm::config::FileBackedMappingParameters;
+#[cfg(feature = "plugin")]
+use crate::crosvm::config::GidMap;
+#[cfg(feature = "direct")]
+use crate::crosvm::config::HostPcieRootPortParameters;
+use crate::crosvm::config::HypervisorKind;
+use crate::crosvm::config::TouchDeviceOption;
+use crate::crosvm::config::VhostUserFsOption;
+use crate::crosvm::config::VhostUserOption;
+use crate::crosvm::config::VhostUserWlOption;
+use crate::crosvm::config::VvuOption;
 
 #[derive(FromArgs)]
 /// crosvm
@@ -96,7 +117,9 @@ pub struct CrosvmCmdlineArgs {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 pub enum CrossPlatformCommands {
+    #[cfg(feature = "balloon")]
     Balloon(BalloonCommand),
+    #[cfg(feature = "balloon")]
     BalloonStats(BalloonStatsCommand),
     Battery(BatteryCommand),
     #[cfg(feature = "composite-disk")]
@@ -857,7 +880,7 @@ pub struct RunCommand {
     #[argh(option, long = "product-channel")]
     /// product channel
     pub product_channel: Option<String>,
-    #[cfg(feature = "crash-report")]
+    #[cfg(windows)]
     #[argh(option, long = "product-name")]
     /// the product name for file paths.
     pub product_name: Option<String>,
@@ -1169,7 +1192,6 @@ pub struct RunCommand {
     #[argh(option, arg_name = "SOCKET_PATH")]
     /// path to a socket for vhost-user net
     pub vhost_user_net: Vec<VhostUserOption>,
-    #[cfg(feature = "audio")]
     #[argh(option, arg_name = "SOCKET_PATH")]
     /// path to a socket for vhost-user snd
     pub vhost_user_snd: Vec<VhostUserOption>,
@@ -1363,8 +1385,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         {
             cfg.ac97_parameters = cmd.ac97;
             cfg.sound = cmd.sound;
-            cfg.vhost_user_snd = cmd.vhost_user_snd;
         }
+        cfg.vhost_user_snd = cmd.vhost_user_snd;
 
         for serial_params in cmd.serial_parameters {
             super::sys::config::check_serial_params(&serial_params)?;
@@ -1475,10 +1497,9 @@ impl TryFrom<RunCommand> for super::config::Config {
         {
             #[cfg(feature = "crash-report")]
             {
-                cfg.product_name = cmd.product_name;
-
                 cfg.crash_pipe_name = cmd.crash_pipe_name;
             }
+            cfg.product_name = cmd.product_name;
             cfg.exit_stats = cmd.exit_stats;
             cfg.host_guid = cmd.host_guid;
             cfg.irq_chip = cmd.irq_chip;
@@ -1492,7 +1513,10 @@ impl TryFrom<RunCommand> for super::config::Config {
                 cfg.process_invariants_data_size = cmd.process_invariants_data_size;
             }
             cfg.pvclock = cmd.pvclock;
-            cfg.service_pipe_name = cmd.service_pipe_name;
+            #[cfg(feature = "kiwi")]
+            {
+                cfg.service_pipe_name = cmd.service_pipe_name;
+            }
             #[cfg(feature = "slirp-ring-capture")]
             {
                 cfg.slirp_capture_file = cmd.slirp_capture_file;
@@ -1709,7 +1733,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                 if !cmd.gpu_display.is_empty() {
                     cfg.gpu_parameters
                         .get_or_insert_with(Default::default)
-                        .displays
+                        .display_params
                         .extend(cmd.gpu_display);
                 }
             }
@@ -1741,7 +1765,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                     "unprotected-vm-with-firmware path should be an existing file".to_string(),
                 );
             }
-            cfg.protected_vm = ProtectionType::Unprotected;
+            cfg.protected_vm = ProtectionType::UnprotectedWithFirmware;
             // Balloon and USB devices only work for unprotected VMs.
             cfg.balloon = false;
             cfg.usb = false;

@@ -12,45 +12,85 @@
 
 use std::fmt;
 use std::fs::File;
+use std::io::IoSlice;
+use std::io::Read;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
+use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::{anyhow, bail, Context};
-use base::{
-    error, info, AsRawDescriptor, Event, EventToken, EventType, FromRawDescriptor,
-    IntoRawDescriptor, Protection, RawDescriptor, SafeDescriptor, Tube, WaitContext,
-};
-use data_model::{DataInit, Le32};
-use libc::{recv, MSG_DONTWAIT, MSG_PEEK};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
+use base::error;
+use base::info;
+use base::AsRawDescriptor;
+use base::Event;
+use base::EventToken;
+use base::EventType;
+use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
+use base::Protection;
+use base::RawDescriptor;
+use base::SafeDescriptor;
+use base::ScmSocket;
+use base::Tube;
+use base::WaitContext;
+use data_model::DataInit;
+use data_model::Le32;
+use libc::recv;
+use libc::MSG_DONTWAIT;
+use libc::MSG_PEEK;
 use resources::Alloc;
 use sync::Mutex;
 use uuid::Uuid;
-use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
+use vm_control::MemSlot;
+use vm_control::VmMemoryDestination;
+use vm_control::VmMemoryRequest;
+use vm_control::VmMemoryResponse;
+use vm_control::VmMemorySource;
+use vm_memory::udmabuf::UdmabufDriver;
+use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-use vmm_vhost::{
-    connection::socket::Endpoint as SocketEndpoint,
-    connection::EndpointExt,
-    message::{
-        MasterReq, Req, VhostUserMemory, VhostUserMemoryRegion, VhostUserMsgHeader,
-        VhostUserMsgValidator, VhostUserU64,
-    },
-    Protocol, SlaveReqHelper,
-};
+use vmm_vhost::connection::socket::Endpoint as SocketEndpoint;
+use vmm_vhost::connection::EndpointExt;
+use vmm_vhost::message::MasterReq;
+use vmm_vhost::message::Req;
+use vmm_vhost::message::SlaveReq;
+use vmm_vhost::message::VhostUserMemory;
+use vmm_vhost::message::VhostUserMemoryRegion;
+use vmm_vhost::message::VhostUserMsgHeader;
+use vmm_vhost::message::VhostUserMsgValidator;
+use vmm_vhost::message::VhostUserShmemMapMsg;
+use vmm_vhost::message::VhostUserShmemMapMsgFlags;
+use vmm_vhost::message::VhostUserU64;
+use vmm_vhost::Protocol;
+use vmm_vhost::SlaveReqHelper;
 
-use crate::virtio::{
-    copy_config, DescriptorChain, DeviceType, Interrupt, PciCapabilityType, Queue, Reader,
-    SignalableInterrupt, VirtioDevice, VirtioPciCap, Writer,
-};
+use crate::pci::PciBarConfiguration;
+use crate::pci::PciBarIndex;
+use crate::pci::PciBarPrefetchable;
+use crate::pci::PciBarRegionType;
+use crate::pci::PciCapability;
+use crate::pci::PciCapabilityID;
+use crate::virtio::copy_config;
+use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
+use crate::virtio::vhost::vhost_body_from_message_bytes;
+use crate::virtio::vhost::vhost_header_from_bytes;
+use crate::virtio::DescriptorChain;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::PciCapabilityType;
+use crate::virtio::Queue;
+use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
+use crate::virtio::VirtioDevice;
+use crate::virtio::VirtioPciCap;
+use crate::virtio::Writer;
+use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
+use crate::virtio::VIRTIO_MSI_NO_VECTOR;
 use crate::PciAddress;
-use crate::{
-    pci::{
-        PciBarConfiguration, PciBarIndex, PciBarPrefetchable, PciBarRegionType, PciCapability,
-        PciCapabilityID,
-    },
-    virtio::{VIRTIO_F_ACCESS_PLATFORM, VIRTIO_MSI_NO_VECTOR},
-};
 
 // Note: There are two sets of queues that will be mentioned here. 1st set is
 // for this Virtio PCI device itself. 2nd set is the actual device backends
@@ -179,14 +219,6 @@ fn check_attached_files(
     }
 }
 
-// Check if `hdr` is valid.
-fn is_header_valid(hdr: &VhostUserMsgHeader<MasterReq>) -> bool {
-    if hdr.is_reply() || hdr.get_version() != 0x1 {
-        return false;
-    }
-    true
-}
-
 // Payload sent by the sibling in a |SET_VRING_KICK| message.
 #[derive(Default)]
 struct KickData {
@@ -232,12 +264,23 @@ struct Worker {
 
     // Stores memory regions that the worker has asked the main thread to register.
     registered_memory: Vec<MemSlot>,
+
+    // Channel for backend mesages.
+    slave_req_fd: Option<SocketEndpoint<SlaveReq>>,
+
+    // Driver for exporting memory as udmabufs for shared memory regions.
+    udmabuf_driver: Option<UdmabufDriver>,
+
+    // Iommu to translate IOVAs into GPAs for shared memory regions.
+    iommu: Arc<Mutex<IpcMemoryMapper>>,
 }
 
-#[derive(EventToken, Debug, Clone)]
+#[derive(EventToken, Debug, Clone, PartialEq)]
 enum Token {
     // Data is available on the Vhost-user sibling socket.
     SiblingSocket,
+    // Data is available on the vhost-user backend socket.
+    BackendSocket,
     // The device backend has made a read buffer available.
     RxQueue,
     // The device backend has sent a buffer to the |Worker::tx_queue|.
@@ -274,7 +317,10 @@ enum ExitReason {
 }
 
 // Trait used to process an incoming vhost-user message
-trait Action: Req {
+trait RxAction: Req {
+    // Checks whether the header is valid
+    fn is_header_valid(hdr: &VhostUserMsgHeader<Self>) -> bool;
+
     // Process a message before forwarding it on to the virtqueue
     fn process_message(
         worker: &mut Worker,
@@ -291,7 +337,14 @@ trait Action: Req {
     fn handle_failure(worker: &mut Worker, hdr: &VhostUserMsgHeader<Self>) -> Result<()>;
 }
 
-impl Action for MasterReq {
+impl RxAction for MasterReq {
+    fn is_header_valid(hdr: &VhostUserMsgHeader<MasterReq>) -> bool {
+        if hdr.is_reply() || hdr.get_version() != 0x1 {
+            return false;
+        }
+        true
+    }
+
     fn process_message(
         worker: &mut Worker,
         wait_ctx: &mut WaitContext<Token>,
@@ -304,9 +357,10 @@ impl Action for MasterReq {
             return Ok(());
         }
         match hdr.get_code() {
-            MasterReq::SET_MEM_TABLE => worker.set_mem_table(hdr, payload, files),
-            MasterReq::SET_VRING_CALL => worker.set_vring_call(hdr, payload, files),
-            MasterReq::SET_VRING_KICK => worker.set_vring_kick(wait_ctx, hdr, payload, files),
+            MasterReq::SET_MEM_TABLE => worker.set_mem_table(payload, files),
+            MasterReq::SET_VRING_CALL => worker.set_vring_call(payload, files),
+            MasterReq::SET_VRING_KICK => worker.set_vring_kick(wait_ctx, payload, files),
+            MasterReq::SET_SLAVE_REQ_FD => worker.set_slave_req_fd(wait_ctx, files),
             _ => unimplemented!("unimplemented action message: {:?}", hdr.get_code()),
         }
     }
@@ -320,6 +374,36 @@ impl Action for MasterReq {
             .slave_req_helper
             .send_ack_message(hdr, false)
             .context("failed to send ack")
+    }
+}
+
+impl RxAction for SlaveReq {
+    fn is_header_valid(hdr: &VhostUserMsgHeader<SlaveReq>) -> bool {
+        if !hdr.is_reply() || hdr.get_version() != 0x1 {
+            return false;
+        }
+        true
+    }
+
+    fn process_message(
+        _worker: &mut Worker,
+        _wait_ctx: &mut WaitContext<Token>,
+        _hdr: &VhostUserMsgHeader<SlaveReq>,
+        _payload: &[u8],
+        _files: Option<Vec<File>>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_ep(worker: &mut Worker) -> &mut SocketEndpoint<SlaveReq> {
+        // We can only be here if we slave_req_fd became readable, so it must exist.
+        worker.slave_req_fd.as_mut().unwrap()
+    }
+
+    fn handle_failure(_worker: &mut Worker, hdr: &VhostUserMsgHeader<SlaveReq>) -> Result<()> {
+        // There's nothing we can do to directly handle this failure here.
+        error!("failed to process reply to backend {:?}", hdr.get_code());
+        Ok(())
     }
 }
 
@@ -353,20 +437,19 @@ impl Worker {
             let events = wait_ctx.wait().context("failed to wait for events")?;
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
-                    Token::SiblingSocket => {
-                        match self.process_rx::<MasterReq>(&mut wait_ctx) {
+                    Token::SiblingSocket | Token::BackendSocket => {
+                        let res = if event.token == Token::SiblingSocket {
+                            self.process_rx::<MasterReq>(&mut wait_ctx)
+                        } else {
+                            self.process_rx::<SlaveReq>(&mut wait_ctx)
+                        };
+                        match res {
                             Ok(RxqStatus::Processed) => (),
                             Ok(RxqStatus::DescriptorsExhausted) => {
                                 // If the driver has no Rx buffers left, then no
                                 // point monitoring the Vhost-user sibling for data. There
                                 // would be no way to send it to the device backend.
-                                wait_ctx
-                                    .modify(
-                                        &self.slave_req_helper,
-                                        EventType::None,
-                                        Token::SiblingSocket,
-                                    )
-                                    .context("failed to disable EPOLLIN on sibling VM socket fd")?;
+                                self.set_rx_polling_state(&mut wait_ctx, EventType::None)?;
                                 sibling_socket_polling_enabled = false;
                             }
                             Ok(RxqStatus::Disconnected) => {
@@ -383,13 +466,7 @@ impl Worker {
                         // Rx buffers are available, now we should monitor the
                         // Vhost-user sibling connection for data.
                         if !sibling_socket_polling_enabled {
-                            wait_ctx
-                                .modify(
-                                    &self.slave_req_helper,
-                                    EventType::Read,
-                                    Token::SiblingSocket,
-                                )
-                                .context("failed to add kick event to the epoll set")?;
+                            self.set_rx_polling_state(&mut wait_ctx, EventType::Read)?;
                             sibling_socket_polling_enabled = true;
                         }
                     }
@@ -397,7 +474,8 @@ impl Worker {
                         if let Err(e) = tx_queue_evt.read() {
                             bail!("error reading tx queue event: {}", e);
                         }
-                        self.process_tx();
+                        self.process_tx()
+                            .context("error processing tx queue event")?;
                     }
                     Token::SiblingKick { index } => {
                         if let Err(e) = self.process_sibling_kick(index) {
@@ -422,8 +500,32 @@ impl Worker {
         }
     }
 
+    // Set the target event to poll for on rx descriptors.
+    fn set_rx_polling_state(
+        &mut self,
+        wait_ctx: &mut WaitContext<Token>,
+        target_event: EventType,
+    ) -> Result<()> {
+        let fds = std::iter::once((
+            &self.slave_req_helper as &dyn AsRawDescriptor,
+            Token::SiblingSocket,
+        ))
+        .chain(
+            self.slave_req_fd
+                .as_ref()
+                .map(|fd| (fd as &dyn AsRawDescriptor, Token::BackendSocket))
+                .into_iter(),
+        );
+        for (fd, token) in fds {
+            wait_ctx
+                .modify(fd, target_event, token)
+                .context("failed to set EPOLLIN on socket fd")?;
+        }
+        Ok(())
+    }
+
     // Processes data from the Vhost-user sibling and forwards to the driver via Rx buffers.
-    fn process_rx<R: Action>(&mut self, wait_ctx: &mut WaitContext<Token>) -> Result<RxqStatus> {
+    fn process_rx<R: RxAction>(&mut self, wait_ctx: &mut WaitContext<Token>) -> Result<RxqStatus> {
         // Keep looping until -
         // - No more Rx buffers are available on the Rx queue. OR
         // - No more data is available on the Vhost-user sibling socket (checked via a
@@ -479,7 +581,11 @@ impl Worker {
 
             let index = desc.index;
             let bytes_written = {
-                let res = R::process_message(self, wait_ctx, &hdr, &buf, files);
+                let res = if !R::is_header_valid(&hdr) {
+                    Err(anyhow!("invalid header for {:?}", hdr.get_code()))
+                } else {
+                    R::process_message(self, wait_ctx, &hdr, &buf, files)
+                };
                 // If the "action" in response to the action messages
                 // failed then no bytes have been written to the virt
                 // queue. Else, the action is done. Now forward the
@@ -515,7 +621,7 @@ impl Worker {
     }
 
     // Returns the sibling connection status.
-    fn check_sibling_connection<R: Action>(&mut self) -> ConnStatus {
+    fn check_sibling_connection<R: RxAction>(&mut self) -> ConnStatus {
         // Peek if any data is left on the Vhost-user sibling socket. If no, then
         // nothing to forwad to the device backend.
         let mut peek_buf = [0; 1];
@@ -543,7 +649,10 @@ impl Worker {
     }
 
     // Returns any data attached to a Vhost-user sibling message.
-    fn get_sibling_msg_data<R: Action>(&mut self, hdr: &VhostUserMsgHeader<R>) -> Result<Vec<u8>> {
+    fn get_sibling_msg_data<R: RxAction>(
+        &mut self,
+        hdr: &VhostUserMsgHeader<R>,
+    ) -> Result<Vec<u8>> {
         let buf = match hdr.get_size() {
             0 => vec![0u8; 0],
             len => {
@@ -600,16 +709,7 @@ impl Worker {
     // this function both this VMM and the sibling have two regions of
     // virtual memory pointing to the same physical page. These regions will be
     // accessed by the device VM and the silbing VM.
-    fn set_mem_table(
-        &mut self,
-        hdr: &VhostUserMsgHeader<MasterReq>,
-        payload: &[u8],
-        files: Option<Vec<File>>,
-    ) -> Result<()> {
-        if !is_header_valid(hdr) {
-            bail!("invalid header for SET_MEM_TABLE");
-        }
-
+    fn set_mem_table(&mut self, payload: &[u8], files: Option<Vec<File>>) -> Result<()> {
         // `hdr` is followed by a `payload`. `payload` consists of metadata about the number of
         // memory regions and then memory regions themeselves. The memory regions structs consist of
         // metadata about actual device related memory passed from the sibling. Ensure that the size
@@ -724,16 +824,7 @@ impl Worker {
     }
 
     // Handles |SET_VRING_CALL|.
-    fn set_vring_call(
-        &mut self,
-        hdr: &VhostUserMsgHeader<MasterReq>,
-        payload: &[u8],
-        files: Option<Vec<File>>,
-    ) -> Result<()> {
-        if !is_header_valid(hdr) {
-            bail!("invalid header for SET_VRING_CALL");
-        }
-
+    fn set_vring_call(&mut self, payload: &[u8], files: Option<Vec<File>>) -> Result<()> {
         let payload_size = payload.len();
         if payload_size != std::mem::size_of::<VhostUserU64>() {
             bail!("wrong payload size {} for SET_VRING_CALL", payload_size);
@@ -762,14 +853,9 @@ impl Worker {
     fn set_vring_kick(
         &mut self,
         wait_ctx: &mut WaitContext<Token>,
-        hdr: &VhostUserMsgHeader<MasterReq>,
         payload: &[u8],
         files: Option<Vec<File>>,
     ) -> Result<()> {
-        if !is_header_valid(hdr) {
-            bail!("invalid header for SET_VRING_KICK");
-        }
-
         let payload_size = payload.len();
         if payload_size != std::mem::size_of::<VhostUserU64>() {
             bail!("wrong payload size {} for SET_VRING_KICK", payload_size);
@@ -803,23 +889,132 @@ impl Worker {
         Ok(())
     }
 
+    // Handles |SET_SLAVE_REQ_FD|. Prepares the proxy to handle backend messages by
+    // proxying messages/replies to/from the slave_req_fd.
+    fn set_slave_req_fd(
+        &mut self,
+        wait_ctx: &mut WaitContext<Token>,
+        files: Option<Vec<File>>,
+    ) -> Result<()> {
+        // Validated by check_attached_files
+        let mut files = files.expect("missing files");
+        let file = files.pop().context("missing file for set_slave_req_fd")?;
+        if !files.is_empty() {
+            bail!("invalid file count for SET_SLAVE_REQ_FD {}", files.len());
+        }
+
+        self.udmabuf_driver = Some(UdmabufDriver::new().context("failed to get udmabuf driver")?);
+        // Safe because we own the file.
+        let socket = unsafe { UnixStream::from_raw_descriptor(file.into_raw_descriptor()) };
+
+        wait_ctx
+            .add(&socket, Token::BackendSocket)
+            .context("failed to set EPOLLIN on socket fd")?;
+
+        self.slave_req_fd = Some(SocketEndpoint::from(socket));
+        Ok(())
+    }
+
+    // Exports the udmabuf necessary to fulfil the |msg| mapping request.
+    fn export_udmabuf(&mut self, msg: &VhostUserShmemMapMsg) -> Result<Box<dyn AsRawDescriptor>> {
+        let regions = self
+            .iommu
+            .lock()
+            .translate(msg.fd_offset, msg.len)
+            .context("failed to translate")?;
+
+        let prot = match (
+            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_R),
+            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_W),
+        ) {
+            (true, true) => Protection::read_write(),
+            (true, false) => Protection::read(),
+            (false, true) => Protection::write(),
+            (false, false) => bail!("unsupported protection"),
+        };
+        let regions = regions
+            .iter()
+            .map(|r| {
+                if !r.prot.allows(&prot) {
+                    Err(anyhow!("invalid permissions"))
+                } else {
+                    Ok((r.gpa, r.len as usize))
+                }
+            })
+            .collect::<Result<Vec<(GuestAddress, usize)>>>()?;
+
+        // udmabuf_driver is set at the same time as slave_req_fd, so if we've
+        // received a message on slave_req_fd, udmabuf_driver must be present.
+        let udmabuf = self
+            .udmabuf_driver
+            .as_ref()
+            .expect("missing udmabuf driver")
+            .create_udmabuf(&self.mem, &regions)
+            .context("failed to create udmabuf")?;
+
+        Ok(Box::new(udmabuf))
+    }
+
+    fn process_message_from_backend(
+        &mut self,
+        mut msg: Vec<u8>,
+    ) -> Result<(Vec<u8>, Option<Box<dyn AsRawDescriptor>>)> {
+        // The message was already parsed as a MasterReq, so this can't fail
+        let hdr = vhost_header_from_bytes::<SlaveReq>(&msg).unwrap();
+
+        let fd = if hdr.get_code() == SlaveReq::SHMEM_MAP {
+            let mut msg = vhost_body_from_message_bytes(&mut msg).context("incomplete message")?;
+            let fd = self.export_udmabuf(msg).context("failed to export fd")?;
+            // VVU reuses the fd_offset field for the IOVA of the buffer. The
+            // udmabuf corresponds to exactly what should be mapped, so set
+            // fd_offset to 0 for regular vhost-user.
+            msg.fd_offset = 0;
+            Some(fd)
+        } else {
+            None
+        };
+        Ok((msg, fd))
+    }
+
     // Processes data from the device backend (via virtio Tx queue) and forward it to
     // the Vhost-user sibling over its socket connection.
-    fn process_tx(&mut self) {
+    fn process_tx(&mut self) -> Result<()> {
         while let Some(desc_chain) = self.tx_queue.pop(&self.mem) {
             let index = desc_chain.index;
             match Reader::new(self.mem.clone(), desc_chain) {
                 Ok(mut reader) => {
                     let expected_count = reader.available_bytes();
-                    match reader.read_to(self.slave_req_helper.as_mut().as_mut(), expected_count) {
-                        Ok(count) => {
-                            // The |reader| guarantees that all the available data is read.
-                            if count != expected_count {
-                                error!("wrote only {} bytes of {}", count, expected_count);
-                            }
-                        }
-                        Err(e) => error!("failed to write message to vhost-vmm: {}", e),
+                    let mut msg = vec![0; expected_count];
+                    reader
+                        .read_exact(&mut msg)
+                        .context("virtqueue read failed")?;
+
+                    // This may be a SlaveReq, but the bytes of any valid SlaveReq
+                    // are also a valid MasterReq.
+                    let hdr =
+                        vhost_header_from_bytes::<MasterReq>(&msg).context("message too short")?;
+                    let (dest, (msg, fd)) = if hdr.is_reply() {
+                        (self.slave_req_helper.as_mut().as_mut(), (msg, None))
+                    } else {
+                        let processed_msg = self.process_message_from_backend(msg)?;
+                        (
+                            self.slave_req_fd
+                                .as_mut()
+                                .context("missing slave_req_fd")?
+                                .as_mut(),
+                            processed_msg,
+                        )
+                    };
+
+                    if let Some(fd) = fd {
+                        let written = dest
+                            .send_with_fd(&[IoSlice::new(msg.as_slice())], fd.as_raw_descriptor())
+                            .context("failed to foward message")?;
+                        dest.write_all(&msg[written..])
+                    } else {
+                        dest.write_all(msg.as_slice())
                     }
+                    .context("failed to foward message")?;
                 }
                 Err(e) => error!("failed to create Reader: {}", e),
             }
@@ -828,6 +1023,7 @@ impl Worker {
                 panic!("failed inject tx queue interrupt");
             }
         }
+        Ok(())
     }
 
     // Processes a sibling kick for the |index|-th vring and injects the corresponding interrupt
@@ -942,6 +1138,8 @@ enum State {
         tx_queue: Queue,
         rx_queue_evt: Event,
         tx_queue_evt: Event,
+
+        iommu: Arc<Mutex<IpcMemoryMapper>>,
     },
     /// The worker thread is running.
     Running {
@@ -1004,6 +1202,8 @@ pub struct VirtioVhostUser {
     // The value is wrapped with `Arc<Mutex<_>>` because it can be modified from the worker thread
     // as well as the main device thread.
     state: Arc<Mutex<State>>,
+
+    iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
 }
 
 impl VirtioVhostUser {
@@ -1035,6 +1235,7 @@ impl VirtioVhostUser {
                 listener,
             })),
             pci_address,
+            iommu: None,
         })
     }
 
@@ -1180,6 +1381,7 @@ impl VirtioVhostUser {
             tx_queue,
             rx_queue_evt,
             tx_queue_evt,
+            iommu,
         ) = match old_state {
             State::Activated {
                 main_process_tube,
@@ -1190,6 +1392,7 @@ impl VirtioVhostUser {
                 tx_queue,
                 rx_queue_evt,
                 tx_queue_evt,
+                iommu,
             } => (
                 main_process_tube,
                 listener,
@@ -1199,6 +1402,7 @@ impl VirtioVhostUser {
                 tx_queue,
                 rx_queue_evt,
                 tx_queue_evt,
+                iommu,
             ),
             s => {
                 // Unreachable because we've checked the state at the beginning of this function.
@@ -1256,6 +1460,9 @@ impl VirtioVhostUser {
                     vrings,
                     slave_req_helper,
                     registered_memory: Vec::new(),
+                    slave_req_fd: None,
+                    udmabuf_driver: None,
+                    iommu: iommu.clone(),
                 };
                 match worker.run(
                     rx_queue_evt.try_clone().unwrap(),
@@ -1291,6 +1498,7 @@ impl VirtioVhostUser {
                             tx_queue,
                             rx_queue_evt,
                             tx_queue_evt,
+                            iommu,
                         };
 
                         Ok(())
@@ -1460,6 +1668,10 @@ impl VirtioDevice for VirtioVhostUser {
         )]
     }
 
+    fn set_iommu(&mut self, iommu: &Arc<Mutex<IpcMemoryMapper>>) {
+        self.iommu = Some(iommu.clone());
+    }
+
     fn activate(
         &mut self,
         mem: GuestMemory,
@@ -1490,6 +1702,7 @@ impl VirtioDevice for VirtioVhostUser {
                     tx_queue: queues.remove(0),
                     rx_queue_evt: queue_evts.remove(0),
                     tx_queue_evt: queue_evts.remove(0),
+                    iommu: self.iommu.take().unwrap(),
                 };
             }
             s => {

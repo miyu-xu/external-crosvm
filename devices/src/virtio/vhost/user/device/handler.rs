@@ -47,39 +47,65 @@
 
 pub(super) mod sys;
 
-use sys::Doorbell;
-
 use std::collections::BTreeMap;
-use std::convert::{From, TryFrom};
+use std::convert::From;
+use std::convert::TryFrom;
 use std::fs::File;
 use std::num::Wrapping;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
-use base::{
-    error, info, AsRawDescriptor, Event, FromRawDescriptor, IntoRawDescriptor, Protection,
-    SafeDescriptor, SharedMemory,
-};
-use cros_async::{AsyncWrapper, Executor};
-use sync::Mutex;
-use vm_control::VmMemorySource;
-use vm_memory::{GuestAddress, GuestMemory, MemoryRegion};
-use vmm_vhost::{
-    connection::Endpoint,
-    message::{
-        MasterReq, SlaveReq, VhostSharedMemoryRegion, VhostUserConfigFlags, VhostUserInflight,
-        VhostUserMemoryRegion, VhostUserProtocolFeatures, VhostUserShmemMapMsg,
-        VhostUserShmemMapMsgFlags, VhostUserShmemUnmapMsg, VhostUserSingleMemoryRegion,
-        VhostUserVirtioFeatures, VhostUserVringAddrFlags, VhostUserVringState,
-    },
-    Error as VhostError, Protocol, Result as VhostResult, Slave, SlaveReqHandler,
-    VhostUserMasterReqHandler, VhostUserSlaveReqHandler, VhostUserSlaveReqHandlerMut,
-};
-
-use crate::virtio::{Queue, SharedMemoryMapper, SharedMemoryRegion, SignalableInterrupt};
-
+use anyhow::bail;
+use anyhow::Context;
+use anyhow::Result;
 #[cfg(unix)]
-use {base::clear_fd_flags, std::os::unix::io::AsRawFd};
+use base::clear_fd_flags;
+use base::error;
+use base::info;
+use base::AsRawDescriptor;
+use base::Event;
+use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
+use base::Protection;
+use base::SafeDescriptor;
+use base::SharedMemory;
+use cros_async::AsyncWrapper;
+use cros_async::Executor;
+use sync::Mutex;
+use sys::Doorbell;
+use vm_control::VmMemorySource;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
+use vm_memory::MemoryRegion;
+use vmm_vhost::connection::Endpoint;
+use vmm_vhost::message::MasterReq;
+use vmm_vhost::message::SlaveReq;
+use vmm_vhost::message::VhostSharedMemoryRegion;
+use vmm_vhost::message::VhostUserConfigFlags;
+use vmm_vhost::message::VhostUserInflight;
+use vmm_vhost::message::VhostUserMemoryRegion;
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserShmemMapMsg;
+use vmm_vhost::message::VhostUserShmemMapMsgFlags;
+use vmm_vhost::message::VhostUserShmemUnmapMsg;
+use vmm_vhost::message::VhostUserSingleMemoryRegion;
+use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::message::VhostUserVringAddrFlags;
+use vmm_vhost::message::VhostUserVringState;
+use vmm_vhost::Error as VhostError;
+use vmm_vhost::Protocol;
+use vmm_vhost::Result as VhostResult;
+use vmm_vhost::Slave;
+use vmm_vhost::SlaveReqHandler;
+use vmm_vhost::VhostUserMasterReqHandler;
+use vmm_vhost::VhostUserSlaveReqHandler;
+use vmm_vhost::VhostUserSlaveReqHandlerMut;
+
+use crate::virtio::Queue;
+use crate::virtio::SharedMemoryMapper;
+use crate::virtio::SharedMemoryRegion;
+use crate::virtio::SignalableInterrupt;
 
 /// An event to deliver an interrupt to the guest.
 ///
@@ -166,11 +192,6 @@ pub trait VhostUserBackend {
 
     /// writes `data` to this device's configuration space at `offset`.
     fn write_config(&self, _offset: u64, _data: &[u8]) {}
-
-    /// Sets the channel for device-specific communication.
-    fn set_device_request_channel(&mut self, _channel: File) -> anyhow::Result<()> {
-        Ok(())
-    }
 
     /// Indicates that the backend should start processing requests for virtio queue number `idx`.
     /// This method must not block the current thread so device backends should either spawn an
@@ -678,18 +699,8 @@ impl<O: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for DeviceRequestHandl
         Ok(())
     }
 
-    #[allow(unused, dead_code, clippy::diverging_sub_expression)]
-    fn set_slave_req_fd(&mut self, file: File) {
-        let shmid = match self.shmid {
-            Some(shmid) => shmid,
-            None => {
-                if let Err(e) = self.backend.set_device_request_channel(file) {
-                    error!("failed to set device request channel: {}", e);
-                }
-                return;
-            }
-        };
-        let ep: Box<dyn Endpoint<SlaveReq>> = todo!();
+    fn set_slave_req_fd(&mut self, ep: Box<dyn Endpoint<SlaveReq>>) {
+        let shmid = self.shmid.expect("unexpected slave_req_fd");
         let frontend = Slave::new(ep);
         self.backend
             .set_shared_memory_mapper(Box::new(VhostShmemMapper {
@@ -791,18 +802,20 @@ impl SharedMemoryMapper for VhostShmemMapper {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[cfg(unix)]
     use std::sync::mpsc::channel;
     #[cfg(unix)]
     use std::sync::Barrier;
 
-    use anyhow::{anyhow, bail};
+    use anyhow::anyhow;
+    use anyhow::bail;
     use data_model::DataInit;
     #[cfg(unix)]
-    use tempfile::{Builder, TempDir};
+    use tempfile::Builder;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
+    use super::*;
     use crate::virtio::vhost::user::vmm::VhostUserHandler;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -910,7 +923,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_vhost_user_activate() {
-        use vmm_vhost::{connection::socket::Listener as SocketListener, SlaveListener};
+        use vmm_vhost::connection::socket::Listener as SocketListener;
+        use vmm_vhost::SlaveListener;
 
         const QUEUES_NUM: usize = 2;
 
