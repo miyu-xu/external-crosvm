@@ -47,7 +47,9 @@ use std::error;
 use std::fmt::{self, Display};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
-use std::os::unix::io::RawFd;
+use std::os::unix::io::RawFd as RawDescriptor;
+#[cfg(windows)]
+use std::os::windows::io::RawHandle as RawDescriptor;
 use std::result::Result;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -139,6 +141,12 @@ pub enum Error {
     Unimplemented,
 }
 
+/// `StreamSourceGenerator` is a trait used to abstract types that create [`StreamSource`].
+/// It can be used when multiple types of `StreamSource` are needed.
+pub trait StreamSourceGenerator: Sync + Send {
+    fn generate(&self) -> Result<Box<dyn StreamSource>, BoxError>;
+}
+
 /// `StreamSource` creates streams for playback or capture of audio.
 pub trait StreamSource: Send {
     /// Returns a stream control and buffer generator object. These are separate as the buffer
@@ -227,8 +235,7 @@ pub trait StreamSource: Send {
 
     /// Returns any open file descriptors needed by the implementor. The FD list helps users of the
     /// StreamSource enter Linux jails making sure not to close needed FDs.
-    #[cfg(unix)]
-    fn keep_fds(&self) -> Option<Vec<RawFd>> {
+    fn keep_rds(&self) -> Option<Vec<RawDescriptor>> {
         None
     }
 }
@@ -325,6 +332,8 @@ pub trait AsyncBufferCommit {
 pub enum PlaybackBufferError {
     #[error("Invalid buffer length")]
     InvalidLength,
+    #[error("Slicing of playback buffer out of bounds")]
+    SliceOutOfBounds,
 }
 
 /// `AudioBuffer` is one buffer that holds buffer_size audio frames.
@@ -443,6 +452,26 @@ impl<'a> PlaybackBuffer<'a> {
     pub fn commit(&mut self) {
         self.drop
             .commit(self.buffer.offset / self.buffer.frame_size);
+    }
+
+    /// Writes up to `size` bytes directly to this buffer inside of the given callback function
+    /// with a buffer size error check.
+    ///
+    /// TODO(b/238933737): Investigate removing this method for Windows when
+    /// switching from Ac97 to Virtio-Snd
+    pub fn copy_cb_with_checks<F: FnOnce(&mut [u8])>(
+        &mut self,
+        size: usize,
+        cb: F,
+    ) -> Result<(), PlaybackBufferError> {
+        // only write complete frames.
+        let len = size / self.buffer.frame_size * self.buffer.frame_size;
+        if self.buffer.offset + len > self.buffer.buffer.len() {
+            return Err(PlaybackBufferError::SliceOutOfBounds);
+        }
+        cb(&mut self.buffer.buffer[self.buffer.offset..(self.buffer.offset + len)]);
+        self.buffer.offset += len;
+        Ok(())
     }
 
     /// Writes up to `size` bytes directly to this buffer inside of the given callback function.
@@ -684,6 +713,22 @@ impl StreamSource for NoopStreamSource {
     }
 }
 
+/// `NoopStreamSourceGenerator` is a struct that implements [`StreamSourceGenerator`]
+/// to generate [`NoopStreamSource`].
+pub struct NoopStreamSourceGenerator;
+
+impl NoopStreamSourceGenerator {
+    pub fn new() -> Self {
+        NoopStreamSourceGenerator {}
+    }
+}
+
+impl StreamSourceGenerator for NoopStreamSourceGenerator {
+    fn generate(&self) -> Result<Box<dyn StreamSource>, BoxError> {
+        Ok(Box::new(NoopStreamSource))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::async_api::test::TestExecutor;
@@ -915,5 +960,13 @@ mod tests {
 
         let ex = TestExecutor {};
         this_test(&ex).now_or_never();
+    }
+
+    #[test]
+    fn generate_noop_stream_source() {
+        let generator: Box<dyn StreamSourceGenerator> = Box::new(NoopStreamSourceGenerator::new());
+        generator
+            .generate()
+            .expect("failed to generate stream source");
     }
 }

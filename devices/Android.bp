@@ -37,6 +37,7 @@ rust_test {
         "libballoon_control",
         "libbase_rust",
         "libbit_field",
+        "libbytes",
         "libcfg_if",
         "libcrc32fast",
         "libcros_async",
@@ -65,6 +66,7 @@ rust_test {
         "libsync_rust",
         "libtempfile",
         "libthiserror",
+        "libtracing",
         "libusb_util",
         "libuuid",
         "libvfio_sys",
@@ -94,7 +96,10 @@ rust_test {
             ],
         },
         android: {
-            shared_libs: ["libdrm"],
+            shared_libs: [
+                "libcutils",
+                "libdrm",
+            ],
             static_libs: [
                 "libepoxy",
                 "libgbm",
@@ -152,6 +157,7 @@ rust_library {
         "libsmallvec",
         "libsync_rust",
         "libthiserror",
+        "libtracing",
         "libusb_util",
         "libuuid",
         "libvfio_sys",

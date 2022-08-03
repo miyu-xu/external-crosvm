@@ -52,36 +52,32 @@ fn import_resource(resource: &mut RutabagaResource) {
 
     if let Some(handle) = &resource.handle {
         if handle.handle_type == RUTABAGA_MEM_HANDLE_TYPE_DMABUF {
-            // TODO: b/234881451 -- update virgl_renderer and uncomment lines below. Remove
-            // abort() call. The abort call is currently in use since Android isn't using the calls
-            // below.
-            std::process::abort();
-//            if let Ok(dmabuf_fd) = base::clone_descriptor(&handle.os_handle) {
-//                // Safe because we are being passed a valid fd
-//                unsafe {
-//                    let dmabuf_size = libc::lseek64(dmabuf_fd, 0, libc::SEEK_END);
-//                    libc::lseek64(dmabuf_fd, 0, libc::SEEK_SET);
-//                    let args = virgl_renderer_resource_import_blob_args {
-//                        res_handle: resource.resource_id,
-//                        blob_mem: resource.blob_mem,
-//                        fd_type: VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF,
-//                        fd: dmabuf_fd,
-//                        size: dmabuf_size as u64,
-//                    };
-//                    let ret = virgl_renderer_resource_import_blob(&args);
-//                    if ret != 0 {
-//                        // import_blob can fail if we've previously imported this resource,
-//                        // but in any case virglrenderer does not take ownership of the fd
-//                        // in error paths
-//                        //
-//                        // Because of the re-import case we must still fall through to the
-//                        // virgl_renderer_ctx_attach_resource() call.
-//                        libc::close(dmabuf_fd);
-//                        return;
-//                    }
-//                    resource.import_mask |= 1 << (RutabagaComponentType::VirglRenderer as u32);
-//                }
-//            }
+            if let Ok(dmabuf_fd) = base::clone_descriptor(&handle.os_handle) {
+                // Safe because we are being passed a valid fd
+                unsafe {
+                    let dmabuf_size = libc::lseek64(dmabuf_fd, 0, libc::SEEK_END);
+                    libc::lseek64(dmabuf_fd, 0, libc::SEEK_SET);
+                    let args = virgl_renderer_resource_import_blob_args {
+                        res_handle: resource.resource_id,
+                        blob_mem: resource.blob_mem,
+                        fd_type: VIRGL_RENDERER_BLOB_FD_TYPE_DMABUF,
+                        fd: dmabuf_fd,
+                        size: dmabuf_size as u64,
+                    };
+                    let ret = virgl_renderer_resource_import_blob(&args);
+                    if ret != 0 {
+                        // import_blob can fail if we've previously imported this resource,
+                        // but in any case virglrenderer does not take ownership of the fd
+                        // in error paths
+                        //
+                        // Because of the re-import case we must still fall through to the
+                        // virgl_renderer_ctx_attach_resource() call.
+                        libc::close(dmabuf_fd);
+                        return;
+                    }
+                    resource.import_mask |= 1 << (RutabagaComponentType::VirglRenderer as u32);
+                }
+            }
         }
     }
 }

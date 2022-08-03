@@ -165,7 +165,7 @@ impl ProxyDevice {
     /// * `keep_rds` - File descriptors that will be kept open in the child.
     pub fn new<D: BusDevice>(
         mut device: D,
-        jail: &Minijail,
+        jail: Minijail,
         mut keep_rds: Vec<RawDescriptor>,
     ) -> Result<ProxyDevice> {
         let debug_label = device.debug_label();
@@ -178,29 +178,30 @@ impl ProxyDevice {
         keep_rds.dedup();
 
         // Forking here is safe as long as the program is still single threaded.
-        let pid = unsafe {
-            match jail.fork(Some(&keep_rds)).map_err(Error::ForkingJail)? {
-                0 => {
-                    let max_len = 15; // pthread_setname_np() limit on Linux
-                    let debug_label_trimmed =
-                        &debug_label.as_bytes()[..std::cmp::min(max_len, debug_label.len())];
-                    let thread_name = CString::new(debug_label_trimmed).unwrap();
-                    let _ = libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr());
-                    device.on_sandboxed();
-                    child_proc(child_tube, &mut device);
+        // We own the jail object and nobody else will try to reuse it.
+        let pid = match unsafe { jail.fork(Some(&keep_rds)) }.map_err(Error::ForkingJail)? {
+            0 => {
+                let max_len = 15; // pthread_setname_np() limit on Linux
+                let debug_label_trimmed =
+                    &debug_label.as_bytes()[..std::cmp::min(max_len, debug_label.len())];
+                let thread_name = CString::new(debug_label_trimmed).unwrap();
+                // thread_name is a valid pointer and setting name of this thread should be safe.
+                let _ =
+                    unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
+                device.on_sandboxed();
+                child_proc(child_tube, &mut device);
 
-                    // We're explicitly not using std::process::exit here to avoid the cleanup of
-                    // stdout/stderr globals. This can cause cascading panics and SIGILL if a worker
-                    // thread attempts to log to stderr after at_exit handlers have been run.
-                    // TODO(crbug.com/992494): Remove this once device shutdown ordering is clearly
-                    // defined.
-                    //
-                    // exit() is trivially safe.
-                    // ! Never returns
-                    libc::exit(0);
-                }
-                p => p,
+                // We're explicitly not using std::process::exit here to avoid the cleanup of
+                // stdout/stderr globals. This can cause cascading panics and SIGILL if a worker
+                // thread attempts to log to stderr after at_exit handlers have been run.
+                // TODO(crbug.com/992494): Remove this once device shutdown ordering is clearly
+                // defined.
+                //
+                // exit() is trivially safe.
+                // ! Never returns
+                unsafe { libc::exit(0) };
             }
+            p => p,
         };
 
         parent_tube
@@ -410,7 +411,7 @@ mod tests {
         let device = EchoDevice::new();
         let keep_fds: Vec<RawDescriptor> = Vec::new();
         let minijail = Minijail::new().unwrap();
-        ProxyDevice::new(device, &minijail, keep_fds).unwrap()
+        ProxyDevice::new(device, minijail, keep_fds).unwrap()
     }
 
     // TODO(b/173833661): Find a way to ensure these tests are run single-threaded.

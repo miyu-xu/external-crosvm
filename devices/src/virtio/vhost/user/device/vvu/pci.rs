@@ -196,20 +196,20 @@ macro_rules! read_common_cfg_field {
 }
 
 macro_rules! write_notify_cfg_field {
-    ($device:expr, $field:ident, $val:expr) => {
-        $device.vfio_dev.region_write_to_addr(
-            &$val,
-            &$device.caps.notify_cfg_addr,
-            offset_of!(virtio_pci_notification_cfg, $field) as u64,
+    ($device:expr, $mmap:expr, $field:ident, $val:expr) => {
+        $mmap.write_obj_volatile(
+            $val,
+            $device.caps.notify_cfg_addr.addr as usize
+                + offset_of!(virtio_pci_notification_cfg, $field),
         )
     };
 }
 
 macro_rules! read_notify_cfg_field {
-    ($device:expr,  $field:ident) => {
-        $device.vfio_dev.region_read_from_addr(
-            &$device.caps.notify_cfg_addr,
-            offset_of!(virtio_pci_notification_cfg, $field) as u64,
+    ($device:expr, $mmap:expr, $field:ident) => {
+        $mmap.read_obj_volatile(
+            $device.caps.notify_cfg_addr.addr as usize
+                + offset_of!(virtio_pci_notification_cfg, $field),
         )
     };
 }
@@ -247,7 +247,7 @@ impl QueueNotifier {
         // anyway. The mmap address should be correct as initialized in the 'new()' function
         // according to the given vfio device.
         self.mmap
-            .write_obj(0_u8, self.addr as usize)
+            .write_obj_volatile(0_u8, self.addr as usize)
             .expect("unable to write to mmap area");
     }
 }
@@ -268,15 +268,29 @@ pub enum QueueType {
 }
 
 impl VvuPciDevice {
-    /// Creates a driver for virtio-vhost-user PCI device.
+    /// Creates a driver for virtio-vhost-user PCI device from a PCI address.
     ///
     /// # Arguments
     ///
-    /// * `pci_id` - PCI device ID such as `"0000:00:05.0"`.
+    /// * `pci_id` - PCI device ID such as `"0000:00:05.0"`. An error will be returned if this is
+    /// not a valid PCI device ID string.
     /// * `device_vq_num` - number of virtqueues that the device backend (e.g. block) may use.
     pub fn new(pci_id: &str, device_vq_num: usize) -> Result<Self> {
-        let pci_address = PciAddress::from_str(pci_id).context("failed to parse PCI address")?;
-        let vfio_dev = Arc::new(open_vfio_device(pci_address)?);
+        Self::new_from_address(
+            PciAddress::from_str(pci_id).context("failed to parse PCI address")?,
+            device_vq_num,
+        )
+    }
+
+    /// Creates a driver for virtio-vhost-user PCI device from a string containing a PCI address.
+    ///
+    /// # Arguments
+    ///
+    /// * `pci_address` - PCI device address.
+    /// * `device_vq_num` - number of virtqueues that the device backend (e.g. block) may use.
+    pub fn new_from_address(pci_address: PciAddress, device_vq_num: usize) -> Result<Self> {
+        let vfio_path = format!("/sys/bus/pci/devices/{}", pci_address);
+        let vfio_dev = Arc::new(open_vfio_device(&vfio_path)?);
         let config = VfioPciConfig::new(vfio_dev.clone());
         let caps = VvuPciCaps::new(&config)?;
         vfio_dev
@@ -370,8 +384,6 @@ impl VvuPciDevice {
         notify_addr.addr += notify_off as u64 * self.caps.notify_off_multiplier as u64;
         let notifier = QueueNotifier::new(typ, &self.vfio_dev, &self.caps)?;
 
-        write_common_cfg_field!(self, queue_enable, 1_u16);
-
         Ok((queue, notifier))
     }
 
@@ -441,18 +453,35 @@ impl VvuPciDevice {
             }
         }
 
+        let mmap_region = self
+            .vfio_dev
+            .get_region_mmap(self.caps.notify_cfg_addr.index);
+        let region_offset = self
+            .vfio_dev
+            .get_region_offset(self.caps.notify_cfg_addr.index);
+        let offset = region_offset + mmap_region[0].offset;
+
+        let mmap = MemoryMappingBuilder::new(mmap_region[0].size as usize)
+            .from_file(self.vfio_dev.device_file())
+            .offset(offset)
+            .build()?;
+
         // Registers the device virtqueus's irqs by writing `notification_msix_vector`.
         for i in 0..device_vq_num as u16 {
             let msix_vector = self.queues.len() as u16 + i;
 
-            write_notify_cfg_field!(self, notification_select, i);
-            let select: u16 = read_notify_cfg_field!(self, notification_select);
+            write_notify_cfg_field!(self, mmap, notification_select, i)
+                .expect("failed to write select");
+            let select: u16 = read_notify_cfg_field!(self, mmap, notification_select)
+                .expect("failed to verify select");
             if select != i {
                 bail!("failed to select {}-th notification", i);
             }
 
-            write_notify_cfg_field!(self, notification_msix_vector, msix_vector);
-            let vector: u16 = read_notify_cfg_field!(self, notification_msix_vector);
+            write_notify_cfg_field!(self, mmap, notification_msix_vector, msix_vector)
+                .expect("failed to write vector");
+            let vector: u16 = read_notify_cfg_field!(self, mmap, notification_msix_vector)
+                .expect("failed to verify vector");
             if msix_vector != vector {
                 bail!(
                     "failed to set vector {} to {}-th notification",
@@ -507,6 +536,12 @@ impl VvuPciDevice {
         let (irqs, notification_evts) = self.create_irqs(device_vq_num)?;
         self.irqs = irqs;
         self.notification_evts = notification_evts;
+
+        // Enable Virtqueues
+        for index in 0..self.queues.len() {
+            write_common_cfg_field!(self, queue_select, index as u16);
+            write_common_cfg_field!(self, queue_enable, 1_u16);
+        }
 
         self.set_status(virtio_config::VIRTIO_CONFIG_S_DRIVER_OK as u8);
 

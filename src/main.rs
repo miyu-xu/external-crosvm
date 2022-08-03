@@ -4,20 +4,19 @@
 
 //! Runs a virtual machine
 
-pub mod panic_hook;
-
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::string::String;
 
+use anyhow::{anyhow, Result};
 use argh::FromArgs;
 use base::syslog::LogConfig;
 use base::{error, info, syslog};
+use cmdline::{RunCommand, UsbAttachCommand};
 mod crosvm;
+use crosvm::cmdline;
 #[cfg(feature = "plugin")]
 use crosvm::config::executable_is_plugin;
 use crosvm::config::Config;
-use crosvm::{cmdline, platform};
 use devices::virtio::vhost::user::device::{run_block_device, run_net_device};
 use disk::QcowFile;
 #[cfg(feature = "composite-disk")]
@@ -33,6 +32,12 @@ use vm_control::{
     BalloonControlCommand, DiskControlCommand, UsbControlResult, VmRequest, VmResponse,
 };
 
+use crate::sys::error_to_exit_code;
+use crate::sys::init_log;
+use crosvm::cmdline::{Command, CrossPlatformCommands, CrossPlatformDevicesCommands};
+#[cfg(windows)]
+use sys::windows::metrics;
+
 #[cfg(feature = "scudo")]
 #[global_allocator]
 static ALLOCATOR: scudo::GlobalScudoAllocator = scudo::GlobalScudoAllocator;
@@ -45,66 +50,67 @@ enum CommandStatus {
     GuestPanic,
 }
 
-fn run_vm<F: 'static>(
-    cmd: cmdline::RunCommand,
-    log_config: LogConfig<F>,
-) -> std::result::Result<CommandStatus, ()>
+fn to_command_status(result: Result<sys::ExitState>) -> Result<CommandStatus> {
+    match result {
+        Ok(sys::ExitState::Stop) => {
+            info!("crosvm has exited normally");
+            Ok(CommandStatus::VmStop)
+        }
+        Ok(sys::ExitState::Reset) => {
+            info!("crosvm has exited normally due to reset request");
+            Ok(CommandStatus::VmReset)
+        }
+        Ok(sys::ExitState::Crash) => {
+            info!("crosvm has exited due to a VM crash");
+            Ok(CommandStatus::VmCrash)
+        }
+        Ok(sys::ExitState::GuestPanic) => {
+            info!("crosvm has exited due to a kernel panic in guest");
+            Ok(CommandStatus::GuestPanic)
+        }
+        Err(e) => {
+            error!("crosvm has exited with error: {:#}", e);
+            Err(e)
+        }
+    }
+}
+
+fn run_vm<F: 'static>(cmd: RunCommand, log_config: LogConfig<F>) -> Result<CommandStatus>
 where
     F: Fn(&mut syslog::fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
 {
-    if let Err(e) = syslog::init_with(LogConfig {
-        proc_name: if let Some(ref tag) = cmd.syslog_tag {
-            tag.clone()
-        } else {
-            String::from("crosvm")
-        },
-        ..log_config
-    }) {
-        eprintln!("failed to initialize syslog: {}", e);
-        return Err(());
-    }
-
-    match TryInto::<Config>::try_into(cmd) {
-        #[cfg(feature = "plugin")]
-        Ok(cfg) if executable_is_plugin(&cfg.executable_path) => {
-            match crosvm::plugin::run_config(cfg) {
-                Ok(_) => {
-                    info!("crosvm and plugin have exited normally");
-                    Ok(CommandStatus::VmStop)
-                }
-                Err(e) => {
-                    error!("{:#}", e);
-                    Err(())
-                }
-            }
+    let cfg = match TryInto::<Config>::try_into(cmd) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("{}", e);
+            return Err(anyhow!("{}", e));
         }
-        Ok(cfg) => match platform::run_config(cfg) {
-            Ok(platform::ExitState::Stop) => {
-                info!("crosvm has exited normally");
+    };
+
+    #[cfg(feature = "plugin")]
+    if executable_is_plugin(&cfg.executable_path) {
+        let res = match crosvm::plugin::run_config(cfg) {
+            Ok(_) => {
+                info!("crosvm and plugin have exited normally");
                 Ok(CommandStatus::VmStop)
             }
-            Ok(platform::ExitState::Reset) => {
-                info!("crosvm has exited normally due to reset request");
-                Ok(CommandStatus::VmReset)
-            }
-            Ok(platform::ExitState::Crash) => {
-                info!("crosvm has exited due to a VM crash");
-                Ok(CommandStatus::VmCrash)
-            }
-            Ok(platform::ExitState::GuestPanic) => {
-                info!("crosvm has exited due to a kernel panic in guest");
-                Ok(CommandStatus::GuestPanic)
-            }
             Err(e) => {
-                error!("crosvm has exited with error: {:#}", e);
-                Err(())
+                eprintln!("{:#}", e);
+                Err(e)
             }
-        },
-        Err(e) => {
-            error!("{}", e);
-            Err(())
-        }
+        };
+        return res;
     }
+
+    #[cfg(feature = "crash-report")]
+    crosvm::sys::setup_emulator_crash_reporting(&cfg)?;
+
+    #[cfg(windows)]
+    metrics::setup_metrics_reporting()?;
+
+    init_log(log_config, &cfg)?;
+    let exit_state = crate::sys::run_config(cfg);
+    to_command_status(exit_state)
 }
 
 fn stop_vms(cmd: cmdline::StopCommand) -> std::result::Result<(), ()> {
@@ -336,8 +342,8 @@ fn create_qcow2(cmd: cmdline::CreateQcow2Command) -> std::result::Result<(), ()>
 fn start_device(opts: cmdline::DeviceCommand) -> std::result::Result<(), ()> {
     let result = match opts.command {
         cmdline::DeviceSubcommand::CrossPlatform(command) => match command {
-            cmdline::CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
-            cmdline::CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
+            CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
+            CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
         },
         cmdline::DeviceSubcommand::Sys(command) => sys::start_device(command),
     };
@@ -365,7 +371,7 @@ fn make_rt(cmd: cmdline::MakeRTCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::MakeRT, cmd.socket_path)
 }
 
-fn usb_attach(cmd: cmdline::UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
+fn usb_attach(cmd: UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
     do_usb_attach(cmd.socket_path, dev_path)
@@ -410,12 +416,19 @@ fn pkg_version() -> std::result::Result<(), ()> {
     Ok(())
 }
 
-fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
-    panic_hook::set_panic_hook();
+// Returns true if the argument is a flag (e.g. `-s` or `--long`).
+//
+// As a special case, `-` is not treated as a flag, since it is typically used to represent
+// `stdin`/`stdout`.
+fn is_flag(arg: &str) -> bool {
+    arg.len() > 1 && arg.starts_with('-')
+}
 
+// Perform transformations on `args_iter` to produce arguments suitable for parsing by `argh`.
+fn prepare_argh_args<I: IntoIterator<Item = String>>(args_iter: I) -> Vec<String> {
     let mut args: Vec<String> = Vec::default();
     // http://b/235882579
-    for arg in std::env::args() {
+    for arg in args_iter {
         match arg.as_str() {
             "--host_ip" => {
                 eprintln!("`--host_ip` option is deprecated!");
@@ -427,12 +440,12 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
                 eprintln!("Please use `--balloon-bias-mib` instead");
                 args.push("--balloon-bias-mib".to_string());
             }
-            arg if arg.starts_with("--") => {
+            "-h" => args.push("--help".to_string()),
+            // TODO(238361778): This block should work on windows as well.
+            #[cfg(unix)]
+            arg if is_flag(arg) => {
+                // Split `--arg=val` into `--arg val`, since argh doesn't support the former.
                 if let Some((key, value)) = arg.split_once("=") {
-                    eprintln!(
-                        "`{}={}` is deprecated, please use `{} {}`",
-                        key, value, key, value
-                    );
                     args.push(key.to_string());
                     args.push(value.to_string());
                 } else {
@@ -451,14 +464,30 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
     ];
     for arg in switch_or_option {
         if let Some(i) = args.iter().position(|a| a == arg) {
-            if i == args.len() - 1 || args[i + 1].starts_with("--") {
+            if i >= args.len() - 2 || is_flag(&args[i + 1]) {
                 args.insert(i + 1, "".to_string());
             }
         }
     }
 
+    args
+}
+
+fn crosvm_main() -> Result<CommandStatus> {
+    let _library_watcher = sys::get_library_watcher();
+
+    // The following panic hook will stop our crashpad hook on windows.
+    // Only initialize when the crash-pad feature is off.
+    #[cfg(not(feature = "crash-report"))]
+    sys::set_panic_hook();
+
+    // Ensure all processes detach from metrics on exit.
+    #[cfg(windows)]
+    let _metrics_destructor = metrics::get_destructor();
+
+    let args = prepare_argh_args(std::env::args());
     let args = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let args = match crosvm::cmdline::CrosvmCmdlineArgs::from_args(&["crosvm"], &args[1..]) {
+    let args = match crosvm::cmdline::CrosvmCmdlineArgs::from_args(&args[..1], &args[1..]) {
         Ok(args) => args,
         Err(e) => {
             println!("{}", e.output);
@@ -467,44 +496,92 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
     };
     let extended_status = args.extended_status;
 
-    let log_config = LogConfig {
+    let mut log_config = LogConfig {
         filter: &args.log_level,
         syslog: !args.no_syslog,
         ..Default::default()
     };
 
-    // Past this point, usage of exit is in danger of leaking zombie processes.
-    let ret = if let crosvm::cmdline::Command::Run(cmd) = args.command {
-        // We handle run_vm separately because it does not simply signal success/error
-        // but also indicates whether the guest requested reset or stop.
-        run_vm(cmd, log_config)
-    } else {
-        if let Err(e) = syslog::init_with(log_config) {
-            eprintln!("failed to initialize syslog: {}", e);
-            return Err(());
+    let ret = match args.command {
+        Command::CrossPlatform(command) => {
+            // Past this point, usage of exit is in danger of leaking zombie processes.
+            if let CrossPlatformCommands::Run(cmd) = command {
+                if let Some(syslog_tag) = &cmd.syslog_tag {
+                    log_config.proc_name = syslog_tag.clone();
+                }
+                // We handle run_vm separately because it does not simply signal success/error
+                // but also indicates whether the guest requested reset or stop.
+                run_vm(cmd, log_config)
+            } else if let CrossPlatformCommands::Device(cmd) = command {
+                // On windows, the device command handles its own logging setup, so we can't handle it below
+                // otherwise logging will double init.
+                if cfg!(unix) {
+                    syslog::init_with(log_config)
+                        .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+                }
+                start_device(cmd)
+                    .map_err(|_| anyhow!("start_device subcommand failed"))
+                    .map(|_| CommandStatus::Success)
+            } else {
+                syslog::init_with(log_config)
+                    .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+
+                match command {
+                    CrossPlatformCommands::Balloon(cmd) => {
+                        balloon_vms(cmd).map_err(|_| anyhow!("balloon subcommand failed"))
+                    }
+                    CrossPlatformCommands::BalloonStats(cmd) => {
+                        balloon_stats(cmd).map_err(|_| anyhow!("balloon_stats subcommand failed"))
+                    }
+                    CrossPlatformCommands::Battery(cmd) => {
+                        modify_battery(cmd).map_err(|_| anyhow!("battery subcommand failed"))
+                    }
+                    #[cfg(feature = "composite-disk")]
+                    CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)
+                        .map_err(|_| anyhow!("create_composite subcommand failed")),
+                    CrossPlatformCommands::CreateQcow2(cmd) => {
+                        create_qcow2(cmd).map_err(|_| anyhow!("create_qcow2 subcommand failed"))
+                    }
+                    CrossPlatformCommands::Device(_) => unreachable!(),
+                    CrossPlatformCommands::Disk(cmd) => {
+                        disk_cmd(cmd).map_err(|_| anyhow!("disk subcommand failed"))
+                    }
+                    CrossPlatformCommands::MakeRT(cmd) => {
+                        make_rt(cmd).map_err(|_| anyhow!("make_rt subcommand failed"))
+                    }
+                    CrossPlatformCommands::Resume(cmd) => {
+                        resume_vms(cmd).map_err(|_| anyhow!("resume subcommand failed"))
+                    }
+                    CrossPlatformCommands::Run(_) => unreachable!(),
+                    CrossPlatformCommands::Stop(cmd) => {
+                        stop_vms(cmd).map_err(|_| anyhow!("stop subcommand failed"))
+                    }
+                    CrossPlatformCommands::Suspend(cmd) => {
+                        suspend_vms(cmd).map_err(|_| anyhow!("suspend subcommand failed"))
+                    }
+                    CrossPlatformCommands::Powerbtn(cmd) => {
+                        powerbtn_vms(cmd).map_err(|_| anyhow!("powerbtn subcommand failed"))
+                    }
+                    CrossPlatformCommands::Sleepbtn(cmd) => {
+                        sleepbtn_vms(cmd).map_err(|_| anyhow!("sleepbtn subcommand failed"))
+                    }
+                    CrossPlatformCommands::Gpe(cmd) => {
+                        inject_gpe(cmd).map_err(|_| anyhow!("gpe subcommand failed"))
+                    }
+                    CrossPlatformCommands::Usb(cmd) => {
+                        modify_usb(cmd).map_err(|_| anyhow!("usb subcommand failed"))
+                    }
+                    CrossPlatformCommands::Version(_) => {
+                        pkg_version().map_err(|_| anyhow!("version subcommand failed"))
+                    }
+                    CrossPlatformCommands::Vfio(cmd) => {
+                        modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
+                    }
+                }
+                .map(|_| CommandStatus::Success)
+            }
         }
-        match args.command {
-            cmdline::Command::Balloon(cmd) => balloon_vms(cmd),
-            cmdline::Command::BalloonStats(cmd) => balloon_stats(cmd),
-            cmdline::Command::Battery(cmd) => modify_battery(cmd),
-            #[cfg(feature = "composite-disk")]
-            cmdline::Command::CreateComposite(cmd) => create_composite(cmd),
-            cmdline::Command::CreateQcow2(cmd) => create_qcow2(cmd),
-            cmdline::Command::Device(cmd) => start_device(cmd),
-            cmdline::Command::Disk(cmd) => disk_cmd(cmd),
-            cmdline::Command::MakeRT(cmd) => make_rt(cmd),
-            cmdline::Command::Resume(cmd) => resume_vms(cmd),
-            cmdline::Command::Run(_) => unreachable!(),
-            cmdline::Command::Stop(cmd) => stop_vms(cmd),
-            cmdline::Command::Suspend(cmd) => suspend_vms(cmd),
-            cmdline::Command::Powerbtn(cmd) => powerbtn_vms(cmd),
-            cmdline::Command::Sleepbtn(cmd) => sleepbtn_vms(cmd),
-            cmdline::Command::Gpe(cmd) => inject_gpe(cmd),
-            cmdline::Command::Usb(cmd) => modify_usb(cmd),
-            cmdline::Command::Version(_) => pkg_version(),
-            cmdline::Command::Vfio(cmd) => modify_vfio(cmd),
-        }
-        .map(|_| CommandStatus::Success)
+        cmdline::Command::Sys(command) => sys::run_command(command).map(|_| CommandStatus::Success),
     };
 
     sys::cleanup();
@@ -521,12 +598,207 @@ fn crosvm_main() -> std::result::Result<CommandStatus, ()> {
 }
 
 fn main() {
-    let exit_code = match crosvm_main() {
-        Ok(CommandStatus::Success | CommandStatus::VmStop) => 0,
-        Ok(CommandStatus::VmReset) => 32,
-        Ok(CommandStatus::VmCrash) => 33,
-        Ok(CommandStatus::GuestPanic) => 34,
-        Err(_) => 1,
+    let res = crosvm_main();
+    let exit_code = match &res {
+        Ok(CommandStatus::Success | CommandStatus::VmStop) => {
+            info!("exiting with success");
+            0
+        }
+        Ok(CommandStatus::VmReset) => {
+            info!("exiting with reset");
+            32
+        }
+        Ok(CommandStatus::VmCrash) => {
+            info!("exiting with crash");
+            33
+        }
+        Ok(CommandStatus::GuestPanic) => {
+            info!("exiting with guest panic");
+            34
+        }
+        Err(e) => {
+            let exit_code = error_to_exit_code(&res);
+            error!("exiting with error {}:{:?}", exit_code, e);
+            exit_code
+        }
     };
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn args_is_flag() {
+        assert!(is_flag("--test"));
+        assert!(is_flag("-s"));
+
+        assert!(!is_flag("-"));
+        assert!(!is_flag("no-leading-dash"));
+    }
+
+    // TODO(b/238361778) this doesn't work on Windows because is_flag isn't called yet.
+    #[cfg(unix)]
+    #[test]
+    fn args_split_long() {
+        assert_eq!(
+            prepare_argh_args(
+                ["crosvm", "run", "--something=options", "vm_kernel"].map(|x| x.to_string())
+            ),
+            ["crosvm", "run", "--something", "options", "vm_kernel"]
+        );
+    }
+
+    // TODO(b/238361778) this doesn't work on Windows because is_flag isn't called yet.
+    #[cfg(unix)]
+    #[test]
+    fn args_split_short() {
+        assert_eq!(
+            prepare_argh_args(
+                ["crosvm", "run", "-p=init=/bin/bash", "vm_kernel"].map(|x| x.to_string())
+            ),
+            ["crosvm", "run", "-p", "init=/bin/bash", "vm_kernel"]
+        );
+    }
+
+    #[test]
+    fn args_host_ip() {
+        assert_eq!(
+            prepare_argh_args(
+                ["crosvm", "run", "--host_ip", "1.2.3.4", "vm_kernel"].map(|x| x.to_string())
+            ),
+            ["crosvm", "run", "--host-ip", "1.2.3.4", "vm_kernel"]
+        );
+    }
+
+    #[test]
+    fn args_balloon_bias_mib() {
+        assert_eq!(
+            prepare_argh_args(
+                ["crosvm", "run", "--balloon_bias_mib", "1234", "vm_kernel"].map(|x| x.to_string())
+            ),
+            ["crosvm", "run", "--balloon-bias-mib", "1234", "vm_kernel"]
+        );
+    }
+
+    #[test]
+    fn args_h() {
+        assert_eq!(
+            prepare_argh_args(["crosvm", "run", "-h"].map(|x| x.to_string())),
+            ["crosvm", "run", "--help"]
+        );
+    }
+
+    #[test]
+    fn args_battery_switch() {
+        assert_eq!(
+            prepare_argh_args(
+                ["crosvm", "run", "--battery", "--other-args", "vm_kernel"].map(|x| x.to_string())
+            ),
+            [
+                "crosvm",
+                "run",
+                "--battery",
+                "",
+                "--other-args",
+                "vm_kernel"
+            ]
+        );
+    }
+
+    #[test]
+    fn args_battery_switch_last_arg() {
+        assert_eq!(
+            prepare_argh_args(["crosvm", "run", "--battery", "vm_kernel"].map(|x| x.to_string())),
+            ["crosvm", "run", "--battery", "", "vm_kernel"]
+        );
+    }
+
+    #[test]
+    fn args_battery_switch_short_arg() {
+        assert_eq!(
+            prepare_argh_args(
+                [
+                    "crosvm",
+                    "run",
+                    "--battery",
+                    "-p",
+                    "init=/bin/bash",
+                    "vm_kernel"
+                ]
+                .map(|x| x.to_string())
+            ),
+            [
+                "crosvm",
+                "run",
+                "--battery",
+                "",
+                "-p",
+                "init=/bin/bash",
+                "vm_kernel"
+            ]
+        );
+    }
+
+    #[test]
+    fn args_battery_option() {
+        assert_eq!(
+            prepare_argh_args(
+                [
+                    "crosvm",
+                    "run",
+                    "--battery",
+                    "type=goldfish",
+                    "-p",
+                    "init=/bin/bash",
+                    "vm_kernel"
+                ]
+                .map(|x| x.to_string())
+            ),
+            [
+                "crosvm",
+                "run",
+                "--battery",
+                "type=goldfish",
+                "-p",
+                "init=/bin/bash",
+                "vm_kernel"
+            ]
+        );
+    }
+
+    #[test]
+    fn args_switch_multi() {
+        assert_eq!(
+            prepare_argh_args(
+                [
+                    "crosvm",
+                    "run",
+                    "--gpu",
+                    "test",
+                    "--video-decoder",
+                    "--video-encoder",
+                    "--battery",
+                    "--other-switch",
+                    "vm_kernel"
+                ]
+                .map(|x| x.to_string())
+            ),
+            [
+                "crosvm",
+                "run",
+                "--gpu",
+                "test",
+                "--video-decoder",
+                "",
+                "--video-encoder",
+                "",
+                "--battery",
+                "",
+                "--other-switch",
+                "vm_kernel"
+            ]
+        );
+    }
 }

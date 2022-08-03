@@ -6,6 +6,12 @@
 //!
 //! This crate is a programmatic alternative to invoking crosvm with subcommands that produce the
 //! result on stdout.
+//!
+//! Downstream projects rely on this library maintaining a stable API surface.
+//! Do not make changes to this library without consulting the crosvm externalization team.
+//! Email: crosvm-dev@chromium.org
+//! For more information see:
+//! <https://google.github.io/crosvm/running_crosvm/programmatic_interaction.html#usage>
 
 use std::convert::{TryFrom, TryInto};
 use std::ffi::CStr;
@@ -16,7 +22,7 @@ use libc::{c_char, ssize_t};
 
 use vm_control::{
     client::*, BalloonControlCommand, BalloonStats, DiskControlCommand, UsbControlAttachedDevice,
-    UsbControlResult, VmRequest, VmResponse,
+    UsbControlResult, VmRequest, VmResponse, USB_CONTROL_MAX_PORTS,
 };
 
 fn validate_socket_path(socket_path: *const c_char) -> Option<PathBuf> {
@@ -126,6 +132,12 @@ impl From<&UsbControlAttachedDevice> for UsbDeviceEntry {
     }
 }
 
+/// Simply returns the maximum possible number of USB devices
+#[no_mangle]
+pub extern "C" fn crosvm_client_max_usb_devices() -> usize {
+    USB_CONTROL_MAX_PORTS
+}
+
 /// Returns all USB devices passed through the crosvm instance whose control socket is listening on `socket_path`.
 ///
 /// The function returns the amount of entries written.
@@ -136,8 +148,8 @@ impl From<&UsbControlAttachedDevice> for UsbDeviceEntry {
 ///               devices will be written to
 /// * `entries_length` - Amount of entries in the array specified by `entries`
 ///
-/// Crosvm supports passing through up to 255 devices, so pasing an array with 255 entries will
-/// guarantee to return all entries.
+/// Use the value returned by [`crosvm_client_max_usb_devices()`] to determine the size of the input
+/// array to this function.
 #[no_mangle]
 pub extern "C" fn crosvm_client_usb_list(
     socket_path: *const c_char,
