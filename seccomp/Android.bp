@@ -726,6 +726,55 @@ prebuilt_etc {
 }
 
 genrule {
+    name: "snd_null_device.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["snd_null_device.policy"],
+    srcs: ["x86_64/snd_null_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_null_device.policy_x86_64",
+    filename: "snd_null_device.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":snd_null_device.policy_inline_x86_64",
+}
+
+genrule {
+    name: "snd_null_device.policy_inline_aarch64",
+    defaults: ["crosvm_inline_seccomp_policy_aarch64"],
+    out: ["snd_null_device.policy"],
+    srcs: ["aarch64/snd_null_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_null_device.policy_aarch64",
+    filename: "snd_null_device.policy",
+    relative_install_path: "crosvm/aarch64-linux-gnu/seccomp",
+    src: ":snd_null_device.policy_inline_aarch64",
+}
+
+prebuilt_etc {
+    name: "snd_null_device.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":snd_null_device.policy_inline_x86_64",
+        },
+        arm64: {
+            src: ":snd_null_device.policy_inline_aarch64",
+        },
+    },
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
     name: "xhci_device.policy_inline_x86_64",
     defaults: ["crosvm_inline_seccomp_policy_x86_64"],
     out: ["xhci_device.policy"],
@@ -1069,6 +1118,55 @@ prebuilt_etc {
 }
 
 genrule {
+    name: "snd_cras_device.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["snd_cras_device.policy"],
+    srcs: ["x86_64/snd_cras_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_cras_device.policy_x86_64",
+    filename: "snd_cras_device.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":snd_cras_device.policy_inline_x86_64",
+}
+
+genrule {
+    name: "snd_cras_device.policy_inline_aarch64",
+    defaults: ["crosvm_inline_seccomp_policy_aarch64"],
+    out: ["snd_cras_device.policy"],
+    srcs: ["aarch64/snd_cras_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_cras_device.policy_aarch64",
+    filename: "snd_cras_device.policy",
+    relative_install_path: "crosvm/aarch64-linux-gnu/seccomp",
+    src: ":snd_cras_device.policy_inline_aarch64",
+}
+
+prebuilt_etc {
+    name: "snd_cras_device.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":snd_cras_device.policy_inline_x86_64",
+        },
+        arm64: {
+            src: ":snd_cras_device.policy_inline_aarch64",
+        },
+    },
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
     name: "gpu_device.policy_inline_x86_64",
     defaults: ["crosvm_inline_seccomp_policy_x86_64"],
     out: ["gpu_device.policy"],
@@ -1154,55 +1252,6 @@ prebuilt_etc {
         },
         arm64: {
             src: ":balloon_device.policy_inline_aarch64",
-        },
-    },
-    target: {
-        android_arm: {
-            enabled: false,
-        },
-        android_x86: {
-            enabled: false,
-        },
-    },
-}
-
-genrule {
-    name: "cras_snd_device.policy_inline_x86_64",
-    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
-    out: ["cras_snd_device.policy"],
-    srcs: ["x86_64/cras_snd_device.policy"],
-}
-
-prebuilt_usr_share_host {
-    name: "cras_snd_device.policy_x86_64",
-    filename: "cras_snd_device.policy",
-    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
-    src: ":cras_snd_device.policy_inline_x86_64",
-}
-
-genrule {
-    name: "cras_snd_device.policy_inline_aarch64",
-    defaults: ["crosvm_inline_seccomp_policy_aarch64"],
-    out: ["cras_snd_device.policy"],
-    srcs: ["aarch64/cras_snd_device.policy"],
-}
-
-prebuilt_usr_share_host {
-    name: "cras_snd_device.policy_aarch64",
-    filename: "cras_snd_device.policy",
-    relative_install_path: "crosvm/aarch64-linux-gnu/seccomp",
-    src: ":cras_snd_device.policy_inline_aarch64",
-}
-
-prebuilt_etc {
-    name: "cras_snd_device.policy",
-    relative_install_path: "seccomp_policy/crosvm",
-    arch: {
-        x86_64: {
-            src: ":cras_snd_device.policy_inline_x86_64",
-        },
-        arm64: {
-            src: ":cras_snd_device.policy_inline_aarch64",
         },
     },
     target: {
