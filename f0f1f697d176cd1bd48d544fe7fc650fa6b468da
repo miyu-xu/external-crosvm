@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "172318b2_4623dfc0",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1629,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-03T18:55:42Z",
+      "side": 0,
+      "message": "should be able to delete this now, but we can do it in a follow up",
+      "range": {
+        "startLine": 1629,
+        "startChar": 69,
+        "endLine": 1629,
+        "endChar": 85
+      },
+      "revId": "f0f1f697d176cd1bd48d544fe7fc650fa6b468da",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

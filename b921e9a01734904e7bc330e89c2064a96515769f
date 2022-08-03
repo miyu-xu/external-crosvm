@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fa5a56a0_822355c4",
+        "filename": "src/crosvm/sys/unix/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 196,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-03T18:55:42Z",
+      "side": 1,
+      "message": "yeah, they don\u0027t support building with gfxstream",
+      "parentUuid": "54ae9ef9_71d1a067",
+      "range": {
+        "startLine": 196,
+        "startChar": 8,
+        "endLine": 196,
+        "endChar": 42
+      },
+      "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4beac3b5_bbcd385a",
