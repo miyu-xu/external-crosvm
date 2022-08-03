@@ -123,6 +123,30 @@
       },
       "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "377ec1a1_17abd385",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-03T18:33:48Z",
+      "side": 1,
+      "message": "reposted in https://r.android.com/c/platform/external/crosvm/+/2173510/1/vm_memory/Cargo.toml",
+      "parentUuid": "93dd594e_b40c0c5b",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
