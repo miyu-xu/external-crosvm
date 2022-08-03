@@ -45,6 +45,30 @@
       },
       "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "04e25147_9b116ff8",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-03T18:33:53Z",
+      "side": 1,
+      "message": "Oh, so they removed the crate feature. We are specifying the feature manually in http://cs/android-internal/external/crosvm/vm_memory/cargo2android.json;l\u003d4;rcl\u003d4d0a1da2977794859b8c73260c202c85ce1958a7. Cargo errors when told to turn on a feature that doesn\u0027t exist, so we should delete it from our cargo2android.json file\n\n(the way we are handling cargo features is hacky, ideally we\u0027d use all the same logic as upstream to avoid these pitfalls. requires improving cargo2android)",
+      "parentUuid": "4beac3b5_bbcd385a",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
