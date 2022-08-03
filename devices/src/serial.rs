@@ -5,19 +5,18 @@
 pub(crate) mod sys;
 
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self};
 
-use base::{error, Event, FileSync, RawDescriptor, Result};
-use hypervisor::ProtectionType;
+use base::{error, Event, Result};
 
 use crate::bus::BusAccessInfo;
 use crate::pci::CrosvmDeviceId;
 use crate::serial_device::SerialInput;
-use crate::{BusDevice, DeviceId, SerialDevice};
+use crate::{BusDevice, DeviceId};
 
 const LOOP_SIZE: usize = 0x40;
 
@@ -85,17 +84,16 @@ pub struct Serial {
     in_channel: Option<Receiver<u8>>,
     input: Option<Box<dyn SerialInput>>,
     out: Option<Box<dyn io::Write + Send>>,
+    #[cfg(windows)]
+    pub system_params: sys::windows::SystemSerialParams,
 }
 
-impl SerialDevice for Serial {
-    fn new(
-        _protected_vm: ProtectionType,
+impl Serial {
+    fn new_common(
         interrupt_evt: Event,
         input: Option<Box<dyn SerialInput>>,
         out: Option<Box<dyn io::Write + Send>>,
-        _sync: Option<Box<dyn FileSync + Send>>,
-        _out_timestamp: bool,
-        _keep_rds: Vec<RawDescriptor>,
+        #[cfg(windows)] system_params: sys::windows::SystemSerialParams,
     ) -> Serial {
         Serial {
             interrupt_enable: Default::default(),
@@ -111,6 +109,8 @@ impl SerialDevice for Serial {
             in_channel: None,
             input,
             out,
+            #[cfg(windows)]
+            system_params,
         }
     }
 }
@@ -304,10 +304,7 @@ impl Serial {
                         self.trigger_recv_interrupt()?;
                     }
                 } else {
-                    if let Some(out) = self.out.as_mut() {
-                        out.write_all(&[v])?;
-                        out.flush()?;
-                    }
+                    self.system_handle_write(v)?;
                     self.trigger_thr_empty()?;
                 }
             }
@@ -336,6 +333,9 @@ impl BusDevice for Serial {
         if data.len() != 1 {
             return;
         }
+
+        #[cfg(windows)]
+        self.handle_sync_thread();
 
         if let Err(e) = self.handle_write(info.offset as u8, data[0]) {
             error!("serial failed write: {}", e);
@@ -401,15 +401,18 @@ mod tests {
     use std::io;
     use std::sync::Arc;
 
+    use hypervisor::ProtectionType;
     use sync::Mutex;
 
+    pub use crate::sys::serial_device::SerialDevice;
+
     #[derive(Clone)]
-    struct SharedBuffer {
-        buf: Arc<Mutex<Vec<u8>>>,
+    pub(super) struct SharedBuffer {
+        pub(super) buf: Arc<Mutex<Vec<u8>>>,
     }
 
     impl SharedBuffer {
-        fn new() -> SharedBuffer {
+        pub(super) fn new() -> SharedBuffer {
             SharedBuffer {
                 buf: Arc::new(Mutex::new(Vec::new())),
             }
@@ -425,7 +428,7 @@ mod tests {
         }
     }
 
-    fn serial_bus_address(offset: u8) -> BusAccessInfo {
+    pub(super) fn serial_bus_address(offset: u8) -> BusAccessInfo {
         // Serial devices only use the offset of the BusAccessInfo
         BusAccessInfo {
             offset: offset as u64,

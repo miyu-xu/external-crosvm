@@ -4,22 +4,26 @@
 
 use std::{thread::sleep, time::Duration};
 
-use base::{kill_process_group, reap_child, warn};
-#[cfg(feature = "audio_cras")]
-use devices::virtio::vhost::user::device::run_cras_snd_device;
+use anyhow::anyhow;
+use base::{kill_process_group, reap_child, syslog, syslog::LogConfig, warn};
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::device::run_gpu_device;
+#[cfg(feature = "audio_cras")]
+use devices::virtio::vhost::user::device::run_snd_device;
 use devices::virtio::vhost::user::device::{
     run_console_device, run_fs_device, run_vsock_device, run_wl_device,
 };
 
-use crate::crosvm::sys::cmdline::DevicesSubcommand;
+use crate::{
+    crosvm::sys::cmdline::{Commands, DevicesSubcommand},
+    CommandStatus, Config,
+};
 
 pub(crate) fn start_device(command: DevicesSubcommand) -> anyhow::Result<()> {
     match command {
         DevicesSubcommand::Console(cfg) => run_console_device(cfg),
         #[cfg(feature = "audio_cras")]
-        DevicesSubcommand::CrasSnd(cfg) => run_cras_snd_device(cfg),
+        DevicesSubcommand::Snd(cfg) => run_snd_device(cfg),
         DevicesSubcommand::Fs(cfg) => run_fs_device(cfg),
         #[cfg(feature = "gpu")]
         DevicesSubcommand::Gpu(cfg) => run_gpu_device(cfg),
@@ -68,4 +72,27 @@ pub(crate) fn cleanup() {
             warn!("unable to kill all child processes: {}", e);
         }
     }
+}
+
+pub fn get_library_watcher() -> std::io::Result<()> {
+    Ok(())
+}
+
+pub(crate) fn run_command(_cmd: Commands) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!("invalid command"))
+}
+
+pub(crate) fn init_log<F: 'static>(log_config: LogConfig<F>, _cfg: &Config) -> anyhow::Result<()>
+where
+    F: Fn(&mut syslog::fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
+{
+    if let Err(e) = syslog::init_with(log_config) {
+        eprintln!("failed to initialize syslog: {}", e);
+        return Err(anyhow!("failed to initialize syslog: {}", e));
+    }
+    Ok(())
+}
+
+pub(crate) fn error_to_exit_code(_res: &std::result::Result<CommandStatus, anyhow::Error>) -> i32 {
+    1
 }

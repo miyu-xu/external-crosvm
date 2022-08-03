@@ -4,6 +4,8 @@
 
 use std::io::{self, Write};
 use std::mem::size_of;
+#[cfg(windows)]
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::result;
 use std::sync::Arc;
@@ -11,16 +13,16 @@ use std::thread;
 use std::time::Duration;
 use std::u32;
 
+#[cfg(unix)]
+use base::AsRawDescriptor;
 use base::Error as SysError;
 use base::Result as SysResult;
-use base::{
-    error, info, warn, AsRawDescriptor, Event, EventToken, RawDescriptor, Timer, Tube, WaitContext,
-};
+use base::{error, info, warn, Event, EventToken, RawDescriptor, Timer, Tube, WaitContext};
 use data_model::DataInit;
 use disk::DiskFile;
 
 use remain::sorted;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use sync::Mutex;
 use thiserror::Error;
 use vm_control::{DiskControlCommand, DiskControlResult};
@@ -107,6 +109,12 @@ fn block_option_sparse_default() -> bool {
 fn block_option_block_size_default() -> u32 {
     512
 }
+// TODO(b/237829580): Move to sys module once virtio block sys is refactored to
+// match the style guide.
+#[cfg(windows)]
+fn block_option_io_concurrency_default() -> NonZeroU32 {
+    NonZeroU32::new(1).unwrap()
+}
 
 /// Maximum length of a `DiskOption` identifier.
 ///
@@ -132,7 +140,7 @@ fn deserialize_disk_id<'de, D: Deserializer<'de>>(
     Ok(Some(ret))
 }
 
-#[derive(Debug, Deserialize, PartialEq, serde_keyvalue::FromKeyValues)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, serde_keyvalue::FromKeyValues)]
 #[serde(deny_unknown_fields)]
 pub struct DiskOption {
     pub path: PathBuf,
@@ -146,8 +154,13 @@ pub struct DiskOption {
     pub block_size: u32,
     #[serde(default, deserialize_with = "deserialize_disk_id")]
     pub id: Option<[u8; DISK_ID_LEN]>,
+    #[cfg(windows)]
+    #[serde(default = "block_option_io_concurrency_default")]
+    pub io_concurrency: NonZeroU32,
 }
 
+// TODO(b/237829580): Have platform specific impl once virtio block sys is
+// refactored to match the style guide.
 impl Default for DiskOption {
     fn default() -> Self {
         Self {
@@ -155,8 +168,13 @@ impl Default for DiskOption {
             read_only: true,
             sparse: false,
             o_direct: false,
+            #[cfg(unix)]
             block_size: 512,
+            #[cfg(windows)]
+            block_size: base::pagesize() as u32,
             id: None,
+            #[cfg(windows)]
+            io_concurrency: NonZeroU32::new(1).unwrap(),
         }
     }
 }
@@ -639,6 +657,8 @@ impl VirtioDevice for Block {
             keep_rds.extend(disk_image.as_raw_descriptors());
         }
 
+        // TODO: b/143318939 uncomment this when msgOnSocket is ported
+        #[cfg(unix)]
         if let Some(control_tube) = &self.control_tube {
             keep_rds.push(control_tube.as_raw_descriptor());
         }
@@ -1025,6 +1045,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
 
@@ -1039,6 +1061,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
 
@@ -1053,6 +1077,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
 
@@ -1067,6 +1093,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
         let params = from_block_arg("/some/path.img,sparse=false").unwrap();
@@ -1079,6 +1107,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
 
@@ -1093,6 +1123,8 @@ mod tests {
                 o_direct: true,
                 block_size: 512,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
 
@@ -1107,8 +1139,28 @@ mod tests {
                 o_direct: false,
                 block_size: 128,
                 id: None,
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
+
+        // io_concurrency
+        #[cfg(windows)]
+        {
+            let params = from_block_arg("/some/path.img,io_concurrency=4").unwrap();
+            assert_eq!(
+                params,
+                DiskOption {
+                    path: "/some/path.img".into(),
+                    read_only: false,
+                    sparse: true,
+                    o_direct: false,
+                    block_size: 512,
+                    id: None,
+                    io_concurrency: NonZeroU32::new(4).unwrap(),
+                }
+            );
+        }
 
         // id
         let params = from_block_arg("/some/path.img,id=DISK").unwrap();
@@ -1121,6 +1173,8 @@ mod tests {
                 o_direct: false,
                 block_size: 512,
                 id: Some(*b"DISK\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
         let err = from_block_arg("/some/path.img,id=DISK_ID_IS_WAY_TOO_LONG").unwrap_err();
@@ -1145,6 +1199,8 @@ mod tests {
                 o_direct: true,
                 block_size: 256,
                 id: Some(*b"DISK_LABEL\0\0\0\0\0\0\0\0\0\0"),
+                #[cfg(windows)]
+                io_concurrency: NonZeroU32::new(1).unwrap(),
             }
         );
     }

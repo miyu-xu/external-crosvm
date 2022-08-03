@@ -2,7 +2,7 @@ diff --git a/devices/Android.bp b/devices/Android.bp
 index a1ac9363..ae2fdde5 100644
 --- a/devices/Android.bp
 +++ b/devices/Android.bp
-@@ -83,7 +83,15 @@ rust_test {
+@@ -83,7 +83,18 @@ rust_test {
                  "libgpu_display",
                  "librutabaga_gfx",
              ],
@@ -10,7 +10,10 @@ index a1ac9363..ae2fdde5 100644
 +            shared_libs: ["libvirglrenderer", "libgfxstream_backend"],
 +        },
 +        android: {
-+            shared_libs: ["libdrm"],
++            shared_libs: [
++                "libcutils",
++                "libdrm",
++            ],
 +            static_libs: [
 +                "libepoxy",
 +                "libgbm",

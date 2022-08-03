@@ -43,7 +43,7 @@ pub mod msr;
 
 mod acpi;
 mod bzimage;
-mod cpuid;
+pub mod cpuid;
 mod gdt;
 mod interrupts;
 mod mptable;
@@ -66,11 +66,18 @@ use arch::{
     get_serial_cmdline, GetSerialCmdlineError, MsrAction, MsrConfig, MsrFilter, MsrRWType,
     MsrValueFrom, RunnableLinuxVm, VmComponents, VmImage,
 };
+#[cfg(unix)]
+use base::AsRawDescriptors;
 use base::{warn, Event, SendTube, TubeError};
-use devices::serial_device::{SerialHardware, SerialParameters};
+pub use cpuid::{adjust_cpuid, CpuIdContext};
+#[cfg(windows)]
+use devices::Minijail;
+#[cfg(unix)]
+use devices::ProxyDevice;
 use devices::{
     BusDevice, BusDeviceObj, BusResumeDevice, Debugcon, IrqChip, IrqChipX86_64, IrqEventSource,
-    PciAddress, PciConfigIo, PciConfigMmio, PciDevice, PciVirtualConfigMmio, ProxyDevice, Serial,
+    PciAddress, PciConfigIo, PciConfigMmio, PciDevice, PciVirtualConfigMmio, Pflash, Serial,
+    SerialHardware, SerialParameters,
 };
 use hypervisor::{
     HypervisorX86_64, ProtectionType, VcpuInitX86_64, VcpuX86_64, Vm, VmCap, VmX86_64,
@@ -102,6 +109,7 @@ pub enum Error {
     CloneEvent(base::Error),
     #[error("failed to clone IRQ chip: {0}")]
     CloneIrqChip(base::Error),
+    #[cfg(unix)]
     #[error("failed to clone jail: {0}")]
     CloneJail(minijail::Error),
     #[error("unable to clone a Tube: {0}")]
@@ -110,6 +118,8 @@ pub enum Error {
     Cmdline(kernel_cmdline::Error),
     #[error("failed to configure hotplugged pci device: {0}")]
     ConfigurePciDevice(arch::DeviceRegistrationError),
+    #[error("failed to configure segment registers: {0}")]
+    ConfigureSegments(regs::Error),
     #[error("error configuring the system")]
     ConfigureSystem,
     #[error("unable to create ACPI tables")]
@@ -133,6 +143,7 @@ pub enum Error {
     CreatePit(base::Error),
     #[error("unable to make PIT device: {0}")]
     CreatePitDevice(devices::PitError),
+    #[cfg(unix)]
     #[error("unable to create proxy device: {0}")]
     CreateProxyDevice(devices::ProxyError),
     #[error("unable to create serial devices: {0}")]
@@ -163,6 +174,8 @@ pub enum Error {
     LoadInitrd(arch::LoadImageError),
     #[error("error loading Kernel: {0}")]
     LoadKernel(kernel_loader::Error),
+    #[error("error loading pflash: {0}")]
+    LoadPflash(io::Error),
     #[error("error translating address: Page not present")]
     PageNotPresent,
     #[error("error reading guest memory {0}")]
@@ -184,19 +197,23 @@ pub enum Error {
     #[error("failed to set up cpuid: {0}")]
     SetupCpuid(cpuid::Error),
     #[error("failed to set up FPU: {0}")]
-    SetupFpu(regs::Error),
+    SetupFpu(base::Error),
     #[error("failed to set up guest memory: {0}")]
     SetupGuestMemory(GuestMemoryError),
     #[error("failed to set up mptable: {0}")]
     SetupMptable(mptable::Error),
     #[error("failed to set up MSRs: {0}")]
-    SetupMsrs(regs::Error),
+    SetupMsrs(base::Error),
+    #[error("failed to set up page tables: {0}")]
+    SetupPageTables(regs::Error),
+    #[error("failed to set up pflash: {0}")]
+    SetupPflash(anyhow::Error),
     #[error("failed to set up registers: {0}")]
     SetupRegs(regs::Error),
     #[error("failed to set up SMBIOS: {0}")]
     SetupSmbios(smbios::Error),
     #[error("failed to set up sregs: {0}")]
-    SetupSregs(regs::Error),
+    SetupSregs(base::Error),
     #[error("failed to translate virtual address")]
     TranslatingVirtAddr,
     #[error("protected VMs not supported on x86_64")]
@@ -501,6 +518,7 @@ impl arch::LinuxArch for X8664arch {
         irq_chip: &mut dyn IrqChipX86_64,
         vcpu_ids: &mut Vec<usize>,
         debugcon_jail: Option<Minijail>,
+        pflash_jail: Option<Minijail>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmX86_64,
@@ -617,6 +635,25 @@ impl arch::LinuxArch for X8664arch {
             debugcon_jail,
         )?;
 
+        let bios_size = if let VmImage::Bios(ref bios) = components.vm_image {
+            bios.metadata().map_err(Error::LoadBios)?.len()
+        } else {
+            0
+        };
+        if let Some(pflash_image) = components.pflash_image {
+            Self::setup_pflash(
+                pflash_image,
+                components.pflash_block_size,
+                bios_size,
+                &mmio_bus,
+                pflash_jail,
+            )?;
+        }
+
+        // Functions that use/create jails MUST be used before the call to
+        // setup_acpi_devices below, as this move us into a multiprocessing state
+        // from which we can no longer fork.
+
         let mut resume_notify_devices = Vec::new();
 
         // each bus occupy 1MB mmio for pcie enhanced configuration
@@ -698,8 +735,11 @@ impl arch::LinuxArch for X8664arch {
                 .map_err(Error::Cmdline)?;
         }
 
-        let mut vcpu_init = VcpuInitX86_64::default();
+        let pci_start = read_pci_mmio_before_32bit().start;
 
+        let mut vcpu_init = vec![VcpuInitX86_64::default(); vcpu_count];
+
+        let mut msrs;
         match components.vm_image {
             VmImage::Bios(ref mut bios) => {
                 // Allow a bios to hardcode CMDLINE_OFFSET and read the kernel command line from it.
@@ -709,8 +749,9 @@ impl arch::LinuxArch for X8664arch {
                     &CString::new(cmdline).unwrap(),
                 )
                 .map_err(Error::LoadCmdline)?;
-                Self::load_bios(&mem, bios)?
-                // RIP and CS will be configured by `set_reset_vector()` later.
+                Self::load_bios(&mem, bios)?;
+                msrs = regs::default_msrs();
+                // The default values for `Regs` and `Sregs` already set up the reset vector.
             }
             VmImage::Kernel(ref mut kernel_image) => {
                 let (params, kernel_end, kernel_entry) = Self::load_kernel(&mem, kernel_image)?;
@@ -724,12 +765,26 @@ impl arch::LinuxArch for X8664arch {
                     params,
                 )?;
 
-                // Configure the VCPU for the Linux/x86 64-bit boot protocol.
+                // Configure the bootstrap VCPU for the Linux/x86 64-bit boot protocol.
                 // <https://www.kernel.org/doc/html/latest/x86/boot.html>
-                vcpu_init.regs.rip = kernel_entry.offset();
-                vcpu_init.regs.rsp = BOOT_STACK_POINTER;
-                vcpu_init.regs.rsi = ZERO_PAGE_OFFSET;
+                vcpu_init[0].regs.rip = kernel_entry.offset();
+                vcpu_init[0].regs.rsp = BOOT_STACK_POINTER;
+                vcpu_init[0].regs.rsi = ZERO_PAGE_OFFSET;
+
+                msrs = regs::long_mode_msrs();
+                msrs.append(&mut regs::mtrr_msrs(&vm, pci_start));
+
+                // Set up long mode and enable paging.
+                regs::configure_segments_and_sregs(&mem, &mut vcpu_init[0].sregs)
+                    .map_err(Error::ConfigureSegments)?;
+                regs::setup_page_tables(&mem, &mut vcpu_init[0].sregs)
+                    .map_err(Error::SetupPageTables)?;
             }
+        }
+
+        // Initialize MSRs for all VCPUs.
+        for vcpu in vcpu_init.iter_mut() {
+            vcpu.msrs = msrs.clone();
         }
 
         Ok(RunnableLinuxVm {
@@ -762,10 +817,10 @@ impl arch::LinuxArch for X8664arch {
         hypervisor: &dyn HypervisorX86_64,
         irq_chip: &mut dyn IrqChipX86_64,
         vcpu: &mut dyn VcpuX86_64,
-        vcpu_init: &VcpuInitX86_64,
+        vcpu_init: VcpuInitX86_64,
         vcpu_id: usize,
         num_cpus: usize,
-        has_bios: bool,
+        _has_bios: bool,
         no_smt: bool,
         host_cpu_topology: bool,
         enable_pnp_data: bool,
@@ -788,17 +843,33 @@ impl arch::LinuxArch for X8664arch {
             .map_err(Error::SetupCpuid)?;
         }
 
-        if has_bios {
-            regs::set_reset_vector(vcpu).map_err(Error::SetupRegs)?;
-            regs::reset_msrs(vcpu).map_err(Error::SetupMsrs)?;
-            return Ok(());
-        }
-
-        let guest_mem = vm.get_memory();
-        regs::setup_msrs(vm, vcpu, read_pci_mmio_before_32bit().start).map_err(Error::SetupMsrs)?;
         vcpu.set_regs(&vcpu_init.regs).map_err(Error::WriteRegs)?;
-        regs::setup_fpu(vcpu).map_err(Error::SetupFpu)?;
-        regs::setup_sregs(guest_mem, vcpu).map_err(Error::SetupSregs)?;
+
+        vcpu.set_sregs(&vcpu_init.sregs)
+            .map_err(Error::SetupSregs)?;
+
+        vcpu.set_fpu(&vcpu_init.fpu).map_err(Error::SetupFpu)?;
+
+        let vcpu_supported_var_mtrrs = regs::vcpu_supported_variable_mtrrs(vcpu);
+        let num_var_mtrrs = regs::count_variable_mtrrs(&vcpu_init.msrs);
+        let msrs = if num_var_mtrrs > vcpu_supported_var_mtrrs {
+            warn!(
+                "Too many variable MTRR entries ({} required, {} supported),
+                please check pci_start addr, guest with pass through device may be very slow",
+                num_var_mtrrs, vcpu_supported_var_mtrrs,
+            );
+            // Filter out the MTRR entries from the MSR list.
+            vcpu_init
+                .msrs
+                .into_iter()
+                .filter(|&msr| !regs::is_mtrr_msr(msr.id))
+                .collect()
+        } else {
+            vcpu_init.msrs
+        };
+
+        vcpu.set_msrs(&msrs).map_err(Error::SetupMsrs)?;
+
         interrupts::set_lint(vcpu_id, irq_chip).map_err(Error::SetLint)?;
 
         Ok(())
@@ -1209,6 +1280,37 @@ impl X8664arch {
         Ok(())
     }
 
+    fn setup_pflash(
+        pflash_image: File,
+        block_size: u32,
+        bios_size: u64,
+        mmio_bus: &devices::Bus,
+        jail: Option<Minijail>,
+    ) -> Result<()> {
+        let size = pflash_image.metadata().map_err(Error::LoadPflash)?.len();
+        let start = FIRST_ADDR_PAST_32BITS - bios_size - size;
+        let pflash_image = Box::new(pflash_image);
+
+        #[cfg(unix)]
+        let fds = pflash_image.as_raw_descriptors();
+
+        let pflash = Pflash::new(pflash_image, block_size).map_err(Error::SetupPflash)?;
+        let pflash: Arc<Mutex<dyn BusDevice>> = match jail {
+            #[cfg(unix)]
+            Some(jail) => Arc::new(Mutex::new(
+                ProxyDevice::new(pflash, jail, fds).map_err(Error::CreateProxyDevice)?,
+            )),
+            #[cfg(windows)]
+            Some(_) => unreachable!(),
+            None => Arc::new(Mutex::new(pflash)),
+        };
+        mmio_bus
+            .insert(pflash, start, size)
+            .map_err(Error::InsertBus)?;
+
+        Ok(())
+    }
+
     /// Loads the kernel from an open file.
     ///
     /// # Arguments
@@ -1225,7 +1327,7 @@ impl X8664arch {
         kernel_image: &mut File,
     ) -> Result<(boot_params, u64, GuestAddress)> {
         let kernel_start = GuestAddress(KERNEL_START_OFFSET);
-        match kernel_loader::load_kernel(mem, kernel_start, kernel_image) {
+        match kernel_loader::load_elf64(mem, kernel_start, kernel_image) {
             Ok(loaded_kernel) => {
                 // ELF kernels don't contain a `boot_params` structure, so synthesize a default one.
                 let boot_params = Default::default();
@@ -1434,7 +1536,7 @@ impl X8664arch {
         irq_chip: &mut dyn IrqChip,
         sci_irq: u32,
         battery: (&Option<BatteryType>, Option<Minijail>),
-        mmio_bus: &devices::Bus,
+        #[cfg_attr(windows, allow(unused_variables))] mmio_bus: &devices::Bus,
         max_bus: u8,
         resume_notify_devices: &mut Vec<Arc<Mutex<dyn BusResumeDevice>>>,
     ) -> Result<(acpi::AcpiDevResource, Option<BatControl>)> {
@@ -1443,8 +1545,9 @@ impl X8664arch {
 
         let bat_control = if let Some(battery_type) = battery.0 {
             match battery_type {
+                #[cfg(unix)]
                 BatteryType::Goldfish => {
-                    let (control_tube, _mmio_base) = arch::add_goldfish_battery(
+                    let (control_tube, _mmio_base) = arch::sys::unix::add_goldfish_battery(
                         &mut amls, battery.1, mmio_bus, irq_chip, sci_irq, resources,
                     )
                     .map_err(Error::CreateBatDevices)?;
@@ -1453,6 +1556,8 @@ impl X8664arch {
                         control_tube,
                     })
                 }
+                #[cfg(windows)]
+                _ => None,
             }
         } else {
             None
@@ -1644,14 +1749,17 @@ impl X8664arch {
                 .map_err(Error::CreateDebugconDevice)?;
 
             let con: Arc<Mutex<dyn BusDevice>> = match debugcon_jail.as_ref() {
+                #[cfg(unix)]
                 Some(jail) => Arc::new(Mutex::new(
                     ProxyDevice::new(
                         con,
-                        &jail.try_clone().map_err(Error::CloneJail)?,
+                        jail.try_clone().map_err(Error::CloneJail)?,
                         preserved_fds,
                     )
                     .map_err(Error::CreateProxyDevice)?,
                 )),
+                #[cfg(windows)]
+                Some(_) => unreachable!(),
                 None => Arc::new(Mutex::new(con)),
             };
             io_bus
