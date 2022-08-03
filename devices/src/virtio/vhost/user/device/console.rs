@@ -2,32 +2,37 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
-use base::{error, Event, Terminal};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
+use argh::FromArgs;
+use base::error;
+use base::Event;
+use base::RawDescriptor;
+use base::Terminal;
 use cros_async::Executor;
 use data_model::DataInit;
-
-use argh::FromArgs;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::{
-    virtio::{
-        self,
-        console::{asynchronous::ConsoleDevice, virtio_console_config},
-        copy_config,
-        vhost::user::device::{
-            handler::{sys::Doorbell, VhostUserBackend},
-            listener::{sys::VhostUserListener, VhostUserListenerTrait},
-            VhostUserDevice,
-        },
-    },
-    SerialHardware, SerialParameters, SerialType,
-};
+use crate::virtio;
+use crate::virtio::console::asynchronous::ConsoleDevice;
+use crate::virtio::console::virtio_console_config;
+use crate::virtio::copy_config;
+use crate::virtio::vhost::user::device::handler::sys::Doorbell;
+use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
+use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
+use crate::virtio::vhost::user::device::VhostUserDevice;
+use crate::SerialHardware;
+use crate::SerialParameters;
+use crate::SerialType;
 
 const MAX_QUEUE_NUM: usize = 2 /* transmit and receive queues */;
 const MAX_VRING_LEN: u16 = 256;
@@ -200,6 +205,26 @@ pub struct Options {
     input_file: Option<PathBuf>,
 }
 
+/// Return a new vhost-user console device. `params` are the device's configuration, and `keep_rds`
+/// is a vector into which `RawDescriptors` that need to survive a fork are added, in case the
+/// device is meant to run within a child process.
+pub fn create_vu_console_device(
+    params: &SerialParameters,
+    keep_rds: &mut Vec<RawDescriptor>,
+) -> anyhow::Result<VhostUserConsoleDevice> {
+    let device = params.create_serial_device::<ConsoleDevice>(
+        ProtectionType::Unprotected,
+        // We need to pass an event as per Serial Device API but we don't really use it anyway.
+        &Event::new()?,
+        keep_rds,
+    )?;
+
+    Ok(VhostUserConsoleDevice {
+        console: device,
+        raw_stdin: params.stdin,
+    })
+}
+
 /// Starts a vhost-user console device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
@@ -223,22 +248,10 @@ pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let console = match params.create_serial_device::<ConsoleDevice>(
-        ProtectionType::Unprotected,
-        // We need to pass an event as per Serial Device API but we don't really use it anyway.
-        &Event::new()?,
-        // Same for keep_rds, we don't really use this.
-        &mut Vec::new(),
-    ) {
-        Ok(c) => c,
-        Err(e) => bail!(e),
-    };
+    // We won't jail the device and can simply ignore `keep_rds`.
+    let device = Box::new(create_vu_console_device(&params, &mut Vec::new())?);
     let ex = Executor::new().context("Failed to create executor")?;
-    let console = Box::new(VhostUserConsoleDevice {
-        console,
-        raw_stdin: true,
-    });
-    let backend = console.into_backend(&ex)?;
+    let backend = device.into_backend(&ex)?;
 
     let listener = VhostUserListener::new_from_socket_or_vfio(
         &opts.socket,

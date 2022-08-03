@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(feature = "direct")]
-use anyhow::Context;
-use std::cmp::{max, min, Reverse};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::max;
+use std::cmp::min;
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 #[cfg(feature = "direct")]
 use std::path::Path;
@@ -14,38 +15,68 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::u32;
-use sync::Mutex;
-
-use base::{
-    error, pagesize, warn, AsRawDescriptor, AsRawDescriptors, Event, EventToken, Protection,
-    RawDescriptor, Tube, WaitContext,
-};
-use hypervisor::MemSlot;
-
-use resources::{Alloc, MmioType, SystemAllocator};
-
-use vfio_sys::*;
-use vm_control::{
-    VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource, VmRequest, VmResponse,
-};
-
-use crate::pci::msi::{
-    MsiConfig, MsiStatus, PCI_MSI_FLAGS, PCI_MSI_FLAGS_64BIT, PCI_MSI_FLAGS_MASKBIT,
-    PCI_MSI_NEXT_POINTER,
-};
-use crate::pci::msix::{
-    MsixConfig, MsixStatus, BITS_PER_PBA_ENTRY, MSIX_PBA_ENTRIES_MODULO, MSIX_TABLE_ENTRIES_MODULO,
-};
 
 #[cfg(feature = "direct")]
-use crate::pci::pci_configuration::{CLASS_REG, CLASS_REG_REVISION_ID_OFFSET, HEADER_TYPE_REG};
-use crate::pci::pci_device::{BarRange, Error as PciDeviceError, PciDevice};
-use crate::pci::{
-    PciAddress, PciBarConfiguration, PciBarIndex, PciBarPrefetchable, PciBarRegionType,
-    PciClassCode, PciId, PciInterruptPin, PCI_VENDOR_ID_INTEL,
-};
+use anyhow::Context;
+use base::debug;
+use base::error;
+use base::pagesize;
+use base::warn;
+use base::AsRawDescriptor;
+use base::AsRawDescriptors;
+use base::Event;
+use base::EventToken;
+use base::Protection;
+use base::RawDescriptor;
+use base::Tube;
+use base::WaitContext;
+use hypervisor::MemSlot;
+use resources::Alloc;
+use resources::AllocOptions;
+use resources::MmioType;
+use resources::SystemAllocator;
+use sync::Mutex;
+use vfio_sys::*;
+use vm_control::VmMemoryDestination;
+use vm_control::VmMemoryRequest;
+use vm_control::VmMemoryResponse;
+use vm_control::VmMemorySource;
+use vm_control::VmRequest;
+use vm_control::VmResponse;
 
-use crate::vfio::{VfioDevice, VfioError, VfioIrqType, VfioPciConfig};
+use crate::pci::msi::MsiConfig;
+use crate::pci::msi::MsiStatus;
+use crate::pci::msi::PCI_MSI_FLAGS;
+use crate::pci::msi::PCI_MSI_FLAGS_64BIT;
+use crate::pci::msi::PCI_MSI_FLAGS_MASKBIT;
+use crate::pci::msi::PCI_MSI_NEXT_POINTER;
+use crate::pci::msix::MsixConfig;
+use crate::pci::msix::MsixStatus;
+use crate::pci::msix::BITS_PER_PBA_ENTRY;
+use crate::pci::msix::MSIX_PBA_ENTRIES_MODULO;
+use crate::pci::msix::MSIX_TABLE_ENTRIES_MODULO;
+#[cfg(feature = "direct")]
+use crate::pci::pci_configuration::CLASS_REG;
+#[cfg(feature = "direct")]
+use crate::pci::pci_configuration::CLASS_REG_REVISION_ID_OFFSET;
+#[cfg(feature = "direct")]
+use crate::pci::pci_configuration::HEADER_TYPE_REG;
+use crate::pci::pci_device::BarRange;
+use crate::pci::pci_device::Error as PciDeviceError;
+use crate::pci::pci_device::PciDevice;
+use crate::pci::PciAddress;
+use crate::pci::PciBarConfiguration;
+use crate::pci::PciBarIndex;
+use crate::pci::PciBarPrefetchable;
+use crate::pci::PciBarRegionType;
+use crate::pci::PciClassCode;
+use crate::pci::PciId;
+use crate::pci::PciInterruptPin;
+use crate::pci::PCI_VENDOR_ID_INTEL;
+use crate::vfio::VfioDevice;
+use crate::vfio::VfioError;
+use crate::vfio::VfioIrqType;
+use crate::vfio::VfioPciConfig;
 use crate::IrqLevelEvent;
 
 const PCI_VENDOR_ID: u32 = 0x0;
@@ -491,7 +522,7 @@ pub struct VfioPciDevice {
     device: Arc<VfioDevice>,
     config: VfioPciConfig,
     hotplug_bus_number: Option<u8>, // hot plug device has bus number specified at device creation.
-    guest_address: Option<PciAddress>,
+    preferred_address: PciAddress,
     pci_address: Option<PciAddress>,
     interrupt_evt: Option<IrqLevelEvent>,
     mmio_regions: Vec<PciBarConfiguration>,
@@ -523,7 +554,27 @@ impl VfioPciDevice {
         vfio_device_socket_msix: Tube,
         vfio_device_socket_mem: Tube,
         vfio_device_socket_vm: Option<Tube>,
-    ) -> Self {
+    ) -> Result<Self, PciDeviceError> {
+        let preferred_address = if let Some(bus_num) = hotplug_bus_number {
+            debug!("hotplug bus {}", bus_num);
+            PciAddress {
+                // Caller specify pcie bus number for hotplug device
+                bus: bus_num,
+                // devfn should be 0, otherwise pcie root port couldn't detect it
+                dev: 0,
+                func: 0,
+            }
+        } else if let Some(guest_address) = guest_address {
+            debug!("guest PCI address {}", guest_address);
+            guest_address
+        } else {
+            let addr = PciAddress::from_str(device.device_name()).map_err(|e| {
+                PciDeviceError::PciAddressParseFailure(device.device_name().clone(), e)
+            })?;
+            debug!("parsed device PCI address {}", addr);
+            addr
+        };
+
         let dev = Arc::new(device);
         let config = VfioPciConfig::new(Arc::clone(&dev));
         let mut msi_socket = Some(vfio_device_socket_msi);
@@ -595,11 +646,11 @@ impl VfioPciDevice {
             }
         };
 
-        VfioPciDevice {
+        Ok(VfioPciDevice {
             device: dev,
             config,
             hotplug_bus_number,
-            guest_address,
+            preferred_address,
             pci_address: None,
             interrupt_evt: None,
             mmio_regions: Vec::new(),
@@ -617,7 +668,7 @@ impl VfioPciDevice {
             #[cfg(feature = "direct")]
             header_type_reg,
             mapped_mmio_bars: BTreeMap::new(),
-        }
+        })
     }
 
     /// Gets the pci address of the device, if one has already been allocated.
@@ -1150,19 +1201,13 @@ impl VfioPciDevice {
         let address = self.pci_address.unwrap();
         let mut ranges: Vec<BarRange> = Vec::new();
         for mem_bar in mem_bars {
-            let mmio_type = if mem_bar.is_64bit_memory() {
-                MmioType::High
-            } else {
-                MmioType::Low
-            };
             let bar_size = mem_bar.size();
             let mut bar_addr: u64 = 0;
             // Don't allocate mmio for hotplug device, OS will allocate it from
             // its parent's bridge window.
             if self.hotplug_bus_number.is_none() {
                 bar_addr = resources
-                    .mmio_allocator(mmio_type)
-                    .allocate_with_align(
+                    .allocate_mmio(
                         bar_size,
                         Alloc::PciBar {
                             bus: address.bus,
@@ -1171,7 +1216,14 @@ impl VfioPciDevice {
                             bar: mem_bar.bar_index() as u8,
                         },
                         "vfio_bar".to_string(),
-                        bar_size,
+                        AllocOptions::new()
+                            .prefetchable(mem_bar.is_prefetchable())
+                            .max_address(if mem_bar.is_64bit_memory() {
+                                u64::MAX
+                            } else {
+                                u32::MAX.into()
+                            })
+                            .align(bar_size),
                     )
                     .map_err(|e| PciDeviceError::IoAllocationFailed(bar_size, e))?;
                 ranges.push(BarRange {
@@ -1358,25 +1410,16 @@ impl PciDevice for VfioPciDevice {
         format!("vfio {} device", self.device.device_name())
     }
 
+    fn preferred_address(&self) -> Option<PciAddress> {
+        Some(self.preferred_address)
+    }
+
     fn allocate_address(
         &mut self,
         resources: &mut SystemAllocator,
     ) -> Result<PciAddress, PciDeviceError> {
         if self.pci_address.is_none() {
-            let mut address = self.guest_address.unwrap_or(
-                PciAddress::from_str(self.device.device_name()).map_err(|e| {
-                    PciDeviceError::PciAddressParseFailure(self.device.device_name().clone(), e)
-                })?,
-            );
-
-            if let Some(bus_num) = self.hotplug_bus_number {
-                // Caller specify pcie bus number for hotplug device
-                address.bus = bus_num;
-                // devfn should be 0, otherwise pcie root port couldn't detect it
-                address.dev = 0;
-                address.func = 0;
-            }
-
+            let mut address = self.preferred_address;
             while address.func < 8 {
                 if resources.reserve_pci(
                     Alloc::PciBar {
@@ -1494,8 +1537,7 @@ impl PciDevice for VfioPciDevice {
                 .pci_address
                 .expect("allocate_address must be called prior to allocate_device_bars");
             let bar_addr = resources
-                .mmio_allocator(MmioType::Low)
-                .allocate(
+                .allocate_mmio(
                     size,
                     Alloc::PciBar {
                         bus: address.bus,
@@ -1504,6 +1546,7 @@ impl PciDevice for VfioPciDevice {
                         bar: (index * 4) as u8,
                     },
                     "vfio_bar".to_string(),
+                    AllocOptions::new().max_address(u32::MAX.into()),
                 )
                 .map_err(|e| PciDeviceError::IoAllocationFailed(size, e))?;
             ranges.push(BarRange {

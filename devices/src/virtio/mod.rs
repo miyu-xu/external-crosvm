@@ -6,8 +6,10 @@
 
 mod async_device;
 mod async_utils;
+#[cfg(feature = "balloon")]
 mod balloon;
 mod descriptor_utils;
+pub mod device_constants;
 mod input;
 mod interrupt;
 mod iommu;
@@ -28,6 +30,7 @@ pub mod resource_bridge;
 pub mod snd;
 pub mod vhost;
 
+#[cfg(feature = "balloon")]
 pub use self::balloon::*;
 pub use self::block::*;
 pub use self::console::*;
@@ -82,7 +85,8 @@ use std::cmp;
 use std::convert::TryFrom;
 
 use hypervisor::ProtectionType;
-use virtio_sys::virtio_config::{VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1};
+use virtio_sys::virtio_config::VIRTIO_F_ACCESS_PLATFORM;
+use virtio_sys::virtio_config::VIRTIO_F_VERSION_1;
 use virtio_sys::virtio_ids;
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 

@@ -23,48 +23,75 @@ pub mod display;
 pub mod sys;
 
 use std::convert::TryInto;
-use std::fmt::{self, Display};
+use std::fmt;
+use std::fmt::Display;
 use std::fs::File;
 use std::path::PathBuf;
 use std::result::Result as StdResult;
 use std::str::FromStr;
-use std::sync::{mpsc, Arc};
-
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use remain::sorted;
-use thiserror::Error;
-
-use libc::{EINVAL, EIO, ENODEV, ENOTSUP, ERANGE};
-use serde::{Deserialize, Serialize};
-
 pub use balloon_control::BalloonStats;
-use balloon_control::{BalloonTubeCommand, BalloonTubeResult};
-
-use base::{
-    error, info, warn, with_as_descriptor, AsRawDescriptor, Error as SysError, Event,
-    ExternalMapping, MappedRegion, MemoryMappingBuilder, MmapError, Protection, Result,
-    SafeDescriptor, SharedMemory, Tube,
-};
-
-use hypervisor::{IrqRoute, IrqSource, Vm};
-use resources::{Alloc, MmioType, SystemAllocator};
-use rutabaga_gfx::{RutabagaGralloc, RutabagaHandle, VulkanInfo};
-use sync::{Condvar, Mutex};
-use vm_memory::GuestAddress;
-
-use crate::display::{
-    AspectRatio, DisplaySize, GuestDisplayDensity, MouseMode, WindowEvent, WindowMode,
-    WindowVisibility,
-};
-
+#[cfg(feature = "balloon")]
+use balloon_control::BalloonTubeCommand;
+#[cfg(feature = "balloon")]
+use balloon_control::BalloonTubeResult;
+use base::error;
+use base::info;
+use base::warn;
+use base::with_as_descriptor;
+use base::AsRawDescriptor;
+use base::Error as SysError;
+use base::Event;
+use base::ExternalMapping;
+use base::MappedRegion;
+use base::MemoryMappingBuilder;
+use base::MmapError;
+use base::Protection;
+use base::Result;
+use base::SafeDescriptor;
+use base::SharedMemory;
+use base::Tube;
+use hypervisor::IrqRoute;
+use hypervisor::IrqSource;
+pub use hypervisor::MemSlot;
+use hypervisor::Vm;
+use libc::EINVAL;
+use libc::EIO;
+use libc::ENODEV;
+use libc::ENOTSUP;
+use libc::ERANGE;
+use remain::sorted;
+use resources::Alloc;
+use resources::SystemAllocator;
+use rutabaga_gfx::RutabagaGralloc;
+use rutabaga_gfx::RutabagaHandle;
+use rutabaga_gfx::VulkanInfo;
+use serde::Deserialize;
+use serde::Serialize;
+use sync::Condvar;
+use sync::Mutex;
 use sys::kill_handle;
 #[cfg(unix)]
-pub use sys::{FsMappingRequest, VmMsyncRequest, VmMsyncResponse};
+pub use sys::FsMappingRequest;
+#[cfg(unix)]
+pub use sys::VmMsyncRequest;
+#[cfg(unix)]
+pub use sys::VmMsyncResponse;
+use thiserror::Error;
+use vm_memory::GuestAddress;
 
+use crate::display::AspectRatio;
+use crate::display::DisplaySize;
+use crate::display::GuestDisplayDensity;
+use crate::display::MouseMode;
+use crate::display::WindowEvent;
+use crate::display::WindowMode;
+use crate::display::WindowVisibility;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 pub use crate::gdb::*;
-pub use hypervisor::MemSlot;
 
 /// Control the state of a particular VM CPU.
 #[derive(Clone, Debug)]
@@ -324,7 +351,7 @@ impl VmMemoryDestination {
     pub fn allocate(self, allocator: &mut SystemAllocator, size: u64) -> Result<GuestAddress> {
         let addr = match self {
             VmMemoryDestination::ExistingAllocation { allocation, offset } => allocator
-                .mmio_allocator(MmioType::High)
+                .mmio_allocator_any()
                 .address_from_pci_offset(allocation, offset, size)
                 .map_err(|_e| SysError::new(EINVAL))?,
             VmMemoryDestination::GuestPhysicalAddress(gpa) => gpa,
@@ -564,6 +591,7 @@ impl Display for BatControlResult {
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
+#[serde(rename_all = "kebab-case")]
 pub enum BatteryType {
     Goldfish,
 }
@@ -844,8 +872,8 @@ impl VmRequest {
     pub fn execute(
         &self,
         run_mode: &mut Option<VmRunMode>,
-        balloon_host_tube: Option<&Tube>,
-        balloon_stats_id: &mut u64,
+        #[cfg(feature = "balloon")] balloon_host_tube: Option<&Tube>,
+        #[cfg(feature = "balloon")] balloon_stats_id: &mut u64,
         disk_host_tubes: &[Tube],
         pm: &mut Option<Arc<Mutex<dyn PmResource>>>,
         usb_control_tube: Option<&Tube>,
@@ -920,6 +948,7 @@ impl VmRequest {
                 }
                 VmResponse::Ok
             }
+            #[cfg(feature = "balloon")]
             VmRequest::BalloonCommand(BalloonControlCommand::Adjust { num_bytes }) => {
                 if let Some(balloon_host_tube) = balloon_host_tube {
                     match balloon_host_tube.send(&BalloonTubeCommand::Adjust {
@@ -933,6 +962,7 @@ impl VmRequest {
                     VmResponse::Err(SysError::new(ENOTSUP))
                 }
             }
+            #[cfg(feature = "balloon")]
             VmRequest::BalloonCommand(BalloonControlCommand::Stats) => {
                 if let Some(balloon_host_tube) = balloon_host_tube {
                     // NB: There are a few reasons stale balloon stats could be left
@@ -982,6 +1012,8 @@ impl VmRequest {
                     VmResponse::Err(SysError::new(ENOTSUP))
                 }
             }
+            #[cfg(not(feature = "balloon"))]
+            VmRequest::BalloonCommand(_) => VmResponse::Err(SysError::new(ENOTSUP)),
             VmRequest::DiskCommand {
                 disk_index,
                 ref command,
@@ -1167,8 +1199,9 @@ pub enum ServiceSendToGpu {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use base::Event;
+
+    use super::*;
 
     #[test]
     fn sock_send_recv_event() {

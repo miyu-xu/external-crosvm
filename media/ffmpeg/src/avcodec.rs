@@ -6,10 +6,14 @@
 //! designed to concentrate all calls to unsafe methods in one place, while providing the same
 //! low-level access as the libavcodec functions do.
 
-use std::{ffi::CStr, fmt::Display, marker::PhantomData, ops::Deref};
+use std::ffi::CStr;
+use std::fmt::Display;
+use std::marker::PhantomData;
+use std::ops::Deref;
 
-use base::MappedRegion;
-use libc::{c_char, c_int};
+use libc::c_char;
+use libc::c_int;
+use libc::c_void;
 use thiserror::Error as ThisError;
 
 use super::*;
@@ -195,10 +199,7 @@ impl AvCodecContext {
     ///
     /// Error codes are the same as those returned by `avcodec_send_packet` with the exception of
     /// EAGAIN which is converted into `Ok(false)` as it is not actually an error.
-    pub fn try_send_packet<'a, T: MappedRegion>(
-        &mut self,
-        packet: &AvPacket<'a, T>,
-    ) -> Result<bool, AvError> {
+    pub fn try_send_packet<'a>(&mut self, packet: &AvPacket<'a>) -> Result<bool, AvError> {
         // Safe because the context is valid through the life of this object, and `packet`'s
         // lifetime properties ensures its memory area is readable.
         match unsafe { ffi::avcodec_send_packet(self.0, &packet.packet) } {
@@ -250,32 +251,144 @@ impl AvCodecContext {
     }
 }
 
-/// An encoded input packet that can be submitted to `AvCodecContext::try_send_packet`.
-pub struct AvPacket<'a, T: MappedRegion> {
-    packet: ffi::AVPacket,
-    _phantom: PhantomData<&'a T>,
+/// Trait for types that can be used as data provider for a `AVBuffer`.
+///
+/// `AVBuffer` is an owned buffer type, so all the type needs to do is being able to provide a
+/// stable pointer to its own data as well as its length. Implementors need to be sendable across
+/// threads because avcodec is allowed to use threads in its codec implementations.
+pub trait AvBufferSource: Send {
+    fn as_ptr(&self) -> *const u8;
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.as_ptr() as *mut u8
+    }
+    fn len(&self) -> usize;
 }
 
-impl<'a, T: MappedRegion> AvPacket<'a, T> {
-    /// Create a new AvPacket.
+/// Wrapper around `AVBuffer` and `AVBufferRef`.
+///
+/// libavcodec can manage its own memory for input and output data. Doing so implies a transparent
+/// copy of user-provided data (packets or frames) from and to this memory, which is wasteful.
+///
+/// This copy can be avoided by explicitly providing our own buffers to libavcodec using
+/// `AVBufferRef`. Doing so means that the lifetime of these buffers becomes managed by avcodec.
+/// This struct helps make this process safe by taking full ownership of an `AvBufferSource` and
+/// dropping it when libavcodec is done with it.
+struct AvBuffer(*mut ffi::AVBufferRef);
+
+impl AvBuffer {
+    /// Create a new `AvBuffer` from an `AvBufferSource`.
     ///
-    /// `input_data` is the encoded data we want to send to the codec for decoding. The data is not
-    /// copied by the AvPacket itself, however a copy may happen when the packet is submitted.
-    pub fn new(pts: i64, input_data: &'a T) -> Self {
+    /// Ownership of `source` is transferred to libavcodec, which will drop it when the number of
+    /// references to this buffer reaches zero.
+    ///
+    /// Returns `None` if the buffer could not be created due to an error in libavcodec.
+    fn new<D: AvBufferSource>(source: D) -> Option<Self> {
+        // Move storage to the heap so we find it at the same place in `avbuffer_free`
+        let mut storage = Box::new(source);
+
+        extern "C" fn avbuffer_free<D>(opaque: *mut c_void, _data: *mut u8) {
+            // Safe because `opaque` has been created from `Box::into_raw`. `storage` will be
+            // dropped immediately which will release any resources held by the storage.
+            let _ = unsafe { Box::from_raw(opaque as *mut D) };
+        }
+
+        // Safe because storage points to valid data and we are checking the return value against
+        // NULL, which signals an error.
+        Some(Self(unsafe {
+            ffi::av_buffer_create(
+                storage.as_mut_ptr(),
+                storage.len() as c_int,
+                Some(avbuffer_free::<D>),
+                Box::into_raw(storage) as *mut c_void,
+                0,
+            )
+            .as_mut()?
+        }))
+    }
+
+    /// Return a slice to the data contained in this buffer.
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        // Safe because the data has been initialized from valid storage in the constructor.
+        unsafe { std::slice::from_raw_parts_mut((*self.0).data, (*self.0).size as usize) }
+    }
+}
+
+impl Drop for AvBuffer {
+    fn drop(&mut self) {
+        // Safe because `self.0` is a valid pointer to an AVBufferRef.
+        unsafe { ffi::av_buffer_unref(&mut self.0) };
+    }
+}
+
+enum AvPacketOwnership<'a> {
+    Owned(AvBuffer),
+    Borrowed(PhantomData<&'a ()>),
+}
+
+/// An encoded input packet that can be submitted to `AvCodecContext::try_send_packet`.
+pub struct AvPacket<'a> {
+    packet: ffi::AVPacket,
+    /// This is just used to drop the `AvBuffer` if needed upon destruction and is not referenced
+    /// otherwise.
+    #[allow(dead_code)]
+    ownership: AvPacketOwnership<'a>,
+}
+
+#[derive(Debug, ThisError)]
+pub enum AvPacketError {
+    #[error("failed to create an AvBuffer from the input buffer")]
+    AvBufferCreationError,
+}
+
+impl<'a> AvPacket<'a> {
+    /// Create a new AvPacket that borrows the `input_data`.
+    ///
+    /// The returned `AvPacket` will hold a reference to `input_data`, meaning that libavcodec might
+    /// perform a copy from/to it.
+    pub fn new<T: AvBufferSource>(pts: i64, input_data: &'a mut T) -> Self {
         Self {
             packet: ffi::AVPacket {
                 buf: std::ptr::null_mut(),
                 pts,
                 dts: AV_NOPTS_VALUE as i64,
-                data: input_data.as_ptr(),
-                size: input_data.size() as c_int,
+                data: input_data.as_mut_ptr(),
+                size: input_data.len() as c_int,
                 side_data: std::ptr::null_mut(),
                 pos: -1,
                 // Safe because all the other elements of this struct can be zeroed.
                 ..unsafe { std::mem::zeroed() }
             },
-            _phantom: PhantomData,
+            ownership: AvPacketOwnership::Borrowed(PhantomData),
         }
+    }
+
+    /// Create a new AvPacket that owns the `input_data`.
+    ///
+    /// The returned `AvPacket` will have a `'static` lifetime and will keep `input_data` alive for
+    /// as long as libavcodec needs it.
+    pub fn new_owned<T: AvBufferSource>(pts: i64, input_data: T) -> Result<Self, AvPacketError> {
+        let mut av_buffer =
+            AvBuffer::new(input_data).ok_or(AvPacketError::AvBufferCreationError)?;
+        let data_slice = av_buffer.as_mut_slice();
+        let data = data_slice.as_mut_ptr();
+        let size = data_slice.len() as i32;
+
+        let ret = Self {
+            packet: ffi::AVPacket {
+                buf: av_buffer.0,
+                pts,
+                dts: AV_NOPTS_VALUE as i64,
+                data,
+                size,
+                side_data: std::ptr::null_mut(),
+                pos: -1,
+                // Safe because all the other elements of this struct can be zeroed.
+                ..unsafe { std::mem::zeroed() }
+            },
+            ownership: AvPacketOwnership::Owned(av_buffer),
+        };
+
+        Ok(ret)
     }
 }
 

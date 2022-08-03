@@ -11,33 +11,50 @@ use std::rc::Rc;
 use std::thread;
 
 use anyhow::Context;
-use audio_streams::{BoxError, SampleFormat, StreamSource, StreamSourceGenerator};
-use base::{error, warn, Error as SysError, Event, RawDescriptor};
+use audio_streams::BoxError;
+use audio_streams::SampleFormat;
+use audio_streams::StreamSource;
+use audio_streams::StreamSourceGenerator;
+use base::error;
+use base::warn;
+use base::Error as SysError;
+use base::Event;
+use base::RawDescriptor;
 use cros_async::sync::Mutex as AsyncMutex;
-use cros_async::{AsyncError, EventAsync, Executor};
+use cros_async::AsyncError;
+use cros_async::EventAsync;
+use cros_async::Executor;
 use data_model::DataInit;
-use futures::channel::{
-    mpsc,
-    oneshot::{self, Canceled},
-};
-use futures::{pin_mut, select, Future, FutureExt, TryFutureExt};
+use futures::channel::mpsc;
+use futures::channel::oneshot;
+use futures::channel::oneshot::Canceled;
+use futures::pin_mut;
+use futures::select;
+use futures::Future;
+use futures::FutureExt;
+use futures::TryFutureExt;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
 
+use crate::virtio::async_utils;
+use crate::virtio::copy_config;
+use crate::virtio::device_constants::snd::virtio_snd_config;
 use crate::virtio::snd::common::*;
 use crate::virtio::snd::common_backend::async_funcs::*;
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::layout::*;
 use crate::virtio::snd::null_backend::create_null_stream_source_generators;
-use crate::virtio::snd::parameters::{Parameters, StreamSourceBackend};
-use crate::virtio::snd::sys::{
-    create_stream_source_generators as sys_create_stream_source_generators,
-    set_audio_thread_priority,
-};
-use crate::virtio::{
-    async_utils, copy_config, DescriptorChain, DescriptorError, DeviceType, Interrupt, Queue,
-    VirtioDevice, Writer,
-};
+use crate::virtio::snd::parameters::Parameters;
+use crate::virtio::snd::parameters::StreamSourceBackend;
+use crate::virtio::snd::sys::create_stream_source_generators as sys_create_stream_source_generators;
+use crate::virtio::snd::sys::set_audio_thread_priority;
+use crate::virtio::DescriptorChain;
+use crate::virtio::DescriptorError;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::VirtioDevice;
+use crate::virtio::Writer;
 
 pub mod async_funcs;
 
@@ -374,17 +391,12 @@ impl VirtioSnd {
         let cfg = hardcoded_virtio_snd_config(&params);
         let snd_data = hardcoded_snd_data(&params);
         let avail_features = base_features;
-        let stream_source_generators: Vec<Box<dyn StreamSourceGenerator>>;
-
-        match params.backend {
-            StreamSourceBackend::NULL => {
-                stream_source_generators = create_null_stream_source_generators(&snd_data);
-            }
+        let stream_source_generators = match params.backend {
+            StreamSourceBackend::NULL => create_null_stream_source_generators(&snd_data),
             StreamSourceBackend::Sys(backend) => {
-                stream_source_generators =
-                    sys_create_stream_source_generators(backend, &params, &snd_data);
+                sys_create_stream_source_generators(backend, &params, &snd_data)
             }
-        }
+        };
 
         Ok(VirtioSnd {
             cfg,
@@ -621,7 +633,6 @@ fn run_worker(
 ) -> Result<(), String> {
     let ex = Executor::new().expect("Failed to create an executor");
 
-    let streams: Vec<AsyncMutex<StreamInfo>>;
     if snd_data.pcm_info_len() != stream_source_generators.len() {
         error!(
             "snd: expected {} streams, got {}",
@@ -629,7 +640,7 @@ fn run_worker(
             stream_source_generators.len(),
         );
     }
-    streams = stream_source_generators
+    let streams = stream_source_generators
         .into_iter()
         .map(|generator| AsyncMutex::new(StreamInfo::new(generator)))
         .collect();

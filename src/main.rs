@@ -7,36 +7,56 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
+use anyhow::Result;
 use argh::FromArgs;
+use base::error;
+use base::info;
+use base::syslog;
 use base::syslog::LogConfig;
-use base::{error, info, syslog};
-use cmdline::{RunCommand, UsbAttachCommand};
+use cmdline::RunCommand;
+use cmdline::UsbAttachCommand;
 mod crosvm;
 use crosvm::cmdline;
 #[cfg(feature = "plugin")]
 use crosvm::config::executable_is_plugin;
 use crosvm::config::Config;
-use devices::virtio::vhost::user::device::{run_block_device, run_net_device};
-use disk::QcowFile;
+use devices::virtio::vhost::user::device::run_block_device;
+use devices::virtio::vhost::user::device::run_net_device;
 #[cfg(feature = "composite-disk")]
-use disk::{
-    create_composite_disk, create_disk_file, create_zero_filler, ImagePartitionType, PartitionInfo,
-};
+use disk::create_composite_disk;
+#[cfg(feature = "composite-disk")]
+use disk::create_disk_file;
+#[cfg(feature = "composite-disk")]
+use disk::create_zero_filler;
+#[cfg(feature = "composite-disk")]
+use disk::ImagePartitionType;
+#[cfg(feature = "composite-disk")]
+use disk::PartitionInfo;
+use disk::QcowFile;
 mod sys;
-use vm_control::{
-    client::{
-        do_modify_battery, do_usb_attach, do_usb_detach, do_usb_list, handle_request, vms_request,
-        ModifyUsbResult,
-    },
-    BalloonControlCommand, DiskControlCommand, UsbControlResult, VmRequest, VmResponse,
-};
+use crosvm::cmdline::Command;
+use crosvm::cmdline::CrossPlatformCommands;
+use crosvm::cmdline::CrossPlatformDevicesCommands;
+#[cfg(windows)]
+use sys::windows::metrics;
+use vm_control::client::do_modify_battery;
+use vm_control::client::do_usb_attach;
+use vm_control::client::do_usb_detach;
+use vm_control::client::do_usb_list;
+use vm_control::client::handle_request;
+use vm_control::client::vms_request;
+use vm_control::client::ModifyUsbResult;
+#[cfg(feature = "balloon")]
+use vm_control::BalloonControlCommand;
+use vm_control::DiskControlCommand;
+use vm_control::UsbControlResult;
+use vm_control::VmRequest;
+#[cfg(feature = "balloon")]
+use vm_control::VmResponse;
 
 use crate::sys::error_to_exit_code;
 use crate::sys::init_log;
-use crosvm::cmdline::{Command, CrossPlatformCommands, CrossPlatformDevicesCommands};
-#[cfg(windows)]
-use sys::windows::metrics;
 
 #[cfg(feature = "scudo")]
 #[global_allocator]
@@ -137,6 +157,7 @@ fn inject_gpe(cmd: cmdline::GpeCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Gpe(cmd.gpe), cmd.socket_path)
 }
 
+#[cfg(feature = "balloon")]
 fn balloon_vms(cmd: cmdline::BalloonCommand) -> std::result::Result<(), ()> {
     let command = BalloonControlCommand::Adjust {
         num_bytes: cmd.num_bytes,
@@ -144,6 +165,7 @@ fn balloon_vms(cmd: cmdline::BalloonCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::BalloonCommand(command), cmd.socket_path)
 }
 
+#[cfg(feature = "balloon")]
 fn balloon_stats(cmd: cmdline::BalloonStatsCommand) -> std::result::Result<(), ()> {
     let command = BalloonControlCommand::Stats {};
     let request = &VmRequest::BalloonCommand(command);
@@ -199,7 +221,8 @@ fn modify_vfio(cmd: cmdline::VfioCrosvmCommand) -> std::result::Result<(), ()> {
 
 #[cfg(feature = "composite-disk")]
 fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result<(), ()> {
-    use std::{fs::File, path::PathBuf};
+    use std::fs::File;
+    use std::path::PathBuf;
 
     let composite_image_path = &cmd.path;
     let zero_filler_path = format!("{}.filler", composite_image_path);
@@ -455,20 +478,6 @@ fn prepare_argh_args<I: IntoIterator<Item = String>>(args_iter: I) -> Vec<String
             arg => args.push(arg.to_string()),
         }
     }
-    let switch_or_option = [
-        "--battery",
-        "--video-decoder",
-        "--video-encoder",
-        "--gpu",
-        "--gpu-display",
-    ];
-    for arg in switch_or_option {
-        if let Some(i) = args.iter().position(|a| a == arg) {
-            if i >= args.len() - 2 || is_flag(&args[i + 1]) {
-                args.insert(i + 1, "".to_string());
-            }
-        }
-    }
 
     args
 }
@@ -498,6 +507,7 @@ fn crosvm_main() -> Result<CommandStatus> {
 
     let mut log_config = LogConfig {
         filter: &args.log_level,
+        proc_name: args.syslog_tag.unwrap_or("crosvm".to_string()),
         syslog: !args.no_syslog,
         ..Default::default()
     };
@@ -527,9 +537,11 @@ fn crosvm_main() -> Result<CommandStatus> {
                     .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
 
                 match command {
+                    #[cfg(feature = "balloon")]
                     CrossPlatformCommands::Balloon(cmd) => {
                         balloon_vms(cmd).map_err(|_| anyhow!("balloon subcommand failed"))
                     }
+                    #[cfg(feature = "balloon")]
                     CrossPlatformCommands::BalloonStats(cmd) => {
                         balloon_stats(cmd).map_err(|_| anyhow!("balloon_stats subcommand failed"))
                     }
@@ -581,7 +593,15 @@ fn crosvm_main() -> Result<CommandStatus> {
                 .map(|_| CommandStatus::Success)
             }
         }
-        cmdline::Command::Sys(command) => sys::run_command(command).map(|_| CommandStatus::Success),
+        cmdline::Command::Sys(command) => {
+            // On windows, the sys commands handle their own logging setup, so we can't handle it
+            // below otherwise logging will double init.
+            if cfg!(unix) {
+                syslog::init_with(log_config)
+                    .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+            }
+            sys::run_command(command).map(|_| CommandStatus::Success)
+        }
     };
 
     sys::cleanup();
@@ -691,57 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn args_battery_switch() {
-        assert_eq!(
-            prepare_argh_args(
-                ["crosvm", "run", "--battery", "--other-args", "vm_kernel"].map(|x| x.to_string())
-            ),
-            [
-                "crosvm",
-                "run",
-                "--battery",
-                "",
-                "--other-args",
-                "vm_kernel"
-            ]
-        );
-    }
-
-    #[test]
-    fn args_battery_switch_last_arg() {
-        assert_eq!(
-            prepare_argh_args(["crosvm", "run", "--battery", "vm_kernel"].map(|x| x.to_string())),
-            ["crosvm", "run", "--battery", "", "vm_kernel"]
-        );
-    }
-
-    #[test]
-    fn args_battery_switch_short_arg() {
-        assert_eq!(
-            prepare_argh_args(
-                [
-                    "crosvm",
-                    "run",
-                    "--battery",
-                    "-p",
-                    "init=/bin/bash",
-                    "vm_kernel"
-                ]
-                .map(|x| x.to_string())
-            ),
-            [
-                "crosvm",
-                "run",
-                "--battery",
-                "",
-                "-p",
-                "init=/bin/bash",
-                "vm_kernel"
-            ]
-        );
-    }
-
-    #[test]
     fn args_battery_option() {
         assert_eq!(
             prepare_argh_args(
@@ -763,40 +732,6 @@ mod tests {
                 "type=goldfish",
                 "-p",
                 "init=/bin/bash",
-                "vm_kernel"
-            ]
-        );
-    }
-
-    #[test]
-    fn args_switch_multi() {
-        assert_eq!(
-            prepare_argh_args(
-                [
-                    "crosvm",
-                    "run",
-                    "--gpu",
-                    "test",
-                    "--video-decoder",
-                    "--video-encoder",
-                    "--battery",
-                    "--other-switch",
-                    "vm_kernel"
-                ]
-                .map(|x| x.to_string())
-            ),
-            [
-                "crosvm",
-                "run",
-                "--gpu",
-                "test",
-                "--video-decoder",
-                "",
-                "--video-encoder",
-                "",
-                "--battery",
-                "",
-                "--other-switch",
                 "vm_kernel"
             ]
         );

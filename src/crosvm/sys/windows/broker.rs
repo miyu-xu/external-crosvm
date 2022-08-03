@@ -5,47 +5,82 @@
 //! Contains the multi-process broker for crosvm. This is a work in progress, and some example
 //! structs here are dead code.
 #![allow(dead_code)]
-use crate::crosvm::sys::windows::exit::{
-    to_process_type_error, Exit, ExitCode, ExitCodeWrapper, ExitContext, ExitContextAnyhow,
-};
-#[cfg(feature = "crash-report")]
-use crash_report::CrashReportAttributes;
-
-use crate::{bail_exit_code, crosvm::sys::config::ProcessType, ensure_exit_code, Config};
-use anyhow::{anyhow, Context, Result};
-use base::named_pipes::{self, BlockingMode, FramingMode};
-use base::{
-    error, info, syslog, warn, AsRawDescriptor, Descriptor, DuplicateHandleRequest,
-    DuplicateHandleResponse, Event, EventToken, RawDescriptor, ReadNotifier, SafeDescriptor, Timer,
-    Tube, WaitContext,
-};
-
-use base::enable_high_res_timers;
-use broker_ipc::CommonChildStartupArgs;
-#[cfg(feature = "process-invariants")]
-use broker_ipc::{init_broker_process_invariants, EmulatorProcessInvariants};
-use devices::virtio::vhost::user::device::NetBackendConfig;
-#[cfg(feature = "gpu")]
-use gpu_display::EventDevice;
-use metrics::event_details_proto::{EmulatorChildProcessExitDetails, RecordDetails};
-use metrics::{self, MetricEventType};
-use net_util::slirp::sys::windows::{SlirpStartupConfig, SLIRP_BUFFER_SIZE};
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::env::current_exe;
 use std::ffi::OsStr;
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fs::OpenOptions;
-use std::os::windows::io::{AsRawHandle, RawHandle};
-use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::RawHandle;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process;
+use std::process::Command;
 use std::time::Duration;
-use tube_transporter::{TubeToken, TubeTransferData, TubeTransporter};
+
+use anyhow::anyhow;
+use anyhow::Context;
+use anyhow::Result;
+use base::enable_high_res_timers;
+use base::error;
+#[cfg(feature = "crash-report")]
+use base::generate_uuid;
+use base::info;
+use base::named_pipes;
+use base::named_pipes::BlockingMode;
+use base::named_pipes::FramingMode;
+use base::syslog;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Descriptor;
+use base::DuplicateHandleRequest;
+use base::DuplicateHandleResponse;
+use base::Event;
+use base::EventToken;
+use base::RawDescriptor;
+use base::ReadNotifier;
+use base::SafeDescriptor;
+use base::Timer;
+use base::Tube;
+use base::WaitContext;
+#[cfg(feature = "process-invariants")]
+use broker_ipc::init_broker_process_invariants;
+use broker_ipc::CommonChildStartupArgs;
+#[cfg(feature = "process-invariants")]
+use broker_ipc::EmulatorProcessInvariants;
+#[cfg(feature = "crash-report")]
+use crash_report::product_type;
+#[cfg(feature = "crash-report")]
+use crash_report::CrashReportAttributes;
+use devices::virtio::vhost::user::device::NetBackendConfig;
+#[cfg(feature = "gpu")]
+use gpu_display::EventDevice;
+use metrics::event_details_proto::EmulatorChildProcessExitDetails;
+use metrics::event_details_proto::RecordDetails;
+use metrics::MetricEventType;
+use net_util::slirp::sys::windows::SlirpStartupConfig;
+use net_util::slirp::sys::windows::SLIRP_BUFFER_SIZE;
+use tube_transporter::TubeToken;
+use tube_transporter::TubeTransferData;
+use tube_transporter::TubeTransporter;
 use win_util::get_exit_code_process;
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::um::processthreadsapi::TerminateProcess;
-#[cfg(feature = "crash-report")]
-use {base::generate_uuid, crash_report::product_type};
+
+use crate::bail_exit_code;
+use crate::crosvm::sys::config::ProcessType;
+use crate::crosvm::sys::windows::exit::to_process_type_error;
+use crate::crosvm::sys::windows::exit::Exit;
+use crate::crosvm::sys::windows::exit::ExitCode;
+use crate::crosvm::sys::windows::exit::ExitCodeWrapper;
+use crate::crosvm::sys::windows::exit::ExitContext;
+use crate::crosvm::sys::windows::exit::ExitContextAnyhow;
+use crate::ensure_exit_code;
+use crate::Config;
 
 const KILL_CHILD_EXIT_CODE: u32 = 1;
 
@@ -291,10 +326,10 @@ impl Drop for ChildCleanup {
             // itself.
             if self.process_type != ProcessType::Metrics {
                 let exit_code = self.child.wait();
-                if exit_code.is_ok() && exit_code.as_ref().unwrap().is_some() {
+                if let Ok(Some(exit_code)) = exit_code {
                     let mut details = RecordDetails::new();
                     let mut exit_details = EmulatorChildProcessExitDetails::new();
-                    exit_details.set_exit_code(exit_code.unwrap().unwrap() as u32);
+                    exit_details.set_exit_code(exit_code as u32);
                     exit_details.set_process_type(self.process_type.into());
                     details.set_emulator_child_process_exit_details(exit_details);
                     metrics::log_event_with_details(MetricEventType::ChildProcessExit, &details);
@@ -347,10 +382,9 @@ enum Token {
 }
 
 fn get_log_path(cfg: &Config, file_name: &str) -> Option<PathBuf> {
-    match cfg.logs_directory.as_ref() {
-        Some(dir) => Some(Path::new(dir).join(file_name)),
-        None => None,
-    }
+    cfg.logs_directory
+        .as_ref()
+        .map(|dir| Path::new(dir).join(file_name))
 }
 
 /// Creates a metrics tube pair for communication with the metrics process.
@@ -638,11 +672,7 @@ fn clean_up_metrics(metrics_child: ChildCleanup) -> Result<()> {
         .context("failed to wait for metrics context")?;
 
     let mut process_exited = false;
-    if events
-        .iter()
-        .find(|e| e.is_readable && e.token == 1)
-        .is_some()
-    {
+    if events.iter().any(|e| e.is_readable && e.token == 1) {
         process_exited = true;
     }
 
@@ -1028,8 +1058,8 @@ fn spawn_block_backend(
     let block_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
         &["device", "block"],
-        get_log_path(&cfg, &format!("disk_{}_stdout.log", log_index)),
-        get_log_path(&cfg, &format!("disk_{}_stderr.log", log_index)),
+        get_log_path(cfg, &format!("disk_{}_stdout.log", log_index)),
+        get_log_path(cfg, &format!("disk_{}_stderr.log", log_index)),
         ProcessType::Block,
         children,
         wait_ctx,
@@ -1278,8 +1308,8 @@ fn spawn_slirp(
     let slirp_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
         &["run-slirp"],
-        get_log_path(&cfg, "slirp_stdout.log"),
-        get_log_path(&cfg, "slirp_stderr.log"),
+        get_log_path(cfg, "slirp_stdout.log"),
+        get_log_path(cfg, "slirp_stderr.log"),
         ProcessType::Slirp,
         children,
         wait_ctx,
@@ -1313,8 +1343,8 @@ fn spawn_net_backend(
     let net_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
         &["device", "net"],
-        get_log_path(&cfg, "net_stdout.log"),
-        get_log_path(&cfg, "net_stderr.log"),
+        get_log_path(cfg, "net_stdout.log"),
+        get_log_path(cfg, "net_stderr.log"),
         ProcessType::Net,
         children,
         wait_ctx,
@@ -1500,8 +1530,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use base::thread::spawn_with_timeout;
+
+    use super::*;
 
     /// Verifies that the supervisor loop exits normally with a single child that exits.
     #[test]

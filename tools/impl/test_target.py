@@ -41,6 +41,7 @@ having to source it after each call.
 
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPT_DIR = SCRIPT_PATH.parent.resolve()
+CROSVM_ROOT = (SCRIPT_DIR / "../../").resolve()
 TESTVM_DIR = SCRIPT_DIR.parent.joinpath("testvm")
 TARGET_DIR = testvm.cargo_target_dir().joinpath("crosvm_tools")
 ENVRC_PATH = SCRIPT_DIR.parent.parent.joinpath(".envrc")
@@ -318,7 +319,8 @@ def get_cargo_env(target: TestTarget):
     upper_target = cargo_target.upper().replace("-", "_")
     env["CARGO_BUILD_TARGET"] = cargo_target
     if not target.is_host:
-        env[f"CARGO_TARGET_{upper_target}_RUNNER"] = f"{SCRIPT_PATH} exec-file"
+        script_path = CROSVM_ROOT / "tools/test_target"
+        env[f"CARGO_TARGET_{upper_target}_RUNNER"] = f"{script_path} exec-file"
     env["CROSVM_TEST_TARGET"] = target.target_str
     return env
 
@@ -342,6 +344,7 @@ def exec_file_on_target(
     timeout: int,
     args: List[str] = [],
     extra_files: List[Path] = [],
+    profile_file: Optional[Path] = None,
     **kwargs: Any,
 ):
     """Executes a file on the test target.
@@ -368,6 +371,8 @@ def exec_file_on_target(
                 env["PATH"] += ";" + str(find_rust_lib_dir())
         else:
             raise Exception(f"Unsupported build target: {os.name}")
+        if profile_file:
+            env["LLVM_PROFILE_FILE"] = str(profile_file)
 
         cmd_line = [*prefix, str(filepath), *args]
         return subprocess.run(
@@ -381,6 +386,8 @@ def exec_file_on_target(
         filename = Path(filepath).name
         target.ssh.upload_files([filepath] + extra_files, quiet=True)
         cmd_line = [*prefix, f"./{filename}", *args]
+        if profile_file:
+            raise Exception("Coverage collection on remote hosts is not supported.")
         try:
             result = target.ssh.run(
                 f"chmod +x {filename} && sudo LD_LIBRARY_PATH=. {' '.join(cmd_line)}",

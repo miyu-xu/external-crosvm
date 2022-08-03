@@ -4,22 +4,30 @@
 
 //! Handles routing to devices in an address space.
 
-use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
+use std::cmp::Ord;
+use std::cmp::Ordering;
+use std::cmp::PartialEq;
+use std::cmp::PartialOrd;
 use std::collections::btree_map::BTreeMap;
 use std::fmt;
 use std::result;
 use std::sync::Arc;
 
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error;
 
+#[cfg(feature = "stats")]
+use crate::bus_stats::BusOperation;
+#[cfg(feature = "stats")]
+use crate::BusStatistics;
+use crate::DeviceId;
+use crate::PciAddress;
+use crate::PciDevice;
 #[cfg(unix)]
 use crate::VfioPlatformDevice;
-#[cfg(feature = "stats")]
-use crate::{bus_stats::BusOperation, BusStatistics};
-use crate::{DeviceId, PciAddress, PciDevice};
 
 /// Information about how a device was accessed.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -133,8 +141,10 @@ pub trait BusResumeDevice: Send {
 /// The key to identify hotplug device from host view.
 /// like host sysfs path for vfio pci device, host disk file
 /// path for virtio block device
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum HostHotPlugKey {
+    UpstreamPort { host_addr: PciAddress },
+    DownstreamPort { host_addr: PciAddress },
     Vfio { host_addr: PciAddress },
 }
 
@@ -157,6 +167,10 @@ pub trait HotPlugBus {
     fn add_hotplug_device(&mut self, host_key: HostHotPlugKey, guest_addr: PciAddress);
     /// get guest pci address from the specified host_key
     fn get_hotplug_device(&self, host_key: HostHotPlugKey) -> Option<PciAddress>;
+    /// Check whether this hotplug bus is empty
+    fn is_empty(&self) -> bool;
+    /// Get hotplug key of this hotplug bus
+    fn get_hotplug_key(&self) -> Option<HostHotPlugKey>;
 }
 
 /// Trait for generic device abstraction, that is, all devices that reside on BusDevice and want
@@ -509,10 +523,10 @@ impl Bus {
         };
 
         #[cfg(feature = "stats")]
-        if device_index.is_some() {
+        if let Some(device_index) = device_index {
             self.stats
                 .lock()
-                .end_stat(BusOperation::Write, start, device_index.clone().unwrap());
+                .end_stat(BusOperation::Write, start, device_index);
         }
         device_index.is_some()
     }
@@ -520,9 +534,8 @@ impl Bus {
 
 #[cfg(test)]
 mod tests {
-    use crate::pci::CrosvmDeviceId;
-
     use super::*;
+    use crate::pci::CrosvmDeviceId;
 
     struct DummyDevice;
     impl BusDevice for DummyDevice {

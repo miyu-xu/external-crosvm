@@ -30,57 +30,107 @@
 
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap as Map, BTreeSet as Set, VecDeque};
+use std::collections::BTreeMap as Map;
+use std::collections::BTreeSet as Set;
+use std::collections::VecDeque;
 use std::convert::From;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, IoSliceMut, Read, Seek, SeekFrom, Write};
+use std::io;
+use std::io::IoSliceMut;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::mem::size_of;
 #[cfg(feature = "minigbm")]
-use std::os::raw::{c_uint, c_ulonglong};
+use std::os::raw::c_uint;
+#[cfg(feature = "minigbm")]
+use std::os::raw::c_ulonglong;
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::result;
 use std::thread;
 use std::time::Duration;
 
-#[cfg(feature = "minigbm")]
-use libc::{EBADF, EINVAL};
-
 use anyhow::Context;
-use data_model::*;
-
+use base::error;
 #[cfg(feature = "minigbm")]
 use base::ioctl_iow_nr;
+use base::ioctl_iowr_nr;
+use base::ioctl_with_ref;
+use base::pagesize;
+use base::pipe;
+use base::round_up_to_page_size;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Error;
+use base::Event;
+use base::EventToken;
+use base::EventType;
+use base::FileFlags;
+use base::FromRawDescriptor;
 #[cfg(feature = "gpu")]
 use base::IntoRawDescriptor;
-use base::{
-    error, ioctl_iowr_nr, ioctl_with_ref, pagesize, pipe, round_up_to_page_size, warn,
-    AsRawDescriptor, Error, Event, EventToken, EventType, FileFlags, FromRawDescriptor, Protection,
-    RawDescriptor, Result, SafeDescriptor, ScmSocket, SharedMemory, SharedMemoryUnix, Tube,
-    TubeError, WaitContext,
-};
-use remain::sorted;
-use resources::{address_allocator::AddressAllocator, AddressRange, Alloc};
+use base::Protection;
+use base::RawDescriptor;
+use base::Result;
+use base::SafeDescriptor;
+use base::ScmSocket;
+use base::SharedMemory;
+use base::SharedMemoryUnix;
+use base::Tube;
+use base::TubeError;
+use base::WaitContext;
+use data_model::*;
 #[cfg(feature = "minigbm")]
-use rutabaga_gfx::{
-    DrmFormat, ImageAllocationInfo, ImageMemoryRequirements, RutabagaError, RutabagaGralloc,
-    RutabagaGrallocFlags,
-};
+use libc::EBADF;
+#[cfg(feature = "minigbm")]
+use libc::EINVAL;
+use remain::sorted;
+use resources::address_allocator::AddressAllocator;
+use resources::AddressRange;
+use resources::Alloc;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::DrmFormat;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::ImageAllocationInfo;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::ImageMemoryRequirements;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaError;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGralloc;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGrallocFlags;
 use thiserror::Error as ThisError;
-use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
+use vm_control::VmMemorySource;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
+use vm_memory::GuestMemoryError;
 
 #[cfg(feature = "gpu")]
-use super::resource_bridge::{
-    get_resource_info, BufferInfo, ResourceBridgeError, ResourceInfo, ResourceRequest,
-};
-use super::{
-    DeviceType, Interrupt, Queue, Reader, SharedMemoryMapper, SharedMemoryRegion,
-    SignalableInterrupt, VirtioDevice, Writer,
-};
-use vm_control::VmMemorySource;
+use super::resource_bridge::get_resource_info;
+#[cfg(feature = "gpu")]
+use super::resource_bridge::BufferInfo;
+#[cfg(feature = "gpu")]
+use super::resource_bridge::ResourceBridgeError;
+#[cfg(feature = "gpu")]
+use super::resource_bridge::ResourceInfo;
+#[cfg(feature = "gpu")]
+use super::resource_bridge::ResourceRequest;
+use super::DeviceType;
+use super::Interrupt;
+use super::Queue;
+use super::Reader;
+use super::SharedMemoryMapper;
+use super::SharedMemoryRegion;
+use super::SignalableInterrupt;
+use super::VirtioDevice;
+use super::Writer;
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -1021,7 +1071,7 @@ pub struct WlState {
     #[cfg(feature = "gpu")]
     signaled_fence: Option<SafeDescriptor>,
     use_send_vfd_v2: bool,
-    address_offset: u64,
+    address_offset: Option<u64>,
 }
 
 impl WlState {
@@ -1033,7 +1083,7 @@ impl WlState {
         use_send_vfd_v2: bool,
         resource_bridge: Option<Tube>,
         #[cfg(feature = "minigbm")] gralloc: RutabagaGralloc,
-        address_offset: u64,
+        address_offset: Option<u64>,
     ) -> WlState {
         WlState {
             wayland_paths,
@@ -1626,7 +1676,14 @@ impl WlState {
     }
 
     fn compute_pfn(&self, offset: &Option<u64>) -> u64 {
-        let addr = offset.map_or(0, |o| o + self.address_offset);
+        let addr = match (offset, self.address_offset) {
+            (Some(o), Some(address_offset)) => o + address_offset,
+            (Some(o), None) => *o,
+            // without shmem, 0 is the special address for "no_pfn"
+            (None, Some(_)) => 0,
+            // with shmem, WL_SHMEM_SIZE is the special address for "no_pfn"
+            (None, None) => WL_SHMEM_SIZE,
+        };
         addr >> VIRTIO_WL_PFN_SHIFT
     }
 }
@@ -1769,7 +1826,7 @@ impl Worker {
         use_send_vfd_v2: bool,
         resource_bridge: Option<Tube>,
         #[cfg(feature = "minigbm")] gralloc: RutabagaGralloc,
-        address_offset: u64,
+        address_offset: Option<u64>,
     ) -> Worker {
         Worker {
             interrupt,
@@ -1906,15 +1963,6 @@ impl Wl {
         wayland_paths: Map<String, PathBuf>,
         resource_bridge: Option<Tube>,
     ) -> Result<Wl> {
-        #[cfg(feature = "minigbm")]
-        let gralloc = match RutabagaGralloc::new() {
-            Ok(g) => g,
-            Err(e) => {
-                error!("failed to initialize gralloc {:?}", e);
-                return Err(Error::new(libc::EIO));
-            }
-        };
-
         Ok(Wl {
             kill_evt: None,
             worker_thread: None,
@@ -1926,7 +1974,7 @@ impl Wl {
             use_shmem: false,
             base_features,
             #[cfg(feature = "minigbm")]
-            gralloc: Some(gralloc),
+            gralloc: None,
             address_offset: None,
         })
     }
@@ -1957,15 +2005,19 @@ impl VirtioDevice for Wl {
         if let Some(resource_bridge) = &self.resource_bridge {
             keep_rds.push(resource_bridge.as_raw_descriptor());
         }
-        #[cfg(feature = "minigbm")]
-        if let Some(gralloc) = &self.gralloc {
-            match gralloc.try_as_raw_descriptors() {
-                Ok(mut rds) => keep_rds.append(&mut rds),
-                Err(e) => error!("failed to get gralloc fds {:?}", e),
-            }
-        }
-
         keep_rds
+    }
+
+    #[cfg(feature = "minigbm")]
+    fn on_device_sandboxed(&mut self) {
+        // Gralloc initialization can cause some GPU drivers to create their own threads
+        // and that must be done after sandboxing.
+        match RutabagaGralloc::new() {
+            Ok(g) => self.gralloc = Some(g),
+            Err(e) => {
+                error!("failed to initialize gralloc {:?}", e);
+            }
+        };
     }
 
     fn device_type(&self) -> DeviceType {
@@ -2026,9 +2078,9 @@ impl VirtioDevice for Wl {
                 .take()
                 .expect("gralloc already passed to worker");
             let address_offset = if !self.use_shmem {
-                self.address_offset.expect("missing address offset")
+                self.address_offset
             } else {
-                0
+                None
             };
             let worker_result =
                 thread::Builder::new()
