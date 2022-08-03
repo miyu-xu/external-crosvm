@@ -75,6 +75,30 @@
       },
       "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ec22d32b_68d262d7",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-08-03T16:43:17Z",
+      "side": 1,
+      "message": "Error when running cargo2android: `none of the selected packages contains these features: udmabuf`\nThese lines are from:\nhttps://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3716339\nAnd they were removed in:\nhttps://chromium-review.googlesource.com/c/crosvm/crosvm/+/3779086\n\nvm_memory::udmabuf is still used in devices/src/virtio/\n\nI\u0027m not sure what would be causing the Android build to fail without this. Any ideas?",
+      "parentUuid": "39665434_4347fdba",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "e3c7dbddc7780efb3f9eb58c30107b41aaf17ec6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
