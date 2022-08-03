@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "54ae9ef9_71d1a067",
+        "filename": "src/crosvm/sys/unix/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 196,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-08-03T18:09:01Z",
+      "side": 1,
+      "message": "this should be fixed upstream. They must not be building with gfxstream. I\u0027ll work on it later today.",
+      "range": {
+        "startLine": 196,
+        "startChar": 8,
+        "endLine": 196,
+        "endChar": 42
+      },
+      "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4beac3b5_bbcd385a",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-08-03T18:09:01Z",
+      "side": 1,
+      "message": "from: https://android-review.googlesource.com/c/platform/external/crosvm/+/2168397/comment/39665434_4347fdba/\nFrederick Mayle\ndo you remember why this is needed?\n\nDevin Moore\nError when running cargo2android:  none of the selected packages contains these features: udmabuf \nThese lines are from:\nhttps://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3716339\nAnd they were removed in:\nhttps://chromium-review.googlesource.com/c/crosvm/crosvm/+/3779086\n\nvm_memory::udmabuf is still used in devices/src/virtio/\n\nI\u0027m not sure what would be causing the Android build to fail without this. Any ideas?",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
