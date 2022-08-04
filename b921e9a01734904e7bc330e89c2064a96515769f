@@ -93,6 +93,30 @@
       },
       "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7cb072f0_38c23a35",
+        "filename": "vm_memory/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-04T17:46:45Z",
+      "side": 1,
+      "message": "Sent https://r.android.com/2175605 to fix.",
+      "parentUuid": "04e25147_9b116ff8",
+      "range": {
+        "startLine": 18,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 12
+      },
+      "revId": "b921e9a01734904e7bc330e89c2064a96515769f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
