@@ -5,10 +5,12 @@
 //! Utility file for allocating exportable system memory.  On Linux systems,
 //! this is is often done with memfd.
 
-use base::{RawDescriptor, SharedMemory};
+use base::SharedMemory;
 
 use crate::rutabaga_gralloc::formats::canonical_image_requirements;
-use crate::rutabaga_gralloc::gralloc::{Gralloc, ImageAllocationInfo, ImageMemoryRequirements};
+use crate::rutabaga_gralloc::gralloc::Gralloc;
+use crate::rutabaga_gralloc::gralloc::ImageAllocationInfo;
+use crate::rutabaga_gralloc::gralloc::ImageMemoryRequirements;
 use crate::rutabaga_utils::*;
 
 /// A gralloc implementation capable of allocation from system memory.
@@ -49,9 +51,5 @@ impl Gralloc for SystemGralloc {
             os_handle: shm.into(),
             handle_type: RUTABAGA_MEM_HANDLE_TYPE_SHM,
         })
-    }
-
-    fn try_as_raw_descriptors(&self) -> RutabagaResult<Vec<RawDescriptor>> {
-        Ok(Vec::new())
     }
 }

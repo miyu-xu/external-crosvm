@@ -7,17 +7,16 @@
 
 use std::collections::BTreeMap as Map;
 
-use base::{round_up_to_page_size, MappedRegion, RawDescriptor};
+use base::round_up_to_page_size;
+use base::MappedRegion;
 
 use crate::rutabaga_gralloc::formats::*;
-use crate::rutabaga_gralloc::system_gralloc::SystemGralloc;
-use crate::rutabaga_utils::*;
-
 #[cfg(feature = "minigbm")]
 use crate::rutabaga_gralloc::minigbm::MinigbmDevice;
-
+use crate::rutabaga_gralloc::system_gralloc::SystemGralloc;
 #[cfg(feature = "vulkano")]
 use crate::rutabaga_gralloc::vulkano_gralloc::VulkanoGralloc;
+use crate::rutabaga_utils::*;
 
 /*
  * Rutabaga gralloc flags are copied from minigbm, but redundant legacy flags are left out.
@@ -198,11 +197,6 @@ pub trait Gralloc: Send {
     ) -> RutabagaResult<Box<dyn MappedRegion>> {
         Err(RutabagaError::Unsupported)
     }
-
-    /// Returns the underlying raw descriptors that should be kept when jailing the
-    /// current process. May fail if the backend doesn't support this, or if it is in
-    /// an intermediate state.
-    fn try_as_raw_descriptors(&self) -> RutabagaResult<Vec<RawDescriptor>>;
 }
 
 /// Enumeration of possible allocation backends.
@@ -345,14 +339,6 @@ impl RutabagaGralloc {
             .ok_or(RutabagaError::InvalidGrallocBackend)?;
 
         gralloc.import_and_map(handle, vulkan_info, size)
-    }
-
-    pub fn try_as_raw_descriptors(&self) -> RutabagaResult<Vec<RawDescriptor>> {
-        let mut res = Vec::new();
-        for g in self.grallocs.values() {
-            res.append(&mut g.try_as_raw_descriptors()?);
-        }
-        Ok(res)
     }
 }
 

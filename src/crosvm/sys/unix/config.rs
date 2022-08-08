@@ -2,19 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, time::Duration};
-
-use devices::{IommuDevType, PciAddress, SerialParameters};
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::time::Duration;
 
 #[cfg(feature = "gpu")]
-use devices::virtio::{
-    GpuDisplayParameters, GpuParameters, DEFAULT_DISPLAY_HEIGHT, DEFAULT_DISPLAY_WIDTH,
-};
-
-use crate::crosvm::config::{invalid_value_err, Config};
+use devices::virtio::GpuDisplayParameters;
 #[cfg(feature = "gpu")]
-use crate::crosvm::{argument, argument::parse_hex_or_decimal};
+use devices::virtio::GpuParameters;
+#[cfg(feature = "gpu")]
+use devices::virtio::GpuMode;
+#[cfg(feature = "gpu")]
+use devices::virtio::DEFAULT_DISPLAY_HEIGHT;
+#[cfg(feature = "gpu")]
+use devices::virtio::DEFAULT_DISPLAY_WIDTH;
+use devices::IommuDevType;
+use devices::PciAddress;
+use devices::SerialParameters;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[cfg(feature = "gpu")]
+use crate::crosvm::argument;
+#[cfg(feature = "gpu")]
+use crate::crosvm::argument::parse_hex_or_decimal;
+use crate::crosvm::config::invalid_value_err;
+use crate::crosvm::config::Config;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HypervisorKind {
@@ -73,60 +87,27 @@ pub fn parse_gpu_render_server_options(
     }
 }
 
-#[cfg(feature = "audio")]
+#[cfg(feature = "audio_cras")]
 pub fn parse_ac97_options(
     ac97_params: &mut devices::Ac97Parameters,
     key: &str,
     #[allow(unused_variables)] value: &str,
 ) -> Result<(), String> {
     match key {
-        #[cfg(feature = "audio_cras")]
         "client_type" => {
             ac97_params
                 .set_client_type(value)
                 .map_err(|e| crate::crosvm::config::invalid_value_err(value, e))?;
         }
-        #[cfg(feature = "audio_cras")]
         "socket_type" => {
             ac97_params
                 .set_socket_type(value)
                 .map_err(|e| crate::crosvm::config::invalid_value_err(value, e))?;
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        "server" => {
-            ac97_params.vios_server_path = Some(
-                PathBuf::from_str(value)
-                    .map_err(|e| crate::crosvm::config::invalid_value_err(value, e))?,
-            );
-        }
         _ => {
             return Err(format!("unknown ac97 parameter {}", key));
         }
     };
-    Ok(())
-}
-
-#[cfg(feature = "audio")]
-pub fn check_ac97_backend(
-    #[allow(unused_variables)] ac97_params: &devices::Ac97Parameters,
-) -> Result<(), String> {
-    // server is required for and exclusive to vios backend
-    #[cfg(target_os = "android")]
-    match ac97_params.backend {
-        devices::Ac97Backend::VIOS => {
-            if ac97_params.vios_server_path.is_none() {
-                return Err(String::from("server argument is required for VIOS backend"));
-            }
-        }
-        _ => {
-            if ac97_params.vios_server_path.is_some() {
-                return Err(String::from(
-                    "server argument is exclusive to the VIOS backend",
-                ));
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -482,7 +463,7 @@ pub fn parse_gpu_options(s: &str) -> Result<GpuParameters, String> {
     }
 
     if let Some(display_param) = display_param_builder.build()?.take() {
-        gpu_params.displays.push(display_param);
+        gpu_params.display_params.push(display_param);
     }
 
     #[cfg(feature = "gfxstream")]
@@ -533,15 +514,15 @@ pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
                 gpu_parameters.pci_bar_size
             ));
         }
-        if gpu_parameters.displays.is_empty() {
-            gpu_parameters.displays.push(GpuDisplayParameters {
+        if gpu_parameters.display_params.is_empty() {
+            gpu_parameters.display_params.push(GpuDisplayParameters {
                 width: DEFAULT_DISPLAY_WIDTH,
                 height: DEFAULT_DISPLAY_HEIGHT,
             });
         }
 
-        let width = gpu_parameters.displays[0].width;
-        let height = gpu_parameters.displays[0].height;
+        let width = gpu_parameters.display_params[0].width;
+        let height = gpu_parameters.display_params[0].height;
 
         if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
             virtio_multi_touch.set_default_size(width, height);
@@ -671,15 +652,16 @@ impl VfioCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::crosvm::config::{DEFAULT_TOUCH_DEVICE_HEIGHT, DEFAULT_TOUCH_DEVICE_WIDTH};
-
-    use argh::FromArgs;
     use std::path::PathBuf;
 
-    #[cfg(feature = "audio")]
+    use argh::FromArgs;
+
+    use super::*;
+    #[cfg(feature = "audio_cras")]
     use crate::crosvm::config::parse_ac97_options;
     use crate::crosvm::config::BindMount;
+    use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_HEIGHT;
+    use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_WIDTH;
 
     #[cfg(feature = "audio_cras")]
     #[test]
@@ -806,11 +788,11 @@ mod tests {
 
             let gpu_params = config.gpu_parameters.unwrap();
 
-            assert_eq!(gpu_params.displays.len(), 2);
-            assert_eq!(gpu_params.displays[0].width, 500);
-            assert_eq!(gpu_params.displays[0].height, 600);
-            assert_eq!(gpu_params.displays[1].width, 700);
-            assert_eq!(gpu_params.displays[1].height, 800);
+            assert_eq!(gpu_params.display_params.len(), 2);
+            assert_eq!(gpu_params.display_params[0].width, 500);
+            assert_eq!(gpu_params.display_params[0].height, 600);
+            assert_eq!(gpu_params.display_params[1].width, 700);
+            assert_eq!(gpu_params.display_params[1].height, 800);
         }
         {
             let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
@@ -829,17 +811,10 @@ mod tests {
 
             let gpu_params = config.gpu_parameters.unwrap();
 
-            assert_eq!(gpu_params.displays.len(), 1);
-            assert_eq!(gpu_params.displays[0].width, 700);
-            assert_eq!(gpu_params.displays[0].height, 800);
+            assert_eq!(gpu_params.display_params.len(), 1);
+            assert_eq!(gpu_params.display_params[0].width, 700);
+            assert_eq!(gpu_params.display_params[0].height, 800);
         }
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_vios_valid() {
-        parse_ac97_options("backend=vios,server=/path/to/server")
-            .expect("parse should have succeded");
     }
 
     #[test]

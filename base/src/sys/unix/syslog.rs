@@ -2,21 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-pub use super::{target_os::syslog::PlatformSyslog, RawDescriptor};
+pub use super::target_os::syslog::PlatformSyslog;
+pub use super::RawDescriptor;
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CStr;
+    use std::fs::File;
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::os::unix::io::FromRawFd;
+
+    cfg_if::cfg_if! {
+        // ANDROID: b/228881485
+        if #[cfg(not(target_os = "android"))] {
+            use libc::shm_open;
+            use libc::shm_unlink;
+            use libc::O_CREAT;
+            use libc::O_EXCL;
+            use libc::O_RDWR;
+        }
+    }
+
     use crate::syslog::*;
-
-    #[cfg(not(target_os = "android"))]  // ANDROID: b/227789997
-    use libc::{shm_open, shm_unlink, O_CREAT, O_EXCL, O_RDWR};
-
-    use std::{
-        ffi::CStr,
-        fs::File,
-        io::{Read, Seek, SeekFrom},
-        os::unix::io::FromRawFd,
-    };
 
     #[test]
     fn fds() {
@@ -30,7 +39,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "android"))]  // ANDROID: b/227789997
+    #[cfg(not(target_os = "android"))] // ANDROID: b/228881485
     fn syslog_file() {
         ensure_inited().unwrap();
         let shm_name = CStr::from_bytes_with_nul(b"/crosvm_shm\0").unwrap();

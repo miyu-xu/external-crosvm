@@ -5,37 +5,35 @@
 mod block;
 mod handler;
 
-pub use self::block::*;
-pub use self::handler::VhostUserHandler;
-
 use remain::sorted;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemoryError;
 use vmm_vhost::Error as VhostError;
 
+pub use self::block::*;
+pub use self::handler::VhostUserHandler;
+
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
         mod console;
         mod fs;
-        #[cfg(feature = "gpu")]
         mod gpu;
         mod mac80211_hwsim;
         mod net;
-        #[cfg(feature = "audio")]
         mod snd;
         mod vsock;
         mod wl;
+        mod video;
 
-        #[cfg(feature = "audio")]
         pub use self::snd::*;
         pub use self::vsock::*;
         pub use self::wl::*;
         pub use self::net::*;
         pub use self::mac80211_hwsim::*;
-        #[cfg(feature = "gpu")]
         pub use self::gpu::*;
         pub use self::console::*;
         pub use self::fs::*;
+        pub use self::video::*;
     } else if #[cfg(windows)] {
         #[cfg(feature = "slirp")]
         pub mod net;

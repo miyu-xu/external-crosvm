@@ -3,38 +3,67 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use sync::Mutex;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
-use anyhow::{anyhow, bail, Context};
-use base::{
-    error, AsRawDescriptor, AsRawDescriptors, Event, Protection, RawDescriptor, Result, Tube,
-};
-use data_model::{DataInit, Le32};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
+use base::error;
+use base::AsRawDescriptor;
+use base::AsRawDescriptors;
+use base::Event;
+use base::Protection;
+use base::RawDescriptor;
+use base::Result;
+use base::Tube;
+use data_model::DataInit;
+use data_model::Le32;
 use hypervisor::Datamatch;
 use libc::ERANGE;
-use resources::{Alloc, MmioType, SystemAllocator};
-use virtio_sys::virtio_config::{
-    VIRTIO_CONFIG_S_ACKNOWLEDGE, VIRTIO_CONFIG_S_DRIVER, VIRTIO_CONFIG_S_DRIVER_OK,
-    VIRTIO_CONFIG_S_FAILED, VIRTIO_CONFIG_S_FEATURES_OK,
-};
-use vm_control::{MemSlot, VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
-use vm_memory::{GuestAddress, GuestMemory};
-
-use super::*;
-use crate::pci::{
-    BarRange, MsixCap, MsixConfig, PciAddress, PciBarConfiguration, PciBarIndex,
-    PciBarPrefetchable, PciBarRegionType, PciCapability, PciCapabilityID, PciClassCode,
-    PciConfiguration, PciDevice, PciDeviceError, PciDisplaySubclass, PciHeaderType, PciId,
-    PciInterruptPin, PciSubclass,
-};
-use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
-use crate::IrqLevelEvent;
+use resources::Alloc;
+use resources::AllocOptions;
+use resources::SystemAllocator;
+use sync::Mutex;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_ACKNOWLEDGE;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER_OK;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FAILED;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FEATURES_OK;
+use vm_control::MemSlot;
+use vm_control::VmMemoryDestination;
+use vm_control::VmMemoryRequest;
+use vm_control::VmMemoryResponse;
+use vm_control::VmMemorySource;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 use self::virtio_pci_common_config::VirtioPciCommonConfig;
+use super::*;
+use crate::pci::BarRange;
+use crate::pci::MsixCap;
+use crate::pci::MsixConfig;
+use crate::pci::PciAddress;
+use crate::pci::PciBarConfiguration;
+use crate::pci::PciBarIndex;
+use crate::pci::PciBarPrefetchable;
+use crate::pci::PciBarRegionType;
+use crate::pci::PciCapability;
+use crate::pci::PciCapabilityID;
+use crate::pci::PciClassCode;
+use crate::pci::PciConfiguration;
+use crate::pci::PciDevice;
+use crate::pci::PciDeviceError;
+use crate::pci::PciDisplaySubclass;
+use crate::pci::PciHeaderType;
+use crate::pci::PciId;
+use crate::pci::PciInterruptPin;
+use crate::pci::PciSubclass;
+use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
+use crate::IrqLevelEvent;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, enumn::N)]
@@ -245,6 +274,7 @@ const SHMEM_BAR_NUM: usize = 2;
 /// transport for virtio devices.
 pub struct VirtioPciDevice {
     config_regs: PciConfiguration,
+    preferred_address: Option<PciAddress>,
     pci_address: Option<PciAddress>,
 
     device: Box<dyn VirtioDevice>,
@@ -331,7 +361,8 @@ impl VirtioPciDevice {
 
         Ok(VirtioPciDevice {
             config_regs,
-            pci_address: device.pci_address(),
+            preferred_address: device.pci_address(),
+            pci_address: None,
             device,
             device_activated: false,
             disable_intx,
@@ -481,6 +512,10 @@ impl VirtioPciDevice {
                     .filter(|(q, _)| q.ready())
                     .unzip();
 
+                if let Some(iommu) = &self.iommu {
+                    self.device.set_iommu(iommu);
+                }
+
                 self.device.activate(mem, interrupt, queues, queue_evts);
                 self.device_activated = true;
             }
@@ -505,19 +540,38 @@ impl PciDevice for VirtioPciDevice {
         format!("pci{}", self.device.debug_label())
     }
 
+    fn preferred_address(&self) -> Option<PciAddress> {
+        self.preferred_address
+    }
+
     fn allocate_address(
         &mut self,
         resources: &mut SystemAllocator,
     ) -> std::result::Result<PciAddress, PciDeviceError> {
         if self.pci_address.is_none() {
-            self.pci_address = match resources.allocate_pci(0, self.debug_label()) {
-                Some(Alloc::PciBar {
-                    bus,
-                    dev,
-                    func,
-                    bar: _,
-                }) => Some(PciAddress { bus, dev, func }),
-                _ => None,
+            if let Some(address) = self.preferred_address {
+                if !resources.reserve_pci(
+                    Alloc::PciBar {
+                        bus: address.bus,
+                        dev: address.dev,
+                        func: address.func,
+                        bar: 0,
+                    },
+                    self.debug_label(),
+                ) {
+                    return Err(PciDeviceError::PciAllocationFailed);
+                }
+                self.pci_address = Some(address);
+            } else {
+                self.pci_address = match resources.allocate_pci(0, self.debug_label()) {
+                    Some(Alloc::PciBar {
+                        bus,
+                        dev,
+                        func,
+                        bar: _,
+                    }) => Some(PciAddress { bus, dev, func }),
+                    _ => None,
+                }
             }
         }
         self.pci_address.ok_or(PciDeviceError::PciAllocationFailed)
@@ -563,8 +617,7 @@ impl PciDevice for VirtioPciDevice {
         // Allocate one bar for the structures pointed to by the capability structures.
         let mut ranges: Vec<BarRange> = Vec::new();
         let settings_config_addr = resources
-            .mmio_allocator(MmioType::Low)
-            .allocate_with_align(
+            .allocate_mmio(
                 CAPABILITY_BAR_SIZE,
                 Alloc::PciBar {
                     bus: address.bus,
@@ -573,7 +626,9 @@ impl PciDevice for VirtioPciDevice {
                     bar: 0,
                 },
                 format!("virtio-{}-cap_bar", self.device.device_type()),
-                CAPABILITY_BAR_SIZE,
+                AllocOptions::new()
+                    .max_address(u32::MAX.into())
+                    .align(CAPABILITY_BAR_SIZE),
             )
             .map_err(|e| PciDeviceError::IoAllocationFailed(CAPABILITY_BAR_SIZE, e))?;
         let config = PciBarConfiguration::new(
@@ -647,8 +702,7 @@ impl PciDevice for VirtioPciDevice {
 
         for config in configs {
             let device_addr = resources
-                .mmio_allocator(MmioType::High)
-                .allocate_with_align(
+                .allocate_mmio(
                     config.size(),
                     Alloc::PciBar {
                         bus: address.bus,
@@ -657,7 +711,9 @@ impl PciDevice for VirtioPciDevice {
                         bar: config.bar_index() as u8,
                     },
                     format!("virtio-{}-custom_bar", self.device.device_type()),
-                    config.size(),
+                    AllocOptions::new()
+                        .prefetchable(config.is_prefetchable())
+                        .align(config.size()),
                 )
                 .map_err(|e| PciDeviceError::IoAllocationFailed(config.size(), e))?;
             let config = config.set_address(device_addr);

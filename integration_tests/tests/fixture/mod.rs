@@ -2,21 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::env;
 use std::ffi::CString;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Child;
+use std::process::Command;
+use std::process::Stdio;
 use std::str::from_utf8;
 use std::sync::mpsc::sync_channel;
 use std::sync::Once;
 use std::thread;
 use std::time::Duration;
-use std::{env, process::Child};
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
+use anyhow::Result;
 use base::syslog;
 use libc::O_DIRECT;
 use tempfile::TempDir;
@@ -35,7 +42,7 @@ const ARCH: &str = "aarch64";
 const VM_COMMUNICATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn prebuilt_version() -> &'static str {
-    include_str!("../guest_under_test/PREBUILT_VERSION").trim()
+    include_str!("../../guest_under_test/PREBUILT_VERSION").trim()
 }
 
 fn kernel_prebuilt_url() -> String {
@@ -163,6 +170,7 @@ pub struct Config {
     o_direct: bool,
 }
 
+#[cfg(test)]
 impl Config {
     /// Creates a new `run` command with `extra_args`.
     pub fn new() -> Self {
@@ -187,6 +195,7 @@ impl Config {
 ///
 /// After creation, commands can be sent via exec_in_guest. The VM is stopped
 /// when this instance is dropped.
+#[cfg(test)]
 pub struct TestVm {
     /// Maintain ownership of test_dir until the vm is destroyed.
     #[allow(dead_code)]

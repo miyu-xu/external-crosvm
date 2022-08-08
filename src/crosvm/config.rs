@@ -4,39 +4,56 @@
 
 use std::collections::BTreeMap;
 use std::net;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
-use arch::{
-    set_default_serial_parameters, MsrAction, MsrConfig, MsrFilter, MsrRWType, MsrValueFrom,
-    Pstore, VcpuAffinity,
-};
-use base::{debug, pagesize};
-use devices::serial_device::{SerialHardware, SerialParameters};
+use arch::set_default_serial_parameters;
+use arch::MsrAction;
+use arch::MsrConfig;
+use arch::MsrFilter;
+use arch::MsrRWType;
+use arch::MsrValueFrom;
+use arch::Pstore;
+use arch::VcpuAffinity;
+use base::debug;
+use base::pagesize;
+use devices::serial_device::SerialHardware;
+use devices::serial_device::SerialParameters;
 use devices::virtio::block::block::DiskOption;
+#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
+use devices::virtio::device_constants::video::VideoDeviceConfig;
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::GpuParameters;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
-#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
-use devices::virtio::VideoBackendType;
+#[cfg(feature = "audio")]
+use devices::Ac97Backend;
+#[cfg(feature = "audio")]
+use devices::Ac97Parameters;
 #[cfg(feature = "direct")]
 use devices::BusRange;
-use devices::{PciAddress, PciClassCode, PflashParameters, StubPciParameters};
+use devices::PciAddress;
+use devices::PciClassCode;
+use devices::PflashParameters;
+use devices::StubPciParameters;
 use hypervisor::ProtectionType;
 use resources::AddressRange;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
+use serde_keyvalue::FromKeyValues;
 use uuid::Uuid;
 use vm_control::BatteryType;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::{set_enable_pnp_data_msr_config, set_itmt_msr_config};
+use x86_64::set_enable_pnp_data_msr_config;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use x86_64::set_itmt_msr_config;
 
-#[cfg(feature = "audio")]
-use devices::{Ac97Backend, Ac97Parameters};
-
+use super::argument::parse_hex_or_decimal;
+use super::check_opt_path;
 pub(crate) use super::sys::HypervisorKind;
-use super::{argument::parse_hex_or_decimal, check_opt_path};
 
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
@@ -307,6 +324,7 @@ impl TouchDeviceOption {
     }
 
     /// If the user specifies the size, use it. Otherwise, use the default values.
+    #[cfg(any(unix, feature = "gpu"))]
     pub fn get_size(&self) -> (u32, u32) {
         (
             self.width.unwrap_or(self.default_width),
@@ -557,48 +575,6 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
             })
         })
         .collect()
-}
-
-#[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
-pub fn parse_video_options(s: &str) -> Result<VideoBackendType, String> {
-    const VALID_VIDEO_BACKENDS: &[&str] = &[
-        #[cfg(feature = "libvda")]
-        "libvda",
-        #[cfg(feature = "ffmpeg")]
-        "ffmpeg",
-        #[cfg(feature = "vaapi")]
-        "vaapi",
-    ];
-
-    match s {
-        "" => {
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "libvda")] {
-                    Ok(VideoBackendType::Libvda)
-                } else if #[cfg(feature = "vaapi")] {
-                    Ok(VideoBackendType::Vaapi)
-                } else if #[cfg(feature = "ffmpeg")] {
-                    Ok(VideoBackendType::Ffmpeg)
-                } else {
-                    // Cannot be reached because at least one video backend needs to be enabled for
-                    // the decoder to be compiled.
-                    unreachable!()
-                }
-            }
-        }
-        #[cfg(feature = "libvda")]
-        "libvda" => Ok(VideoBackendType::Libvda),
-        #[cfg(feature = "libvda")]
-        "libvda-vd" => Ok(VideoBackendType::LibvdaVd),
-        #[cfg(feature = "ffmpeg")]
-        "ffmpeg" => Ok(VideoBackendType::Ffmpeg),
-        #[cfg(feature = "vaapi")]
-        "vaapi" => Ok(VideoBackendType::Vaapi),
-        _ => Err(invalid_value_err(
-            s,
-            format!("should be one of ({})", VALID_VIDEO_BACKENDS.join("|")),
-        )),
-    }
 }
 
 pub fn parse_pstore(value: &str) -> Result<Pstore, String> {
@@ -903,12 +879,11 @@ pub fn parse_ac97_options(s: &str) -> Result<Ac97Parameters, String> {
                     .map_err(|e| format!("invalid capture option: {}", e))?;
             }
             _ => {
+                #[cfg(feature = "audio_cras")]
                 super::sys::config::parse_ac97_options(&mut ac97_params, k, v)?;
             }
         }
     }
-
-    super::sys::config::check_ac97_backend(&ac97_params)?;
 
     Ok(ac97_params)
 }
@@ -917,30 +892,11 @@ pub fn invalid_value_err<T: AsRef<str>, S: ToString>(value: T, expected: S) -> S
     format!("invalid value {}: {}", value.as_ref(), expected.to_string())
 }
 
-pub fn parse_battery_options(s: &str) -> Result<BatteryType, String> {
-    let mut battery_type: BatteryType = Default::default();
-
-    let opts = s
-        .split(',')
-        .map(|frag| frag.split('='))
-        .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-    for (k, v) in opts {
-        match k {
-            "type" => match v.parse::<BatteryType>() {
-                Ok(type_) => battery_type = type_,
-                Err(e) => {
-                    return Err(invalid_value_err(v, e));
-                }
-            },
-            "" => {}
-            _ => {
-                return Err(format!("battery parameter {}", k));
-            }
-        }
-    }
-
-    Ok(battery_type)
+#[derive(Debug, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct BatteryConfig {
+    #[serde(rename = "type", default)]
+    pub type_: BatteryType,
 }
 
 pub fn parse_cpu_capacity(s: &str) -> Result<BTreeMap<usize, u32>, String> {
@@ -1198,9 +1154,12 @@ pub fn parse_pflash_parameters(s: &str) -> Result<PflashParameters, String> {
 // BTreeMaps serialize fine, as long as their keys are trivial types. A tuple does not
 // work, hence the need to convert to/from a vector form.
 mod serde_serial_params {
-    use super::*;
-    use serde::{Deserializer, Serializer};
     use std::iter::FromIterator;
+
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    use super::*;
 
     pub fn serialize<S>(
         params: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -1236,7 +1195,7 @@ pub struct Config {
     pub balloon: bool,
     pub balloon_bias: i64,
     pub balloon_control: Option<PathBuf>,
-    pub battery_type: Option<BatteryType>,
+    pub battery_config: Option<BatteryConfig>,
     #[cfg(windows)]
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
@@ -1379,6 +1338,8 @@ pub struct Config {
     pub vcpu_count: Option<usize>,
     #[cfg(unix)]
     pub vfio: Vec<super::sys::config::VfioCommand>,
+    #[cfg(unix)]
+    pub vfio_isolate_hotplug: bool,
     pub vhost_net: bool,
     #[cfg(unix)]
     pub vhost_net_device_path: PathBuf,
@@ -1388,16 +1349,16 @@ pub struct Config {
     pub vhost_user_gpu: Vec<VhostUserOption>,
     pub vhost_user_mac80211_hwsim: Option<VhostUserOption>,
     pub vhost_user_net: Vec<VhostUserOption>,
-    #[cfg(feature = "audio")]
     pub vhost_user_snd: Vec<VhostUserOption>,
+    pub vhost_user_video_dec: Option<VhostUserOption>,
     pub vhost_user_vsock: Vec<VhostUserOption>,
     pub vhost_user_wl: Option<VhostUserWlOption>,
     #[cfg(unix)]
     pub vhost_vsock_device: Option<PathBuf>,
     #[cfg(feature = "video-decoder")]
-    pub video_dec: Option<VideoBackendType>,
+    pub video_dec: Option<VideoDeviceConfig>,
     #[cfg(feature = "video-encoder")]
-    pub video_enc: Option<VideoBackendType>,
+    pub video_enc: Option<VideoDeviceConfig>,
     pub virtio_input_evdevs: Vec<PathBuf>,
     pub virtio_iommu: bool,
     pub virtio_keyboard: Vec<PathBuf>,
@@ -1426,7 +1387,7 @@ impl Default for Config {
             balloon: true,
             balloon_bias: 0,
             balloon_control: None,
-            battery_type: None,
+            battery_config: None,
             #[cfg(windows)]
             block_control_tube: Vec::new(),
             #[cfg(windows)]
@@ -1570,16 +1531,18 @@ impl Default for Config {
             vcpu_count: None,
             #[cfg(unix)]
             vfio: Vec::new(),
+            #[cfg(unix)]
+            vfio_isolate_hotplug: false,
             vhost_net: false,
             #[cfg(unix)]
             vhost_net_device_path: PathBuf::from(VHOST_NET_PATH),
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),
+            vhost_user_video_dec: None,
             vhost_user_fs: Vec::new(),
             vhost_user_gpu: Vec::new(),
             vhost_user_mac80211_hwsim: None,
             vhost_user_net: Vec::new(),
-            #[cfg(feature = "audio")]
             vhost_user_snd: Vec::new(),
             vhost_user_vsock: Vec::new(),
             vhost_user_wl: None,
@@ -1797,8 +1760,9 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use argh::FromArgs;
+
+    use super::*;
 
     #[test]
     fn parse_cpu_set_single() {
@@ -2056,23 +2020,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_battery_vaild() {
-        parse_battery_options("type=goldfish").expect("parse should have succeded");
+    fn parse_battery_valid() {
+        let bat_config: BatteryConfig = from_key_values("type=goldfish").unwrap();
+        assert_eq!(bat_config.type_, BatteryType::Goldfish);
     }
 
     #[test]
-    fn parse_battery_vaild_no_type() {
-        parse_battery_options("").expect("parse should have succeded");
+    fn parse_battery_valid_no_type() {
+        let bat_config: BatteryConfig = from_key_values("").unwrap();
+        assert_eq!(bat_config.type_, BatteryType::Goldfish);
     }
 
     #[test]
-    fn parse_battery_invaild_parameter() {
-        parse_battery_options("tyep=goldfish").expect_err("parse should have failed");
+    fn parse_battery_invalid_parameter() {
+        from_key_values::<BatteryConfig>("tyep=goldfish").expect_err("parse should have failed");
     }
 
     #[test]
-    fn parse_battery_invaild_type_value() {
-        parse_battery_options("type=xxx").expect_err("parse should have failed");
+    fn parse_battery_invalid_type_value() {
+        from_key_values::<BatteryConfig>("type=xxx").expect_err("parse should have failed");
     }
 
     #[test]
@@ -2285,6 +2251,33 @@ mod tests {
         let config: Result<JailConfig, String> =
             from_key_values("seccomp-log-failures,invalid-arg=value");
         assert!(config.is_err());
+    }
+
+    #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
+    #[test]
+    fn parse_video() {
+        use devices::virtio::device_constants::video::VideoBackendType;
+
+        #[cfg(feature = "libvda")]
+        {
+            let params: VideoDeviceConfig = from_key_values("libvda").unwrap();
+            assert_eq!(params.backend_type, VideoBackendType::Libvda);
+
+            let params: VideoDeviceConfig = from_key_values("libvda-vd").unwrap();
+            assert_eq!(params.backend_type, VideoBackendType::LibvdaVd);
+        }
+
+        #[cfg(feature = "ffmpeg")]
+        {
+            let params: VideoDeviceConfig = from_key_values("ffmpeg").unwrap();
+            assert_eq!(params.backend_type, VideoBackendType::Ffmpeg);
+        }
+
+        #[cfg(feature = "vaapi")]
+        {
+            let params: VideoDeviceConfig = from_key_values("vaapi").unwrap();
+            assert_eq!(params.backend_type, VideoBackendType::Vaapi);
+        }
     }
 
     #[test]

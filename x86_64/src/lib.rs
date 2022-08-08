@@ -50,52 +50,90 @@ mod mptable;
 mod regs;
 mod smbios;
 
-use once_cell::sync::OnceCell;
 use std::arch::x86_64::__cpuid;
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
+use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, Seek};
+use std::io;
+use std::io::Seek;
 use std::mem;
 use std::sync::Arc;
 
-use crate::bootparam::boot_params;
+use acpi_tables::aml;
+use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
-use acpi_tables::{aml, aml::Aml};
-use arch::{
-    get_serial_cmdline, GetSerialCmdlineError, MsrAction, MsrConfig, MsrFilter, MsrRWType,
-    MsrValueFrom, RunnableLinuxVm, VmComponents, VmImage,
-};
+use arch::get_serial_cmdline;
+use arch::GetSerialCmdlineError;
+use arch::MsrAction;
+use arch::MsrConfig;
+use arch::MsrFilter;
+use arch::MsrRWType;
+use arch::MsrValueFrom;
+use arch::RunnableLinuxVm;
+use arch::VmComponents;
+use arch::VmImage;
+use base::warn;
 #[cfg(unix)]
 use base::AsRawDescriptors;
-use base::{warn, Event, SendTube, TubeError};
-pub use cpuid::{adjust_cpuid, CpuIdContext};
+use base::Event;
+use base::SendTube;
+use base::TubeError;
+pub use cpuid::adjust_cpuid;
+pub use cpuid::CpuIdContext;
+use devices::BusDevice;
+use devices::BusDeviceObj;
+use devices::BusResumeDevice;
+use devices::Debugcon;
+use devices::IrqChip;
+use devices::IrqChipX86_64;
+use devices::IrqEventSource;
 #[cfg(windows)]
 use devices::Minijail;
+use devices::PciAddress;
+use devices::PciConfigIo;
+use devices::PciConfigMmio;
+use devices::PciDevice;
+use devices::PciVirtualConfigMmio;
+use devices::Pflash;
 #[cfg(unix)]
 use devices::ProxyDevice;
-use devices::{
-    BusDevice, BusDeviceObj, BusResumeDevice, Debugcon, IrqChip, IrqChipX86_64, IrqEventSource,
-    PciAddress, PciConfigIo, PciConfigMmio, PciDevice, PciVirtualConfigMmio, Pflash, Serial,
-    SerialHardware, SerialParameters,
-};
-use hypervisor::{
-    HypervisorX86_64, ProtectionType, VcpuInitX86_64, VcpuX86_64, Vm, VmCap, VmX86_64,
-};
+use devices::Serial;
+use devices::SerialHardware;
+use devices::SerialParameters;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use gdbstub_arch::x86::reg::X86SegmentRegs;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use gdbstub_arch::x86::reg::X86_64CoreRegs;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use gdbstub_arch::x86::reg::X87FpuInternalRegs;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use hypervisor::x86_64::Regs;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use hypervisor::x86_64::Sregs;
+use hypervisor::HypervisorX86_64;
+use hypervisor::ProtectionType;
+use hypervisor::VcpuInitX86_64;
+use hypervisor::VcpuX86_64;
+use hypervisor::Vm;
+use hypervisor::VmCap;
+use hypervisor::VmX86_64;
 #[cfg(unix)]
 use minijail::Minijail;
+use once_cell::sync::OnceCell;
 use remain::sorted;
-use resources::{AddressRange, SystemAllocator, SystemAllocatorConfig};
+use resources::AddressRange;
+use resources::SystemAllocator;
+use resources::SystemAllocatorConfig;
 use sync::Mutex;
 use thiserror::Error;
-use vm_control::{BatControl, BatteryType};
-use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-use {
-    gdbstub_arch::x86::reg::{X86SegmentRegs, X86_64CoreRegs, X87FpuInternalRegs},
-    hypervisor::x86_64::{Regs, Sregs},
-};
+use vm_control::BatControl;
+use vm_control::BatteryType;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
+use vm_memory::GuestMemoryError;
 
+use crate::bootparam::boot_params;
 use crate::msr_index::*;
 
 #[sorted]
@@ -511,7 +549,7 @@ impl arch::LinuxArch for X8664arch {
         system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
-        battery: (&Option<BatteryType>, Option<Minijail>),
+        battery: (Option<BatteryType>, Option<Minijail>),
         mut vm: V,
         ramoops_region: Option<arch::pstore::RamoopsRegion>,
         devs: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
@@ -1443,9 +1481,11 @@ impl X8664arch {
 
         let phys_mem_end = (1u64 << vm.get_guest_phys_addr_bits()) - 1;
         let high_mmio_end = std::cmp::min(phys_mem_end, HIGH_MMIO_MAX_END);
-        let end = high_mmio_end - 1;
 
-        AddressRange { start, end }
+        AddressRange {
+            start,
+            end: high_mmio_end,
+        }
     }
 
     /// This returns a minimal kernel command for this architecture
@@ -1535,7 +1575,7 @@ impl X8664arch {
         #[cfg(feature = "direct")] direct_gpe: &[u32],
         irq_chip: &mut dyn IrqChip,
         sci_irq: u32,
-        battery: (&Option<BatteryType>, Option<Minijail>),
+        battery: (Option<BatteryType>, Option<Minijail>),
         #[cfg_attr(windows, allow(unused_variables))] mmio_bus: &devices::Bus,
         max_bus: u8,
         resume_notify_devices: &mut Vec<Arc<Mutex<dyn BusResumeDevice>>>,

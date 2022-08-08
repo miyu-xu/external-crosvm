@@ -2,38 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use anyhow::{anyhow, Result};
-use argh::FromArgs;
-use base::{
-    info,
-    syslog::{self, LogConfig},
-    FromRawDescriptor, RawDescriptor,
-};
-use broker_ipc::{common_child_setup, CommonChildStartupArgs};
-use metrics::{
-    self,
-    event_details_proto::{EmulatorDllDetails, RecordDetails},
-    MetricEventType,
-};
-#[cfg(all(feature = "slirp"))]
-use net_util::slirp::sys::windows::SlirpStartupConfig;
-use tube_transporter::{TubeToken, TubeTransporterReader};
-use win_util::{DllNotificationData, DllWatcher};
-
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 
-use crate::{
-    crosvm::{
-        argument::{self, Argument},
-        cmdline::RunCommand,
-        sys::cmdline::{Commands, DevicesSubcommand},
-        sys::windows::exit::{Exit, ExitContext, ExitContextAnyhow},
-    },
-    metrics::run_metrics,
-    CommandStatus, Config,
-};
+use anyhow::anyhow;
+use anyhow::Result;
+use argh::FromArgs;
+use base::info;
+use base::syslog;
+use base::syslog::LogConfig;
+use base::FromRawDescriptor;
+use base::RawDescriptor;
+use broker_ipc::common_child_setup;
+use broker_ipc::CommonChildStartupArgs;
+use metrics::event_details_proto::EmulatorDllDetails;
+use metrics::event_details_proto::RecordDetails;
+use metrics::MetricEventType;
+#[cfg(all(feature = "slirp"))]
+use net_util::slirp::sys::windows::SlirpStartupConfig;
+use tube_transporter::TubeToken;
+use tube_transporter::TubeTransporterReader;
+use win_util::DllNotificationData;
+use win_util::DllWatcher;
+
+use crate::crosvm::argument;
+use crate::crosvm::argument::Argument;
+use crate::crosvm::cmdline::RunCommand;
+use crate::crosvm::sys::cmdline::Commands;
+use crate::crosvm::sys::cmdline::DevicesSubcommand;
+use crate::crosvm::sys::windows::exit::Exit;
+use crate::crosvm::sys::windows::exit::ExitContext;
+use crate::crosvm::sys::windows::exit::ExitContextAnyhow;
+use crate::metrics::run_metrics;
+use crate::CommandStatus;
+use crate::Config;
 
 #[cfg(all(feature = "slirp"))]
 pub(crate) fn run_slirp(args: Vec<String>) -> Result<()> {
@@ -84,7 +87,7 @@ pub(crate) fn run_slirp(args: Vec<String>) -> Result<()> {
 
 pub fn run_broker_impl(cfg: Config) -> Result<()> {
     tracing::init();
-    Ok(crate::crosvm::sys::windows::broker::run(cfg)?)
+    crate::crosvm::sys::windows::broker::run(cfg)
 }
 
 pub fn initialize_sandbox() -> Result<()> {
@@ -154,7 +157,7 @@ pub(crate) fn set_bootstrap_arguments(
     arguments: &[Argument],
 ) -> std::result::Result<Option<RawDescriptor>, argument::Error> {
     let mut raw_transport_tube = None;
-    crate::crosvm::argument::set_arguments(args.iter(), &arguments[..], |name, value| {
+    crate::crosvm::argument::set_arguments(args.iter(), arguments, |name, value| {
         if name == "bootstrap" {
             raw_transport_tube = Some(value.unwrap().parse::<usize>().or(Err(
                 argument::Error::InvalidValue {
@@ -188,13 +191,13 @@ pub(crate) fn run_command(cmd: Commands) -> anyhow::Result<()> {
             let mut x: Vec<&str> = vec![];
             for s in cmd.args.iter() {
                 if s == "backend=win_audio" {
-                    x.push(&s.as_str());
+                    x.push(s.as_str());
                     continue;
                 }
                 match s.split_once('=') {
                     Some((k, v)) => {
-                        x.push(&k);
-                        x.push(&v);
+                        x.push(k);
+                        x.push(v);
                     }
                     None => x.push(s.as_str()),
                 }

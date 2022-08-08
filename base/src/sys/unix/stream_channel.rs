@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::super::{net::UnixSeqpacket, Result};
+use std::io;
+use std::io::Read;
+use std::os::unix::net::UnixStream;
+
+use libc::c_void;
+
+use super::super::net::UnixSeqpacket;
+use super::super::Result;
 use super::RawDescriptor;
-use crate::{descriptor::AsRawDescriptor, ReadNotifier};
-use libc::{
-    c_void, {self},
-};
-use std::{
-    io::{
-        Read, {self},
-    },
-    os::unix::net::UnixStream,
-};
+use crate::descriptor::AsRawDescriptor;
+use crate::ReadNotifier;
 
 #[derive(Copy, Clone)]
 pub enum FramingMode {
@@ -167,9 +166,13 @@ impl ReadNotifier for StreamChannel {
 
 #[cfg(test)]
 mod test {
+    use std::io::Read;
+    use std::io::Write;
+
     use super::*;
-    use crate::{EventContext, EventToken, ReadNotifier};
-    use std::io::{Read, Write};
+    use crate::EventContext;
+    use crate::EventToken;
+    use crate::ReadNotifier;
 
     #[derive(EventToken, Debug, Eq, PartialEq, Copy, Clone)]
     enum Token {
@@ -177,7 +180,7 @@ mod test {
     }
 
     #[test]
-    fn test_non_blocking_pair() {
+    fn test_non_blocking_pair_byte() {
         let (mut sender, mut receiver) =
             StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte).unwrap();
 
@@ -205,6 +208,43 @@ mod test {
         size = receiver.read(&mut recv_buffer).unwrap();
         assert_eq!(size, 2);
         assert_eq!(recv_buffer[0..2], [76, 65]);
+
+        // Now that we've polled for & received all data, polling again should show no events.
+        assert_eq!(
+            event_ctx
+                .wait_timeout(std::time::Duration::new(0, 0))
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_non_blocking_pair_message() {
+        let (mut sender, mut receiver) =
+            StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Message).unwrap();
+
+        sender.write_all(&[75, 77, 54, 82, 76, 65]).unwrap();
+
+        // Wait for the data to arrive.
+        let event_ctx: EventContext<Token> =
+            EventContext::build_with(&[(receiver.get_read_notifier(), Token::ReceivedData)])
+                .unwrap();
+        let events = event_ctx.wait().unwrap();
+        let tokens: Vec<Token> = events
+            .iter()
+            .filter(|e| e.is_readable)
+            .map(|e| e.token)
+            .collect();
+        assert_eq!(tokens, vec! {Token::ReceivedData});
+
+        // Unlike Byte format, Message mode panics if the buffer is smaller than the packet size;
+        // make the buffer the right size.
+        let mut recv_buffer: [u8; 6] = [0; 6];
+
+        let size = receiver.read(&mut recv_buffer).unwrap();
+        assert_eq!(size, 6);
+        assert_eq!(recv_buffer, [75, 77, 54, 82, 76, 65]);
 
         // Now that we've polled for & received all data, polling again should show no events.
         assert_eq!(

@@ -5,18 +5,20 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::pci::pci_configuration::PciCapabilityID;
-use crate::pci::{MsiConfig, PciAddress, PciDeviceError};
+use base::warn;
+use data_model::DataInit;
+use resources::Alloc;
+use resources::SystemAllocator;
+use sync::Mutex;
 
+use crate::pci::pci_configuration::PciCapabilityID;
 use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
 use crate::pci::pcie::pcie_device::PmcConfig;
 use crate::pci::pcie::pcie_host::PcieHostPort;
 use crate::pci::pcie::*;
-
-use base::warn;
-use data_model::DataInit;
-use resources::{Alloc, SystemAllocator};
-use sync::Mutex;
+use crate::pci::MsiConfig;
+use crate::pci::PciAddress;
+use crate::pci::PciDeviceError;
 
 // reserve 8MB memory window
 const PCIE_BR_MEM_SIZE: u64 = 0x80_0000;
@@ -26,6 +28,7 @@ const PCIE_BR_PREF_MEM_SIZE: u64 = 0x400_0000;
 pub struct PciePort {
     device_id: u16,
     debug_label: String,
+    preferred_address: Option<PciAddress>,
     pci_address: Option<PciAddress>,
     bus_range: PciBridgeBusRange,
     pcie_host: Option<PcieHostPort>,
@@ -62,6 +65,7 @@ impl PciePort {
         PciePort {
             device_id,
             debug_label,
+            preferred_address: None,
             pci_address: None,
             bus_range,
             pcie_host: None,
@@ -86,11 +90,17 @@ impl PciePort {
         }
     }
 
-    pub fn new_from_host(pcie_host: PcieHostPort, slot_implemented: bool) -> Self {
+    pub fn new_from_host(
+        pcie_host: PcieHostPort,
+        slot_implemented: bool,
+    ) -> std::result::Result<Self, PciDeviceError> {
         let bus_range = pcie_host.get_bus_range();
-        PciePort {
+        let host_address = PciAddress::from_str(&pcie_host.host_name())
+            .map_err(|e| PciDeviceError::PciAddressParseFailure(pcie_host.host_name(), e))?;
+        Ok(PciePort {
             device_id: pcie_host.read_device_id(),
             debug_label: pcie_host.host_name(),
+            preferred_address: Some(host_address),
             pci_address: None,
             bus_range,
             pcie_host: Some(pcie_host),
@@ -112,7 +122,7 @@ impl PciePort {
             pme_pending_request_id: None,
             prepare_hotplug: false,
             removed_downstream_valid: false,
-        }
+        })
     }
 
     pub fn get_device_id(&self) -> u16 {
@@ -123,30 +133,31 @@ impl PciePort {
         self.debug_label.clone()
     }
 
+    pub fn preferred_address(&self) -> Option<PciAddress> {
+        self.preferred_address
+    }
+
     pub fn allocate_address(
         &mut self,
         resources: &mut SystemAllocator,
     ) -> std::result::Result<PciAddress, PciDeviceError> {
         if self.pci_address.is_none() {
-            match &self.pcie_host {
-                Some(host) => {
-                    let address = PciAddress::from_str(&host.host_name())
-                        .map_err(|e| PciDeviceError::PciAddressParseFailure(host.host_name(), e))?;
-                    if resources.reserve_pci(
-                        Alloc::PciBar {
-                            bus: address.bus,
-                            dev: address.dev,
-                            func: address.func,
-                            bar: 0,
-                        },
-                        host.host_name(),
-                    ) {
-                        self.pci_address = Some(address);
-                    } else {
-                        self.pci_address = None;
-                    }
+            if let Some(address) = self.preferred_address {
+                if resources.reserve_pci(
+                    Alloc::PciBar {
+                        bus: address.bus,
+                        dev: address.dev,
+                        func: address.func,
+                        bar: 0,
+                    },
+                    self.debug_label(),
+                ) {
+                    self.pci_address = Some(address);
+                } else {
+                    self.pci_address = None;
                 }
-                None => match resources.allocate_pci(self.bus_range.primary, self.debug_label()) {
+            } else {
+                match resources.allocate_pci(self.bus_range.primary, self.debug_label()) {
                     Some(Alloc::PciBar {
                         bus,
                         dev,
@@ -154,7 +165,7 @@ impl PciePort {
                         bar: _,
                     }) => self.pci_address = Some(PciAddress { bus, dev, func }),
                     _ => self.pci_address = None,
-                },
+                }
             }
         }
         self.pci_address.ok_or(PciDeviceError::PciAllocationFailed)

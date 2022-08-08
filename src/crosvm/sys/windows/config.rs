@@ -9,15 +9,27 @@ use base::info;
 #[cfg(all(feature = "prod-build", feature = "kiwi"))]
 use devices::serial_device::SerialType;
 #[cfg(feature = "gpu")]
-use devices::virtio::{GpuDisplayMode, GpuDisplayParameters, GpuMode, GpuParameters};
+use devices::virtio::GpuDisplayMode;
+#[cfg(feature = "gpu")]
+use devices::virtio::GpuDisplayParameters;
+#[cfg(feature = "gpu")]
+use devices::virtio::GpuMode;
+#[cfg(feature = "gpu")]
+use devices::virtio::GpuParameters;
+#[cfg(feature = "audio")]
 use devices::Ac97Parameters;
 use devices::SerialParameters;
 use metrics::event_details_proto::EmulatorProcessType;
 #[cfg(feature = "gpu")]
-use rutabaga_gfx::{calculate_context_mask, RutabagaWsi};
-use serde::{Deserialize, Serialize};
+use rutabaga_gfx::calculate_context_mask;
+#[cfg(feature = "gpu")]
+use rutabaga_gfx::RutabagaWsi;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::crosvm::{argument, config::Config};
+#[cfg(feature = "gpu")]
+use crate::crosvm::argument;
+use crate::crosvm::config::Config;
 
 #[cfg(feature = "audio")]
 pub fn parse_ac97_options(
@@ -26,13 +38,6 @@ pub fn parse_ac97_options(
     value: &str,
 ) -> Result<(), String> {
     Err(format!("unknown ac97 parameter {} {}", key, value))
-}
-
-#[cfg(feature = "audio")]
-pub(crate) fn check_ac97_backend(
-    #[allow(unused_variables)] ac97_params: &Ac97Parameters,
-) -> Result<(), String> {
-    Ok(())
 }
 
 #[cfg(feature = "gpu")]
@@ -552,11 +557,13 @@ impl FromStr for HypervisorKind {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "gpu")]
+    use devices::virtio::gpu::GpuDisplayMode;
+
+    #[cfg(any(feature = "audio", feature = "gpu"))]
     use super::*;
     #[cfg(feature = "gpu")]
     use crate::crosvm::sys::config::parse_gpu_options;
-    #[cfg(feature = "gpu")]
-    use devices::virtio::gpu::GpuDisplayMode;
 
     #[cfg(all(feature = "gpu", feature = "gfxstream"))]
     #[test]

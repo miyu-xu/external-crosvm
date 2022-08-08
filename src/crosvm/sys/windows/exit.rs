@@ -4,10 +4,13 @@
 
 //! Enum and Anyhow helpers to set the process exit code.
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
+
+use anyhow::Context;
 
 use crate::crosvm::sys::config::ProcessType;
-use anyhow::Context;
 
 pub type ExitCode = i32;
 
@@ -191,6 +194,7 @@ macro_rules! ensure_exit_code {
     };
 }
 
+#[allow(clippy::enum_clike_unportable_variant)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Exit {
     // Windows process exit codes triggered by the kernel tend to be NTSTATUS, so we treat
@@ -427,8 +431,9 @@ pub fn to_process_type_error(error_code: u32, cmd_type: ProcessType) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use winapi::shared::ntstatus::STATUS_BAD_INITIAL_PC;
+
+    use super::*;
 
     #[test]
     fn test_to_process_type_error_ntstatus_vendor() {
