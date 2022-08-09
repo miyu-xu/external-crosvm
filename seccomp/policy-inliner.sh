@@ -17,7 +17,7 @@ common_device="$1"
 gpu_common="$2"
 serial="$3"
 if ! [[ -f $common_device ]] || ! [[ -f $gpu_common ]] || ! [[ -f $serial ]]; then
-  echo "usage: $0 /path/to/common_device.policy /path/to/gpu_common.policy /path/to/serial.policy <input.policy >output.policy"
+  echo "usage: $0 /path/to/common_device.policy /path/to/gpu_common.policy /path/to/serial.policy /path/to/block_device.policy <input.policy >output.policy"
   exit 1
 fi
 

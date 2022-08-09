@@ -50,7 +50,6 @@ mod mptable;
 mod regs;
 mod smbios;
 
-use std::arch::x86_64::__cpuid;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -58,6 +57,7 @@ use std::fs::File;
 use std::io;
 use std::io::Seek;
 use std::mem;
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use acpi_tables::aml;
@@ -79,6 +79,7 @@ use base::AsRawDescriptors;
 use base::Event;
 use base::SendTube;
 use base::TubeError;
+use chrono::Utc;
 pub use cpuid::adjust_cpuid;
 pub use cpuid::CpuIdContext;
 use devices::BusDevice;
@@ -94,6 +95,7 @@ use devices::PciAddress;
 use devices::PciConfigIo;
 use devices::PciConfigMmio;
 use devices::PciDevice;
+use devices::PciRootCommand;
 use devices::PciVirtualConfigMmio;
 use devices::Pflash;
 #[cfg(unix)]
@@ -111,6 +113,7 @@ use gdbstub_arch::x86::reg::X87FpuInternalRegs;
 use hypervisor::x86_64::Regs;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use hypervisor::x86_64::Sregs;
+use hypervisor::CpuConfigX86_64;
 use hypervisor::HypervisorX86_64;
 use hypervisor::ProtectionType;
 use hypervisor::VcpuInitX86_64;
@@ -201,6 +204,8 @@ pub enum Error {
     #[error("failed to insert device onto bus: {0}")]
     InsertBus(devices::BusError),
     #[error("the kernel extends past the end of RAM")]
+    InvalidCpuConfig,
+    #[error("invalid CPU config parameters")]
     KernelOffsetPastEnd,
     #[error("error loading bios: {0}")]
     LoadBios(io::Error),
@@ -859,26 +864,15 @@ impl arch::LinuxArch for X8664arch {
         vcpu_id: usize,
         num_cpus: usize,
         _has_bios: bool,
-        no_smt: bool,
-        host_cpu_topology: bool,
-        enable_pnp_data: bool,
-        itmt: bool,
-        force_calibrated_tsc_leaf: bool,
+        cpu_config: Option<CpuConfigX86_64>,
     ) -> Result<()> {
+        let cpu_config = match cpu_config {
+            Some(config) => config,
+            None => return Err(Error::InvalidCpuConfig),
+        };
         if !vm.check_capability(VmCap::EarlyInitCpuid) {
-            cpuid::setup_cpuid(
-                hypervisor,
-                irq_chip,
-                vcpu,
-                vcpu_id,
-                num_cpus,
-                no_smt,
-                host_cpu_topology,
-                enable_pnp_data,
-                itmt,
-                force_calibrated_tsc_leaf,
-            )
-            .map_err(Error::SetupCpuid)?;
+            cpuid::setup_cpuid(hypervisor, irq_chip, vcpu, vcpu_id, num_cpus, cpu_config)
+                .map_err(Error::SetupCpuid)?;
         }
 
         vcpu.set_regs(&vcpu_init.regs).map_err(Error::WriteRegs)?;
@@ -918,6 +912,7 @@ impl arch::LinuxArch for X8664arch {
         device: Box<dyn PciDevice>,
         #[cfg(unix)] minijail: Option<Minijail>,
         resources: &mut SystemAllocator,
+        hp_control_tube: &mpsc::Sender<PciRootCommand>,
     ) -> Result<PciAddress> {
         arch::configure_pci_device(
             linux,
@@ -925,6 +920,7 @@ impl arch::LinuxArch for X8664arch {
             #[cfg(unix)]
             minijail,
             resources,
+            hp_control_tube,
         )
         .map_err(Error::ConfigurePciDevice)
     }
@@ -1543,7 +1539,11 @@ impl X8664arch {
 
         io_bus
             .insert(
-                Arc::new(Mutex::new(devices::Cmos::new(mem_below_4g, mem_above_4g))),
+                Arc::new(Mutex::new(devices::Cmos::new(
+                    mem_below_4g,
+                    mem_above_4g,
+                    Utc::now,
+                ))),
                 0x70,
                 0x2,
             )
@@ -1853,10 +1853,9 @@ fn insert_msrs(
 }
 
 pub fn set_enable_pnp_data_msr_config(
-    itmt: bool,
     msr_map: &mut BTreeMap<u32, MsrConfig>,
 ) -> std::result::Result<(), MsrError> {
-    let mut msrs = vec![
+    let msrs = vec![
         (
             MSR_IA32_APERF,
             MsrRWType::ReadOnly,
@@ -1873,117 +1872,6 @@ pub fn set_enable_pnp_data_msr_config(
         ),
     ];
 
-    // When itmt is enabled, the following 5 MSRs are already
-    // passed through or emulated, so just skip here.
-    if !itmt {
-        msrs.extend([
-            (
-                MSR_PLATFORM_INFO,
-                MsrRWType::ReadOnly,
-                MsrAction::MsrPassthrough,
-                MsrValueFrom::RWFromRunningCPU,
-                MsrFilter::Override,
-            ),
-            (
-                MSR_TURBO_RATIO_LIMIT,
-                MsrRWType::ReadOnly,
-                MsrAction::MsrPassthrough,
-                MsrValueFrom::RWFromRunningCPU,
-                MsrFilter::Default,
-            ),
-            (
-                MSR_PM_ENABLE,
-                MsrRWType::ReadOnly,
-                MsrAction::MsrPassthrough,
-                MsrValueFrom::RWFromRunningCPU,
-                MsrFilter::Default,
-            ),
-            (
-                MSR_HWP_CAPABILITIES,
-                MsrRWType::ReadOnly,
-                MsrAction::MsrPassthrough,
-                MsrValueFrom::RWFromRunningCPU,
-                MsrFilter::Default,
-            ),
-            (
-                MSR_HWP_REQUEST,
-                MsrRWType::ReadOnly,
-                MsrAction::MsrPassthrough,
-                MsrValueFrom::RWFromRunningCPU,
-                MsrFilter::Default,
-            ),
-        ]);
-    }
-
-    insert_msrs(msr_map, &msrs)?;
-
-    Ok(())
-}
-
-const EBX_INTEL_GENU: u32 = 0x756e6547; // "Genu"
-const ECX_INTEL_NTEL: u32 = 0x6c65746e; // "ntel"
-const EDX_INTEL_INEI: u32 = 0x49656e69; // "ineI"
-
-fn check_itmt_cpu_support() -> std::result::Result<(), MsrError> {
-    // Safe because we pass 0 for this call and the host supports the
-    // `cpuid` instruction
-    let entry = unsafe { __cpuid(0) };
-    if entry.ebx == EBX_INTEL_GENU && entry.ecx == ECX_INTEL_NTEL && entry.edx == EDX_INTEL_INEI {
-        Ok(())
-    } else {
-        Err(MsrError::CpuUnSupport)
-    }
-}
-
-pub fn set_itmt_msr_config(
-    msr_map: &mut BTreeMap<u32, MsrConfig>,
-) -> std::result::Result<(), MsrError> {
-    check_itmt_cpu_support()?;
-
-    let msrs = vec![
-        (
-            MSR_HWP_CAPABILITIES,
-            MsrRWType::ReadOnly,
-            MsrAction::MsrPassthrough,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-        (
-            MSR_PM_ENABLE,
-            MsrRWType::ReadWrite,
-            MsrAction::MsrEmulate,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-        (
-            MSR_HWP_REQUEST,
-            MsrRWType::ReadWrite,
-            MsrAction::MsrEmulate,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-        (
-            MSR_TURBO_RATIO_LIMIT,
-            MsrRWType::ReadOnly,
-            MsrAction::MsrPassthrough,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-        (
-            MSR_PLATFORM_INFO,
-            MsrRWType::ReadOnly,
-            MsrAction::MsrPassthrough,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-        (
-            MSR_IA32_PERF_CTL,
-            MsrRWType::ReadWrite,
-            MsrAction::MsrEmulate,
-            MsrValueFrom::RWFromRunningCPU,
-            MsrFilter::Default,
-        ),
-    ];
     insert_msrs(msr_map, &msrs)?;
 
     Ok(())
