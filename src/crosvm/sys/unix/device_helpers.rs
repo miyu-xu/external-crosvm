@@ -282,6 +282,36 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
 
         Ok(dev)
     }
+
+    fn create_vhost_user_device(
+        &self,
+        keep_rds: &mut Vec<RawDescriptor>,
+    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+        let disk = self.disk;
+
+        let disk_device_tube = self.device_tube.take();
+        if let Some(device_tube) = &disk_device_tube {
+            keep_rds.push(device_tube.as_raw_descriptor());
+        }
+
+        let async_file = disk.open_as_async_file()?;
+        keep_rds.extend(async_file.as_raw_descriptors());
+
+        let block = Box::new(
+            virtio::BlockAsync::new(
+                virtio::base_features(ProtectionType::Unprotected),
+                async_file,
+                disk.read_only,
+                disk.sparse,
+                disk.block_size,
+                disk.id,
+                disk_device_tube,
+            )
+            .context("failed to create block device")?,
+        );
+
+        Ok(block)
+    }
 }
 
 pub fn create_vhost_user_block_device(
@@ -720,6 +750,7 @@ pub fn create_balloon_device(
     tube: Tube,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
+    enabled_features: u64,
 ) -> DeviceResult {
     let dev = virtio::Balloon::new(
         virtio::base_features(protected_vm),
@@ -727,6 +758,7 @@ pub fn create_balloon_device(
         inflate_tube,
         init_balloon_size,
         mode,
+        enabled_features,
     )
     .context("failed to create balloon")?;
 
