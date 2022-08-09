@@ -22,6 +22,30 @@
       },
       "revId": "0d9e3845142a5c6f759c885e899892682eeb576c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3012d97d_324650f9",
+        "filename": "x86_64/src/cpuid.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-08-09T18:39:21Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "333df0c4_4273fe6f",
+      "range": {
+        "startLine": 208,
+        "startChar": 0,
+        "endLine": 210,
+        "endChar": 54
+      },
+      "revId": "0d9e3845142a5c6f759c885e899892682eeb576c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
