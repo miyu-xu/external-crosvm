@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use arch::get_serial_cmdline;
@@ -33,7 +34,9 @@ use devices::IrqEventSource;
 use devices::PciAddress;
 use devices::PciConfigMmio;
 use devices::PciDevice;
+use devices::PciRootCommand;
 use devices::Serial;
+use hypervisor::CpuConfigAArch64;
 use hypervisor::DeviceKind;
 use hypervisor::Hypervisor;
 use hypervisor::HypervisorCap;
@@ -602,11 +605,7 @@ impl arch::LinuxArch for AArch64 {
         _vcpu_id: usize,
         _num_cpus: usize,
         _has_bios: bool,
-        _no_smt: bool,
-        _host_cpu_topology: bool,
-        _enable_pnp_data: bool,
-        _itmt: bool,
-        _force_calibrated_tsc_leaf: bool,
+        _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         // AArch64 doesn't configure vcpus on the vcpu thread, so nothing to do here.
         Ok(())
@@ -617,6 +616,7 @@ impl arch::LinuxArch for AArch64 {
         _device: Box<dyn PciDevice>,
         _minijail: Option<Minijail>,
         _resources: &mut SystemAllocator,
+        _tube: &mpsc::Sender<PciRootCommand>,
     ) -> std::result::Result<PciAddress, Self::Error> {
         // hotplug function isn't verified on AArch64, so set it unsupported here.
         Err(Error::Unsupported)
