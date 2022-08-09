@@ -60,7 +60,6 @@ use crate::crosvm::config::parse_cpu_capacity;
 use crate::crosvm::config::parse_cpu_set;
 #[cfg(feature = "direct")]
 use crate::crosvm::config::parse_direct_io_options;
-use crate::crosvm::config::parse_file_backed_mapping;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::crosvm::config::parse_memory_region;
 use crate::crosvm::config::parse_mmio_address_range;
@@ -375,6 +374,7 @@ pub struct DeviceCommand {
 /// Cross-platform Devices
 pub enum CrossPlatformDevicesCommands {
     Block(device::BlockOptions),
+    #[cfg(unix)]
     Net(device::NetOptions),
 }
 
@@ -468,6 +468,9 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     /// path for balloon controller socket.
     pub balloon_control: Option<PathBuf>,
+    #[argh(switch)]
+    /// enable page reporting in balloon.
+    pub balloon_page_reporting: bool,
     #[argh(option)]
     /// comma separated key=value pairs for setting up battery
     /// device
@@ -606,6 +609,9 @@ pub struct RunCommand {
     /// directory with smbios_entry_point/DMI files
     pub dmi_path: Option<PathBuf>,
     #[argh(switch)]
+    /// expose HWP feature to the guest
+    pub enable_hwp: bool,
+    #[argh(switch)]
     /// expose Power and Perfomance (PnP) data to guest and guest can show these PnP data
     pub enable_pnp_data: bool,
     #[argh(positional, arg_name = "KERNEL")]
@@ -618,8 +624,7 @@ pub struct RunCommand {
     #[argh(
         option,
         long = "file-backed-mapping",
-        arg_name = "addr=NUM,size=SIZE,path=PATH[,offset=NUM][,ro][,rw][,sync]",
-        from_str_fn(parse_file_backed_mapping)
+        arg_name = "addr=NUM,size=SIZE,path=PATH[,offset=NUM][,rw][,sync]"
     )]
     /// map the given file into guest memory at the specified
     /// address.
@@ -628,8 +633,7 @@ pub struct RunCommand {
     ///     size=NUM - amount of memory to map
     ///     path=PATH - path to backing file/device to map
     ///     offset=NUM - offset in backing file (default 0)
-    ///     ro - make the mapping readonly (default)
-    ///     rw - make the mapping writable
+    ///     rw - make the mapping writable (default readonly)
     ///     sync - open backing file with O_SYNC
     ///     align - whether to adjust addr and size to page
     ///        boundaries implicitly
@@ -1647,7 +1651,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.usb = !cmd.no_usb;
         cfg.rng = !cmd.no_rng;
         cfg.balloon = !cmd.no_balloon;
-
+        cfg.balloon_page_reporting = cmd.balloon_page_reporting;
         #[cfg(feature = "audio")]
         {
             cfg.virtio_snds = cmd.virtio_snds;
@@ -1772,6 +1776,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
         {
+            cfg.enable_hwp = cmd.enable_hwp;
             cfg.host_cpu_topology = cmd.host_cpu_topology;
             cfg.force_s2idle = cmd.s2idle;
             cfg.pcie_ecam = cmd.pcie_ecam;
