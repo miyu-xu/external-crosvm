@@ -32,6 +32,9 @@ do
   elif echo "$line" | egrep "@include[[:space:]]+/usr/share/policy/crosvm/serial.policy" > /dev/null; then
     cat $serial
     continue
+  elif echo "$line" | egrep "@include[[:space:]]+/usr/share/policy/crosvm/block.policy" > /dev/null; then
+    cat $block
+    continue
   elif echo "$line" | egrep "@include" > /dev/null; then
     echo "ERROR: Unsupported include statement $line" >&2
     exit 1

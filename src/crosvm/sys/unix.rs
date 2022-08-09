@@ -34,7 +34,7 @@ use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(target_arch = "x86_64"))]
 use std::thread;
 #[cfg(feature = "balloon")]
 use std::time::Duration;
@@ -53,6 +53,7 @@ use arch::VirtioDeviceStub;
 use arch::VmComponents;
 use arch::VmImage;
 use base::sys::WaitStatus;
+#[cfg(feature = "balloon")]
 use base::UnixSeqpacket;
 use base::UnixSeqpacketListener;
 use base::UnlinkUnixSeqpacketListener;
@@ -69,6 +70,8 @@ use devices::virtio::memory_mapper::MemoryMapperTrait;
 use devices::virtio::vhost::user::VhostUserListener;
 use devices::virtio::vhost::user::VhostUserListenerTrait;
 use devices::virtio::vhost::vsock::VhostVsockConfig;
+#[cfg(feature = "balloon")]
+use devices::virtio::BalloonFeatures;
 #[cfg(feature = "balloon")]
 use devices::virtio::BalloonMode;
 #[cfg(feature = "gpu")]
@@ -96,6 +99,9 @@ use devices::PciAddress;
 use devices::PciBridge;
 use devices::PciDevice;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use devices::PciRoot;
+use devices::PciRootCommand;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PcieHostPort;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PcieRootPort;
@@ -112,6 +118,8 @@ use gpu::*;
 use hypervisor::kvm::Kvm;
 use hypervisor::kvm::KvmVcpu;
 use hypervisor::kvm::KvmVm;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::CpuConfigX86_64;
 use hypervisor::HypervisorCap;
 use hypervisor::ProtectionType;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -428,6 +436,8 @@ fn create_virtio_devices(
 
     #[cfg(feature = "balloon")]
     if let Some(balloon_device_tube) = balloon_device_tube {
+        let balloon_features =
+            (cfg.balloon_page_reporting as u64) << BalloonFeatures::PageReporting as u64;
         devs.push(create_balloon_device(
             cfg.protected_vm,
             &cfg.jail_config,
@@ -439,6 +449,7 @@ fn create_virtio_devices(
             balloon_device_tube,
             balloon_inflate_tube,
             init_balloon_size,
+            balloon_features,
         )?);
     }
 
@@ -1698,6 +1709,10 @@ where
     .context("the architecture failed to build the vm")?;
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let (hp_control_tube, hp_worker_tube) = mpsc::channel();
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    let (hp_control_tube, _) = mpsc::channel();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         for hotplug_bus in hotplug_buses.iter() {
             linux.hotplug_bus.push(hotplug_bus.clone());
@@ -1708,6 +1723,11 @@ where
                 pm.lock().register_gpe_notify_dev(gpe, notify_dev);
             }
         }
+
+        let pci_root = linux.root_config.clone();
+        thread::Builder::new()
+            .name("pci_root".to_string())
+            .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube))?;
     }
 
     #[cfg(feature = "direct")]
@@ -1757,7 +1777,40 @@ where
         gralloc,
         vcpu_ids,
         iommu_host_tube,
+        hp_control_tube,
     )
+}
+
+// Hotplug command is facing dead lock issue when it tries to acquire the lock
+// for pci root in the vm control thread. Dead lock could happen when the vm
+// control thread(Thread A namely) is handling the hotplug command and it tries
+// to get the lock for pci root. However, the lock is already hold by another
+// device in thread B, which is actively sending an vm control to be handled by
+// thread A and waiting for response. However, thread A is blocked on acquiring
+// the lock, so dead lock happens. In order to resolve this issue, we add this
+// worker thread and push all work that locks pci root to this thread.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn start_pci_root_worker(
+    pci_root: Arc<Mutex<PciRoot>>,
+    hp_device_tube: mpsc::Receiver<PciRootCommand>,
+) {
+    loop {
+        match hp_device_tube.recv() {
+            Ok(cmd) => match cmd {
+                PciRootCommand::Add(addr, device) => {
+                    pci_root.lock().add_device(addr, device);
+                }
+                PciRootCommand::Remove(addr) => {
+                    pci_root.lock().remove_device(addr);
+                }
+                PciRootCommand::Kill => break,
+            },
+            Err(e) => {
+                error!("Error: pci root worker channel closed: {}", e);
+                break;
+            }
+        }
+    }
 }
 
 fn get_hp_bus<V: VmArch, Vcpu: VcpuArch>(
@@ -1777,11 +1830,12 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     sys_allocator: &mut SystemAllocator,
     cfg: &Config,
     control_tubes: &mut Vec<TaggedControlTube>,
+    hp_control_tube: &mpsc::Sender<PciRootCommand>,
     iommu_host_tube: &Option<Tube>,
-    vfio_path: &Path,
-    hp_interrupt: bool,
+    device: &HotPlugDeviceInfo,
 ) -> Result<()> {
-    let host_os_str = vfio_path
+    let host_os_str = device
+        .path
         .file_name()
         .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
     let host_str = host_os_str
@@ -1796,7 +1850,7 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
         &linux.vm,
         sys_allocator,
         control_tubes,
-        vfio_path,
+        &device.path,
         Some(bus_num),
         None,
         None,
@@ -1807,8 +1861,9 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
         },
     )?;
 
-    let pci_address = Arch::register_pci_device(linux, vfio_pci_device, jail, sys_allocator)
-        .context("Failed to configure pci hotplug device")?;
+    let pci_address =
+        Arch::register_pci_device(linux, vfio_pci_device, jail, sys_allocator, hp_control_tube)
+            .context("Failed to configure pci hotplug device")?;
 
     if let Some(iommu_host_tube) = iommu_host_tube {
         let endpoint_addr = pci_address.to_u32();
@@ -1833,7 +1888,7 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     let host_key = HostHotPlugKey::Vfio { host_addr };
     let mut hp_bus = hp_bus.lock();
     hp_bus.add_hotplug_device(host_key, pci_address);
-    if hp_interrupt {
+    if device.hp_interrupt {
         hp_bus.hot_plug(pci_address);
     }
     Ok(())
@@ -1842,11 +1897,12 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
 fn remove_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     linux: &RunnableLinuxVm<V, Vcpu>,
     sys_allocator: &mut SystemAllocator,
+    _hp_control_tube: &mpsc::Sender<PciRootCommand>,
     iommu_host_tube: &Option<Tube>,
-    vfio_path: &Path,
-    _hp_interrupt: bool,
+    device: &HotPlugDeviceInfo,
 ) -> Result<()> {
-    let host_os_str = vfio_path
+    let host_os_str = device
+        .path
         .file_name()
         .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
     let host_str = host_os_str
@@ -1879,45 +1935,49 @@ fn remove_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     Err(anyhow!("HotPlugBus hasn't been implemented"))
 }
 
-fn handle_vfio_command<V: VmArch, Vcpu: VcpuArch>(
+fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
     sys_allocator: &mut SystemAllocator,
     cfg: &Config,
     add_tubes: &mut Vec<TaggedControlTube>,
+    hp_control_tube: &mpsc::Sender<PciRootCommand>,
     iommu_host_tube: &Option<Tube>,
-    vfio_path: &Path,
+    device: &HotPlugDeviceInfo,
     add: bool,
-    hp_interrupt: bool,
 ) -> VmResponse {
     let iommu_host_tube = if cfg.vfio_isolate_hotplug {
         iommu_host_tube
     } else {
         &None
     };
+    if !matches!(device.device_type, HotPlugDeviceType::EndPoint) {
+        // Not supported yet
+        return VmResponse::Ok;
+    }
     let ret = if add {
         add_vfio_device(
             linux,
             sys_allocator,
             cfg,
             add_tubes,
+            hp_control_tube,
             iommu_host_tube,
-            vfio_path,
-            hp_interrupt,
+            device,
         )
     } else {
         remove_vfio_device(
             linux,
             sys_allocator,
+            hp_control_tube,
             iommu_host_tube,
-            vfio_path,
-            hp_interrupt,
+            device,
         )
     };
 
     match ret {
         Ok(()) => VmResponse::Ok,
         Err(e) => {
-            error!("hanlde_vfio_command failure: {}", e);
+            error!("hanlde_hotplug_command failure: {}", e);
             add_tubes.clear();
             VmResponse::Err(base::Error::new(libc::EINVAL))
         }
@@ -1940,6 +2000,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut gralloc: RutabagaGralloc,
     vcpu_ids: Vec<usize>,
     iommu_host_tube: Option<Tube>,
+    hp_control_tube: mpsc::Sender<PciRootCommand>,
 ) -> Result<ExitState> {
     #[derive(EventToken)]
     enum Token {
@@ -2052,6 +2113,20 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             Some(VcpuAffinity::PerVcpu(mut m)) => m.remove(&cpu_id).unwrap_or_default(),
             None => Default::default(),
         };
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let cpu_config = Some(CpuConfigX86_64::new(
+            cfg.force_calibrated_tsc_leaf,
+            cfg.host_cpu_topology,
+            cfg.enable_hwp,
+            cfg.enable_pnp_data,
+            cfg.no_smt,
+            cfg.itmt,
+        ));
+
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        let cpu_config = None;
+
         let handle = vcpu::run_vcpu(
             cpu_id,
             vcpu_ids[cpu_id],
@@ -2066,7 +2141,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             linux.rt_cpus.contains(&cpu_id),
             vcpu_affinity,
             linux.delay_rt,
-            linux.no_smt,
             vcpu_thread_barrier.clone(),
             linux.has_bios,
             (*linux.io_bus).clone(),
@@ -2080,10 +2154,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
             to_gdb_channel.clone(),
             cfg.per_vm_core_scheduling,
-            cfg.host_cpu_topology,
-            cfg.enable_pnp_data,
-            cfg.itmt,
-            cfg.force_calibrated_tsc_leaf,
+            cpu_config,
             cfg.privileged_vm,
             match vcpu_cgroup_tasks_file {
                 None => None,
@@ -2232,20 +2303,18 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                 Ok(request) => {
                                     let mut run_mode_opt = None;
                                     let response = match request {
-                                        VmRequest::VfioCommand {
-                                            vfio_path,
-                                            add,
-                                            hp_interrupt,
-                                        } => handle_vfio_command(
-                                            &mut linux,
-                                            &mut sys_allocator,
-                                            &cfg,
-                                            &mut add_tubes,
-                                            &iommu_host_tube,
-                                            &vfio_path,
-                                            add,
-                                            hp_interrupt,
-                                        ),
+                                        VmRequest::HotPlugCommand { device, add } => {
+                                            handle_hotplug_command(
+                                                &mut linux,
+                                                &mut sys_allocator,
+                                                &cfg,
+                                                &mut add_tubes,
+                                                &hp_control_tube,
+                                                &iommu_host_tube,
+                                                &device,
+                                                add,
+                                            )
+                                        }
                                         _ => request.execute(
                                             &mut run_mode_opt,
                                             #[cfg(feature = "balloon")]
@@ -2485,6 +2554,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         }
     }
 
+    // Stop pci root worker thread
+    let _ = hp_control_tube.send(PciRootCommand::Kill);
+
     // Explicitly drop the VM structure here to allow the devices to clean up before the
     // control sockets are closed when this function exits.
     mem::drop(linux);
@@ -2629,6 +2701,12 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
         add_device(i, serial_config, &params.vhost, &jail, &mut devices_jails)?;
     }
 
+    // Create block devices.
+    for (i, params) in opts.block.iter().enumerate() {
+        let disk_config = DiskConfig::new(&params.device_params, None);
+        add_device(i, &disk_config, &params.vhost, &jail, &mut devices_jails)?;
+    }
+
     // Now wait for all device processes to return.
     while !devices_jails.is_empty() {
         match base::platform::wait_for_pid(-1, 0) {
@@ -2677,6 +2755,7 @@ mod tests {
             offset: 0,
             writable: false,
             sync: false,
+            align: false,
         }
     }
 
