@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "26c30a21_7c384f17",
+        "filename": "seccomp/crosvm_seccomp_policy_product_packages.mk",
+        "patchSetId": 7
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-11T21:02:52Z",
+      "side": 1,
+      "message": "can you move the changes to this file into https://r.android.com/c/platform/external/crosvm/+/2183567/2/seccomp/crosvm_seccomp_policy_product_packages.mk so it is easier to see what\u0027s going on? e.g. some things are added here only to be removed immediately in that CL",
+      "revId": "cbd73ca5912f3992b754d7f2885760bc5ce33595",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dd7f6051_2f2778ca",
+        "filename": "seccomp/policy-inliner.sh",
+        "patchSetId": 7
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-11T21:02:52Z",
+      "side": 1,
+      "message": "should revert",
+      "range": {
+        "startLine": 20,
+        "startChar": 98,
+        "endLine": 20,
+        "endChar": 126
+      },
+      "revId": "cbd73ca5912f3992b754d7f2885760bc5ce33595",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
