@@ -42,6 +42,7 @@ pub struct Interrupt {
     interrupt_evt: IrqLevelEvent,
     msix_config: Option<Arc<Mutex<MsixConfig>>>,
     config_msix_vector: u16,
+    skip_check: bool,
 }
 
 impl SignalableInterrupt for Interrupt {
@@ -59,6 +60,11 @@ impl SignalableInterrupt for Interrupt {
                 }
                 return;
             }
+        }
+
+        if self.skip_check {
+            self.interrupt_evt.trigger().unwrap();
+            return;
         }
 
         // Set bit in ISR and inject the interrupt if it was not already pending.
@@ -142,6 +148,7 @@ impl Interrupt {
             interrupt_evt,
             msix_config,
             config_msix_vector,
+            skip_check: false,
         }
     }
 
@@ -160,4 +167,9 @@ impl Interrupt {
     pub fn get_msix_config(&self) -> &Option<Arc<Mutex<MsixConfig>>> {
         &self.msix_config
     }
+
+    pub fn set_skip_check(&mut self) {
+        self.skip_check = true;
+    }
+
 }
