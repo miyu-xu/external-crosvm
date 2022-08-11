@@ -52,6 +52,24 @@
       "parentUuid": "9d1a0e9a_b734bf8a",
       "revId": "1d826a58387be22d2ea2f319ca500c9f13f3f868",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "84cd1b20_de6e2cae",
+        "filename": "seccomp/policy-inliner.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 39,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-11T21:07:00Z",
+      "side": 1,
+      "message": "no, you still want to do `continue` for x86 (i.e. when `$block` is non-empty). it should error only when `$block` is empty (because in that case the included file isn\u0027t present and so we can\u0027t inline it)\n\nsomething vaguely like\n\n```\nif ! [[ -f $block ]]; then\n  echo \"no block.policy to inline!\"\n  exit 1\nfi\ncat $block\ncontinue\n```\n\nstill not a blocker IMO",
+      "parentUuid": "8f2e692a_a6cd8438",
+      "revId": "1d826a58387be22d2ea2f319ca500c9f13f3f868",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
