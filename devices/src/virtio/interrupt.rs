@@ -42,6 +42,7 @@ pub struct Interrupt {
     interrupt_evt: IrqLevelEvent,
     msix_config: Option<Arc<Mutex<MsixConfig>>>,
     config_msix_vector: u16,
+    async_intr_status: bool,
 }
 
 impl SignalableInterrupt for Interrupt {
@@ -63,10 +64,12 @@ impl SignalableInterrupt for Interrupt {
 
         // Set bit in ISR and inject the interrupt if it was not already pending.
         // Don't need to inject the interrupt if the guest hasn't processed it.
+        // In hypervisors where interrupt_status is updated asynchronously, inject the
+        // interrupt even if the previous interrupt appears to be already pending.
         if self
             .interrupt_status
             .fetch_or(interrupt_status_mask as usize, Ordering::SeqCst)
-            == 0
+            == 0 || self.async_intr_status
         {
             // Write to irqfd to inject INTx interrupt
             self.interrupt_evt.trigger().unwrap();
@@ -142,6 +145,7 @@ impl Interrupt {
             interrupt_evt,
             msix_config,
             config_msix_vector,
+            async_intr_status: false,
         }
     }
 
@@ -160,4 +164,9 @@ impl Interrupt {
     pub fn get_msix_config(&self) -> &Option<Arc<Mutex<MsixConfig>>> {
         &self.msix_config
     }
+
+    pub fn set_async_intr_status(&mut self) {
+        self.async_intr_status = true;
+    }
+
 }
