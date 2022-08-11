@@ -34,6 +34,24 @@
       "parentUuid": "b499f04a_4b76c526",
       "revId": "1d826a58387be22d2ea2f319ca500c9f13f3f868",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8f2e692a_a6cd8438",
+        "filename": "seccomp/policy-inliner.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 39,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-08-11T21:02:46Z",
+      "side": 1,
+      "message": "Is that a suggestion to replace \"continue\" with a break/error?",
+      "parentUuid": "9d1a0e9a_b734bf8a",
+      "revId": "1d826a58387be22d2ea2f319ca500c9f13f3f868",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
