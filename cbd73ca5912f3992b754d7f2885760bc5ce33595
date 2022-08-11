@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f3577628_45499d9c",
+        "filename": "seccomp/crosvm_seccomp_policy_product_packages.mk",
+        "patchSetId": 7
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-08-11T22:10:14Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "26c30a21_7c384f17",
+      "revId": "cbd73ca5912f3992b754d7f2885760bc5ce33595",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "dd7f6051_2f2778ca",
@@ -31,6 +49,30 @@
       "writtenOn": "2022-08-11T21:02:52Z",
       "side": 1,
       "message": "should revert",
+      "range": {
+        "startLine": 20,
+        "startChar": 98,
+        "endLine": 20,
+        "endChar": 126
+      },
+      "revId": "cbd73ca5912f3992b754d7f2885760bc5ce33595",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2c1e07ee_03190e65",
+        "filename": "seccomp/policy-inliner.sh",
+        "patchSetId": 7
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-08-11T22:10:14Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "dd7f6051_2f2778ca",
       "range": {
         "startLine": 20,
         "startChar": 98,
