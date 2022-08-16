@@ -2,9 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::{error, SendTube, VmEventType};
+use base::error;
+use base::SendTube;
+use base::VmEventType;
 
-use crate::{BusAccessInfo, BusDevice};
+use crate::pci::CrosvmDeviceId;
+use crate::BusAccessInfo;
+use crate::BusDevice;
+use crate::DeviceId;
 
 /// A i8042 PS/2 controller that emulates just enough to shutdown the machine.
 pub struct I8042Device {
@@ -21,6 +26,10 @@ impl I8042Device {
 // i8042 device is mapped I/O address 0x61. We partially implement two 8-bit
 // registers: port 0x61 (I8042_PORT_B_REG), and port 0x64 (I8042_COMMAND_REG).
 impl BusDevice for I8042Device {
+    fn device_id(&self) -> DeviceId {
+        CrosvmDeviceId::I8042.into()
+    }
+
     fn debug_label(&self) -> String {
         "i8042".to_owned()
     }

@@ -5,31 +5,47 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io;
 use std::mem;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::FileExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::slice;
 use std::sync::Arc;
 use std::u32;
 
-use crate::IommuDevType;
 use base::error;
-use base::{
-    ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref, ioctl_with_val,
-    warn, AsRawDescriptor, Error, Event, FromRawDescriptor, RawDescriptor, SafeDescriptor,
-};
-use data_model::{vec_with_array_field, DataInit};
-use hypervisor::{DeviceKind, Vm};
+use base::ioctl;
+use base::ioctl_with_mut_ptr;
+use base::ioctl_with_mut_ref;
+use base::ioctl_with_ptr;
+use base::ioctl_with_ref;
+use base::ioctl_with_val;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Error;
+use base::Event;
+use base::FromRawDescriptor;
+use base::RawDescriptor;
+use base::SafeDescriptor;
+use data_model::vec_with_array_field;
+use data_model::DataInit;
+use hypervisor::DeviceKind;
+use hypervisor::Vm;
 use once_cell::sync::OnceCell;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
-use resources::{Alloc, Error as ResourcesError};
+use resources::AddressRange;
+use resources::Alloc;
+use resources::Error as ResourcesError;
 use sync::Mutex;
 use thiserror::Error;
 use vfio_sys::*;
+
+use crate::IommuDevType;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -242,7 +258,7 @@ impl VfioContainer {
         Ok(iommu_info.iova_pgsizes)
     }
 
-    pub fn vfio_iommu_iova_get_iova_ranges(&self) -> Result<Vec<vfio_iova_range>> {
+    pub fn vfio_iommu_iova_get_iova_ranges(&self) -> Result<Vec<AddressRange>> {
         // Query the buffer size needed fetch the capabilities.
         let mut iommu_info_argsz = vfio_iommu_type1_info {
             argsz: mem::size_of::<vfio_iommu_type1_info>() as u32,
@@ -303,7 +319,13 @@ impl VfioContainer {
                         range_offset + i as usize * mem::size_of::<vfio_iova_range>(),
                     ));
                 }
-                return Ok(ret);
+                return Ok(ret
+                    .iter()
+                    .map(|range| AddressRange {
+                        start: range.start,
+                        end: range.end,
+                    })
+                    .collect());
             }
             offset = header.next as usize;
         }
@@ -533,7 +555,7 @@ impl VfioGroup {
             },
         };
 
-        // Safe as we are the owner of vfio_dev_fd and vfio_dev_attr which are valid value,
+        // Safe as we are the owner of vfio_dev_descriptor and vfio_dev_attr which are valid value,
         // and we verify the return value.
         if 0 != unsafe {
             ioctl_with_ref(
@@ -558,7 +580,7 @@ impl VfioGroup {
             return Err(VfioError::GroupGetDeviceFD(get_error()));
         }
 
-        // Safe as ret is valid FD
+        // Safe as ret is valid descriptor
         Ok(unsafe { File::from_raw_descriptor(ret) })
     }
 
@@ -757,11 +779,7 @@ impl VfioDevice {
         group.lock().add_device_num();
         let group_descriptor = group.lock().as_raw_descriptor();
 
-        let iova_ranges = container
-            .lock()
-            .vfio_iommu_iova_get_iova_ranges()?
-            .into_iter()
-            .map(|r| std::ops::RangeInclusive::new(r.start, r.end));
+        let iova_ranges = container.lock().vfio_iommu_iova_get_iova_ranges()?;
         let iova_alloc = AddressAllocator::new_from_list(iova_ranges, None, None)
             .map_err(VfioError::Resources)?;
 
@@ -806,11 +824,7 @@ impl VfioDevice {
         group.lock().add_device_num();
         let group_descriptor = group.lock().as_raw_descriptor();
 
-        let iova_ranges = container
-            .lock()
-            .vfio_iommu_iova_get_iova_ranges()?
-            .into_iter()
-            .map(|r| std::ops::RangeInclusive::new(r.start, r.end));
+        let iova_ranges = container.lock().vfio_iommu_iova_get_iova_ranges()?;
         let iova_alloc = AddressAllocator::new_from_list(iova_ranges, None, None)
             .map_err(VfioError::Resources)?;
 
@@ -1164,7 +1178,7 @@ impl VfioDevice {
                         cap_info = Some((cap_type_info.type_, cap_type_info.subtype));
                     } else if cap_header.id as u32 == VFIO_REGION_INFO_CAP_MSIX_MAPPABLE {
                         mmaps.push(vfio_region_sparse_mmap_area {
-                            offset: region_with_cap[0].region_info.offset,
+                            offset: 0,
                             size: region_with_cap[0].region_info.size,
                         });
                     }
@@ -1389,6 +1403,17 @@ impl VfioDevice {
         self.iova_alloc
             .lock()
             .allocate_with_align(size, alloc, "alloc_iova".to_owned(), align_size)
+            .map_err(VfioError::Resources)
+    }
+
+    pub fn get_iova(&self, alloc: &Alloc) -> Option<AddressRange> {
+        self.iova_alloc.lock().get(alloc).map(|res| res.0)
+    }
+
+    pub fn release_iova(&self, alloc: Alloc) -> Result<AddressRange> {
+        self.iova_alloc
+            .lock()
+            .release(alloc)
             .map_err(VfioError::Resources)
     }
 

@@ -4,8 +4,11 @@
 
 //! Data structures that represent video format information in virtio video devices.
 
-use std::convert::{From, Into, TryFrom};
-use std::fmt::{self, Display};
+use std::convert::From;
+use std::convert::Into;
+use std::convert::TryFrom;
+use std::fmt;
+use std::fmt::Display;
 use std::io;
 
 use base::error;
@@ -46,7 +49,7 @@ pub enum Profile {
 impl_try_from_le32_for_enumn!(Profile, "profile");
 
 impl Profile {
-    #[cfg(any(feature = "video-encoder", feature = "libvda"))]
+    #[cfg(any(feature = "video-encoder", feature = "libvda", feature = "vaapi"))]
     pub fn to_format(self) -> Format {
         use Profile::*;
         match self {

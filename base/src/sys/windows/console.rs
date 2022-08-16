@@ -2,16 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io::{stdin, Error, Read, Result};
+use std::io::Error;
+use std::io::Read;
+use std::io::Result;
 
-use winapi::{
-    shared::{minwindef::LPVOID, ntdef::NULL},
-    um::{fileapi::ReadFile, minwinbase::LPOVERLAPPED},
-};
+use winapi::shared::minwindef::LPVOID;
+use winapi::shared::ntdef::NULL;
+use winapi::um::fileapi::ReadFile;
+use winapi::um::minwinbase::LPOVERLAPPED;
 
-use crate::{AsRawDescriptor, RawDescriptor};
+use crate::AsRawDescriptor;
+use crate::ReadNotifier;
 
-pub struct Console;
+pub struct Console(std::io::Stdin);
+
+impl Console {
+    pub fn new() -> Self {
+        Self(std::io::stdin())
+    }
+}
 
 impl Read for Console {
     fn read(&mut self, out: &mut [u8]) -> Result<usize> {
@@ -20,7 +29,7 @@ impl Read for Console {
         // and `num_of_bytes_read` is a valid u32.
         let res = unsafe {
             ReadFile(
-                stdin().as_raw_descriptor(),
+                self.0.as_raw_descriptor(),
                 out.as_mut_ptr() as LPVOID,
                 out.len() as u32,
                 &mut num_of_bytes_read,
@@ -36,8 +45,8 @@ impl Read for Console {
     }
 }
 
-impl AsRawDescriptor for Console {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        stdin().as_raw_descriptor()
+impl ReadNotifier for Console {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        &self.0
     }
 }

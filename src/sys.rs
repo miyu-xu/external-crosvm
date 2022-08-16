@@ -6,24 +6,24 @@ cfg_if::cfg_if! {
     if #[cfg(unix)] {
         pub(crate) mod unix;
         use unix as platform;
+        pub(crate) use crate::crosvm::sys::unix::{run_config, ExitState};
+    } else if #[cfg(windows)] {
+        pub(crate) mod windows;
+        use windows as platform;
+        pub(crate) use windows::ExitState;
+        pub(crate) use windows::run_config;
     } else {
         compile_error!("Unsupported platform");
     }
 }
 
-pub(crate) use platform::main::{
-    check_serial_params, cleanup, get_arguments, net_vq_pairs_expected, set_arguments,
-    start_device, DevicesSubcommand,
-};
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub(crate) use platform::main::use_host_cpu_topology;
-
-#[cfg(feature = "gpu")]
-pub(crate) use platform::main::is_gpu_backend_deprecated;
-
-#[cfg(feature = "gfxstream")]
-pub(crate) use platform::main::use_vulkan;
-
-#[cfg(feature = "audio")]
-pub(crate) use platform::main::{check_ac97_backend, parse_ac97_options};
+pub(crate) use platform::main::cleanup;
+pub(crate) use platform::main::error_to_exit_code;
+pub(crate) use platform::main::get_library_watcher;
+pub(crate) use platform::main::init_log;
+pub(crate) use platform::main::run_command;
+#[cfg(feature = "kiwi")]
+pub(crate) use platform::main::sandbox_lower_token;
+pub(crate) use platform::main::start_device;
+#[cfg(not(feature = "crash-report"))]
+pub(crate) use platform::set_panic_hook;

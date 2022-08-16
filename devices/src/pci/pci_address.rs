@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fmt::{self, Display};
+use std::fmt;
+use std::fmt::Display;
 use std::str::FromStr;
 
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
 use thiserror::Error as ThisError;
 
 /// Identifies a single component of a [`PciAddress`].
@@ -39,7 +43,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// PCI Device Address, AKA Bus:Device.Function
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PciAddress {
     /// Bus number, in the range `0..=255`.
     pub bus: u8,
@@ -47,6 +51,25 @@ pub struct PciAddress {
     pub dev: u8,
     /// Function number, in the range `0..=7`.
     pub func: u8,
+}
+
+impl Serialize for PciAddress {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PciAddress {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        FromStr::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Convert `PciAddress` to a human-readable string format.
@@ -413,6 +436,26 @@ mod tests {
         assert_eq!(
             PciAddress::new(0, 0xff, 0x1f, 7).unwrap().to_string(),
             "0000:ff:1f.7"
+        );
+    }
+
+    #[test]
+    fn serialize_json() {
+        assert_eq!(
+            serde_json::to_string(&PciAddress::new(0, 0xa5, 0x1f, 3).unwrap()).unwrap(),
+            "\"0000:a5:1f.3\""
+        );
+    }
+
+    #[test]
+    fn deserialize_json() {
+        assert_eq!(
+            serde_json::from_str::<PciAddress>("\"0000:a5:1f.3\"").unwrap(),
+            PciAddress {
+                bus: 0xa5,
+                dev: 0x1f,
+                func: 3,
+            }
         );
     }
 }

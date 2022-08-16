@@ -7,17 +7,15 @@
 use std::collections::BTreeMap as Map;
 use std::sync::Arc;
 
-use base::{ExternalMapping, SafeDescriptor};
+use base::ExternalMapping;
+use base::SafeDescriptor;
 use data_model::VolatileSlice;
 
 use crate::cross_domain::CrossDomain;
-
 #[cfg(feature = "gfxstream")]
 use crate::gfxstream::Gfxstream;
-
 use crate::rutabaga_2d::Rutabaga2D;
 use crate::rutabaga_utils::*;
-
 #[cfg(feature = "virgl_renderer")]
 use crate::virgl_renderer::VirglRenderer;
 
@@ -831,12 +829,6 @@ impl RutabagaBuilder {
         self
     }
 
-    /// Set use syncfd in gfxstream
-    pub fn set_use_syncfd(mut self, v: bool) -> RutabagaBuilder {
-        self.gfxstream_flags = self.gfxstream_flags.use_syncfd(v);
-        self
-    }
-
     /// Set use guest ANGLE in gfxstream
     pub fn set_use_guest_angle(mut self, v: bool) -> RutabagaBuilder {
         self.gfxstream_flags = self.gfxstream_flags.use_guest_angle(v);
@@ -1007,6 +999,8 @@ impl RutabagaBuilder {
 
             let cross_domain = CrossDomain::init(self.channels)?;
             rutabaga_components.insert(RutabagaComponentType::CrossDomain, cross_domain);
+            push_capset(RUTABAGA_CAPSET_CROSS_DOMAIN);
+            push_capset(30);
         }
 
         Ok(Rutabaga {

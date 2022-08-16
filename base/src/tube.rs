@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use remain::sorted;
 use std::io;
 
+use remain::sorted;
 use thiserror::Error as ThisError;
 
 #[cfg_attr(windows, path = "sys/windows/tube.rs")]
 #[cfg_attr(not(windows), path = "sys/unix/tube.rs")]
 mod tube;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::time::Duration;
+
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde::Serialize;
 pub use tube::*;
 
 impl Tube {
@@ -21,6 +24,9 @@ impl Tube {
         Ok((SendTube(t1), RecvTube(t2)))
     }
 }
+
+use crate::AsRawDescriptor;
+use crate::ReadNotifier;
 
 #[derive(Serialize, Deserialize)]
 #[serde(transparent)]
@@ -81,6 +87,12 @@ impl RecvTube {
     }
 }
 
+impl ReadNotifier for RecvTube {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        self.0.get_read_notifier()
+    }
+}
+
 #[sorted]
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -122,20 +134,33 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::Duration;
+
+    use serde::Deserialize;
+    use serde::Serialize;
+
     use super::*;
+    use crate::descriptor::FromRawDescriptor;
+    use crate::descriptor::SafeDescriptor;
+    use crate::platform::deserialize_with_descriptors;
+    use crate::platform::SerializeDescriptors;
     use crate::Event;
-
-    use std::{collections::HashMap, time::Duration};
-
-    use serde::{Deserialize, Serialize};
-    use std::{
-        sync::{Arc, Barrier},
-        thread,
-    };
+    use crate::EventToken;
+    use crate::ReadNotifier;
+    use crate::WaitContext;
 
     #[derive(Serialize, Deserialize)]
     struct DataStruct {
         x: u32,
+    }
+
+    #[derive(EventToken, Debug, Eq, PartialEq, Copy, Clone)]
+    enum Token {
+        ReceivedData,
     }
 
     // Magics to identify which producer sent a message (& detect corruption).
@@ -218,6 +243,44 @@ mod tests {
             }
         }
         (tube, id1_count, id2_count)
+    }
+
+    #[test]
+    fn test_serialize_tube_pair() {
+        let (tube_send, tube_recv) = Tube::pair().unwrap();
+
+        // Serialize the Tube
+        let msg_serialize = SerializeDescriptors::new(&tube_send);
+        let serialized = serde_json::to_vec(&msg_serialize).unwrap();
+        let msg_descriptors = msg_serialize.into_descriptors();
+
+        // Deserialize the Tube
+        let mut msg_descriptors_safe = msg_descriptors
+            .into_iter()
+            .map(|v| Some(unsafe { SafeDescriptor::from_raw_descriptor(v) }))
+            .collect();
+        let tube_deserialized: Tube = deserialize_with_descriptors(
+            || serde_json::from_slice(&serialized),
+            &mut msg_descriptors_safe,
+        )
+        .unwrap();
+
+        // Send a message through deserialized Tube
+        tube_deserialized.send(&"hi".to_string()).unwrap();
+
+        // Wait for the message to arrive
+        let wait_ctx: WaitContext<Token> =
+            WaitContext::build_with(&[(tube_recv.get_read_notifier(), Token::ReceivedData)])
+                .unwrap();
+        let events = wait_ctx.wait_timeout(Duration::from_secs(10)).unwrap();
+        let tokens: Vec<Token> = events
+            .iter()
+            .filter(|e| e.is_readable)
+            .map(|e| e.token)
+            .collect();
+        assert_eq!(tokens, vec! {Token::ReceivedData});
+
+        assert_eq!(tube_recv.recv::<String>().unwrap(), "hi");
     }
 
     #[test]

@@ -4,26 +4,28 @@
 
 #![cfg(feature = "plugin")]
 
-use std::env::{current_exe, var_os};
+use std::env::current_exe;
+use std::env::var_os;
 use std::ffi::OsString;
 use std::fs::remove_file;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
 
-use base::{ioctl, AsRawDescriptor};
+use base::ioctl;
+use base::AsRawDescriptor;
 use net_util::TapTCommon;
+use once_cell::sync::Lazy;
 use tempfile::tempfile;
 
-lazy_static::lazy_static! {
-    static ref TAP_AVAILABLE: bool = {
-        use net_util::TapT;
-        net_util::sys::unix::Tap::new(true, false).is_ok()
-    };
-}
+static TAP_AVAILABLE: Lazy<bool> = Lazy::new(|| net_util::sys::unix::Tap::new(true, false).is_ok());
 
 struct RemovePath(PathBuf);
 impl Drop for RemovePath {
@@ -109,7 +111,7 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
 
     if *TAP_AVAILABLE {
         cmd.args(&[
-            "--host_ip",
+            "--host-ip",
             "100.115.92.5",
             "--netmask",
             "255.255.255.252",
@@ -240,6 +242,7 @@ fn test_adder() {
     test_plugin(include_str!("plugin_adder.c"));
 }
 
+#[ignore] // TODO(b/239094055): fix the SIGSTOP usage that stops the cargo test runner
 #[test]
 fn test_hint() {
     test_plugin(include_str!("plugin_hint.c"));

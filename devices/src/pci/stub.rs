@@ -13,15 +13,21 @@
 //! something to the guest on function 0.
 
 use base::RawDescriptor;
-use resources::{Alloc, SystemAllocator};
+use resources::Alloc;
+use resources::SystemAllocator;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::pci::pci_configuration::{
-    PciBarConfiguration, PciClassCode, PciConfiguration, PciHeaderType, PciProgrammingInterface,
-    PciSubclass,
-};
-use crate::pci::pci_device::{PciDevice, Result};
-use crate::pci::{PciAddress, PciDeviceError};
-use serde::{Deserialize, Serialize};
+use crate::pci::pci_configuration::PciBarConfiguration;
+use crate::pci::pci_configuration::PciClassCode;
+use crate::pci::pci_configuration::PciConfiguration;
+use crate::pci::pci_configuration::PciHeaderType;
+use crate::pci::pci_configuration::PciProgrammingInterface;
+use crate::pci::pci_configuration::PciSubclass;
+use crate::pci::pci_device::PciDevice;
+use crate::pci::pci_device::Result;
+use crate::pci::PciAddress;
+use crate::pci::PciDeviceError;
 
 #[derive(Serialize, Deserialize)]
 pub struct StubPciParameters {
@@ -87,6 +93,10 @@ impl PciDevice for StubPciDevice {
         "Stub".to_owned()
     }
 
+    fn preferred_address(&self) -> Option<PciAddress> {
+        Some(self.requested_address)
+    }
+
     fn allocate_address(&mut self, resources: &mut SystemAllocator) -> Result<PciAddress> {
         if self.assigned_address.is_none() {
             if resources.reserve_pci(
@@ -128,8 +138,11 @@ impl PciDevice for StubPciDevice {
 
 #[cfg(test)]
 mod test {
+    use resources::AddressRange;
+    use resources::SystemAllocator;
+    use resources::SystemAllocatorConfig;
+
     use super::*;
-    use resources::{MemRegion, SystemAllocator, SystemAllocatorConfig};
 
     const CONFIG: StubPciParameters = StubPciParameters {
         address: PciAddress {
@@ -160,17 +173,17 @@ mod test {
     fn address_allocation() {
         let mut allocator = SystemAllocator::new(
             SystemAllocatorConfig {
-                io: Some(MemRegion {
-                    base: 0x1000,
-                    size: 0x2000,
+                io: Some(AddressRange {
+                    start: 0x1000,
+                    end: 0x2fff,
                 }),
-                low_mmio: MemRegion {
-                    base: 0x2000_0000,
-                    size: 0x1000_0000,
+                low_mmio: AddressRange {
+                    start: 0x2000_0000,
+                    end: 0x2fff_ffff,
                 },
-                high_mmio: MemRegion {
-                    base: 0x1_0000_0000,
-                    size: 0x1000_0000,
+                high_mmio: AddressRange {
+                    start: 0x1_0000_0000,
+                    end: 0x1_0fff_ffff,
                 },
                 platform_mmio: None,
                 first_irq: 5,

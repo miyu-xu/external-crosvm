@@ -61,7 +61,7 @@ luci.project(
                 acl.SCHEDULER_OWNER,
                 acl.CQ_COMMITTER,
             ],
-            groups = "mdb/crosvm-acl-luci-admin",
+            groups = ["googlers", "project-crosvm-committers"],
         ),
         # Group with bots that have write access to the Logdog prefix.
         acl.entry(
@@ -124,6 +124,8 @@ luci.cq_group(
         repo = "https://chromium.googlesource.com/crosvm/crosvm",
         refs = ["refs/heads/.+"],  # will watch all branches
     ),
+    # Allows us to submit chains of commits with a single CQ run.
+    allow_submit_with_open_deps = True,
 )
 
 # Console showing all postsubmit verify builders
@@ -132,12 +134,45 @@ luci.console_view(
     repo = "https://chromium.googlesource.com/crosvm/crosvm",
 )
 
+# View showing all presubmit builders
+luci.list_view(
+    name = "Presubmit",
+)
+
 # View showing all infra builders
 luci.list_view(
     name = "Infra",
 )
 
-def verify_builder(name, dimensions, presubmit = True, postsubmit = True, **args):
+# Allows builders to send email notifications on failures.
+luci.notifier(
+    name = "postsubmit-failures",
+    on_status_change = True,
+    notify_emails = [
+        "crosvm-uprev@grotations.appspotmail.com",
+        "crosvm-uprev-apac@grotations.appspotmail.com",
+        "denniskempin@google.com",
+    ],
+)
+luci.notifier(
+    name = "infra-failures",
+    on_status_change = True,
+    notify_emails = [
+        "denniskempin@google.com",
+        "keiichiw@google.com",
+    ],
+)
+
+def verify_builder(
+        name,
+        dimensions,
+        presubmit = True,
+        postsubmit = True,
+        properties = dict(),
+        presubmit_properties = dict(),
+        postsubmit_properties = dict(),
+        category = "generic",
+        **args):
     """Creates both a CI and try builder with the same properties.
 
     The CI builder is attached to the gitlies poller and console view, and the try builder
@@ -147,17 +182,25 @@ def verify_builder(name, dimensions, presubmit = True, postsubmit = True, **args
         name: Name of the builder
         dimensions: Passed to luci.builder
         presubmit: Create a presubmit builder (defaults to True)
-        postsubmit: Creaet a postsubmit builder (defaults to True)
+        postsubmit: Create a postsubmit builder (defaults to True)
+        category: Category of this builder in the concole view
+        properties: Builder properties for both presubmit and postsubmit
+        presubmit_properties: Builder properties for only presubmit
+        postsubmit_properties: Builder properties for only postsubmit
         **args: Passed to luci.builder
     """
 
     # CI builder
     if postsubmit:
+        props = dict(**properties)
+        props.update(postsubmit_properties)
         luci.builder(
             name = name,
             bucket = "ci",
             service_account = "crosvm-luci-ci-builder@crosvm-infra.iam.gserviceaccount.com",
             dimensions = dict(pool = "luci.crosvm.ci", **dimensions),
+            notifies = ["postsubmit-failures"],
+            properties = props,
             **args
         )
         luci.gitiles_poller(
@@ -169,17 +212,24 @@ def verify_builder(name, dimensions, presubmit = True, postsubmit = True, **args
         luci.console_view_entry(
             console_view = "Postsubmit",
             builder = "ci/%s" % name,
-            category = "linux",
+            category = category,
         )
 
     # Try builder
     if presubmit:
+        props = dict(**properties)
+        props.update(presubmit_properties)
         luci.builder(
             name = name,
             bucket = "try",
             service_account = "crosvm-luci-try-builder@crosvm-infra.iam.gserviceaccount.com",
             dimensions = dict(pool = "luci.crosvm.try", **dimensions),
+            properties = props,
             **args
+        )
+        luci.list_view_entry(
+            list_view = "Presubmit",
+            builder = "try/%s" % name,
         )
 
         # Attach try builder to Change Verifier
@@ -188,15 +238,19 @@ def verify_builder(name, dimensions, presubmit = True, postsubmit = True, **args
             cq_group = "main",
         )
 
-def verify_linux_builder(arch, **kwargs):
+def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
     """Creates a verify builder that builds crosvm on linux
 
     Args:
         arch: Architecture to build and test
+        crosvm_direct: Test crosvm-direct instead of crosvm
         **kwargs: Passed to verify_builder
     """
+    name = "linux_%s" % arch
+    if crosvm_direct:
+        name += "_direct"
     verify_builder(
-        name = "crosvm_linux_%s" % arch,
+        name = name,
         dimensions = {
             "os": "Ubuntu",
             "cpu": "x86-64",
@@ -206,7 +260,18 @@ def verify_linux_builder(arch, **kwargs):
         ),
         properties = {
             "test_arch": arch,
+            "crosvm_direct": crosvm_direct,
         },
+        postsubmit_properties = {
+            "repeat_tests": 3,
+        },
+        presubmit_properties = {
+            "retry_tests": 2,
+        },
+        caches = [
+            swarming.cache("builder", name = "linux_builder_cache"),
+        ],
+        category = "linux",
         **kwargs
     )
 
@@ -218,7 +283,7 @@ def verify_chromeos_builder(board, **kwargs):
         **kwargs: Passed to verify_builder
     """
     verify_builder(
-        name = "crosvm_chromeos_%s" % board,
+        name = "chromeos_%s" % board,
         dimensions = {
             "os": "Ubuntu",
             "cpu": "x86-64",
@@ -229,6 +294,7 @@ def verify_chromeos_builder(board, **kwargs):
         properties = {
             "board": board,
         },
+        category = "linux",
         **kwargs
     )
 
@@ -251,6 +317,7 @@ def infra_builder(name, postsubmit, **args):
             "os": "Ubuntu",
             "cpu": "x86-64",
         },
+        notifies = ["infra-failures"],
         **args
     )
     if postsubmit:
@@ -266,13 +333,26 @@ def infra_builder(name, postsubmit, **args):
     )
 
 verify_linux_builder("x86_64")
+verify_linux_builder("x86_64", crosvm_direct = True)
 verify_linux_builder("aarch64")
 verify_linux_builder("armhf")
 
 verify_chromeos_builder("amd64-generic", presubmit = False)
 
 verify_builder(
-    name = "crosvm_health_check",
+    name = "windows",
+    dimensions = {
+        "os": "Windows",
+        "cpu": "x86-64",
+    },
+    executable = luci.recipe(
+        name = "build_windows",
+    ),
+    category = "windows",
+)
+
+verify_builder(
+    name = "health_check",
     dimensions = {
         "os": "Ubuntu",
         "cpu": "x86-64",
@@ -280,10 +360,14 @@ verify_builder(
     executable = luci.recipe(
         name = "health_check",
     ),
+    caches = [
+        swarming.cache("builder", name = "linux_builder_cache"),
+    ],
+    category = "linux",
 )
 
 infra_builder(
-    name = "crosvm_push_to_github",
+    name = "push_to_github",
     executable = luci.recipe(
         name = "push_to_github",
     ),
@@ -291,7 +375,23 @@ infra_builder(
 )
 
 infra_builder(
-    name = "crosvm_update_chromeos_merges",
+    name = "build_docs",
+    executable = luci.recipe(
+        name = "build_docs",
+    ),
+    postsubmit = True,
+)
+
+infra_builder(
+    name = "build_coverage",
+    executable = luci.recipe(
+        name = "build_coverage",
+    ),
+    postsubmit = True,
+)
+
+infra_builder(
+    name = "update_chromeos_merges",
     executable = luci.recipe(
         name = "update_chromeos_merges",
     ),

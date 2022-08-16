@@ -2,15 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use base::MemfdSeals;
+use base::MemoryMappingUnix;
+use base::SharedMemory;
+use base::SharedMemoryUnix;
 use bitflags::bitflags;
 
-use base::{MemfdSeals, MemoryMappingUnix, SharedMemory, SharedMemoryUnix};
-
-use crate::{Error, GuestAddress, GuestMemory, Result};
+use crate::Error;
+use crate::GuestAddress;
+use crate::GuestMemory;
+use crate::Result;
 
 bitflags! {
     pub struct MemoryPolicy: u32 {
         const USE_HUGEPAGES = 1;
+        const LOCK_GUEST_MEMORY = (1 << 1);
     }
 }
 
@@ -41,12 +47,29 @@ impl GuestMemory {
 
     /// Handles guest memory policy hints/advices.
     pub fn set_memory_policy(&self, mem_policy: MemoryPolicy) {
-        if mem_policy.contains(MemoryPolicy::USE_HUGEPAGES) {
-            for (_, region) in self.regions.iter().enumerate() {
+        if mem_policy.is_empty() {
+            return;
+        }
+
+        for (_, region) in self.regions.iter().enumerate() {
+            if mem_policy.contains(MemoryPolicy::USE_HUGEPAGES) {
                 let ret = region.mapping.use_hugepages();
 
                 if let Err(err) = ret {
                     println!("Failed to enable HUGEPAGE for mapping {}", err);
+                }
+            }
+
+            if mem_policy.contains(MemoryPolicy::LOCK_GUEST_MEMORY) {
+                // This is done in coordination with remove_range() calls, which are
+                // performed by the virtio-balloon process (they must be performed by
+                // a different process from the one that issues the locks).
+                // We also prevent this from happening in single-process configurations,
+                // when we compute configuration flags.
+                let ret = region.mapping.lock_all();
+
+                if let Err(err) = ret {
+                    println!("Failed to lock memory for mapping {}", err);
                 }
             }
         }

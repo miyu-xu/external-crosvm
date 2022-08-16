@@ -14,16 +14,28 @@
 
 use std::fmt;
 
+use base::error;
 use base::RawDescriptor;
-use base::{self, error, SendTube, VmEventType};
-use resources::{Alloc, MmioType, SystemAllocator};
+use base::SendTube;
+use base::VmEventType;
+use resources::Alloc;
+use resources::AllocOptions;
+use resources::SystemAllocator;
 
-use crate::pci::pci_configuration::{
-    PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode, PciConfiguration,
-    PciHeaderType, PciOtherSubclass,
-};
-use crate::pci::pci_device::{self, BarRange, PciDevice, Result};
-use crate::pci::{PciAddress, PciDeviceError, PCI_VENDOR_ID_REDHAT};
+use crate::pci::pci_configuration::PciBarConfiguration;
+use crate::pci::pci_configuration::PciBarPrefetchable;
+use crate::pci::pci_configuration::PciBarRegionType;
+use crate::pci::pci_configuration::PciClassCode;
+use crate::pci::pci_configuration::PciConfiguration;
+use crate::pci::pci_configuration::PciHeaderType;
+use crate::pci::pci_configuration::PciOtherSubclass;
+use crate::pci::pci_device;
+use crate::pci::pci_device::BarRange;
+use crate::pci::pci_device::PciDevice;
+use crate::pci::pci_device::Result;
+use crate::pci::PciAddress;
+use crate::pci::PciDeviceError;
+use crate::pci::PCI_VENDOR_ID_REDHAT;
 
 const PCI_DEVICE_ID_REDHAT_PVPANIC: u16 = 0x0011;
 const PCI_PVPANIC_REVISION_ID: u8 = 1;
@@ -120,8 +132,7 @@ impl PciDevice for PvPanicPciDevice {
             .expect("allocate_address must be called prior to allocate_io_bars");
         let mut ranges: Vec<BarRange> = Vec::new();
         let pvpanic_reg_addr = resources
-            .mmio_allocator(MmioType::Low)
-            .allocate_with_align(
+            .allocate_mmio(
                 PVPANIC_REG_SIZE,
                 Alloc::PciBar {
                     bus: address.bus,
@@ -130,7 +141,9 @@ impl PciDevice for PvPanicPciDevice {
                     bar: PVPANIC_REG_NUM,
                 },
                 "pvpanic_reg".to_string(),
-                PVPANIC_REG_SIZE,
+                AllocOptions::new()
+                    .max_address(u32::MAX.into())
+                    .align(PVPANIC_REG_SIZE),
             )
             .map_err(|e| pci_device::Error::IoAllocationFailed(PVPANIC_REG_SIZE, e))?;
         let pvpanic_config = PciBarConfiguration::new(
@@ -194,25 +207,28 @@ impl PciDevice for PvPanicPciDevice {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use base::Tube;
-    use resources::{MemRegion, SystemAllocator, SystemAllocatorConfig};
+    use resources::AddressRange;
+    use resources::SystemAllocator;
+    use resources::SystemAllocatorConfig;
+
+    use super::*;
 
     #[test]
     fn pvpanic_read_write() {
         let mut allocator = SystemAllocator::new(
             SystemAllocatorConfig {
-                io: Some(MemRegion {
-                    base: 0x1000,
-                    size: 0x2000,
+                io: Some(AddressRange {
+                    start: 0x1000,
+                    end: 0xffff,
                 }),
-                low_mmio: MemRegion {
-                    base: 0x2000_0000,
-                    size: 0x1000_0000,
+                low_mmio: AddressRange {
+                    start: 0x2000_0000,
+                    end: 0x2fffffff,
                 },
-                high_mmio: MemRegion {
-                    base: 0x1_0000_0000,
-                    size: 0x1000_0000,
+                high_mmio: AddressRange {
+                    start: 0x1_0000_0000,
+                    end: 0x1_0fff_ffff,
                 },
                 platform_mmio: None,
                 first_irq: 5,

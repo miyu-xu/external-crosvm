@@ -4,8 +4,12 @@
 
 use std::sync::Arc;
 
-use base::{error, Event, MemoryMapping, MemoryMappingBuilder};
-use vmm_vhost::{Error as VhostError, Result as VhostResult};
+use base::error;
+use base::Event;
+use base::MemoryMapping;
+use base::MemoryMappingBuilder;
+use vmm_vhost::Error as VhostError;
+use vmm_vhost::Result as VhostResult;
 
 use crate::vfio::VfioDevice;
 use crate::virtio::vhost::user::device::vvu::pci::VvuPciCaps;
@@ -14,9 +18,8 @@ use crate::virtio::SignalableInterrupt;
 /// Doorbell region in the VVU device's additional BAR.
 /// Writing to this area will sends a signal to the sibling VM's vhost-user device.
 pub struct DoorbellRegion {
-    pub index: u8,
-    pub addr: u64,
-    pub mmap: MemoryMapping,
+    addr: u64,
+    mmap: MemoryMapping,
 }
 
 impl DoorbellRegion {
@@ -41,13 +44,7 @@ impl DoorbellRegion {
                 error!("Failed to mmap vfio memory region: {}", e);
                 VhostError::InvalidOperation
             })?;
-        let doorbell = DoorbellRegion {
-            index: queue_index,
-            addr,
-            mmap,
-        };
-
-        Ok(doorbell)
+        Ok(DoorbellRegion { addr, mmap })
     }
 }
 
@@ -58,7 +55,7 @@ impl SignalableInterrupt for DoorbellRegion {
         // anyway. The mmap address should be correct as initialized in the 'new()' function
         // according to the given vfio device.
         self.mmap
-            .write_obj(1_u8, self.addr as usize)
+            .write_obj_volatile(1_u8, self.addr as usize)
             .expect("unable to write to mmap area");
     }
 

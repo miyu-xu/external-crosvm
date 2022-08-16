@@ -2,37 +2,55 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::fs::read;
 #[cfg(feature = "direct")]
 use std::fs::read_to_string;
-use std::fs::{read, write, File, OpenOptions};
+use std::fs::write;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
+use anyhow::Result;
+use base::error;
 #[cfg(feature = "direct")]
 use base::warn;
-use base::{error, Tube};
+use base::Tube;
 use data_model::DataInit;
 use sync::Mutex;
-use vm_control::{VmRequest, VmResponse};
+use vm_control::HotPlugDeviceInfo;
+use vm_control::HotPlugDeviceType;
+use vm_control::VmRequest;
+use vm_control::VmResponse;
 
-use crate::pci::{PciCapabilityID, PciClassCode};
-
-use crate::pci::pci_configuration::{
-    PciBridgeSubclass, CAPABILITY_LIST_HEAD_OFFSET, HEADER_TYPE_REG, PCI_CAP_NEXT_POINTER,
-};
+use crate::pci::pci_configuration::PciBridgeSubclass;
+use crate::pci::pci_configuration::CAPABILITY_LIST_HEAD_OFFSET;
 #[cfg(feature = "direct")]
-use crate::pci::pci_configuration::{CLASS_REG, CLASS_REG_REVISION_ID_OFFSET};
-
-use crate::pci::pcie::pci_bridge::{
-    PciBridgeBusRange, BR_BUS_NUMBER_REG, BR_MEM_BASE_MASK, BR_MEM_BASE_SHIFT, BR_MEM_LIMIT_MASK,
-    BR_MEM_MINIMUM, BR_MEM_REG, BR_PREF_MEM_64BIT, BR_PREF_MEM_BASE_HIGH_REG,
-    BR_PREF_MEM_LIMIT_HIGH_REG, BR_PREF_MEM_LOW_REG, BR_WINDOW_ALIGNMENT,
-};
-
-use crate::pci::pcie::*;
+use crate::pci::pci_configuration::CLASS_REG;
+#[cfg(feature = "direct")]
+use crate::pci::pci_configuration::CLASS_REG_REVISION_ID_OFFSET;
+use crate::pci::pci_configuration::HEADER_TYPE_REG;
+use crate::pci::pci_configuration::PCI_CAP_NEXT_POINTER;
+use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
+use crate::pci::pcie::pci_bridge::BR_BUS_NUMBER_REG;
+use crate::pci::pcie::pci_bridge::BR_MEM_BASE_MASK;
+use crate::pci::pcie::pci_bridge::BR_MEM_BASE_SHIFT;
+use crate::pci::pcie::pci_bridge::BR_MEM_LIMIT_MASK;
+use crate::pci::pcie::pci_bridge::BR_MEM_MINIMUM;
+use crate::pci::pcie::pci_bridge::BR_MEM_REG;
+use crate::pci::pcie::pci_bridge::BR_PREF_MEM_64BIT;
+use crate::pci::pcie::pci_bridge::BR_PREF_MEM_BASE_HIGH_REG;
+use crate::pci::pcie::pci_bridge::BR_PREF_MEM_LIMIT_HIGH_REG;
+use crate::pci::pcie::pci_bridge::BR_PREF_MEM_LOW_REG;
+use crate::pci::pcie::pci_bridge::BR_WINDOW_ALIGNMENT;
+use crate::pci::PciCapabilityID;
+use crate::pci::PciClassCode;
 
 // Host Pci device's sysfs config file
 struct PciHostConfig {
@@ -212,12 +230,14 @@ impl HotplugWorker {
                     .with_context(|| format!("failed to write {} into vfio-pci/new_id", new_id))?;
             }
 
-            // Request to hotplug the new added pcie device into guest
-            let request = VmRequest::VfioCommand {
-                vfio_path: child.clone(),
-                add: true,
+            let device = HotPlugDeviceInfo {
+                device_type: HotPlugDeviceType::EndPoint,
+                path: child.clone(),
                 hp_interrupt: children.is_empty(),
             };
+
+            // Request to hotplug the new added pcie device into guest
+            let request = VmRequest::HotPlugCommand { device, add: true };
             vm_socket.lock().send(&request).with_context(|| {
                 format!("failed to send hotplug request for {}", child.display())
             })?;
@@ -239,7 +259,7 @@ const PCI_BASE_CLASS_CODE: u64 = 0x0B;
 const PCI_SUB_CLASS_CODE: u64 = 0x0A;
 
 /// Pcie root port device has a corresponding host pcie root port.
-pub struct PcieHostRootPort {
+pub struct PcieHostPort {
     host_config: PciHostConfig,
     host_name: String,
     hotplug_in_process: Arc<Mutex<bool>>,
@@ -251,8 +271,8 @@ pub struct PcieHostRootPort {
     header_type_reg: Option<u32>,
 }
 
-impl PcieHostRootPort {
-    /// Create PcieHostRootPort, host_syfsfs_patch specify host pcie root port
+impl PcieHostPort {
+    /// Create PcieHostPort, host_syfsfs_patch specify host pcie port
     /// sysfs path.
     pub fn new(host_sysfs_path: &Path, socket: Tube) -> Result<Self> {
         let host_config = PciHostConfig::new(host_sysfs_path)?;
@@ -290,14 +310,9 @@ impl PcieHostRootPort {
             return Err(anyhow!("host {} isn't pcie device", host_name));
         }
 
-        let device_cap: u8 = host_config.read_config(pcie_cap_reg as u64 + PCIE_CAP_VERSION as u64);
-        if (device_cap >> PCIE_TYPE_SHIFT) != PcieDevicePortType::RootPort as u8 {
-            return Err(anyhow!("host {} isn't pcie root port", host_name));
-        }
-
         #[cfg(feature = "direct")]
         let (sysfs_path, header_type_reg) =
-            match PcieHostRootPort::coordinated_pm(host_sysfs_path, true) {
+            match PcieHostPort::coordinated_pm(host_sysfs_path, true) {
                 Ok(_) => {
                     // Cache the dword at offset 0x0c (cacheline size, latency timer,
                     // header type, BIST).
@@ -315,7 +330,7 @@ impl PcieHostRootPort {
                 }
             };
 
-        Ok(PcieHostRootPort {
+        Ok(PcieHostPort {
             host_config,
             host_name,
             hotplug_in_process: Arc::new(Mutex::new(false)),
@@ -478,10 +493,10 @@ impl PcieHostRootPort {
 }
 
 #[cfg(feature = "direct")]
-impl Drop for PcieHostRootPort {
+impl Drop for PcieHostPort {
     fn drop(&mut self) {
         if self.sysfs_path.is_some() {
-            let _ = PcieHostRootPort::coordinated_pm(self.sysfs_path.as_ref().unwrap(), false);
+            let _ = PcieHostPort::coordinated_pm(self.sysfs_path.as_ref().unwrap(), false);
         }
     }
 }

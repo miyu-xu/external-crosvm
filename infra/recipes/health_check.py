@@ -16,7 +16,7 @@ DEPS = [
 
 
 def RunSteps(api):
-    with api.crosvm.build_context():
+    with api.crosvm.container_build_context():
         api.step(
             "Self-test dev-container",
             [
@@ -28,6 +28,12 @@ def RunSteps(api):
         )
         for check in ("python", "misc", "fmt", "clippy"):
             api.crosvm.step_in_container("Checking %s" % check, ["./tools/health-check", check])
+
+        api.crosvm.step_in_container("Checking mdbook", ["mdbook", "build", "docs/book/"])
+        api.crosvm.step_in_container(
+            "Checking cargo docs",
+            ["./tools/cargo-doc"],
+        )
 
 
 def GenTests(api):

@@ -13,26 +13,28 @@
 //   * cluster-mode logical addressing
 //   * external interrupts -- these are handled by querying `Pic` separately in
 //     `UserspaceIrqChip::inject_interrupts`
-//
 
-// TODO(b/213149158): this code will be used once the rest of the module
-// upstreaming is done.
-#![allow(dead_code)]
+use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::time::Duration;
+use std::time::Instant;
 
-use std::convert::{TryFrom, TryInto};
-use std::time::{Duration, Instant};
-
+use base::error;
+use base::warn;
 #[cfg(test)]
 use base::FakeTimer as Timer;
 #[cfg(not(test))]
 use base::Timer;
-// TODO(srichman): Rate-limit error messages?
-use base::{error, warn};
 use bit_field::*;
-use hypervisor::{
-    DeliveryMode, DeliveryStatus, DestinationMode, LapicState, Level, MPState, MsiAddressMessage,
-    MsiDataMessage, TriggerMode,
-};
+use hypervisor::DeliveryMode;
+use hypervisor::DeliveryStatus;
+use hypervisor::DestinationMode;
+use hypervisor::LapicState;
+use hypervisor::Level;
+use hypervisor::MPState;
+use hypervisor::MsiAddressMessage;
+use hypervisor::MsiDataMessage;
+use hypervisor::TriggerMode;
 
 pub type Vector = u8;
 
@@ -137,7 +139,7 @@ impl Apic {
     pub fn frequency() -> u32 {
         // Our Apic implementation will try to use the host's bus frequency if it
         // can be determined from cpuid, otherwise it uses 100MHz (cycle length of 10 nanos)
-        match crate::tsc::bus_freq_hz() {
+        match crate::tsc::bus_freq_hz(std::arch::x86_64::__cpuid_count) {
             Some(hz) => hz,
             None => (1_000_000_000u128 / CYCLE_LENGTH_FALLBACK.as_nanos()) as u32,
         }
@@ -900,9 +902,10 @@ mod tests {
     use std::mem;
     use std::sync::Arc;
 
-    use super::*;
     use base::FakeClock;
     use sync::Mutex;
+
+    use super::*;
 
     #[test]
     fn struct_size() {

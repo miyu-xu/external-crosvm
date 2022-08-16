@@ -128,6 +128,7 @@ pub fn flatten_subcommand(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 /// use temporarily before migrating to real ones
 /// Note: USE ONLY ON EMPTY STRUCTS
 /// Adds a field 'pub args: Vec<String>' containing all remaining arguments.
+// TODO(b:240717724): Migrate the users of this macro and delete it.
 #[proc_macro_attribute]
 pub fn generate_catchall_args(
     _attr: proc_macro::TokenStream,
@@ -197,6 +198,48 @@ pub fn generate_catchall_args(
         #internal_struct
         #wrapper_struct
         #wrapper_impl
+    }
+    .into()
+}
+
+/// A helper proc macro to pad strings so that argh would break them at intended points
+#[proc_macro_attribute]
+pub fn pad_description_for_argh(
+    _attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let mut item = syn::parse_macro_input!(item as syn::Item);
+    if let syn::Item::Struct(s) = &mut item {
+        if let syn::Fields::Named(fields) = &mut s.fields {
+            for f in fields.named.iter_mut() {
+                for a in f.attrs.iter_mut() {
+                    if a.path
+                        .get_ident()
+                        .map(|i| i.to_string())
+                        .unwrap_or_default()
+                        == *"doc"
+                    {
+                        if let Ok(syn::Meta::NameValue(nv)) = a.parse_meta() {
+                            if let syn::Lit::Str(s) = nv.lit {
+                                let doc = s
+                                    .value()
+                                    .lines()
+                                    .map(|s| format!("{: <61}", s))
+                                    .collect::<String>();
+                                *a = syn::parse_quote! { #[doc= #doc] };
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            unreachable!()
+        }
+    } else {
+        unreachable!()
+    }
+    quote! {
+        #item
     }
     .into()
 }

@@ -2,26 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::HashMap;
 use std::fs::File;
+use std::mem;
 use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+use base::error;
+use base::AsRawDescriptor;
+use base::EventType;
+use base::RawDescriptor;
+use base::Tube;
+use sync::Mutex;
+use usb_util::Device;
+use vm_control::UsbControlAttachedDevice;
+use vm_control::UsbControlCommand;
+use vm_control::UsbControlResult;
+use vm_control::USB_CONTROL_MAX_PORTS;
 
 use super::error::*;
 use super::host_device::HostDevice;
 use crate::usb::xhci::usb_hub::UsbHub;
 use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use crate::utils::AsyncJobQueue;
-use crate::utils::{EventHandler, EventLoop, FailHandle};
-
-use anyhow::Context;
-use base::{error, AsRawDescriptor, EventType, RawDescriptor, Tube};
-use std::collections::HashMap;
-use std::mem;
-use std::time::Duration;
-use sync::Mutex;
-use usb_util::Device;
-use vm_control::{
-    UsbControlAttachedDevice, UsbControlCommand, UsbControlResult, USB_CONTROL_MAX_PORTS,
-};
+use crate::utils::EventHandler;
+use crate::utils::EventLoop;
+use crate::utils::FailHandle;
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
 
@@ -220,9 +227,9 @@ impl ProviderInner {
                 if let Some(device_ctx) = self.devices.lock().remove(&port) {
                     let _ = device_ctx.event_handler.on_event();
                     let device = device_ctx.device.lock();
-                    let fd = device.fd();
+                    let descriptor = device.fd();
 
-                    if let Err(e) = self.event_loop.remove_event_for_fd(&*fd) {
+                    if let Err(e) = self.event_loop.remove_event_for_descriptor(&*descriptor) {
                         error!(
                             "failed to remove poll change handler from event loop: {}",
                             e
@@ -263,7 +270,7 @@ impl ProviderInner {
         let tube = self.control_tube.lock();
         let cmd = tube.recv().map_err(Error::ReadControlTube)?;
         let result = match cmd {
-            UsbControlCommand::AttachDevice { file, .. } => self.handle_attach_device(file),
+            UsbControlCommand::AttachDevice { file } => self.handle_attach_device(file),
             UsbControlCommand::DetachDevice { port } => self.handle_detach_device(port),
             UsbControlCommand::ListDevice { ports } => self.handle_list_devices(ports),
         };

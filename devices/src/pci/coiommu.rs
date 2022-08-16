@@ -17,36 +17,70 @@
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::default::Default;
+use std::fmt;
+use std::mem;
 use std::panic;
 use std::str::FromStr;
-use std::sync::atomic::{fence, AtomicU32, Ordering};
+use std::sync::atomic::fence;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
-use std::{fmt, mem, thread};
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use base::{
-    error, info, AsRawDescriptor, Event, EventToken, MemoryMapping, MemoryMappingBuilder,
-    RawDescriptor, SafeDescriptor, SharedMemory, Timer, Tube, TubeError, WaitContext,
-};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::ensure;
+use anyhow::Context;
+use anyhow::Result;
+use base::error;
+use base::info;
+use base::AsRawDescriptor;
+use base::Event;
+use base::EventToken;
+use base::MemoryMapping;
+use base::MemoryMappingBuilder;
+use base::Protection;
+use base::RawDescriptor;
+use base::SafeDescriptor;
+use base::SharedMemory;
+use base::Timer;
+use base::Tube;
+use base::TubeError;
+use base::WaitContext;
 use data_model::DataInit;
 use hypervisor::Datamatch;
-use resources::{Alloc, MmioType, SystemAllocator};
-use serde::{Deserialize, Serialize};
+use resources::Alloc;
+use resources::AllocOptions;
+use resources::SystemAllocator;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error as ThisError;
+use vm_control::VmMemoryDestination;
+use vm_control::VmMemoryRequest;
+use vm_control::VmMemoryResponse;
+use vm_control::VmMemorySource;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
-use vm_control::{VmMemoryDestination, VmMemoryRequest, VmMemoryResponse, VmMemorySource};
-use vm_memory::{GuestAddress, GuestMemory};
-
-use crate::pci::pci_configuration::{
-    PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode, PciConfiguration,
-    PciHeaderType, PciOtherSubclass, COMMAND_REG, COMMAND_REG_MEMORY_SPACE_MASK,
-};
-use crate::pci::pci_device::{BarRange, PciDevice, Result as PciResult};
-use crate::pci::{PciAddress, PciDeviceError};
+use crate::pci::pci_configuration::PciBarConfiguration;
+use crate::pci::pci_configuration::PciBarPrefetchable;
+use crate::pci::pci_configuration::PciBarRegionType;
+use crate::pci::pci_configuration::PciClassCode;
+use crate::pci::pci_configuration::PciConfiguration;
+use crate::pci::pci_configuration::PciHeaderType;
+use crate::pci::pci_configuration::PciOtherSubclass;
+use crate::pci::pci_configuration::COMMAND_REG;
+use crate::pci::pci_configuration::COMMAND_REG_MEMORY_SPACE_MASK;
+use crate::pci::pci_device::BarRange;
+use crate::pci::pci_device::PciDevice;
+use crate::pci::pci_device::Result as PciResult;
+use crate::pci::PciAddress;
+use crate::pci::PciDeviceError;
 use crate::vfio::VfioContainer;
-use crate::{UnpinRequest, UnpinResponse};
+use crate::UnpinRequest;
+use crate::UnpinResponse;
 
 const PCI_VENDOR_ID_COIOMMU: u16 = 0x1234;
 const PCI_DEVICE_ID_COIOMMU: u16 = 0xabcd;
@@ -974,7 +1008,7 @@ impl CoIommuDev {
         mem: GuestMemory,
         vfio_container: Arc<Mutex<VfioContainer>>,
         device_tube: Tube,
-        unpin_tube: Tube,
+        unpin_tube: Option<Tube>,
         endpoints: Vec<u16>,
         vcpu_count: u64,
         params: CoIommuParameters,
@@ -1043,7 +1077,7 @@ impl CoIommuDev {
             pin_kill_evt: None,
             unpin_thread: None,
             unpin_kill_evt: None,
-            unpin_tube: Some(unpin_tube),
+            unpin_tube,
             ioevents,
             vfio_container,
             pinstate: Arc::new(Mutex::new(CoIommuPinState {
@@ -1072,7 +1106,7 @@ impl CoIommuDev {
         size: usize,
         offset: u64,
         gpa: u64,
-        read_only: bool,
+        prot: Protection,
     ) -> Result<()> {
         let request = VmMemoryRequest::RegisterMemory {
             source: VmMemorySource::Descriptor {
@@ -1081,7 +1115,7 @@ impl CoIommuDev {
                 size: size as u64,
             },
             dest: VmMemoryDestination::GuestPhysicalAddress(gpa),
-            read_only,
+            prot,
         };
         self.send_msg(&request)
     }
@@ -1097,7 +1131,7 @@ impl CoIommuDev {
                 COIOMMU_NOTIFYMAP_SIZE,
                 0,
                 gpa,
-                false,
+                Protection::read_write(),
             ) {
                 Ok(_) => {}
                 Err(e) => {
@@ -1112,7 +1146,7 @@ impl CoIommuDev {
                 COIOMMU_TOPOLOGYMAP_SIZE,
                 0,
                 gpa,
-                true,
+                Protection::read(),
             ) {
                 Ok(_) => {}
                 Err(e) => {
@@ -1253,8 +1287,7 @@ impl CoIommuDev {
         name: &str,
     ) -> PciResult<u64> {
         let addr = resources
-            .mmio_allocator(MmioType::High)
-            .allocate_with_align(
+            .allocate_mmio(
                 size,
                 Alloc::PciBar {
                     bus: address.bus,
@@ -1263,7 +1296,7 @@ impl CoIommuDev {
                     bar: bar_num,
                 },
                 name.to_string(),
-                size,
+                AllocOptions::new().prefetchable(true).align(size),
             )
             .map_err(|e| PciDeviceError::IoAllocationFailed(size, e))?;
 

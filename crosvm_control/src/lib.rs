@@ -6,18 +6,31 @@
 //!
 //! This crate is a programmatic alternative to invoking crosvm with subcommands that produce the
 //! result on stdout.
+//!
+//! Downstream projects rely on this library maintaining a stable API surface.
+//! Do not make changes to this library without consulting the crosvm externalization team.
+//! Email: crosvm-dev@chromium.org
+//! For more information see:
+//! <https://crosvm.dev/book/running_crosvm/programmatic_interaction.html#usage>
 
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::ffi::CStr;
 use std::panic::catch_unwind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
-use libc::{c_char, ssize_t};
-
-use vm_control::{
-    client::*, BalloonControlCommand, BalloonStats, DiskControlCommand, UsbControlAttachedDevice,
-    UsbControlResult, VmRequest, VmResponse,
-};
+use libc::c_char;
+use libc::ssize_t;
+use vm_control::client::*;
+use vm_control::BalloonControlCommand;
+use vm_control::BalloonStats;
+use vm_control::DiskControlCommand;
+use vm_control::UsbControlAttachedDevice;
+use vm_control::UsbControlResult;
+use vm_control::VmRequest;
+use vm_control::VmResponse;
+use vm_control::USB_CONTROL_MAX_PORTS;
 
 fn validate_socket_path(socket_path: *const c_char) -> Option<PathBuf> {
     if !socket_path.is_null() {
@@ -126,6 +139,12 @@ impl From<&UsbControlAttachedDevice> for UsbDeviceEntry {
     }
 }
 
+/// Simply returns the maximum possible number of USB devices
+#[no_mangle]
+pub extern "C" fn crosvm_client_max_usb_devices() -> usize {
+    USB_CONTROL_MAX_PORTS
+}
+
 /// Returns all USB devices passed through the crosvm instance whose control socket is listening on `socket_path`.
 ///
 /// The function returns the amount of entries written.
@@ -136,8 +155,8 @@ impl From<&UsbControlAttachedDevice> for UsbDeviceEntry {
 ///               devices will be written to
 /// * `entries_length` - Amount of entries in the array specified by `entries`
 ///
-/// Crosvm supports passing through up to 255 devices, so pasing an array with 255 entries will
-/// guarantee to return all entries.
+/// Use the value returned by [`crosvm_client_max_usb_devices()`] to determine the size of the input
+/// array to this function.
 #[no_mangle]
 pub extern "C" fn crosvm_client_usb_list(
     socket_path: *const c_char,
@@ -174,10 +193,10 @@ pub extern "C" fn crosvm_client_usb_list(
 /// # Arguments
 ///
 /// * `socket_path` - Path to the crosvm control socket
-/// * `bus` - USB device bus ID
-/// * `addr` - USB device address
-/// * `vid` - USB device vendor ID
-/// * `pid` - USB device product ID
+/// * `bus` - USB device bus ID (unused)
+/// * `addr` - USB device address (unused)
+/// * `vid` - USB device vendor ID (unused)
+/// * `pid` - USB device product ID (unused)
 /// * `dev_path` - Path to the USB device (Most likely `/dev/bus/usb/<bus>/<addr>`).
 /// * `out_port` - (optional) internal port will be written here if provided.
 ///
@@ -185,10 +204,10 @@ pub extern "C" fn crosvm_client_usb_list(
 #[no_mangle]
 pub extern "C" fn crosvm_client_usb_attach(
     socket_path: *const c_char,
-    bus: u8,
-    addr: u8,
-    vid: u16,
-    pid: u16,
+    _bus: u8,
+    _addr: u8,
+    _vid: u16,
+    _pid: u16,
     dev_path: *const c_char,
     out_port: *mut u8,
 ) -> bool {
@@ -199,9 +218,7 @@ pub extern "C" fn crosvm_client_usb_attach(
             }
             let dev_path = Path::new(unsafe { CStr::from_ptr(dev_path) }.to_str().unwrap_or(""));
 
-            if let Ok(UsbControlResult::Ok { port }) =
-                do_usb_attach(&socket_path, bus, addr, vid, pid, dev_path)
-            {
+            if let Ok(UsbControlResult::Ok { port }) = do_usb_attach(&socket_path, dev_path) {
                 if !out_port.is_null() {
                     unsafe { *out_port = port };
                 }
@@ -307,6 +324,8 @@ pub struct BalloonStatsFfi {
     disk_caches: i64,
     hugetlb_allocations: i64,
     hugetlb_failures: i64,
+    shared_memory: i64,
+    unevictable_memory: i64,
 }
 
 impl From<&BalloonStats> for BalloonStatsFfi {
@@ -323,6 +342,8 @@ impl From<&BalloonStats> for BalloonStatsFfi {
             disk_caches: convert(other.disk_caches),
             hugetlb_allocations: convert(other.hugetlb_allocations),
             hugetlb_failures: convert(other.hugetlb_failures),
+            shared_memory: convert(other.shared_memory),
+            unevictable_memory: convert(other.unevictable_memory),
         }
     }
 }

@@ -2,25 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 use std::sync::Arc;
+
+use data_model::DataInit;
+use resources::SystemAllocator;
 use sync::Mutex;
 
 use crate::pci::pci_configuration::PciCapabilityID;
 use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
 use crate::pci::pcie::*;
-use crate::pci::{MsiConfig, PciAddress, PciCapability, PciDeviceError};
-use data_model::DataInit;
-use resources::SystemAllocator;
+use crate::pci::MsiConfig;
+use crate::pci::PciAddress;
+use crate::pci::PciCapability;
+use crate::pci::PciDeviceError;
 
 pub trait PcieDevice: Send {
     fn get_device_id(&self) -> u16;
     fn debug_label(&self) -> String;
+    fn preferred_address(&self) -> Option<PciAddress> {
+        None
+    }
     fn allocate_address(
         &mut self,
         resources: &mut SystemAllocator,
     ) -> std::result::Result<PciAddress, PciDeviceError>;
     fn read_config(&self, reg_idx: usize, data: &mut u32);
     fn write_config(&mut self, reg_idx: usize, offset: u64, data: &[u8]);
-    fn clone_interrupt(&mut self, msix_config: Arc<Mutex<MsiConfig>>);
+    fn clone_interrupt(&mut self, msi_config: Arc<Mutex<MsiConfig>>);
     fn get_caps(&self) -> Vec<Box<dyn PciCapability>>;
     fn set_capability_reg_idx(&mut self, id: PciCapabilityID, reg_idx: usize);
     fn get_bus_range(&self) -> Option<PciBridgeBusRange> {
@@ -32,6 +39,9 @@ pub trait PcieDevice: Send {
     /// Return true, the children pci devices could be connected through hotplug
     /// Return false, the children pci devices should be connected statically
     fn hotplug_implemented(&self) -> bool;
+
+    /// This function returns true if this pcie device is hotplugged into the system
+    fn hotplugged(&self) -> bool;
 
     /// Get bridge window size to cover children's mmio size
     /// (u64, u64) -> (non_prefetchable window size, prefetchable_window_size)

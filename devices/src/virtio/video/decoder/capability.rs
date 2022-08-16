@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use crate::virtio::video::control::*;
 use crate::virtio::video::format::*;
 
+#[derive(Clone)]
 pub struct Capability {
     in_fmts: Vec<FormatDesc>,
     out_fmts: Vec<FormatDesc>,
@@ -47,13 +48,11 @@ impl Capability {
         match *t {
             Profile(fmt) => {
                 let profiles = self.profiles.get(&fmt)?;
-                Some(QueryCtrlResponse::Profile(
-                    profiles.iter().copied().collect(),
-                ))
+                Some(QueryCtrlResponse::Profile(profiles.to_vec()))
             }
             Level(fmt) => {
                 let levels = self.levels.get(&fmt)?;
-                Some(QueryCtrlResponse::Level(levels.iter().copied().collect()))
+                Some(QueryCtrlResponse::Level(levels.to_vec()))
             }
         }
     }

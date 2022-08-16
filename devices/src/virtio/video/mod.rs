@@ -9,16 +9,26 @@
 
 use std::thread;
 
+use base::error;
 #[cfg(feature = "video-encoder")]
 use base::info;
-use base::{error, AsRawDescriptor, Error as SysError, Event, RawDescriptor, Tube};
-use data_model::{DataInit, Le32};
+use base::AsRawDescriptor;
+use base::Error as SysError;
+use base::Event;
+use base::RawDescriptor;
+use base::Tube;
+use data_model::DataInit;
+use data_model::Le32;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestMemory;
 
+use crate::virtio;
+use crate::virtio::copy_config;
 use crate::virtio::virtio_device::VirtioDevice;
-use crate::virtio::{self, copy_config, DescriptorError, DeviceType, Interrupt};
+use crate::virtio::DescriptorError;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
 
 #[macro_use]
 mod macros;
@@ -41,9 +51,9 @@ mod worker;
 
 #[cfg(all(
     feature = "video-decoder",
-    not(any(feature = "libvda", feature = "ffmpeg"))
+    not(any(feature = "libvda", feature = "ffmpeg", feature = "vaapi"))
 ))]
-compile_error!("The \"video-decoder\" feature requires at least one of \"ffmpeg\" or \"libvda\" to also be enabled.");
+compile_error!("The \"video-decoder\" feature requires at least one of \"ffmpeg\", \"libvda\" or \"vaapi\" to also be enabled.");
 
 #[cfg(all(feature = "video-encoder", not(feature = "libvda")))]
 compile_error!("The \"video-encoder\" feature requires \"libvda\" to also be enabled.");
@@ -55,17 +65,10 @@ use command::ReadCmdError;
 use device::Device;
 use worker::Worker;
 
-// CMD_QUEUE_SIZE = max number of command descriptors for input and output queues
-// Experimentally, it appears a stream allocates 16 input and 26 output buffers = 42 total
-// For 8 simultaneous streams, 2 descs per buffer * 42 buffers * 8 streams = 672 descs
-// Allocate 1024 to give some headroom in case of extra streams/buffers
-//
-// TODO(b/204055006): Make cmd queue size dependent of
-// (max buf cnt for input + max buf cnt for output) * max descs per buffer * max nb of streams
-const CMD_QUEUE_SIZE: u16 = 1024;
-// EVENT_QUEUE_SIZE = max number of event descriptors for stream events like resolution changes
-const EVENT_QUEUE_SIZE: u16 = 256;
-const QUEUE_SIZES: &[u16] = &[CMD_QUEUE_SIZE, EVENT_QUEUE_SIZE];
+use super::device_constants::video::backend_supported_virtio_features;
+use super::device_constants::video::VideoBackendType;
+use super::device_constants::video::VideoDeviceType;
+use super::device_constants::video::QUEUE_SIZES;
 
 /// An error indicating something went wrong in virtio-video's worker.
 #[sorted]
@@ -95,14 +98,6 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug)]
-pub enum VideoDeviceType {
-    #[cfg(feature = "video-decoder")]
-    Decoder,
-    #[cfg(feature = "video-encoder")]
-    Encoder,
-}
 
 pub struct VideoDevice {
     device_type: VideoDeviceType,
@@ -138,23 +133,6 @@ impl Drop for VideoDevice {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum VideoBackendType {
-    #[cfg(feature = "libvda")]
-    Libvda,
-    #[cfg(feature = "libvda")]
-    LibvdaVd,
-    #[cfg(feature = "ffmpeg")]
-    Ffmpeg,
-}
-
-#[cfg(feature = "ffmpeg")]
-pub fn ffmpeg_supported_virtio_features() -> u64 {
-    1u64 << protocol::VIRTIO_VIDEO_F_RESOURCE_GUEST_PAGES
-        | 1u64 << protocol::VIRTIO_VIDEO_F_RESOURCE_NON_CONTIG
-        | 1u64 << protocol::VIRTIO_VIDEO_F_RESOURCE_VIRTIO_OBJECT
-}
-
 impl VirtioDevice for VideoDevice {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         let mut keep_rds = Vec::new();
@@ -166,9 +144,7 @@ impl VirtioDevice for VideoDevice {
 
     fn device_type(&self) -> DeviceType {
         match &self.device_type {
-            #[cfg(feature = "video-decoder")]
             VideoDeviceType::Decoder => DeviceType::VideoDec,
-            #[cfg(feature = "video-encoder")]
             VideoDeviceType::Encoder => DeviceType::VideoEnc,
         }
     }
@@ -178,18 +154,7 @@ impl VirtioDevice for VideoDevice {
     }
 
     fn features(&self) -> u64 {
-        // We specify the type to avoid an extra compilation error in case no backend is enabled
-        // and this match statement becomes empty.
-        let backend_features: u64 = match self.backend {
-            #[cfg(feature = "libvda")]
-            VideoBackendType::Libvda | VideoBackendType::LibvdaVd => {
-                vda::supported_virtio_features()
-            }
-            #[cfg(feature = "ffmpeg")]
-            VideoBackendType::Ffmpeg => ffmpeg_supported_virtio_features(),
-        };
-
-        self.base_features | backend_features
+        self.base_features | backend_supported_virtio_features(self.backend)
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -207,6 +172,8 @@ impl VirtioDevice for VideoDevice {
             VideoBackendType::Ffmpeg => {
                 (&mut device_name[0..6]).copy_from_slice("ffmpeg".as_bytes())
             }
+            #[cfg(feature = "vaapi")]
+            VideoBackendType::Vaapi => (&mut device_name[0..5]).copy_from_slice("vaapi".as_bytes()),
         };
         let mut cfg = protocol::virtio_video_config {
             version: Le32::from(0),
@@ -307,6 +274,20 @@ impl VirtioDevice for VideoDevice {
                             let ffmpeg = decoder::backend::ffmpeg::FfmpegDecoder::new();
                             Box::new(decoder::Decoder::new(ffmpeg, resource_bridge, mem))
                         }
+                        #[cfg(feature = "vaapi")]
+                        VideoBackendType::Vaapi => {
+                            let va = match decoder::backend::vaapi::VaapiDecoder::new() {
+                                Ok(va) => va,
+                                Err(e) => {
+                                    error!(
+                                        "Failed to initialize the VA-API driver for decoder: {}",
+                                        e
+                                    );
+                                    return;
+                                }
+                            };
+                            Box::new(decoder::Decoder::new(va, resource_bridge, mem))
+                        }
                     };
 
                     if let Err(e) = worker.run(device) {
@@ -347,12 +328,20 @@ impl VirtioDevice for VideoDevice {
                             error!("ffmpeg encoder is not supported yet");
                             return;
                         }
+                        #[cfg(feature = "vaapi")]
+                        VideoBackendType::Vaapi => {
+                            error!("The VA-API encoder is not supported yet");
+                            return;
+                        }
                     };
 
                     if let Err(e) = worker.run(device) {
                         error!("Failed to start encoder worker: {}", e);
                     }
                 }),
+            #[allow(unreachable_patterns)]
+            // A device will never be created for a device type not enabled
+            device_type => unreachable!("Not compiled with {:?} enabled", device_type),
         };
         if let Err(e) = worker_result {
             error!(

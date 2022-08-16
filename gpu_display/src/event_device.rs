@@ -2,20 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::{AsRawDescriptor, RawDescriptor};
-use data_model::DataInit;
-use linux_input_sys::{
-    virtio_input_event, InputEventDecoder, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT,
-    ABS_MT_TRACKING_ID,
-};
 use std::cmp::max;
 use std::collections::VecDeque;
-use std::io::{self, Error, ErrorKind, Read, Write};
+use std::io;
+use std::io::Error;
+use std::io::ErrorKind;
+use std::io::Read;
+use std::io::Write;
 use std::iter::ExactSizeIterator;
 use std::os::unix::net::UnixStream;
 
+use base::AsRawDescriptor;
+use base::RawDescriptor;
+use data_model::DataInit;
+use linux_input_sys::virtio_input_event;
+use linux_input_sys::InputEventDecoder;
+use linux_input_sys::ABS_MT_POSITION_X;
+use linux_input_sys::ABS_MT_POSITION_Y;
+use linux_input_sys::ABS_MT_SLOT;
+use linux_input_sys::ABS_MT_TRACKING_ID;
+
 const EVENT_SIZE: usize = virtio_input_event::SIZE;
-const EVENT_BUFFER_LEN_MAX: usize = 16 * EVENT_SIZE;
+const EVENT_BUFFER_LEN_MAX: usize = 64 * EVENT_SIZE;
 
 // /// Half-way build `EventDevice` with only the `event_socket` defined. Finish building the
 // /// `EventDevice` by using `status_socket`.
@@ -124,6 +132,19 @@ impl EventDevice {
         }
     }
 
+    /// Determines if there is space in the event buffer for the given number
+    /// of events. The buffer is capped at `EVENT_BUFFER_LEN_MAX`.
+    #[inline]
+    fn can_buffer_events(&self, num_events: usize) -> bool {
+        let event_bytes = match EVENT_SIZE.checked_mul(num_events) {
+            Some(bytes) => bytes,
+            None => return false,
+        };
+        let free_bytes = EVENT_BUFFER_LEN_MAX.saturating_sub(self.event_buffer.len());
+
+        free_bytes >= event_bytes
+    }
+
     pub fn send_report<E: IntoIterator<Item = virtio_input_event>>(
         &mut self,
         events: E,
@@ -137,7 +158,7 @@ impl EventDevice {
         let mut oldest_mt_event: Option<MTEvent> = None;
         let mut current_mt_event: Option<MTEvent> = None;
 
-        if self.event_buffer.len() > (EVENT_BUFFER_LEN_MAX - EVENT_SIZE * (it.len() + 1)) {
+        if !self.can_buffer_events(it.len() + 1) {
             return Ok(false);
         }
 
@@ -230,7 +251,7 @@ impl EventDevice {
             return Ok(true);
         }
 
-        if self.event_buffer.len() <= (EVENT_BUFFER_LEN_MAX - EVENT_SIZE) {
+        if self.can_buffer_events(1) {
             self.event_buffer.extend(bytes[written..].iter());
         }
 

@@ -2,32 +2,60 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{cell::RefCell, collections::BTreeMap, fs::File, path::PathBuf, rc::Rc, sync::Arc};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
 use argh::FromArgs;
 use async_task::Task;
-use base::{
-    clone_descriptor, error, warn, Event, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor,
-    Timer, Tube, UnixSeqpacketListener, UnlinkUnixSeqpacketListener,
-};
-use cros_async::{AsyncTube, AsyncWrapper, EventAsync, Executor, IoSourceExt, TimerAsync};
-use futures::{
-    future::{select, Either},
-    pin_mut,
-};
+use base::clone_descriptor;
+use base::error;
+use base::warn;
+use base::Event;
+use base::FromRawDescriptor;
+use base::SafeDescriptor;
+use base::Timer;
+use base::Tube;
+use base::UnixSeqpacketListener;
+use base::UnlinkUnixSeqpacketListener;
+use cros_async::AsyncWrapper;
+use cros_async::EventAsync;
+use cros_async::Executor;
+use cros_async::IoSourceExt;
+use cros_async::TimerAsync;
+use futures::future::select;
+use futures::future::Either;
+use futures::pin_mut;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::{
-    self, gpu,
-    vhost::user::device::handler::{DeviceRequestHandler, Doorbell, VhostUserBackend},
-    vhost::user::device::vvu::pci::VvuPciDevice,
-    vhost::user::device::wl::parse_wayland_sock,
-    DescriptorChain, Gpu, GpuDisplayParameters, GpuParameters, Queue, QueueReader, VirtioDevice,
-};
+use crate::virtio;
+use crate::virtio::gpu;
+use crate::virtio::vhost::user::device::handler::sys::Doorbell;
+use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
+use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
+use crate::virtio::vhost::user::device::wl::parse_wayland_sock;
+use crate::virtio::DescriptorChain;
+use crate::virtio::Gpu;
+use crate::virtio::GpuDisplayParameters;
+use crate::virtio::GpuParameters;
+use crate::virtio::Queue;
+use crate::virtio::QueueReader;
+use crate::virtio::SharedMemoryMapper;
+use crate::virtio::SharedMemoryRegion;
+use crate::virtio::VirtioDevice;
+
+const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
+const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
 
 #[derive(Clone)]
 struct SharedReader {
@@ -144,14 +172,18 @@ struct GpuBackend {
     state: Option<Rc<RefCell<gpu::Frontend>>>,
     fence_state: Arc<Mutex<gpu::FenceState>>,
     display_worker: Option<Task<()>>,
-    workers: [Option<Task<()>>; Self::MAX_QUEUE_NUM],
+    workers: [Option<Task<()>>; MAX_QUEUE_NUM],
+    mapper: Option<Box<dyn SharedMemoryMapper>>,
 }
 
 impl VhostUserBackend for GpuBackend {
-    const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
-    const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
+    fn max_queue_num(&self) -> usize {
+        return MAX_QUEUE_NUM;
+    }
 
-    type Error = anyhow::Error;
+    fn max_vring_len(&self) -> u16 {
+        return MAX_VRING_LEN;
+    }
 
     fn features(&self) -> u64 {
         self.gpu.borrow().features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
@@ -194,45 +226,6 @@ impl VhostUserBackend for GpuBackend {
         self.gpu.borrow_mut().write_config(offset, data)
     }
 
-    fn set_device_request_channel(&mut self, channel: File) -> anyhow::Result<()> {
-        let tube = AsyncTube::new(&self.ex, unsafe {
-            Tube::from_raw_descriptor(channel.into_raw_descriptor())
-        })
-        .context("failed to create AsyncTube")?;
-
-        // We need a PciAddress in order to initialize the pci bar but this isn't part of the
-        // vhost-user protocol. Instead we expect this to be the first message the crosvm main
-        // process sends us on the device tube.
-        let gpu = Rc::clone(&self.gpu);
-        self.ex
-            .spawn_local(async move {
-                let response = match tube.next().await {
-                    Ok(addr) => gpu.borrow_mut().get_device_bars(addr),
-                    Err(e) => {
-                        error!("Failed to get `PciAddr` from tube: {}", e);
-                        return;
-                    }
-                };
-
-                if let Err(e) = tube.send(response).await {
-                    error!("Failed to send `PciBarConfiguration`: {}", e);
-                }
-
-                let device_tube: Tube = match tube.next().await {
-                    Ok(tube) => tube,
-                    Err(e) => {
-                        error!("Failed to get device tube: {}", e);
-                        return;
-                    }
-                };
-
-                gpu.borrow_mut().set_device_tube(device_tube);
-            })
-            .detach();
-
-        Ok(())
-    }
-
     fn start_queue(
         &mut self,
         idx: usize,
@@ -267,10 +260,11 @@ impl VhostUserBackend for GpuBackend {
         } else {
             let fence_handler =
                 gpu::create_fence_handler(mem.clone(), reader.clone(), self.fence_state.clone());
+            let mapper = self.mapper.take().context("missing mapper")?;
             let state = Rc::new(RefCell::new(
                 self.gpu
                     .borrow_mut()
-                    .initialize_frontend(self.fence_state.clone(), fence_handler)
+                    .initialize_frontend(self.fence_state.clone(), fence_handler, mapper)
                     .ok_or_else(|| anyhow!("failed to initialize gpu frontend"))?,
             ));
             self.state = Some(state.clone());
@@ -332,6 +326,14 @@ impl VhostUserBackend for GpuBackend {
             cancel_task(&self.ex, task)
         }
     }
+
+    fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
+        self.gpu.borrow().get_shared_memory_region()
+    }
+
+    fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
+        self.mapper = Some(mapper);
+    }
 }
 
 fn gpu_parameters_from_str(input: &str) -> Result<GpuParameters, String> {
@@ -379,8 +381,6 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         wayland_sock,
     } = opts;
 
-    base::syslog::init().context("failed to initialize syslog")?;
-
     let wayland_paths: BTreeMap<_, _> = wayland_sock.into_iter().collect();
 
     let resource_bridge_listeners = resource_bridge
@@ -392,9 +392,9 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    if gpu_parameters.displays.is_empty() {
+    if gpu_parameters.display_params.is_empty() {
         gpu_parameters
-            .displays
+            .display_params
             .push(GpuDisplayParameters::default());
     }
 
@@ -432,9 +432,6 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let (exit_evt_wrtube, _) =
         Tube::directional_pair().context("failed to create vm event tube")?;
 
-    // Initialized later.
-    let gpu_device_tube = None;
-
     let mut display_backends = vec![
         virtio::DisplayBackend::X(x_display),
         virtio::DisplayBackend::Stub,
@@ -455,9 +452,10 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let base_features = virtio::base_features(ProtectionType::Unprotected);
     let channels = wayland_paths;
 
+    let listener = VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, MAX_QUEUE_NUM, None)?;
+
     let gpu = Rc::new(RefCell::new(Gpu::new(
         exit_evt_wrtube,
-        gpu_device_tube,
         Vec::new(), // resource_bridges, handled separately by us
         display_backends,
         &gpu_parameters,
@@ -469,7 +467,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         channels,
     )));
 
-    let backend = GpuBackend {
+    let backend = Box::new(GpuBackend {
         ex: ex.clone(),
         gpu,
         resource_bridges,
@@ -478,17 +476,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         fence_state: Default::default(),
         display_worker: None,
         workers: Default::default(),
-    };
-
-    let handler = DeviceRequestHandler::new(backend);
-    // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    let res = match (socket, vfio) {
-        (Some(socket), None) => ex.run_until(handler.run(socket, &ex))?,
-        (None, Some(vfio)) => {
-            let device = VvuPciDevice::new(&vfio, GpuBackend::MAX_QUEUE_NUM)?;
-            ex.run_until(handler.run_vvu(device, &ex))?
-        }
-        _ => Err(anyhow!("exactly one of `--socket` or `--vfio` is required")),
-    };
-    res
+        mapper: None,
+    });
+    ex.run_until(listener.run_backend(backend, &ex))?
 }

@@ -2,17 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fmt::{self, Display};
-use std::fs::{File, OpenOptions};
-use std::io::{self, stdin, stdout};
+use std::fmt;
+use std::fmt::Display;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::stdin;
+use std::io::stdout;
 use std::path::PathBuf;
 
+use base::error;
+use base::open_file;
 #[cfg(windows)]
 use base::platform::Console as WinConsole;
-use base::{error, open_file, syslog, AsRawDescriptor, Event, FileSync, RawDescriptor};
+use base::syslog;
+use base::AsRawDescriptor;
+use base::Event;
+use base::FileSync;
+use base::RawDescriptor;
+use base::ReadNotifier;
 use hypervisor::ProtectionType;
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
+use serde_keyvalue::FromKeyValues;
 use thiserror::Error as ThisError;
 
 pub use crate::sys::serial_device::SerialDevice;
@@ -42,7 +55,7 @@ pub enum Error {
 }
 
 /// Trait for types that can be used as input for a serial device.
-pub trait SerialInput: io::Read + AsRawDescriptor + Send {}
+pub trait SerialInput: io::Read + ReadNotifier + Send {}
 impl SerialInput for File {}
 #[cfg(windows)]
 impl SerialInput for WinConsole {}
@@ -116,7 +129,7 @@ fn serial_parameters_default_debugcon_port() -> u16 {
     0xe9
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, default)]
 pub struct SerialParameters {
     #[serde(rename = "type")]
@@ -159,7 +172,7 @@ impl SerialParameters {
             Some(Box::new(input_file))
         } else if self.stdin {
             keep_rds.push(stdin().as_raw_descriptor());
-            Some(Box::new(ConsoleInput))
+            Some(Box::new(ConsoleInput::new()))
         } else {
             None
         };
@@ -210,8 +223,9 @@ impl SerialParameters {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_keyvalue::*;
+
+    use super::*;
 
     fn from_serial_arg(options: &str) -> Result<SerialParameters, ParseError> {
         from_key_values(options)
@@ -248,7 +262,7 @@ mod tests {
         assert_eq!(params.type_, SerialType::Syslog);
         #[cfg(unix)]
         let opt = "type=unix";
-        #[cfg(window)]
+        #[cfg(windows)]
         let opt = "type=namedpipe";
         let params = from_serial_arg(opt).unwrap();
         assert_eq!(params.type_, SerialType::SystemSerialType);
@@ -305,6 +319,16 @@ mod tests {
         let params = from_serial_arg("stdin=false").unwrap();
         assert!(!params.stdin);
         let params = from_serial_arg("stdin=foobar");
+        assert!(params.is_err());
+
+        // out_timestamp parameter
+        let params = from_serial_arg("out_timestamp").unwrap();
+        assert!(params.out_timestamp);
+        let params = from_serial_arg("out_timestamp=true").unwrap();
+        assert!(params.out_timestamp);
+        let params = from_serial_arg("out_timestamp=false").unwrap();
+        assert!(!params.out_timestamp);
+        let params = from_serial_arg("out_timestamp=foobar");
         assert!(params.is_err());
 
         // debugcon port parameter

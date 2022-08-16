@@ -49,19 +49,22 @@
 //!
 //! [log-crate-url]: https://docs.rs/log/
 
-use std::{fmt::Display, io};
+use std::fmt::Display;
+use std::io;
+use std::io::Write;
 
+use chrono::Local;
+pub use env_logger::fmt;
+pub use env_logger::{self};
+pub use log::*;
 use once_cell::sync::OnceCell;
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error as ThisError;
 
 use crate::platform::syslog::PlatformSyslog;
 use crate::platform::RawDescriptor;
-
-// Reexports
-pub use env_logger::{self, fmt};
-pub use log::*;
 
 /// The priority (i.e. severity) of a syslog message.
 ///
@@ -227,7 +230,7 @@ impl<'a> Default
             filter: "info",
             stderr: true,
             pipe: None,
-            proc_name: String::from("-"),
+            proc_name: String::from("crosvm"),
             syslog: true,
             syslog_facility: Facility::User,
             pipe_formatter: FORMATTER_NONE,
@@ -247,8 +250,25 @@ impl State {
         builder.parse(cfg.filter);
         let filter = builder.build();
 
-        if cfg.stderr {
+        let create_formatted_builder = || {
             let mut builder = env_logger::Builder::new();
+
+            // Output log lines w/ local ISO 8601 timestamps.
+            builder.format(|buf, record| {
+                writeln!(
+                    buf,
+                    "[{} {:5} {}] {}",
+                    Local::now().format("%Y-%m-%dT%H:%M:%S%.9f%:z"),
+                    record.level(),
+                    record.module_path().unwrap_or("<missing module path>"),
+                    record.args()
+                )
+            });
+            builder
+        };
+
+        if cfg.stderr {
+            let mut builder = create_formatted_builder();
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Stderr);
             loggers.push(Box::new(builder.build()));
@@ -259,7 +279,7 @@ impl State {
         }
 
         if let Some(file) = cfg.pipe {
-            let mut builder = env_logger::Builder::new();
+            let mut builder = create_formatted_builder();
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Pipe(Box::new(file)));
             // https://github.com/env-logger-rs/env_logger/issues/208
@@ -293,19 +313,34 @@ static STATE: OnceCell<State> = OnceCell::new();
 /// Initialize the syslog connection and internal variables.
 ///
 /// This should only be called once per process before any other threads have been spawned or any
-/// signal handlers have been registered. Every call made after the first will have no effect
-/// besides return `Ok` or `Err` appropriately.
+/// signal handlers have been registered. Every call made after the first will panic.
 ///
 /// Use `init_with_filter` to initialize with filtering
 pub fn init() -> Result<(), Error> {
     init_with(Default::default())
 }
 
+/// Test only function that ensures logging has been configured. Since tests
+/// share module state, we need a way to make sure it has been initialized
+/// with *some* configuration.
+#[cfg(test)]
+pub(crate) fn ensure_inited() -> Result<(), Error> {
+    let mut first_init = false;
+    let state = STATE.get_or_try_init(|| {
+        first_init = true;
+        State::new(Default::default())
+    })?;
+    if first_init {
+        apply_logging_state(state);
+    }
+    Ok(())
+}
+
 /// Initialize the syslog connection and internal variables.
 ///
 /// This should only be called once per process before any other threads have been spawned or any
-/// signal handlers have been registered. Every call made after the first will have no effect
-/// besides return `Ok` or `Err` appropriately.
+/// signal handlers have been registered. Every call made after the first will
+/// panic.
 ///
 /// Arguments:
 /// * filter: See <https://docs.rs/env_logger/0.9/env_logger/index.html> for example filter
@@ -319,14 +354,21 @@ pub fn init_with<F: 'static>(cfg: LogConfig<'_, F>) -> Result<(), Error>
 where
     F: Fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
 {
-    let setup_logger = STATE.get().is_none();
-
-    let _ = STATE.get_or_try_init(|| State::new(cfg))?;
-    if setup_logger {
-        let _ = log::set_logger(STATE.get().unwrap());
-        log::set_max_level(log::LevelFilter::Trace);
+    let mut first_init = false;
+    let state = STATE.get_or_try_init(|| {
+        first_init = true;
+        State::new(cfg)
+    });
+    if !first_init {
+        panic!("double-init of the logging system is not permitted.");
     }
+    apply_logging_state(state?);
     Ok(())
+}
+
+fn apply_logging_state(state: &'static State) {
+    let _ = log::set_logger(state);
+    log::set_max_level(log::LevelFilter::Trace);
 }
 
 /// Retrieves the file descriptors owned by the global syslogger.
@@ -428,8 +470,9 @@ impl io::Write for Syslogger {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::field_reassign_with_default)]
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     impl Default for State {
         fn default() -> Self {
@@ -437,7 +480,8 @@ mod tests {
         }
     }
 
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use std::sync::Mutex;
     #[derive(Clone)]
     struct MockWrite {
         buffer: Arc<Mutex<Vec<u8>>>,
@@ -497,7 +541,7 @@ mod tests {
 
     #[test]
     fn macros() {
-        init().unwrap();
+        ensure_inited().unwrap();
         log::error!("this is an error {}", 3);
         log::warn!("this is a warning {}", "uh oh");
         log::info!("this is info {}", true);
