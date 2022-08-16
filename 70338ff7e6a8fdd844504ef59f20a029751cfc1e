@@ -65,6 +65,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0029257b_1627c1c7",
+        "filename": "devices/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 84,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T23:52:42Z",
+      "side": 1,
+      "message": "nevermind, i read this before the other comment and then forgot to delete this comment",
+      "parentUuid": "fa10e61d_0b86837d",
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "0586549b_4c0d94ac",
