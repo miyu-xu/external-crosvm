@@ -91,21 +91,7 @@ rust_test {
                 "libgpu_display",
                 "librutabaga_gfx",
             ],
-            shared_libs: [
-                "libvirglrenderer",
-                "libgfxstream_backend",
-            ],
-        },
-        android: {
-            shared_libs: [
-                "libcutils",
-                "libdrm",
-            ],
-            static_libs: [
-                "libepoxy",
-                "libgbm",
-                "libvirglrenderer",
-            ],
+            shared_libs: ["libgfxstream_backend"],
         },
     },
 }
