@@ -7,12 +7,18 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+#[cfg(feature = "gfxstream")]
+use devices::virtio::GpuMode;
 #[cfg(feature = "gpu")]
+<<<<<<< HEAD   (a3e10c ANDROID: all2android.sh - respect Ctrl+C)
 use devices::virtio::GpuDisplayParameters;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuMode;
+=======
+use devices::virtio::{GpuDisplayParameters, GpuParameters};
+>>>>>>> BRANCH (c345f3 crosvm: fix build with gfxstream on Unix)
 use devices::IommuDevType;
 use devices::PciAddress;
 use devices::SerialParameters;
