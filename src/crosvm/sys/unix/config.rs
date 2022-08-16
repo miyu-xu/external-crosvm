@@ -7,12 +7,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-#[cfg(feature = "gpu")]
-use devices::virtio::GpuDisplayParameters;
-#[cfg(feature = "gpu")]
-use devices::virtio::GpuParameters;
-#[cfg(feature = "gpu")]
+#[cfg(feature = "gfxstream")]
 use devices::virtio::GpuMode;
+#[cfg(feature = "gpu")]
+use devices::virtio::{GpuDisplayParameters, GpuParameters};
 use devices::IommuDevType;
 use devices::PciAddress;
 use devices::SerialParameters;
