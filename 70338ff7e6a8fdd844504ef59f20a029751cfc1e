@@ -98,6 +98,24 @@
       "message": "unrelated?",
       "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "376312b3_892e6f96",
+        "filename": "metrics/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T23:52:59Z",
+      "side": 1,
+      "message": "resolved",
+      "parentUuid": "0586549b_4c0d94ac",
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
