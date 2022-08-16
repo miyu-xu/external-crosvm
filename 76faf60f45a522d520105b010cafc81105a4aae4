@@ -16,6 +16,24 @@
       "message": "Have any of you encountered this problem before?",
       "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b43ae9dd_c73ba19f",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T20:32:39Z",
+      "side": 1,
+      "message": "I haven\u0027t. Tried to reproduce with something like `echo 10000 20000 | xargs -L1 sleep`, but ctrl-c seems to kill the whole thing fine.",
+      "parentUuid": "a75a29b6_a602a328",
+      "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
