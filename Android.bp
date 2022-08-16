@@ -44,6 +44,7 @@ rust_binary {
     edition: "2021",
     features: [
         "audio",
+        "balloon",
         "usb",
     ],
     rustlibs: [
@@ -163,6 +164,7 @@ rust_test {
     edition: "2021",
     features: [
         "audio",
+        "balloon",
         "usb",
     ],
     rustlibs: [

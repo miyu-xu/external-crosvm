@@ -19,6 +19,7 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    features: ["balloon"],
     rustlibs: [
         "libanyhow",
         "libballoon_control",
@@ -66,6 +67,7 @@ rust_test {
         unit_test: true,
     },
     edition: "2021",
+    features: ["balloon"],
     rustlibs: [
         "libanyhow",
         "libballoon_control",
