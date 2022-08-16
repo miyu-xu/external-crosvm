@@ -81,7 +81,7 @@ vp8 = { path = "../media/vp8", optional = true }
 fuse = {path = "../fuse" }
 gpu_display = { path = "../gpu_display", optional = true }
 libcras = { path = "../libcras_stub", optional = true }
-minijail = { path = "../../minijail/rust/minijail" } # ignored by ebuild
+minijail = "*"
 p9 = { path = "../common/p9" }
 power_monitor = { path = "../power_monitor" }
 usb_util = { path = "../usb_util" }

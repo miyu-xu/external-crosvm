@@ -244,4 +244,4 @@ p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
 system_api = { path = "system_api_stub" } # ignored by ebuild
 wire_format_derive = { path = "common/p9/wire_format_derive" } # ignored by ebuild
-minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
+minijail = { path = "third_party/minijail/rust/minijail" } # ignored by ebuild
