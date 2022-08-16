@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "07339116_c281a08a",
+        "filename": "Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 247,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-16T22:07:02Z",
+      "side": 1,
+      "message": "the upstream Cargo.toml files need to be all updated to this, then we could do this solution. I\u0027ll proceed independently from the merge.",
+      "range": {
+        "startLine": 247,
+        "startChar": 0,
+        "endLine": 247,
+        "endChar": 78
+      },
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
