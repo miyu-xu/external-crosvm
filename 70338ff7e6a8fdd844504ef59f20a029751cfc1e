@@ -22,6 +22,64 @@
       },
       "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "688cbf8f_65605e68",
+        "filename": "Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 247,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T23:51:56Z",
+      "side": 1,
+      "message": "note that in the upstream, IIUC, this patched path applies to all the crates because they are sub-crates and this one declares itself as a \"workspace\". in our case, all2android messes that up because it tries to compile sub-crates independently by marking them each a workspace temporarily\n\nso, there might be some resistance to this upstream.\n\n(i put some thoughts about this in http://b/240289173 before)",
+      "parentUuid": "07339116_c281a08a",
+      "range": {
+        "startLine": 247,
+        "startChar": 0,
+        "endLine": 247,
+        "endChar": 78
+      },
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fa10e61d_0b86837d",
+        "filename": "devices/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 84,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T23:51:56Z",
+      "side": 1,
+      "message": "how does this work?",
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0586549b_4c0d94ac",
+        "filename": "metrics/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-16T23:51:56Z",
+      "side": 1,
+      "message": "unrelated?",
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
