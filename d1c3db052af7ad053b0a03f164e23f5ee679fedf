@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d526ef02_7a95506b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-16T21:01:19Z",
+      "side": 1,
+      "message": "I checked locally, this does cherry-pick cleanly.",
+      "revId": "d1c3db052af7ad053b0a03f164e23f5ee679fedf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
