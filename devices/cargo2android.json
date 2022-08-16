@@ -5,7 +5,6 @@
   "features": "audio,usb",
   "global_defaults": "crosvm_defaults",
   "no_presubmit": true,
-  "patch": "patches/Android.bp.patch",
   "run": true,
   "tests": true
 }
