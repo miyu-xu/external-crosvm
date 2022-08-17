@@ -34,6 +34,24 @@
       "parentUuid": "a75a29b6_a602a328",
       "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d665af06_921022ef",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-17T00:03:58Z",
+      "side": 1,
+      "message": "I believe it has to do with the script starting sub-processes (os.system in python)",
+      "parentUuid": "b43ae9dd_c73ba19f",
+      "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
