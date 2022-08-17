@@ -74,6 +74,7 @@ impl PciDevice for PciRootConfiguration {
 // Command send to pci root worker thread to add/remove device from pci root
 pub enum PciRootCommand {
     Add(PciAddress, Arc<Mutex<dyn BusDevice>>),
+    AddBridge(Arc<Mutex<PciBus>>),
     Remove(PciAddress),
     Kill,
 }
@@ -162,7 +163,12 @@ impl PciRoot {
                 };
                 let _ = bus_ptr.remove(range.base, range.len);
             }
+            // Remove the pci bus if this device is a pci bridge.
+            if let Some(bus_no) = d.lock().is_bridge() {
+                let _ = self.root_bus.lock().remove_child_bus(bus_no);
+            }
             d.lock().destroy_device();
+            let _ = self.root_bus.lock().remove_child_device(address);
         }
     }
 
@@ -458,13 +464,17 @@ impl BusDevice for PciConfigMmio {
     }
 }
 
-/// Inspired by PCI configuration space, CrosVM provides 1024 dword virtual registers (4KiB in
+/// Inspired by PCI configuration space, CrosVM provides 2048 dword virtual registers (8KiB in
 /// total) for each PCI device. The guest can use these registers to exchange device-specific
-/// information with CrosVM.
+/// information with CrosVM. The first 4kB is trapped by crosvm and crosm supply these
+/// register's emulation. The second 4KB is mapped into guest directly as shared memory, so
+/// when guest access this 4KB, vm exit doesn't happen.
 /// All these virtual registers from all PCI devices locate in a contiguous memory region.
 /// The base address of this memory region is provided by an IntObj named VCFG in the ACPI DSDT.
+/// Bit 12 is used to select the first trapped page or the second directly mapped page
 /// The offset of each register is calculated in the same way as PCIe ECAM;
-/// i.e. offset = (bus << 20) | (device << 15) | (function << 12) | (register_index << 2)
+/// i.e. offset = (bus << 21) | (device << 16) | (function << 13) | (page_select << 12) |
+/// (register_index << 2)
 pub struct PciVirtualConfigMmio {
     /// PCI root bridge.
     pci_root: Arc<Mutex<PciRoot>>,

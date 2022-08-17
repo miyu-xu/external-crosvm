@@ -381,7 +381,7 @@ pub enum CrossPlatformDevicesCommands {
 #[derive(argh_helpers::FlattenSubcommand)]
 pub enum DeviceSubcommand {
     CrossPlatform(CrossPlatformDevicesCommands),
-    Sys(super::sys::cmdline::DevicesSubcommand),
+    Sys(super::sys::cmdline::DeviceSubcommand),
 }
 
 #[derive(FromArgs)]
@@ -516,30 +516,6 @@ pub struct RunCommand {
     )]
     /// group the given CPUs into a cluster (default: no clusters)
     pub cpu_clusters: Vec<Vec<usize>>,
-    #[cfg(feature = "audio_cras")]
-    #[argh(
-        option,
-        arg_name = "[capture=true,client=crosvm,socket=unified,\
-        num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]",
-        long = "cras-snd"
-    )]
-    /// comma separated key=value pairs for setting up virtio snd
-    /// devices.
-    /// Possible key values:
-    ///     capture=(false,true) - Disable/enable audio capture.
-    ///         Default is false.
-    ///     client_type=(crosvm,arcvm,borealis) - Set specific
-    ///         client type for cras backend. Default is crosvm.
-    ///     socket_type=(legacy,unified) Set specific socket type
-    ///         for cras backend. Default is unified.
-    ///     num_output_devices=INT - Set number of output PCM
-    ///         devices.
-    ///     num_input_devices=INT - Set number of input PCM devices.
-    ///     num_output_streams=INT - Set number of output PCM
-    ///         streams per device.
-    ///     num_input_streams=INT - Set number of input PCM streams
-    ///         per device.
-    pub cras_snds: Vec<SndParameters>,
     #[cfg(feature = "crash-report")]
     #[argh(option, long = "crash-pipe-name", arg_name = "\\\\.\\pipe\\PIPE_NAME")]
     /// the crash handler ipc pipe name.
@@ -551,6 +527,14 @@ pub struct RunCommand {
     #[argh(option, arg_name = "irq")]
     /// enable interrupt passthrough
     pub direct_edge_irq: Vec<u32>,
+    #[cfg(feature = "direct")]
+    #[argh(
+        option,
+        long = "direct-fixed-event",
+        arg_name = "event=gbllock|powerbtn|sleepbtn|rtc"
+    )]
+    /// enable ACPI fixed event interrupt and register access passthrough
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
     #[cfg(feature = "direct")]
     #[argh(option, arg_name = "gpe")]
     /// enable GPE interrupt and register access passthrough
@@ -982,10 +966,14 @@ pub struct RunCommand {
     /// Possible key values:
     ///     type=(stdout,syslog,sink,file) - Where to route the
     ///        serial device
-    ///     hardware=(serial,virtio-console) - Which type of serial
-    ///        hardware to emulate. Defaults to 8250 UART (serial).
+    ///     hardware=(serial,virtio-console,debugcon) - Which type
+    ///        of serial hardware to emulate. Defaults to 8250 UART
+    ///        (serial).
     ///     num=(1,2,3,4) - Serial Device Number. If not provided,
     ///        num will default to 1.
+    ///     debugcon_port=PORT - Port for the debugcon device to
+    ///        listen to. Defaults to 0x402, which is what OVMF
+    ///        expects.
     ///     path=PATH - The path to the file to write to when
     ///        type=file
     ///     input=PATH - The path to the file to read from when not
@@ -1656,17 +1644,6 @@ impl TryFrom<RunCommand> for super::config::Config {
         {
             cfg.virtio_snds = cmd.virtio_snds;
         }
-        #[cfg(feature = "audio_cras")]
-        {
-            // cmd.cras_snds is the old parameter for virtio snd with cras backend.
-            cfg.virtio_snds
-                .extend(cmd.cras_snds.into_iter().map(|s| SndParameters {
-                    backend: devices::virtio::parameters::StreamSourceBackend::Sys(
-                        devices::virtio::snd::sys::StreamSourceBackend::CRAS,
-                    ),
-                    ..s
-                }));
-        }
 
         #[cfg(feature = "gpu")]
         {
@@ -1812,6 +1789,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.direct_level_irq = cmd.direct_level_irq;
             cfg.direct_edge_irq = cmd.direct_edge_irq;
             cfg.direct_gpe = cmd.direct_gpe;
+            cfg.direct_fixed_evts = cmd.direct_fixed_evts;
             cfg.pcie_rp = cmd.pcie_rp;
             cfg.mmio_address_ranges = cmd.mmio_address_ranges.unwrap_or_default();
         }
