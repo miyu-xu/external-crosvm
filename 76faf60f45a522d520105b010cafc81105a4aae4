@@ -70,6 +70,24 @@
       "parentUuid": "d665af06_921022ef",
       "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "078b9e99_94fa7ccc",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-17T18:21:57Z",
+      "side": 1,
+      "message": "that is the behavior when running xargs directly or indirectly, but with xargs, the process continued to run, but xargs itself exited.",
+      "parentUuid": "1a44cb38_aba08210",
+      "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
