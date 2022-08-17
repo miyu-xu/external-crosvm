@@ -74,6 +74,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "6eb117ca_51e96b6d",
+        "filename": "Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 247,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-17T18:37:22Z",
+      "side": 1,
+      "message": "not sure. i\u0027d like to try running a single c2a command at the root of the repo and see how well its does. that would help with build time, should allow these paths to be specified once at the root, and might help with automatically setting the right features for sub crates.\n\ni\u0027d guess we\u0027d have some trouble with all the cargo2android.json files and Android.bp.patch files in the subcrates that would no longer apply. there is probably something trickier i\u0027m missing",
+      "parentUuid": "bc6760eb_0dca19a3",
+      "range": {
+        "startLine": 247,
+        "startChar": 0,
+        "endLine": 247,
+        "endChar": 78
+      },
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "ed62cdd1_87186ed1",
         "filename": "arch/Cargo.toml",
         "patchSetId": 1
