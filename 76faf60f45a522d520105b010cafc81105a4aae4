@@ -52,6 +52,24 @@
       "parentUuid": "b43ae9dd_c73ba19f",
       "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a44cb38_aba08210",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-17T17:45:19Z",
+      "side": 1,
+      "message": "I think I reproduced with c2a directly\n\n```\n$ $ANDROID_BUILD_TOP/development/scripts/cargo2android.py --apex-available //apex_available:platform --config cargo2android.json\nWARNING: cannot find RustDefaultVersion in /usr/local/google/home/fmayle/android/aosp2/development/scripts/../../build/soong/rust/config/global.go\n^C*** There was an error while running cargo.  See the cargo.out file for details.\n^C*** There was an error while running cargo.  See the cargo.out file for details.\n^C*** There was an error while running cargo.  See the cargo.out file for details.\n^C*** There was an error while running cargo.  See the cargo.out file for details.\n```\n\nso probably not xargs\u0027 fault (I\u0027m happy with the bash loop though)",
+      "parentUuid": "d665af06_921022ef",
+      "revId": "76faf60f45a522d520105b010cafc81105a4aae4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
