@@ -50,6 +50,53 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "bc6760eb_0dca19a3",
+        "filename": "Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 247,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-17T01:41:16Z",
+      "side": 1,
+      "message": "Do you know why we don\u0027t declare our things as sub-crates?",
+      "parentUuid": "688cbf8f_65605e68",
+      "range": {
+        "startLine": 247,
+        "startChar": 0,
+        "endLine": 247,
+        "endChar": 78
+      },
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ed62cdd1_87186ed1",
+        "filename": "arch/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 31,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-08-17T01:41:16Z",
+      "side": 1,
+      "message": "after upstream changes, these would all have to be updated to look like the one in Cargo.toml",
+      "range": {
+        "startLine": 31,
+        "startChar": 0,
+        "endLine": 31,
+        "endChar": 35
+      },
+      "revId": "70338ff7e6a8fdd844504ef59f20a029751cfc1e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "fa10e61d_0b86837d",
         "filename": "devices/Cargo.toml",
         "patchSetId": 1
