@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cd04ac4e_271e5ef3",
+        "filename": "argh_helpers/cargo2android.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-18T18:32:18Z",
+      "side": 1,
+      "message": "Maybe explicitly list `\"tests\": false`\n\nWould be nice to have a comment saying why the tests are disable, but no comments in json. Should really ban json as a config language.",
+      "revId": "bd20aa69a6592f5057432bd3c9c5659d0b4a2c46",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
