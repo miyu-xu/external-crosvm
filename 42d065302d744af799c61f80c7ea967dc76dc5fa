@@ -16,6 +16,23 @@
       "message": "why?\nshould this be \u0027ANDROID:\u0027?",
       "revId": "42d065302d744af799c61f80c7ea967dc76dc5fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aaf6a218_8b1d999f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-08-19T17:28:02Z",
+      "side": 1,
+      "message": "Looks like the bug is being worked on, so reverting this temporarily for now is the best approach. Thanks!",
+      "revId": "42d065302d744af799c61f80c7ea967dc76dc5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
