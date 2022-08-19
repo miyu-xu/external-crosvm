@@ -34,6 +34,24 @@
       "parentUuid": "bd83332b_98da8824",
       "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e8842fa7_9eba3040",
+        "filename": "devices/src/virtio/gpu/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-19T18:26:47Z",
+      "side": 0,
+      "message": "Thanks. Started a discussion at https://docs.google.com/document/d/1bHtfsRmfEJLicwJj6MvZBN52jOkzNOstvhy8uiyXAgU/edit?disco\u003dAAAAepOkuHo about this class of problems (maybe it will turn out this bug is more nuanced and my idea wouldn\u0027t help though)",
+      "parentUuid": "df230c3f_ba42e77f",
+      "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
