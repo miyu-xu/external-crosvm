@@ -52,6 +52,24 @@
       "parentUuid": "df230c3f_ba42e77f",
       "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2aa360da_a98327ea",
+        "filename": "devices/src/virtio/gpu/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-19T18:45:20Z",
+      "side": 0,
+      "message": "(by \"my idea\", I mean possibility requiring some more process for changes to the advertised features)",
+      "parentUuid": "e8842fa7_9eba3040",
+      "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
