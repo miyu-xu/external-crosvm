@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd83332b_98da8824",
+        "filename": "devices/src/virtio/gpu/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-19T16:58:55Z",
+      "side": 0,
+      "message": "A clean revert seems fine to me, but I\u0027m curious if just reverting this line would be enough.\n\nI don\u0027t understand the bug, but I\u0027d guess the problem is that we are advertising that we support this feature when we really don\u0027t in android yet. Is that right?",
+      "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
