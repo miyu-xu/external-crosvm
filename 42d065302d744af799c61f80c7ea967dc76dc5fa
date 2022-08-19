@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "cd4d1210_9f0bfeb0",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2022-08-19T22:12:00Z",
+      "side": 1,
+      "message": "\u003e why?\nbecause of the bug referenced in the commit message. Basically android guests deems the EDID invalid which breaks input in cuttlefish.\n\u003e should this be \u0027ANDROID:\u0027?\nidk, is that a prefix we put on android specific changes? Are there any guidelines for submitting these changes?",
+      "parentUuid": "7c0f2f7f_9996f1b2",
+      "revId": "42d065302d744af799c61f80c7ea967dc76dc5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "aaf6a218_8b1d999f",
