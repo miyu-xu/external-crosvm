@@ -122,6 +122,16 @@ impl io_uring_sqe {
     }
 }
 
+// Convert a file offset to the raw io_uring offset format.
+// Some => explicit offset
+// None => use current file position
+fn file_offset_to_raw_offset(offset: Option<u64>) -> u64 {
+    // TODO: File offsets are interpretted as off64_t. We should probably use that in our APIs
+    // instead of u64.
+    const USE_CURRENT_FILE_POS: libc::off64_t = -1;
+    offset.unwrap_or(USE_CURRENT_FILE_POS as u64)
+}
+
 impl SubmitQueue {
     // Call `f` with the next available sqe or return an error if none are available.
     // After `f` returns, the sqe is appended to the kernel's queue.
@@ -187,7 +197,7 @@ impl SubmitQueue {
         ptr: *const u8,
         len: usize,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
         op: u8,
     ) -> Result<()> {
@@ -197,7 +207,7 @@ impl SubmitQueue {
             sqe.opcode = op;
             sqe.set_addr(iovec as *const _ as *const libc::c_void as u64);
             sqe.len = 1;
-            sqe.set_off(offset);
+            sqe.set_off(file_offset_to_raw_offset(offset));
             sqe.set_buf_index(0);
             sqe.ioprio = 0;
             sqe.user_data = user_data;
@@ -330,7 +340,7 @@ impl URingContext {
         ptr: *const u8,
         len: usize,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
         self.submit_ring
@@ -351,7 +361,7 @@ impl URingContext {
         ptr: *mut u8,
         len: usize,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
         self.submit_ring
@@ -366,7 +376,7 @@ impl URingContext {
         &self,
         iovecs: I,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()>
     where
@@ -400,14 +410,14 @@ impl URingContext {
         &self,
         iovecs: Pin<Box<[IoBufMut<'static>]>>,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
         self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
             sqe.opcode = IORING_OP_WRITEV as u8;
             sqe.set_addr(iovecs.as_ptr() as *const _ as *const libc::c_void as u64);
             sqe.len = iovecs.len() as u32;
-            sqe.set_off(offset);
+            sqe.set_off(file_offset_to_raw_offset(offset));
             sqe.set_buf_index(0);
             sqe.ioprio = 0;
             sqe.user_data = user_data;
@@ -425,7 +435,7 @@ impl URingContext {
         &self,
         iovecs: I,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()>
     where
@@ -459,14 +469,14 @@ impl URingContext {
         &self,
         iovecs: Pin<Box<[IoBufMut<'static>]>>,
         fd: RawFd,
-        offset: u64,
+        offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
         self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
             sqe.opcode = IORING_OP_READV as u8;
             sqe.set_addr(iovecs.as_ptr() as *const _ as *const libc::c_void as u64);
             sqe.len = iovecs.len() as u32;
-            sqe.set_off(offset);
+            sqe.set_off(file_offset_to_raw_offset(offset));
             sqe.set_buf_index(0);
             sqe.ioprio = 0;
             sqe.user_data = user_data;
@@ -951,7 +961,7 @@ mod tests {
         let (user_data_ret, res) = unsafe {
             // Safe because the `wait` call waits until the kernel is done with `buf`.
             uring
-                .add_read(buf.as_mut_ptr(), buf.len(), fd, offset, user_data)
+                .add_read(buf.as_mut_ptr(), buf.len(), fd, Some(offset), user_data)
                 .unwrap();
             uring.wait().unwrap().next().unwrap()
         };
@@ -975,7 +985,7 @@ mod tests {
         let (user_data_ret, res) = unsafe {
             // Safe because the `wait` call waits until the kernel is done with `buf`.
             uring
-                .add_readv_iter(io_vecs, fd, offset, user_data)
+                .add_readv_iter(io_vecs, fd, Some(offset), user_data)
                 .unwrap();
             uring.wait().unwrap().next().unwrap()
         };
@@ -1009,7 +1019,7 @@ mod tests {
                     buf[offset..].as_mut_ptr(),
                     BUF_SIZE,
                     f.as_raw_fd(),
-                    offset as u64,
+                    Some(offset as u64),
                     index,
                 ) {
                     Ok(_) => (),
@@ -1064,7 +1074,7 @@ mod tests {
         let (user_data_ret, res) = unsafe {
             // Safe because the `wait` call waits until the kernel is done with `buf`.
             uring
-                .add_readv_iter(io_vecs.into_iter(), f.as_raw_fd(), 0, 55)
+                .add_readv_iter(io_vecs.into_iter(), f.as_raw_fd(), Some(0), 55)
                 .unwrap();
             uring.wait().unwrap().next().unwrap()
         };
@@ -1083,7 +1093,7 @@ mod tests {
         unsafe {
             // Safe because the `wait` call waits until the kernel is done mutating `buf`.
             uring
-                .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), 0, 55)
+                .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 55)
                 .unwrap();
             let (user_data, res) = uring.wait().unwrap().next().unwrap();
             assert_eq!(user_data, 55_u64);
@@ -1109,7 +1119,7 @@ mod tests {
         unsafe {
             // Safe because the `wait` call waits until the kernel is done mutating `buf`.
             uring
-                .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), 0, 55)
+                .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 55)
                 .unwrap();
             uring.submit().unwrap();
             // Poll for completion with epoll.
@@ -1145,7 +1155,7 @@ mod tests {
         let (user_data_ret, res) = unsafe {
             // Safe because the `wait` call waits until the kernel is done with `buf`.
             uring
-                .add_writev_iter(io_vecs.into_iter(), f.as_raw_fd(), OFFSET, 55)
+                .add_writev_iter(io_vecs.into_iter(), f.as_raw_fd(), Some(OFFSET), 55)
                 .unwrap();
             uring.wait().unwrap().next().unwrap()
         };
@@ -1210,15 +1220,15 @@ mod tests {
         let mut pending = std::collections::BTreeSet::new();
         unsafe {
             uring
-                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), 0, 67)
+                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(0), 67)
                 .unwrap();
             pending.insert(67u64);
             uring
-                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), 4096, 68)
+                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(4096), 68)
                 .unwrap();
             pending.insert(68);
             uring
-                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), 8192, 69)
+                .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(8192), 69)
                 .unwrap();
             pending.insert(69);
         }
@@ -1323,7 +1333,13 @@ mod tests {
             let mut buf = [0u8; BUF_DATA.len()];
             unsafe {
                 uring2
-                    .add_read(buf.as_mut_ptr(), buf.len(), pipe_out.as_raw_fd(), 0, 0)
+                    .add_read(
+                        buf.as_mut_ptr(),
+                        buf.len(),
+                        pipe_out.as_raw_fd(),
+                        Some(0),
+                        0,
+                    )
                     .unwrap();
             }
 
