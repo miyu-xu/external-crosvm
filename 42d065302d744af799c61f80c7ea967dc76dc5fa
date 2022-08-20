@@ -54,6 +54,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "2a5762ab_34a82d63",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-08-20T03:37:26Z",
+      "side": 1,
+      "message": "Normally we don\u0027t put ANDROID: in front of Revert, but you could. Since we are all tracking this closely, I\u0027m confident it won\u0027t matter.",
+      "parentUuid": "cd4d1210_9f0bfeb0",
+      "revId": "42d065302d744af799c61f80c7ea967dc76dc5fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "aaf6a218_8b1d999f",
