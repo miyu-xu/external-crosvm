@@ -53,7 +53,6 @@ use devices::virtio::vhost::user::VhostUserDevice;
 use devices::virtio::vhost::vsock::VhostVsockConfig;
 #[cfg(feature = "balloon")]
 use devices::virtio::BalloonMode;
-use devices::virtio::Console;
 use devices::virtio::VirtioDevice;
 use devices::BusDeviceObj;
 use devices::IommuDevType;
@@ -1364,9 +1363,8 @@ impl VirtioDeviceBuilder for SerialParameters {
         let mut keep_rds = Vec::new();
         let evt = Event::new().context("failed to create event")?;
 
-        // TODO(b/238440998): Switch back to AsyncConsole in android.
         Ok(Box::new(
-            self.create_serial_device::<Console>(protected_vm, &evt, &mut keep_rds)
+            self.create_serial_device::<AsyncConsole>(protected_vm, &evt, &mut keep_rds)
                 .context("failed to create console device")?,
         ))
     }
