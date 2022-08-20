@@ -70,6 +70,24 @@
       "parentUuid": "e8842fa7_9eba3040",
       "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "662303ae_db47a0e9",
+        "filename": "devices/src/virtio/gpu/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1181,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2022-08-20T03:22:36Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "2aa360da_a98327ea",
+      "revId": "db76d1dce10de127766e4feb7d04e48152a81cd7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
