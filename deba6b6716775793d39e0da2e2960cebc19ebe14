@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "818aa9ad_c8f4c0dc",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-22T20:08:45Z",
+      "side": 1,
+      "message": "passing run on oxygen https://android-build.googleplex.com/builds/abtd/run/L36600000956034732?referrer\u003demail",
+      "revId": "deba6b6716775793d39e0da2e2960cebc19ebe14",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
