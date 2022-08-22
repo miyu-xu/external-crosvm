@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aa31dcd2_9a0fe38a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-08-22T16:25:20Z",
+      "side": 1,
+      "message": "LGTM overall.",
+      "revId": "d949f7c5b5c27a7a8cacc5b996619938bdfb8b38",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "abb9f262_153dcefa",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 65,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-08-22T16:25:20Z",
+      "side": 1,
+      "message": "nit: please use spaces vs indents.",
+      "revId": "d949f7c5b5c27a7a8cacc5b996619938bdfb8b38",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
