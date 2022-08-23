@@ -50,6 +50,41 @@
       "message": "If this is indeed needed, then we need a better name, otherwise users will have to dig through the code to figure out what check is being skipped.\n\nThat said, what is the harm in re-triggering interrupt unconditionally. Daniel, any opinion here? It looks we are dealing with INT-x here which have level-triggered semantics as opposed to edge.",
       "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c39501c4_cb7941f7",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 45,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-08-23T19:42:14Z",
+      "side": 1,
+      "message": "Removing the check entirely might be okay, but it should be backed up by benchmarks.\n\nIt might make a difference in cases where a device processes many requests in a batch and calls `Queue::trigger_interrupt()` repeatedly, although if the guest driver uses `VIRTIO_RING_F_EVENT_IDX` for interrupt suppression, it might not matter that much.",
+      "parentUuid": "0195cdfe_36f174fb",
+      "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f51cd943_1ccf93c5",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-08-23T19:42:14Z",
+      "side": 1,
+      "message": "This should probably still set the requested bits in `interrupt_status`, since this skips the `fetch_or` below. Otherwise the interrupt handler will not know what caused the interrupt (used ring or config change). This could probably be merged into the block below:\n\n```\nif self.interrupt_status.fetch_or(...) \u003d\u003d 0 || self.skip_check {\n    self.interrupt_evt.trigger();\n}\n```",
+      "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
