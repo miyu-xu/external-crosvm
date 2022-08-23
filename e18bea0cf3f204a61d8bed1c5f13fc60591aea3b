@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c74cef8a_6fcf0151",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-08-23T15:55:16Z",
+      "side": 1,
+      "message": "Thank you Udam for the review. I have corrected the patch. Could you please review the new patch.\n\nThanks,\nSreenad.",
+      "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
