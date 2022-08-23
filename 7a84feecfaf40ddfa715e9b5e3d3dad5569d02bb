@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c871b677_6bed1285",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-08-23T21:19:53Z",
+      "side": 1,
+      "message": "Do we want these tests or not? @smoreland recently removed them, then added them back aosp/2189576",
+      "revId": "7a84feecfaf40ddfa715e9b5e3d3dad5569d02bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
