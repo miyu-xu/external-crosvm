@@ -16,6 +16,23 @@
       "message": "Thank you Udam for the review. I have corrected the patch. Could you please review the new patch.\n\nThanks,\nSreenad.",
       "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c421a339_7f81ee2a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-08-23T16:28:26Z",
+      "side": 1,
+      "message": "LGTM. I\u0027ll let Steven +2 it, as I\u0027m not sure how they want to manage the diff w/ upstream or if we should land this upstream first.",
+      "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
