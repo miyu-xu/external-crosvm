@@ -466,8 +466,16 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     // Do not suggest INTx for hot-plug devices.
     let intx_event = devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-    if let Some((gsi, _pin)) = device.assign_irq(&intx_event, None) {
+    if let Some((pin, gsi)) = device.preferred_irq() {
         resources.reserve_irq(gsi);
+
+        device.assign_irq(
+            intx_event
+                .try_clone()
+                .map_err(DeviceRegistrationError::EventClone)?,
+            pin,
+            gsi,
+        );
 
         linux
             .irq_chip
@@ -684,34 +692,74 @@ pub fn generate_pci_root(
 
     // Allocate legacy INTx
     let mut pci_irqs = Vec::new();
-    let mut irqs: Vec<Option<u32>> = vec![None; max_irqs];
+    let mut irqs: Vec<u32> = Vec::new();
+
+    // Mapping of (bus, dev, pin) -> IRQ number.
+    let mut dev_pin_irq = BTreeMap::new();
 
     for (dev_idx, (device, _jail)) in devices.iter_mut().enumerate() {
-        // For default interrupt routing use next preallocated interrupt from the pool.
-        let irq_num = if let Some(irq) = irqs[dev_idx % max_irqs] {
-            irq
+        let pci_address = device_addrs[dev_idx];
+
+        let (pin, gsi) = if let Some((pin, gsi)) = device.preferred_irq() {
+            // The device reported a preferred IRQ, so use that rather than allocating one.
+            resources.reserve_irq(gsi);
+            (pin, gsi)
         } else {
-            let irq = resources
-                .allocate_irq()
-                .ok_or(DeviceRegistrationError::AllocateIrq)?;
-            irqs[dev_idx % max_irqs] = Some(irq);
-            irq
+            // The device did not provide a preferred IRQ, so allocate one.
+
+            // Choose a pin based on the slot's function number. Function 0 must always use INTA#
+            // per the PCI spec, and we choose to distribute the remaining functions evenly across
+            // the other pins.
+            let pin = match pci_address.func % 4 {
+                0 => PciInterruptPin::IntA,
+                1 => PciInterruptPin::IntB,
+                2 => PciInterruptPin::IntC,
+                _ => PciInterruptPin::IntD,
+            };
+
+            // If an IRQ number has already been assigned for a different function with this (bus,
+            // device, pin) combination, use it. Otherwise allocate a new one and insert it into the
+            // map.
+            let pin_key = (pci_address.bus, pci_address.dev, pin);
+            let irq_num = if let Some(irq_num) = dev_pin_irq.get(&pin_key) {
+                *irq_num
+            } else {
+                // If we have allocated fewer than `max_irqs` total, add a new irq to the `irqs`
+                // pool. Otherwise, share one of the existing `irqs`.
+                let irq_num = if irqs.len() < max_irqs {
+                    let irq_num = resources
+                        .allocate_irq()
+                        .ok_or(DeviceRegistrationError::AllocateIrq)?;
+                    irqs.push(irq_num);
+                    irq_num
+                } else {
+                    // Pick one of the existing IRQs to share, using `dev_idx` to distribute IRQ
+                    // sharing evenly across devices.
+                    irqs[dev_idx % max_irqs]
+                };
+
+                dev_pin_irq.insert(pin_key, irq_num);
+                irq_num
+            };
+            (pin, irq_num)
         };
 
         let intx_event =
             devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-        if let Some((gsi, pin)) = device.assign_irq(&intx_event, Some(irq_num)) {
-            // reserve INTx if needed and non-default.
-            if gsi != irq_num {
-                resources.reserve_irq(gsi);
-            };
-            irq_chip
-                .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
-                .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+        device.assign_irq(
+            intx_event
+                .try_clone()
+                .map_err(DeviceRegistrationError::EventClone)?,
+            pin,
+            gsi,
+        );
 
-            pci_irqs.push((device_addrs[dev_idx], gsi, pin));
-        }
+        irq_chip
+            .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
+            .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+
+        pci_irqs.push((pci_address, gsi, pin));
     }
 
     // To prevent issues where device's on_sandbox may spawn thread before all

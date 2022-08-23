@@ -72,9 +72,12 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const ONE_MB: u64 = 1 << 20;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -614,6 +617,7 @@ pub fn parse_pstore(value: &str) -> Result<Pstore, String> {
     })
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
     let mut rw_type: Option<MsrRWType> = None;
     let mut action: Option<MsrAction> = None;
@@ -671,27 +675,33 @@ pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), Stri
     ))
 }
 
-pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
-    let serial_setting: SerialParameters = from_key_values(s)?;
-
-    if serial_setting.stdin && serial_setting.input.is_some() {
+pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
+    if params.stdin && params.input.is_some() {
         return Err("Cannot specify both stdin and input options".to_string());
     }
-    if serial_setting.num < 1 {
+    if params.num < 1 {
         return Err(invalid_value_err(
-            serial_setting.num.to_string(),
+            params.num.to_string(),
             "Serial port num must be at least 1",
         ));
     }
 
-    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+    if params.hardware == SerialHardware::Serial && params.num > 4 {
         return Err(invalid_value_err(
-            format!("{}", serial_setting.num),
+            format!("{}", params.num),
             "Serial port num must be 4 or less",
         ));
     }
 
-    Ok(serial_setting)
+    Ok(())
+}
+
+pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
+    let params: SerialParameters = from_key_values(s)?;
+
+    validate_serial_parameters(&params)?;
+
+    Ok(params)
 }
 
 #[cfg(feature = "plugin")]
@@ -2158,6 +2168,7 @@ mod tests {
         assert_eq!(params.size, 0x2000);
     }
 
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn parse_userspace_msr_options_test() {
         let (pass_cpu0_index, pass_cpu0_cfg) =

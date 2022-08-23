@@ -8,6 +8,8 @@ use devices::virtio::vhost::user::device;
 use devices::virtio::vhost::user::VhostUserParams;
 use devices::SerialParameters;
 
+use crate::crosvm::config::from_key_values;
+use crate::crosvm::config::validate_serial_parameters;
 use crate::crosvm::config::JailConfig;
 
 #[derive(FromArgs)]
@@ -22,6 +24,14 @@ pub enum DeviceSubcommand {
     Gpu(device::GpuOptions),
     Vsock(device::VsockOptions),
     Wl(device::WlOptions),
+}
+
+fn parse_vu_serial_options(s: &str) -> Result<VhostUserParams<SerialParameters>, String> {
+    let params: VhostUserParams<SerialParameters> = from_key_values(s)?;
+
+    validate_serial_parameters(&params.device_params)?;
+
+    Ok(params)
 }
 
 #[argh_helpers::pad_description_for_argh]
@@ -47,8 +57,33 @@ pub struct DevicesCommand {
     ///         failures instead of them being fatal.
     pub jail: JailConfig,
 
-    #[argh(option, arg_name = "serial options")]
-    /// start a serial device (see help from run command for options)
+    #[argh(
+        option,
+        arg_name = "vhost=PATH,type=TYPE,[hardware=HW,num=NUM,path=PATH,input=PATH,console,earlycon,stdin]",
+        from_str_fn(parse_vu_serial_options)
+    )]
+    /// comma separated key=value pairs for setting up serial
+    /// devices. Can be given more than once.
+    /// Possible key values:
+    ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
+    ///     type=(stdout,syslog,sink,file) - Where to route the
+    ///        serial device
+    ///     hardware=(serial,virtio-console) - Which type of serial
+    ///        hardware to emulate. Defaults to 8250 UART (serial).
+    ///     num=(1,2,3,4) - Serial Device Number. If not provided,
+    ///        num will default to 1.
+    ///     path=PATH - The path to the file to write to when
+    ///        type=file
+    ///     input=PATH - The path to the file to read from when not
+    ///        stdin
+    ///     console - Use this serial device as the guest console.
+    ///        Can only be given once. Will default to first
+    ///        serial port if not provided.
+    ///     earlycon - Use this serial device as the early console.
+    ///        Can only be given once.
+    ///     stdin - Direct standard input to this serial device.
+    ///        Can only be given once. Will default to first serial
+    ///        port if not provided.
     pub serial: Vec<VhostUserParams<SerialParameters>>,
 
     #[argh(option, arg_name = "block options")]

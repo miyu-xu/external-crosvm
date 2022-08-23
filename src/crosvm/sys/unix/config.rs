@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Duration;
 
 #[cfg(feature = "gfxstream")]
 use devices::virtio::GpuMode;
@@ -99,47 +98,6 @@ pub fn parse_ac97_options(
         }
     };
     Ok(())
-}
-
-pub fn parse_coiommu_params(value: &str) -> Result<devices::CoIommuParameters, String> {
-    let mut params: devices::CoIommuParameters = Default::default();
-
-    let opts = value
-        .split(',')
-        .map(|frag| frag.splitn(2, '='))
-        .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-    for (k, v) in opts {
-        match k {
-            "unpin_policy" => {
-                params.unpin_policy = v
-                    .parse::<devices::CoIommuUnpinPolicy>()
-                    .map_err(|e| format!("{}", e))?
-            }
-            "unpin_interval" => {
-                params.unpin_interval =
-                    Duration::from_secs(v.parse::<u64>().map_err(|e| format!("{}", e))?)
-            }
-            "unpin_limit" => {
-                let limit = v.parse::<u64>().map_err(|e| format!("{}", e))?;
-
-                if limit == 0 {
-                    return Err(String::from("Please use non-zero unpin_limit value"));
-                }
-
-                params.unpin_limit = Some(limit)
-            }
-            "unpin_gen_threshold" => {
-                params.unpin_gen_threshold = v
-                    .parse::<u64>()
-                    .map_err(|e| format!("unknown argument: {}", e))?
-            }
-            _ => {
-                return Err(format!("coiommu parameter {}", k));
-            }
-        }
-    }
-    Ok(params)
 }
 
 #[cfg(feature = "gfxstream")]
@@ -322,6 +280,17 @@ impl VfioCommand {
                     ))
                 }
             }
+            #[cfg(feature = "direct")]
+            "intel-lpss" => {
+                if value.parse::<bool>().is_ok() {
+                    Ok(())
+                } else {
+                    Err(invalid_value_err(
+                        format!("{}={}", kind, value),
+                        "option must be `intel-lpss=true|false`",
+                    ))
+                }
+            }
             _ => Err(invalid_value_err(
                 format!("{}={}", kind, value),
                 "option must be `guest-address=<val>` and/or `iommu=<val>`",
@@ -347,6 +316,14 @@ impl VfioCommand {
         }
         IommuDevType::NoIommu
     }
+
+    #[cfg(feature = "direct")]
+    pub fn is_intel_lpss(&self) -> bool {
+        if let Some(lpss) = self.params.get("intel-lpss") {
+            return lpss.parse::<bool>().unwrap_or(false);
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -368,6 +345,91 @@ mod tests {
     fn parse_ac97_socket_type() {
         parse_ac97_options("socket_type=unified").expect("parse should have succeded");
         parse_ac97_options("socket_type=legacy").expect("parse should have succeded");
+    }
+
+    #[test]
+    fn parse_coiommu_options() {
+        use devices::CoIommuParameters;
+        use devices::CoIommuUnpinPolicy;
+        use std::time::Duration;
+
+        // unpin_policy
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_policy=off").unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_policy: CoIommuUnpinPolicy::Off,
+                ..Default::default()
+            }
+        );
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_policy=lru").unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_policy: CoIommuUnpinPolicy::Lru,
+                ..Default::default()
+            }
+        );
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_policy=foo");
+        assert!(coiommu_params.is_err());
+
+        // unpin_interval
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_interval=42").unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_interval: Duration::from_secs(42),
+                ..Default::default()
+            }
+        );
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_interval=foo");
+        assert!(coiommu_params.is_err());
+
+        // unpin_limit
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_limit=256").unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_limit: Some(256),
+                ..Default::default()
+            }
+        );
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_limit=0");
+        assert!(coiommu_params.is_err());
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_limit=foo");
+        assert!(coiommu_params.is_err());
+
+        // unpin_gen_threshold
+        let coiommu_params =
+            from_key_values::<CoIommuParameters>("unpin_gen_threshold=32").unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_gen_threshold: 32,
+                ..Default::default()
+            }
+        );
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_gen_threshold=foo");
+        assert!(coiommu_params.is_err());
+
+        // All together
+        let coiommu_params = from_key_values::<CoIommuParameters>(
+            "unpin_policy=lru,unpin_interval=90,unpin_limit=8,unpin_gen_threshold=64",
+        )
+        .unwrap();
+        assert_eq!(
+            coiommu_params,
+            CoIommuParameters {
+                unpin_policy: CoIommuUnpinPolicy::Lru,
+                unpin_interval: Duration::from_secs(90),
+                unpin_limit: Some(8),
+                unpin_gen_threshold: 64,
+            }
+        );
+
+        // invalid parameter
+        let coiommu_params = from_key_values::<CoIommuParameters>("unpin_invalid_param=0");
+        assert!(coiommu_params.is_err());
     }
 
     #[cfg(feature = "gpu")]

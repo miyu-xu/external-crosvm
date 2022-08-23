@@ -43,6 +43,7 @@ impl PcieUpstreamPort {
                 primary_bus_num,
                 secondary_bus_num,
                 false,
+                false,
             ),
             hotplugged,
             downstream_devices: BTreeMap::new(),
@@ -53,7 +54,7 @@ impl PcieUpstreamPort {
         pcie_host: PcieHostPort,
         hotplugged: bool,
     ) -> std::result::Result<Self, PciDeviceError> {
-        let pcie_port = PciePort::new_from_host(pcie_host, false)?;
+        let pcie_port = PciePort::new_from_host(pcie_host, false, false)?;
         Ok(PcieUpstreamPort {
             pcie_port,
             hotplugged,
@@ -197,6 +198,7 @@ impl PcieDownstreamPort {
                 primary_bus_num,
                 secondary_bus_num,
                 false,
+                false,
             ),
             hotplugged,
             downstream_devices: BTreeMap::new(),
@@ -209,7 +211,7 @@ impl PcieDownstreamPort {
         pcie_host: PcieHostPort,
         hotplugged: bool,
     ) -> std::result::Result<Self, PciDeviceError> {
-        let pcie_port = PciePort::new_from_host(pcie_host, true)?;
+        let pcie_port = PciePort::new_from_host(pcie_host, true, false)?;
         Ok(PcieDownstreamPort {
             pcie_port,
             hotplugged,
@@ -294,7 +296,7 @@ impl HotPlugBus for PcieDownstreamPort {
             return;
         }
         self.pcie_port
-            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
         self.pcie_port.trigger_hp_or_pme_interrupt();
     }
 
@@ -311,8 +313,7 @@ impl HotPlugBus for PcieDownstreamPort {
             for (guest_pci_addr, _) in self.downstream_devices.iter() {
                 self.removed_downstream.push(*guest_pci_addr);
             }
-            self.pcie_port
-                .set_slot_status(PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
             self.pcie_port.trigger_hp_or_pme_interrupt();
 
             if self.pcie_port.is_host() {

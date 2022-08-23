@@ -3,13 +3,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from dataclasses import dataclass
 from fnmatch import fnmatch
+from pathlib import Path
 from time import time
 from typing import Callable, List, NamedTuple
-from pathlib import Path
-from impl.common import all_tracked_files, cmd, verbose
 
-from dataclasses import dataclass
+from impl.common import all_tracked_files, cmd, verbose
 
 git = cmd("git")
 
@@ -30,6 +30,9 @@ class CheckContext(object):
     # Those files of all_files that were modified locally.
     modified_files: List[Path]
 
+    # Files that do not exist upstream and have been added locally.
+    new_files: List[Path]
+
 
 class Check(NamedTuple):
     "Metadata for each check, definining on which files it should run."
@@ -45,6 +48,9 @@ class Check(NamedTuple):
     # List of globs to exclude from this check
     exclude: List[str] = []
 
+    # Whether or not this check can fix issues.
+    can_fix: bool = False
+
     @property
     def name(self):
         name = self.check_function.__name__
@@ -53,7 +59,7 @@ class Check(NamedTuple):
         return name
 
 
-def list_modified_files():
+def list_file_diff():
     """
     Lists files there were modified compared to the upstream branch.
 
@@ -61,10 +67,15 @@ def list_modified_files():
     """
     upstream = git("rev-parse @{u}").stdout(check=False)
     if upstream:
-        return (Path(f) for f in git("diff --name-only", upstream).lines())
+        for line in git("diff --name-status", upstream).lines():
+            parts = line.split("\t", 1)
+            file = Path(parts[1].strip())
+            if file.is_file():
+                yield (parts[0].strip(), file)
     else:
         print("WARNING: Not tracking a branch. Checking all files.")
-        return all_tracked_files()
+        for file in all_tracked_files():
+            yield ("M", file)
 
 
 def should_run_check_on_file(check: Check, file: Path):
@@ -129,20 +140,27 @@ def run_checks(
         nightly: Use nightly version of rust tooling.
     """
     all_files = [*all_tracked_files()]
+    file_diff = [*list_file_diff()]
+    new_files = [f for (s, f) in file_diff if s == "A"]
     if run_on_all_files:
         modified_files = all_files
     else:
-        modified_files = [*list_modified_files()]
+        modified_files = [f for (s, f) in file_diff if s in ("M", "A")]
 
-    success = True
+    failed_checks: List[Check] = []
     for check in checks_list:
         context = CheckContext(
             fix=fix,
             nightly=nightly,
             all_files=[f for f in all_files if should_run_check_on_file(check, f)],
             modified_files=[f for f in modified_files if should_run_check_on_file(check, f)],
+            new_files=[f for f in new_files if should_run_check_on_file(check, f)],
         )
         if context.modified_files:
             if not run_check(check, context):
-                success = False
-    return success
+                failed_checks.append(check)
+    if any(c.can_fix for c in failed_checks):
+        print("")
+        print("Some of the issues above can be fixed automatically with:")
+        print("./tools/health-check --fix")
+    return len(failed_checks) == 0

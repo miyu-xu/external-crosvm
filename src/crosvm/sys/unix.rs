@@ -687,6 +687,8 @@ fn create_devices(
                 vfio_dev.guest_address(),
                 Some(&mut coiommu_attached_endpoints),
                 vfio_dev.iommu_dev_type(),
+                #[cfg(feature = "direct")]
+                vfio_dev.is_intel_lpss(),
             )?;
 
             *iova_max_addr = Some(max(
@@ -1386,7 +1388,7 @@ where
         if let Some(ref path) = cfg.balloon_control {
             (
                 None,
-                Some(Tube::new(
+                Some(Tube::new_from_unix_seqpacket(
                     UnixSeqpacket::connect(path).context("failed to create balloon control")?,
                 )),
             )
@@ -1915,6 +1917,8 @@ fn add_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
                 } else {
                     IommuDevType::NoIommu
                 },
+                #[cfg(feature = "direct")]
+                false,
             )?;
             let pci_address = Arch::register_pci_device(
                 linux,
@@ -2468,7 +2472,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                         },
                                     )
                                     .context("failed to add descriptor to wait context")?;
-                                control_tubes.push(TaggedControlTube::Vm(Tube::new(socket)));
+                                control_tubes.push(TaggedControlTube::Vm(
+                                    Tube::new_from_unix_seqpacket(socket),
+                                ));
                             }
                             Err(e) => error!("failed to accept socket: {}", e),
                         }
