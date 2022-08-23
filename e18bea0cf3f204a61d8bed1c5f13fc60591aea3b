@@ -33,6 +33,23 @@
       "message": "LGTM. I\u0027ll let Steven +2 it, as I\u0027m not sure how they want to manage the diff w/ upstream or if we should land this upstream first.",
       "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0195cdfe_36f174fb",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 45,
+      "author": {
+        "id": 1076784
+      },
+      "writtenOn": "2022-08-23T19:18:22Z",
+      "side": 1,
+      "message": "If this is indeed needed, then we need a better name, otherwise users will have to dig through the code to figure out what check is being skipped.\n\nThat said, what is the harm in re-triggering interrupt unconditionally. Daniel, any opinion here? It looks we are dealing with INT-x here which have level-triggered semantics as opposed to edge.",
+      "revId": "e18bea0cf3f204a61d8bed1c5f13fc60591aea3b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
