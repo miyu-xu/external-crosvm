@@ -16,6 +16,24 @@
       "message": "Unless there is some time pressure, let\u0027s wait for the fixes to land upstream and make it into AOSP via the normal merge process and then we can submit this with the cuttlefish change.",
       "revId": "e3c87b6a41a87232cf25693a6363b1965cd4eb0b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ee3d1464_a83aa648",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-23T03:31:13Z",
+      "side": 1,
+      "message": "Those CLs are in the new merge commit now and I\u0027ve moved this CL into the same topic.",
+      "parentUuid": "45c73bba_f489b836",
+      "revId": "e3c87b6a41a87232cf25693a6363b1965cd4eb0b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
