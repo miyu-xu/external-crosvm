@@ -16,6 +16,24 @@
       "message": "Do we want these tests or not? @smoreland recently removed them, then added them back aosp/2189576",
       "revId": "7a84feecfaf40ddfa715e9b5e3d3dad5569d02bb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "73010c47_603ac678",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-23T21:25:16Z",
+      "side": 1,
+      "message": "I put notes in the commit message about it. There is overlap in the set of the tests added and removed, but they aren\u0027t exactly the same. I verified all the ones removed here don\u0027t actually have tests (i.e. when you run the test target, it would have done nothing).\n\nIf they get added back later, we should investigate why. There is probably yet another cargo2android bug that causes it to added test modules unnecessarily when used with certain versions of `cargo`.",
+      "parentUuid": "c871b677_6bed1285",
+      "revId": "7a84feecfaf40ddfa715e9b5e3d3dad5569d02bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
