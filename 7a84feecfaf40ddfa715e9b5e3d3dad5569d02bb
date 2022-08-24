@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "29b3d891_ade2b227",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-08-24T00:00:59Z",
+      "side": 1,
+      "message": "you mean the `rust_test` changes, right? probably yeah. i hadn\u0027t noticed that you used the prebuilts when you added them back. the prebuilts don\u0027t work well enough for the whole crosvm repo (at least for me), so i\u0027m using my system rust install as we were before. i guess we should loop back to figure out why Elie\u0027s is behaving differently since we can\u0027t switch to prebuilt yet.\n\nas mentioned in the commit message and other comment thread, i think all the `rust_test` changes here are correct. went through them one by one. if we see them added back later, we should investigate why.",
+      "parentUuid": "5ce50d29_5f8d2e4c",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 46
+      },
+      "revId": "7a84feecfaf40ddfa715e9b5e3d3dad5569d02bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c871b677_6bed1285",
