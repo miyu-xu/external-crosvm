@@ -1,0 +1,72 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6a018e71_1af3be83",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1076784
+      },
+      "writtenOn": "2022-08-25T17:18:05Z",
+      "side": 1,
+      "message": "We need unit tests for this.",
+      "revId": "fcd7318687774171c25c760373ab356b04060351",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d7878896_a7bef4f3",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 458,
+      "author": {
+        "id": 1076784
+      },
+      "writtenOn": "2022-08-25T17:18:05Z",
+      "side": 1,
+      "message": "Why do we have to store it as a vector instead of a scalar?",
+      "revId": "fcd7318687774171c25c760373ab356b04060351",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9eb9ed9a_65ad8d71",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 491,
+      "author": {
+        "id": 1076784
+      },
+      "writtenOn": "2022-08-25T17:18:05Z",
+      "side": 1,
+      "message": "let q_size \u003d queue_size.unwrap_or(QUEUE_SIZE);",
+      "revId": "fcd7318687774171c25c760373ab356b04060351",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b105bf55_f841ec69",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 496,
+      "author": {
+        "id": 1076784
+      },
+      "writtenOn": "2022-08-25T17:18:05Z",
+      "side": 1,
+      "message": "Do we also want to add a test for an upper bound of queue size (32768 IIRC)?",
+      "revId": "fcd7318687774171c25c760373ab356b04060351",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
