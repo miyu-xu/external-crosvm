@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d3044e3d_e0e15251",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 8
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1953820
+      },
+      "writtenOn": "2022-08-25T16:10:27Z",
+      "side": 1,
+      "message": "Replace skip_check with the actual name of the flag introduced",
+      "range": {
+        "startLine": 37,
+        "startChar": 37,
+        "endLine": 37,
+        "endChar": 42
+      },
+      "revId": "80af3388b391a8a3fb5fd332039377028d81a8e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9ad456fb_2a30151a",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1953820
+      },
+      "writtenOn": "2022-08-25T16:10:27Z",
+      "side": 1,
+      "message": "In hypervisors where interrupt_status is updated asynchronously, inject the interrupt even if the previous interrupt \"appears to be\" already pending.",
+      "range": {
+        "startLine": 67,
+        "startChar": 26,
+        "endLine": 67,
+        "endChar": 35
+      },
+      "revId": "80af3388b391a8a3fb5fd332039377028d81a8e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
