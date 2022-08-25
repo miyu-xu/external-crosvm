@@ -53,7 +53,6 @@ use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
 
 const QUEUE_SIZE: u16 = 256;
-const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
 const NUM_QUEUES: u16 = 1;
 
 #[sorted]
@@ -456,6 +455,7 @@ pub struct Block {
     block_size: u32,
     id: Option<BlockId>,
     control_tube: Option<Tube>,
+    queue_sizes: [u16; 1],
 }
 
 impl Block {
@@ -468,6 +468,7 @@ impl Block {
         block_size: u32,
         id: Option<BlockId>,
         control_tube: Option<Tube>,
+        queue_size: Option<u16>,
     ) -> SysResult<Block> {
         if block_size % SECTOR_SIZE as u32 != 0 {
             error!(
@@ -487,7 +488,17 @@ impl Block {
 
         let avail_features = build_avail_features(base_features, read_only, sparse, false);
 
-        let seg_max = get_seg_max(QUEUE_SIZE);
+        let q_size = match queue_size {
+                Some(qs) => qs,
+                None => QUEUE_SIZE,
+        };
+
+        if (q_size & (q_size - 1)) != 0  {
+                error!("queue size {} is not a power of 2", q_size);
+                return Err(SysError::new(libc::EINVAL));
+        }
+
+        let seg_max = get_seg_max(q_size);
 
         Ok(Block {
             kill_evt: None,
@@ -501,6 +512,7 @@ impl Block {
             block_size,
             id,
             control_tube,
+            queue_sizes: [q_size],
         })
     }
 
@@ -693,7 +705,7 @@ impl VirtioDevice for Block {
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
-        QUEUE_SIZES
+        &self.queue_sizes
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -808,7 +820,7 @@ mod tests {
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        let b = Block::new(features, Box::new(f), true, false, 512, None, None).unwrap();
+        let b = Block::new(features, Box::new(f), true, false, 512, None, None, None).unwrap();
         let mut num_sectors = [0u8; 4];
         b.read_config(0, &mut num_sectors);
         // size is 0x1000, so num_sectors is 8 (4096/512).
@@ -825,7 +837,7 @@ mod tests {
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        let b = Block::new(features, Box::new(f), true, false, 4096, None, None).unwrap();
+        let b = Block::new(features, Box::new(f), true, false, 4096, None, None, None).unwrap();
         let mut blk_size = [0u8; 4];
         b.read_config(20, &mut blk_size);
         // blk_size should be 4096 (0x1000).
@@ -838,7 +850,7 @@ mod tests {
         {
             let f = tempfile().unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = Block::new(features, Box::new(f), false, true, 512, None, None).unwrap();
+            let b = Block::new(features, Box::new(f), false, true, 512, None, None, None).unwrap();
             // writable device should set VIRTIO_BLK_F_FLUSH + VIRTIO_BLK_F_DISCARD
             // + VIRTIO_BLK_F_WRITE_ZEROES + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE
             // + VIRTIO_BLK_F_SEG_MAX + VIRTIO_RING_F_EVENT_IDX
@@ -849,7 +861,7 @@ mod tests {
         {
             let f = tempfile().unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = Block::new(features, Box::new(f), false, false, 512, None, None).unwrap();
+            let b = Block::new(features, Box::new(f), false, false, 512, None, None, None).unwrap();
             // writable device should set VIRTIO_BLK_F_FLUSH
             // + VIRTIO_BLK_F_WRITE_ZEROES + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE
             // + VIRTIO_BLK_F_SEG_MAX + VIRTIO_RING_F_EVENT_IDX
@@ -860,7 +872,7 @@ mod tests {
         {
             let f = tempfile().unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = Block::new(features, Box::new(f), true, true, 512, None, None).unwrap();
+            let b = Block::new(features, Box::new(f), true, true, 512, None, None, None).unwrap();
             // read-only device should set VIRTIO_BLK_F_FLUSH and VIRTIO_BLK_F_RO
             // + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE + VIRTIO_BLK_F_SEG_MAX
             // + VIRTIO_RING_F_EVENT_IDX
