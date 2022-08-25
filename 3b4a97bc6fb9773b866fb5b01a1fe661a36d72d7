@@ -39,6 +39,52 @@
       "message": "This is only modifying the non-async version of the block device; do we want to apply this to the asynchronous one too? (devices/src/virtio/block/asynchronous.rs)\n\nI am also working on migrating all disk image formats to async and removing the non-async version: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3824068",
       "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "09ac7008_713cbc11",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 458,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-08-25T21:04:51Z",
+      "side": 1,
+      "message": "Nit: would we want `NUM_QUEUES` here?",
+      "range": {
+        "startLine": 458,
+        "startChar": 23,
+        "endLine": 458,
+        "endChar": 24
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2bf42a40_4d6bc8db",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 515,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-08-25T21:04:51Z",
+      "side": 1,
+      "message": "If we increase the number of queues, this will break. Could we use `vec![queue_size; NUM_QUEUES]` instead?",
+      "range": {
+        "startLine": 515,
+        "startChar": 25,
+        "endLine": 515,
+        "endChar": 34
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

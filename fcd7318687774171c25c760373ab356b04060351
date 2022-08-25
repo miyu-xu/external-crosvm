@@ -37,6 +37,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "67a49fc5_9d3f7db3",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 458,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-08-25T21:04:51Z",
+      "side": 1,
+      "message": "We have a size per queue I think. Right now there\u0027s just one queue, but we\u0027re planning to experiment with multiple queues in the future.",
+      "parentUuid": "d7878896_a7bef4f3",
+      "revId": "fcd7318687774171c25c760373ab356b04060351",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "9eb9ed9a_65ad8d71",
         "filename": "devices/src/virtio/block/block.rs",
         "patchSetId": 2
