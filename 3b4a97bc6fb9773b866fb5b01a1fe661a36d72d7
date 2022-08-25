@@ -3,6 +3,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "643be709_235aa3b6",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1579844
+      },
+      "writtenOn": "2022-08-25T18:13:13Z",
+      "side": 1,
+      "message": "Is this only for the block device or do  you make custom changes here for other devices as well based on memory constraints?",
+      "range": {
+        "startLine": 10,
+        "startChar": 7,
+        "endLine": 11,
+        "endChar": 57
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3195ce20_6f832158",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 3
