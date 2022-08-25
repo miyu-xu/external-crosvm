@@ -11,10 +11,8 @@ cfg_if::cfg_if! {
         use devices::virtio::GpuDisplayParameters;
         use devices::virtio::vhost::user::device::parse_wayland_sock;
 
-        #[cfg(feature = "gpu")]
-        use super::sys::config::parse_gpu_display_options;
         use super::sys::config::{
-            parse_coiommu_params, VfioCommand, parse_vfio, parse_vfio_platform,
+            VfioCommand, parse_vfio, parse_vfio_platform,
         };
         use super::config::SharedDir;
     } else if #[cfg(windows)] {
@@ -62,7 +60,6 @@ use crate::crosvm::config::parse_cpu_capacity;
 use crate::crosvm::config::parse_cpu_set;
 #[cfg(feature = "direct")]
 use crate::crosvm::config::parse_direct_io_options;
-use crate::crosvm::config::parse_file_backed_mapping;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::crosvm::config::parse_memory_region;
 use crate::crosvm::config::parse_mmio_address_range;
@@ -377,13 +374,14 @@ pub struct DeviceCommand {
 /// Cross-platform Devices
 pub enum CrossPlatformDevicesCommands {
     Block(device::BlockOptions),
+    #[cfg(unix)]
     Net(device::NetOptions),
 }
 
 #[derive(argh_helpers::FlattenSubcommand)]
 pub enum DeviceSubcommand {
     CrossPlatform(CrossPlatformDevicesCommands),
-    Sys(super::sys::cmdline::DevicesSubcommand),
+    Sys(super::sys::cmdline::DeviceSubcommand),
 }
 
 #[derive(FromArgs)]
@@ -470,6 +468,9 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     /// path for balloon controller socket.
     pub balloon_control: Option<PathBuf>,
+    #[argh(switch)]
+    /// enable page reporting in balloon.
+    pub balloon_page_reporting: bool,
     #[argh(option)]
     /// comma separated key=value pairs for setting up battery
     /// device
@@ -486,8 +487,7 @@ pub struct RunCommand {
     #[cfg(unix)]
     #[argh(
         option,
-        arg_name = "unpin_policy=POLICY,unpin_interval=NUM,unpin_limit=NUM,unpin_gen_threshold=NUM",
-        from_str_fn(parse_coiommu_params)
+        arg_name = "unpin_policy=POLICY,unpin_interval=NUM,unpin_limit=NUM,unpin_gen_threshold=NUM"
     )]
     /// comma separated key=value pairs for setting up coiommu
     /// devices.
@@ -515,30 +515,6 @@ pub struct RunCommand {
     )]
     /// group the given CPUs into a cluster (default: no clusters)
     pub cpu_clusters: Vec<Vec<usize>>,
-    #[cfg(feature = "audio_cras")]
-    #[argh(
-        option,
-        arg_name = "[capture=true,client=crosvm,socket=unified,\
-        num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]",
-        long = "cras-snd"
-    )]
-    /// comma separated key=value pairs for setting up virtio snd
-    /// devices.
-    /// Possible key values:
-    ///     capture=(false,true) - Disable/enable audio capture.
-    ///         Default is false.
-    ///     client_type=(crosvm,arcvm,borealis) - Set specific
-    ///         client type for cras backend. Default is crosvm.
-    ///     socket_type=(legacy,unified) Set specific socket type
-    ///         for cras backend. Default is unified.
-    ///     num_output_devices=INT - Set number of output PCM
-    ///         devices.
-    ///     num_input_devices=INT - Set number of input PCM devices.
-    ///     num_output_streams=INT - Set number of output PCM
-    ///         streams per device.
-    ///     num_input_streams=INT - Set number of input PCM streams
-    ///         per device.
-    pub cras_snds: Vec<SndParameters>,
     #[cfg(feature = "crash-report")]
     #[argh(option, long = "crash-pipe-name", arg_name = "\\\\.\\pipe\\PIPE_NAME")]
     /// the crash handler ipc pipe name.
@@ -550,6 +526,14 @@ pub struct RunCommand {
     #[argh(option, arg_name = "irq")]
     /// enable interrupt passthrough
     pub direct_edge_irq: Vec<u32>,
+    #[cfg(feature = "direct")]
+    #[argh(
+        option,
+        long = "direct-fixed-event",
+        arg_name = "event=gbllock|powerbtn|sleepbtn|rtc"
+    )]
+    /// enable ACPI fixed event interrupt and register access passthrough
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
     #[cfg(feature = "direct")]
     #[argh(option, arg_name = "gpe")]
     /// enable GPE interrupt and register access passthrough
@@ -608,6 +592,9 @@ pub struct RunCommand {
     /// directory with smbios_entry_point/DMI files
     pub dmi_path: Option<PathBuf>,
     #[argh(switch)]
+    /// expose HWP feature to the guest
+    pub enable_hwp: bool,
+    #[argh(switch)]
     /// expose Power and Perfomance (PnP) data to guest and guest can show these PnP data
     pub enable_pnp_data: bool,
     #[argh(positional, arg_name = "KERNEL")]
@@ -620,8 +607,7 @@ pub struct RunCommand {
     #[argh(
         option,
         long = "file-backed-mapping",
-        arg_name = "addr=NUM,size=SIZE,path=PATH[,offset=NUM][,ro][,rw][,sync]",
-        from_str_fn(parse_file_backed_mapping)
+        arg_name = "addr=NUM,size=SIZE,path=PATH[,offset=NUM][,rw][,sync]"
     )]
     /// map the given file into guest memory at the specified
     /// address.
@@ -630,8 +616,7 @@ pub struct RunCommand {
     ///     size=NUM - amount of memory to map
     ///     path=PATH - path to backing file/device to map
     ///     offset=NUM - offset in backing file (default 0)
-    ///     ro - make the mapping readonly (default)
-    ///     rw - make the mapping writable
+    ///     rw - make the mapping writable (default readonly)
     ///     sync - open backing file with O_SYNC
     ///     align - whether to adjust addr and size to page
     ///        boundaries implicitly
@@ -646,11 +631,7 @@ pub struct RunCommand {
     /// (EXPERIMENTAL) gdb on the given port
     pub gdb: Option<u32>,
     #[cfg(feature = "gpu")]
-    #[argh(
-        option,
-        arg_name = "[width=INT,height=INT]",
-        from_str_fn(parse_gpu_display_options)
-    )]
+    #[argh(option, arg_name = "[width=INT,height=INT]")]
     /// (EXPERIMENTAL) Comma separated key=value pairs for setting
     /// up a display on the virtio-gpu device
     /// Possible key values:
@@ -984,10 +965,14 @@ pub struct RunCommand {
     /// Possible key values:
     ///     type=(stdout,syslog,sink,file) - Where to route the
     ///        serial device
-    ///     hardware=(serial,virtio-console) - Which type of serial
-    ///        hardware to emulate. Defaults to 8250 UART (serial).
+    ///     hardware=(serial,virtio-console,debugcon) - Which type
+    ///        of serial hardware to emulate. Defaults to 8250 UART
+    ///        (serial).
     ///     num=(1,2,3,4) - Serial Device Number. If not provided,
     ///        num will default to 1.
+    ///     debugcon_port=PORT - Port for the debugcon device to
+    ///        listen to. Defaults to 0x402, which is what OVMF
+    ///        expects.
     ///     path=PATH - The path to the file to write to when
     ///        type=file
     ///     input=PATH - The path to the file to read from when not
@@ -1227,9 +1212,6 @@ pub struct RunCommand {
     #[argh(option, long = "evdev", arg_name = "PATH")]
     /// path to an event device node. The device will be grabbed (unusable from the host) and made available to the guest with the same configuration it shows on the host
     pub virtio_input_evdevs: Vec<PathBuf>,
-    #[argh(switch, long = "virtio-iommu")]
-    /// add a virtio-iommu device
-    pub virtio_iommu: bool,
     #[argh(option, long = "keyboard", arg_name = "PATH")]
     /// path to a socket from where to read keyboard input events and write status updates to
     pub virtio_keyboard: Vec<PathBuf>,
@@ -1615,8 +1597,6 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.virtio_switches = cmd.virtio_switches;
         cfg.virtio_input_evdevs = cmd.virtio_input_evdevs;
 
-        cfg.virtio_iommu = cmd.virtio_iommu;
-
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             cfg.split_irqchip = cmd.split_irqchip;
@@ -1653,21 +1633,10 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.usb = !cmd.no_usb;
         cfg.rng = !cmd.no_rng;
         cfg.balloon = !cmd.no_balloon;
-
+        cfg.balloon_page_reporting = cmd.balloon_page_reporting;
         #[cfg(feature = "audio")]
         {
             cfg.virtio_snds = cmd.virtio_snds;
-        }
-        #[cfg(feature = "audio_cras")]
-        {
-            // cmd.cras_snds is the old parameter for virtio snd with cras backend.
-            cfg.virtio_snds
-                .extend(cmd.cras_snds.into_iter().map(|s| SndParameters {
-                    backend: devices::virtio::parameters::StreamSourceBackend::Sys(
-                        devices::virtio::snd::sys::StreamSourceBackend::CRAS,
-                    ),
-                    ..s
-                }));
         }
 
         #[cfg(feature = "gpu")]
@@ -1778,6 +1747,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
         {
+            cfg.enable_hwp = cmd.enable_hwp;
             cfg.host_cpu_topology = cmd.host_cpu_topology;
             cfg.force_s2idle = cmd.s2idle;
             cfg.pcie_ecam = cmd.pcie_ecam;
@@ -1813,6 +1783,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.direct_level_irq = cmd.direct_level_irq;
             cfg.direct_edge_irq = cmd.direct_edge_irq;
             cfg.direct_gpe = cmd.direct_gpe;
+            cfg.direct_fixed_evts = cmd.direct_fixed_evts;
             cfg.pcie_rp = cmd.pcie_rp;
             cfg.mmio_address_ranges = cmd.mmio_address_ranges.unwrap_or_default();
         }

@@ -120,6 +120,16 @@ rust_test {
     },
 }
 
+rust_test {
+    name: "hypervisor_test_tests_tsc_offsets",
+    defaults: ["hypervisor_test_defaults"],
+    host_supported: true,
+    srcs: ["tests/tsc_offsets.rs"],
+    test_options: {
+        unit_test: false,
+    },
+}
+
 rust_library {
     name: "libhypervisor",
     defaults: ["crosvm_defaults"],

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+mod edid;
 mod parameters;
 mod protocol;
 mod virtio_gpu;
@@ -39,8 +40,7 @@ pub use gpu_display::EventDevice;
 use gpu_display::*;
 pub use parameters::DisplayParameters as GpuDisplayParameters;
 pub use parameters::GpuParameters;
-pub use parameters::DEFAULT_DISPLAY_HEIGHT;
-pub use parameters::DEFAULT_DISPLAY_WIDTH;
+pub use parameters::DEFAULT_REFRESH_RATE;
 use rutabaga_gfx::*;
 use serde::Deserialize;
 use serde::Serialize;
@@ -75,8 +75,11 @@ use super::Writer;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GpuMode {
+    #[serde(rename = "2d", alias = "2D")]
     Mode2D,
+    #[serde(rename = "virglrenderer", alias = "3d", alias = "3D")]
     ModeVirglRenderer,
+    #[serde(rename = "gfxstream")]
     ModeGfxstream,
 }
 
@@ -585,6 +588,7 @@ impl Frontend {
                 let resource_id = info.resource_id.to_native();
                 self.virtio_gpu.resource_unmap_blob(resource_id)
             }
+            GpuCommand::GetEdid(info) => self.virtio_gpu.get_edid(info.scanout.to_native()),
         }
     }
 
@@ -984,6 +988,11 @@ impl Gpu {
         base_features: u64,
         channels: BTreeMap<String, PathBuf>,
     ) -> Gpu {
+        let mut display_params = gpu_parameters.display_params.clone();
+        if display_params.is_empty() {
+            display_params.push(Default::default());
+        }
+
         let mut rutabaga_channels: Vec<RutabagaChannel> = Vec::new();
         for (channel_name, path) in &channels {
             match &channel_name[..] {
@@ -1006,23 +1015,16 @@ impl Gpu {
             GpuMode::ModeGfxstream => RutabagaComponentType::Gfxstream,
         };
 
-        let mut display_width = DEFAULT_DISPLAY_WIDTH;
-        let mut display_height = DEFAULT_DISPLAY_HEIGHT;
-        if !gpu_parameters.display_params.is_empty() {
-            display_width = gpu_parameters.display_params[0].width;
-            display_height = gpu_parameters.display_params[0].height;
-        }
-
         let rutabaga_builder = RutabagaBuilder::new(component, gpu_parameters.context_mask)
-            .set_display_width(display_width)
-            .set_display_height(display_height)
+            .set_display_width(display_params[0].width)
+            .set_display_height(display_params[0].height)
             .set_rutabaga_channels(rutabaga_channels_opt)
             .set_use_egl(gpu_parameters.renderer_use_egl)
             .set_use_gles(gpu_parameters.renderer_use_gles)
             .set_use_glx(gpu_parameters.renderer_use_glx)
             .set_use_surfaceless(gpu_parameters.renderer_use_surfaceless)
-            .set_use_vulkan(gpu_parameters.use_vulkan)
-            .set_use_guest_angle(gpu_parameters.gfxstream_use_guest_angle)
+            .set_use_vulkan(gpu_parameters.use_vulkan.unwrap_or_default())
+            .set_use_guest_angle(gpu_parameters.gfxstream_use_guest_angle.unwrap_or_default())
             .set_wsi(gpu_parameters.wsi.as_ref())
             .set_use_external_blob(external_blob)
             .set_use_render_server(render_server_fd.is_some());
@@ -1036,7 +1038,7 @@ impl Gpu {
             kill_evt: None,
             worker_thread: None,
             display_backends,
-            display_params: gpu_parameters.display_params.clone(),
+            display_params,
             rutabaga_builder: Some(rutabaga_builder),
             pci_bar_size: gpu_parameters.pci_bar_size,
             map_request,
@@ -1168,7 +1170,7 @@ impl VirtioDevice for Gpu {
 
     fn features(&self) -> u64 {
         let rutabaga_features = match self.rutabaga_component {
-            RutabagaComponentType::Rutabaga2D => 0,
+            RutabagaComponentType::Rutabaga2D => 1 << VIRTIO_GPU_F_EDID,
             _ => {
                 let mut features_3d = 0;
 
@@ -1176,6 +1178,7 @@ impl VirtioDevice for Gpu {
                     | 1 << VIRTIO_GPU_F_RESOURCE_UUID
                     | 1 << VIRTIO_GPU_F_RESOURCE_BLOB
                     | 1 << VIRTIO_GPU_F_CONTEXT_INIT
+                    | 1 << VIRTIO_GPU_F_EDID
                     | 1 << VIRTIO_GPU_F_RESOURCE_SYNC;
 
                 if self.udmabuf {

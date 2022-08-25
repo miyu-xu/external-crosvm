@@ -19,6 +19,7 @@ use crate::vfio::VfioError;
 use crate::virtio::iommu::memory_mapper::AddMapResult;
 use crate::virtio::iommu::memory_mapper::MappingInfo;
 use crate::virtio::iommu::memory_mapper::MemoryMapper;
+use crate::virtio::iommu::memory_mapper::RemoveMapResult;
 use crate::VfioContainer;
 
 pub struct VfioWrapper {
@@ -51,6 +52,22 @@ impl VfioWrapper {
     pub fn clone_as_raw_descriptor(&self) -> Result<RawDescriptor, VfioError> {
         self.container.lock().clone_as_raw_descriptor()
     }
+
+    unsafe fn do_map(&self, map: MappingInfo) -> anyhow::Result<AddMapResult> {
+        let res = self.container.lock().vfio_dma_map(
+            map.iova,
+            map.size,
+            map.gpa.offset(),
+            map.prot.allows(&Protection::write()),
+        );
+        if let Err(VfioError::IommuDmaMap(err)) = res {
+            if err.errno() == libc::EEXIST {
+                // A mapping already exists in the requested range,
+                return Ok(AddMapResult::OverlapFailure);
+            }
+        }
+        res.context("vfio mapping error").map(|_| AddMapResult::Ok)
+    }
 }
 
 impl MemoryMapper for VfioWrapper {
@@ -60,32 +77,34 @@ impl MemoryMapper for VfioWrapper {
                 .get_host_address_range(map.gpa, map.size as usize)
                 .context("failed to find host address")? as u64,
         );
+
         // Safe because both guest and host address are guaranteed by
         // get_host_address_range() to be valid.
-        let res = unsafe {
-            self.container.lock().vfio_dma_map(
-                map.iova,
-                map.size,
-                map.gpa.offset(),
-                map.prot.allows(&Protection::write()),
-            )
-        };
-        if let Err(VfioError::IommuDmaMap(err)) = res {
-            if err.errno() == libc::EEXIST {
-                // A mapping already exists in the requested range,
-                return Ok(AddMapResult::OverlapFailure);
-            }
-        }
-        res.context("vfio mapping error").map(|_| AddMapResult::Ok)
+        unsafe { self.do_map(map) }
     }
 
-    fn remove_map(&mut self, iova_start: u64, size: u64) -> anyhow::Result<bool> {
+    unsafe fn vfio_dma_map(
+        &mut self,
+        iova: u64,
+        hva: u64,
+        size: u64,
+        prot: Protection,
+    ) -> anyhow::Result<AddMapResult> {
+        self.do_map(MappingInfo {
+            iova,
+            gpa: GuestAddress(hva),
+            size,
+            prot,
+        })
+    }
+
+    fn remove_map(&mut self, iova_start: u64, size: u64) -> anyhow::Result<RemoveMapResult> {
         iova_start.checked_add(size).context("iova overflow")?;
         self.container
             .lock()
             .vfio_dma_unmap(iova_start, size)
             .context("vfio unmapping error")
-            .map(|_| true)
+            .map(|_| RemoveMapResult::Success(None))
     }
 
     fn get_mask(&self) -> anyhow::Result<u64> {

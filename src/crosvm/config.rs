@@ -48,8 +48,6 @@ use uuid::Uuid;
 use vm_control::BatteryType;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use x86_64::set_enable_pnp_data_msr_config;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::set_itmt_msr_config;
 
 use super::argument::parse_hex_or_decimal;
 use super::check_opt_path;
@@ -74,9 +72,12 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const ONE_MB: u64 = 1 << 20;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -506,14 +507,21 @@ impl FromStr for SharedDir {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields)]
 pub struct FileBackedMappingParameters {
+    pub path: PathBuf,
+    #[serde(rename = "addr")]
     pub address: u64,
     pub size: u64,
-    pub path: PathBuf,
+    #[serde(default)]
     pub offset: u64,
+    #[serde(rename = "rw", default)]
     pub writable: bool,
+    #[serde(default)]
     pub sync: bool,
+    #[serde(default)]
+    pub align: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -609,6 +617,7 @@ pub fn parse_pstore(value: &str) -> Result<Pstore, String> {
     })
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
     let mut rw_type: Option<MsrRWType> = None;
     let mut action: Option<MsrAction> = None;
@@ -666,27 +675,33 @@ pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), Stri
     ))
 }
 
-pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
-    let serial_setting: SerialParameters = from_key_values(s)?;
-
-    if serial_setting.stdin && serial_setting.input.is_some() {
+pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
+    if params.stdin && params.input.is_some() {
         return Err("Cannot specify both stdin and input options".to_string());
     }
-    if serial_setting.num < 1 {
+    if params.num < 1 {
         return Err(invalid_value_err(
-            serial_setting.num.to_string(),
+            params.num.to_string(),
             "Serial port num must be at least 1",
         ));
     }
 
-    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+    if params.hardware == SerialHardware::Serial && params.num > 4 {
         return Err(invalid_value_err(
-            format!("{}", serial_setting.num),
+            format!("{}", params.num),
             "Serial port num must be 4 or less",
         ));
     }
 
-    Ok(serial_setting)
+    Ok(())
+}
+
+pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
+    let params: SerialParameters = from_key_values(s)?;
+
+    validate_serial_parameters(&params)?;
+
+    Ok(params)
 }
 
 #[cfg(feature = "plugin")]
@@ -1037,58 +1052,6 @@ pub fn parse_direct_io_options(s: &str) -> Result<DirectIoOption, String> {
     })
 }
 
-pub fn parse_file_backed_mapping(s: &str) -> Result<FileBackedMappingParameters, String> {
-    let mut address = None;
-    let mut size = None;
-    let mut path = None;
-    let mut offset = None;
-    let mut writable = false;
-    let mut sync = false;
-    let mut align = false;
-    for opt in super::argument::parse_key_value_options("file-backed-mapping", s, ',') {
-        match opt.key() {
-            "addr" => address = Some(opt.parse_numeric::<u64>().map_err(|e| e.to_string())?),
-            "size" => size = Some(opt.parse_numeric::<u64>().map_err(|e| e.to_string())?),
-            "path" => path = Some(PathBuf::from(opt.value().map_err(|e| e.to_string())?)),
-            "offset" => offset = Some(opt.parse_numeric::<u64>().map_err(|e| e.to_string())?),
-            "ro" => writable = !opt.parse_or::<bool>(true).map_err(|e| e.to_string())?,
-            "rw" => writable = opt.parse_or::<bool>(true).map_err(|e| e.to_string())?,
-            "sync" => sync = opt.parse_or::<bool>(true).map_err(|e| e.to_string())?,
-            "align" => align = opt.parse_or::<bool>(true).map_err(|e| e.to_string())?,
-            _ => return Err(opt.invalid_key_err().to_string()),
-        }
-    }
-
-    let (address, path, size) = match (address, path, size) {
-        (Some(a), Some(p), Some(s)) => (a, p, s),
-        _ => {
-            return Err(String::from(
-                "file-backed-mapping: address, size, and path parameters are required",
-            ))
-        }
-    };
-
-    let pagesize_mask = pagesize() as u64 - 1;
-    let aligned_address = address & !pagesize_mask;
-    let aligned_size = ((address + size + pagesize_mask) & !pagesize_mask) - aligned_address;
-
-    if !align && (aligned_address != address || aligned_size != size) {
-        return Err(invalid_value_err(
-            s,
-            "addr and size parameters must be page size aligned",
-        ));
-    }
-
-    Ok(FileBackedMappingParameters {
-        address: aligned_address,
-        size: aligned_size,
-        path,
-        offset: offset.unwrap_or(0),
-        writable,
-        sync,
-    })
-}
-
 pub fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     matches!(executable, Some(Executable::Plugin(_)))
 }
@@ -1195,6 +1158,7 @@ pub struct Config {
     pub balloon: bool,
     pub balloon_bias: i64,
     pub balloon_control: Option<PathBuf>,
+    pub balloon_page_reporting: bool,
     pub battery_config: Option<BatteryConfig>,
     #[cfg(windows)]
     pub block_control_tube: Vec<Tube>,
@@ -1215,6 +1179,8 @@ pub struct Config {
     #[cfg(feature = "direct")]
     pub direct_edge_irq: Vec<u32>,
     #[cfg(feature = "direct")]
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
+    #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
     #[cfg(feature = "direct")]
     pub direct_level_irq: Vec<u32>,
@@ -1227,6 +1193,7 @@ pub struct Config {
     pub display_window_keyboard: bool,
     pub display_window_mouse: bool,
     pub dmi_path: Option<PathBuf>,
+    pub enable_hwp: bool,
     pub enable_pnp_data: bool,
     pub executable_path: Option<Executable>,
     #[cfg(windows)]
@@ -1360,7 +1327,6 @@ pub struct Config {
     #[cfg(feature = "video-encoder")]
     pub video_enc: Option<VideoDeviceConfig>,
     pub virtio_input_evdevs: Vec<PathBuf>,
-    pub virtio_iommu: bool,
     pub virtio_keyboard: Vec<PathBuf>,
     pub virtio_mice: Vec<PathBuf>,
     pub virtio_multi_touch: Vec<TouchDeviceOption>,
@@ -1387,6 +1353,7 @@ impl Default for Config {
             balloon: true,
             balloon_bias: 0,
             balloon_control: None,
+            balloon_page_reporting: false,
             battery_config: None,
             #[cfg(windows)]
             block_control_tube: Vec::new(),
@@ -1407,6 +1374,8 @@ impl Default for Config {
             #[cfg(feature = "direct")]
             direct_edge_irq: Vec::new(),
             #[cfg(feature = "direct")]
+            direct_fixed_evts: Vec::new(),
+            #[cfg(feature = "direct")]
             direct_gpe: Vec::new(),
             #[cfg(feature = "direct")]
             direct_level_irq: Vec::new(),
@@ -1419,6 +1388,7 @@ impl Default for Config {
             display_window_keyboard: false,
             display_window_mouse: false,
             dmi_path: None,
+            enable_hwp: false,
             enable_pnp_data: false,
             executable_path: None,
             #[cfg(windows)]
@@ -1553,7 +1523,6 @@ impl Default for Config {
             #[cfg(feature = "video-encoder")]
             video_enc: None,
             virtio_input_evdevs: Vec::new(),
-            virtio_iommu: false,
             virtio_keyboard: Vec::new(),
             virtio_mice: Vec::new(),
             virtio_multi_touch: Vec::new(),
@@ -1689,6 +1658,10 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
             }
         }
     }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if cfg.enable_hwp && !cfg.host_cpu_topology {
+        return Err("setting `enable-hwp` requires `host-cpu-topology` is set.".to_string());
+    }
     if cfg.enable_pnp_data {
         if !cfg.host_cpu_topology {
             return Err(
@@ -1698,7 +1671,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
 
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        set_enable_pnp_data_msr_config(cfg.itmt, &mut cfg.userspace_msr)
+        set_enable_pnp_data_msr_config(&mut cfg.userspace_msr)
             .map_err(|e| format!("MSR can't be passed through {}", e))?;
     }
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -1736,12 +1709,17 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
                 return Err("`itmt` requires affinity to be set for every vCPU.".to_string());
             }
         }
-        set_itmt_msr_config(&mut cfg.userspace_msr)
-            .map_err(|e| format!("the cpu doesn't support itmt {}", e))?;
+        if !cfg.enable_hwp {
+            return Err("setting `itmt` requires `enable-hwp` is set.".to_string());
+        }
     }
 
     if !cfg.balloon && cfg.balloon_control.is_some() {
         return Err("'balloon-control' requires enabled balloon".to_string());
+    }
+
+    if !cfg.balloon && cfg.balloon_page_reporting {
+        return Err("'balloon_page_reporting' requires enabled balloon".to_string());
     }
 
     #[cfg(unix)]
@@ -1754,8 +1732,30 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         !cfg.vhost_user_console.is_empty(),
     );
 
+    for mapping in cfg.file_backed_mappings.iter_mut() {
+        validate_file_backed_mapping(mapping)?;
+    }
+
     // Validate platform specific things
     super::sys::config::validate_config(cfg)
+}
+
+fn validate_file_backed_mapping(mapping: &mut FileBackedMappingParameters) -> Result<(), String> {
+    let pagesize_mask = pagesize() as u64 - 1;
+    let aligned_address = mapping.address & !pagesize_mask;
+    let aligned_size =
+        ((mapping.address + mapping.size + pagesize_mask) & !pagesize_mask) - aligned_address;
+
+    if mapping.align {
+        mapping.address = aligned_address;
+        mapping.size = aligned_size;
+    } else if aligned_address != mapping.address || aligned_size != mapping.size {
+        return Err(
+            "--file-backed-mapping addr and size parameters must be page size aligned".to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2105,8 +2105,8 @@ mod tests {
 
     #[test]
     fn parse_file_backed_mapping_valid() {
-        let params = parse_file_backed_mapping(
-            "addr=0x1000,size=0x2000,path=/dev/mem,offset=0x3000,ro,rw,sync",
+        let params = from_key_values::<FileBackedMappingParameters>(
+            "addr=0x1000,size=0x2000,path=/dev/mem,offset=0x3000,rw,sync",
         )
         .unwrap();
         assert_eq!(params.address, 0x1000);
@@ -2119,39 +2119,56 @@ mod tests {
 
     #[test]
     fn parse_file_backed_mapping_incomplete() {
-        assert!(parse_file_backed_mapping("addr=0x1000,size=0x2000")
-            .unwrap_err()
-            .contains("required"));
-        assert!(parse_file_backed_mapping("size=0x2000,path=/dev/mem")
-            .unwrap_err()
-            .contains("required"));
-        assert!(parse_file_backed_mapping("addr=0x1000,path=/dev/mem")
-            .unwrap_err()
-            .contains("required"));
+        assert!(
+            from_key_values::<FileBackedMappingParameters>("addr=0x1000,size=0x2000")
+                .unwrap_err()
+                .contains("missing field `path`")
+        );
+        assert!(
+            from_key_values::<FileBackedMappingParameters>("size=0x2000,path=/dev/mem")
+                .unwrap_err()
+                .contains("missing field `addr`")
+        );
+        assert!(
+            from_key_values::<FileBackedMappingParameters>("addr=0x1000,path=/dev/mem")
+                .unwrap_err()
+                .contains("missing field `size`")
+        );
     }
 
     #[test]
-    fn parse_file_backed_mapping_unaligned() {
-        assert!(
-            parse_file_backed_mapping("addr=0x1001,size=0x2000,path=/dev/mem")
-                .unwrap_err()
-                .contains("aligned")
-        );
-        assert!(
-            parse_file_backed_mapping("addr=0x1000,size=0x2001,path=/dev/mem")
-                .unwrap_err()
-                .contains("aligned")
-        );
+    fn parse_file_backed_mapping_unaligned_addr() {
+        let mut params =
+            from_key_values::<FileBackedMappingParameters>("addr=0x1001,size=0x2000,path=/dev/mem")
+                .unwrap();
+        assert!(validate_file_backed_mapping(&mut params)
+            .unwrap_err()
+            .contains("aligned"));
+    }
+    #[test]
+    fn parse_file_backed_mapping_unaligned_size() {
+        let mut params =
+            from_key_values::<FileBackedMappingParameters>("addr=0x1000,size=0x2001,path=/dev/mem")
+                .unwrap();
+        assert!(validate_file_backed_mapping(&mut params)
+            .unwrap_err()
+            .contains("aligned"));
     }
 
     #[test]
     fn parse_file_backed_mapping_align() {
-        let params =
-            parse_file_backed_mapping("addr=0x3042,size=0xff0,path=/dev/mem,align").unwrap();
+        let mut params = from_key_values::<FileBackedMappingParameters>(
+            "addr=0x3042,size=0xff0,path=/dev/mem,align",
+        )
+        .unwrap();
+        assert_eq!(params.address, 0x3042);
+        assert_eq!(params.size, 0xff0);
+        validate_file_backed_mapping(&mut params).unwrap();
         assert_eq!(params.address, 0x3000);
         assert_eq!(params.size, 0x2000);
     }
 
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn parse_userspace_msr_options_test() {
         let (pass_cpu0_index, pass_cpu0_cfg) =
@@ -2167,6 +2184,13 @@ mod tests {
         assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::ReadOnly);
         assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
         assert_eq!(pass_cpu0_cfg.from, MsrValueFrom::RWFromCPU0);
+
+        let (pass_cpus_index, pass_cpus_cfg) =
+            parse_userspace_msr_options("0x10,type=rw,action=pass").unwrap();
+        assert_eq!(pass_cpus_index, 0x10);
+        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
+        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrPassthrough);
+        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
 
         let (pass_cpus_index, pass_cpus_cfg) =
             parse_userspace_msr_options("0x10,type=rw,action=emu").unwrap();
@@ -2239,14 +2263,13 @@ mod tests {
 
         let config: JailConfig =
             from_key_values("pivot-root=/path/to/pivot/root,seccomp-log-failures=true").unwrap();
-        assert_eq!(
-            config,
-            JailConfig {
-                pivot_root: "/path/to/pivot/root".into(),
-                seccomp_log_failures: true,
-                ..Default::default()
-            }
-        );
+        #[allow(clippy::needless_update)]
+        let expected = JailConfig {
+            pivot_root: "/path/to/pivot/root".into(),
+            seccomp_log_failures: true,
+            ..Default::default()
+        };
+        assert_eq!(config, expected);
 
         let config: Result<JailConfig, String> =
             from_key_values("seccomp-log-failures,invalid-arg=value");

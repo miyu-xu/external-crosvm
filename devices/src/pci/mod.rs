@@ -35,7 +35,11 @@ use libc::EINVAL;
 
 // TODO(b:236297362): build it on windows as weil.
 #[cfg(all(unix, feature = "audio"))]
-pub use self::ac97::{Ac97Backend, Ac97Dev, Ac97Parameters};
+pub use self::ac97::Ac97Backend;
+#[cfg(all(unix, feature = "audio"))]
+pub use self::ac97::Ac97Dev;
+#[cfg(all(unix, feature = "audio"))]
+pub use self::ac97::Ac97Parameters;
 #[cfg(unix)]
 pub use self::coiommu::CoIommuDev;
 #[cfg(unix)]
@@ -69,13 +73,18 @@ pub use self::pci_device::PciDevice;
 pub use self::pci_root::PciConfigIo;
 pub use self::pci_root::PciConfigMmio;
 pub use self::pci_root::PciRoot;
+pub use self::pci_root::PciRootCommand;
 pub use self::pci_root::PciVirtualConfigMmio;
 #[cfg(unix)]
 pub use self::pcie::PciBridge;
 #[cfg(unix)]
+pub use self::pcie::PcieDownstreamPort;
+#[cfg(unix)]
 pub use self::pcie::PcieHostPort;
 #[cfg(unix)]
 pub use self::pcie::PcieRootPort;
+#[cfg(unix)]
+pub use self::pcie::PcieUpstreamPort;
 pub use self::pvpanic::PvPanicCode;
 pub use self::pvpanic::PvPanicPciDevice;
 pub use self::stub::StubPciDevice;
@@ -84,7 +93,7 @@ pub use self::stub::StubPciParameters;
 pub use self::vfio_pci::VfioPciDevice;
 
 /// PCI has four interrupt pins A->D.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub enum PciInterruptPin {
     IntA,
     IntB,

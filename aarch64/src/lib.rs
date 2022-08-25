@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use arch::get_serial_cmdline;
@@ -33,7 +34,9 @@ use devices::IrqEventSource;
 use devices::PciAddress;
 use devices::PciConfigMmio;
 use devices::PciDevice;
+use devices::PciRootCommand;
 use devices::Serial;
+use hypervisor::CpuConfigAArch64;
 use hypervisor::DeviceKind;
 use hypervisor::Hypervisor;
 use hypervisor::HypervisorCap;
@@ -589,7 +592,7 @@ impl arch::LinuxArch for AArch64 {
             pm: None,
             resume_notify_devices: Vec::new(),
             root_config: pci_root,
-            hotplug_bus: Vec::new(),
+            hotplug_bus: BTreeMap::new(),
         })
     }
 
@@ -602,11 +605,7 @@ impl arch::LinuxArch for AArch64 {
         _vcpu_id: usize,
         _num_cpus: usize,
         _has_bios: bool,
-        _no_smt: bool,
-        _host_cpu_topology: bool,
-        _enable_pnp_data: bool,
-        _itmt: bool,
-        _force_calibrated_tsc_leaf: bool,
+        _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         // AArch64 doesn't configure vcpus on the vcpu thread, so nothing to do here.
         Ok(())
@@ -617,6 +616,7 @@ impl arch::LinuxArch for AArch64 {
         _device: Box<dyn PciDevice>,
         _minijail: Option<Minijail>,
         _resources: &mut SystemAllocator,
+        _tube: &mpsc::Sender<PciRootCommand>,
     ) -> std::result::Result<PciAddress, Self::Error> {
         // hotplug function isn't verified on AArch64, so set it unsupported here.
         Err(Error::Unsupported)
@@ -751,13 +751,13 @@ impl AArch64 {
             };
             match protected_vm {
                 ProtectionType::Protected => {
-                    vcpu.set_one_reg(VcpuRegAArch64::W1, entry_addr.offset())
+                    vcpu.set_one_reg(VcpuRegAArch64::X(1), entry_addr.offset())
                         .map_err(Error::SetReg)?;
                 }
                 ProtectionType::UnprotectedWithFirmware => {
                     vcpu.set_one_reg(VcpuRegAArch64::Pc, AARCH64_PROTECTED_VM_FW_START)
                         .map_err(Error::SetReg)?;
-                    vcpu.set_one_reg(VcpuRegAArch64::W1, entry_addr.offset())
+                    vcpu.set_one_reg(VcpuRegAArch64::X(1), entry_addr.offset())
                         .map_err(Error::SetReg)?;
                 }
                 ProtectionType::Unprotected | ProtectionType::ProtectedWithoutFirmware => {
@@ -769,7 +769,7 @@ impl AArch64 {
             /* X0 -- fdt address */
             let mem_size = guest_mem.memory_size();
             let fdt_addr = (AARCH64_PHYS_MEM_START + fdt_offset(mem_size, has_bios)) as u64;
-            vcpu.set_one_reg(VcpuRegAArch64::W0, fdt_addr)
+            vcpu.set_one_reg(VcpuRegAArch64::X(0), fdt_addr)
                 .map_err(Error::SetReg)?;
 
             /* X2 -- image size */
@@ -777,7 +777,7 @@ impl AArch64 {
                 protected_vm,
                 ProtectionType::Protected | ProtectionType::UnprotectedWithFirmware
             ) {
-                vcpu.set_one_reg(VcpuRegAArch64::W2, image_size as u64)
+                vcpu.set_one_reg(VcpuRegAArch64::X(2), image_size as u64)
                     .map_err(Error::SetReg)?;
             }
         }

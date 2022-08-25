@@ -19,6 +19,8 @@ PRODUCT_PACKAGES += \
     balloon_device.policy \
     battery.policy \
     block_device.policy \
+    block_device_vhost_user.policy \
+    block_device_vvu.policy \
     coiommu_device.policy \
     cras_audio_device.policy \
     fs_device.policy \
@@ -50,6 +52,8 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     system/etc/seccomp_policy/crosvm/balloon_device.policy \
     system/etc/seccomp_policy/crosvm/battery.policy \
     system/etc/seccomp_policy/crosvm/block_device.policy \
+    system/etc/seccomp_policy/crosvm/block_device_vhost_user.policy \
+    system/etc/seccomp_policy/crosvm/block_device_vvu.policy \
     system/etc/seccomp_policy/crosvm/coiommu_device.policy \
     system/etc/seccomp_policy/crosvm/cras_audio_device.policy \
     system/etc/seccomp_policy/crosvm/fs_device.policy \

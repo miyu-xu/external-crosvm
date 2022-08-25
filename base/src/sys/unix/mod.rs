@@ -26,11 +26,11 @@ mod eventfd;
 mod file_flags;
 pub mod file_traits;
 mod get_filesystem_type;
-mod gmtime;
 mod mmap;
 pub mod net;
 mod netlink;
 mod notifiers;
+pub mod panic_handler;
 pub mod platform_timer_resolution;
 mod poll;
 mod priority;
@@ -69,7 +69,9 @@ pub use descriptor::*;
 // EventFd is deprecated. Use Event instead. EventFd will be removed as soon as rest of the current
 // users migrate.
 // TODO(b:231344063): Remove EventFd.
-pub use eventfd::{EventFd as Event, EventFd, EventReadResult};
+pub use eventfd::EventFd as Event;
+pub use eventfd::EventFd;
+pub use eventfd::EventReadResult;
 pub use file_flags::*;
 pub use file_traits::AsRawFds;
 pub use file_traits::FileAllocate;
@@ -79,7 +81,6 @@ pub use file_traits::FileReadWriteVolatile;
 pub use file_traits::FileSetLen;
 pub use file_traits::FileSync;
 pub use get_filesystem_type::*;
-pub use gmtime::*;
 pub use ioctl::*;
 use libc::c_int;
 use libc::c_long;

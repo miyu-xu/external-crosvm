@@ -282,6 +282,36 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
 
         Ok(dev)
     }
+
+    fn create_vhost_user_device(
+        &self,
+        keep_rds: &mut Vec<RawDescriptor>,
+    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+        let disk = self.disk;
+
+        let disk_device_tube = self.device_tube.take();
+        if let Some(device_tube) = &disk_device_tube {
+            keep_rds.push(device_tube.as_raw_descriptor());
+        }
+
+        let async_file = disk.open_as_async_file()?;
+        keep_rds.extend(async_file.as_raw_descriptors());
+
+        let block = Box::new(
+            virtio::BlockAsync::new(
+                virtio::base_features(ProtectionType::Unprotected),
+                async_file,
+                disk.read_only,
+                disk.sparse,
+                disk.block_size,
+                disk.id,
+                disk_device_tube,
+            )
+            .context("failed to create block device")?,
+        );
+
+        Ok(block)
+    }
 }
 
 pub fn create_vhost_user_block_device(
@@ -720,6 +750,7 @@ pub fn create_balloon_device(
     tube: Tube,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
+    enabled_features: u64,
 ) -> DeviceResult {
     let dev = virtio::Balloon::new(
         virtio::base_features(protected_vm),
@@ -727,6 +758,7 @@ pub fn create_balloon_device(
         inflate_tube,
         init_balloon_size,
         mode,
+        enabled_features,
     )
     .context("failed to create balloon")?;
 
@@ -1398,10 +1430,12 @@ pub fn create_vfio_device(
     resources: &mut SystemAllocator,
     control_tubes: &mut Vec<TaggedControlTube>,
     vfio_path: &Path,
-    bus_num: Option<u8>,
+    hotplug: bool,
+    hotplug_bus: Option<u8>,
     guest_address: Option<PciAddress>,
     coiommu_endpoints: Option<&mut Vec<u16>>,
     iommu_dev: IommuDevType,
+    #[cfg(feature = "direct")] is_intel_lpss: bool,
 ) -> DeviceResult<(Box<VfioPciDevice>, Option<Minijail>, Option<VfioWrapper>)> {
     let vfio_container = VfioCommonSetup::vfio_get_container(iommu_dev, Some(vfio_path))
         .context("failed to get vfio container")?;
@@ -1419,7 +1453,6 @@ pub fn create_vfio_device(
         Tube::pair().context("failed to create tube")?;
     control_tubes.push(TaggedControlTube::VmMemory(vfio_host_tube_mem));
 
-    let hotplug = bus_num.is_some();
     let vfio_device_tube_vm = if hotplug {
         let (vfio_host_tube_vm, device_tube_vm) = Tube::pair().context("failed to create tube")?;
         control_tubes.push(TaggedControlTube::Vm(vfio_host_tube_vm));
@@ -1435,20 +1468,20 @@ pub fn create_vfio_device(
         iommu_dev != IommuDevType::NoIommu,
     )
     .context("failed to create vfio device")?;
-    let mut vfio_pci_device = Box::new(
-        VfioPciDevice::new(
-            #[cfg(feature = "direct")]
-            vfio_path,
-            vfio_device,
-            bus_num,
-            guest_address,
-            vfio_device_tube_msi,
-            vfio_device_tube_msix,
-            vfio_device_tube_mem,
-            vfio_device_tube_vm,
-        )
-        .context("failed to create VfioPciDevice")?,
-    );
+    let mut vfio_pci_device = Box::new(VfioPciDevice::new(
+        #[cfg(feature = "direct")]
+        vfio_path,
+        vfio_device,
+        hotplug,
+        hotplug_bus,
+        guest_address,
+        vfio_device_tube_msi,
+        vfio_device_tube_msix,
+        vfio_device_tube_mem,
+        vfio_device_tube_vm,
+        #[cfg(feature = "direct")]
+        is_intel_lpss,
+    )?);
     // early reservation for pass-through PCI devices.
     let endpoint_addr = vfio_pci_device
         .allocate_address(resources)

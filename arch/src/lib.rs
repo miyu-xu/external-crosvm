@@ -19,6 +19,8 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::mpsc::SendError;
 use std::sync::Arc;
 
 use acpi_tables::sdt::SDT;
@@ -51,12 +53,17 @@ use devices::PciDevice;
 use devices::PciDeviceError;
 use devices::PciInterruptPin;
 use devices::PciRoot;
+use devices::PciRootCommand;
 #[cfg(unix)]
 use devices::ProxyDevice;
 use devices::SerialHardware;
 use devices::SerialParameters;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use gdbstub_arch::x86::reg::X86_64CoreRegs as GdbStubRegs;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+use hypervisor::CpuConfigAArch64 as CpuConfigArch;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::CpuConfigX86_64 as CpuConfigArch;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use hypervisor::Hypervisor as HypervisorArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -132,6 +139,8 @@ pub struct VmComponents {
     pub cpu_clusters: Vec<Vec<usize>>,
     pub delay_rt: bool,
     #[cfg(feature = "direct")]
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
+    #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
     pub dmi_path: Option<PathBuf>,
     pub extra_kernel_params: Vec<String>,
@@ -173,7 +182,7 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     pub gdb: Option<(u32, Tube)>,
     pub has_bios: bool,
-    pub hotplug_bus: Vec<Arc<Mutex<dyn HotPlugBus>>>,
+    pub hotplug_bus: BTreeMap<u8, Arc<Mutex<dyn HotPlugBus>>>,
     pub io_bus: Arc<Bus>,
     pub irq_chip: Box<dyn IrqChipArch>,
     pub mmio_bus: Arc<Bus>,
@@ -275,11 +284,7 @@ pub trait LinuxArch {
     /// * `vcpu_id` - The id of the given `vcpu`.
     /// * `num_cpus` - Number of virtual CPUs the guest will have.
     /// * `has_bios` - Whether the `VmImage` is a `Bios` image
-    /// * `no_smt` - Wheter diabling SMT.
-    /// * `host_cpu_topology` - whether enabling host cpu topology.
-    /// * `enable_pnp_data` - whether enabling PnP statistics data.
-    /// * `itmt` - whether enabling ITMT scheduler
-    /// * `force_calibrated_tsc_leaf` - whether to force using a calibrated TSC leaf (0x15).
+    /// * `cpu_config` - CPU feature configurations.
     fn configure_vcpu<V: Vm>(
         vm: &V,
         hypervisor: &dyn HypervisorArch,
@@ -289,11 +294,7 @@ pub trait LinuxArch {
         vcpu_id: usize,
         num_cpus: usize,
         has_bios: bool,
-        no_smt: bool,
-        host_cpu_topology: bool,
-        enable_pnp_data: bool,
-        itmt: bool,
-        force_calibrated_tsc_leaf: bool,
+        cpu_config: Option<CpuConfigArch>,
     ) -> Result<(), Self::Error>;
 
     /// Configures and add a pci device into vm
@@ -302,6 +303,7 @@ pub trait LinuxArch {
         device: Box<dyn PciDevice>,
         #[cfg(unix)] minijail: Option<Minijail>,
         resources: &mut SystemAllocator,
+        hp_control_tube: &mpsc::Sender<PciRootCommand>,
     ) -> Result<PciAddress, Self::Error>;
 
     #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
@@ -410,6 +412,9 @@ pub enum DeviceRegistrationError {
     /// Failed to register battery device.
     #[error("failed to register battery device to VM: {0}")]
     RegisterBattery(devices::BatteryError),
+    /// Could not register PCI device to pci root bus
+    #[error("failed to register PCI device to pci root bus")]
+    RegisterDevice(SendError<PciRootCommand>),
     /// Could not register PCI device capabilities.
     #[error("could not register PCI device capabilities: {0}")]
     RegisterDeviceCapabilities(PciDeviceError),
@@ -430,6 +435,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     mut device: Box<dyn PciDevice>,
     #[cfg(unix)] jail: Option<Minijail>,
     resources: &mut SystemAllocator,
+    hp_control_tube: &mpsc::Sender<PciRootCommand>,
 ) -> Result<PciAddress, DeviceRegistrationError> {
     // Allocate PCI device address before allocating BARs.
     let pci_address = device
@@ -446,11 +452,30 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
         .allocate_device_bars(resources)
         .map_err(DeviceRegistrationError::AllocateDeviceAddrs)?;
 
+    // If device is a pcie bridge, add its pci bus to pci root
+    if let Some(pci_bus) = device.get_new_pci_bus() {
+        hp_control_tube
+            .send(PciRootCommand::AddBridge(pci_bus))
+            .map_err(DeviceRegistrationError::RegisterDevice)?;
+        let bar_ranges = Vec::new();
+        device
+            .configure_bridge_window(resources, &bar_ranges)
+            .map_err(DeviceRegistrationError::ConfigureWindowSize)?;
+    }
+
     // Do not suggest INTx for hot-plug devices.
     let intx_event = devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-    if let Some((gsi, _pin)) = device.assign_irq(&intx_event, None) {
+    if let Some((pin, gsi)) = device.preferred_irq() {
         resources.reserve_irq(gsi);
+
+        device.assign_irq(
+            intx_event
+                .try_clone()
+                .map_err(DeviceRegistrationError::EventClone)?,
+            pin,
+            gsi,
+        );
 
         linux
             .irq_chip
@@ -494,10 +519,9 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     };
 
     #[cfg(unix)]
-    linux
-        .root_config
-        .lock()
-        .add_device(pci_address, arced_dev.clone());
+    hp_control_tube
+        .send(PciRootCommand::Add(pci_address, arced_dev.clone()))
+        .map_err(DeviceRegistrationError::RegisterDevice)?;
 
     for range in &mmio_ranges {
         linux
@@ -668,34 +692,74 @@ pub fn generate_pci_root(
 
     // Allocate legacy INTx
     let mut pci_irqs = Vec::new();
-    let mut irqs: Vec<Option<u32>> = vec![None; max_irqs];
+    let mut irqs: Vec<u32> = Vec::new();
+
+    // Mapping of (bus, dev, pin) -> IRQ number.
+    let mut dev_pin_irq = BTreeMap::new();
 
     for (dev_idx, (device, _jail)) in devices.iter_mut().enumerate() {
-        // For default interrupt routing use next preallocated interrupt from the pool.
-        let irq_num = if let Some(irq) = irqs[dev_idx % max_irqs] {
-            irq
+        let pci_address = device_addrs[dev_idx];
+
+        let (pin, gsi) = if let Some((pin, gsi)) = device.preferred_irq() {
+            // The device reported a preferred IRQ, so use that rather than allocating one.
+            resources.reserve_irq(gsi);
+            (pin, gsi)
         } else {
-            let irq = resources
-                .allocate_irq()
-                .ok_or(DeviceRegistrationError::AllocateIrq)?;
-            irqs[dev_idx % max_irqs] = Some(irq);
-            irq
+            // The device did not provide a preferred IRQ, so allocate one.
+
+            // Choose a pin based on the slot's function number. Function 0 must always use INTA#
+            // per the PCI spec, and we choose to distribute the remaining functions evenly across
+            // the other pins.
+            let pin = match pci_address.func % 4 {
+                0 => PciInterruptPin::IntA,
+                1 => PciInterruptPin::IntB,
+                2 => PciInterruptPin::IntC,
+                _ => PciInterruptPin::IntD,
+            };
+
+            // If an IRQ number has already been assigned for a different function with this (bus,
+            // device, pin) combination, use it. Otherwise allocate a new one and insert it into the
+            // map.
+            let pin_key = (pci_address.bus, pci_address.dev, pin);
+            let irq_num = if let Some(irq_num) = dev_pin_irq.get(&pin_key) {
+                *irq_num
+            } else {
+                // If we have allocated fewer than `max_irqs` total, add a new irq to the `irqs`
+                // pool. Otherwise, share one of the existing `irqs`.
+                let irq_num = if irqs.len() < max_irqs {
+                    let irq_num = resources
+                        .allocate_irq()
+                        .ok_or(DeviceRegistrationError::AllocateIrq)?;
+                    irqs.push(irq_num);
+                    irq_num
+                } else {
+                    // Pick one of the existing IRQs to share, using `dev_idx` to distribute IRQ
+                    // sharing evenly across devices.
+                    irqs[dev_idx % max_irqs]
+                };
+
+                dev_pin_irq.insert(pin_key, irq_num);
+                irq_num
+            };
+            (pin, irq_num)
         };
 
         let intx_event =
             devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-        if let Some((gsi, pin)) = device.assign_irq(&intx_event, Some(irq_num)) {
-            // reserve INTx if needed and non-default.
-            if gsi != irq_num {
-                resources.reserve_irq(gsi);
-            };
-            irq_chip
-                .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
-                .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+        device.assign_irq(
+            intx_event
+                .try_clone()
+                .map_err(DeviceRegistrationError::EventClone)?,
+            pin,
+            gsi,
+        );
 
-            pci_irqs.push((device_addrs[dev_idx], gsi, pin));
-        }
+        irq_chip
+            .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
+            .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+
+        pci_irqs.push((pci_address, gsi, pin));
     }
 
     // To prevent issues where device's on_sandbox may spawn thread before all

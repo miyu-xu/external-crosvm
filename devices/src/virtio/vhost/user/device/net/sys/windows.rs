@@ -8,6 +8,7 @@ use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
 use base::error;
+use base::info;
 use base::named_pipes::OverlappedWrapper;
 use base::named_pipes::PipeConnection;
 use base::warn;
@@ -285,13 +286,15 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         let _ = net_ex.set(ex.clone());
     });
 
-    if sandbox::is_sandbox_target() {
-        sandbox::TargetServices::get()
-            .expect("failed to get target services")
-            .unwrap()
-            .lower_token();
-    }
+    // TODO(b/213170185): Uncomment once sandbox is upstreamed.
+    // if sandbox::is_sandbox_target() {
+    //     sandbox::TargetServices::get()
+    //         .expect("failed to get target services")
+    //         .unwrap()
+    //         .lower_token();
+    // }
 
+    info!("vhost-user net device ready, starting run loop...");
     if let Err(e) = ex.run_until(handler.run(vhost_user_tube, exit_event, &ex)) {
         bail!("error occurred: {}", e);
     }

@@ -43,6 +43,7 @@ cfg_if::cfg_if! {
     }
 }
 
+pub use self::acpi::ACPIPMFixedEvent;
 pub use self::acpi::ACPIPMResource;
 pub use self::bat::BatteryError;
 pub use self::bat::GoldfishBattery;
@@ -86,6 +87,7 @@ pub use self::pci::PciDevice;
 pub use self::pci::PciDeviceError;
 pub use self::pci::PciInterruptPin;
 pub use self::pci::PciRoot;
+pub use self::pci::PciRootCommand;
 pub use self::pci::PciVirtualConfigMmio;
 pub use self::pci::StubPciDevice;
 pub use self::pci::StubPciParameters;
@@ -121,7 +123,7 @@ cfg_if::cfg_if! {
         pub use self::pci::{
             CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy,
             PvPanicCode, PcieRootPort, PcieHostPort,
-            PvPanicPciDevice, VfioPciDevice, PciBridge,
+            PvPanicPciDevice, VfioPciDevice, PciBridge, PcieDownstreamPort, PcieUpstreamPort
         };
         pub use self::platform::VfioPlatformDevice;
         pub use self::proxy::Error as ProxyError;

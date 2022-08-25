@@ -136,6 +136,34 @@ class CrosvmApi(recipe_api.RecipeApi):
             if not self.m.platform.is_win:
                 self.__set_git_config("credential.helper", "gcloud.sh")
 
+    def get_git_sha(self):
+        result = self.m.step(
+            "Get git sha", ["git", "rev-parse", "HEAD"], stdout=self.m.raw_io.output()
+        )
+        value = result.stdout.strip().decode("utf-8")
+        result.presentation.step_text = value
+        return value
+
+    def upload_coverage(self, filename):
+        with self.m.step.nest("Uploading coverage"):
+            codecov = self.m.cipd.ensure_tool("crosvm/codecov/${platform}", "latest")
+            sha = self.get_git_sha()
+            self.m.step(
+                "Uploading to covecov.io",
+                [
+                    "bash",
+                    self.resource("codecov_wrapper.sh"),
+                    codecov,
+                    "--nonZero",  # Enables error codes
+                    "--slug=google/crosvm",
+                    "--sha=" + sha,
+                    "--branch=main",
+                    "-X=search",  # Don't search for coverage files, just upload the file below.
+                    "-f",
+                    filename,
+                ],
+            )
+
     def __prepare_rust(self):
         """
         Prepares the rust toolchain via rustup.
