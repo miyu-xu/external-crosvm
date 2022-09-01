@@ -52,6 +52,24 @@
       "parentUuid": "51296ede_b222eee4",
       "revId": "e29e71b21e0126fc66b30a4461886b0cf47aacbd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "12d35f2b_0052234b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-09-01T16:46:34Z",
+      "side": 1,
+      "message": "I see, good catch!\n\nI _think_ that this crash is on purpose as part of `MicrodroidTestCase#testTombstonesAreGeneratedUponCrash`. It seems to always happen, for example, the presubmit run of the CL reverted here also has it: https://dashboards.corp.google.com/_8af28d27_feb3_4482_b562_c804ef420327?fb\u003dlog_filename:in:I25700010083711420%2Fgit_master%2FP39589498%2Ftest-mapping-user-base%2Finv_3261140128337775924%2Fdevice_logcat_test_24191FDH2000PA_15186735421255661658.txt\u0026fb\u003dlog_type:in:NATIVE_CRASH",
+      "parentUuid": "3f799dc0_041354d9",
+      "revId": "e29e71b21e0126fc66b30a4461886b0cf47aacbd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
