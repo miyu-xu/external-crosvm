@@ -34,6 +34,24 @@
       "parentUuid": "ed88b2e1_42cfb79c",
       "revId": "e29e71b21e0126fc66b30a4461886b0cf47aacbd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3f799dc0_041354d9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-09-01T16:30:37Z",
+      "side": 1,
+      "message": "Hmmm when I was looking at the link in my comment earlier, I didn\u0027t see any test cases in the test_results tab without any filters. Now I see them all there, clearly passing!\n\nOn the artifacts page there is a column that has a \"Native Crash\" button present when there is a crash in a log. It brings me to:\nhttps://dashboards.corp.google.com/_8af28d27_feb3_4482_b562_c804ef420327?fb\u003dlog_filename:in:I64400010086665664%2Fgit_master%2FP40080521%2Ftest-mapping-user-base%2Finv_14728369103333413889%2Fdevice_logcat_test_24261FDH2000BR_18121173374364696987.txt\u0026fb\u003dlog_type:in:NATIVE_CRASH\n\nthe crash is in\ndevice_logcat_test_24261FDH2000BR_18121173374364696987.txt :\nhttps://android-build.googleplex.com/builds/I64400010086665664/git_master/P40080521/test-mapping-user-base/inv_14728369103333413889/device_logcat_test_24261FDH2000BR_18121173374364696987.txt\n\nIt might be an expected crash if all of the tests are passing.",
+      "parentUuid": "51296ede_b222eee4",
+      "revId": "e29e71b21e0126fc66b30a4461886b0cf47aacbd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
