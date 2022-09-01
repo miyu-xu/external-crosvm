@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ed88b2e1_42cfb79c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-09-01T15:49:03Z",
+      "side": 1,
+      "message": "It looks like something is wrong with the avf test suite? Or am I reading the presubmit results incorrectly? \nIt looks like avf_presubmit_tests  passed with no test results, and there is a callstack of the microdroid launcher in the logcat.\nhttps://android-build.googleplex.com/builds/tests/view?invocationId\u003dI64400010086665664\n\nAre you able to run the avf tests locally?",
+      "revId": "e29e71b21e0126fc66b30a4461886b0cf47aacbd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
