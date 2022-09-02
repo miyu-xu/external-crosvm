@@ -26,7 +26,6 @@ rust_library {
     ],
     rustlibs: [
         "libargh",
-        "libnom",
         "libnum_traits",
         "libserde",
         "libthiserror",
@@ -61,7 +60,6 @@ rust_test {
     ],
     rustlibs: [
         "libargh",
-        "libnom",
         "libnum_traits",
         "libserde",
         "libthiserror",
