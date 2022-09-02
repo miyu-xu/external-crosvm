@@ -438,8 +438,7 @@ mod tests {
         let file_path = file_path.as_path();
 
         // compressed = empty short for compressed status to be read into
-        // Now do a FSCTL_SET_COMPRESSED to set it to COMPRESSION_FORMAT_LZNT1.
-        let mut compressed: c_ushort = COMPRESSION_FORMAT_LZNT1;
+        let mut compressed: c_ushort;
 
         // open our random file and write "foo" in it
         let mut f = OpenOptions::new()
@@ -449,6 +448,9 @@ mod tests {
             .unwrap();
         f.write_all(b"foo").expect("Failed to write bytes.");
         f.sync_all().expect("Failed to sync all.");
+
+        // Now do a FSCTL_SET_COMPRESSED to set it to COMPRESSION_FORMAT_LZNT1.
+        compressed = COMPRESSION_FORMAT_LZNT1;
 
         // NOTE: Theoretically I should be able to open this file like so:
         // let mut f = OpenOptions::new()

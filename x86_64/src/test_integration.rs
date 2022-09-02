@@ -141,10 +141,7 @@ where
     .unwrap();
     let pci = Arc::new(Mutex::new(pci));
     let (pcibus_exit_evt_wrtube, _) = Tube::directional_pair().unwrap();
-    let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(
-        pci.clone(),
-        pcibus_exit_evt_wrtube,
-    )));
+    let pci_bus = Arc::new(Mutex::new(PciConfigIo::new(pci, pcibus_exit_evt_wrtube)));
     io_bus.insert(pci_bus, 0xcf8, 0x8).unwrap();
 
     X8664arch::setup_legacy_i8042_device(
@@ -190,7 +187,6 @@ where
     let suspend_evt = Event::new().unwrap();
     let mut resume_notify_devices = Vec::new();
     let acpi_dev_resource = X8664arch::setup_acpi_devices(
-        pci,
         &guest_mem,
         &io_bus,
         &mut resources,

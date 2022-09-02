@@ -22,7 +22,6 @@ mod tpm;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 mod video;
 mod virtio_device;
-mod virtio_mmio_device;
 mod virtio_pci_common_config;
 mod virtio_pci_device;
 
@@ -49,7 +48,6 @@ pub use self::tpm::*;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub use self::video::*;
 pub use self::virtio_device::*;
-pub use self::virtio_mmio_device::*;
 pub use self::virtio_pci_device::*;
 cfg_if::cfg_if! {
     if #[cfg(unix)] {

@@ -268,14 +268,15 @@ mod test {
         )
         .unwrap();
 
-        let left_channel_bytes: Vec<u8> = [25u16, 256, 1000, 2400]
+        let mut left_channel_bytes: Vec<u8> = [25u16, 256, 1000, 2400]
             .iter()
-            .flat_map(|x| x.to_le_bytes())
+            .map(|x| x.to_le_bytes())
+            .flatten()
             .collect();
 
         let mut result = vec![0.0; 2];
         intermediate_src_buffer.copy_every_other_and_convert_to_float(
-            &left_channel_bytes,
+            &mut left_channel_bytes,
             &mut result,
             0,
         );
@@ -283,7 +284,7 @@ mod test {
 
         let mut result2 = vec![0.0; 2];
         intermediate_src_buffer.copy_every_other_and_convert_to_float(
-            &left_channel_bytes,
+            &mut left_channel_bytes,
             &mut result2,
             2,
         );

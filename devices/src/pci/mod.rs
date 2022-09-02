@@ -131,7 +131,6 @@ pub enum CrosvmDeviceId {
     UserspaceIrqChip = 16,
     VmWatchdog = 17,
     Pflash = 18,
-    VirtioMmio = 19,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -157,7 +156,6 @@ impl TryFrom<u16> for CrosvmDeviceId {
             16 => Ok(CrosvmDeviceId::UserspaceIrqChip),
             17 => Ok(CrosvmDeviceId::VmWatchdog),
             18 => Ok(CrosvmDeviceId::Pflash),
-            19 => Ok(CrosvmDeviceId::VirtioMmio),
             _ => Err(base::Error::new(EINVAL)),
         }
     }

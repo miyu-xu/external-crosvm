@@ -201,8 +201,9 @@ pub(in crate::virtio::iommu) async fn handle_translate_request(
                 return Err(IommuError::Tube(e));
             }
         };
-        let resp = if let Some(mapper) = state.borrow().endpoints.get(&req.get_endpoint_id()) {
-            match req {
+        let state = state.borrow_mut();
+        let resp = match state.endpoints.get(&req.get_endpoint_id()) {
+            Some(mapper) => match req {
                 IommuRequest::Export { iova, size, .. } => {
                     mapper.lock().export(iova, size).map(IommuResponse::Export)
                 }
@@ -214,10 +215,11 @@ pub(in crate::virtio::iommu) async fn handle_translate_request(
                     .lock()
                     .start_export_session(ex)
                     .map(IommuResponse::StartExportSession),
+            },
+            None => {
+                error!("endpoint {} not found", req.get_endpoint_id());
+                continue;
             }
-        } else {
-            error!("endpoint {} not found", req.get_endpoint_id());
-            continue;
         };
         let resp: IommuResponse = match resp {
             Ok(resp) => resp,

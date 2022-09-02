@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io;
-use std::time::Instant;
+use std::{io, time::Instant};
 
 use audio_streams::*;
 use cros_async::Executor;
@@ -12,10 +11,11 @@ mod args;
 mod error;
 mod performance_data;
 
-use crate::args::*;
-use crate::error::Error;
-use crate::error::Result;
-use crate::performance_data::*;
+use crate::{
+    args::*,
+    error::{Error, Result},
+    performance_data::*,
+};
 
 async fn run_playback(ex: &Executor, args: &Args) -> Result<PerformanceData> {
     let mut data = PerformanceData::default();
