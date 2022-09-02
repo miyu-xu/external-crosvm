@@ -1,7 +1,7 @@
 {
-    "image": "gcr.io/crosvm-packages/crosvm_dev:latest",
+    "image": "gcr.io/crosvm-infra/crosvm_dev:r0019",
     "extensions": [
-        "matklad.rust-analyzer",
+        "rust-lang.rust-analyzer",
         "bungcip.better-toml",
         "esbenp.prettier-vscode",
         "ms-python.vscode-pylance",
@@ -16,5 +16,9 @@
         "--device=/dev/vhost-net",
         "--device=/dev/vhost-vsock",
         "--mount=type=tmpfs,destination=/tmp",
-    ]
+        "--mount=type=tmpfs,destination=/var/empty",
+    ],
+    "containerUser": "crosvmdev",
+    "updateContentCommand": "sudo chown -R --reference=/workspaces/crosvm /home/crosvmdev",
+    "postCreateCommand": "sudo chmod 666 /dev/kvm",
 }

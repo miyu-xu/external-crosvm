@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{
-    convert::{TryFrom, TryInto},
-    fs::File as StdFile,
-    io,
-    path::Path,
-};
+use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::fs::File as StdFile;
+use std::io;
+use std::path::Path;
 
-use sys_util::AsRawDescriptor;
+use base::AsRawDescriptor;
 
-use crate::{sys, AsIoBufs};
+use crate::sys;
+use crate::AsIoBufs;
 
 static DOWNCAST_ERROR: &str = "inner error not downcastable to `io::Error`";
 
@@ -349,25 +349,24 @@ impl TryFrom<File> for StdFile {
 }
 
 impl AsRawDescriptor for File {
-    fn as_raw_descriptor(&self) -> sys_util::RawDescriptor {
+    fn as_raw_descriptor(&self) -> base::RawDescriptor {
         self.inner.as_raw_descriptor()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
-    use std::{
-        fs::{File as StdFile, OpenOptions},
-        path::PathBuf,
-        thread,
-    };
+    use std::fs::File as StdFile;
+    use std::fs::OpenOptions;
+    use std::path::PathBuf;
+    use std::thread;
 
     use anyhow::Context;
     use futures::channel::oneshot::channel;
 
-    use crate::{Executor, OwnedIoBuf};
+    use super::*;
+    use crate::Executor;
+    use crate::OwnedIoBuf;
 
     #[test]
     fn readvec() {
@@ -424,7 +423,7 @@ mod test {
             .unwrap();
         });
 
-        let (pipe_out, pipe_in) = sys_util::pipe(true).unwrap();
+        let (pipe_out, pipe_in) = base::pipe(true).unwrap();
         ex.run_until(async move {
             tx.send(File::try_from(pipe_in).unwrap()).unwrap();
 

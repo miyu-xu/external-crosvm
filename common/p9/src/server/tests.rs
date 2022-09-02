@@ -2,20 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::*;
-
 use std::borrow::Cow;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::env;
-use std::ffi::{CString, OsString};
-use std::fs::{self, File};
-use std::io::{self, Cursor};
+use std::ffi::CString;
+use std::ffi::OsString;
+use std::fs;
+use std::fs::File;
+use std::io;
+use std::io::Cursor;
 use std::mem;
 use std::ops::Deref;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
 use std::u32;
+
+use super::*;
 
 // Used to indicate that there is no fid associated with this message.
 const P9_NOFID: u32 = u32::MAX;
@@ -23,8 +29,14 @@ const P9_NOFID: u32 = u32::MAX;
 // The fid associated with the root directory of the server.
 const ROOT_FID: u32 = 1;
 
+// The pid of the server process, cannot be 1 since that's the kernel init
+const SERVER_PID: u32 = 5;
+
 // How big we want the default buffer to be when running tests.
 const DEFAULT_BUFFER_SIZE: u32 = 4096;
+
+// How big we want to make randomly generated files
+const LOCAL_FILE_LEN: u64 = 200;
 
 // Joins `path` to `buf`.  If `path` is '..', removes the last component from `buf`
 // only if `buf` != `root` but does nothing if `buf` == `root`.  Pushes `path` onto
@@ -105,6 +117,8 @@ enum DirEntry<'a> {
 
 impl<'a> DirEntry<'a> {
     // Creates `self` in the path given by `dir`.
+    // TODO(b/228627457): clippy is warning about the `Cow` below, but it is necessary
+    #[allow(clippy::ptr_arg)]
     fn create(&self, dir: &mut Cow<Path>) {
         match *self {
             DirEntry::File { name, content } => {
@@ -130,7 +144,7 @@ impl<'a> DirEntry<'a> {
 fn create_local_file<P: AsRef<Path>>(dir: P, name: &str) -> Vec<u8> {
     let mut content = Vec::new();
     File::open("/dev/urandom")
-        .and_then(|f| f.take(200).read_to_end(&mut content))
+        .and_then(|f| f.take(LOCAL_FILE_LEN).read_to_end(&mut content))
         .expect("failed to read from /dev/urandom");
 
     let f = DirEntry::File {
@@ -902,6 +916,171 @@ fn rename_at() {
         .expect("failed to read new file content");
     assert_eq!(size, content.len());
     assert_eq!(newcontent, content);
+}
+
+fn setlk_tlock(fid: u32, len: u64, start: u64, type_: i32) -> Tlock {
+    Tlock {
+        fid,
+        type_: type_ as u8,
+        flags: 0,
+        start,
+        length: len,
+        proc_id: SERVER_PID,
+        client_id: String::from("test-server"),
+    }
+}
+
+fn getlk_tgetlock(fid: u32, type_: i32) -> Tgetlock {
+    Tgetlock {
+        fid,
+        type_: type_ as u8,
+        start: 0,
+        length: 0,
+        proc_id: SERVER_PID,
+        client_id: String::from("test-server"),
+    }
+}
+
+fn setup_simple_lock_no_open() -> Server {
+    let (test_dir, server) = setup("simple lock");
+
+    let filename = "file";
+    create_local_file(&test_dir, filename);
+
+    server
+}
+
+fn setup_simple_lock(flags: u32) -> Server {
+    let (test_dir, mut server) = setup("simple lock");
+
+    let filename = "file";
+    create_local_file(&test_dir, filename);
+
+    open(
+        &mut server,
+        &*test_dir,
+        ROOT_FID,
+        filename,
+        ROOT_FID + 1,
+        flags as u32,
+    )
+    .expect("failed to open file");
+
+    server
+}
+
+#[test]
+fn lock_rdlck_no_open_file() {
+    let mut server = setup_simple_lock_no_open();
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 8, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect_err("Bad file descriptor");
+}
+
+#[test]
+fn lock_rdlck() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 8, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+}
+#[test]
+fn lock_wrlck_no_open_file() {
+    let mut server = setup_simple_lock_no_open();
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 8, 0, libc::F_WRLCK);
+
+    server.lock(&tlock).expect_err("Bad file descriptor");
+}
+#[test]
+fn lock_wrlck() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 8, 0, libc::F_WRLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+}
+
+#[test]
+fn lock_unlck_no_lock() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 0, 0, libc::F_UNLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+}
+
+#[test]
+fn lock_unlck() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, LOCAL_FILE_LEN / 2, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 0, 0, libc::F_UNLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+}
+
+#[test]
+fn lock_unlck_relock() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, LOCAL_FILE_LEN / 2, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+
+    let tlock = setlk_tlock(ROOT_FID + 1, 0, 0, libc::F_UNLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+
+    let tlock = setlk_tlock(ROOT_FID + 1, LOCAL_FILE_LEN / 2, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+}
+
+#[test]
+fn getlock_rdlck_nolock() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tgetlock = getlk_tgetlock(ROOT_FID + 1, libc::F_RDLCK);
+
+    server
+        .get_lock(&tgetlock)
+        .expect("failed to get lock on file");
+}
+
+#[test]
+fn getlock_wrlck() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, LOCAL_FILE_LEN / 2, 0, libc::F_WRLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+
+    let tgetlock = getlk_tgetlock(ROOT_FID + 1, libc::F_WRLCK);
+
+    server
+        .get_lock(&tgetlock)
+        .expect("failed to get lock on file");
+}
+
+#[test]
+fn getlock_rdlck() {
+    let mut server = setup_simple_lock(P9_RDWR);
+
+    let tlock = setlk_tlock(ROOT_FID + 1, LOCAL_FILE_LEN / 2, 0, libc::F_RDLCK);
+
+    server.lock(&tlock).expect("failed to lock file");
+
+    let tgetlock = getlk_tgetlock(ROOT_FID + 1, libc::F_RDLCK);
+
+    server
+        .get_lock(&tgetlock)
+        .expect("failed to get lock on file");
 }
 
 macro_rules! open_test {

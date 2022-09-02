@@ -6,19 +6,30 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::thread;
 
-use base::{error, Event, RawDescriptor};
+use base::error;
+use base::Event;
+use base::RawDescriptor;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::vhost::user::vmm::{worker::Worker, Result, VhostUserHandler};
-use crate::virtio::wl::{
-    QUEUE_SIZE, QUEUE_SIZES, VIRTIO_WL_F_SEND_FENCES, VIRTIO_WL_F_TRANS_FLAGS,
-};
-use crate::virtio::{Interrupt, Queue, VirtioDevice, TYPE_WL};
+use crate::virtio::vhost::user::vmm::Result;
+use crate::virtio::vhost::user::vmm::VhostUserHandler;
+use crate::virtio::wl::QUEUE_SIZE;
+use crate::virtio::wl::QUEUE_SIZES;
+use crate::virtio::wl::VIRTIO_WL_F_SEND_FENCES;
+use crate::virtio::wl::VIRTIO_WL_F_TRANS_FLAGS;
+use crate::virtio::wl::VIRTIO_WL_F_USE_SHMEM;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::SharedMemoryMapper;
+use crate::virtio::SharedMemoryRegion;
+use crate::virtio::VirtioDevice;
 
 pub struct Wl {
     kill_evt: Option<Event>,
-    worker_thread: Option<thread::JoinHandle<Worker>>,
+    worker_thread: Option<thread::JoinHandle<()>>,
     handler: RefCell<VhostUserHandler>,
     queue_sizes: Vec<u16>,
 }
@@ -27,14 +38,15 @@ impl Wl {
     pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Wl> {
         let default_queue_size = QUEUE_SIZES.len();
 
-        let allow_features = 1u64 << crate::virtio::VIRTIO_F_VERSION_1
+        let allow_features = base_features
             | 1 << VIRTIO_WL_F_TRANS_FLAGS
             | 1 << VIRTIO_WL_F_SEND_FENCES
-            | base_features
+            | 1 << VIRTIO_WL_F_USE_SHMEM
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-        let allow_protocol_features =
-            VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::CONFIG;
+        let allow_protocol_features = VhostUserProtocolFeatures::MQ
+            | VhostUserProtocolFeatures::CONFIG
+            | VhostUserProtocolFeatures::SLAVE_REQ;
 
         let mut handler = VhostUserHandler::new_from_path(
             socket_path,
@@ -59,8 +71,8 @@ impl VirtioDevice for Wl {
         Vec::new()
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_WL
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Wl
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
@@ -86,45 +98,17 @@ impl VirtioDevice for Wl {
         queues: Vec<Queue>,
         queue_evts: Vec<Event>,
     ) {
-        if let Err(e) = self
+        match self
             .handler
             .borrow_mut()
-            .activate(&mem, &interrupt, &queues, &queue_evts)
+            .activate(mem, interrupt, queues, queue_evts, "wl")
         {
-            error!("failed to activate queues: {}", e);
-            return;
-        }
-
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating kill Event pair: {}", e);
-                return;
-            }
-        };
-        self.kill_evt = Some(self_kill_evt);
-
-        let worker_result = thread::Builder::new()
-            .name("vhost_user_wl".to_string())
-            .spawn(move || {
-                let mut worker = Worker {
-                    queues,
-                    mem,
-                    kill_evt,
-                };
-
-                if let Err(e) = worker.run(interrupt) {
-                    error!("failed to start a worker: {}", e);
-                }
-                worker
-            });
-
-        match worker_result {
-            Err(e) => {
-                error!("failed to spawn vhost_user_wl worker: {}", e);
-            }
-            Ok(join_handle) => {
+            Ok((join_handle, kill_evt)) => {
                 self.worker_thread = Some(join_handle);
+                self.kill_evt = Some(kill_evt);
+            }
+            Err(e) => {
+                error!("failed to activate queues: {}", e);
             }
         }
     }
@@ -135,6 +119,22 @@ impl VirtioDevice for Wl {
             false
         } else {
             true
+        }
+    }
+
+    fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
+        match self.handler.borrow_mut().get_shared_memory_region() {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to get shared memory regions {}", e);
+                None
+            }
+        }
+    }
+
+    fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
+        if let Err(e) = self.handler.borrow_mut().set_shared_memory_mapper(mapper) {
+            error!("Error setting shared memory mapper {}", e);
         }
     }
 }

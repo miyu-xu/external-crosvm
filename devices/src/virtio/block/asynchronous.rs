@@ -3,43 +3,65 @@
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::cmp::{max, min};
-use std::io::{self, Write};
+use std::io;
+use std::io::Write;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::result;
-use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::u32;
 
+use base::error;
+use base::info;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Error as SysError;
+use base::Event;
+use base::RawDescriptor;
+use base::Result as SysResult;
+use base::Timer;
+use base::Tube;
+use base::TubeError;
+use cros_async::select5;
+use cros_async::sync::Mutex as AsyncMutex;
+use cros_async::AsyncError;
+use cros_async::AsyncTube;
+use cros_async::EventAsync;
+use cros_async::Executor;
+use cros_async::SelectResult;
+use cros_async::TimerAsync;
+use data_model::DataInit;
+use disk::AsyncDisk;
+use disk::ToAsyncDisk;
 use futures::pin_mut;
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::FuturesUnordered;
+use futures::stream::StreamExt;
 use remain::sorted;
 use thiserror::Error as ThisError;
-
-use base::Error as SysError;
-use base::Result as SysResult;
-use base::{
-    error, info, iov_max, warn, AsRawDescriptor, AsyncTube, Event, RawDescriptor, Timer, Tube,
-    TubeError,
-};
-use cros_async::{
-    select5, sync::Mutex as AsyncMutex, AsyncError, EventAsync, Executor, SelectResult, TimerAsync,
-};
-use data_model::DataInit;
-use disk::{AsyncDisk, ToAsyncDisk};
-use vm_control::{DiskControlCommand, DiskControlResult};
+use vm_control::DiskControlCommand;
+use vm_control::DiskControlResult;
 use vm_memory::GuestMemory;
 
 use super::common::*;
-use crate::virtio::{
-    async_utils, copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader,
-    SignalableInterrupt, VirtioDevice, Writer, TYPE_BLOCK,
-};
+use crate::virtio::async_utils;
+use crate::virtio::block::sys::*;
+use crate::virtio::copy_config;
+use crate::virtio::DescriptorChain;
+use crate::virtio::DescriptorError;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
+use crate::virtio::VirtioDevice;
+use crate::virtio::Writer;
 
 const QUEUE_SIZE: u16 = 256;
-const NUM_QUEUES: u16 = 16;
+pub const NUM_QUEUES: u16 = 16;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES as usize];
 
 #[sorted]
@@ -231,13 +253,13 @@ pub async fn process_one_chain<I: SignalableInterrupt>(
 // There is one async task running `handle_queue` per virtio queue in use.
 // Receives messages from the guest and queues a task to complete the operations with the async
 // executor.
-async fn handle_queue(
-    ex: &Executor,
-    mem: &GuestMemory,
+pub async fn handle_queue<I: SignalableInterrupt + Clone + 'static>(
+    ex: Executor,
+    mem: GuestMemory,
     disk_state: Rc<AsyncMutex<DiskState>>,
     queue: Rc<RefCell<Queue>>,
     evt: EventAsync,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: I,
     flush_timer: Rc<RefCell<TimerAsync>>,
     flush_timer_armed: Rc<RefCell<bool>>,
 ) {
@@ -246,11 +268,11 @@ async fn handle_queue(
             error!("Failed to read the next queue event: {}", e);
             continue;
         }
-        while let Some(descriptor_chain) = queue.borrow_mut().pop(mem) {
+        while let Some(descriptor_chain) = queue.borrow_mut().pop(&mem) {
             let queue = Rc::clone(&queue);
             let disk_state = Rc::clone(&disk_state);
             let mem = mem.clone();
-            let interrupt = Rc::clone(&interrupt);
+            let interrupt = interrupt.clone();
             let flush_timer = Rc::clone(&flush_timer);
             let flush_timer_armed = Rc::clone(&flush_timer_armed);
 
@@ -260,7 +282,7 @@ async fn handle_queue(
                     descriptor_chain,
                     disk_state,
                     mem,
-                    &*interrupt.borrow(),
+                    &interrupt,
                     flush_timer,
                     flush_timer_armed,
                 )
@@ -292,8 +314,10 @@ async fn handle_command_tube(
                     }
                 };
 
+                let resp_clone = resp.clone();
                 command_tube
-                    .send(&resp)
+                    .send(resp_clone)
+                    .await
                     .map_err(ExecuteError::SendingResponse)?;
                 if let DiskControlResult::Ok = resp {
                     interrupt.borrow().signal_config_changed();
@@ -399,41 +423,38 @@ fn run_worker(
     let flush_timer = Rc::new(RefCell::new(
         TimerAsync::new(
             // Call try_clone() to share the same underlying FD with the `flush_disk` task.
-            timer.0.try_clone().expect("Failed to clone flush_timer"),
+            timer.try_clone().expect("Failed to clone flush_timer"),
             &ex,
         )
         .expect("Failed to create an async timer"),
     ));
 
-    let queue_handlers =
-        queues
-            .into_iter()
-            .map(|q| Rc::new(RefCell::new(q)))
-            .zip(queue_evts.into_iter().map(|e| {
-                EventAsync::new(e.0, &ex).expect("Failed to create async event for queue")
-            }))
-            .map(|(queue, event)| {
-                // alias some refs so the lifetimes work.
-                let mem = &mem;
-                let disk_state = &disk_state;
-                let interrupt = &interrupt;
-                handle_queue(
-                    &ex,
-                    mem,
-                    Rc::clone(disk_state),
-                    Rc::clone(&queue),
-                    event,
-                    Rc::clone(interrupt),
-                    Rc::clone(&flush_timer),
-                    Rc::clone(&flush_timer_armed),
-                )
-            })
-            .collect::<FuturesUnordered<_>>()
-            .into_future();
+    let queue_handlers = queues
+        .into_iter()
+        .map(|q| Rc::new(RefCell::new(q)))
+        .zip(
+            queue_evts
+                .into_iter()
+                .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue")),
+        )
+        .map(|(queue, event)| {
+            handle_queue(
+                ex.clone(),
+                mem.clone(),
+                Rc::clone(disk_state),
+                Rc::clone(&queue),
+                event,
+                Rc::clone(&interrupt),
+                Rc::clone(&flush_timer),
+                Rc::clone(&flush_timer_armed),
+            )
+        })
+        .collect::<FuturesUnordered<_>>()
+        .into_future();
 
     // Flushes the disk periodically.
-    let flush_timer = TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer");
-    let disk_flush = flush_disk(disk_state.clone(), flush_timer, flush_timer_armed.clone());
+    let flush_timer = TimerAsync::new(timer, &ex).expect("Failed to create an async timer");
+    let disk_flush = flush_disk(disk_state.clone(), flush_timer, flush_timer_armed);
     pin_mut!(disk_flush);
 
     // Exit if the kill event is triggered.
@@ -459,16 +480,17 @@ fn run_worker(
 
 /// Virtio device for exposing block level read/write operations on a host file.
 pub struct BlockAsync {
+    // We keep these members crate-public as they are accessed by the vhost-user device.
+    pub(crate) disk_image: Option<Box<dyn ToAsyncDisk>>,
+    pub(crate) disk_size: Arc<AtomicU64>,
+    pub(crate) avail_features: u64,
+    pub(crate) read_only: bool,
+    pub(crate) sparse: bool,
+    pub(crate) seg_max: u32,
+    pub(crate) block_size: u32,
+    pub(crate) id: Option<BlockId>,
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<(Box<dyn ToAsyncDisk>, Option<Tube>)>>,
-    disk_image: Option<Box<dyn ToAsyncDisk>>,
-    disk_size: Arc<AtomicU64>,
-    avail_features: u64,
-    read_only: bool,
-    sparse: bool,
-    seg_max: u32,
-    block_size: u32,
-    id: Option<BlockId>,
     control_tube: Option<Tube>,
 }
 
@@ -501,16 +523,9 @@ impl BlockAsync {
 
         let avail_features = build_avail_features(base_features, read_only, sparse, true);
 
-        let seg_max = min(max(iov_max(), 1), u32::max_value() as usize) as u32;
-
-        // Since we do not currently support indirect descriptors, the maximum
-        // number of segments must be smaller than the queue size.
-        // In addition, the request header and status each consume a descriptor.
-        let seg_max = min(seg_max, u32::from(QUEUE_SIZE) - 2);
+        let seg_max = get_seg_max(QUEUE_SIZE);
 
         Ok(BlockAsync {
-            kill_evt: None,
-            worker_thread: None,
             disk_image: Some(disk_image),
             disk_size: Arc::new(AtomicU64::new(disk_size)),
             avail_features,
@@ -519,6 +534,8 @@ impl BlockAsync {
             seg_max,
             block_size,
             id,
+            kill_evt: None,
+            worker_thread: None,
             control_tube,
         })
     }
@@ -722,8 +739,8 @@ impl VirtioDevice for BlockAsync {
         self.avail_features
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_BLOCK
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Block
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
@@ -767,7 +784,7 @@ impl VirtioDevice for BlockAsync {
                         let ex = Executor::new().expect("Failed to create an executor");
 
                         let async_control = control_tube
-                            .map(|c| c.into_async_tube(&ex).expect("failed to create async tube"));
+                            .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
                         let async_image = match disk_image.to_async_disk(&ex) {
                             Ok(d) => d,
                             Err(e) => panic!("Failed to create async disk {}", e),
@@ -841,21 +858,22 @@ impl VirtioDevice for BlockAsync {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{File, OpenOptions};
+    use std::fs::File;
+    use std::fs::OpenOptions;
     use std::mem::size_of_val;
     use std::sync::atomic::AtomicU64;
 
-    use data_model::{Le32, Le64};
+    use data_model::Le32;
+    use data_model::Le64;
     use disk::SingleFileDisk;
     use hypervisor::ProtectionType;
     use tempfile::TempDir;
     use vm_memory::GuestAddress;
 
-    use crate::virtio::base_features;
-    use crate::virtio::block::common::*;
-    use crate::virtio::descriptor_utils::{create_descriptor_chain, DescriptorType};
-
     use super::*;
+    use crate::virtio::base_features;
+    use crate::virtio::descriptor_utils::create_descriptor_chain;
+    use crate::virtio::descriptor_utils::DescriptorType;
 
     #[test]
     fn read_size() {
@@ -981,7 +999,7 @@ mod tests {
 
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 
@@ -1051,7 +1069,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
         let disk_state = Rc::new(AsyncMutex::new(DiskState {
@@ -1119,7 +1137,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer.0, &ex).expect("Failed to create an async timer"),
+            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 

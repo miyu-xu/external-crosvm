@@ -7,18 +7,27 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::thread;
 
-use net_util::{MacAddress, TapT};
-
-use base::{error, warn, AsRawDescriptor, Event, RawDescriptor, Tube};
+use base::error;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Event;
+use base::RawDescriptor;
+use base::Tube;
+use net_util::MacAddress;
+use net_util::TapT;
 use vhost::NetT as VhostNetT;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
 
 use super::control_socket::*;
 use super::worker::Worker;
-use super::{Error, Result};
+use super::Error;
+use super::Result;
 use crate::pci::MsixStatus;
-use crate::virtio::{Interrupt, Queue, VirtioDevice, TYPE_NET};
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::VirtioDevice;
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 2;
@@ -80,10 +89,7 @@ where
             | 1 << virtio_net::VIRTIO_NET_F_GUEST_UFO
             | 1 << virtio_net::VIRTIO_NET_F_HOST_TSO4
             | 1 << virtio_net::VIRTIO_NET_F_HOST_UFO
-            | 1 << virtio_net::VIRTIO_NET_F_MRG_RXBUF
-            | 1 << virtio_sys::vhost::VIRTIO_RING_F_INDIRECT_DESC
-            | 1 << virtio_sys::vhost::VIRTIO_RING_F_EVENT_IDX
-            | 1 << virtio_sys::vhost::VIRTIO_F_NOTIFY_ON_EMPTY;
+            | 1 << virtio_net::VIRTIO_NET_F_MRG_RXBUF;
 
         let mut vhost_interrupt = Vec::new();
         for _ in 0..NUM_QUEUES {
@@ -161,8 +167,8 @@ where
         keep_rds
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_NET
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Net
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
@@ -217,6 +223,7 @@ where
                             acked_features,
                             kill_evt,
                             socket,
+                            self.supports_iommu(),
                         );
                         let activate_vqs = |handle: &U| -> Result<()> {
                             for idx in 0..NUM_QUEUES {
@@ -352,17 +359,22 @@ where
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::virtio::base_features;
-    use crate::virtio::VIRTIO_MSI_NO_VECTOR;
-    use hypervisor::ProtectionType;
-    use net_util::fakes::FakeTap;
     use std::path::PathBuf;
     use std::result;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+
+    use hypervisor::ProtectionType;
+    use net_util::sys::unix::fakes::FakeTap;
     use vhost::net::fakes::FakeNet;
-    use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
+    use vm_memory::GuestAddress;
+    use vm_memory::GuestMemory;
+    use vm_memory::GuestMemoryError;
+
+    use super::*;
+    use crate::virtio::base_features;
+    use crate::virtio::VIRTIO_MSI_NO_VECTOR;
+    use crate::IrqLevelEvent;
 
     fn create_guest_memory() -> result::Result<GuestMemory, GuestMemoryError> {
         let start_addr1 = GuestAddress(0x0);
@@ -391,13 +403,25 @@ pub mod tests {
     fn keep_rds() {
         let net = create_net_common();
         let fds = net.keep_rds();
-        assert!(!fds.is_empty(), "We should have gotten at least one fd");
+        assert!(
+            !fds.is_empty(),
+            "We should have gotten at least one descriptor"
+        );
     }
 
     #[test]
     fn features() {
         let net = create_net_common();
-        assert_eq!(net.features(), 5117103235);
+        let expected_features = 1 << 0 // VIRTIO_NET_F_CSUM
+            | 1 << 1 // VIRTIO_NET_F_GUEST_CSUM
+            | 1 << 7 // VIRTIO_NET_F_GUEST_TSO4
+            | 1 << 10 // VIRTIO_NET_F_GUEST_UFO
+            | 1 << 11 // VIRTIO_NET_F_HOST_TSO4
+            | 1 << 14 // VIRTIO_NET_F_HOST_UFO
+            | 1 << 15 // VIRTIO_NET_F_MRG_RXBUF
+            | 1 << 29 // VIRTIO_RING_F_EVENT_IDX
+            | 1 << 32; // VIRTIO_F_VERSION_1
+        assert_eq!(net.features(), expected_features);
     }
 
     #[test]
@@ -417,8 +441,7 @@ pub mod tests {
             guest_memory,
             Interrupt::new(
                 Arc::new(AtomicUsize::new(0)),
-                Event::new().unwrap(),
-                Event::new().unwrap(),
+                IrqLevelEvent::new().unwrap(),
                 None,
                 VIRTIO_MSI_NO_VECTOR,
             ),

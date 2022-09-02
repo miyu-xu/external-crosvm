@@ -8,24 +8,41 @@ mod defaults;
 mod evdev;
 mod event_source;
 
-use self::constants::*;
-
-use base::{error, warn, AsRawDescriptor, Event, PollToken, RawDescriptor, WaitContext};
-use data_model::{DataInit, Le16, Le32};
-use remain::sorted;
-use thiserror::Error;
-use vm_memory::GuestMemory;
-
-use self::event_source::{EvdevEventSource, EventSource, SocketEventSource};
-use super::{
-    copy_config, DescriptorChain, DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt,
-    VirtioDevice, Writer, TYPE_INPUT,
-};
-use linux_input_sys::{virtio_input_event, InputEventDecoder};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::thread;
+
+use base::error;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Event;
+use base::EventToken;
+use base::RawDescriptor;
+use base::WaitContext;
+use data_model::DataInit;
+use data_model::Le16;
+use data_model::Le32;
+use linux_input_sys::virtio_input_event;
+use linux_input_sys::InputEventDecoder;
+use remain::sorted;
+use thiserror::Error;
+use vm_memory::GuestMemory;
+
+use self::constants::*;
+use self::event_source::EvdevEventSource;
+use self::event_source::EventSource;
+use self::event_source::SocketEventSource;
+use super::copy_config;
+use super::DescriptorChain;
+use super::DescriptorError;
+use super::DeviceType;
+use super::Interrupt;
+use super::Queue;
+use super::Reader;
+use super::SignalableInterrupt;
+use super::VirtioDevice;
+use super::Writer;
 
 const EVENT_QUEUE_SIZE: u16 = 64;
 const STATUS_QUEUE_SIZE: u16 = 64;
@@ -440,7 +457,7 @@ impl<T: EventSource> Worker<T> {
             return;
         }
 
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             EventQAvailable,
             StatusQAvailable,
@@ -559,8 +576,8 @@ where
         Vec::new()
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_INPUT
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Input
     }
 
     fn queue_max_sizes(&self) -> &[u16] {

@@ -4,18 +4,28 @@
 
 #![cfg(feature = "plugin")]
 
-use std::env::{current_exe, var_os};
+use std::env::current_exe;
+use std::env::var_os;
 use std::ffi::OsString;
 use std::fs::remove_file;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
 
-use base::{ioctl, AsRawDescriptor};
+use base::ioctl;
+use base::AsRawDescriptor;
+use net_util::TapTCommon;
+use once_cell::sync::Lazy;
 use tempfile::tempfile;
+
+static TAP_AVAILABLE: Lazy<bool> = Lazy::new(|| net_util::sys::unix::Tap::new(true, false).is_ok());
 
 struct RemovePath(PathBuf);
 impl Drop for RemovePath {
@@ -62,11 +72,11 @@ fn build_plugin(src: &str) -> RemovePath {
         .arg(&out_bin)
         .arg("-L") // Path of shared object to link to.
         .arg(&libcrosvm_plugin_dir)
-        .arg("-lcrosvm_plugin")
         .arg("-Wl,-rpath") // Search for shared object in the same path when exec'd.
         .arg(&libcrosvm_plugin_dir)
         .args(&["-Wl,-rpath", "."]) // Also check current directory in case of sandboxing.
         .args(&["-xc", "-"]) // Read source code from piped stdin.
+        .arg("-lcrosvm_plugin")
         .stdin(Stdio::piped())
         .spawn()
         .expect("failed to spawn compiler");
@@ -89,12 +99,6 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
         "run",
         "-c",
         "1",
-        "--host_ip",
-        "100.115.92.5",
-        "--netmask",
-        "255.255.255.252",
-        "--mac",
-        "de:21:e8:47:6b:6a",
         "--seccomp-policy-dir",
         "tests",
         "--plugin",
@@ -104,6 +108,17 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
             .canonicalize()
             .expect("failed to canonicalize plugin path"),
     );
+
+    if *TAP_AVAILABLE {
+        cmd.args(&[
+            "--host-ip",
+            "100.115.92.5",
+            "--netmask",
+            "255.255.255.252",
+            "--mac",
+            "de:21:e8:47:6b:6a",
+        ]);
+    }
     if !with_sandbox {
         cmd.arg("--disable-sandbox");
     }
@@ -227,6 +242,7 @@ fn test_adder() {
     test_plugin(include_str!("plugin_adder.c"));
 }
 
+#[ignore] // TODO(b/239094055): fix the SIGSTOP usage that stops the cargo test runner
 #[test]
 fn test_hint() {
     test_plugin(include_str!("plugin_hint.c"));
@@ -262,6 +278,8 @@ fn test_supported_cpuid() {
     test_plugin(include_str!("plugin_supported_cpuid.c"));
 }
 
+// b:223675792
+#[ignore]
 #[test]
 fn test_enable_cap() {
     test_plugin(include_str!("plugin_enable_cap.c"));
@@ -284,7 +302,9 @@ fn test_vcpu_pause() {
 
 #[test]
 fn test_net_config() {
-    test_plugin(include_str!("plugin_net_config.c"));
+    if *TAP_AVAILABLE {
+        test_plugin(include_str!("plugin_net_config.c"));
+    }
 }
 
 #[test]

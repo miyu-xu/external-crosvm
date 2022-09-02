@@ -10,33 +10,63 @@
 
 use std::cell::RefCell;
 use std::convert::TryInto;
-use std::mem::{size_of, transmute};
-use std::os::raw::{c_char, c_int, c_uint, c_void};
-use std::ptr::{null, null_mut};
+use std::mem::size_of;
+use std::mem::transmute;
+use std::os::raw::c_char;
+use std::os::raw::c_int;
+use std::os::raw::c_uint;
+use std::os::raw::c_void;
+use std::ptr::null;
+use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use base::{
-    ExternalMapping, ExternalMappingError, ExternalMappingResult, FromRawDescriptor,
-    IntoRawDescriptor, SafeDescriptor,
-};
+use base::ExternalMapping;
+use base::ExternalMappingError;
+use base::ExternalMappingResult;
+use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
+use base::SafeDescriptor;
+use data_model::VolatileSlice;
 
-use crate::generated::virgl_renderer_bindings::{
-    iovec, virgl_box, virgl_renderer_resource_create_args,
-};
-
+use crate::generated::virgl_renderer_bindings::iovec;
+use crate::generated::virgl_renderer_bindings::virgl_box;
+use crate::generated::virgl_renderer_bindings::virgl_renderer_resource_create_args;
 use crate::renderer_utils::*;
-use crate::rutabaga_core::{RutabagaComponent, RutabagaContext, RutabagaResource};
+use crate::rutabaga_core::RutabagaComponent;
+use crate::rutabaga_core::RutabagaContext;
+use crate::rutabaga_core::RutabagaResource;
 use crate::rutabaga_utils::*;
 
-use data_model::VolatileSlice;
+#[repr(C)]
+pub struct VirglRendererGlCtxParam {
+    pub version: c_int,
+    pub shared: bool,
+    pub major_ver: c_int,
+    pub minor_ver: c_int,
+}
 
 // In gfxstream, only write_fence is used (for synchronization of commands delivered)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct GfxstreamRendererCallbacks {
+pub struct VirglRendererCallbacks {
     pub version: c_int,
     pub write_fence: unsafe extern "C" fn(cookie: *mut c_void, fence: u32),
+    pub create_gl_context: Option<
+        unsafe extern "C" fn(
+            cookie: *mut c_void,
+            scanout_idx: c_int,
+            param: *mut VirglRendererGlCtxParam,
+        ) -> *mut c_void,
+    >,
+    pub destroy_gl_context: Option<unsafe extern "C" fn(cookie: *mut c_void, ctx: *mut c_void)>,
+    pub make_current: Option<
+        unsafe extern "C" fn(cookie: *mut c_void, scanout_idx: c_int, ctx: *mut c_void) -> c_int,
+    >,
+
+    pub get_drm_fd: Option<unsafe extern "C" fn(cookie: *mut c_void) -> c_int>,
+    pub write_context_fence:
+        unsafe extern "C" fn(cookie: *mut c_void, fence_id: u64, ctx_id: u32, ring_idx: u8),
 }
 
 #[repr(C)]
@@ -60,7 +90,7 @@ extern "C" {
         display_type: u32,
         renderer_cookie: *mut c_void,
         renderer_flags: i32,
-        renderer_callbacks: *mut GfxstreamRendererCallbacks,
+        renderer_callbacks: *mut VirglRendererCallbacks,
         gfxstream_callbacks: *mut c_void,
     );
 
@@ -78,7 +108,6 @@ extern "C" {
     ) -> c_int;
 
     fn pipe_virgl_renderer_resource_unref(res_handle: u32);
-    fn pipe_virgl_renderer_context_create(handle: u32, nlen: u32, name: *const c_char) -> c_int;
     fn pipe_virgl_renderer_context_destroy(handle: u32);
     fn pipe_virgl_renderer_transfer_read_iov(
         handle: u32,
@@ -138,12 +167,20 @@ extern "C" {
     ) -> c_int;
     fn stream_renderer_resource_unmap(res_handle: u32) -> c_int;
     fn stream_renderer_resource_map_info(res_handle: u32, map_info: *mut u32) -> c_int;
+    fn stream_renderer_context_create(
+        handle: u32,
+        nlen: u32,
+        name: *const c_char,
+        context_init: u32,
+    ) -> c_int;
+    fn stream_renderer_context_create_fence(fence_id: u64, ctx_id: u32, ring_idx: u8) -> c_int;
 }
 
 /// The virtio-gpu backend state tracker which supports accelerated rendering.
 pub struct Gfxstream {
     fence_state: Rc<RefCell<FenceState>>,
     fence_handler: RutabagaFenceHandler,
+    use_async_fence_cb: bool,
 }
 
 struct GfxstreamContext {
@@ -193,6 +230,15 @@ impl RutabagaContext for GfxstreamContext {
     fn component_type(&self) -> RutabagaComponentType {
         RutabagaComponentType::Gfxstream
     }
+
+    fn context_create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
+        // Safe becase only integers are given to gfxstream, not memory.
+        let ret = unsafe {
+            stream_renderer_context_create_fence(fence.fence_id, fence.ctx_id, fence.ring_idx)
+        };
+
+        ret_to_res(ret)
+    }
 }
 
 impl Drop for GfxstreamContext {
@@ -204,9 +250,14 @@ impl Drop for GfxstreamContext {
     }
 }
 
-const GFXSTREAM_RENDERER_CALLBACKS: &GfxstreamRendererCallbacks = &GfxstreamRendererCallbacks {
-    version: 1,
+const GFXSTREAM_RENDERER_CALLBACKS: &VirglRendererCallbacks = &VirglRendererCallbacks {
+    version: 3,
     write_fence,
+    create_gl_context: None,
+    destroy_gl_context: None,
+    make_current: None,
+    get_drm_fd: None,
+    write_context_fence,
 };
 
 fn map_func(resource_id: u32) -> ExternalMappingResult<(u64, usize)> {
@@ -233,14 +284,16 @@ impl Gfxstream {
         gfxstream_flags: GfxstreamFlags,
         fence_handler: RutabagaFenceHandler,
     ) -> RutabagaResult<Box<dyn RutabagaComponent>> {
-        let fence_state = Rc::new(RefCell::new(FenceState {
-            latest_fence: 0,
-            handler: None,
-        }));
+        let fence_state = Rc::new(RefCell::new(FenceState { latest_fence: 0 }));
+
+        let use_async_fence_cb =
+            (u32::from(gfxstream_flags) & GFXSTREAM_RENDERER_FLAGS_ASYNC_FENCE_CB) != 0;
 
         let cookie: *mut VirglCookie = Box::into_raw(Box::new(VirglCookie {
             fence_state: Rc::clone(&fence_state),
             render_server_fd: None,
+            fence_handler: Some(fence_handler.clone()),
+            use_async_fence_cb,
         }));
 
         unsafe {
@@ -258,6 +311,7 @@ impl Gfxstream {
         Ok(Box::new(Gfxstream {
             fence_state,
             fence_handler,
+            use_async_fence_cb,
         }))
     }
 
@@ -297,9 +351,14 @@ impl RutabagaComponent for Gfxstream {
 
     fn create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
         let ret = unsafe { pipe_virgl_renderer_create_fence(fence.fence_id as i32, fence.ctx_id) };
-        // This can be moved to the cookie once gfxstream directly calls the
-        // write_fence callback in pipe_virgl_renderer_create_fence
-        self.fence_handler.call(fence);
+
+        // When async_fence_cb is enabled, gfxstream directly calls the write_fence callback in
+        // pipe_virgl_renderer_create_fence.
+        // TODO: this can be removed when timer-based fence handling is removed.
+        if !self.use_async_fence_cb {
+            self.fence_handler.call(fence);
+        }
+
         ret_to_res(ret)
     }
 
@@ -343,6 +402,7 @@ impl RutabagaComponent for Gfxstream {
             info_3d: None,
             vulkan_info: None,
             backing_iovecs: None,
+            import_mask: 0,
         })
     }
 
@@ -513,6 +573,7 @@ impl RutabagaComponent for Gfxstream {
             info_3d: None,
             vulkan_info: None,
             backing_iovecs: iovec_opt,
+            import_mask: 0,
         })
     }
 
@@ -527,17 +588,23 @@ impl RutabagaComponent for Gfxstream {
     fn create_context(
         &self,
         ctx_id: u32,
-        _context_init: u32,
+        context_init: u32,
+        context_name: Option<&str>,
         _fence_handler: RutabagaFenceHandler,
     ) -> RutabagaResult<Box<dyn RutabagaContext>> {
-        const CONTEXT_NAME: &[u8] = b"gpu_renderer";
-        // Safe because virglrenderer is initialized by now and the context name is statically
+        let mut name: &str = "gpu_renderer";
+        if let Some(name_string) = context_name.filter(|s| s.len() > 0) {
+            name = name_string;
+        }
+
+        // Safe because gfxstream is initialized by now and the context name is statically
         // allocated. The return value is checked before returning a new context.
         let ret = unsafe {
-            pipe_virgl_renderer_context_create(
+            stream_renderer_context_create(
                 ctx_id,
-                CONTEXT_NAME.len() as u32,
-                CONTEXT_NAME.as_ptr() as *const c_char,
+                name.len() as u32,
+                name.as_ptr() as *const c_char,
+                context_init,
             )
         };
         ret_to_res(ret)?;

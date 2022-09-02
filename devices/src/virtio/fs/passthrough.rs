@@ -2,48 +2,77 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{
-    borrow::Cow,
-    cmp,
-    collections::{btree_map, BTreeMap},
-    ffi::{CStr, CString},
-    fs::File,
-    io,
-    mem::{self, size_of, MaybeUninit},
-    os::raw::{c_int, c_long},
-    ptr::{addr_of, addr_of_mut},
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::borrow::Cow;
+use std::cmp;
+use std::collections::btree_map;
+use std::collections::BTreeMap;
+use std::ffi::CStr;
+use std::ffi::CString;
+use std::fs::File;
+use std::io;
+use std::mem;
+use std::mem::size_of;
+use std::mem::MaybeUninit;
+use std::os::raw::c_int;
+use std::os::raw::c_long;
+use std::ptr::addr_of;
+use std::ptr::addr_of_mut;
+use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
-use base::{
-    error, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr, ioctl_with_mut_ptr, ioctl_with_ptr, syscall,
-    AsRawDescriptor, FileFlags, FromRawDescriptor, RawDescriptor,
-};
+use base::error;
+use base::ioctl_ior_nr;
+use base::ioctl_iow_nr;
+use base::ioctl_iowr_nr;
+use base::ioctl_with_mut_ptr;
+use base::ioctl_with_ptr;
+use base::syscall;
+use base::AsRawDescriptor;
+use base::FileFlags;
+use base::FromRawDescriptor;
+use base::RawDescriptor;
 use data_model::DataInit;
-use fuse::filesystem::{
-    Context, DirectoryIterator, Entry, FileSystem, FsOptions, GetxattrReply, IoctlFlags,
-    IoctlReply, ListxattrReply, OpenOptions, RemoveMappingOne, SetattrValid, ZeroCopyReader,
-    ZeroCopyWriter, ROOT_ID,
-};
+use fuse::filesystem::Context;
+use fuse::filesystem::DirectoryIterator;
+use fuse::filesystem::Entry;
+use fuse::filesystem::FileSystem;
+use fuse::filesystem::FsOptions;
+use fuse::filesystem::GetxattrReply;
+use fuse::filesystem::IoctlFlags;
+use fuse::filesystem::IoctlReply;
+use fuse::filesystem::ListxattrReply;
+use fuse::filesystem::OpenOptions;
+use fuse::filesystem::RemoveMappingOne;
+use fuse::filesystem::SetattrValid;
+use fuse::filesystem::ZeroCopyReader;
+use fuse::filesystem::ZeroCopyWriter;
+use fuse::filesystem::ROOT_ID;
 use fuse::sys::WRITE_KILL_PRIV;
 use fuse::Mapper;
-use sync::Mutex;
-
 #[cfg(feature = "chromeos")]
-use {
-    protobuf::Message,
-    system_api::client::OrgChromiumArcQuota,
-    system_api::UserDataAuth::{
-        SetMediaRWDataFileProjectIdReply, SetMediaRWDataFileProjectIdRequest,
-    },
-};
+use protobuf::Message;
+use serde::Deserialize;
+use serde::Serialize;
+use sync::Mutex;
+#[cfg(feature = "chromeos")]
+use system_api::client::OrgChromiumArcQuota;
+#[cfg(feature = "chromeos")]
+use system_api::UserDataAuth::SetMediaRWDataFileProjectIdReply;
+#[cfg(feature = "chromeos")]
+use system_api::UserDataAuth::SetMediaRWDataFileProjectIdRequest;
+#[cfg(feature = "chromeos")]
+use system_api::UserDataAuth::SetMediaRWDataFileProjectInheritanceFlagReply;
+#[cfg(feature = "chromeos")]
+use system_api::UserDataAuth::SetMediaRWDataFileProjectInheritanceFlagRequest;
 
-use crate::virtio::fs::caps::{Capability, Caps, Set as CapSet, Value as CapValue};
+use crate::virtio::fs::caps::Capability;
+use crate::virtio::fs::caps::Caps;
+use crate::virtio::fs::caps::Set as CapSet;
+use crate::virtio::fs::caps::Value as CapValue;
 use crate::virtio::fs::multikey::MultikeyBTreeMap;
 use crate::virtio::fs::read_dir::ReadDir;
 
@@ -57,6 +86,9 @@ const SELINUX_XATTR: &[u8] = b"security.selinux";
 
 const FSCRYPT_KEY_DESCRIPTOR_SIZE: usize = 8;
 const FSCRYPT_KEY_IDENTIFIER_SIZE: usize = 16;
+
+#[cfg(feature = "chromeos")]
+const FS_PROJINHERIT_FL: c_int = 0x20000000;
 
 // 25 seconds is the default timeout for dbus-send.
 #[cfg(feature = "chromeos")]
@@ -396,7 +428,7 @@ fn statat<D: AsRawDescriptor>(dir: &D, name: &CStr) -> io::Result<libc::stat64> 
 /// The caching policy that the file system should report to the FUSE client. By default the FUSE
 /// protocol uses close-to-open consistency. This means that any cached contents of the file are
 /// invalidated the next time that file is opened.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CachePolicy {
     /// The client should never cache file data and all I/O should be directly forwarded to the
     /// server. This policy must be selected when file contents may change without the knowledge of
@@ -434,7 +466,7 @@ impl Default for CachePolicy {
 }
 
 /// Options that configure the behavior of the file system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// How long the FUSE client should consider directory entries to be valid. If the contents of a
     /// directory can only be modified by the FUSE client (i.e., the file system has exclusive
@@ -1039,7 +1071,7 @@ impl PassthroughFs {
                 let fd = unsafe { dbus::arg::OwnedFd::new(base::clone_descriptor(&*data)?) };
                 match proxy.set_media_rwdata_file_project_id(fd, proto.write_to_bytes().unwrap()) {
                     Ok(r) => {
-                        let r = protobuf::parse_from_bytes::<SetMediaRWDataFileProjectIdReply>(&r)
+                        let r = SetMediaRWDataFileProjectIdReply::parse_from_bytes(&r)
                             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                         if !r.success {
                             return Ok(IoctlReply::Done(Err(io::Error::from_raw_os_error(
@@ -1082,7 +1114,13 @@ impl PassthroughFs {
         }
     }
 
-    fn set_flags<R: io::Read>(&self, inode: Inode, handle: Handle, r: R) -> io::Result<IoctlReply> {
+    fn set_flags<R: io::Read>(
+        &self,
+        #[cfg_attr(not(feature = "chromeos"), allow(unused_variables))] ctx: Context,
+        inode: Inode,
+        handle: Handle,
+        r: R,
+    ) -> io::Result<IoctlReply> {
         let data: Arc<dyn AsRawDescriptor> = if self.zero_message_open.load(Ordering::Relaxed) {
             self.find_inode(inode)?
         } else {
@@ -1090,10 +1128,61 @@ impl PassthroughFs {
         };
 
         // The ioctl encoding is a long but the parameter is actually an int.
-        let flags = c_int::from_reader(r)?;
+        let in_flags = c_int::from_reader(r)?;
+
+        #[cfg(feature = "chromeos")]
+        let st = stat(&*data)?;
+
+        // Only privleged uid can perform FS_IOC_SETFLAGS through cryptohome.
+        #[cfg(feature = "chromeos")]
+        if ctx.uid == st.st_uid || self.cfg.privileged_quota_uids.contains(&ctx.uid) {
+            // Get the current flag.
+            let mut buf = MaybeUninit::<c_int>::zeroed();
+            // Safe because the kernel will only write to `buf` and we check the return value.
+            let res = unsafe { ioctl_with_mut_ptr(&*data, FS_IOC_GETFLAGS(), buf.as_mut_ptr()) };
+            if res < 0 {
+                return Ok(IoctlReply::Done(Err(io::Error::last_os_error())));
+            }
+            // Safe because the kernel guarantees that the policy is now initialized.
+            let current_flags = unsafe { buf.assume_init() };
+
+            // Project inheritance flag cannot be changed inside a user namespace.
+            // Use UserDataAuth to avoid this restriction.
+            if (in_flags & FS_PROJINHERIT_FL) != (current_flags & FS_PROJINHERIT_FL) {
+                let connection = self.dbus_connection.as_ref().unwrap().lock();
+                let proxy = connection.with_proxy(
+                    "org.chromium.UserDataAuth",
+                    "/org/chromium/UserDataAuth",
+                    DEFAULT_DBUS_TIMEOUT,
+                );
+                let mut proto: SetMediaRWDataFileProjectInheritanceFlagRequest = Message::new();
+                // If the input flags contain FS_PROJINHERIT_FL, then it is a set. Otherwise it is a
+                // reset.
+                proto.enable = (in_flags & FS_PROJINHERIT_FL) == FS_PROJINHERIT_FL;
+                // Safe because data is a valid file descriptor.
+                let fd = unsafe { dbus::arg::OwnedFd::new(base::clone_descriptor(&*data)?) };
+                match proxy.set_media_rwdata_file_project_inheritance_flag(
+                    fd,
+                    proto.write_to_bytes().unwrap(),
+                ) {
+                    Ok(r) => {
+                        let r = SetMediaRWDataFileProjectInheritanceFlagReply::parse_from_bytes(&r)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                        if !r.success {
+                            return Ok(IoctlReply::Done(Err(io::Error::from_raw_os_error(
+                                r.error,
+                            ))));
+                        }
+                    }
+                    Err(e) => {
+                        return Err(io::Error::new(io::ErrorKind::Other, e));
+                    }
+                };
+            }
+        }
 
         // Safe because this doesn't modify any memory and we check the return value.
-        let res = unsafe { ioctl_with_ptr(&*data, FS_IOC_SETFLAGS(), &flags) };
+        let res = unsafe { ioctl_with_ptr(&*data, FS_IOC_SETFLAGS(), &in_flags) };
         if res < 0 {
             Ok(IoctlReply::Done(Err(io::Error::last_os_error())))
         } else {
@@ -2336,7 +2425,7 @@ impl FileSystem for PassthroughFs {
                 if in_size < size_of::<c_int>() as u32 {
                     Err(io::Error::from_raw_os_error(libc::ENOMEM))
                 } else {
-                    self.set_flags(inode, handle, r)
+                    self.set_flags(ctx, inode, handle, r)
                 }
             }
             ENABLE_VERITY => {

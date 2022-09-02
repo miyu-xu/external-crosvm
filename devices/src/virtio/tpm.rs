@@ -2,22 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::env;
-use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::ops::BitOrAssign;
-use std::path::PathBuf;
 use std::thread;
 
-use base::{error, Event, PollToken, RawDescriptor, WaitContext};
+use base::error;
+use base::Event;
+use base::EventToken;
+use base::RawDescriptor;
+use base::WaitContext;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestMemory;
 
-use super::{
-    DescriptorChain, DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice,
-    Writer, TYPE_TPM,
-};
+use super::DescriptorChain;
+use super::DescriptorError;
+use super::DeviceType;
+use super::Interrupt;
+use super::Queue;
+use super::Reader;
+use super::SignalableInterrupt;
+use super::VirtioDevice;
+use super::Writer;
 
 // A single queue of size 2. The guest kernel driver will enqueue a single
 // descriptor chain containing one command buffer and one response buffer at a
@@ -36,17 +44,17 @@ struct Worker {
     mem: GuestMemory,
     queue_evt: Event,
     kill_evt: Event,
-    device: Device,
+    backend: Box<dyn TpmBackend>,
 }
 
-struct Device {
-    simulator: tpm2::Simulator,
+pub trait TpmBackend: Send {
+    fn execute_command<'a>(&'a mut self, command: &[u8]) -> &'a [u8];
 }
 
-impl Device {
-    fn perform_work(&mut self, mem: &GuestMemory, desc: DescriptorChain) -> Result<u32> {
-        let mut reader = Reader::new(mem.clone(), desc.clone()).map_err(Error::Descriptor)?;
-        let mut writer = Writer::new(mem.clone(), desc).map_err(Error::Descriptor)?;
+impl Worker {
+    fn perform_work(&mut self, desc: DescriptorChain) -> Result<u32> {
+        let mut reader = Reader::new(self.mem.clone(), desc.clone()).map_err(Error::Descriptor)?;
+        let mut writer = Writer::new(self.mem.clone(), desc).map_err(Error::Descriptor)?;
 
         let available_bytes = reader.available_bytes();
         if available_bytes > TPM_BUFSIZE {
@@ -58,7 +66,7 @@ impl Device {
         let mut command = vec![0u8; available_bytes];
         reader.read_exact(&mut command).map_err(Error::Read)?;
 
-        let response = self.simulator.execute_command(&command);
+        let response = self.backend.execute_command(&command);
 
         if response.len() > TPM_BUFSIZE {
             return Err(Error::ResponseTooLong {
@@ -78,15 +86,13 @@ impl Device {
 
         Ok(writer.bytes_written() as u32)
     }
-}
 
-impl Worker {
     fn process_queue(&mut self) -> NeedsInterrupt {
         let mut needs_interrupt = NeedsInterrupt::No;
         while let Some(avail_desc) = self.queue.pop(&self.mem) {
             let index = avail_desc.index;
 
-            let len = match self.device.perform_work(&self.mem, avail_desc) {
+            let len = match self.perform_work(avail_desc) {
                 Ok(len) => len,
                 Err(err) => {
                     error!("{}", err);
@@ -102,7 +108,7 @@ impl Worker {
     }
 
     fn run(mut self) {
-        #[derive(PollToken, Debug)]
+        #[derive(EventToken, Debug)]
         enum Token {
             // A request is ready on the queue.
             QueueAvailable,
@@ -133,7 +139,7 @@ impl Worker {
             let events = match wait_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("vtpm failed polling for events: {}", e);
+                    error!("vtpm failed waiting for events: {}", e);
                     break;
                 }
             };
@@ -163,17 +169,19 @@ impl Worker {
 
 /// Virtio vTPM device.
 pub struct Tpm {
-    storage: PathBuf,
+    backend: Option<Box<dyn TpmBackend>>,
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<()>>,
+    features: u64,
 }
 
 impl Tpm {
-    pub fn new(storage: PathBuf) -> Tpm {
+    pub fn new(backend: Box<dyn TpmBackend>, base_features: u64) -> Tpm {
         Tpm {
-            storage,
+            backend: Some(backend),
             kill_evt: None,
             worker_thread: None,
+            features: base_features,
         }
     }
 }
@@ -195,12 +203,16 @@ impl VirtioDevice for Tpm {
         Vec::new()
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_TPM
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Tpm
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
         QUEUE_SIZES
+    }
+
+    fn features(&self) -> u64 {
+        self.features
     }
 
     fn activate(
@@ -216,15 +228,13 @@ impl VirtioDevice for Tpm {
         let queue = queues.remove(0);
         let queue_evt = queue_evts.remove(0);
 
-        if let Err(err) = fs::create_dir_all(&self.storage) {
-            error!("vtpm failed to create directory for simulator: {}", err);
-            return;
-        }
-        if let Err(err) = env::set_current_dir(&self.storage) {
-            error!("vtpm failed to change into simulator directory: {}", err);
-            return;
-        }
-        let simulator = tpm2::Simulator::singleton_in_current_directory();
+        let backend = match self.backend.take() {
+            Some(backend) => backend,
+            None => {
+                error!("no backend in vtpm");
+                return;
+            }
+        };
 
         let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
@@ -241,7 +251,7 @@ impl VirtioDevice for Tpm {
             mem,
             queue_evt,
             kill_evt,
-            device: Device { simulator },
+            backend,
         };
 
         let worker_result = thread::Builder::new()

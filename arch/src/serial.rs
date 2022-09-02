@@ -3,18 +3,24 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use base::Event;
-use devices::serial_device::{SerialHardware, SerialParameters, SerialType};
-use devices::{Bus, ProxyDevice, Serial};
+use devices::serial_device::SerialHardware;
+use devices::serial_device::SerialParameters;
+use devices::serial_device::SerialType;
+use devices::Bus;
+#[cfg(windows)]
+use devices::Minijail;
+use devices::Serial;
 use hypervisor::ProtectionType;
+#[cfg(unix)]
 use minijail::Minijail;
 use remain::sorted;
-use sync::Mutex;
 use thiserror::Error as ThisError;
 
 use crate::DeviceRegistrationError;
+
+mod sys;
 
 /// Add the default serial parameters for serial ports that have not already been specified.
 ///
@@ -26,11 +32,12 @@ use crate::DeviceRegistrationError;
 /// configured explicitly.
 pub fn set_default_serial_parameters(
     serial_parameters: &mut BTreeMap<(SerialHardware, u8), SerialParameters>,
+    is_vhost_user_console_enabled: bool,
 ) {
     // If no console device exists and the first serial port has not been specified,
     // set the first serial port as a stdout+stdin console.
     let default_console = (SerialHardware::Serial, 1);
-    if !serial_parameters.iter().any(|(_, p)| p.console) {
+    if !serial_parameters.iter().any(|(_, p)| p.console) && !is_vhost_user_console_enabled {
         serial_parameters
             .entry(default_console)
             .or_insert(SerialParameters {
@@ -42,6 +49,8 @@ pub fn set_default_serial_parameters(
                 console: true,
                 earlycon: false,
                 stdin: true,
+                out_timestamp: false,
+                ..Default::default()
             });
     }
 
@@ -59,6 +68,8 @@ pub fn set_default_serial_parameters(
             console: false,
             earlycon: false,
             stdin: false,
+            out_timestamp: false,
+            ..Default::default()
         });
     }
 }
@@ -72,11 +83,12 @@ pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 ///
 /// # Arguments
 ///
+/// * `protected_vm` - VM protection mode.
 /// * `io_bus` - Bus to add the devices to
 /// * `com_evt_1_3` - event for com1 and com3
 /// * `com_evt_1_4` - event for com2 and com4
-/// * `io_bus` - Bus to add the devices to
 /// * `serial_parameters` - definitions of serial parameter configurations.
+/// * `serial_jail` - minijail object cloned for use with each serial device.
 ///   All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
     protected_vm: ProtectionType,
@@ -84,49 +96,49 @@ pub fn add_serial_devices(
     com_evt_1_3: &Event,
     com_evt_2_4: &Event,
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
-    serial_jail: Option<Minijail>,
-) -> Result<(), DeviceRegistrationError> {
-    for x in 0..=3 {
-        let com_evt = match x {
-            0 => com_evt_1_3,
-            1 => com_evt_2_4,
-            2 => com_evt_1_3,
-            3 => com_evt_2_4,
-            _ => com_evt_1_3,
+    #[cfg_attr(windows, allow(unused_variables))] serial_jail: Option<Minijail>,
+) -> std::result::Result<(), DeviceRegistrationError> {
+    for com_num in 0..=3 {
+        let com_evt = match com_num {
+            0 => &com_evt_1_3,
+            1 => &com_evt_2_4,
+            2 => &com_evt_1_3,
+            3 => &com_evt_2_4,
+            _ => &com_evt_1_3,
         };
 
         let param = serial_parameters
-            .get(&(SerialHardware::Serial, x + 1))
-            .ok_or(DeviceRegistrationError::MissingRequiredSerialDevice(x + 1))?;
+            .get(&(SerialHardware::Serial, com_num + 1))
+            .ok_or(DeviceRegistrationError::MissingRequiredSerialDevice(
+                com_num + 1,
+            ))?;
 
-        let mut preserved_fds = Vec::new();
+        let mut preserved_descriptors = Vec::new();
         let com = param
-            .create_serial_device::<Serial>(protected_vm, com_evt, &mut preserved_fds)
+            .create_serial_device::<Serial>(protected_vm, com_evt, &mut preserved_descriptors)
             .map_err(DeviceRegistrationError::CreateSerialDevice)?;
 
-        match serial_jail.as_ref() {
-            Some(jail) => {
-                let com = Arc::new(Mutex::new(
-                    ProxyDevice::new(
-                        com,
-                        &jail
-                            .try_clone()
-                            .map_err(DeviceRegistrationError::CloneJail)?,
-                        preserved_fds,
-                    )
-                    .map_err(DeviceRegistrationError::ProxyDeviceCreation)?,
-                ));
-                io_bus
-                    .insert(com.clone(), SERIAL_ADDR[x as usize], 0x8)
-                    .unwrap();
-            }
-            None => {
-                let com = Arc::new(Mutex::new(com));
-                io_bus
-                    .insert(com.clone(), SERIAL_ADDR[x as usize], 0x8)
-                    .unwrap();
-            }
-        }
+        #[cfg(unix)]
+        let serial_jail = if let Some(serial_jail) = serial_jail.as_ref() {
+            Some(
+                serial_jail
+                    .try_clone()
+                    .map_err(DeviceRegistrationError::CloneJail)?,
+            )
+        } else {
+            None
+        };
+        #[cfg(windows)]
+        let serial_jail = None;
+
+        sys::add_serial_device(
+            com_num as usize,
+            com,
+            param,
+            serial_jail,
+            preserved_descriptors,
+            io_bus,
+        )?;
     }
 
     Ok(())
@@ -146,6 +158,7 @@ pub type GetSerialCmdlineResult<T> = std::result::Result<T, GetSerialCmdlineErro
 /// Add serial options to the provided `cmdline` based on `serial_parameters`.
 /// `serial_io_type` should be "io" if the platform uses x86-style I/O ports for serial devices
 /// or "mmio" if the serial ports are memory mapped.
+// TODO(b/227407433): Support cases where vhost-user console is specified.
 pub fn get_serial_cmdline(
     cmdline: &mut kernel_cmdline::Cmdline,
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -167,6 +180,7 @@ pub fn get_serial_cmdline(
                 .insert("console", &format!("hvc{}", num - 1))
                 .map_err(GetSerialCmdlineError::KernelCmdline)?;
         }
+        Some((SerialHardware::Debugcon, _)) => {}
         None => {}
     }
 
@@ -197,15 +211,16 @@ pub fn get_serial_cmdline(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use kernel_cmdline::Cmdline;
+
+    use super::*;
 
     #[test]
     fn get_serial_cmdline_default() {
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
 
-        set_default_serial_parameters(&mut serial_parameters);
+        set_default_serial_parameters(&mut serial_parameters, false);
         get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
             .expect("get_serial_cmdline failed");
 
@@ -230,10 +245,12 @@ mod tests {
                 console: true,
                 earlycon: false,
                 stdin: true,
+                out_timestamp: false,
+                debugcon_port: 0,
             },
         );
 
-        set_default_serial_parameters(&mut serial_parameters);
+        set_default_serial_parameters(&mut serial_parameters, false);
         get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
             .expect("get_serial_cmdline failed");
 
@@ -258,6 +275,8 @@ mod tests {
                 console: true,
                 earlycon: false,
                 stdin: true,
+                out_timestamp: false,
+                debugcon_port: 0,
             },
         );
 
@@ -273,10 +292,12 @@ mod tests {
                 console: false,
                 earlycon: true,
                 stdin: false,
+                out_timestamp: false,
+                debugcon_port: 0,
             },
         );
 
-        set_default_serial_parameters(&mut serial_parameters);
+        set_default_serial_parameters(&mut serial_parameters, false);
         get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
             .expect("get_serial_cmdline failed");
 
@@ -302,10 +323,12 @@ mod tests {
                 console: false,
                 earlycon: true,
                 stdin: true,
+                out_timestamp: false,
+                debugcon_port: 0,
             },
         );
 
-        set_default_serial_parameters(&mut serial_parameters);
+        set_default_serial_parameters(&mut serial_parameters, false);
         get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
             .expect_err("get_serial_cmdline succeeded");
     }

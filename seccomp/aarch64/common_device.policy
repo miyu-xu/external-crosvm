@@ -17,11 +17,12 @@ exit_group: 1
 futex: 1
 getcwd: 1
 getpid: 1
+gettid: 1
 gettimeofday: 1
 io_uring_setup: 1
 io_uring_enter: 1
 kill: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE
+madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE
 mmap: arg2 in ~PROT_EXEC
 mprotect: arg2 in ~PROT_EXEC
 mremap: 1
@@ -36,6 +37,7 @@ readv: 1
 recvfrom: 1
 recvmsg: 1
 restart_syscall: 1
+rseq: 1
 rt_sigaction: 1
 rt_sigprocmask: 1
 rt_sigreturn: 1

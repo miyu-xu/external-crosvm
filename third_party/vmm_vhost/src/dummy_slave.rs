@@ -38,6 +38,10 @@ impl DummySlaveReqHandler {
 }
 
 impl VhostUserSlaveReqHandlerMut for DummySlaveReqHandler {
+    fn protocol(&self) -> Protocol {
+        Protocol::Regular
+    }
+
     fn set_owner(&mut self) -> Result<()> {
         if self.owned {
             return Err(Error::InvalidOperation);
@@ -265,5 +269,9 @@ impl VhostUserSlaveReqHandlerMut for DummySlaveReqHandler {
 
     fn remove_mem_region(&mut self, _region: &VhostUserSingleMemoryRegion) -> Result<()> {
         Ok(())
+    }
+
+    fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>> {
+        Ok(Vec::new())
     }
 }

@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use anyhow::Result;
-
-#[cfg(feature = "virgl_renderer")]
-use anyhow::bail;
 #[cfg(feature = "virgl_renderer")]
 use std::env;
 #[cfg(feature = "virgl_renderer")]
@@ -18,7 +14,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[cfg(feature = "virgl_renderer")]
-const MINIGBM_SRC: &str = "../../minigbm";
+use anyhow::bail;
+use anyhow::Result;
+
+#[cfg(feature = "virgl_renderer")]
+const MINIGBM_SRC: &str = "../third_party/minigbm";
 #[cfg(feature = "virgl_renderer")]
 const VIRGLRENDERER_SRC: &str = "../../virglrenderer";
 
@@ -102,10 +102,17 @@ fn build_virglrenderer(out_dir: &Path) -> Result<()> {
         );
     }
 
+    let platforms = [
+        "egl",
+        #[cfg(feature = "x")]
+        "glx",
+    ];
+
     let minigbm_src_abs = PathBuf::from(MINIGBM_SRC).canonicalize()?;
     let status = Command::new("meson")
         .env("PKG_CONFIG_PATH", &minigbm_src_abs)
         .arg("setup")
+        .arg(format!("-Dplatforms={}", platforms.join(",")))
         .arg("-Ddefault_library=static")
         .args(get_meson_cross_args())
         .arg(out_dir.as_os_str())
@@ -157,9 +164,23 @@ fn virglrenderer() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "gfxstream")]
+fn gfxstream() -> Result<()> {
+    let gfxstream_path = std::env::var("GFXSTREAM_PATH")?;
+    println!("cargo:rustc-link-search={}", gfxstream_path);
+    Ok(())
+}
+
 fn main() -> Result<()> {
+    // Skip installing dependencies when generating documents.
+    if std::env::var("CARGO_DOC").is_ok() {
+        return Ok(());
+    }
+
     #[cfg(feature = "virgl_renderer")]
     virglrenderer()?;
+    #[cfg(feature = "gfxstream")]
+    gfxstream()?;
 
     Ok(())
 }

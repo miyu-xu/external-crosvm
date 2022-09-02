@@ -17,6 +17,7 @@ echo "manifest = ${MANIFEST_PATH}"
 DISABLED_FEATURES=(
     audio_cras
     chromeos
+    crash-report
     libvda
     power-monitor-powerd
     video-decoder
@@ -38,6 +39,12 @@ for f in $ALL_FEATURES; do
     fi
 done
 
-cargo doc \
+# Set an environment variable 'CARGO_DOC' here so that each build.rs can skip
+# building unnecessary dependencies to generate documentations.
+CARGO_DOC="true" cargo doc \
       --manifest-path="${MANIFEST_PATH}" \
-      --features="${features}" "$@"
+      --workspace \
+      --no-deps \
+      --exclude crosvm-fuzz \
+      --features="${features}" "$@" \
+      --document-private-items

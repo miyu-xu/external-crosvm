@@ -4,16 +4,15 @@
 use base::{AsRawDescriptor, RawDescriptor};
 use std::fs::File;
 use std::mem;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::UnixStream;
 use std::slice;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use data_model::DataInit;
 
-use super::connection::{socket::Endpoint as SocketEndpoint, Endpoint, EndpointExt};
+use super::connection::{Endpoint, EndpointExt};
 use super::message::*;
 use super::{take_single_file, Error, Result};
+use crate::{MasterReqEndpoint, SystemStream};
 
 #[derive(PartialEq, Eq, Debug)]
 /// Vhost-user protocol variants used for the communication.
@@ -77,12 +76,13 @@ pub trait VhostUserSlaveReqHandler {
     fn set_vring_enable(&self, index: u32, enable: bool) -> Result<()>;
     fn get_config(&self, offset: u32, size: u32, flags: VhostUserConfigFlags) -> Result<Vec<u8>>;
     fn set_config(&self, offset: u32, buf: &[u8], flags: VhostUserConfigFlags) -> Result<()>;
-    fn set_slave_req_fd(&self, _vu_req: File) {}
+    fn set_slave_req_fd(&self, _vu_req: Box<dyn Endpoint<SlaveReq>>) {}
     fn get_inflight_fd(&self, inflight: &VhostUserInflight) -> Result<(VhostUserInflight, File)>;
     fn set_inflight_fd(&self, inflight: &VhostUserInflight, file: File) -> Result<()>;
     fn get_max_mem_slots(&self) -> Result<u64>;
     fn add_mem_region(&self, region: &VhostUserSingleMemoryRegion, fd: File) -> Result<()>;
     fn remove_mem_region(&self, region: &VhostUserSingleMemoryRegion) -> Result<()>;
+    fn get_shared_memory_regions(&self) -> Result<Vec<VhostSharedMemoryRegion>>;
 }
 
 /// Services provided to the master by the slave without interior mutability.
@@ -91,9 +91,7 @@ pub trait VhostUserSlaveReqHandler {
 #[allow(missing_docs)]
 pub trait VhostUserSlaveReqHandlerMut {
     /// Returns the type of vhost-user protocol that the handler support.
-    fn protocol(&self) -> Protocol {
-        Protocol::Regular
-    }
+    fn protocol(&self) -> Protocol;
 
     fn set_owner(&mut self) -> Result<()>;
     fn reset_owner(&mut self) -> Result<()>;
@@ -127,7 +125,7 @@ pub trait VhostUserSlaveReqHandlerMut {
         flags: VhostUserConfigFlags,
     ) -> Result<Vec<u8>>;
     fn set_config(&mut self, offset: u32, buf: &[u8], flags: VhostUserConfigFlags) -> Result<()>;
-    fn set_slave_req_fd(&mut self, _vu_req: File) {}
+    fn set_slave_req_fd(&mut self, _vu_req: Box<dyn Endpoint<SlaveReq>>) {}
     fn get_inflight_fd(
         &mut self,
         inflight: &VhostUserInflight,
@@ -136,6 +134,7 @@ pub trait VhostUserSlaveReqHandlerMut {
     fn get_max_mem_slots(&mut self) -> Result<u64>;
     fn add_mem_region(&mut self, region: &VhostUserSingleMemoryRegion, fd: File) -> Result<()>;
     fn remove_mem_region(&mut self, region: &VhostUserSingleMemoryRegion) -> Result<()>;
+    fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>>;
 }
 
 impl<T: VhostUserSlaveReqHandlerMut> VhostUserSlaveReqHandler for Mutex<T> {
@@ -225,7 +224,7 @@ impl<T: VhostUserSlaveReqHandlerMut> VhostUserSlaveReqHandler for Mutex<T> {
         self.lock().unwrap().set_config(offset, buf, flags)
     }
 
-    fn set_slave_req_fd(&self, vu_req: File) {
+    fn set_slave_req_fd(&self, vu_req: Box<dyn Endpoint<SlaveReq>>) {
         self.lock().unwrap().set_slave_req_fd(vu_req)
     }
 
@@ -247,6 +246,10 @@ impl<T: VhostUserSlaveReqHandlerMut> VhostUserSlaveReqHandler for Mutex<T> {
 
     fn remove_mem_region(&self, region: &VhostUserSingleMemoryRegion) -> Result<()> {
         self.lock().unwrap().remove_mem_region(region)
+    }
+
+    fn get_shared_memory_regions(&self) -> Result<Vec<VhostSharedMemoryRegion>> {
+        self.lock().unwrap().get_shared_memory_regions()
     }
 }
 
@@ -384,12 +387,6 @@ impl<E: Endpoint<MasterReq> + AsRawDescriptor> AsRawDescriptor for SlaveReqHelpe
     }
 }
 
-impl<E: Endpoint<MasterReq> + AsRawFd> AsRawFd for SlaveReqHelper<E> {
-    fn as_raw_fd(&self) -> RawFd {
-        self.endpoint.as_raw_fd()
-    }
-}
-
 /// Server to handle service requests from masters from the master communication channel.
 ///
 /// The [SlaveReqHandler] acts as a server on the slave side, to handle service requests from
@@ -404,7 +401,7 @@ impl<E: Endpoint<MasterReq> + AsRawFd> AsRawFd for SlaveReqHelper<E> {
 pub struct SlaveReqHandler<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> {
     slave_req_helper: SlaveReqHelper<E>,
     // the vhost-user backend device object
-    backend: Arc<S>,
+    backend: S,
 
     virtio_features: u64,
     acked_virtio_features: u64,
@@ -415,16 +412,22 @@ pub struct SlaveReqHandler<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> 
     error: Option<i32>,
 }
 
-impl<S: VhostUserSlaveReqHandler> SlaveReqHandler<S, SocketEndpoint<MasterReq>> {
+impl<S: VhostUserSlaveReqHandler> SlaveReqHandler<S, MasterReqEndpoint> {
     /// Create a vhost-user slave endpoint from a connected socket.
-    pub fn from_stream(socket: UnixStream, backend: Arc<S>) -> Self {
-        Self::new(SocketEndpoint::from(socket), backend)
+    pub fn from_stream(socket: SystemStream, backend: S) -> Self {
+        Self::new(MasterReqEndpoint::from(socket), backend)
+    }
+}
+
+impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> AsRef<S> for SlaveReqHandler<S, E> {
+    fn as_ref(&self) -> &S {
+        &self.backend
     }
 }
 
 impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> {
     /// Create a vhost-user slave endpoint.
-    pub(super) fn new(endpoint: E, backend: Arc<S>) -> Self {
+    pub fn new(endpoint: E, backend: S) -> Self {
         SlaveReqHandler {
             slave_req_helper: SlaveReqHelper::new(endpoint, backend.protocol()),
             backend,
@@ -441,7 +444,7 @@ impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> 
     /// # Arguments
     /// * - `path` - path of Unix domain socket listener to connect to
     /// * - `backend` - handler for requests from the master to the slave
-    pub fn connect(path: &str, backend: Arc<S>) -> Result<Self> {
+    pub fn connect(path: &str, backend: S) -> Result<Self> {
         Ok(Self::new(Endpoint::<MasterReq>::connect(path)?, backend))
     }
 
@@ -450,12 +453,19 @@ impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> 
         self.error = Some(error);
     }
 
-    /// Main entrance to server slave request from the slave communication channel.
+    /// Main entrance to request from the communication channel.
     ///
-    /// Receive and handle one incoming request message from the master. The caller needs to:
+    /// Receive and handle one incoming request message from the vmm. The caller needs to:
     /// - serialize calls to this function
     /// - decide what to do when error happens
     /// - optional recover from failure
+    ///
+    /// # Return:
+    /// * - `Ok(())`: one request was successfully handled.
+    /// * - `Err(ClientExit)`: the vmm closed the connection properly. This isn't an actual failure.
+    /// * - `Err(Disconnect)`: the connection was closed unexpectedly.
+    /// * - `Err(InvalidMessage)`: the vmm sent a illegal message.
+    /// * - other errors: failed to handle a request.
     pub fn handle_request(&mut self) -> Result<()> {
         // Return error if the endpoint is already in failed state.
         self.check_state()?;
@@ -469,7 +479,18 @@ impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> 
         // . recv optional message body and payload according size field in
         //   message header
         // . validate message body and optional payload
-        let (hdr, files) = self.slave_req_helper.endpoint.recv_header()?;
+        let (hdr, files) = match self.slave_req_helper.endpoint.recv_header() {
+            Ok((hdr, files)) => (hdr, files),
+            Err(Error::Disconnect) => {
+                // If the client closed the connection before sending a header, this should be
+                // handled as a legal exit.
+                return Err(Error::ClientExit);
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
         self.check_attached_files(&hdr, &files)?;
 
         let buf = match hdr.get_size() {
@@ -713,6 +734,16 @@ impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> 
                 self.slave_req_helper.send_ack_message(&hdr, res.is_ok())?;
                 res?;
             }
+            MasterReq::GET_SHARED_MEMORY_REGIONS => {
+                let regions = self.backend.get_shared_memory_regions()?;
+                let mut buf = Vec::new();
+                let msg = VhostUserU64::new(regions.len() as u64);
+                for r in regions {
+                    buf.extend_from_slice(r.as_slice())
+                }
+                self.slave_req_helper
+                    .send_reply_with_payload(&hdr, &msg, buf.as_slice())?;
+            }
             _ => {
                 return Err(Error::InvalidMessage);
             }
@@ -820,18 +851,20 @@ impl<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>> SlaveReqHandler<S, E> 
         if size - mem::size_of::<VhostUserConfig>() != msg.size as usize {
             return Err(Error::InvalidMessage);
         }
-        let flags: VhostUserConfigFlags;
-        match VhostUserConfigFlags::from_bits(msg.flags) {
-            Some(val) => flags = val,
+        let flags: VhostUserConfigFlags = match VhostUserConfigFlags::from_bits(msg.flags) {
+            Some(val) => val,
             None => return Err(Error::InvalidMessage),
-        }
+        };
 
         self.backend.set_config(msg.offset, buf, flags)
     }
 
     fn set_slave_req_fd(&mut self, files: Option<Vec<File>>) -> Result<()> {
-        let file = take_single_file(files).ok_or(Error::InvalidMessage)?;
-        self.backend.set_slave_req_fd(file);
+        let ep = self
+            .slave_req_helper
+            .endpoint
+            .create_slave_request_endpoint(files)?;
+        self.backend.set_slave_req_fd(ep);
         Ok(())
     }
 
@@ -918,6 +951,7 @@ impl<S: VhostUserSlaveReqHandler, E: AsRawDescriptor + Endpoint<MasterReq>> AsRa
     for SlaveReqHandler<S, E>
 {
     fn as_raw_descriptor(&self) -> RawDescriptor {
+        // TODO(b/221882601): figure out if this used for polling.
         self.slave_req_helper.endpoint.as_raw_descriptor()
     }
 }
@@ -927,13 +961,13 @@ mod tests {
     use base::INVALID_DESCRIPTOR;
 
     use super::*;
-    use crate::dummy_slave::DummySlaveReqHandler;
+    use crate::{dummy_slave::DummySlaveReqHandler, MasterReqEndpoint, SystemStream};
 
     #[test]
     fn test_slave_req_handler_new() {
-        let (p1, _p2) = UnixStream::pair().unwrap();
-        let endpoint = SocketEndpoint::<MasterReq>::from(p1);
-        let backend = Arc::new(Mutex::new(DummySlaveReqHandler::new()));
+        let (p1, _p2) = SystemStream::pair().unwrap();
+        let endpoint = MasterReqEndpoint::from(p1);
+        let backend = Mutex::new(DummySlaveReqHandler::new());
         let mut handler = SlaveReqHandler::new(endpoint, backend);
 
         handler.check_state().unwrap();

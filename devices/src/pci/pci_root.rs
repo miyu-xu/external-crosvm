@@ -5,19 +5,34 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::ops::Bound::Included;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+use std::sync::Weak;
 
-use base::{error, Event, RawDescriptor};
+use base::error;
+use base::RawDescriptor;
+use base::SendTube;
+use base::VmEventType;
+use resources::SystemAllocator;
 use sync::Mutex;
 
-use crate::pci::pci_configuration::{
-    PciBarConfiguration, PciBridgeSubclass, PciClassCode, PciConfiguration, PciHeaderType,
-    HEADER_TYPE_MULTIFUNCTION_MASK, HEADER_TYPE_REG,
-};
-use crate::pci::pci_device::{Error, PciDevice};
-use crate::pci::{PciAddress, PCI_VENDOR_ID_INTEL};
-use crate::{Bus, BusAccessInfo, BusDevice, BusType};
-use resources::SystemAllocator;
+use crate::pci::pci_configuration::PciBarConfiguration;
+use crate::pci::pci_configuration::PciBridgeSubclass;
+use crate::pci::pci_configuration::PciClassCode;
+use crate::pci::pci_configuration::PciConfiguration;
+use crate::pci::pci_configuration::PciHeaderType;
+use crate::pci::pci_configuration::HEADER_TYPE_MULTIFUNCTION_MASK;
+use crate::pci::pci_configuration::HEADER_TYPE_REG;
+use crate::pci::pci_device::Error;
+use crate::pci::pci_device::PciBus;
+use crate::pci::pci_device::PciDevice;
+use crate::pci::PciAddress;
+use crate::pci::PciId;
+use crate::pci::PCI_VENDOR_ID_INTEL;
+use crate::Bus;
+use crate::BusAccessInfo;
+use crate::BusDevice;
+use crate::BusType;
+use crate::DeviceId;
 
 // A PciDevice that holds the root hub's configuration.
 struct PciRootConfiguration {
@@ -56,6 +71,14 @@ impl PciDevice for PciRootConfiguration {
     }
 }
 
+// Command send to pci root worker thread to add/remove device from pci root
+pub enum PciRootCommand {
+    Add(PciAddress, Arc<Mutex<dyn BusDevice>>),
+    AddBridge(Arc<Mutex<PciBus>>),
+    Remove(PciAddress),
+    Kill,
+}
+
 /// Emulates the PCI Root bridge.
 #[allow(dead_code)] // TODO(b/174705596): remove once mmio_bus and io_bus are used
 pub struct PciRoot {
@@ -63,6 +86,8 @@ pub struct PciRoot {
     mmio_bus: Weak<Bus>,
     /// IO bus (x86 only - for non-x86 platforms, this is just an empty Bus).
     io_bus: Weak<Bus>,
+    /// Root pci bus (bus 0)
+    root_bus: Arc<Mutex<PciBus>>,
     /// Bus configuration for the root device.
     root_configuration: PciRootConfiguration,
     /// Devices attached to this bridge.
@@ -76,10 +101,11 @@ const PCIE_XBAR_BASE_ADDR: usize = 24;
 
 impl PciRoot {
     /// Create an empty PCI root bus.
-    pub fn new(mmio_bus: Weak<Bus>, io_bus: Weak<Bus>) -> Self {
+    pub fn new(mmio_bus: Weak<Bus>, io_bus: Weak<Bus>, root_bus: Arc<Mutex<PciBus>>) -> Self {
         PciRoot {
             mmio_bus,
             io_bus,
+            root_bus,
             root_configuration: PciRootConfiguration {
                 config: PciConfiguration::new(
                     PCI_VENDOR_ID_INTEL,
@@ -98,6 +124,35 @@ impl PciRoot {
         }
     }
 
+    /// Get the root pci bus
+    pub fn get_root_bus(&self) -> Arc<Mutex<PciBus>> {
+        self.root_bus.clone()
+    }
+
+    /// Get the ACPI path to a PCI device
+    pub fn acpi_path(&self, address: &PciAddress) -> Option<String> {
+        if let Some(device) = self.devices.get(address) {
+            let path = self.root_bus.lock().path_to(address.bus);
+            if path.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "_SB_.{}.{}",
+                    path.iter()
+                        .map(|x| format!("PC{:02X}", x))
+                        .collect::<Vec<String>>()
+                        .join("."),
+                    match device.lock().is_bridge() {
+                        Some(bus_no) => format!("PC{:02X}", bus_no),
+                        None => format!("PE{:02X}", address.devfn()),
+                    }
+                ))
+            }
+        } else {
+            None
+        }
+    }
+
     /// enable pcie enhanced configuration access and set base mmio
     pub fn enable_pcie_cfg_mmio(&mut self, pcie_cfg_mmio: u64) {
         self.pcie_cfg_mmio = Some(pcie_cfg_mmio);
@@ -109,9 +164,19 @@ impl PciRoot {
         if !address.is_root() {
             self.devices.insert(address, device);
         }
+
+        if let Err(e) = self.root_bus.lock().add_child_device(address) {
+            error!("add device error: {}", e);
+        }
     }
 
-    fn remove_device(&mut self, address: PciAddress) {
+    pub fn add_bridge(&mut self, bridge_bus: Arc<Mutex<PciBus>>) {
+        if let Err(e) = self.root_bus.lock().add_child_bus(bridge_bus) {
+            error!("add bridge error: {}", e);
+        }
+    }
+
+    pub fn remove_device(&mut self, address: PciAddress) {
         if let Some(d) = self.devices.remove(&address) {
             for (range, bus_type) in d.lock().get_ranges() {
                 let bus_ptr = if bus_type == BusType::Mmio {
@@ -127,7 +192,12 @@ impl PciRoot {
                 };
                 let _ = bus_ptr.remove(range.base, range.len);
             }
+            // Remove the pci bus if this device is a pci bridge.
+            if let Some(bus_no) = d.lock().is_bridge() {
+                let _ = self.root_bus.lock().remove_child_bus(bus_no);
+            }
             d.lock().destroy_device();
+            let _ = self.root_bus.lock().remove_child_device(address);
         }
     }
 
@@ -248,18 +318,18 @@ pub struct PciConfigIo {
     pci_root: Arc<Mutex<PciRoot>>,
     /// Current address to read/write from (0xcf8 register, litte endian).
     config_address: u32,
-    /// Event to signal that the quest requested reset via writing to 0xcf9 register.
-    reset_evt: Event,
+    /// Tube to signal that the guest requested reset via writing to 0xcf9 register.
+    reset_evt_wrtube: SendTube,
 }
 
 impl PciConfigIo {
     const REGISTER_BITS_NUM: usize = 8;
 
-    pub fn new(pci_root: Arc<Mutex<PciRoot>>, reset_evt: Event) -> Self {
+    pub fn new(pci_root: Arc<Mutex<PciRoot>>, reset_evt_wrtube: SendTube) -> Self {
         PciConfigIo {
             pci_root,
             config_address: 0,
-            reset_evt,
+            reset_evt_wrtube,
         }
     }
 
@@ -314,6 +384,10 @@ impl BusDevice for PciConfigIo {
         format!("pci config io-port 0x{:03x}", self.config_address)
     }
 
+    fn device_id(&self) -> DeviceId {
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+    }
+
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         // `offset` is relative to 0xcf8
         let value = match info.offset {
@@ -340,7 +414,10 @@ impl BusDevice for PciConfigIo {
         // `offset` is relative to 0xcf8
         match info.offset {
             _o @ 1 if data.len() == 1 && data[0] & PCI_RESET_CPU_BIT != 0 => {
-                if let Err(e) = self.reset_evt.write(1) {
+                if let Err(e) = self
+                    .reset_evt_wrtube
+                    .send::<VmEventType>(&VmEventType::Reset)
+                {
                     error!("failed to trigger PCI 0xcf9 reset event: {}", e);
                 }
             }
@@ -387,6 +464,10 @@ impl BusDevice for PciConfigMmio {
         "pci config mmio".to_owned()
     }
 
+    fn device_id(&self) -> DeviceId {
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+    }
+
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         // Only allow reads to the register boundary.
         let start = info.offset as usize % 4;
@@ -412,13 +493,17 @@ impl BusDevice for PciConfigMmio {
     }
 }
 
-/// Inspired by PCI configuration space, CrosVM provides 1024 dword virtual registers (4KiB in
+/// Inspired by PCI configuration space, CrosVM provides 2048 dword virtual registers (8KiB in
 /// total) for each PCI device. The guest can use these registers to exchange device-specific
-/// information with CrosVM.
+/// information with CrosVM. The first 4kB is trapped by crosvm and crosm supply these
+/// register's emulation. The second 4KB is mapped into guest directly as shared memory, so
+/// when guest access this 4KB, vm exit doesn't happen.
 /// All these virtual registers from all PCI devices locate in a contiguous memory region.
 /// The base address of this memory region is provided by an IntObj named VCFG in the ACPI DSDT.
+/// Bit 12 is used to select the first trapped page or the second directly mapped page
 /// The offset of each register is calculated in the same way as PCIe ECAM;
-/// i.e. offset = (bus << 20) | (device << 15) | (function << 12) | (register_index << 2)
+/// i.e. offset = (bus << 21) | (device << 16) | (function << 13) | (page_select << 12) |
+/// (register_index << 2)
 pub struct PciVirtualConfigMmio {
     /// PCI root bridge.
     pci_root: Arc<Mutex<PciRoot>>,
@@ -440,6 +525,10 @@ impl BusDevice for PciVirtualConfigMmio {
         "pci virtual config mmio".to_owned()
     }
 
+    fn device_id(&self) -> DeviceId {
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+    }
+
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         let value = if info.offset % 4 != 0 || data.len() != 4 {
             error!(
@@ -456,10 +545,7 @@ impl BusDevice for PciVirtualConfigMmio {
                 .lock()
                 .virtual_config_space_read(address, register)
         };
-        data[0] = value as u8;
-        data[1] = (value >> (1 * 8)) as u8;
-        data[2] = (value >> (2 * 8)) as u8;
-        data[3] = (value >> (3 * 8)) as u8;
+        data[0..4].copy_from_slice(&value.to_le_bytes()[..]);
     }
 
     fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
@@ -472,10 +558,8 @@ impl BusDevice for PciVirtualConfigMmio {
             );
             return;
         }
-        let value = (data[0] as u32)
-            | ((data[1] as u32) << (1 * 8))
-            | ((data[2] as u32) << (2 * 8))
-            | ((data[3] as u32) << (3 * 8));
+        // Unwrap is safe as we verified length above
+        let value = u32::from_le_bytes(data.try_into().unwrap());
         let (address, register) =
             PciAddress::from_config_address(info.offset as u32, self.register_bit_num);
         self.pci_root

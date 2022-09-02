@@ -2,14 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::{Error, Result};
-use super::{EventHandler, EventLoop};
-
-use anyhow::Context;
-use base::{Event, WatchingEvents};
 use std::mem;
 use std::sync::Arc;
+
+use anyhow::Context;
+use base::Event;
+use base::EventType;
 use sync::Mutex;
+
+use super::Error;
+use super::EventHandler;
+use super::EventLoop;
+use super::Result;
 
 /// Async Job Queue can schedule async jobs.
 pub struct AsyncJobQueue {
@@ -26,11 +30,7 @@ impl AsyncJobQueue {
             evt,
         });
         let handler: Arc<dyn EventHandler> = queue.clone();
-        event_loop.add_event(
-            &queue.evt,
-            WatchingEvents::empty().set_read(),
-            Arc::downgrade(&handler),
-        )?;
+        event_loop.add_event(&queue.evt, EventType::Read, Arc::downgrade(&handler))?;
         Ok(queue)
     }
 

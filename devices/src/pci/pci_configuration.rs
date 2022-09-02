@@ -7,20 +7,26 @@ use std::convert::TryInto;
 
 use base::warn;
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
-use crate::pci::{PciAddress, PciInterruptPin};
+use crate::pci::PciInterruptPin;
 
 // The number of 32bit registers in the config space, 256 bytes.
 const NUM_CONFIGURATION_REGISTERS: usize = 64;
 
+pub const PCI_ID_REG: usize = 0;
 pub const COMMAND_REG: usize = 1;
 pub const COMMAND_REG_IO_SPACE_MASK: u32 = 0x0000_0001;
 pub const COMMAND_REG_MEMORY_SPACE_MASK: u32 = 0x0000_0002;
 const STATUS_REG: usize = 1;
 pub const STATUS_REG_CAPABILITIES_USED_MASK: u32 = 0x0010_0000;
+#[allow(dead_code)]
+#[cfg(unix)]
 pub const CLASS_REG: usize = 2;
+#[cfg(feature = "direct")]
+pub const CLASS_REG_REVISION_ID_OFFSET: usize = 0;
 pub const HEADER_TYPE_REG: usize = 3;
 pub const HEADER_TYPE_MULTIFUNCTION_MASK: u32 = 0x0080_0000;
 pub const BAR0_REG: usize = 4;
@@ -33,6 +39,7 @@ pub const NUM_BAR_REGS: usize = 7; // 6 normal BARs + expansion ROM BAR.
 pub const ROM_BAR_IDX: PciBarIndex = 6;
 pub const ROM_BAR_REG: usize = 12;
 pub const CAPABILITY_LIST_HEAD_OFFSET: usize = 0x34;
+#[cfg(unix)]
 pub const PCI_CAP_NEXT_POINTER: usize = 0x1;
 const FIRST_CAPABILITY_OFFSET: usize = 0x40;
 pub const CAPABILITY_MAX_OFFSET: usize = 255;
@@ -49,7 +56,7 @@ pub enum PciHeaderType {
 
 /// Classes of PCI nodes.
 #[allow(dead_code)]
-#[derive(Copy, Clone, enumn::N)]
+#[derive(Copy, Clone, enumn::N, Serialize, Deserialize)]
 pub enum PciClassCode {
     TooOld,
     MassStorage,
@@ -659,15 +666,6 @@ impl PciConfiguration {
         let next = offset + len;
         (next + 3) & !3
     }
-
-    pub fn suggested_interrupt_pin(pci_address: PciAddress) -> PciInterruptPin {
-        match pci_address.func % 4 {
-            0 => PciInterruptPin::IntA,
-            1 => PciInterruptPin::IntB,
-            2 => PciInterruptPin::IntC,
-            _ => PciInterruptPin::IntD,
-        }
-    }
 }
 
 impl PciBarConfiguration {
@@ -700,6 +698,10 @@ impl PciBarConfiguration {
 
     pub fn address(&self) -> u64 {
         self.addr
+    }
+
+    pub fn address_range(&self) -> std::ops::Range<u64> {
+        self.addr..self.addr + self.size
     }
 
     pub fn set_address(mut self, addr: u64) -> Self {

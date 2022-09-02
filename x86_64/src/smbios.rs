@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::mem;
-use std::result;
-use std::slice;
-
 use std::fs::OpenOptions;
 use std::io::prelude::*;
-use std::path::{Path, PathBuf};
+use std::mem;
+use std::path::Path;
+use std::path::PathBuf;
+use std::result;
+use std::slice;
 
 use data_model::DataInit;
 use remain::sorted;
 use thiserror::Error;
-use vm_memory::{GuestAddress, GuestMemory};
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -36,6 +37,9 @@ pub enum Error {
     /// There was too little guest memory to store the entire SMBIOS table.
     #[error("There was too little guest memory to store the SMBIOS table")]
     NotEnoughMemory,
+    /// Failure while opening SMBIOS data file
+    #[error("Failure while opening SMBIOS data file {1}: {0}")]
+    OpenFailed(std::io::Error, PathBuf),
     /// Failure to write additional data to memory
     #[error("Failure to write additional data to memory")]
     WriteData,
@@ -208,7 +212,7 @@ fn setup_smbios_from_file(mem: &GuestMemory, path: &Path) -> Result<()> {
     OpenOptions::new()
         .read(true)
         .open(&sme_path)
-        .map_err(|_| Error::IoFailed)?
+        .map_err(|e| Error::OpenFailed(e, sme_path))?
         .read_to_end(&mut sme)
         .map_err(|_| Error::IoFailed)?;
 
@@ -218,7 +222,7 @@ fn setup_smbios_from_file(mem: &GuestMemory, path: &Path) -> Result<()> {
     OpenOptions::new()
         .read(true)
         .open(&dmi_path)
-        .map_err(|_| Error::IoFailed)?
+        .map_err(|e| Error::OpenFailed(e, dmi_path))?
         .read_to_end(&mut dmi)
         .map_err(|_| Error::IoFailed)?;
 

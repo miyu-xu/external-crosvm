@@ -2,21 +2,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! Bindings for the Linux KVM (Kernel Virtual Machine) API.
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use base::{ioctl_io_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
-use data_model::{flexible_array_impl, FlexibleArray};
+use base::ioctl_io_nr;
+use base::ioctl_ior_nr;
+use base::ioctl_iow_nr;
+use base::ioctl_iowr_nr;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use data_model::flexible_array_impl;
 // Each of the below modules defines ioctls specific to their platform.
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub const KVM_MSR_FILTER_RANGE_MAX_BITS: usize = 0x2000;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub const KVM_MSR_FILTER_RANGE_MAX_BYTES: usize = KVM_MSR_FILTER_RANGE_MAX_BITS / 8;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod x86 {
     // generated with bindgen /usr/include/linux/kvm.h --no-unstable-rust --constified-enum '*' --with-derive-default
     #[allow(clippy::all)]
     pub mod bindings;
+    use base::ioctl_ior_nr;
+    use base::ioctl_iow_nr;
+    use base::ioctl_iowr_nr;
+
     pub use crate::bindings::*;
-    use base::{ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
     ioctl_iowr_nr!(KVM_GET_MSR_INDEX_LIST, KVMIO, 0x02, kvm_msr_list);
     ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
@@ -32,8 +46,8 @@ pub mod x86 {
     ioctl_iow_nr!(KVM_SET_LAPIC, KVMIO, 0x8f, kvm_lapic_state);
     ioctl_iow_nr!(KVM_SET_CPUID2, KVMIO, 0x90, kvm_cpuid2);
     ioctl_iowr_nr!(KVM_GET_CPUID2, KVMIO, 0x91, kvm_cpuid2);
-    ioctl_iow_nr!(KVM_X86_SETUP_MCE, KVMIO, 0x9c, __u64);
-    ioctl_ior_nr!(KVM_X86_GET_MCE_CAP_SUPPORTED, KVMIO, 0x9d, __u64);
+    ioctl_iow_nr!(KVM_X86_SETUP_MCE, KVMIO, 0x9c, u64);
+    ioctl_ior_nr!(KVM_X86_GET_MCE_CAP_SUPPORTED, KVMIO, 0x9d, u64);
     ioctl_iow_nr!(KVM_X86_SET_MCE, KVMIO, 0x9e, kvm_x86_mce);
     ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
     ioctl_iow_nr!(KVM_SET_VCPU_EVENTS, KVMIO, 0xa0, kvm_vcpu_events);
@@ -50,7 +64,8 @@ pub mod x86 {
 pub mod aarch64 {
     // generated with bindgen <arm sysroot>/usr/include/linux/kvm.h --no-unstable-rust --constified-enum '*' --with-derive-default -- -I<arm sysroot>/usr/include
     pub mod bindings;
-    use base::{ioctl_ior_nr, ioctl_iow_nr};
+    use base::ioctl_ior_nr;
+    use base::ioctl_iow_nr;
     pub use bindings::*;
 
     ioctl_iow_nr!(KVM_ARM_SET_DEVICE_ADDR, KVMIO, 0xab, kvm_arm_device_addr);
@@ -75,7 +90,7 @@ ioctl_iow_nr!(
     kvm_userspace_memory_region
 );
 ioctl_io_nr!(KVM_SET_TSS_ADDR, KVMIO, 0x47);
-ioctl_iow_nr!(KVM_SET_IDENTITY_MAP_ADDR, KVMIO, 0x48, __u64);
+ioctl_iow_nr!(KVM_SET_IDENTITY_MAP_ADDR, KVMIO, 0x48, u64);
 ioctl_io_nr!(KVM_CREATE_IRQCHIP, KVMIO, 0x60);
 ioctl_iow_nr!(KVM_IRQ_LINE, KVMIO, 0x61, kvm_irq_level);
 ioctl_iowr_nr!(KVM_GET_IRQCHIP, KVMIO, 0x62, kvm_irqchip);
@@ -148,6 +163,8 @@ ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
 ioctl_io_nr!(KVM_KVMCLOCK_CTRL, KVMIO, 0xad);
 ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 ioctl_io_nr!(KVM_SMI, KVMIO, 0xb7);
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+ioctl_iow_nr!(KVM_X86_SET_MSR_FILTER, KVMIO, 0xc6, kvm_msr_filter);
 
 // Along with the common ioctls, we reexport the ioctls of the current
 // platform.

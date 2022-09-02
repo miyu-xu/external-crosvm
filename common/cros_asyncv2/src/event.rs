@@ -41,22 +41,23 @@ impl Event {
 }
 
 #[cfg(unix)]
-impl TryFrom<sys_util::EventFd> for Event {
+impl TryFrom<base::EventFd> for Event {
     type Error = anyhow::Error;
 
-    fn try_from(evt: sys_util::EventFd) -> anyhow::Result<Event> {
+    fn try_from(evt: base::EventFd) -> anyhow::Result<Event> {
         sys::Event::try_from(evt).map(|inner| Event { inner })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::convert::TryInto;
 
-    use futures::channel::oneshot::{channel, Receiver, Sender};
+    use futures::channel::oneshot::channel;
+    use futures::channel::oneshot::Receiver;
+    use futures::channel::oneshot::Sender;
 
+    use super::*;
     use crate::Executor;
 
     #[test]
@@ -72,7 +73,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn next_val_reads_value() {
-        use sys_util::EventFd;
+        use base::EventFd;
         async fn go(event: Event) -> u64 {
             event.next_val().await.unwrap()
         }

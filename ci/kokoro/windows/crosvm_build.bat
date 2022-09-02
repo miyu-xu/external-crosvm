@@ -15,7 +15,7 @@ set rustup_version=1.24.3
 
 :: Install rust toolchain through rustup.
 echo [%TIME%] installing rustup %rustup_version%
-choco install -y rustup.install --version=%rustup_version%
+choco install --no-progress -y rustup.install --version=%rustup_version% --ignore-checksums
 
 :: Reload path for installed rustup binary
 call RefreshEnv.cmd
@@ -26,8 +26,7 @@ cargo install bindgen
 
 :: Install python. The default kokoro intalled version is 3.7 but linux tests
 :: seem to run on 3.9+.
-choco install -y python
-choco install python --version=3.9.0
+choco install --no-progress -y python --version=3.9.0
 
 :: Reload path for installed rust toolchain.
 call RefreshEnv.cmd
@@ -41,8 +40,14 @@ rustc --version
 echo [%TIME%] Python version:
 py --version
 
-echo [%TIME%] Calling crosvm\build_test.py
-py ./tools\impl/test_runner.py --arch x86_64 
+py -m pip install argh --user
+
+echo [%TIME%] Calling crosvm\tools\clippy
+py .\tools\clippy
+if %ERRORLEVEL% neq 0 ( exit /b %ERRORLEVEL% )
+
+echo [%TIME%] Calling crosvm\tools\run_tests
+py .\tools\run_tests --build-target=x86_64-pc-windows-msvc -v
 if %ERRORLEVEL% neq 0 ( exit /b %ERRORLEVEL% )
 
 exit /b %ERRORLEVEL%

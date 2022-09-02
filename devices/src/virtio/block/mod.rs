@@ -5,7 +5,9 @@
 pub mod asynchronous;
 pub mod block;
 pub(crate) mod common;
+pub(crate) mod sys;
 
-pub use asynchronous::{BlockAsync, DiskState};
+pub use asynchronous::BlockAsync;
+pub use asynchronous::DiskState;
 pub use block::Block;
 pub use common::*;

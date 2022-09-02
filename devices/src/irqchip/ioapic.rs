@@ -6,17 +6,31 @@
 // See https://www.intel.com/content/dam/doc/datasheet/io-controller-hub-10-family-datasheet.pdf
 // for a specification.
 
-use super::IrqEvent;
-use crate::bus::BusAccessInfo;
-use crate::BusDevice;
-use base::{error, warn, Error, Event, Result, Tube, TubeError};
-use hypervisor::{
-    IoapicRedirectionTableEntry, IoapicState, MsiAddressMessage, MsiDataMessage, TriggerMode,
-    MAX_IOAPIC_PINS, NUM_IOAPIC_PINS,
-};
+use base::error;
+use base::warn;
+use base::Error;
+use base::Event;
+use base::Result;
+use base::Tube;
+use base::TubeError;
+use hypervisor::IoapicRedirectionTableEntry;
+use hypervisor::IoapicState;
+use hypervisor::MsiAddressMessage;
+use hypervisor::MsiDataMessage;
+use hypervisor::TriggerMode;
+use hypervisor::MAX_IOAPIC_PINS;
+use hypervisor::NUM_IOAPIC_PINS;
 use remain::sorted;
 use thiserror::Error;
-use vm_control::{VmIrqRequest, VmIrqResponse};
+use vm_control::VmIrqRequest;
+use vm_control::VmIrqResponse;
+
+use super::IrqEvent;
+use crate::bus::BusAccessInfo;
+use crate::pci::CrosvmDeviceId;
+use crate::BusDevice;
+use crate::DeviceId;
+use crate::IrqEventSource;
 
 // ICH10 I/O APIC version: 0x20
 const IOAPIC_VERSION_ID: u32 = 0x00000020;
@@ -90,6 +104,10 @@ impl BusDevice for Ioapic {
         "userspace IOAPIC".to_string()
     }
 
+    fn device_id(&self) -> DeviceId {
+        CrosvmDeviceId::Ioapic.into()
+    }
+
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         if data.len() > 8 || data.is_empty() {
             warn!("IOAPIC: Bad read size: {}", data.len());
@@ -160,6 +178,27 @@ impl Ioapic {
             interrupt_level: (0..num_pins).map(|_| false).collect(),
             irq_tube,
         })
+    }
+
+    pub fn init_direct_gsi<F>(&mut self, register_irqfd: F) -> Result<()>
+    where
+        F: Fn(u32, &Event) -> Result<()>,
+    {
+        for (gsi, out_event) in self.out_events.iter_mut().enumerate() {
+            let event = Event::new()?;
+            register_irqfd(gsi as u32, &event)?;
+            *out_event = Some(IrqEvent {
+                gsi: gsi as u32,
+                event,
+                resample_event: None,
+                source: IrqEventSource {
+                    device_id: CrosvmDeviceId::DirectGsi.into(),
+                    queue_id: 0,
+                    device_name: "direct_gsi".into(),
+                },
+            });
+        }
+        Ok(())
     }
 
     pub fn get_ioapic_state(&self) -> IoapicState {
@@ -377,11 +416,17 @@ impl Ioapic {
         // irq line, when the guest first sets up the ioapic with a valid route. If the guest
         // later reconfigures an ioapic irq line, the same GSI and event are reused, and we change
         // the GSI's route to the new MSI data+addr destination.
+        let name = self.debug_label();
         let gsi = if let Some(evt) = &self.out_events[index] {
             evt.gsi
         } else {
             let event = Event::new().map_err(IoapicError::CreateEvent)?;
-            let request = VmIrqRequest::AllocateOneMsi { irqfd: event };
+            let request = VmIrqRequest::AllocateOneMsi {
+                irqfd: event,
+                device_id: self.device_id().into(),
+                queue_id: index, // Use out_events index as queue_id for outgoing ioapic MSIs
+                device_name: name.clone(),
+            };
             self.irq_tube
                 .send(&request)
                 .map_err(IoapicError::AllocateOneMsiSend)?;
@@ -394,10 +439,18 @@ impl Ioapic {
                     self.out_events[index] = Some(IrqEvent {
                         gsi,
                         event: match request {
-                            VmIrqRequest::AllocateOneMsi { irqfd } => irqfd,
+                            VmIrqRequest::AllocateOneMsi { irqfd, .. } => irqfd,
                             _ => unreachable!(),
                         },
                         resample_event: None,
+                        // This source isn't currently used for anything, we already sent the
+                        // relevant source information to the main thread via the AllocateOneMsi
+                        // request, but we populate it anyways for debugging.
+                        source: IrqEventSource {
+                            device_id: self.device_id(),
+                            queue_id: index,
+                            device_name: name,
+                        },
                     });
                     gsi
                 }
@@ -466,8 +519,11 @@ enum IoapicError {
 
 #[cfg(test)]
 mod tests {
+    use hypervisor::DeliveryMode;
+    use hypervisor::DeliveryStatus;
+    use hypervisor::DestinationMode;
+
     use super::*;
-    use hypervisor::{DeliveryMode, DeliveryStatus, DestinationMode};
 
     const DEFAULT_VECTOR: u8 = 0x3a;
     const DEFAULT_DESTINATION_ID: u8 = 0x5f;
@@ -499,6 +555,11 @@ mod tests {
             gsi: NUM_IOAPIC_PINS as u32,
             event: Event::new().unwrap(),
             resample_event: None,
+            source: IrqEventSource {
+                device_id: ioapic.device_id(),
+                queue_id: irq,
+                device_name: ioapic.debug_label(),
+            },
         });
         ioapic
     }

@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{
-    alloc::Layout,
-    cmp::min,
-    convert::TryFrom,
-    io,
-    mem::{align_of, size_of},
-    os::unix::io::RawFd,
-};
+use std::alloc::Layout;
+use std::cmp::min;
+use std::convert::TryFrom;
+use std::io;
+use std::mem::align_of;
+use std::mem::size_of;
+use std::os::unix::io::RawFd;
 
 use anyhow::anyhow;
-use sys_util::LayoutAllocation;
+use base::LayoutAllocation;
 
 // Allocates a buffer to hold a `libc::cmsghdr` with `cap` bytes of data.
 //
@@ -122,13 +121,13 @@ pub fn take_fds_from_message(msg: &libc::msghdr, fds: &mut [RawFd]) -> anyhow::R
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "arm"))]
 mod tests {
     use std::ptr;
 
     use super::*;
 
     #[test]
-    #[cfg(not(target_arch = "arm"))]
     fn test_add_fds_to_message() {
         let buf = [0xEAu8, 0xDD, 0xAA, 0xCC];
         let mut iov = libc::iovec {
@@ -169,7 +168,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "arm"))]
     fn test_take_fds_from_message() {
         let buf = [0xEAu8, 0xDD, 0xAA, 0xCC];
         let mut iov = libc::iovec {

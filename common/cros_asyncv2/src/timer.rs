@@ -2,18 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{
-    future::Future,
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-    time::Instant,
-};
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Instant;
 
-use futures::{
-    future::{select, Either},
-    pin_mut,
-};
+use futures::future::select;
+use futures::future::Either;
+use futures::pin_mut;
 use thiserror::Error as ThisError;
 
 use crate::executor;
@@ -142,7 +140,7 @@ impl From<TimedOut> for io::Error {
 /// # use cros_async::{Executor, TimedOut};
 /// #
 /// # let ex = Executor::new();
-/// # let (rx, _tx) = sys_util::pipe(true).unwrap();
+/// # let (rx, _tx) = base::pipe(true).unwrap();
 /// # let rx = cros_async::File::from_std(rx).unwrap();
 /// # let mut buf = 0u64.to_ne_bytes();
 /// #
@@ -164,13 +162,18 @@ pub async fn with_deadline<F: Future>(deadline: Instant, f: F) -> Result<F::Outp
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use std::mem;
+    use std::sync::Arc;
+    use std::task;
+    use std::thread;
+    use std::time::Duration;
 
-    use std::{mem, sync::Arc, task, thread, time::Duration};
-
-    use futures::{future::join5, stream::FuturesUnordered, StreamExt};
+    use futures::future::join5;
+    use futures::stream::FuturesUnordered;
+    use futures::StreamExt;
     use sync::Mutex;
 
+    use super::*;
     use crate::Executor;
 
     #[test]

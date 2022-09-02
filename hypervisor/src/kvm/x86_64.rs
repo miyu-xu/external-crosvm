@@ -2,27 +2,60 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::arch::x86_64::__cpuid;
+use std::arch::x86_64::CpuidResult;
 
+use base::errno_result;
+use base::error;
+use base::ioctl;
+use base::ioctl_with_mut_ptr;
+use base::ioctl_with_mut_ref;
+use base::ioctl_with_ptr;
+use base::ioctl_with_ref;
+use base::ioctl_with_val;
+use base::AsRawDescriptor;
+use base::Error;
 use base::IoctlNr;
-
-use libc::E2BIG;
-
-use base::{
-    errno_result, error, ioctl, ioctl_with_mut_ptr, ioctl_with_mut_ref, ioctl_with_ptr,
-    ioctl_with_ref, ioctl_with_val, AsRawDescriptor, Error, MappedRegion, Result,
-};
+use base::MappedRegion;
+use base::Result;
 use data_model::vec_with_array_field;
 use kvm_sys::*;
+use libc::E2BIG;
+use libc::ENXIO;
 use vm_memory::GuestAddress;
 
-use super::{Kvm, KvmVcpu, KvmVm};
-use crate::{
-    ClockState, CpuId, CpuIdEntry, DebugRegs, DescriptorTable, DeviceKind, Fpu, HypervisorX86_64,
-    IoapicRedirectionTableEntry, IoapicState, IrqSourceChip, LapicState, PicSelect, PicState,
-    PitChannelState, PitState, ProtectionType, Register, Regs, Segment, Sregs, VcpuExit,
-    VcpuX86_64, VmCap, VmX86_64, MAX_IOAPIC_PINS, NUM_IOAPIC_PINS,
-};
+use super::Kvm;
+use super::KvmVcpu;
+use super::KvmVm;
+use crate::get_tsc_offset_from_msr;
+use crate::host_phys_addr_bits;
+use crate::set_tsc_offset_via_msr;
+use crate::ClockState;
+use crate::CpuId;
+use crate::CpuIdEntry;
+use crate::DebugRegs;
+use crate::DescriptorTable;
+use crate::DeviceKind;
+use crate::Fpu;
+use crate::HypervisorX86_64;
+use crate::IoapicRedirectionTableEntry;
+use crate::IoapicState;
+use crate::IrqSourceChip;
+use crate::LapicState;
+use crate::PicSelect;
+use crate::PicState;
+use crate::PitChannelState;
+use crate::PitState;
+use crate::ProtectionType;
+use crate::Register;
+use crate::Regs;
+use crate::Segment;
+use crate::Sregs;
+use crate::VcpuExit;
+use crate::VcpuX86_64;
+use crate::VmCap;
+use crate::VmX86_64;
+use crate::MAX_IOAPIC_PINS;
+use crate::NUM_IOAPIC_PINS;
 
 type KvmCpuId = kvm::CpuId;
 
@@ -79,16 +112,8 @@ impl Kvm {
 
     /// Get the size of guest physical addresses in bits.
     pub fn get_guest_phys_addr_bits(&self) -> u8 {
-        // Get host cpu max physical address bits.
         // Assume the guest physical address size is the same as the host.
-        let highest_ext_function = unsafe { __cpuid(0x80000000) };
-        if highest_ext_function.eax >= 0x80000008 {
-            let addr_size = unsafe { __cpuid(0x80000008) };
-            // Low 8 bits of 0x80000008 leaf: host physical address size in bits.
-            addr_size.eax as u8
-        } else {
-            36
-        }
+        host_phys_addr_bits()
     }
 }
 
@@ -315,6 +340,111 @@ impl KvmVm {
         }
     }
 
+    /// Enable userspace msr.
+    pub fn enable_userspace_msr(&self) -> Result<()> {
+        let mut cap = kvm_enable_cap {
+            cap: KVM_CAP_X86_USER_SPACE_MSR,
+            ..Default::default()
+        };
+        cap.args[0] = (KVM_MSR_EXIT_REASON_UNKNOWN
+            | KVM_MSR_EXIT_REASON_INVAL
+            | KVM_MSR_EXIT_REASON_FILTER) as u64;
+
+        // Safe because we know that our file is a VM fd, we know that the
+        // kernel will only read correct amount of memory from our pointer, and
+        // we verify the return result.
+        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &cap) };
+        if ret < 0 {
+            errno_result()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set MSR_PLATFORM_INFO read access.
+    pub fn set_platform_info_read_access(&self, allow_read: bool) -> Result<()> {
+        let mut cap = kvm_enable_cap {
+            cap: KVM_CAP_MSR_PLATFORM_INFO,
+            ..Default::default()
+        };
+        cap.args[0] = allow_read as u64;
+
+        // Safe because we know that our file is a VM fd, we know that the
+        // kernel will only read correct amount of memory from our pointer, and
+        // we verify the return result.
+        let ret = unsafe { ioctl_with_ref(self, KVM_ENABLE_CAP(), &cap) };
+        if ret < 0 {
+            errno_result()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Set msr filter.
+    pub fn set_msr_filter(&self, msr_list: (Vec<u32>, Vec<u32>)) -> Result<()> {
+        let mut rd_nmsrs: u32 = 0;
+        let mut wr_nmsrs: u32 = 0;
+        let mut rd_msr_bitmap: [u8; KVM_MSR_FILTER_RANGE_MAX_BYTES] =
+            [0xff; KVM_MSR_FILTER_RANGE_MAX_BYTES];
+        let mut wr_msr_bitmap: [u8; KVM_MSR_FILTER_RANGE_MAX_BYTES] =
+            [0xff; KVM_MSR_FILTER_RANGE_MAX_BYTES];
+        let (rd_msrs, wr_msrs) = msr_list;
+
+        for index in rd_msrs {
+            // currently we only consider the MSR lower than
+            // KVM_MSR_FILTER_RANGE_MAX_BITS
+            if index >= (KVM_MSR_FILTER_RANGE_MAX_BITS as u32) {
+                continue;
+            }
+            rd_nmsrs += 1;
+            rd_msr_bitmap[(index / 8) as usize] &= !(1 << (index & 0x7));
+        }
+        for index in wr_msrs {
+            // currently we only consider the MSR lower than
+            // KVM_MSR_FILTER_RANGE_MAX_BITS
+            if index >= (KVM_MSR_FILTER_RANGE_MAX_BITS as u32) {
+                continue;
+            }
+            wr_nmsrs += 1;
+            wr_msr_bitmap[(index / 8) as usize] &= !(1 << (index & 0x7));
+        }
+
+        let mut msr_filter = kvm_msr_filter {
+            flags: KVM_MSR_FILTER_DEFAULT_ALLOW,
+            ..Default::default()
+        };
+
+        let mut count = 0;
+        if rd_nmsrs > 0 {
+            msr_filter.ranges[count].flags = KVM_MSR_FILTER_READ;
+            msr_filter.ranges[count].nmsrs = KVM_MSR_FILTER_RANGE_MAX_BITS as u32;
+            msr_filter.ranges[count].base = 0x0;
+            msr_filter.ranges[count].bitmap = rd_msr_bitmap.as_mut_ptr();
+            count += 1;
+        }
+        if wr_nmsrs > 0 {
+            msr_filter.ranges[count].flags = KVM_MSR_FILTER_WRITE;
+            msr_filter.ranges[count].nmsrs = KVM_MSR_FILTER_RANGE_MAX_BITS as u32;
+            msr_filter.ranges[count].base = 0x0;
+            msr_filter.ranges[count].bitmap = wr_msr_bitmap.as_mut_ptr();
+            count += 1;
+        }
+
+        let mut ret = 0;
+        if count > 0 {
+            // Safe because we know that our file is a VM fd, we know that the
+            // kernel will only read correct amount of memory from our pointer, and
+            // we verify the return result.
+            ret = unsafe { ioctl_with_ref(self, KVM_X86_SET_MSR_FILTER(), &msr_filter) };
+        }
+
+        if ret < 0 {
+            errno_result()
+        } else {
+            Ok(())
+        }
+    }
+
     /// Enable support for split-irqchip.
     pub fn enable_split_irqchip(&self, ioapic_pins: usize) -> Result<()> {
         let mut cap = kvm_enable_cap {
@@ -475,10 +605,36 @@ impl VcpuX86_64 for KvmVcpu {
     }
 
     fn set_sregs(&self, sregs: &Sregs) -> Result<()> {
-        let sregs = kvm_sregs::from(sregs);
+        // Get the current `kvm_sregs` so we can use its `apic_base` and `interrupt_bitmap`, which
+        // are not present in `Sregs`.
+        // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
+        // correct amount of memory to our pointer, and we verify the return result.
+        let mut kvm_sregs: kvm_sregs = Default::default();
+        let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_SREGS(), &mut kvm_sregs) };
+        if ret != 0 {
+            return errno_result();
+        }
+
+        kvm_sregs.cs = kvm_segment::from(&sregs.cs);
+        kvm_sregs.ds = kvm_segment::from(&sregs.ds);
+        kvm_sregs.es = kvm_segment::from(&sregs.es);
+        kvm_sregs.fs = kvm_segment::from(&sregs.fs);
+        kvm_sregs.gs = kvm_segment::from(&sregs.gs);
+        kvm_sregs.ss = kvm_segment::from(&sregs.ss);
+        kvm_sregs.tr = kvm_segment::from(&sregs.tr);
+        kvm_sregs.ldt = kvm_segment::from(&sregs.ldt);
+        kvm_sregs.gdt = kvm_dtable::from(&sregs.gdt);
+        kvm_sregs.idt = kvm_dtable::from(&sregs.idt);
+        kvm_sregs.cr0 = sregs.cr0;
+        kvm_sregs.cr2 = sregs.cr2;
+        kvm_sregs.cr3 = sregs.cr3;
+        kvm_sregs.cr4 = sregs.cr4;
+        kvm_sregs.cr8 = sregs.cr8;
+        kvm_sregs.efer = sregs.efer;
+
         // Safe because we know that our file is a VCPU fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
-        let ret = unsafe { ioctl_with_ref(self, KVM_SET_SREGS(), &sregs) };
+        let ret = unsafe { ioctl_with_ref(self, KVM_SET_SREGS(), &kvm_sregs) };
         if ret == 0 {
             Ok(())
         } else {
@@ -655,6 +811,21 @@ impl VcpuX86_64 for KvmVcpu {
             errno_result()
         }
     }
+
+    /// KVM does not support the VcpuExit::Cpuid exit type.
+    fn handle_cpuid(&mut self, _entry: &CpuIdEntry) -> Result<()> {
+        Err(Error::new(ENXIO))
+    }
+
+    fn get_tsc_offset(&self) -> Result<u64> {
+        // Use the default MSR-based implementation
+        get_tsc_offset_from_msr(self)
+    }
+
+    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
+        // Use the default MSR-based implementation
+        set_tsc_offset_via_msr(self, offset)
+    }
 }
 
 impl KvmVcpu {
@@ -700,10 +871,12 @@ impl<'a> From<&'a KvmCpuId> for CpuId {
                 function: entry.function,
                 index: entry.index,
                 flags: entry.flags,
-                eax: entry.eax,
-                ebx: entry.ebx,
-                ecx: entry.ecx,
-                edx: entry.edx,
+                cpuid: CpuidResult {
+                    eax: entry.eax,
+                    ebx: entry.ebx,
+                    ecx: entry.ecx,
+                    edx: entry.edx,
+                },
             };
             cpu_id_entries.push(cpu_id_entry)
         }
@@ -720,10 +893,10 @@ impl From<&CpuId> for KvmCpuId {
                 function: e.function,
                 index: e.index,
                 flags: e.flags,
-                eax: e.eax,
-                ebx: e.ebx,
-                ecx: e.ecx,
-                edx: e.edx,
+                eax: e.cpuid.eax,
+                ebx: e.cpuid.ebx,
+                ecx: e.cpuid.ecx,
+                edx: e.cpuid.edx,
                 ..Default::default()
             };
         }
@@ -1100,33 +1273,6 @@ impl From<&kvm_sregs> for Sregs {
             cr4: r.cr4,
             cr8: r.cr8,
             efer: r.efer,
-            apic_base: r.apic_base,
-            interrupt_bitmap: r.interrupt_bitmap,
-        }
-    }
-}
-
-impl From<&Sregs> for kvm_sregs {
-    fn from(r: &Sregs) -> Self {
-        kvm_sregs {
-            cs: kvm_segment::from(&r.cs),
-            ds: kvm_segment::from(&r.ds),
-            es: kvm_segment::from(&r.es),
-            fs: kvm_segment::from(&r.fs),
-            gs: kvm_segment::from(&r.gs),
-            ss: kvm_segment::from(&r.ss),
-            tr: kvm_segment::from(&r.tr),
-            ldt: kvm_segment::from(&r.ldt),
-            gdt: kvm_dtable::from(&r.gdt),
-            idt: kvm_dtable::from(&r.idt),
-            cr0: r.cr0,
-            cr2: r.cr2,
-            cr3: r.cr3,
-            cr4: r.cr4,
-            cr8: r.cr8,
-            efer: r.efer,
-            apic_base: r.apic_base,
-            interrupt_bitmap: r.interrupt_bitmap,
         }
     }
 }
@@ -1233,15 +1379,32 @@ fn to_kvm_msrs(vec: &[Register]) -> Vec<kvm_msrs> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        DeliveryMode, DeliveryStatus, DestinationMode, Hypervisor, HypervisorCap, HypervisorX86_64,
-        IoapicRedirectionTableEntry, IoapicState, IrqRoute, IrqSource, IrqSourceChip, LapicState,
-        PicInitState, PicState, PitChannelState, PitRWMode, PitRWState, PitState, TriggerMode,
-        Vcpu, Vm,
-    };
     use libc::EINVAL;
-    use vm_memory::{GuestAddress, GuestMemory};
+    use vm_memory::GuestAddress;
+    use vm_memory::GuestMemory;
+
+    use super::*;
+    use crate::DeliveryMode;
+    use crate::DeliveryStatus;
+    use crate::DestinationMode;
+    use crate::Hypervisor;
+    use crate::HypervisorCap;
+    use crate::HypervisorX86_64;
+    use crate::IoapicRedirectionTableEntry;
+    use crate::IoapicState;
+    use crate::IrqRoute;
+    use crate::IrqSource;
+    use crate::IrqSourceChip;
+    use crate::LapicState;
+    use crate::PicInitState;
+    use crate::PicState;
+    use crate::PitChannelState;
+    use crate::PitRWMode;
+    use crate::PitRWState;
+    use crate::PitState;
+    use crate::TriggerMode;
+    use crate::Vcpu;
+    use crate::Vm;
 
     #[test]
     fn get_supported_cpuid() {

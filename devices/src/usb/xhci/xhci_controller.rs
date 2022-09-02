@@ -2,24 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::pci::{
-    BarRange, PciAddress, PciBarConfiguration, PciBarPrefetchable, PciBarRegionType, PciClassCode,
-    PciConfiguration, PciDevice, PciDeviceError, PciHeaderType, PciInterruptPin,
-    PciProgrammingInterface, PciSerialBusSubClass,
-};
+use std::mem;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use crate::register_space::{Register, RegisterSpace};
+use base::error;
+use base::AsRawDescriptor;
+use base::RawDescriptor;
+use resources::Alloc;
+use resources::AllocOptions;
+use resources::SystemAllocator;
+use vm_memory::GuestMemory;
+
+use crate::pci::BarRange;
+use crate::pci::PciAddress;
+use crate::pci::PciBarConfiguration;
+use crate::pci::PciBarPrefetchable;
+use crate::pci::PciBarRegionType;
+use crate::pci::PciClassCode;
+use crate::pci::PciConfiguration;
+use crate::pci::PciDevice;
+use crate::pci::PciDeviceError;
+use crate::pci::PciHeaderType;
+use crate::pci::PciInterruptPin;
+use crate::pci::PciProgrammingInterface;
+use crate::pci::PciSerialBusSubClass;
+use crate::register_space::Register;
+use crate::register_space::RegisterSpace;
 use crate::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use crate::usb::xhci::xhci::Xhci;
 use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
-use crate::usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XhciRegs};
+use crate::usb::xhci::xhci_regs::init_xhci_mmio_space_and_regs;
+use crate::usb::xhci::xhci_regs::XhciRegs;
 use crate::utils::FailHandle;
-use base::{error, AsRawDescriptor, Event, RawDescriptor};
-use resources::{Alloc, MmioType, SystemAllocator};
-use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use vm_memory::GuestMemory;
+use crate::IrqLevelEvent;
 
 const XHCI_BAR0_SIZE: u64 = 0x10000;
 
@@ -81,8 +98,7 @@ enum XhciControllerState {
     },
     IrqAssigned {
         device_provider: HostBackendDeviceProvider,
-        irq_evt: Event,
-        irq_resample_evt: Event,
+        irq_evt: IrqLevelEvent,
     },
     Initialized {
         mmio: RegisterSpace,
@@ -131,7 +147,6 @@ impl XhciController {
             XhciControllerState::IrqAssigned {
                 device_provider,
                 irq_evt,
-                irq_resample_evt,
             } => {
                 let (mmio, regs) = init_xhci_mmio_space_and_regs();
                 let fail_handle: Arc<dyn FailHandle> = Arc::new(XhciFailHandle::new(&regs));
@@ -140,7 +155,6 @@ impl XhciController {
                     self.mem.clone(),
                     device_provider,
                     irq_evt,
-                    irq_resample_evt,
                     regs,
                 ) {
                     Ok(xhci) => Some(xhci),
@@ -193,11 +207,10 @@ impl PciDevice for XhciController {
             XhciControllerState::IrqAssigned {
                 device_provider,
                 irq_evt,
-                irq_resample_evt,
             } => {
                 let mut keep_rds = device_provider.keep_rds();
-                keep_rds.push(irq_evt.as_raw_descriptor());
-                keep_rds.push(irq_resample_evt.as_raw_descriptor());
+                keep_rds.push(irq_evt.get_trigger().as_raw_descriptor());
+                keep_rds.push(irq_evt.get_resample().as_raw_descriptor());
                 keep_rds
             }
             _ => {
@@ -207,31 +220,19 @@ impl PciDevice for XhciController {
         }
     }
 
-    fn assign_irq(
-        &mut self,
-        irq_evt: &Event,
-        irq_resample_evt: &Event,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        let gsi = irq_num?;
-        let pin = self.pci_address.map_or(
-            PciInterruptPin::IntA,
-            PciConfiguration::suggested_interrupt_pin,
-        );
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
         match mem::replace(&mut self.state, XhciControllerState::Unknown) {
             XhciControllerState::Created { device_provider } => {
-                self.config_regs.set_irq(gsi as u8, pin);
+                self.config_regs.set_irq(irq_num as u8, pin);
                 self.state = XhciControllerState::IrqAssigned {
                     device_provider,
-                    irq_evt: irq_evt.try_clone().ok()?,
-                    irq_resample_evt: irq_resample_evt.try_clone().ok()?,
+                    irq_evt,
                 }
             }
             _ => {
                 error!("xhci controller is in a wrong state");
             }
         }
-        Some((gsi, pin))
     }
 
     fn allocate_io_bars(
@@ -243,8 +244,7 @@ impl PciDevice for XhciController {
             .expect("assign_address must be called prior to allocate_io_bars");
         // xHCI spec 5.2.1.
         let bar0_addr = resources
-            .mmio_allocator(MmioType::Low)
-            .allocate_with_align(
+            .allocate_mmio(
                 XHCI_BAR0_SIZE,
                 Alloc::PciBar {
                     bus: address.bus,
@@ -253,7 +253,9 @@ impl PciDevice for XhciController {
                     bar: 0,
                 },
                 "xhci_bar0".to_string(),
-                XHCI_BAR0_SIZE,
+                AllocOptions::new()
+                    .max_address(u32::MAX.into())
+                    .align(XHCI_BAR0_SIZE),
             )
             .map_err(|e| PciDeviceError::IoAllocationFailed(XHCI_BAR0_SIZE, e))?;
         let bar0_config = PciBarConfiguration::new(

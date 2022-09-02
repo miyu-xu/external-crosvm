@@ -2,13 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::interrupter::Interrupter;
-use crate::utils::{EventHandler, EventLoop};
+use std::sync::Arc;
 
 use anyhow::Context;
-use base::{error, Event, WatchingEvents};
-use std::sync::Arc;
+use base::error;
+use base::Event;
+use base::EventType;
 use sync::Mutex;
+
+use super::interrupter::Interrupter;
+use crate::utils::EventHandler;
+use crate::utils::EventLoop;
 
 /// Interrupt Resample handler handles resample event. It will reassert interrupt if needed.
 pub struct IntrResampleHandler {
@@ -30,7 +34,7 @@ impl IntrResampleHandler {
         let tmp_handler: Arc<dyn EventHandler> = handler.clone();
         if let Err(e) = event_loop.add_event(
             &handler.resample_evt,
-            WatchingEvents::empty().set_read(),
+            EventType::Read,
             Arc::downgrade(&tmp_handler),
         ) {
             error!("cannot add intr resample handler to event loop: {}", e);

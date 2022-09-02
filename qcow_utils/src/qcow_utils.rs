@@ -2,15 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Exported interface to basic qcow functionality to be used from C.
+//! Exported interface to basic qcow functionality to be used from C.
 
-use libc::{EINVAL, EIO, ENOSYS};
 use std::ffi::CStr;
 use std::fs::OpenOptions;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
+use std::os::raw::c_int;
 
-use base::{flock, FlockOperation};
-use disk::{self, DiskFile, ImageType, QcowFile};
+use base::flock;
+use base::FlockOperation;
+use disk::DiskFile;
+use disk::ImageType;
+use disk::QcowFile;
+use libc::EINVAL;
+use libc::EIO;
+use libc::ENOSYS;
 
 #[no_mangle]
 pub unsafe extern "C" fn create_qcow_with_size(path: *const c_char, virtual_size: u64) -> c_int {

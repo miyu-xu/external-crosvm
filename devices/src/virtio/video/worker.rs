@@ -6,29 +6,52 @@
 
 use std::collections::VecDeque;
 
-use base::{error, info, Event, WaitContext};
+use base::error;
+use base::info;
+use base::Event;
+use base::WaitContext;
 use vm_memory::GuestMemory;
 
-use crate::virtio::queue::{DescriptorChain, Queue};
+use crate::virtio::queue::DescriptorChain;
+use crate::virtio::queue::Queue;
 use crate::virtio::video::async_cmd_desc_map::AsyncCmdDescMap;
-use crate::virtio::video::command::{QueueType, VideoCmd};
-use crate::virtio::video::device::{
-    AsyncCmdResponse, AsyncCmdTag, Device, Token, VideoCmdResponseType, VideoEvtResponseType,
-};
-use crate::virtio::video::event::{self, EvtType, VideoEvt};
-use crate::virtio::video::response::{self, Response};
-use crate::virtio::video::{Error, Result};
-use crate::virtio::{Interrupt, Reader, SignalableInterrupt, Writer};
+use crate::virtio::video::command::QueueType;
+use crate::virtio::video::command::VideoCmd;
+use crate::virtio::video::device::AsyncCmdResponse;
+use crate::virtio::video::device::AsyncCmdTag;
+use crate::virtio::video::device::Device;
+use crate::virtio::video::device::Token;
+use crate::virtio::video::device::VideoCmdResponseType;
+use crate::virtio::video::device::VideoEvtResponseType;
+use crate::virtio::video::event;
+use crate::virtio::video::event::EvtType;
+use crate::virtio::video::event::VideoEvt;
+use crate::virtio::video::response;
+use crate::virtio::video::response::Response;
+use crate::virtio::video::Error;
+use crate::virtio::video::Result;
+use crate::virtio::Interrupt;
+use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
+use crate::virtio::Writer;
 
+/// Worker that takes care of running the virtio video device.
 pub struct Worker {
+    /// Device-to-driver notification for the command queue and the event queue
     interrupt: Interrupt,
+    /// Memory region of the guest VM
     mem: GuestMemory,
+    /// VirtIO queue for Command queue
     cmd_queue: Queue,
+    /// Driver-to-device notification for the command queue
     cmd_evt: Event,
+    /// VirtIO queue for Event queue
     event_queue: Queue,
+    /// Driver-to-device notification for the event queue
     event_evt: Event,
+    /// Event to stop the virtio queue handling loop
     kill_evt: Event,
-    // Stores descriptors in which responses for asynchronous commands will be written.
+    /// Stores descriptor chains in which responses for asynchronous commands will be written
     desc_map: AsyncCmdDescMap,
 }
 
@@ -99,6 +122,13 @@ impl Worker {
         Ok(())
     }
 
+    /// Writes the `event_responses` into the command queue or the event queue according to
+    /// each response's type.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_responses` - Responses to write
+    /// * `stream_id` - Stream session ID of the responses
     fn write_event_responses(
         &mut self,
         event_responses: Vec<VideoEvtResponseType>,
@@ -159,6 +189,13 @@ impl Worker {
 
     /// Handles a `DescriptorChain` value sent via the command queue and returns a `VecDeque`
     /// of `WritableResp` to be sent to the guest.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Instance of backend device
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
+    ///   to `wait_ctx`
+    /// * `desc` - `DescriptorChain` to handle
     fn handle_command_desc(
         &mut self,
         device: &mut dyn Device,
@@ -240,6 +277,12 @@ impl Worker {
     }
 
     /// Handles each command in the command queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Instance of backend device
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
+    ///   to `wait_ctx`
     fn handle_command_queue(
         &mut self,
         device: &mut dyn Device,
@@ -254,6 +297,11 @@ impl Worker {
     }
 
     /// Handles an event notified via an event.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Instance of backend device
+    /// * `stream_id` - Stream session ID of the event
     fn handle_event(&mut self, device: &mut dyn Device, stream_id: u32) -> Result<()> {
         if let Some(event_responses) = device.process_event(&mut self.desc_map, stream_id) {
             self.write_event_responses(event_responses, stream_id)?;
@@ -261,6 +309,7 @@ impl Worker {
         Ok(())
     }
 
+    /// Runs the video device virtio queues in a blocking way.
     pub fn run(&mut self, mut device: Box<dyn Device>) -> Result<()> {
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
             (&self.cmd_evt, Token::CmdQueue),

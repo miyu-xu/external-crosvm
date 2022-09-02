@@ -8,16 +8,22 @@ extern crate rutabaga_gfx;
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::catch_unwind;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::ptr::{copy_nonoverlapping, null_mut};
-use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::ptr::copy_nonoverlapping;
+use std::ptr::null_mut;
+use std::slice::from_raw_parts;
+use std::slice::from_raw_parts_mut;
 
-use base::{error, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor};
+use base::error;
+use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
+use base::SafeDescriptor;
 use data_model::VolatileSlice;
-
-use libc::{iovec, EINVAL, ESRCH};
-
+use libc::iovec;
+use libc::EINVAL;
+use libc::ESRCH;
 use rutabaga_gfx::*;
 
 const NO_ERROR: i32 = 0;
@@ -124,18 +130,6 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
             }
         };
 
-        let virglrenderer_flags = VirglRendererFlags::new()
-            .use_egl(true)
-            .use_surfaceless(true)
-            .use_external_blob(true);
-
-        let gfxstream_flags = GfxstreamFlags::new()
-            .use_egl(true)
-            .use_surfaceless(true)
-            .use_guest_angle(true)
-            .use_syncfd(true)
-            .use_vulkan(true);
-
         let mut rutabaga_channels_opt = None;
         if let Some(channels) = (*builder).channels {
             let mut rutabaga_channels: Vec<RutabagaChannel> = Vec::new();
@@ -156,9 +150,12 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
 
             rutabaga_channels_opt = Some(rutabaga_channels);
         }
-        let result = RutabagaBuilder::new(component)
-            .set_virglrenderer_flags(virglrenderer_flags)
-            .set_gfxstream_flags(gfxstream_flags)
+        let result = RutabagaBuilder::new(component, 0)
+            .set_use_egl(true)
+            .set_use_surfaceless(true)
+            .set_use_guest_angle(true)
+            .set_use_vulkan(true)
+            .set_use_external_blob(true)
             .set_rutabaga_channels(rutabaga_channels_opt)
             .build(fence_handler, None);
 
@@ -247,9 +244,23 @@ pub extern "C" fn rutabaga_context_create(
     ptr: &mut rutabaga,
     ctx_id: u32,
     context_init: u32,
+    context_name: *const c_char,
+    context_name_len: u32,
 ) -> i32 {
+    let mut name: Option<&str> = None;
+    if !context_name.is_null() && context_name_len > 0 {
+        // Safe because context_name is not NULL and len is a positive integer, so the caller
+        // is expected to provide a valid pointer to an array of bytes at least as long as the
+        // passed length. If the provided byte array doesn't contain valid utf-8, name will be
+        // None.
+        let view = unsafe {
+            std::slice::from_raw_parts(context_name as *const u8, context_name_len as usize)
+        };
+        name = std::str::from_utf8(view).ok();
+    }
+
     catch_unwind(AssertUnwindSafe(|| {
-        let result = ptr.create_context(ctx_id, context_init);
+        let result = ptr.create_context(ctx_id, context_init, name);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)

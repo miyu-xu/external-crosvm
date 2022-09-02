@@ -2,20 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io::{self, Write};
+use std::io;
+use std::io::Write;
 use std::mem;
 use std::result;
 use std::thread;
 
-use base::{error, warn, Error as SysError, Event, PollToken, RawDescriptor, WaitContext};
+use base::error;
+use base::warn;
+use base::Error as SysError;
+use base::Event;
+use base::EventToken;
+use base::RawDescriptor;
+use base::WaitContext;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestMemory;
 
-use super::{
-    copy_config, DescriptorError, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice,
-    Writer, TYPE_9P,
-};
+use super::copy_config;
+use super::DescriptorError;
+use super::DeviceType;
+use super::Interrupt;
+use super::Queue;
+use super::Reader;
+use super::SignalableInterrupt;
+use super::VirtioDevice;
+use super::Writer;
 
 const QUEUE_SIZE: u16 = 128;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
@@ -89,7 +101,7 @@ impl Worker {
     }
 
     fn run(&mut self, queue_evt: Event, kill_evt: Event) -> P9Result<()> {
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             // A request is ready on the queue.
             QueueReady,
@@ -169,8 +181,8 @@ impl VirtioDevice for P9 {
             .unwrap_or_else(Vec::new)
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_9P
+    fn device_type(&self) -> DeviceType {
+        DeviceType::P9
     }
 
     fn queue_max_sizes(&self) -> &[u16] {

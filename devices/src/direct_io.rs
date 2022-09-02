@@ -2,16 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::{BusAccessInfo, BusDevice, BusDeviceSync, BusRange};
-use base::{
-    error, pagesize, round_up_to_page_size, MemoryMapping, MemoryMappingBuilder, Protection,
-};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::prelude::FileExt;
 use std::path::Path;
 use std::sync::Mutex;
+
+use base::error;
+use base::pagesize;
+use base::round_up_to_page_size;
+use base::MemoryMapping;
+use base::MemoryMappingBuilder;
+use base::Protection;
+
+use crate::pci::CrosvmDeviceId;
+use crate::BusAccessInfo;
+use crate::BusDevice;
+use crate::BusDeviceSync;
+use crate::BusRange;
+use crate::DeviceId;
 
 pub struct DirectIo {
     dev: Mutex<File>,
@@ -44,6 +55,10 @@ impl DirectIo {
 }
 
 impl BusDevice for DirectIo {
+    fn device_id(&self) -> DeviceId {
+        CrosvmDeviceId::DirectIo.into()
+    }
+
     fn debug_label(&self) -> String {
         "direct-io".to_string()
     }
@@ -171,6 +186,10 @@ impl DirectMmio {
 }
 
 impl BusDevice for DirectMmio {
+    fn device_id(&self) -> DeviceId {
+        CrosvmDeviceId::DirectMmio.into()
+    }
+
     fn debug_label(&self) -> String {
         "direct-mmio".to_string()
     }

@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 # Copyright 2021 The Chromium OS Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 from pathlib import Path
-from typing import Iterable, Optional, Literal
+from typing import Iterable, Optional, Literal, Dict, List, Tuple
 import argparse
 import itertools
 import os
@@ -12,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import time
-import typing
 import urllib.request as request
 import json
 
@@ -65,7 +63,7 @@ SRC_DIR = SCRIPT_DIR.joinpath("testvm")
 ID_RSA = SRC_DIR.joinpath("id_rsa")
 BASE_IMG_VERSION = open(SRC_DIR.joinpath("version"), "r").read().strip()
 
-IMAGE_DIR_URL = "https://storage.googleapis.com/crosvm-testvm"
+IMAGE_DIR_URL = "https://storage.googleapis.com/crosvm/testvm"
 
 
 def cargo_target_dir():
@@ -110,13 +108,13 @@ def rootfs_img_path(arch: Arch):
 
 
 # List of ports to use for SSH for each architecture
-SSH_PORTS: dict[Arch, int] = {
+SSH_PORTS: Dict[Arch, int] = {
     "x86_64": 9000,
     "aarch64": 9001,
 }
 
 # QEMU arguments shared by all architectures
-SHARED_ARGS: list[tuple[str, str]] = [
+SHARED_ARGS: List[Tuple[str, str]] = [
     ("-display", "none"),
     ("-device", "virtio-net-pci,netdev=net0"),
     ("-smp", "8"),
@@ -124,7 +122,7 @@ SHARED_ARGS: list[tuple[str, str]] = [
 ]
 
 # Arguments to QEMU for each architecture
-ARCH_TO_QEMU: dict[Arch, tuple[str, list[Iterable[str]]]] = {
+ARCH_TO_QEMU: Dict[Arch, Tuple[str, List[Iterable[str]]]] = {
     # arch: (qemu-binary, [(param, value), ...])
     "x86_64": (
         "qemu-system-x86_64",
@@ -152,7 +150,7 @@ ARCH_TO_QEMU: dict[Arch, tuple[str, list[Iterable[str]]]] = {
 }
 
 
-def ssh_opts(arch: Arch) -> dict[str, str]:
+def ssh_opts(arch: Arch) -> Dict[str, str]:
     return {
         "Port": str(SSH_PORTS[arch]),
         "User": "crosvm",
@@ -217,9 +215,7 @@ def run_qemu(
     (binary, arch_args) = ARCH_TO_QEMU[arch]
     qemu_args = [*arch_args, ("-hda", str(hda))]
     if background:
-        qemu_args.append(
-            ("-serial", f"file:{data_dir(arch).joinpath('vm_log')}")
-        )
+        qemu_args.append(("-serial", f"file:{data_dir(arch).joinpath('vm_log')}"))
     else:
         qemu_args.append(("-serial", "stdio"))
 
@@ -363,7 +359,7 @@ def clean(arch: Arch):
     shutil.rmtree(data_dir(arch))
 
 
-def main():
+def main(arch: Arch, argv: List[str]):
     COMMANDS = [
         "build",
         "up",
@@ -378,11 +374,6 @@ def main():
     parser = argparse.ArgumentParser(usage=USAGE)
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument(
-        "--arch",
-        choices=typing.get_args(Arch),
-        help="Which architecture to run as the guest",
-    )
-    parser.add_argument(
         "--reset",
         action="store_true",
         help="Reset VM image to a fresh state. Removes all user modifications.",
@@ -393,46 +384,32 @@ def main():
         default=60,
         help="Timeout in seconds while waiting for the VM to come up.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "clean":
-        if not args.arch:
-            clean("x86_64")
-            clean("aarch64")
-        else:
-            clean(args.arch)
-        return
-
-    if not args.arch:
-        print("--arch argument is required")
-        print("")
-        parser.print_help()
+        clean(arch)
         return
 
     if args.command == "ssh_config":
-        ssh_config(args.arch)
+        ssh_config(arch)
         return
 
     # Ensure the images are built regardless of which command we execute.
-    build_if_needed(args.arch, reset=args.reset)
+    build_if_needed(arch, reset=args.reset)
 
     if args.command == "build":
         return  # Nothing left to do.
     elif args.command == "run":
-        run(args.arch)
+        run(arch)
     elif args.command == "up":
-        up(args.arch)
+        up(arch)
     elif args.command == "ssh":
-        ssh(args.arch, args.timeout)
+        ssh(arch, args.timeout)
     elif args.command == "stop":
-        stop(args.arch)
+        stop(arch)
     elif args.command == "kill":
-        kill(args.arch)
+        kill(arch)
     elif args.command == "wait":
-        wait(args.arch, args.timeout)
+        wait(arch, args.timeout)
     else:
         print(f"Unknown command {args.command}")
-
-
-if __name__ == "__main__":
-    main()

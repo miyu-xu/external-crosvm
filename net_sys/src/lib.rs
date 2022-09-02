@@ -2,38 +2,37 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! Linux networking API bindings.
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use base::{ioctl_ior_nr, ioctl_iow_nr};
+use base::ioctl_ior_nr;
+use base::ioctl_iow_nr;
 
-// generated with bindgen /usr/include/linux/if.h --no-unstable-rust
-// --constified-enum '*' --with-derive-default -- -D __UAPI_DEF_IF_IFNAMSIZ -D
-// __UAPI_DEF_IF_NET_DEVICE_FLAGS -D __UAPI_DEF_IF_IFREQ -D __UAPI_DEF_IF_IFMAP
-// Name is "iff" to avoid conflicting with "if" keyword.
-// Generated against Linux 4.11 to include fix "uapi: fix linux/if.h userspace
-// compilation errors".
-// Manual fixup of ifrn_name to be of type c_uchar instead of c_char.
-#[allow(clippy::all)]
-pub mod iff;
-// generated with bindgen /usr/include/linux/if_tun.h --no-unstable-rust
-// --constified-enum '*' --with-derive-default
 pub mod if_tun;
-// generated with bindgen /usr/include/linux/in.h --no-unstable-rust
-// --constified-enum '*' --with-derive-default
-// Name is "inn" to avoid conflicting with "in" keyword.
-pub mod inn;
-// generated with bindgen /usr/include/linux/sockios.h --no-unstable-rust
-// --constified-enum '*' --with-derive-default
+pub mod iff; // Named "iff" to avoid conflicting with "if" keyword.
 pub mod sockios;
-pub use crate::if_tun::*;
-pub use crate::iff::*;
-pub use crate::inn::*;
-pub use crate::sockios::*;
+pub use crate::if_tun::sock_fprog;
+pub use crate::if_tun::IFF_MULTI_QUEUE;
+pub use crate::if_tun::IFF_NO_PI;
+pub use crate::if_tun::IFF_TAP;
+pub use crate::if_tun::IFF_VNET_HDR;
+pub use crate::if_tun::TUN_F_CSUM;
+pub use crate::if_tun::TUN_F_TSO4;
+pub use crate::if_tun::TUN_F_TSO6;
+pub use crate::if_tun::TUN_F_TSO_ECN;
+pub use crate::if_tun::TUN_F_UFO;
+pub use crate::iff::ifreq;
+pub use crate::iff::net_device_flags;
 
 pub const TUNTAP: ::std::os::raw::c_uint = 84;
 
+// Windows doesn't have these constants in libc. As such, we preserve them here
+// for use on that platform, and for the sake of simplicity, CrosVM code
+// uses these constants on all platforms.
+pub type sa_family_t = ::std::os::raw::c_ushort;
 pub const ARPHRD_ETHER: sa_family_t = 1;
 
 ioctl_iow_nr!(TUNSETNOCSUM, TUNTAP, 200, ::std::os::raw::c_int);

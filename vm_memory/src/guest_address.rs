@@ -4,11 +4,18 @@
 
 //! Represents an address in the guest's memory space.
 
-use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
-use std::fmt::{self, Display};
-use std::ops::{BitAnd, BitOr};
+use std::cmp::Eq;
+use std::cmp::Ord;
+use std::cmp::Ordering;
+use std::cmp::PartialEq;
+use std::cmp::PartialOrd;
+use std::fmt;
+use std::fmt::Display;
+use std::ops::BitAnd;
+use std::ops::BitOr;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Represents an Address in the guest's memory.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -54,6 +61,17 @@ impl GuestAddress {
     /// Returns the bitwise and of the address with the given mask.
     pub fn mask(self, mask: u64) -> GuestAddress {
         GuestAddress(self.0 & mask as u64)
+    }
+
+    /// Returns the next highest address that is a multiple of `align`, or an unchanged copy of the
+    /// address if it's already a multiple of `align`.  Returns None on overflow.
+    ///
+    /// `align` must be a power of 2.
+    pub fn align(self, align: u64) -> Option<GuestAddress> {
+        if align <= 1 {
+            return Some(self);
+        }
+        self.checked_add(align - 1).map(|a| a & !(align - 1))
     }
 }
 
@@ -115,12 +133,14 @@ mod tests {
 
     #[test]
     #[allow(clippy::eq_op)]
+    #[allow(clippy::nonminimal_bool)]
     fn cmp() {
         let a = GuestAddress(0x300);
         let b = GuestAddress(0x301);
         assert!(a < b);
         assert!(b > a);
         assert!(!(a < a));
+        assert!(a >= a);
     }
 
     #[test]
@@ -143,5 +163,22 @@ mod tests {
         let a = GuestAddress(0xffffffffffffff55);
         assert_eq!(Some(GuestAddress(0xffffffffffffff57)), a.checked_add(2));
         assert!(a.checked_add(0xf0).is_none());
+    }
+
+    #[test]
+    fn align() {
+        assert_eq!(GuestAddress(12345).align(0), Some(GuestAddress(12345)));
+        assert_eq!(GuestAddress(12345).align(1), Some(GuestAddress(12345)));
+        assert_eq!(GuestAddress(12345).align(2), Some(GuestAddress(12346)));
+        assert_eq!(GuestAddress(0).align(4096), Some(GuestAddress(0)));
+        assert_eq!(GuestAddress(1).align(4096), Some(GuestAddress(4096)));
+        assert_eq!(GuestAddress(4095).align(4096), Some(GuestAddress(4096)));
+        assert_eq!(GuestAddress(4096).align(4096), Some(GuestAddress(4096)));
+        assert_eq!(GuestAddress(4097).align(4096), Some(GuestAddress(8192)));
+        assert_eq!(
+            GuestAddress(u64::MAX & !4095).align(4096),
+            Some(GuestAddress(u64::MAX & !4095)),
+        );
+        assert_eq!(GuestAddress(u64::MAX).align(2), None);
     }
 }

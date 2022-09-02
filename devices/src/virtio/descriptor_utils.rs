@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+mod sys;
+
 use std::borrow::Cow;
 use std::cmp;
 use std::convert::TryInto;
-use std::io::{self, Write};
+use std::io;
+use std::io::Write;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ptr::copy_nonoverlapping;
@@ -13,16 +16,24 @@ use std::result;
 use std::sync::Arc;
 
 use anyhow::Context;
-use base::{FileReadWriteAtVolatile, FileReadWriteVolatile};
+use base::FileReadWriteAtVolatile;
+use base::FileReadWriteVolatile;
 use cros_async::MemRegion;
-use data_model::{DataInit, Le16, Le32, Le64, VolatileMemoryError, VolatileSlice};
+use data_model::DataInit;
+use data_model::Le16;
+use data_model::Le32;
+use data_model::Le64;
+use data_model::VolatileMemoryError;
+use data_model::VolatileSlice;
 use disk::AsyncDisk;
 use remain::sorted;
 use smallvec::SmallVec;
 use thiserror::Error;
-use vm_memory::{GuestAddress, GuestMemory};
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 use super::DescriptorChain;
+use crate::virtio::ipc_memory_mapper::ExportedRegion;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -45,7 +56,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone)]
 struct DescriptorChainRegions {
-    regions: SmallVec<[MemRegion; 16]>,
+    regions: DescriptorChainMemRegions,
     current: usize,
     bytes_consumed: usize,
 }
@@ -69,7 +80,7 @@ impl DescriptorChainRegions {
     /// method to advance the `DescriptorChain`. Multiple calls to `get` with no intervening calls
     /// to `consume` will return the same data.
     fn get_remaining_regions(&self) -> &[MemRegion] {
-        &self.regions[self.current..]
+        &self.regions.regions[self.current..]
     }
 
     /// Returns all the remaining buffers in the `DescriptorChain` as `VolatileSlice`s of the given
@@ -140,7 +151,7 @@ impl DescriptorChainRegions {
         // `get_remaining` here because then the compiler complains that `self.current` is already
         // borrowed and doesn't allow us to modify it.  We also need to borrow the iovecs mutably.
         let current = self.current;
-        for region in &mut self.regions[current..] {
+        for region in &mut self.regions.regions[current..] {
             if count == 0 {
                 break;
             }
@@ -173,7 +184,7 @@ impl DescriptorChainRegions {
 
         let mut rem = offset;
         let mut end = self.current;
-        for region in &mut self.regions[self.current..] {
+        for region in &mut self.regions.regions[self.current..] {
             if rem <= region.len {
                 region.len = rem;
                 break;
@@ -183,7 +194,7 @@ impl DescriptorChainRegions {
             rem -= region.len;
         }
 
-        self.regions.truncate(end + 1);
+        self.regions.regions.truncate(end + 1);
 
         other
     }
@@ -220,15 +231,28 @@ impl<'a, T: DataInit> Iterator for ReaderIterator<'a, T> {
     }
 }
 
+#[derive(Clone)]
+pub struct DescriptorChainMemRegions {
+    pub regions: SmallVec<[cros_async::MemRegion; 16]>,
+    // For virtio devices that operate on IOVAs rather than guest phyiscal
+    // addresses, the IOVA regions must be exported from virtio-iommu to get
+    // the underlying memory regions. It is only valid for the virtio device
+    // to access those memory regions while they remain exported, so maintain
+    // references to the exported regions until the descriptor chain is
+    // dropped.
+    _exported_regions: Option<Vec<ExportedRegion>>,
+}
+
 /// Get all the mem regions from a `DescriptorChain` iterator, regardless if the `DescriptorChain`
 /// contains GPAs (guest physical address), or IOVAs (io virtual address). IOVAs will
 /// be translated to GPAs via IOMMU.
-pub fn get_mem_regions<I>(mem: &GuestMemory, vals: I) -> Result<SmallVec<[MemRegion; 16]>>
+pub fn get_mem_regions<I>(mem: &GuestMemory, vals: I) -> Result<DescriptorChainMemRegions>
 where
     I: Iterator<Item = DescriptorChain>,
 {
     let mut total_len: usize = 0;
     let mut regions = SmallVec::new();
+    let mut exported_regions: Option<Vec<ExportedRegion>> = None;
 
     // TODO(jstaron): Update this code to take the indirect descriptors into account.
     for desc in vals {
@@ -239,19 +263,26 @@ where
             .checked_add(desc.len as usize)
             .ok_or(Error::DescriptorChainOverflow)?;
 
-        for r in desc.get_mem_regions().map_err(Error::InvalidChain)? {
+        let (desc_regions, exported) = desc.into_mem_regions();
+        for r in desc_regions {
             // Check that all the regions are totally contained in GuestMemory.
             mem.get_slice_at_addr(r.gpa, r.len.try_into().expect("u32 doesn't fit in usize"))
                 .map_err(Error::GuestMemoryError)?;
 
-            regions.push(MemRegion {
+            regions.push(cros_async::MemRegion {
                 offset: r.gpa.offset(),
                 len: r.len.try_into().expect("u32 doesn't fit in usize"),
             });
         }
+        if let Some(exported) = exported {
+            exported_regions.get_or_insert(vec![]).push(exported);
+        }
     }
 
-    Ok(regions)
+    Ok(DescriptorChainMemRegions {
+        regions,
+        _exported_regions: exported_regions,
+    })
 }
 
 impl Reader {
@@ -308,7 +339,7 @@ impl Reader {
         read
     }
 
-    /// Reads data from the descriptor chain buffer into a file descriptor.
+    /// Reads data from the descriptor chain buffer into a writable object.
     /// Returns the number of bytes read from the descriptor chain buffer.
     /// The number of bytes read can be less than `count` if there isn't
     /// enough data in the descriptor chain buffer.
@@ -564,7 +595,7 @@ impl Writer {
         written
     }
 
-    /// Writes data to the descriptor chain buffer from a file descriptor.
+    /// Writes data to the descriptor chain buffer from a readable object.
     /// Returns the number of bytes written to the descriptor chain buffer.
     /// The number of bytes written can be less than `count` if
     /// there isn't enough data in the descriptor chain buffer.
@@ -801,18 +832,18 @@ pub fn create_descriptor_chain(
         );
     }
 
-    DescriptorChain::checked_new(memory, descriptor_array_addr, 0x100, 0, 0, None)
+    DescriptorChain::checked_new(memory, descriptor_array_addr, 0x100, 0, 0, None, None)
         .map_err(Error::InvalidChain)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::File;
     use std::io::Read;
+
     use tempfile::tempfile;
 
-    use cros_async::Executor;
+    use super::*;
 
     #[test]
     fn reader_test_simple_chain() {
@@ -965,7 +996,8 @@ mod tests {
         let mut reader = Reader::new(memory, chain).expect("failed to create Reader");
 
         // Open a file in read-only mode so writes to it to trigger an I/O error.
-        let mut ro_file = File::open("/dev/zero").expect("failed to open /dev/zero");
+        let device_file = if cfg!(windows) { "NUL" } else { "/dev/zero" };
+        let mut ro_file = File::open(device_file).expect("failed to open device file");
 
         reader
             .read_exact_to(&mut ro_file, 512)
@@ -1473,77 +1505,5 @@ mod tests {
             .fold(0usize, |total, iov| total + iov.size());
         assert!(first > 0);
         assert!(first <= 8);
-    }
-
-    #[test]
-    fn region_reader_failing_io() {
-        let ex = Executor::new().unwrap();
-        ex.run_until(region_reader_failing_io_async(&ex)).unwrap();
-    }
-    async fn region_reader_failing_io_async(ex: &Executor) {
-        use DescriptorType::*;
-
-        let memory_start_addr = GuestAddress(0x0);
-        let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
-
-        let chain = create_descriptor_chain(
-            &memory,
-            GuestAddress(0x0),
-            GuestAddress(0x100),
-            vec![(Readable, 256), (Readable, 256)],
-            0,
-        )
-        .expect("create_descriptor_chain failed");
-
-        let mut reader = Reader::new(memory.clone(), chain).expect("failed to create Reader");
-
-        // Open a file in read-only mode so writes to it to trigger an I/O error.
-        let ro_file = File::open("/dev/zero").expect("failed to open /dev/zero");
-        let async_ro_file = disk::SingleFileDisk::new(ro_file, ex).expect("Failed to crate SFD");
-
-        reader
-            .read_exact_to_at_fut(&async_ro_file, 512, 0)
-            .await
-            .expect_err("successfully read more bytes than SharedMemory size");
-
-        // The write above should have failed entirely, so we end up not writing any bytes at all.
-        assert_eq!(reader.available_bytes(), 512);
-        assert_eq!(reader.bytes_read(), 0);
-    }
-
-    #[test]
-    fn region_writer_failing_io() {
-        let ex = Executor::new().unwrap();
-        ex.run_until(region_writer_failing_io_async(&ex)).unwrap()
-    }
-    async fn region_writer_failing_io_async(ex: &Executor) {
-        use DescriptorType::*;
-
-        let memory_start_addr = GuestAddress(0x0);
-        let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
-
-        let chain = create_descriptor_chain(
-            &memory,
-            GuestAddress(0x0),
-            GuestAddress(0x100),
-            vec![(Writable, 256), (Writable, 256)],
-            0,
-        )
-        .expect("create_descriptor_chain failed");
-
-        let mut writer = Writer::new(memory.clone(), chain).expect("failed to create Writer");
-
-        let file = tempfile().expect("failed to create temp file");
-
-        file.set_len(384).unwrap();
-        let async_file = disk::SingleFileDisk::new(file, ex).expect("Failed to crate SFD");
-
-        writer
-            .write_all_from_at_fut(&async_file, 512, 0)
-            .await
-            .expect_err("successfully wrote more bytes than in SharedMemory");
-
-        assert_eq!(writer.available_bytes(), 128);
-        assert_eq!(writer.bytes_written(), 384);
     }
 }

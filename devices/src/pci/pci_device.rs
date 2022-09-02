@@ -2,43 +2,80 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
 use anyhow::bail;
-use base::{error, Event, RawDescriptor};
+use base::error;
+use base::Event;
+use base::RawDescriptor;
 use hypervisor::Datamatch;
 use remain::sorted;
-use resources::{Error as SystemAllocatorFaliure, SystemAllocator};
+use resources::Error as SystemAllocatorFaliure;
+use resources::SystemAllocator;
+use sync::Mutex;
 use thiserror::Error;
 
-use crate::bus::{BusDeviceObj, BusRange, BusType, ConfigWriteResult};
-use crate::pci::pci_configuration::{
-    self, PciBarConfiguration, BAR0_REG, COMMAND_REG, COMMAND_REG_IO_SPACE_MASK,
-    COMMAND_REG_MEMORY_SPACE_MASK, NUM_BAR_REGS, ROM_BAR_REG,
-};
-use crate::pci::{PciAddress, PciAddressError, PciInterruptPin};
+use super::PciId;
+use crate::bus::BusDeviceObj;
+use crate::bus::BusRange;
+use crate::bus::BusType;
+use crate::bus::ConfigWriteResult;
+use crate::pci::pci_configuration;
+use crate::pci::pci_configuration::PciBarConfiguration;
+use crate::pci::pci_configuration::BAR0_REG;
+use crate::pci::pci_configuration::COMMAND_REG;
+use crate::pci::pci_configuration::COMMAND_REG_IO_SPACE_MASK;
+use crate::pci::pci_configuration::COMMAND_REG_MEMORY_SPACE_MASK;
+use crate::pci::pci_configuration::NUM_BAR_REGS;
+use crate::pci::pci_configuration::PCI_ID_REG;
+use crate::pci::pci_configuration::ROM_BAR_REG;
+use crate::pci::PciAddress;
+use crate::pci::PciAddressError;
+use crate::pci::PciInterruptPin;
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
-#[cfg(feature = "audio")]
+#[cfg(all(unix, feature = "audio"))]
 use crate::virtio::snd::vios_backend::Error as VioSError;
-use crate::{BusAccessInfo, BusDevice};
+use crate::BusAccessInfo;
+use crate::BusDevice;
+use crate::DeviceId;
+use crate::IrqLevelEvent;
 
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Added pci device's parent bus does not belong to this bus
+    #[error("pci device {0}'s parent bus does not belong to bus {1}")]
+    AddedDeviceBusNotExist(PciAddress, u8),
     /// Invalid alignment encountered.
     #[error("Alignment must be a power of 2")]
     BadAlignment,
+    /// The new bus has already been added to this bus
+    #[error("Added bus {0} already existed on bus {1}")]
+    BusAlreadyExist(u8, u8),
+    /// Target bus not exists on this bus
+    #[error("pci bus {0} does not exist on bus {1}")]
+    BusNotExist(u8, u8),
     /// Setup of the device capabilities failed.
     #[error("failed to add capability {0}")]
     CapabilitiesSetup(pci_configuration::Error),
     /// Create cras client failed.
-    #[cfg(all(feature = "audio", feature = "audio_cras"))]
+    #[cfg(all(unix, feature = "audio", feature = "audio_cras"))]
     #[error("failed to create CRAS Client: {0}")]
     CreateCrasClientFailed(libcras::Error),
     /// Create VioS client failed.
-    #[cfg(feature = "audio")]
+    #[cfg(all(unix, feature = "audio"))]
     #[error("failed to create VioS Client: {0}")]
     CreateViosClientFailed(VioSError),
+    /// Device is already on this bus
+    #[error("pci device {0} has already been added to bus {1}")]
+    DeviceAlreadyExist(PciAddress, u8),
+    /// Device not exist on this bus
+    #[error("pci device {0} does not located on bus {1}")]
+    DeviceNotExist(PciAddress, u8),
     /// Allocating space for an IO BAR failed.
     #[error("failed to allocate space for an IO BAR, size={0}: {1}")]
     IoAllocationFailed(u64, SystemAllocatorFaliure),
@@ -54,6 +91,9 @@ pub enum Error {
     /// Overflow encountered
     #[error("base={0} + size={1} overflows")]
     Overflow(u64, u64),
+    /// The new added bus does not located on this bus
+    #[error("Added bus {0} does not located on bus {1}")]
+    ParentBusNotExist(u8, u8),
     /// PCI Address is not allocated.
     #[error("PCI address is not allocated")]
     PciAddressMissing,
@@ -63,6 +103,9 @@ pub enum Error {
     /// PCI Address allocation failure.
     #[error("failed to allocate PCI address")]
     PciAllocationFailed,
+    /// PCI Bus window allocation failure.
+    #[error("failed to allocate window for PCI bus: {0}")]
+    PciBusWindowAllocationFailure(String),
     /// Size of zero encountered
     #[error("Size of zero detected")]
     SizeZero,
@@ -71,7 +114,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Pci Bar Range information
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BarRange {
     /// pci bar start address
     pub addr: u64,
@@ -81,27 +124,213 @@ pub struct BarRange {
     pub prefetchable: bool,
 }
 
+/// Pci Bus information
+#[derive(Debug)]
+pub struct PciBus {
+    // bus number
+    bus_num: u8,
+    // parent bus number
+    parent_bus_num: u8,
+    // devices located on this bus
+    child_devices: HashSet<PciAddress>,
+    // Hash map that stores all direct child buses of this bus.
+    // It maps from child bus number to its pci bus structure.
+    child_buses: HashMap<u8, Arc<Mutex<PciBus>>>,
+    // Is hotplug bus
+    hotplug_bus: bool,
+}
+
+impl PciBus {
+    // Creates a new pci bus
+    pub fn new(bus_num: u8, parent_bus_num: u8, hotplug_bus: bool) -> Self {
+        PciBus {
+            bus_num,
+            parent_bus_num,
+            child_devices: HashSet::new(),
+            child_buses: HashMap::new(),
+            hotplug_bus,
+        }
+    }
+
+    pub fn get_bus_num(&self) -> u8 {
+        self.bus_num
+    }
+
+    // Find all PCI buses from this PCI bus to a given PCI bus
+    pub fn path_to(&self, bus_num: u8) -> Vec<u8> {
+        if self.bus_num == bus_num {
+            return vec![self.bus_num];
+        }
+
+        for (_, child_bus) in self.child_buses.iter() {
+            let mut path = child_bus.lock().path_to(bus_num);
+            if !path.is_empty() {
+                path.insert(0, self.bus_num);
+                return path;
+            }
+        }
+        Vec::new()
+    }
+
+    // Add a new child device to this pci bus tree.
+    pub fn add_child_device(&mut self, add_device: PciAddress) -> Result<()> {
+        if self.bus_num == add_device.bus {
+            if !self.child_devices.insert(add_device) {
+                return Err(Error::DeviceAlreadyExist(add_device, self.bus_num));
+            }
+            return Ok(());
+        }
+
+        for child_bus in self.child_buses.values() {
+            match child_bus.lock().add_child_device(add_device) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if let Error::DeviceAlreadyExist(_, _) = e {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Err(Error::AddedDeviceBusNotExist(add_device, self.bus_num))
+    }
+
+    // Remove one child device from this pci bus tree
+    pub fn remove_child_device(&mut self, device: PciAddress) -> Result<()> {
+        if self.child_devices.remove(&device) {
+            return Ok(());
+        }
+        for child_bus in self.child_buses.values() {
+            if child_bus.lock().remove_child_device(device).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(Error::DeviceNotExist(device, self.bus_num))
+    }
+
+    // Add a new child bus to this pci bus tree.
+    pub fn add_child_bus(&mut self, add_bus: Arc<Mutex<PciBus>>) -> Result<()> {
+        let add_bus_num = add_bus.lock().bus_num;
+        let add_bus_parent = add_bus.lock().parent_bus_num;
+        if self.bus_num == add_bus_parent {
+            if self.child_buses.contains_key(&add_bus_num) {
+                return Err(Error::BusAlreadyExist(self.bus_num, add_bus_num));
+            }
+            self.child_buses.insert(add_bus_num, add_bus);
+            return Ok(());
+        }
+
+        for child_bus in self.child_buses.values() {
+            match child_bus.lock().add_child_bus(add_bus.clone()) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if let Error::BusAlreadyExist(_, _) = e {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Err(Error::ParentBusNotExist(add_bus_num, self.bus_num))
+    }
+
+    // Remove one child bus from this pci bus tree.
+    pub fn remove_child_bus(&mut self, bus_no: u8) -> Result<()> {
+        if self.child_buses.remove(&bus_no).is_some() {
+            return Ok(());
+        }
+        for (_, child_bus) in self.child_buses.iter() {
+            if child_bus.lock().remove_child_bus(bus_no).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(Error::BusNotExist(bus_no, self.bus_num))
+    }
+
+    // Find all downstream devices under the given bus
+    pub fn find_downstream_devices(&self, bus_no: u8) -> Vec<PciAddress> {
+        if self.bus_num == bus_no {
+            return self.get_downstream_devices();
+        }
+        for (_, child_bus) in self.child_buses.iter() {
+            let res = child_bus.lock().find_downstream_devices(bus_no);
+            if !res.is_empty() {
+                return res;
+            }
+        }
+
+        Vec::new()
+    }
+
+    // Get all devices in this pci bus tree by level-order traversal (BFS)
+    pub fn get_downstream_devices(&self) -> Vec<PciAddress> {
+        let mut devices = Vec::new();
+        devices.extend(self.child_devices.clone());
+        for child_bus in self.child_buses.values() {
+            devices.extend(child_bus.lock().get_downstream_devices());
+        }
+        devices
+    }
+
+    // Check if given device is located in the device tree
+    pub fn contains(&self, device: PciAddress) -> bool {
+        if self.child_devices.contains(&device) {
+            return true;
+        }
+
+        for (_, child_bus) in self.child_buses.iter() {
+            if child_bus.lock().contains(device) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Returns the hotplug bus that this device is on.
+    pub fn get_hotplug_bus(&self, device: PciAddress) -> Option<u8> {
+        if self.hotplug_bus && self.contains(device) {
+            return Some(self.bus_num);
+        }
+        for (_, child_bus) in self.child_buses.iter() {
+            let hotplug_bus = child_bus.lock().get_hotplug_bus(device);
+            if hotplug_bus.is_some() {
+                return hotplug_bus;
+            }
+        }
+        return None;
+    }
+}
+
 pub trait PciDevice: Send {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String;
+
+    /// Preferred PCI address for this device, if any.
+    fn preferred_address(&self) -> Option<PciAddress> {
+        None
+    }
+
     /// Allocate and return an unique bus, device and function number for this device.
+    /// May be called multiple times; on subsequent calls, the device should return the same
+    /// address it returned from the first call.
     fn allocate_address(&mut self, resources: &mut SystemAllocator) -> Result<PciAddress>;
+
     /// A vector of device-specific file descriptors that must be kept open
     /// after jailing. Must be called before the process is jailed.
     fn keep_rds(&self) -> Vec<RawDescriptor>;
+
+    /// Preferred IRQ for this device.
+    /// The device may request a specific pin and IRQ number by returning a non-`None` value.
+    /// Otherwise, an appropriate IRQ will be allocated automatically.
+    /// The device's `assign_irq` function will be called with its assigned IRQ either way.
+    fn preferred_irq(&self) -> Option<(PciInterruptPin, u32)> {
+        None
+    }
+
     /// Assign a legacy PCI IRQ to this device.
     /// The device may write to `irq_evt` to trigger an interrupt.
     /// When `irq_resample_evt` is signaled, the device should re-assert `irq_evt` if necessary.
-    /// Optional irq_num can be used for default INTx allocation, device can overwrite it.
-    /// If legacy INTx is used, function shall return requested IRQ number and PCI INTx pin.
-    fn assign_irq(
-        &mut self,
-        _irq_evt: &Event,
-        _irq_resample_evt: &Event,
-        _irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        None
-    }
+    fn assign_irq(&mut self, _irq_evt: IrqLevelEvent, _pin: PciInterruptPin, _irq_num: u32) {}
+
     /// Allocates the needed IO BAR space using the `allocate` function which takes a size and
     /// returns an address. Returns a Vec of BarRange{addr, size, prefetchable}.
     fn allocate_io_bars(&mut self, _resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
@@ -174,14 +403,22 @@ pub trait PciDevice: Send {
         Vec::new()
     }
 
+    /// Get the pci bus generated by this pci device
+    fn get_new_pci_bus(&self) -> Option<Arc<Mutex<PciBus>>> {
+        None
+    }
+
     /// if device is a pci brdige, configure pci bridge window
     fn configure_bridge_window(
         &mut self,
         _resources: &mut SystemAllocator,
         _bar_ranges: &[BarRange],
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Vec<BarRange>> {
+        Ok(Vec::new())
     }
+
+    /// if device is a pci bridge, configure subordinate bus number
+    fn set_subordinate_bus(&mut self, _bus_no: u8) {}
 
     /// Indicates whether the device supports IOMMU
     fn supports_iommu(&self) -> bool {
@@ -197,6 +434,12 @@ pub trait PciDevice: Send {
 impl<T: PciDevice> BusDevice for T {
     fn debug_label(&self) -> String {
         PciDevice::debug_label(self)
+    }
+
+    fn device_id(&self) -> DeviceId {
+        // Use the PCI ID for PCI devices, which contains the PCI vendor ID and the PCI device ID
+        let pci_id: PciId = PciDevice::read_config_register(self, PCI_ID_REG).into();
+        pci_id.into()
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
@@ -348,6 +591,10 @@ impl<T: PciDevice> BusDevice for T {
     fn destroy_device(&mut self) {
         self.destroy_device()
     }
+
+    fn is_bridge(&self) -> Option<u8> {
+        self.get_new_pci_bus().map(|bus| bus.lock().get_bus_num())
+    }
 }
 
 impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
@@ -355,19 +602,20 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     fn debug_label(&self) -> String {
         (**self).debug_label()
     }
+    fn preferred_address(&self) -> Option<PciAddress> {
+        (**self).preferred_address()
+    }
     fn allocate_address(&mut self, resources: &mut SystemAllocator) -> Result<PciAddress> {
         (**self).allocate_address(resources)
     }
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         (**self).keep_rds()
     }
-    fn assign_irq(
-        &mut self,
-        irq_evt: &Event,
-        irq_resample_evt: &Event,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        (**self).assign_irq(irq_evt, irq_resample_evt, irq_num)
+    fn preferred_irq(&self) -> Option<(PciInterruptPin, u32)> {
+        (**self).preferred_irq()
+    }
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
+        (**self).assign_irq(irq_evt, pin, irq_num)
     }
     fn allocate_io_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
         (**self).allocate_io_bars(resources)
@@ -415,6 +663,9 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     fn destroy_device(&mut self) {
         (**self).destroy_device();
     }
+    fn get_new_pci_bus(&self) -> Option<Arc<Mutex<PciBus>>> {
+        (**self).get_new_pci_bus()
+    }
     fn get_removed_children_devices(&self) -> Vec<PciAddress> {
         (**self).get_removed_children_devices()
     }
@@ -423,7 +674,7 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
         &mut self,
         resources: &mut SystemAllocator,
         bar_ranges: &[BarRange],
-    ) -> Result<()> {
+    ) -> Result<Vec<BarRange>> {
         (**self).configure_bridge_window(resources, bar_ranges)
     }
 }
@@ -442,11 +693,14 @@ impl<T: 'static + PciDevice> BusDeviceObj for T {
 
 #[cfg(test)]
 mod tests {
+    use pci_configuration::PciBarPrefetchable;
+    use pci_configuration::PciBarRegionType;
+    use pci_configuration::PciClassCode;
+    use pci_configuration::PciConfiguration;
+    use pci_configuration::PciHeaderType;
+    use pci_configuration::PciMultimediaSubclass;
+
     use super::*;
-    use pci_configuration::{
-        PciBarPrefetchable, PciBarRegionType, PciClassCode, PciConfiguration, PciHeaderType,
-        PciMultimediaSubclass,
-    };
 
     const BAR0_SIZE: u64 = 0x1000;
     const BAR2_SIZE: u64 = 0x20;

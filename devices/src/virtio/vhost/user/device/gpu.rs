@@ -2,32 +2,60 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{cell::RefCell, collections::BTreeMap, fs::File, path::PathBuf, rc::Rc, sync::Arc};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
 use argh::FromArgs;
 use async_task::Task;
-use base::{
-    clone_descriptor, error,
-    net::{UnixSeqpacketListener, UnlinkUnixSeqpacketListener},
-    warn, Event, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor, TimerFd, Tube,
-};
-use cros_async::{AsyncWrapper, EventAsync, Executor, IoSourceExt, TimerAsync};
-use futures::{
-    future::{select, Either},
-    pin_mut,
-};
+use base::clone_descriptor;
+use base::error;
+use base::warn;
+use base::Event;
+use base::FromRawDescriptor;
+use base::SafeDescriptor;
+use base::Timer;
+use base::Tube;
+use base::UnixSeqpacketListener;
+use base::UnlinkUnixSeqpacketListener;
+use cros_async::AsyncWrapper;
+use cros_async::EventAsync;
+use cros_async::Executor;
+use cros_async::IoSourceExt;
+use cros_async::TimerAsync;
+use futures::future::select;
+use futures::future::Either;
+use futures::pin_mut;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::{
-    self, gpu,
-    vhost::user::device::handler::{DeviceRequestHandler, Doorbell, VhostUserBackend},
-    vhost::user::device::wl::parse_wayland_sock,
-    DescriptorChain, Gpu, GpuDisplayParameters, GpuParameters, Queue, QueueReader, VirtioDevice,
-};
+use crate::virtio;
+use crate::virtio::gpu;
+use crate::virtio::vhost::user::device::handler::sys::Doorbell;
+use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
+use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
+use crate::virtio::vhost::user::device::wl::parse_wayland_sock;
+use crate::virtio::DescriptorChain;
+use crate::virtio::Gpu;
+use crate::virtio::GpuDisplayParameters;
+use crate::virtio::GpuParameters;
+use crate::virtio::Queue;
+use crate::virtio::QueueReader;
+use crate::virtio::SharedMemoryMapper;
+use crate::virtio::SharedMemoryRegion;
+use crate::virtio::VirtioDevice;
+
+const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
+const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
 
 #[derive(Clone)]
 struct SharedReader {
@@ -126,7 +154,7 @@ async fn run_resource_bridge(tube: Box<dyn IoSourceExt<Tube>>, state: Rc<RefCell
         }
 
         if let Err(e) = state.borrow_mut().process_resource_bridge(tube.as_source()) {
-            error!("Failed to process resource bridge: {}", e);
+            error!("Failed to process resource bridge: {:#}", e);
             break;
         }
     }
@@ -144,14 +172,18 @@ struct GpuBackend {
     state: Option<Rc<RefCell<gpu::Frontend>>>,
     fence_state: Arc<Mutex<gpu::FenceState>>,
     display_worker: Option<Task<()>>,
-    workers: [Option<Task<()>>; Self::MAX_QUEUE_NUM],
+    workers: [Option<Task<()>>; MAX_QUEUE_NUM],
+    mapper: Option<Box<dyn SharedMemoryMapper>>,
 }
 
 impl VhostUserBackend for GpuBackend {
-    const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
-    const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
+    fn max_queue_num(&self) -> usize {
+        return MAX_QUEUE_NUM;
+    }
 
-    type Error = anyhow::Error;
+    fn max_vring_len(&self) -> u16 {
+        return MAX_VRING_LEN;
+    }
 
     fn features(&self) -> u64 {
         self.gpu.borrow().features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
@@ -194,36 +226,6 @@ impl VhostUserBackend for GpuBackend {
         self.gpu.borrow_mut().write_config(offset, data)
     }
 
-    fn set_device_request_channel(&mut self, channel: File) -> anyhow::Result<()> {
-        let tube = unsafe { Tube::from_raw_descriptor(channel.into_raw_descriptor()) }
-            .into_async_tube(&self.ex)
-            .context("failed to create AsyncTube")?;
-
-        // We need a PciAddress in order to initialize the pci bar but this isn't part of the
-        // vhost-user protocol. Instead we expect this to be the first message the crosvm main
-        // process sends us on the device tube.
-        let gpu = Rc::clone(&self.gpu);
-        self.ex
-            .spawn_local(async move {
-                let response = match tube.next().await {
-                    Ok(addr) => gpu.borrow_mut().get_device_bars(addr),
-                    Err(e) => {
-                        error!("Failed to get `PciAddr` from tube: {}", e);
-                        return;
-                    }
-                };
-
-                if let Err(e) = tube.send(&response) {
-                    error!("Failed to send `PciBarConfiguration`: {}", e);
-                }
-
-                gpu.borrow_mut().set_device_tube(tube.into());
-            })
-            .detach();
-
-        Ok(())
-    }
-
     fn start_queue(
         &mut self,
         idx: usize,
@@ -245,7 +247,7 @@ impl VhostUserBackend for GpuBackend {
             _ => bail!("attempted to start unknown queue: {}", idx),
         }
 
-        let kick_evt = EventAsync::new(kick_evt.0, &self.ex)
+        let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;
 
         let reader = SharedReader {
@@ -258,10 +260,11 @@ impl VhostUserBackend for GpuBackend {
         } else {
             let fence_handler =
                 gpu::create_fence_handler(mem.clone(), reader.clone(), self.fence_state.clone());
+            let mapper = self.mapper.take().context("missing mapper")?;
             let state = Rc::new(RefCell::new(
                 self.gpu
                     .borrow_mut()
-                    .initialize_frontend(self.fence_state.clone(), fence_handler)
+                    .initialize_frontend(self.fence_state.clone(), fence_handler, mapper)
                     .ok_or_else(|| anyhow!("failed to initialize gpu frontend"))?,
             ));
             self.state = Some(state.clone());
@@ -297,8 +300,8 @@ impl VhostUserBackend for GpuBackend {
             self.display_worker = Some(task);
         }
 
-        let timer = TimerFd::new()
-            .context("failed to create TimerFd")
+        let timer = Timer::new()
+            .context("failed to create Timer")
             .and_then(|t| TimerAsync::new(t, &self.ex).context("failed to create TimerAsync"))?;
         let task = self
             .ex
@@ -323,6 +326,14 @@ impl VhostUserBackend for GpuBackend {
             cancel_task(&self.ex, task)
         }
     }
+
+    fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
+        self.gpu.borrow().get_shared_memory_region()
+    }
+
+    fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
+        self.mapper = Some(mapper);
+    }
 }
 
 fn gpu_parameters_from_str(input: &str) -> Result<GpuParameters, String> {
@@ -330,61 +341,45 @@ fn gpu_parameters_from_str(input: &str) -> Result<GpuParameters, String> {
 }
 
 #[derive(FromArgs)]
-#[argh(description = "run gpu device")]
-struct Options {
-    #[argh(
-        option,
-        description = "path to bind a listening vhost-user socket",
-        arg_name = "PATH"
-    )]
-    socket: String,
-    #[argh(
-        option,
-        description = "path to one or more Wayland sockets. The unnamed socket is \
-        used for displaying virtual screens while the named ones are used for IPC",
-        from_str_fn(parse_wayland_sock),
-        arg_name = "PATH[,name=NAME]"
-    )]
+/// GPU device
+#[argh(subcommand, name = "gpu")]
+pub struct Options {
+    #[argh(option, arg_name = "PATH")]
+    /// path to bind a listening vhost-user socket
+    socket: Option<String>,
+    #[argh(option, arg_name = "STRING")]
+    /// VFIO-PCI device name (e.g. '0000:00:07.0')
+    vfio: Option<String>,
+    #[argh(option, from_str_fn(parse_wayland_sock), arg_name = "PATH[,name=NAME]")]
+    /// path to one or more Wayland sockets. The unnamed socket is
+    /// used for displaying virtual screens while the named ones are used for IPC
     wayland_sock: Vec<(String, PathBuf)>,
-    #[argh(
-        option,
-        description = "path to one or more bridge sockets for communicating with \
-        other graphics devices (wayland, video, etc)",
-        arg_name = "PATH"
-    )]
+    #[argh(option, arg_name = "PATH")]
+    /// path to one or more bridge sockets for communicating with
+    /// other graphics devices (wayland, video, etc)
     resource_bridge: Vec<String>,
-    #[argh(option, description = " X11 display name to use", arg_name = "DISPLAY")]
+    #[argh(option, arg_name = "DISPLAY")]
+    /// X11 display name to use
     x_display: Option<String>,
     #[argh(
         option,
         from_str_fn(gpu_parameters_from_str),
         default = "Default::default()",
-        description = "a JSON object of virtio-gpu parameters",
         arg_name = "JSON"
     )]
+    /// a JSON object of virtio-gpu parameters
     params: GpuParameters,
 }
 
-pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
+pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let Options {
         x_display,
         params: mut gpu_parameters,
         resource_bridge,
         socket,
+        vfio,
         wayland_sock,
-    } = match Options::from_args(&[program_name], args) {
-        Ok(opts) => opts,
-        Err(e) => {
-            if e.status.is_err() {
-                bail!(e.output);
-            } else {
-                println!("{}", e.output);
-            }
-            return Ok(());
-        }
-    };
-
-    base::syslog::init().context("failed to initialize syslog")?;
+    } = opts;
 
     let wayland_paths: BTreeMap<_, _> = wayland_sock.into_iter().collect();
 
@@ -397,9 +392,9 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    if gpu_parameters.displays.is_empty() {
+    if gpu_parameters.display_params.is_empty() {
         gpu_parameters
-            .displays
+            .display_params
             .push(GpuDisplayParameters::default());
     }
 
@@ -416,7 +411,9 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
     for listener in resource_bridge_listeners {
         let resource_bridges = Arc::clone(&resource_bridges);
         ex.spawn_blocking(move || match listener.accept() {
-            Ok(stream) => resource_bridges.lock().push(Tube::new(stream)),
+            Ok(stream) => resource_bridges
+                .lock()
+                .push(Tube::new_from_unix_seqpacket(stream)),
             Err(e) => {
                 let path = listener
                     .path()
@@ -431,10 +428,11 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
         .detach();
     }
 
-    let exit_evt = Event::new().context("failed to create Event")?;
-
-    // Initialized later.
-    let gpu_device_tube = None;
+    // TODO(b/232344535): Read side of the tube is ignored currently.
+    // Complete the implementation by polling `exit_evt_rdtube` and
+    // kill the sibling VM.
+    let (exit_evt_wrtube, _) =
+        Tube::directional_pair().context("failed to create vm event tube")?;
 
     let mut display_backends = vec![
         virtio::DisplayBackend::X(x_display),
@@ -456,9 +454,10 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
     let base_features = virtio::base_features(ProtectionType::Unprotected);
     let channels = wayland_paths;
 
+    let listener = VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, MAX_QUEUE_NUM, None)?;
+
     let gpu = Rc::new(RefCell::new(Gpu::new(
-        exit_evt,
-        gpu_device_tube,
+        exit_evt_wrtube,
         Vec::new(), // resource_bridges, handled separately by us
         display_backends,
         &gpu_parameters,
@@ -470,7 +469,7 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
         channels,
     )));
 
-    let backend = GpuBackend {
+    let backend = Box::new(GpuBackend {
         ex: ex.clone(),
         gpu,
         resource_bridges,
@@ -479,9 +478,7 @@ pub fn run_gpu_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
         fence_state: Default::default(),
         display_worker: None,
         workers: Default::default(),
-    };
-
-    let handler = DeviceRequestHandler::new(backend);
-    // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    ex.run_until(handler.run(socket, &ex))?
+        mapper: None,
+    });
+    ex.run_until(listener.run_backend(backend, &ex))?
 }

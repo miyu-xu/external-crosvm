@@ -6,14 +6,20 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 
-use arch::fdt::{Error, FdtWriter, Result};
+use arch::fdt::Error;
+use arch::fdt::FdtWriter;
+use arch::fdt::Result;
 use arch::SERIAL_ADDR;
-use devices::{PciAddress, PciInterruptPin};
+// This is a Battery related constant
+use devices::bat::GOLDFISHBAT_MMIO_LEN;
+use devices::pl030::PL030_AMBA_ID;
+use devices::PciAddress;
+use devices::PciInterruptPin;
 use hypervisor::PsciVersion;
-use vm_memory::{GuestAddress, GuestMemory};
-
-// This is the start of DRAM in the physical address space.
-use crate::AARCH64_PHYS_MEM_START;
+use hypervisor::PSCI_0_2;
+use hypervisor::PSCI_1_0;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
 
 // These are GIC address-space location constants.
 use crate::AARCH64_GIC_CPUI_BASE;
@@ -21,20 +27,18 @@ use crate::AARCH64_GIC_CPUI_SIZE;
 use crate::AARCH64_GIC_DIST_BASE;
 use crate::AARCH64_GIC_DIST_SIZE;
 use crate::AARCH64_GIC_REDIST_SIZE;
-
+// This is the start of DRAM in the physical address space.
+use crate::AARCH64_PHYS_MEM_START;
+use crate::AARCH64_PMU_IRQ;
 // These are RTC related constants
 use crate::AARCH64_RTC_ADDR;
 use crate::AARCH64_RTC_IRQ;
 use crate::AARCH64_RTC_SIZE;
-use devices::pl030::PL030_AMBA_ID;
-
 // These are serial device related constants.
 use crate::AARCH64_SERIAL_1_3_IRQ;
 use crate::AARCH64_SERIAL_2_4_IRQ;
 use crate::AARCH64_SERIAL_SIZE;
 use crate::AARCH64_SERIAL_SPEED;
-
-use crate::AARCH64_PMU_IRQ;
 
 // This is an arbitrary number to specify the node for the GIC.
 // If we had a more complex interrupt architecture, then we'd need an enum for
@@ -223,15 +227,29 @@ fn create_serial_nodes(fdt: &mut FdtWriter) -> Result<()> {
     Ok(())
 }
 
-fn create_psci_node(fdt: &mut FdtWriter, version: &PsciVersion) -> Result<()> {
-    let mut compatible = vec![format!("arm,psci-{}.{}", version.major, version.minor)];
-    if version.major == 1 {
-        // Put `psci-0.2` as well because PSCI 1.0 is compatible with PSCI 0.2.
-        compatible.push(format!("arm,psci-0.2"))
-    };
+fn psci_compatible(version: &PsciVersion) -> Vec<&str> {
+    // The PSCI kernel driver only supports compatible strings for the following
+    // backward-compatible versions.
+    let supported = [(PSCI_1_0, "arm,psci-1.0"), (PSCI_0_2, "arm,psci-0.2")];
 
+    let mut compatible: Vec<_> = supported
+        .iter()
+        .filter(|&(v, _)| *version >= *v)
+        .map(|&(_, c)| c)
+        .collect();
+
+    // The PSCI kernel driver also supports PSCI v0.1, which is NOT forward-compatible.
+    if compatible.is_empty() {
+        compatible = vec!["arm,psci"];
+    }
+
+    compatible
+}
+
+fn create_psci_node(fdt: &mut FdtWriter, version: &PsciVersion) -> Result<()> {
+    let compatible = psci_compatible(version);
     let psci_node = fdt.begin_node("psci")?;
-    fdt.property_string_list("compatible", compatible)?;
+    fdt.property_string_list("compatible", &compatible)?;
     // Only support aarch64 guest
     fdt.property_string("method", "hvc")?;
     fdt.end_node(psci_node)?;
@@ -312,6 +330,19 @@ pub struct PciConfigRegion {
     pub base: u64,
     /// Size of the PCI configuration region in bytes.
     pub size: u64,
+}
+
+/// Location of memory-mapped vm watchdog
+#[derive(Copy, Clone)]
+pub struct VmWdtConfig {
+    /// Physical address of the base of the memory-mapped vm watchdog region.
+    pub base: u64,
+    /// Size of the vm watchdog region in bytes.
+    pub size: u64,
+    /// The internal clock frequency of the watchdog.
+    pub clock_hz: u32,
+    /// The expiration timeout measured in seconds.
+    pub timeout_sec: u32,
 }
 
 fn create_pci_nodes(
@@ -427,6 +458,36 @@ fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
     Ok(())
 }
 
+/// Create a flattened device tree node for Goldfish Battery device.
+///
+/// # Arguments
+///
+/// * `fdt` - A FdtWriter in which the node is created
+/// * `mmio_base` - The MMIO base address of the battery
+/// * `irq` - The IRQ number of the battery
+fn create_battery_node(fdt: &mut FdtWriter, mmio_base: u64, irq: u32) -> Result<()> {
+    let reg = [mmio_base, GOLDFISHBAT_MMIO_LEN];
+    let irqs = [GIC_FDT_IRQ_TYPE_SPI, irq, IRQ_TYPE_LEVEL_HIGH];
+    let bat_node = fdt.begin_node("goldfish_battery")?;
+    fdt.property_string("compatible", "google,goldfish-battery")?;
+    fdt.property_array_u64("reg", &reg)?;
+    fdt.property_array_u32("interrupts", &irqs)?;
+    fdt.end_node(bat_node)?;
+    Ok(())
+}
+
+fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> {
+    let vmwdt_name = format!("vmwdt@{:x}", vmwdt_cfg.base);
+    let reg = [vmwdt_cfg.base, vmwdt_cfg.size];
+    let vmwdt_node = fdt.begin_node(&vmwdt_name)?;
+    fdt.property_string("compatible", "qemu,vcpu-stall-detector")?;
+    fdt.property_array_u64("reg", &reg)?;
+    fdt.property_u32("clock-frequency", vmwdt_cfg.clock_hz)?;
+    fdt.property_u32("timeout-sec", vmwdt_cfg.timeout_sec)?;
+    fdt.end_node(vmwdt_node)?;
+    Ok(())
+}
+
 /// Creates a flattened device tree containing all of the parameters for the
 /// kernel and loads it into the guest memory at the specified offset.
 ///
@@ -444,6 +505,10 @@ fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
 /// * `android_fstab` - An optional file holding Android fstab entries
 /// * `is_gicv3` - True if gicv3, false if v2
 /// * `psci_version` - the current PSCI version
+/// * `bat_mmio_base` - The battery base address
+/// * `bat_irq` - The battery irq number
+/// * `swiotlb` - Reserve a memory pool for DMA
+/// * `vmwdt_cfg` - The virtual watchdog configuration
 pub fn create_fdt(
     fdt_max_size: usize,
     guest_mem: &GuestMemory,
@@ -461,6 +526,8 @@ pub fn create_fdt(
     use_pmu: bool,
     psci_version: PsciVersion,
     swiotlb: Option<u64>,
+    bat_mmio_base_and_irq: Option<(u64, u32)>,
+    vmwdt_cfg: VmWdtConfig,
 ) -> Result<()> {
     let mut fdt = FdtWriter::new(&[]);
 
@@ -486,6 +553,10 @@ pub fn create_fdt(
     create_psci_node(&mut fdt, &psci_version)?;
     create_pci_nodes(&mut fdt, pci_irqs, pci_cfg, pci_ranges, dma_pool_phandle)?;
     create_rtc_node(&mut fdt)?;
+    if let Some((bat_mmio_base, bat_irq)) = bat_mmio_base_and_irq {
+        create_battery_node(&mut fdt, bat_mmio_base, bat_irq)?;
+    }
+    create_vmwdt_node(&mut fdt, vmwdt_cfg)?;
     // End giant node
     fdt.end_node(root_node)?;
 
@@ -499,4 +570,52 @@ pub fn create_fdt(
         return Err(Error::FdtGuestMemoryWriteError);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn psci_compatible_v0_1() {
+        assert_eq!(
+            psci_compatible(&PsciVersion::new(0, 1).unwrap()),
+            vec!["arm,psci"]
+        );
+    }
+
+    #[test]
+    fn psci_compatible_v0_2() {
+        assert_eq!(
+            psci_compatible(&PsciVersion::new(0, 2).unwrap()),
+            vec!["arm,psci-0.2"]
+        );
+    }
+
+    #[test]
+    fn psci_compatible_v0_5() {
+        // Only the 0.2 version supported by the kernel should be added.
+        assert_eq!(
+            psci_compatible(&PsciVersion::new(0, 5).unwrap()),
+            vec!["arm,psci-0.2"]
+        );
+    }
+
+    #[test]
+    fn psci_compatible_v1_0() {
+        // Both 1.0 and 0.2 should be listed, in that order.
+        assert_eq!(
+            psci_compatible(&PsciVersion::new(1, 0).unwrap()),
+            vec!["arm,psci-1.0", "arm,psci-0.2"]
+        );
+    }
+
+    #[test]
+    fn psci_compatible_v1_5() {
+        // Only the 1.0 and 0.2 versions supported by the kernel should be listed.
+        assert_eq!(
+            psci_compatible(&PsciVersion::new(1, 5).unwrap()),
+            vec!["arm,psci-1.0", "arm,psci-0.2"]
+        );
+    }
 }

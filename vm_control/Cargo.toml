@@ -2,16 +2,19 @@
 name = "vm_control"
 version = "0.1.0"
 authors = ["The Chromium OS Authors"]
-edition = "2018"
+edition = "2021"
 
 [features]
+balloon = []
 gdb = ["gdbstub_arch"]
 
 [dependencies]
+anyhow = "*"
 balloon_control = { path = "../common/balloon_control" }
-base = { path = "../common/base" }
+base = { path = "../base" }
+cfg-if = "*"
 data_model = { path = "../common/data_model" }
-gdbstub_arch = { version = "0.1.0", optional = true }
+gdbstub_arch = { version = "0.2.2", optional = true }
 hypervisor = { path = "../hypervisor" }
 libc = "*"
 remain = "*"

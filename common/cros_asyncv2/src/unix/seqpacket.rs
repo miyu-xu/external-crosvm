@@ -2,29 +2,34 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::{
-    convert::TryFrom,
-    ffi::OsString,
-    fs::remove_file,
-    io,
-    mem::size_of,
-    ops::Deref,
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        io::{AsRawFd, RawFd},
-    },
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::convert::TryFrom;
+use std::ffi::OsString;
+use std::fs::remove_file;
+use std::io;
+use std::mem::size_of;
+use std::ops::Deref;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
+use base::warn;
+use base::AsRawDescriptor;
+use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
+use base::SafeDescriptor;
 use memoffset::offset_of;
-use sys_util::{warn, AsRawDescriptor, FromRawDescriptor, IntoRawDescriptor, SafeDescriptor};
 use thiserror::Error as ThisError;
 
-use crate::{AsIoBufs, OwnedIoBuf};
-
 use super::io_driver;
+use crate::AsIoBufs;
+use crate::OwnedIoBuf;
 
 #[derive(Debug, ThisError)]
 #[error("Failed to prepare socket fd")]
@@ -248,7 +253,7 @@ impl SeqPacket {
     /// Reads data and file descriptors from the socket.
     pub async fn recv_as_vec_with_fds(&self) -> anyhow::Result<(Vec<u8>, Vec<RawFd>)> {
         let len = self.next_packet_size().await?;
-        let mut fds = vec![0; sys_util::SCM_SOCKET_MAX_FD_COUNT];
+        let mut fds = vec![0; base::SCM_SOCKET_MAX_FD_COUNT];
         let (res, mut buf) = self
             .recv_iobuf_with_fds(OwnedIoBuf::new(vec![0u8; len]), &mut fds)
             .await;
@@ -260,10 +265,10 @@ impl SeqPacket {
     }
 }
 
-impl TryFrom<sys_util::net::UnixSeqpacket> for SeqPacket {
+impl TryFrom<base::net::UnixSeqpacket> for SeqPacket {
     type Error = anyhow::Error;
 
-    fn try_from(value: sys_util::net::UnixSeqpacket) -> anyhow::Result<Self> {
+    fn try_from(value: base::net::UnixSeqpacket) -> anyhow::Result<Self> {
         // Safe because `value` owns the fd.
         let fd =
             Arc::new(unsafe { SafeDescriptor::from_raw_descriptor(value.into_raw_descriptor()) });
@@ -272,20 +277,20 @@ impl TryFrom<sys_util::net::UnixSeqpacket> for SeqPacket {
     }
 }
 
-impl TryFrom<SeqPacket> for sys_util::net::UnixSeqpacket {
+impl TryFrom<SeqPacket> for base::net::UnixSeqpacket {
     type Error = SeqPacket;
 
     fn try_from(value: SeqPacket) -> Result<Self, Self::Error> {
         Arc::try_unwrap(value.fd)
             .map(|fd| unsafe {
-                sys_util::net::UnixSeqpacket::from_raw_descriptor(fd.into_raw_descriptor())
+                base::net::UnixSeqpacket::from_raw_descriptor(fd.into_raw_descriptor())
             })
             .map_err(|fd| SeqPacket { fd })
     }
 }
 
 impl AsRawDescriptor for SeqPacket {
-    fn as_raw_descriptor(&self) -> sys_util::RawDescriptor {
+    fn as_raw_descriptor(&self) -> base::RawDescriptor {
         self.fd.as_raw_descriptor()
     }
 }
@@ -383,7 +388,7 @@ impl SeqPacketListener {
 }
 
 impl AsRawDescriptor for SeqPacketListener {
-    fn as_raw_descriptor(&self) -> sys_util::RawDescriptor {
+    fn as_raw_descriptor(&self) -> base::RawDescriptor {
         self.fd.as_raw_descriptor()
     }
 }
@@ -427,18 +432,18 @@ impl Drop for UnlinkSeqPacketListener {
 
 #[cfg(test)]
 mod test {
+    use std::env;
+    use std::fs::File;
+    use std::io::Write;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use base::AsRawDescriptor;
+    use base::EventFd;
+
     use super::*;
-
-    use std::{
-        env,
-        fs::File,
-        io::Write,
-        time::{Duration, Instant},
-    };
-
-    use sys_util::{AsRawDescriptor, EventFd};
-
-    use crate::{with_deadline, Executor};
+    use crate::with_deadline;
+    use crate::Executor;
 
     #[test]
     fn send_recv_no_fd() {
@@ -666,6 +671,9 @@ mod test {
     }
 
     #[test]
+    // c_char is u8 on aarch64 and i8 on x86, so clippy's suggested fix of changing
+    // `'a' as libc::c_char` below to `b'a'` won't work everywhere.
+    #[allow(clippy::char_lit_as_u8)]
     fn sockaddr_un_pass() {
         let path_size = 50;
         let (addr, len) =

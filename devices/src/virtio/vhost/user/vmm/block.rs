@@ -2,24 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+mod sys;
+
 use std::cell::RefCell;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::thread;
 use std::u32;
 
-use base::{error, Event, RawDescriptor};
+use base::error;
+use base::Event;
+use base::RawDescriptor;
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::vhost::user::vmm::{handler::VhostUserHandler, worker::Worker, Error, Result};
-use crate::virtio::{block::common::virtio_blk_config, Interrupt, Queue, VirtioDevice, TYPE_BLOCK};
+use crate::virtio::block::common::virtio_blk_config;
+use crate::virtio::vhost::user::vmm::handler::VhostUserHandler;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::VirtioDevice;
 
 const VIRTIO_BLK_F_SEG_MAX: u32 = 2;
 const VIRTIO_BLK_F_RO: u32 = 5;
 const VIRTIO_BLK_F_BLK_SIZE: u32 = 6;
 const VIRTIO_BLK_F_FLUSH: u32 = 9;
+const VIRTIO_BLK_F_MQ: u32 = 12;
 const VIRTIO_BLK_F_DISCARD: u32 = 13;
 const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 
@@ -27,44 +35,30 @@ const QUEUE_SIZE: u16 = 256;
 
 pub struct Block {
     kill_evt: Option<Event>,
-    worker_thread: Option<thread::JoinHandle<Worker>>,
+    worker_thread: Option<thread::JoinHandle<()>>,
     handler: RefCell<VhostUserHandler>,
     queue_sizes: Vec<u16>,
 }
 
 impl Block {
-    pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Block> {
-        let socket = UnixStream::connect(&socket_path).map_err(Error::SocketConnect)?;
-
+    fn get_all_features(base_features: u64) -> (u64, u64, VhostUserProtocolFeatures) {
         let allow_features = 1u64 << crate::virtio::VIRTIO_F_VERSION_1
             | 1 << VIRTIO_BLK_F_SEG_MAX
             | 1 << VIRTIO_BLK_F_RO
             | 1 << VIRTIO_BLK_F_BLK_SIZE
             | 1 << VIRTIO_BLK_F_FLUSH
+            | 1 << VIRTIO_BLK_F_MQ
             | 1 << VIRTIO_BLK_F_DISCARD
             | 1 << VIRTIO_BLK_F_WRITE_ZEROES
             | 1 << VIRTIO_RING_F_EVENT_IDX
             | base_features
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+
         let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-        let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
+        let allow_protocol_features =
+            VhostUserProtocolFeatures::CONFIG | VhostUserProtocolFeatures::MQ;
 
-        let mut handler = VhostUserHandler::new_from_stream(
-            socket,
-            // TODO(b/181753022): Support multiple queues.
-            1, /* queues_num */
-            allow_features,
-            init_features,
-            allow_protocol_features,
-        )?;
-        let queue_sizes = handler.queue_sizes(QUEUE_SIZE, 1)?;
-
-        Ok(Block {
-            kill_evt: None,
-            worker_thread: None,
-            handler: RefCell::new(handler),
-            queue_sizes,
-        })
+        (allow_features, init_features, allow_protocol_features)
     }
 }
 
@@ -96,8 +90,8 @@ impl VirtioDevice for Block {
         }
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_BLOCK
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Block
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
@@ -121,45 +115,17 @@ impl VirtioDevice for Block {
         queues: Vec<Queue>,
         queue_evts: Vec<Event>,
     ) {
-        if let Err(e) = self
+        match self
             .handler
             .borrow_mut()
-            .activate(&mem, &interrupt, &queues, &queue_evts)
+            .activate(mem, interrupt, queues, queue_evts, "block")
         {
-            error!("failed to activate queues: {}", e);
-            return;
-        }
-
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating kill Event pair: {}", e);
-                return;
-            }
-        };
-        self.kill_evt = Some(self_kill_evt);
-
-        let worker_result = thread::Builder::new()
-            .name("vhost_user_virtio_blk".to_string())
-            .spawn(move || {
-                let mut worker = Worker {
-                    queues,
-                    mem,
-                    kill_evt,
-                };
-
-                if let Err(e) = worker.run(interrupt) {
-                    error!("failed to start a worker: {}", e);
-                }
-                worker
-            });
-
-        match worker_result {
-            Err(e) => {
-                error!("failed to spawn vhost-user virtio_blk worker: {}", e);
-            }
-            Ok(join_handle) => {
+            Ok((join_handle, kill_evt)) => {
                 self.worker_thread = Some(join_handle);
+                self.kill_evt = Some(kill_evt);
+            }
+            Err(e) => {
+                error!("failed to activate queues: {}", e);
             }
         }
     }

@@ -2,16 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use crate::Bus;
-use base::{error, Error, Event, Result};
+use base::error;
+use base::Error;
+use base::Event;
+use base::Result;
 use hypervisor::kvm::KvmVcpu;
+use hypervisor::HypervisorCap;
+use hypervisor::IrqRoute;
+use hypervisor::MPState;
+use hypervisor::Vcpu;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use hypervisor::VmAArch64;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use hypervisor::VmX86_64;
-use hypervisor::{HypervisorCap, IrqRoute, MPState, Vcpu};
 use kvm_sys::kvm_mp_state;
 use resources::SystemAllocator;
+
+use crate::Bus;
+use crate::IrqEdgeEvent;
+use crate::IrqEventSource;
+use crate::IrqLevelEvent;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_64;
@@ -23,7 +33,10 @@ mod aarch64;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
 
-use crate::{IrqChip, IrqChipCap, IrqEventIndex, VcpuRunState};
+use crate::IrqChip;
+use crate::IrqChipCap;
+use crate::IrqEventIndex;
+use crate::VcpuRunState;
 
 /// This IrqChip only works with Kvm so we only implement it for KvmVcpu.
 impl IrqChip for KvmKernelIrqChip {
@@ -36,20 +49,39 @@ impl IrqChip for KvmKernelIrqChip {
         Ok(())
     }
 
-    /// Register an event that can trigger an interrupt for a particular GSI.
-    fn register_irq_event(
+    /// Register an event with edge-trigger semantic that can trigger an interrupt
+    /// for a particular GSI.
+    fn register_edge_irq_event(
         &mut self,
         irq: u32,
-        irq_event: &Event,
-        resample_event: Option<&Event>,
+        irq_event: &IrqEdgeEvent,
+        _source: IrqEventSource,
     ) -> Result<Option<IrqEventIndex>> {
-        self.vm.register_irqfd(irq, irq_event, resample_event)?;
+        self.vm.register_irqfd(irq, irq_event.get_trigger(), None)?;
         Ok(None)
     }
 
-    /// Unregister an event for a particular GSI.
-    fn unregister_irq_event(&mut self, irq: u32, irq_event: &Event) -> Result<()> {
-        self.vm.unregister_irqfd(irq, irq_event)
+    /// Unregister an event with edge-trigger semantic for a particular GSI.
+    fn unregister_edge_irq_event(&mut self, irq: u32, irq_event: &IrqEdgeEvent) -> Result<()> {
+        self.vm.unregister_irqfd(irq, irq_event.get_trigger())
+    }
+
+    /// Register an event with level-trigger semantic that can trigger an interrupt
+    /// for a particular GSI.
+    fn register_level_irq_event(
+        &mut self,
+        irq: u32,
+        irq_event: &IrqLevelEvent,
+        _source: IrqEventSource,
+    ) -> Result<Option<IrqEventIndex>> {
+        self.vm
+            .register_irqfd(irq, irq_event.get_trigger(), Some(irq_event.get_resample()))?;
+        Ok(None)
+    }
+
+    /// Unregister an event with level-trigger semantic for a particular GSI.
+    fn unregister_level_irq_event(&mut self, irq: u32, irq_event: &IrqLevelEvent) -> Result<()> {
+        self.vm.unregister_irqfd(irq, irq_event.get_trigger())
     }
 
     /// Route an IRQ line to an interrupt controller, or to a particular MSI vector.
@@ -74,7 +106,7 @@ impl IrqChip for KvmKernelIrqChip {
     /// indices. These should be used by the main thread to wait for irq events.
     /// For the KvmKernelIrqChip, the kernel handles listening to irq events being triggered by
     /// devices, so this function always returns an empty Vec.
-    fn irq_event_tokens(&self) -> Result<Vec<(IrqEventIndex, u32, Event)>> {
+    fn irq_event_tokens(&self) -> Result<Vec<(IrqEventIndex, IrqEventSource, Event)>> {
         Ok(Vec::new())
     }
 
@@ -167,6 +199,10 @@ impl IrqChip for KvmKernelIrqChip {
         Ok(())
     }
 
+    fn irq_delayed_event_token(&self) -> Result<Option<Event>> {
+        Ok(None)
+    }
+
     fn check_capability(&self, c: IrqChipCap) -> bool {
         match c {
             IrqChipCap::TscDeadlineTimer => self
@@ -180,16 +216,19 @@ impl IrqChip for KvmKernelIrqChip {
 
 #[cfg(test)]
 mod tests {
-    use hypervisor::kvm::{Kvm, KvmVm};
-    use hypervisor::{MPState, ProtectionType, Vm};
-    use vm_memory::GuestMemory;
-
-    use crate::irqchip::{IrqChip, KvmKernelIrqChip};
-
+    use hypervisor::kvm::Kvm;
+    use hypervisor::kvm::KvmVm;
+    use hypervisor::MPState;
+    use hypervisor::ProtectionType;
+    use hypervisor::Vm;
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     use hypervisor::VmAArch64;
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     use hypervisor::VmX86_64;
+    use vm_memory::GuestMemory;
+
+    use crate::irqchip::IrqChip;
+    use crate::irqchip::KvmKernelIrqChip;
 
     #[test]
     fn create_kvm_kernel_irqchip() {

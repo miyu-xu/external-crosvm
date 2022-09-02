@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(not(target_arch = "arm"))]
-
-use libc::{c_char, ioctl, open, O_RDWR};
+#![cfg(not(any(target_os = "windows", target_arch = "arm")))]
 
 use kvm_sys::*;
+use libc::c_char;
+use libc::ioctl;
+use libc::open;
+use libc::O_RDWR;
 
 const KVM_PATH: &str = "/dev/kvm\0";
 

@@ -3,7 +3,8 @@
 // found in the LICENSE file.
 //! Utility features shared by both the decoder and encoder VDA backends.
 
-use crate::virtio::video::{error::VideoError, format::Profile, protocol};
+use crate::virtio::video::error::VideoError;
+use crate::virtio::video::format::Profile;
 
 /// Transparent convertion from libvda error to VideoError backend failure.
 impl From<libvda::Error> for VideoError {
@@ -22,7 +23,7 @@ macro_rules! impl_libvda_conversion {
         }
 
         #[cfg(feature = "video-encoder")]
-        pub fn to_libvda_profile(&self) -> Option<libvda::Profile> {
+        pub fn to_libvda_profile(self) -> Option<libvda::Profile> {
             match self {
                 $(Self::$y => Some(libvda::Profile::$x),)*
                 _ => None
@@ -56,10 +57,4 @@ impl Profile {
         (VP9Profile2, VP9Profile2),
         (VP9Profile3, VP9Profile3)
     );
-}
-
-/// The same set of virtio features is supported by the decoder and encoder.
-pub fn supported_virtio_features() -> u64 {
-    1u64 << protocol::VIRTIO_VIDEO_F_RESOURCE_NON_CONTIG
-        | 1u64 << protocol::VIRTIO_VIDEO_F_RESOURCE_VIRTIO_OBJECT
 }

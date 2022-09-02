@@ -6,26 +6,46 @@ mod qcow_raw_file;
 mod refcount;
 mod vec_cache;
 
-use base::{
-    error, open_file, AsRawDescriptor, AsRawDescriptors, FileAllocate, FileReadWriteAtVolatile,
-    FileSetLen, FileSync, PunchHole, RawDescriptor, WriteZeroesAt,
-};
-use data_model::{VolatileMemory, VolatileSlice};
-use libc::{EINVAL, ENOSPC, ENOTSUP};
-use remain::sorted;
-use thiserror::Error;
-
-use std::cmp::{max, min};
+use std::cmp::max;
+use std::cmp::min;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::mem::size_of;
 use std::path::Path;
 use std::str;
 
+use base::error;
+use base::open_file;
+use base::AsRawDescriptor;
+use base::AsRawDescriptors;
+use base::FileAllocate;
+use base::FileReadWriteAtVolatile;
+use base::FileSetLen;
+use base::FileSync;
+use base::PunchHole;
+use base::RawDescriptor;
+use base::WriteZeroesAt;
+use data_model::VolatileMemory;
+use data_model::VolatileSlice;
+use libc::EINVAL;
+use libc::ENOSPC;
+use libc::ENOTSUP;
+use remain::sorted;
+use thiserror::Error;
+
+use crate::create_disk_file;
 use crate::qcow::qcow_raw_file::QcowRawFile;
 use crate::qcow::refcount::RefCount;
-use crate::qcow::vec_cache::{CacheMap, Cacheable, VecCache};
-use crate::{create_disk_file, DiskFile, DiskGetLen};
+use crate::qcow::vec_cache::CacheMap;
+use crate::qcow::vec_cache::Cacheable;
+use crate::qcow::vec_cache::VecCache;
+use crate::DiskFile;
+use crate::DiskGetLen;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -432,13 +452,18 @@ impl QcowFile {
             let path = backing_file_path.clone();
             let backing_raw_file = open_file(
                 Path::new(&path),
-                true, /*read_only*/
-                // TODO(b/190435784): Add support for O_DIRECT.
-                false, /*O_DIRECT*/
+                OpenOptions::new().read(true), // TODO(b/190435784): Add support for O_DIRECT.
             )
             .map_err(|e| Error::BackingFileIo(e.into()))?;
-            let backing_file = create_disk_file(backing_raw_file, max_nesting_depth)
-                .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
+            // is_sparse_file is false because qcow is internally sparse and we don't need file
+            // system sparseness on top of that.
+            let backing_file = create_disk_file(
+                backing_raw_file,
+                /* is_sparse_file= */ false,
+                max_nesting_depth,
+                Path::new(&path),
+            )
+            .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
             Some(backing_file)
         } else {
             None
@@ -574,15 +599,21 @@ impl QcowFile {
         backing_file_name: &str,
         backing_file_max_nesting_depth: u32,
     ) -> Result<QcowFile> {
+        let backing_path = Path::new(backing_file_name);
         let backing_raw_file = open_file(
-            Path::new(backing_file_name),
-            true, /*read_only*/
-            // TODO(b/190435784): add support for O_DIRECT.
-            false, /*O_DIRECT*/
+            backing_path,
+            OpenOptions::new().read(true), // TODO(b/190435784): add support for O_DIRECT.
         )
         .map_err(|e| Error::BackingFileIo(e.into()))?;
-        let backing_file = create_disk_file(backing_raw_file, backing_file_max_nesting_depth)
-            .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
+        // is_sparse_file is false because qcow is internally sparse and we don't need file
+        // system sparseness on top of that.
+        let backing_file = create_disk_file(
+            backing_raw_file,
+            /* is_sparse_file= */ false,
+            backing_file_max_nesting_depth,
+            backing_path,
+        )
+        .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
         let size = backing_file.get_len().map_err(Error::BackingFileIo)?;
         let header = QcowHeader::create_for_size_and_path(size, Some(backing_file_name))?;
         let mut result = QcowFile::new_from_header(file, header, backing_file_max_nesting_depth)?;
@@ -1587,11 +1618,17 @@ fn div_round_up_u32(dividend: u32, divisor: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::io::Write;
+
+    use tempfile::tempfile;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::MAX_NESTING_DEPTH;
-    use std::fs::OpenOptions;
-    use std::io::{Read, Seek, SeekFrom, Write};
-    use tempfile::{tempfile, TempDir};
 
     fn valid_header() -> Vec<u8> {
         vec![
@@ -1641,7 +1678,7 @@ mod tests {
     }
 
     fn basic_file(header: &[u8]) -> File {
-        let mut disk_file = tempfile().expect("failed to create tempfile");
+        let mut disk_file = tempfile().expect("failed to create temp file");
         disk_file.write_all(header).unwrap();
         disk_file.set_len(0x8000_0000).unwrap();
         disk_file.seek(SeekFrom::Start(0)).unwrap();
@@ -1659,7 +1696,7 @@ mod tests {
     where
         F: FnMut(QcowFile),
     {
-        let file = tempfile().expect("failed to create tempfile");
+        let file = tempfile().expect("failed to create temp file");
         let qcow_file = QcowFile::new(file, file_size).unwrap();
 
         testfn(qcow_file); // File closed when the function exits.
@@ -1684,7 +1721,7 @@ mod tests {
     #[test]
     fn default_header() {
         let header = QcowHeader::create_for_size_and_path(0x10_0000, None);
-        let mut disk_file = tempfile().expect("failed to create tempfile");
+        let mut disk_file = tempfile().expect("failed to create temp file");
         header
             .expect("Failed to create header.")
             .write_to(&mut disk_file)
@@ -1705,7 +1742,7 @@ mod tests {
     fn header_with_backing() {
         let header = QcowHeader::create_for_size_and_path(0x10_0000, Some("/my/path/to/a/file"))
             .expect("Failed to create header.");
-        let mut disk_file = tempfile().expect("failed to create tempfile");
+        let mut disk_file = tempfile().expect("failed to create temp file");
         header
             .write_to(&mut disk_file)
             .expect("Failed to write header to shm.");

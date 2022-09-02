@@ -2,16 +2,54 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::convert::TryFrom;
+
+use base::Error;
 use base::Result;
 use downcast_rs::impl_downcast;
+use libc::EINVAL;
 use vm_memory::GuestAddress;
 
-use crate::{Hypervisor, IrqRoute, IrqSource, IrqSourceChip, Vcpu, Vm};
+use crate::Hypervisor;
+use crate::IrqRoute;
+use crate::IrqSource;
+use crate::IrqSourceChip;
+use crate::Vcpu;
+use crate::Vm;
 
 /// Represents a version of Power State Coordination Interface (PSCI).
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 pub struct PsciVersion {
-    pub major: u32,
-    pub minor: u32,
+    pub major: u16,
+    pub minor: u16,
+}
+
+impl PsciVersion {
+    pub fn new(major: u16, minor: u16) -> Result<Self> {
+        if (major as i16) < 0 {
+            Err(Error::new(EINVAL))
+        } else {
+            Ok(Self { major, minor })
+        }
+    }
+}
+
+impl TryFrom<u32> for PsciVersion {
+    type Error = base::Error;
+
+    fn try_from(item: u32) -> Result<Self> {
+        Self::new((item >> 16) as u16, item as u16)
+    }
+}
+
+pub const PSCI_0_2: PsciVersion = PsciVersion { major: 0, minor: 2 };
+pub const PSCI_1_0: PsciVersion = PsciVersion { major: 1, minor: 0 };
+
+pub enum VcpuRegAArch64 {
+    X(u8),
+    Sp,
+    Pc,
+    Pstate,
 }
 
 /// A wrapper for using a VM on aarch64 and getting/setting its state.
@@ -21,7 +59,7 @@ pub trait VmAArch64: Vm {
 
     /// Load pVM firmware for the VM, creating a memslot for it as needed.
     ///
-    /// Only works on protected VMs (i.e. those  that support `VmCap::Protected`).
+    /// Only works on protected VMs (i.e. those that support `VmCap::Protected`).
     fn load_protected_vm_firmware(&mut self, fw_addr: GuestAddress, fw_max_size: u64)
         -> Result<()>;
 
@@ -47,19 +85,24 @@ pub trait VcpuAArch64: Vcpu {
     /// structure as `pvtime_ipa`.
     fn init_pvtime(&self, pvtime_ipa: u64) -> Result<()>;
 
-    /// Sets the value of a register on this VCPU.  `reg_id` is the register ID, as specified in the
-    /// KVM API documentation for KVM_SET_ONE_REG.
-    fn set_one_reg(&self, reg_id: u64, data: u64) -> Result<()>;
+    /// Sets the value of a register on this VCPU.
+    fn set_one_reg(&self, reg_id: VcpuRegAArch64, data: u64) -> Result<()>;
 
-    /// Gets the value of a register on this VCPU.  `reg_id` is the register ID, as specified in the
-    /// KVM API documentation for KVM_GET_ONE_REG.
-    fn get_one_reg(&self, reg_id: u64) -> Result<u64>;
+    /// Gets the value of a register on this VCPU.
+    fn get_one_reg(&self, reg_id: VcpuRegAArch64) -> Result<u64>;
 
     /// Gets the current PSCI version.
     fn get_psci_version(&self) -> Result<PsciVersion>;
 }
 
 impl_downcast!(VcpuAArch64);
+
+/// Initial state for AArch64 VCPUs.
+#[derive(Clone, Default)]
+pub struct VcpuInitAArch64 {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CpuConfigAArch64 {}
 
 // Convenience constructors for IrqRoutes
 impl IrqRoute {

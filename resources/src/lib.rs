@@ -5,12 +5,18 @@
 //! Manages system resources that can be allocated to VMs and their devices.
 
 use remain::sorted;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
-pub use crate::system_allocator::{MemRegion, MmioType, SystemAllocator, SystemAllocatorConfig};
+pub use crate::address_range::AddressRange;
+pub use crate::system_allocator::AllocOptions;
+pub use crate::system_allocator::MmioType;
+pub use crate::system_allocator::SystemAllocator;
+pub use crate::system_allocator::SystemAllocatorConfig;
 
-mod address_allocator;
+pub mod address_allocator;
+mod address_range;
 mod system_allocator;
 
 /// Used to tag SystemAllocator allocations.
@@ -34,6 +40,8 @@ pub enum Alloc {
     PciBridgePrefetchWindow { bus: u8, dev: u8, func: u8 },
     /// File-backed memory mapping.
     FileBacked(u64),
+    /// virtio vhost user queue with queue id
+    VvuQueue(u8),
 }
 
 #[sorted]
@@ -49,8 +57,8 @@ pub enum Error {
     ExistingAlloc(Alloc),
     #[error("Invalid Alloc: {0:?}")]
     InvalidAlloc(Alloc),
-    #[error("IO port out of range: base:{0} size:{1}")]
-    IOPortOutOfRange(u64, u64),
+    #[error("IO port out of range: {0}")]
+    IOPortOutOfRange(AddressRange),
     #[error("Platform MMIO address range not specified")]
     MissingPlatformMMIOAddresses,
     #[error("No IO address range specified")]
@@ -61,10 +69,8 @@ pub enum Error {
     OutOfSpace,
     #[error("base={base} + size={size} overflows")]
     PoolOverflow { base: u64, size: u64 },
-    #[error("Pool cannot have size of 0")]
-    PoolSizeZero,
-    #[error("Overlapping region base={base} size={size}")]
-    RegionOverlap { base: u64, size: u64 },
+    #[error("Overlapping region {0}")]
+    RegionOverlap(AddressRange),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

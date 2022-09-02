@@ -2,26 +2,47 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! Legacy console device that uses a polling thread. This is kept because it is still used by
+//! Windows ; outside of this use-case, please use [[asynchronous::AsyncConsole]] instead.
+
+#[cfg(unix)]
+pub mod asynchronous;
+mod sys;
+
 use std::collections::VecDeque;
-use std::io::{self, Read, Write};
+use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::ops::DerefMut;
 use std::result;
 use std::sync::Arc;
 use std::thread;
 
-use base::{error, Event, PollToken, RawDescriptor, WaitContext};
-use data_model::{DataInit, Le16, Le32};
+use base::error;
+use base::AsRawDescriptor;
+use base::Descriptor;
+use base::Event;
+use base::EventToken;
+use base::RawDescriptor;
+use base::WaitContext;
+use data_model::DataInit;
+use data_model::Le16;
+use data_model::Le32;
 use hypervisor::ProtectionType;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
 
-use super::{
-    base_features, copy_config, Interrupt, Queue, Reader, SignalableInterrupt, VirtioDevice,
-    Writer, TYPE_CONSOLE,
-};
-use crate::SerialDevice;
+use crate::virtio::base_features;
+use crate::virtio::copy_config;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
+use crate::virtio::VirtioDevice;
+use crate::virtio::Writer;
 
 pub(crate) const QUEUE_SIZE: u16 = 256;
 
@@ -57,29 +78,23 @@ unsafe impl DataInit for virtio_console_config {}
 /// * `interrupt` - SignalableInterrupt used to signal that the queue has been used
 /// * `buffer` - Ring buffer providing data to put into the guest
 /// * `receive_queue` - The receive virtio Queue
-pub fn handle_input<I: SignalableInterrupt>(
+fn handle_input<I: SignalableInterrupt>(
     mem: &GuestMemory,
     interrupt: &I,
     buffer: &mut VecDeque<u8>,
     receive_queue: &mut Queue,
 ) -> result::Result<(), ConsoleError> {
-    let mut exhausted_queue = false;
-
     loop {
-        let desc = match receive_queue.peek(mem) {
-            Some(d) => d,
-            None => {
-                exhausted_queue = true;
-                break;
-            }
-        };
+        let desc = receive_queue
+            .peek(mem)
+            .ok_or(ConsoleError::RxDescriptorsExhausted)?;
         let desc_index = desc.index;
         // TODO(morg): Handle extra error cases as Err(ConsoleError) instead of just returning.
         let mut writer = match Writer::new(mem.clone(), desc) {
             Ok(w) => w,
             Err(e) => {
                 error!("console: failed to create Writer: {}", e);
-                break;
+                return Ok(());
             }
         };
 
@@ -103,15 +118,24 @@ pub fn handle_input<I: SignalableInterrupt>(
         }
 
         if bytes_written == 0 {
-            break;
+            return Ok(());
         }
     }
+}
 
-    if exhausted_queue {
-        Err(ConsoleError::RxDescriptorsExhausted)
-    } else {
-        Ok(())
-    }
+/// Writes the available data from the reader into the given output queue.
+///
+/// # Arguments
+///
+/// * `reader` - The Reader with the data we want to write.
+/// * `output` - The output sink we are going to write the data to.
+fn process_transmit_request(mut reader: Reader, output: &mut dyn io::Write) -> io::Result<()> {
+    let len = reader.available_bytes();
+    let mut data = vec![0u8; len];
+    reader.read_exact(&mut data)?;
+    output.write_all(&data)?;
+    output.flush()?;
+    Ok(())
 }
 
 /// Processes the data taken from the given transmit queue into the output sink.
@@ -122,7 +146,7 @@ pub fn handle_input<I: SignalableInterrupt>(
 /// * `interrupt` - SignalableInterrupt used to signal (if required) that the queue has been used
 /// * `transmit_queue` - The transmit virtio Queue
 /// * `output` - The output sink we are going to write the data into
-pub fn process_transmit_queue<I: SignalableInterrupt>(
+fn process_transmit_queue<I: SignalableInterrupt>(
     mem: &GuestMemory,
     interrupt: &I,
     transmit_queue: &mut Queue,
@@ -132,25 +156,15 @@ pub fn process_transmit_queue<I: SignalableInterrupt>(
     while let Some(avail_desc) = transmit_queue.pop(mem) {
         let desc_index = avail_desc.index;
 
-        let reader = match Reader::new(mem.clone(), avail_desc) {
-            Ok(r) => r,
+        match Reader::new(mem.clone(), avail_desc) {
+            Ok(reader) => process_transmit_request(reader, output)
+                .unwrap_or_else(|e| error!("console: process_transmit_request failed: {}", e)),
             Err(e) => {
                 error!("console: failed to create reader: {}", e);
-                transmit_queue.add_used(mem, desc_index, 0);
-                needs_interrupt = true;
-                continue;
             }
         };
 
-        let len = match process_transmit_request(reader, output) {
-            Ok(written) => written,
-            Err(e) => {
-                error!("console: process_transmit_request failed: {}", e);
-                0
-            }
-        };
-
-        transmit_queue.add_used(mem, desc_index, len);
+        transmit_queue.add_used(mem, desc_index, 0);
         needs_interrupt = true;
     }
 
@@ -172,11 +186,6 @@ struct Worker {
     transmit_evt: Event,
 }
 
-fn write_output(output: &mut dyn io::Write, data: &[u8]) -> io::Result<()> {
-    output.write_all(data)?;
-    output.flush()
-}
-
 /// Starts a thread that reads rx and sends the input back via the returned buffer.
 ///
 /// The caller should listen on `in_avail_evt` for events. When `in_avail_evt` signals that data
@@ -187,8 +196,8 @@ fn write_output(output: &mut dyn io::Write, data: &[u8]) -> io::Result<()> {
 ///
 /// * `rx` - Data source that the reader thread will wait on to send data back to the buffer
 /// * `in_avail_evt` - Event triggered by the thread when new input is available on the buffer
-pub fn spawn_input_thread(
-    mut rx: Box<dyn io::Read + Send>,
+fn spawn_input_thread(
+    mut rx: crate::serial::sys::InStreamType,
     in_avail_evt: &Event,
 ) -> Option<Arc<Mutex<VecDeque<u8>>>> {
     let buffer = Arc::new(Mutex::new(VecDeque::<u8>::new()));
@@ -216,7 +225,7 @@ pub fn spawn_input_thread(
                     }
                     Err(e) => {
                         // Being interrupted is not an error, but everything else is.
-                        if e.kind() != io::ErrorKind::Interrupted {
+                        if sys::is_a_fatal_input_error(&e) {
                             error!(
                                 "failed to read for bytes to queue into console device: {}",
                                 e
@@ -225,6 +234,9 @@ pub fn spawn_input_thread(
                         }
                     }
                 }
+
+                // Depending on the platform, a short sleep is needed here (ie. Windows).
+                sys::read_delay_if_needed();
             }
         });
     if let Err(e) = res {
@@ -234,23 +246,9 @@ pub fn spawn_input_thread(
     Some(buffer_cloned)
 }
 
-/// Writes the available data from the reader into the given output queue.
-///
-/// # Arguments
-///
-/// * `reader` - The Reader with the data we want to write.
-/// * `output` - The output sink we are going to write the data to.
-pub fn process_transmit_request(mut reader: Reader, output: &mut dyn io::Write) -> io::Result<u32> {
-    let len = reader.available_bytes();
-    let mut data = vec![0u8; len];
-    reader.read_exact(&mut data)?;
-    write_output(output, &data)?;
-    Ok(0)
-}
-
 impl Worker {
     fn run(&mut self) {
-        #[derive(PollToken)]
+        #[derive(EventToken)]
         enum Token {
             ReceiveQueueAvailable,
             TransmitQueueAvailable,
@@ -355,7 +353,7 @@ impl Worker {
 }
 
 enum ConsoleInput {
-    FromRead(Box<dyn io::Read + Send>),
+    FromRead(crate::serial::sys::InStreamType),
     FromThread(Arc<Mutex<VecDeque<u8>>>),
 }
 
@@ -367,14 +365,13 @@ pub struct Console {
     worker_thread: Option<thread::JoinHandle<Worker>>,
     input: Option<ConsoleInput>,
     output: Option<Box<dyn io::Write + Send>>,
-    keep_rds: Vec<RawDescriptor>,
+    keep_descriptors: Vec<Descriptor>,
 }
 
-impl SerialDevice for Console {
+impl Console {
     fn new(
         protected_vm: ProtectionType,
-        _evt: Event,
-        input: Option<Box<dyn io::Read + Send>>,
+        input: Option<ConsoleInput>,
         output: Option<Box<dyn io::Write + Send>>,
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
@@ -383,9 +380,9 @@ impl SerialDevice for Console {
             in_avail_evt: None,
             kill_evt: None,
             worker_thread: None,
-            input: input.map(ConsoleInput::FromRead),
+            input,
             output,
-            keep_rds,
+            keep_descriptors: keep_rds.iter().map(|rd| Descriptor(*rd)).collect(),
         }
     }
 }
@@ -405,15 +402,19 @@ impl Drop for Console {
 
 impl VirtioDevice for Console {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
-        self.keep_rds.clone()
+        // return the raw descriptors as opposed to descriptor.
+        self.keep_descriptors
+            .iter()
+            .map(|descr| descr.as_raw_descriptor())
+            .collect()
     }
 
     fn features(&self) -> u64 {
         self.base_features
     }
 
-    fn device_type(&self) -> u32 {
-        TYPE_CONSOLE
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Console
     }
 
     fn queue_max_sizes(&self) -> &[u16] {

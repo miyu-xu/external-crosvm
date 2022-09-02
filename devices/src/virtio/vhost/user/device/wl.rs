@@ -8,26 +8,47 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Context;
 use argh::FromArgs;
-use base::{
-    clone_descriptor, error,
-    net::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListener},
-    warn, Event, FromRawDescriptor, SafeDescriptor, Tube,
-};
-use cros_async::{AsyncWrapper, EventAsync, Executor, IoSourceExt};
-use futures::future::{AbortHandle, Abortable};
+use base::clone_descriptor;
+use base::error;
+use base::warn;
+use base::Event;
+use base::FromRawDescriptor;
+use base::SafeDescriptor;
+use base::Tube;
+use base::UnixSeqpacket;
+use cros_async::AsyncWrapper;
+use cros_async::EventAsync;
+use cros_async::Executor;
+use cros_async::IoSourceExt;
+use futures::future::AbortHandle;
+use futures::future::Abortable;
 use hypervisor::ProtectionType;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGralloc;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures};
+use vmm_vhost::message::VhostUserProtocolFeatures;
+use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::vhost::user::device::handler::{
-    DeviceRequestHandler, Doorbell, VhostUserBackend,
-};
-use crate::virtio::{base_features, wl, Queue};
+use crate::virtio::base_features;
+use crate::virtio::vhost::user::device::handler::sys::Doorbell;
+use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
+use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
+use crate::virtio::wl;
+use crate::virtio::Queue;
+use crate::virtio::SharedMemoryMapper;
+use crate::virtio::SharedMemoryRegion;
+
+const MAX_QUEUE_NUM: usize = wl::QUEUE_SIZES.len();
+const MAX_VRING_LEN: u16 = wl::QUEUE_SIZE;
 
 async fn run_out_queue(
     mut queue: Queue,
@@ -63,8 +84,8 @@ async fn run_in_queue(
             break;
         }
 
-        if let Err(wl::DescriptorsExhausted) =
-            wl::process_in_queue(&doorbell, &mut queue, &mem, &mut wlstate.borrow_mut())
+        if wl::process_in_queue(&doorbell, &mut queue, &mem, &mut wlstate.borrow_mut())
+            == Err(wl::DescriptorsExhausted)
         {
             if let Err(e) = kick_evt.next_val().await {
                 error!("Failed to read kick event for in queue: {}", e);
@@ -77,34 +98,36 @@ async fn run_in_queue(
 struct WlBackend {
     ex: Executor,
     wayland_paths: Option<BTreeMap<String, PathBuf>>,
-    vm_socket: Option<Tube>,
+    mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridge: Option<Tube>,
     use_transition_flags: bool,
     use_send_vfd_v2: bool,
+    use_shmem: bool,
     features: u64,
     acked_features: u64,
     wlstate: Option<Rc<RefCell<wl::WlState>>>,
-    workers: [Option<AbortHandle>; Self::MAX_QUEUE_NUM],
+    workers: [Option<AbortHandle>; MAX_QUEUE_NUM],
 }
 
 impl WlBackend {
     fn new(
         ex: &Executor,
         wayland_paths: BTreeMap<String, PathBuf>,
-        vm_socket: Tube,
         resource_bridge: Option<Tube>,
     ) -> WlBackend {
         let features = base_features(ProtectionType::Unprotected)
             | 1 << wl::VIRTIO_WL_F_TRANS_FLAGS
             | 1 << wl::VIRTIO_WL_F_SEND_FENCES
+            | 1 << wl::VIRTIO_WL_F_USE_SHMEM
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         WlBackend {
             ex: ex.clone(),
             wayland_paths: Some(wayland_paths),
-            vm_socket: Some(vm_socket),
+            mapper: None,
             resource_bridge,
             use_transition_flags: false,
             use_send_vfd_v2: false,
+            use_shmem: false,
             features,
             acked_features: 0,
             wlstate: None,
@@ -114,10 +137,13 @@ impl WlBackend {
 }
 
 impl VhostUserBackend for WlBackend {
-    const MAX_QUEUE_NUM: usize = wl::QUEUE_SIZES.len();
-    const MAX_VRING_LEN: u16 = wl::QUEUE_SIZE;
+    fn max_queue_num(&self) -> usize {
+        return MAX_QUEUE_NUM;
+    }
 
-    type Error = anyhow::Error;
+    fn max_vring_len(&self) -> u16 {
+        return MAX_VRING_LEN;
+    }
 
     fn features(&self) -> u64 {
         self.features
@@ -137,6 +163,9 @@ impl VhostUserBackend for WlBackend {
         if value & (1 << wl::VIRTIO_WL_F_SEND_FENCES) != 0 {
             self.use_send_vfd_v2 = true;
         }
+        if value & (1 << wl::VIRTIO_WL_F_USE_SHMEM) != 0 {
+            self.use_shmem = true;
+        }
 
         Ok(())
     }
@@ -146,11 +175,11 @@ impl VhostUserBackend for WlBackend {
     }
 
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
-        VhostUserProtocolFeatures::empty()
+        VhostUserProtocolFeatures::SLAVE_REQ
     }
 
     fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        if features != 0 {
+        if features != VhostUserProtocolFeatures::SLAVE_REQ.bits() {
             Err(anyhow!("Unexpected protocol features: {:#x}", features))
         } else {
             Ok(())
@@ -179,28 +208,37 @@ impl VhostUserBackend for WlBackend {
         // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
         queue.ack_features(self.acked_features);
 
-        let kick_evt = EventAsync::new(kick_evt.0, &self.ex)
+        let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;
+
+        if !self.use_shmem {
+            bail!("Incompatible driver: vhost-user-wl requires shmem support");
+        }
 
         // We use this de-structuring let binding to separate borrows so that the compiler doesn't
         // think we're borrowing all of `self` in the closure below.
         let WlBackend {
             ref mut wayland_paths,
-            ref mut vm_socket,
+            ref mut mapper,
             ref mut resource_bridge,
             ref use_transition_flags,
             ref use_send_vfd_v2,
             ..
         } = self;
+        #[cfg(feature = "minigbm")]
+        let gralloc = RutabagaGralloc::new().context("Failed to initailize gralloc")?;
         let wlstate = self
             .wlstate
             .get_or_insert_with(|| {
                 Rc::new(RefCell::new(wl::WlState::new(
                     wayland_paths.take().expect("WlState already initialized"),
-                    vm_socket.take().expect("WlState already initialized"),
+                    mapper.take().expect("WlState already initialized"),
                     *use_transition_flags,
                     *use_send_vfd_v2,
                     resource_bridge.take(),
+                    #[cfg(feature = "minigbm")]
+                    gralloc,
+                    None, /* address_offset */
                 )))
             })
             .clone();
@@ -250,9 +288,20 @@ impl VhostUserBackend for WlBackend {
             handle.abort();
         }
     }
+
+    fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
+        Some(SharedMemoryRegion {
+            id: wl::WL_SHMEM_ID,
+            length: wl::WL_SHMEM_SIZE,
+        })
+    }
+
+    fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
+        self.mapper = Some(mapper);
+    }
 }
 
-pub(crate) fn parse_wayland_sock(value: &str) -> Result<(String, PathBuf), String> {
+pub fn parse_wayland_sock(value: &str) -> Result<(String, PathBuf), String> {
     let mut components = value.split(',');
     let path = PathBuf::from(match components.next() {
         None => return Err("missing socket path".to_string()),
@@ -275,69 +324,47 @@ pub(crate) fn parse_wayland_sock(value: &str) -> Result<(String, PathBuf), Strin
 }
 
 #[derive(FromArgs)]
-#[argh(description = "")]
-struct Options {
-    #[argh(
-        option,
-        description = "path to bind a listening vhost-user socket",
-        arg_name = "PATH"
-    )]
-    socket: String,
-    #[argh(
-        option,
-        description = "path to a socket for wayland-specific messages",
-        arg_name = "PATH"
-    )]
-    vm_socket: String,
-    #[argh(
-        option,
-        description = "path to one or more Wayland sockets. The unnamed socket is used for\
-        displaying virtual screens while the named ones are used for IPC",
-        from_str_fn(parse_wayland_sock),
-        arg_name = "PATH[,name=NAME]"
-    )]
+#[argh(subcommand, name = "wl")]
+/// Wayland device
+pub struct Options {
+    #[argh(option, arg_name = "PATH")]
+    /// path to bind a listening vhost-user socket
+    socket: Option<String>,
+    #[argh(option, arg_name = "STRING")]
+    /// VFIO-PCI device name (e.g. '0000:00:07.0')
+    vfio: Option<String>,
+    #[argh(option, from_str_fn(parse_wayland_sock), arg_name = "PATH[,name=NAME]")]
+    /// path to one or more Wayland sockets. The unnamed socket is used for
+    /// displaying virtual screens while the named ones are used for IPC
     wayland_sock: Vec<(String, PathBuf)>,
-    #[argh(
-        option,
-        description = "path to the GPU resource bridge",
-        arg_name = "PATH"
-    )]
+    #[argh(option, arg_name = "PATH")]
+    /// path to the GPU resource bridge
     resource_bridge: Option<String>,
 }
 
 /// Starts a vhost-user wayland device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
-pub fn run_wl_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
+pub fn run_wl_device(opts: Options) -> anyhow::Result<()> {
     let Options {
-        vm_socket,
         wayland_sock,
         socket,
+        vfio,
         resource_bridge,
-    } = match Options::from_args(&[program_name], args) {
-        Ok(opts) => opts,
-        Err(e) => {
-            if e.status.is_err() {
-                bail!(e.output);
-            } else {
-                println!("{}", e.output);
-            }
-            return Ok(());
-        }
-    };
+    } = opts;
 
     let wayland_paths: BTreeMap<_, _> = wayland_sock.into_iter().collect();
 
     let resource_bridge = resource_bridge
-        .map(|p| {
+        .map(|p| -> anyhow::Result<Tube> {
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
                 match UnixSeqpacket::connect(&p) {
-                    Ok(s) => return Ok(Tube::new(s)),
+                    Ok(s) => return Ok(Tube::new_from_unix_seqpacket(s)),
                     Err(e) => {
                         if Instant::now() < deadline {
                             thread::sleep(Duration::from_millis(50));
                         } else {
-                            return Err(e);
+                            return Err(anyhow::Error::new(e));
                         }
                     }
                 }
@@ -348,21 +375,10 @@ pub fn run_wl_device(program_name: &str, args: &[&str]) -> anyhow::Result<()> {
 
     let ex = Executor::new().context("failed to create executor")?;
 
-    // We can safely `unwrap()` this because it is a required option.
-    let vm_listener = UnixSeqpacketListener::bind(vm_socket)
-        .map(UnlinkUnixSeqpacketListener)
-        .context("failed to create listening socket")?;
-    let vm_socket = vm_listener
-        .accept()
-        .map(Tube::new)
-        .context("failed to accept vm socket connection")?;
-    let handler = DeviceRequestHandler::new(WlBackend::new(
-        &ex,
-        wayland_paths,
-        vm_socket,
-        resource_bridge,
-    ));
+    let listener =
+        VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, wl::QUEUE_SIZES.len(), None)?;
 
+    let backend = Box::new(WlBackend::new(&ex, wayland_paths, resource_bridge));
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    ex.run_until(handler.run(socket, &ex))?
+    ex.run_until(listener.run_backend(backend, &ex))?
 }

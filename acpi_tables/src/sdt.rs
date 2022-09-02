@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 use std::fs::File;
-use std::io::{ErrorKind, Read, Result};
+use std::io::ErrorKind;
+use std::io::Read;
+use std::io::Result;
 use std::path::Path;
 
 use data_model::DataInit;
@@ -96,13 +98,23 @@ impl SDT {
         self.write(LENGTH_OFFSET, self.data.len() as u32);
     }
 
+    /// Read a value at the given offset
+    pub fn read<T: DataInit + Default>(&self, offset: usize) -> T {
+        let value_len = std::mem::size_of::<T>();
+        *T::from_slice(
+            self.as_slice()
+                .get(offset..offset + value_len)
+                .unwrap_or(T::default().as_slice()),
+        )
+        .unwrap()
+    }
+
     /// Write a value at the given offset
     pub fn write<T: DataInit>(&mut self, offset: usize, value: T) {
         let value_len = std::mem::size_of::<T>();
         if (offset + value_len) > self.data.len() {
             return;
         }
-
         self.data[offset..offset + value_len].copy_from_slice(value.as_slice());
         self.update_checksum();
     }
@@ -114,9 +126,11 @@ impl SDT {
 
 #[cfg(test)]
 mod tests {
-    use super::SDT;
     use std::io::Write;
+
     use tempfile::NamedTempFile;
+
+    use super::SDT;
 
     #[test]
     fn test_sdt() {
@@ -146,7 +160,7 @@ mod tests {
         }
 
         // Read it back and verify.
-        let actual_sdt = SDT::from_file(&temp_file.path().to_path_buf())?;
+        let actual_sdt = SDT::from_file(temp_file.path())?;
         assert!(actual_sdt.is_signature(b"TEST"));
         assert_eq!(actual_sdt.as_slice(), expected_sdt.as_slice());
         Ok(())
