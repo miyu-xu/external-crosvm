@@ -725,7 +725,7 @@ impl VaapiDecoderSession {
             }
         };
 
-        let timestamp = RefCell::borrow(&decoded_frame.picture()).timestamp();
+        let bitstream_id = i32::try_from(RefCell::borrow(&decoded_frame.picture()).frame_number())?;
         let picture = decoded_frame.picture();
         let mut picture = picture.borrow_mut();
 
@@ -752,7 +752,7 @@ impl VaapiDecoderSession {
         self.event_queue
             .queue_event(DecoderEvent::PictureReady {
                 picture_buffer_id,
-                timestamp,
+                bitstream_id,
                 visible_rect: Rect {
                     left: 0,
                     top: 0,
@@ -852,18 +852,19 @@ impl DecoderSession for VaapiDecoderSession {
 
     fn decode(
         &mut self,
-        resource_id: u32,
-        timestamp: u64,
+        bitstream_id: i32,
         resource: GuestResourceHandle,
         offset: u32,
         bytes_used: u32,
     ) -> VideoResult<()> {
-        let frames = self.codec.decode(timestamp, &resource, offset, bytes_used);
+        let frames = self
+            .codec
+            .decode(bitstream_id, &resource, offset, bytes_used);
 
         match frames {
             Ok(frames) => {
                 self.event_queue
-                    .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(resource_id))
+                    .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(bitstream_id))
                     .map_err(|e| {
                         VideoError::BackendFailure(anyhow!(
                             "Can't queue the NotifyEndOfBitstream event {}",
@@ -891,7 +892,7 @@ impl DecoderSession for VaapiDecoderSession {
 
                 event_queue
                     .queue_event(DecoderEvent::NotifyError(VideoError::BackendFailure(
-                        anyhow!("Decoding buffer {} failed", resource_id),
+                        anyhow!("Decoding buffer {} failed", bitstream_id),
                     )))
                     .map_err(|e| {
                         VideoError::BackendFailure(anyhow!(
@@ -1062,13 +1063,13 @@ impl DecoderBackend for VaapiDecoder {
 pub trait VaapiCodec: downcast_rs::Downcast {
     /// Decode the compressed stream contained in
     /// [`offset`..`offset`+`bytes_used`] of the shared memory in `resource`.
-    /// `timestamp` is the timestamp for that part of the stream.
-    /// Returns zero or more decoded pictures depending on the compressed
-    /// stream, which might also be part of the codec's decoded picture buffer
-    /// (DPB).
+    /// `bitstream_id` is the identifier for that part of the stream (most
+    /// likely, a timestamp). Returns zero or more decoded pictures depending on
+    /// the compressed stream, which might also be part of the codec's decoded
+    /// picture buffer (DPB).
     fn decode(
         &mut self,
-        timestamp: u64,
+        bitstream_id: i32,
         resource: &GuestResourceHandle,
         offset: u32,
         bytes_used: u32,

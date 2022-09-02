@@ -348,11 +348,7 @@ impl Aml for EISAName {
 }
 
 fn create_integer(v: usize, bytes: &mut Vec<u8>) {
-    if v == 0_usize {
-        ZERO.to_aml_bytes(bytes);
-    } else if v == 1_usize {
-        ONE.to_aml_bytes(bytes);
-    } else if v <= u8::max_value().into() {
+    if v <= u8::max_value().into() {
         (v as u8).to_aml_bytes(bytes);
     } else if v <= u16::max_value().into() {
         (v as u16).to_aml_bytes(bytes);
@@ -888,16 +884,16 @@ pub enum OpRegionSpace {
 }
 
 /// OperationRegion object with region name, region space type, its offset and length.
-pub struct OpRegion<'a> {
+pub struct OpRegion {
     path: Path,
     space: OpRegionSpace,
-    offset: &'a dyn Aml,
-    length: &'a dyn Aml,
+    offset: usize,
+    length: usize,
 }
 
-impl<'a> OpRegion<'a> {
+impl OpRegion {
     /// Create OperationRegion object.
-    pub fn new(path: Path, space: OpRegionSpace, offset: &'a dyn Aml, length: &'a dyn Aml) -> Self {
+    pub fn new(path: Path, space: OpRegionSpace, offset: usize, length: usize) -> Self {
         OpRegion {
             path,
             space,
@@ -907,7 +903,7 @@ impl<'a> OpRegion<'a> {
     }
 }
 
-impl<'a> Aml for OpRegion<'a> {
+impl Aml for OpRegion {
     fn to_aml_bytes(&self, aml: &mut Vec<u8>) {
         let mut bytes = Vec::new();
         self.path.to_aml_bytes(&mut bytes);
@@ -1713,28 +1709,6 @@ mod tests {
         aml.clear();
         0xdeca_fbad_deca_fbadu64.to_aml_bytes(&mut aml);
         assert_eq!(aml, [0x0e, 0xad, 0xfb, 0xca, 0xde, 0xad, 0xfb, 0xca, 0xde]);
-        aml.clear();
-        0x00_usize.to_aml_bytes(&mut aml);
-        assert_eq!(aml, [0x00]);
-        aml.clear();
-        0x01_usize.to_aml_bytes(&mut aml);
-        assert_eq!(aml, [0x01]);
-        aml.clear();
-        0x86_usize.to_aml_bytes(&mut aml);
-        assert_eq!(aml, [0x0a, 0x86]);
-        aml.clear();
-        0xF00D_usize.to_aml_bytes(&mut aml);
-        assert_eq!(aml, [0x0b, 0x0d, 0xf0]);
-        aml.clear();
-        0xDECAF_usize.to_aml_bytes(&mut aml);
-        assert_eq!(aml, [0x0c, 0xaf, 0xec, 0x0d, 0x00]);
-        aml.clear();
-        #[cfg(target_pointer_width = "64")]
-        {
-            0xDECAFC0FFEE_usize.to_aml_bytes(&mut aml);
-            assert_eq!(aml, [0x0e, 0xee, 0xff, 0xc0, 0xaf, 0xec, 0x0d, 0x00, 0x00]);
-            aml.clear();
-        }
     }
 
     #[test]
@@ -1855,13 +1829,7 @@ mod tests {
         ];
         let mut aml = Vec::new();
 
-        OpRegion::new(
-            "PRST".into(),
-            OpRegionSpace::SystemIO,
-            &0xcd8_usize,
-            &0xc_usize,
-        )
-        .to_aml_bytes(&mut aml);
+        OpRegion::new("PRST".into(), OpRegionSpace::SystemIO, 0xcd8, 0xc).to_aml_bytes(&mut aml);
         assert_eq!(aml, &op_region_data[..]);
     }
 

@@ -49,6 +49,7 @@
 //!
 //! [log-crate-url]: https://docs.rs/log/
 
+use once_cell::sync::Lazy;
 use std::fmt::Display;
 use std::io;
 use std::io::Write;
@@ -58,7 +59,6 @@ use chrono::Local;
 pub use env_logger::fmt;
 pub use env_logger::{self};
 pub use log::*;
-use once_cell::sync::Lazy;
 use once_cell::sync::OnceCell;
 use remain::sorted;
 use serde::Deserialize;

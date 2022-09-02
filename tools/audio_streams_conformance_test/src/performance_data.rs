@@ -2,14 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fmt;
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use num::integer::Roots;
 use serde::Serialize;
 
-use crate::args::Args;
-use crate::error::*;
+use crate::{args::Args, error::*};
 
 const NANOS_PER_MICROS: f32 = 1_000_000.0;
 

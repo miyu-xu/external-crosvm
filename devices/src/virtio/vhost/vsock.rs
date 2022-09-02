@@ -55,24 +55,17 @@ pub struct Vsock {
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
     pub fn new(base_features: u64, vhost_config: &VhostVsockConfig) -> anyhow::Result<Vsock> {
-        let vhost_vsock_device_default = PathBuf::from(VHOST_VSOCK_DEFAULT_PATH);
-        let vhost_vsock_device = vhost_config
-            .device
-            .as_ref()
-            .unwrap_or(&vhost_vsock_device_default);
         let device_file = open_file(
-            vhost_vsock_device,
+            vhost_config
+                .device
+                .as_ref()
+                .unwrap_or(&PathBuf::from(VHOST_VSOCK_DEFAULT_PATH)),
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK),
         )
-        .with_context(|| {
-            format!(
-                "failed to open virtual socket device {}",
-                vhost_vsock_device.display(),
-            )
-        })?;
+        .context("failed to open virtual socket device")?;
 
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
         let handle = VhostVsockHandle::new(device_file);

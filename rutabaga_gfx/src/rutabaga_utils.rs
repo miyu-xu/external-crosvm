@@ -30,8 +30,6 @@ use vulkano::memory::DeviceMemoryAllocationError;
 use vulkano::memory::DeviceMemoryExportError;
 #[cfg(feature = "vulkano")]
 use vulkano::memory::MemoryMapError;
-#[cfg(feature = "vulkano")]
-use vulkano::LoadingError;
 
 /// Represents a buffer.  `base` contains the address of a buffer, while `len` contains the length
 /// of the buffer.
@@ -255,13 +253,9 @@ pub enum RutabagaError {
     #[cfg(feature = "vulkano")]
     #[error("vulkano instance creation failure {0}")]
     VkInstanceCreationError(InstanceCreationError),
-    /// Loading error
+    /// Memory map  error
     #[cfg(feature = "vulkano")]
-    #[error("vulkano loading failure {0}")]
-    VkLoadingError(LoadingError),
-    /// Memory map error
-    #[cfg(feature = "vulkano")]
-    #[error("vulkano memory map failure {0}")]
+    #[error("vullano memory map failure {0}")]
     VkMemoryMapError(MemoryMapError),
     /// Volatile memory error
     #[error("noticed a volatile memory error {0}")]

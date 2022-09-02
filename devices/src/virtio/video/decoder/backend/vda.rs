@@ -19,14 +19,6 @@ use crate::virtio::video::error::VideoError;
 use crate::virtio::video::error::VideoResult;
 use crate::virtio::video::format::*;
 
-/// Since libvda only accepts 32-bit timestamps, we are going to truncate the frame 64-bit timestamp
-/// (of nanosecond granularity) to only keep seconds granularity. This would result in information
-/// being lost on a regular client, but the Android C2 decoder only sends timestamps with second
-/// granularity, so this approach is going to work there. However, this means that this backend is
-/// very unlikely to work with any other guest software. We accept this fact because it is
-/// impossible to use outside of ChromeOS anyway.
-const TIMESTAMP_TRUNCATE_FACTOR: u64 = 1_000_000_000;
-
 impl TryFrom<Format> for libvda::Profile {
     type Error = VideoError;
 
@@ -107,8 +99,7 @@ impl From<libvda::decode::Event> for DecoderEvent {
                 bottom,
             } => DecoderEvent::PictureReady {
                 picture_buffer_id: buffer_id,
-                // Restore the truncated timestamp to its original value (hopefully).
-                timestamp: bitstream_id as u64 * TIMESTAMP_TRUNCATE_FACTOR,
+                bitstream_id,
                 visible_rect: Rect {
                     left,
                     top,
@@ -117,8 +108,7 @@ impl From<libvda::decode::Event> for DecoderEvent {
                 },
             },
             LibvdaEvent::NotifyEndOfBitstreamBuffer { bitstream_id } => {
-                // We will patch the timestamp to the actual bitstream ID in `read_event`.
-                DecoderEvent::NotifyEndOfBitstreamBuffer(bitstream_id as u32)
+                DecoderEvent::NotifyEndOfBitstreamBuffer(bitstream_id)
             }
             LibvdaEvent::NotifyError(resp) => DecoderEvent::NotifyError(
                 VideoError::BackendFailure(anyhow!("VDA failure: {}", resp)),
@@ -162,9 +152,6 @@ fn from_pixel_format(
 pub struct VdaDecoderSession {
     vda_session: libvda::decode::Session,
     format: Option<libvda::PixelFormat>,
-    /// libvda can only handle 32-bit timestamps, so we will give it the buffer ID as a timestamp
-    /// and map it back to the actual timestamp using this table when a decoded frame is produced.
-    timestamp_to_resource_id: BTreeMap<u32, u32>,
 }
 
 impl DecoderSession for VdaDecoderSession {
@@ -175,8 +162,7 @@ impl DecoderSession for VdaDecoderSession {
 
     fn decode(
         &mut self,
-        resource_id: u32,
-        timestamp: u64,
+        bitstream_id: i32,
         resource: GuestResourceHandle,
         offset: u32,
         bytes_used: u32,
@@ -190,21 +176,8 @@ impl DecoderSession for VdaDecoderSession {
             }
         };
 
-        // While the virtio-video driver handles timestamps as nanoseconds, Chrome assumes
-        // per-second timestamps coming. So, we need a conversion from nsec to sec. Note that this
-        // value should not be an unix time stamp but a frame number that the Android V4L2 C2
-        // decoder passes to the driver as a 32-bit integer in our implementation. So, overflow must
-        // not happen in this conversion.
-        let truncated_timestamp = (timestamp / TIMESTAMP_TRUNCATE_FACTOR) as u32;
-        self.timestamp_to_resource_id
-            .insert(truncated_timestamp, resource_id);
-
-        if truncated_timestamp as u64 * TIMESTAMP_TRUNCATE_FACTOR != timestamp {
-            warn!("truncation of timestamp {} resulted in precision loss. Only send timestamps with second granularity to this backend.", timestamp);
-        }
-
         Ok(self.vda_session.decode(
-            truncated_timestamp as i32, // bitstream_id
+            bitstream_id,
             // Steal the descriptor of the resource, as libvda will close it.
             handle.desc.into_raw_descriptor(),
             offset,
@@ -263,22 +236,6 @@ impl DecoderSession for VdaDecoderSession {
         self.vda_session
             .read_event()
             .map(Into::into)
-            // Libvda returned the truncated timestamp that we gave it as the timestamp of this
-            // buffer. Replace it with the bitstream ID that was passed to `decode` for this
-            // resource.
-            .map(|mut e| {
-                if let DecoderEvent::NotifyEndOfBitstreamBuffer(timestamp) = &mut e {
-                    let bitstream_id = self
-                        .timestamp_to_resource_id
-                        .remove(timestamp)
-                        .unwrap_or_else(|| {
-                            error!("timestamp {} not registered!", *timestamp);
-                            0
-                        });
-                    *timestamp = bitstream_id;
-                }
-                e
-            })
             .map_err(Into::into)
     }
 }
@@ -305,7 +262,6 @@ impl DecoderBackend for LibvdaDecoder {
                 VideoError::InvalidOperation
             })?,
             format: None,
-            timestamp_to_resource_id: Default::default(),
         })
     }
 
