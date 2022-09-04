@@ -591,6 +591,9 @@ pub struct RunCommand {
     #[argh(option, long = "dmi", arg_name = "DIR")]
     /// directory with smbios_entry_point/DMI files
     pub dmi_path: Option<PathBuf>,
+    #[argh(option, long = "dump-dtb", arg_name = "FILE")]
+    /// dump generated DTB to file
+    pub dump_dtb_path: Option<PathBuf>,
     #[argh(switch)]
     /// expose HWP feature to the guest
     pub enable_hwp: bool,
@@ -1791,6 +1794,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.disable_virtio_intx = cmd.disable_virtio_intx;
 
         cfg.dmi_path = cmd.dmi_path;
+
+        cfg.dump_dtb_path = cmd.dump_dtb_path;
 
         cfg.itmt = cmd.itmt;
 

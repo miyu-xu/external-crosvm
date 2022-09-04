@@ -42,6 +42,7 @@ pub fn create_fdt(
     guest_mem: &GuestMemory,
     fdt_load_offset: u64,
     android_fstab: File,
+    dump_dtb_path: Option<PathBuf>,
 ) -> Result<usize, Error> {
     // Reserve space for the setup_data
     let fdt_data_size = fdt_max_size - mem::size_of::<setup_data>();
@@ -82,5 +83,16 @@ pub fn create_fdt(
     if written < fdt_data_size {
         return Err(Error::FdtGuestMemoryWriteError);
     }
+
+    if let Some(file_path) = dump_dtb_path {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(file_path)
+            .map_err(|err| Error::FdtIoError(err))?;
+        file.write_all(fdt_final.as_slice()).map_err(|err| Error::FdtIoError(err))?;
+        file.flush().map_err(|err| Error::FdtIoError(err))?;
+    }
+
     Ok(fdt_data_size)
 }
