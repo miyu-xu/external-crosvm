@@ -2143,6 +2143,7 @@ where
         pci_devices,
         irq_chip,
         &mut vcpu_ids,
+        cfg.dump_dtb_path.clone(),
         /*debugcon_jail=*/ None,
         None,
     )
