@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -348,6 +349,7 @@ impl arch::LinuxArch for AArch64 {
         devs: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipAArch64,
         vcpu_ids: &mut Vec<usize>,
+        dump_dtb_path: Option<PathBuf>,
         _debugcon_jail: Option<Minijail>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
@@ -649,6 +651,7 @@ impl arch::LinuxArch for AArch64 {
             }).transpose().map_err(Error::AllocateSwiotlb)?,
             bat_mmio_base_and_irq,
             vmwdt_cfg,
+            dump_dtb_path,
         )
         .map_err(Error::CreateFdt)?;
 

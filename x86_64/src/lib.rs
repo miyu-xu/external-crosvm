@@ -57,6 +57,7 @@ use std::fs::File;
 use std::io;
 use std::io::Seek;
 use std::mem;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -569,6 +570,7 @@ impl arch::LinuxArch for X8664arch {
         devs: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipX86_64,
         vcpu_ids: &mut Vec<usize>,
+        dump_dtb_path: Option<PathBuf>,
         debugcon_jail: Option<Minijail>,
         pflash_jail: Option<Minijail>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
@@ -846,6 +848,7 @@ impl arch::LinuxArch for X8664arch {
                     components.android_fstab,
                     kernel_end,
                     params,
+                    dump_dtb_path,
                 )?;
 
                 // Configure the bootstrap VCPU for the Linux/x86 64-bit boot protocol.
@@ -1453,6 +1456,7 @@ impl X8664arch {
         android_fstab: Option<File>,
         kernel_end: u64,
         params: boot_params,
+        dump_dtb_path: Option<PathBuf>,
     ) -> Result<()> {
         kernel_loader::load_cmdline(mem, GuestAddress(CMDLINE_OFFSET), cmdline)
             .map_err(Error::LoadCmdline)?;
@@ -1469,6 +1473,7 @@ impl X8664arch {
                 mem,
                 dtb_start.offset(),
                 android_fstab,
+                dump_dtb_path,
             )
             .map_err(Error::CreateFdt)?;
             free_addr = dtb_start.offset() + dtb_size as u64;
