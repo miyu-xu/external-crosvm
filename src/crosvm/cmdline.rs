@@ -121,6 +121,7 @@ pub enum CrossPlatformCommands {
     Battery(BatteryCommand),
     #[cfg(feature = "composite-disk")]
     CreateComposite(CreateCompositeCommand),
+    #[cfg(feature = "qcow")]
     CreateQcow2(CreateQcow2Command),
     Device(DeviceCommand),
     Disk(DiskCommand),
@@ -198,6 +199,7 @@ pub struct CreateCompositeCommand {
     pub partitions: Vec<String>,
 }
 
+#[cfg(feature = "qcow")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "create_qcow2")]
 /// Create Qcow2 image given path and size
@@ -626,19 +628,23 @@ pub struct RunCommand {
     /// force use of a calibrated TSC cpuid leaf (0x15) even if the hypervisor
     /// doesn't require one.
     pub force_calibrated_tsc_leaf: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     #[argh(option, arg_name = "PORT")]
     /// (EXPERIMENTAL) gdb on the given port
     pub gdb: Option<u32>,
     #[cfg(feature = "gpu")]
-    #[argh(option, arg_name = "[width=INT,height=INT]")]
+    #[argh(option)]
     /// (EXPERIMENTAL) Comma separated key=value pairs for setting
     /// up a display on the virtio-gpu device
     /// Possible key values:
-    ///     width=INT - The width of the virtual display connected
-    ///        to the virtio-gpu.
-    ///     height=INT - The height of the virtual display
-    ///        connected to the virtio-gpu
+    ///     mode=(borderless_full_screen|windowed) - Whether to show the window on the host in full
+    ///        screen or windowed mode. If not specified, windowed mode is used by default.
+    ///     width=INT - The width of the virtual display connected to the virtio-gpu. Can't be set
+    ///        with the borderless_full_screen display mode.
+    ///     height=INT - The height of the virtual display connected to the virtio-gpu. Can't be set
+    ///        with the borderless_full_screen display mode.
+    ///     hidden[=true|=false] - If the display window is initially hidden.
+    ///     refresh_rate=INT - Force a specific vsync generation rate in hertz on the guest.
     #[cfg(unix)]
     pub gpu_display: Vec<GpuDisplayParameters>,
     #[cfg(feature = "gpu")]
@@ -881,10 +887,6 @@ pub struct RunCommand {
     #[argh(switch)]
     /// enable virtio-pvclock.
     pub pvclock: bool,
-    // Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
-    #[argh(option, long = "unprotected-vm-with-firmware", arg_name = "PATH")]
-    /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
-    pub pvm_fw: Option<PathBuf>,
     #[argh(
         option,
         arg_name = "PATH[,key=value[,key=value[,...]]",
@@ -1101,6 +1103,10 @@ pub struct RunCommand {
     #[argh(option, arg_name = "NAME[,...]")]
     /// comma-separated names of the task profiles to apply to all threads in crosvm including the vCPU threads
     pub task_profiles: Vec<String>,
+    // Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
+    #[argh(option, long = "unprotected-vm-with-firmware", arg_name = "PATH")]
+    /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
+    pub unprotected_vm_with_firmware: Option<PathBuf>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[argh(
         option,
@@ -1700,42 +1706,43 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.net_vq_pairs = cmd.net_vq_pairs;
         }
 
-        if cmd.protected_vm && cmd.protected_vm_without_firmware && cmd.pvm_fw.is_some() {
+        let protection_flags = [
+            cmd.protected_vm,
+            cmd.protected_vm_without_firmware,
+            cmd.unprotected_vm_with_firmware.is_some(),
+        ];
+
+        if protection_flags.into_iter().filter(|b| *b).count() > 1 {
             return Err("Only one protection mode has to be specified".to_string());
         }
 
-        if cmd.protected_vm {
-            cfg.protected_vm = ProtectionType::Protected;
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
-            cfg.usb = false;
-            // Protected VMs can't trust the RNG device, so don't provide it.
-            cfg.rng = false;
+        cfg.protection_type = if cmd.protected_vm {
+            ProtectionType::Protected
         } else if cmd.protected_vm_without_firmware {
-            cfg.protected_vm = ProtectionType::ProtectedWithoutFirmware;
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
-            cfg.usb = false;
-            // Protected VMs can't trust the RNG device, so don't provide it.
-            cfg.rng = false;
-        } else if let Some(p) = cmd.pvm_fw {
+            ProtectionType::ProtectedWithoutFirmware
+        } else if let Some(p) = cmd.unprotected_vm_with_firmware {
             if !p.exists() || !p.is_file() {
                 return Err(
                     "unprotected-vm-with-firmware path should be an existing file".to_string(),
                 );
             }
-            cfg.protected_vm = ProtectionType::UnprotectedWithFirmware;
+            cfg.pvm_fw = Some(p);
+            ProtectionType::UnprotectedWithFirmware
+        } else {
+            ProtectionType::Unprotected
+        };
+
+        if !matches!(cfg.protection_type, ProtectionType::Unprotected) {
             // Balloon and USB devices only work for unprotected VMs.
             cfg.balloon = false;
             cfg.usb = false;
             // Protected VMs can't trust the RNG device, so don't provide it.
             cfg.rng = false;
-            cfg.pvm_fw = Some(p);
         }
 
         cfg.battery_config = cmd.battery;
 
-        #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+        #[cfg(feature = "gdb")]
         {
             cfg.gdb = cmd.gdb;
         }
@@ -1764,6 +1771,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.vhost_user_blk = cmd.vhost_user_blk;
         cfg.vhost_user_console = cmd.vhost_user_console;
+        cfg.vhost_user_fs = cmd.vhost_user_fs;
         cfg.vhost_user_gpu = cmd.vhost_user_gpu;
         cfg.vhost_user_mac80211_hwsim = cmd.vhost_user_mac80211_hwsim;
         cfg.vhost_user_net = cmd.vhost_user_net;

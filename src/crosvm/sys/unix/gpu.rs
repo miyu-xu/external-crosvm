@@ -27,20 +27,34 @@ pub fn get_gpu_cache_info<'a>(
     let mut dir = None;
     let mut env = Vec::new();
 
+    // TODO (renatopereyra): Remove deprecated env vars once all src/third_party/mesa* are updated.
     if let Some(cache_dir) = cache_dir {
         if !Path::new(cache_dir).exists() {
             warn!("shader caching dir {} does not exist", cache_dir);
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else if cfg!(any(target_arch = "arm", target_arch = "aarch64")) && sandbox {
             warn!("shader caching not yet supported on ARM with sandbox enabled");
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else {
             dir = Some(cache_dir.as_str());
 
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "false"));
             env.push(("MESA_GLSL_CACHE_DIR", cache_dir.as_str()));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "false"));
+            env.push(("MESA_SHADER_CACHE_DIR", cache_dir.as_str()));
             if let Some(cache_size) = cache_size {
+                // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
                 env.push(("MESA_GLSL_CACHE_MAX_SIZE", cache_size.as_str()));
+
+                env.push(("MESA_SHADER_CACHE_MAX_SIZE", cache_size.as_str()));
             }
         }
     }
@@ -91,7 +105,7 @@ pub fn create_gpu_device(
         event_devices,
         map_request,
         cfg.jail_config.is_some(),
-        virtio::base_features(cfg.protected_vm),
+        virtio::base_features(cfg.protection_type),
         cfg.wayland_socket_paths.clone(),
     );
 

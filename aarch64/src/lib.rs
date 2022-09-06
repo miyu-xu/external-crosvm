@@ -251,7 +251,14 @@ impl arch::LinuxArch for AArch64 {
             vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size)];
 
         // Allocate memory for the pVM firmware.
+<<<<<<< HEAD   (2f8015 Merge "ANDROID: Revert^2 "Allocate more RAM for pVM firmware)
         if components.protected_vm == ProtectionType::UnprotectedWithFirmware {
+=======
+        if matches!(
+            components.protection_type,
+            ProtectionType::Protected | ProtectionType::UnprotectedWithFirmware
+        ) {
+>>>>>>> BRANCH (481177 virtio: video: encoder: Handle SET_PARAMS_EXT's resource_typ)
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
@@ -349,7 +356,7 @@ impl arch::LinuxArch for AArch64 {
                 use_pmu,
                 has_bios,
                 image_size,
-                components.protected_vm,
+                components.protection_type,
             )?;
             has_pvtime &= vcpu.has_pvtime_support();
             vcpus.push(vcpu);
@@ -371,7 +378,7 @@ impl arch::LinuxArch for AArch64 {
             .map_err(Error::MapPvtimeError)?;
         }
 
-        match components.protected_vm {
+        match components.protection_type {
             ProtectionType::Protected => {
                 // Allocate memory for the pVM firmware and tell the hypervisor to load it.
                 vm.load_protected_vm_firmware(
@@ -382,7 +389,7 @@ impl arch::LinuxArch for AArch64 {
             }
             ProtectionType::UnprotectedWithFirmware => {
                 // Load pVM firmware ourself, as the VM is not really protected.
-                // `components.pvm_fw` is safe to unwrap because `protected_vm` is
+                // `components.pvm_fw` is safe to unwrap because `protection_type` is
                 // `UnprotectedWithFirmware`.
                 arch::load_image(
                     &mem,
@@ -461,7 +468,7 @@ impl arch::LinuxArch for AArch64 {
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         arch::add_serial_devices(
-            components.protected_vm,
+            components.protection_type,
             &mmio_bus,
             com_evt_1_3.get_trigger(),
             com_evt_2_4.get_trigger(),
@@ -727,7 +734,7 @@ impl AArch64 {
         use_pmu: bool,
         has_bios: bool,
         image_size: usize,
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
     ) -> Result<()> {
         let mut features = vec![VcpuFeature::PsciV0_2];
         if use_pmu {
@@ -746,26 +753,24 @@ impl AArch64 {
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            let entry_addr = if has_bios {
+            let image_addr = if has_bios {
                 get_bios_addr()
             } else {
                 get_kernel_addr()
             };
-            match protected_vm {
-                ProtectionType::Protected => {
-                    vcpu.set_one_reg(VcpuRegAArch64::X(1), entry_addr.offset())
-                        .map_err(Error::SetReg)?;
-                }
-                ProtectionType::UnprotectedWithFirmware => {
-                    vcpu.set_one_reg(VcpuRegAArch64::Pc, AARCH64_PROTECTED_VM_FW_START)
-                        .map_err(Error::SetReg)?;
-                    vcpu.set_one_reg(VcpuRegAArch64::X(1), entry_addr.offset())
-                        .map_err(Error::SetReg)?;
-                }
+
+            let entry_addr = match protection_type {
+                ProtectionType::Protected => None, // Hypervisor controls the entry point
+                ProtectionType::UnprotectedWithFirmware => Some(AARCH64_PROTECTED_VM_FW_START),
                 ProtectionType::Unprotected | ProtectionType::ProtectedWithoutFirmware => {
-                    vcpu.set_one_reg(VcpuRegAArch64::Pc, entry_addr.offset())
-                        .map_err(Error::SetReg)?;
+                    Some(image_addr.offset())
                 }
+            };
+
+            /* PC -- entry point */
+            if let Some(entry) = entry_addr {
+                vcpu.set_one_reg(VcpuRegAArch64::Pc, entry)
+                    .map_err(Error::SetReg)?;
             }
 
             /* X0 -- fdt address */
@@ -774,11 +779,15 @@ impl AArch64 {
             vcpu.set_one_reg(VcpuRegAArch64::X(0), fdt_addr)
                 .map_err(Error::SetReg)?;
 
-            /* X2 -- image size */
             if matches!(
-                protected_vm,
+                protection_type,
                 ProtectionType::Protected | ProtectionType::UnprotectedWithFirmware
             ) {
+                /* X1 -- payload entry point */
+                vcpu.set_one_reg(VcpuRegAArch64::X(1), image_addr.offset())
+                    .map_err(Error::SetReg)?;
+
+                /* X2 -- image size */
                 vcpu.set_one_reg(VcpuRegAArch64::X(2), image_size as u64)
                     .map_err(Error::SetReg)?;
             }
