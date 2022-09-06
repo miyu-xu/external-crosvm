@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9de5ec2a_0d19c4a8",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1348,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-06T18:37:37Z",
+      "side": 1,
+      "message": "Will test to see if Microdroid builds. If it fails, reverting to Console.",
+      "range": {
+        "startLine": 1348,
+        "startChar": 12,
+        "endLine": 1348,
+        "endChar": 91
+      },
+      "revId": "aa487f40322350fc5e8f704b29b6c81a2740e56b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
