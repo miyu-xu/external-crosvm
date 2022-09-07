@@ -1200,7 +1200,7 @@ pub struct Config {
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub force_calibrated_tsc_leaf: bool,
     pub force_s2idle: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     pub gdb: Option<u32>,
     #[cfg(feature = "gpu")]
     pub gpu_parameters: Option<GpuParameters>,
@@ -1264,11 +1264,11 @@ pub struct Config {
     pub product_name: Option<String>,
     #[cfg(windows)]
     pub product_version: Option<String>,
-    pub protected_vm: ProtectionType,
+    pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
     #[cfg(windows)]
     pub pvclock: bool,
-    /// Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
     pub rng: bool,
     pub rt_cpus: Vec<usize>,
@@ -1395,7 +1395,7 @@ impl Default for Config {
             file_backed_mappings: Vec::new(),
             force_calibrated_tsc_leaf: false,
             force_s2idle: false,
-            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            #[cfg(feature = "gdb")]
             gdb: None,
             #[cfg(feature = "gpu")]
             gpu_parameters: None,
@@ -1463,7 +1463,7 @@ impl Default for Config {
             process_invariants_data_size: None,
             #[cfg(windows)]
             product_name: None,
-            protected_vm: ProtectionType::Unprotected,
+            protection_type: ProtectionType::Unprotected,
             pstore: None,
             #[cfg(windows)]
             pvclock: false,
@@ -1552,7 +1552,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
     {
         crate::crosvm::sys::validate_gpu_config(cfg)?;
     }
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     if cfg.gdb.is_some() && cfg.vcpu_count.unwrap_or(1) != 1 {
         return Err("`gdb` requires the number of vCPU to be 1".to_string());
     }
