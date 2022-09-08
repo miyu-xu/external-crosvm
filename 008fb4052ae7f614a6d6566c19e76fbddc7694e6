@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a6b0104e_c40793f5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-09-08T09:33:30Z",
+      "side": 1,
+      "message": "This might be a bug in all2android; see b/245336601#comment4.",
+      "revId": "008fb4052ae7f614a6d6566c19e76fbddc7694e6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
