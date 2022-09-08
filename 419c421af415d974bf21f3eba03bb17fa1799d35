@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "461b951f_49c62a83",
+        "filename": "crosvm_control/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 51,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-08T21:19:54Z",
+      "side": 1,
+      "message": "Not sure why this was generated. Might have something to do with rust versions? Investigating, however this should be ready to submit after reviews.",
+      "range": {
+        "startLine": 33,
+        "startChar": 0,
+        "endLine": 51,
+        "endChar": 1
+      },
+      "revId": "419c421af415d974bf21f3eba03bb17fa1799d35",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
