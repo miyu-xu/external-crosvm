@@ -1345,7 +1345,7 @@ impl VirtioDeviceBuilder for SerialParameters {
 
         // TODO(b/238440998): Switch back to AsyncConsole in android.
         Ok(Box::new(
-            self.create_serial_device::<AsyncConsole>(protection_type, &evt, &mut keep_rds)
+            self.create_serial_device::<Console>(protection_type, &evt, &mut keep_rds)
                 .context("failed to create console device")?,
         ))
     }
