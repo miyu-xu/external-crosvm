@@ -22,6 +22,30 @@
       },
       "revId": "419c421af415d974bf21f3eba03bb17fa1799d35",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a32a14cc_42cff16b",
+        "filename": "crosvm_control/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 51,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-09T16:30:05Z",
+      "side": 1,
+      "message": "new crate type added in crosvm_control/Cargo.toml - \"staticlib\"",
+      "parentUuid": "461b951f_49c62a83",
+      "range": {
+        "startLine": 33,
+        "startChar": 0,
+        "endLine": 51,
+        "endChar": 1
+      },
+      "revId": "419c421af415d974bf21f3eba03bb17fa1799d35",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
