@@ -22,6 +22,30 @@
       },
       "revId": "aa487f40322350fc5e8f704b29b6c81a2740e56b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e0e1979a_ee8ddd8a",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1348,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-09T22:35:15Z",
+      "side": 1,
+      "message": "We probably need to avoid this until the prerequisites to https://android-review.googlesource.com/c/platform/external/crosvm/+/2190409/2 land",
+      "parentUuid": "9de5ec2a_0d19c4a8",
+      "range": {
+        "startLine": 1348,
+        "startChar": 12,
+        "endLine": 1348,
+        "endChar": 91
+      },
+      "revId": "aa487f40322350fc5e8f704b29b6c81a2740e56b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
