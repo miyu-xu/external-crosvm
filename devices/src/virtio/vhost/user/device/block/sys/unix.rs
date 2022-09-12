@@ -47,13 +47,14 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         path: filename.into(),
         read_only: fileopts.contains(&"read-only"),
         sparse: false,
+        o_direct: false,
         block_size: 512,
-        ..Default::default()
+        id: None,
     };
 
     let block = Box::new(BlockAsync::new(
         base_features(ProtectionType::Unprotected),
-        disk.open_as_async_file()?,
+        disk.open()?,
         disk.read_only,
         disk.sparse,
         disk.block_size,
