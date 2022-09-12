@@ -22,6 +22,30 @@
       },
       "revId": "65356916d90a102d02862f21b02fdc769d52925e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a0a9de1a_a376b09f",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 1348,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-12T20:58:11Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "8f7dac64_c15bc059",
+      "range": {
+        "startLine": 1348,
+        "startChar": 0,
+        "endLine": 1348,
+        "endChar": 86
+      },
+      "revId": "65356916d90a102d02862f21b02fdc769d52925e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
