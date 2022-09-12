@@ -46,6 +46,30 @@
       },
       "revId": "6bf7175517fa47201f5c988282216419cb1fc9aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f0b452b7_a9f7a38f",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 255,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-12T20:57:41Z",
+      "side": 0,
+      "message": "Correct! Added a different fix closer to upstream that retains the logic.",
+      "parentUuid": "0cb8df44_2326f99c",
+      "range": {
+        "startLine": 255,
+        "startChar": 0,
+        "endLine": 255,
+        "endChar": 79
+      },
+      "revId": "6bf7175517fa47201f5c988282216419cb1fc9aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

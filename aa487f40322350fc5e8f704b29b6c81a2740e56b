@@ -70,6 +70,30 @@
       },
       "revId": "aa487f40322350fc5e8f704b29b6c81a2740e56b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "eca5819f_6804737c",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1348,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-12T20:57:41Z",
+      "side": 1,
+      "message": "Reverted back to Console.",
+      "parentUuid": "aef11482_6afd5201",
+      "range": {
+        "startLine": 1348,
+        "startChar": 12,
+        "endLine": 1348,
+        "endChar": 91
+      },
+      "revId": "aa487f40322350fc5e8f704b29b6c81a2740e56b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
