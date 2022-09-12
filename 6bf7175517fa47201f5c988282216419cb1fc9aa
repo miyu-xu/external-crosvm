@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "02c9c38e_8edb6fb9",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 255,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-12T20:04:09Z",
+      "side": 0,
+      "message": "hey - see also https://android-review.googlesource.com/c/platform/external/crosvm/+/2193401\n\nI think this is causing the presubmit failure",
+      "range": {
+        "startLine": 255,
+        "startChar": 0,
+        "endLine": 255,
+        "endChar": 79
+      },
+      "revId": "6bf7175517fa47201f5c988282216419cb1fc9aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
