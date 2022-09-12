@@ -22,6 +22,30 @@
       },
       "revId": "6bf7175517fa47201f5c988282216419cb1fc9aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0cb8df44_2326f99c",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 255,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-12T20:05:23Z",
+      "side": 0,
+      "message": "That is, the failure on the child CL. Since these are in the same project, the failure here is running without the child CL. You should add this CL and http://aosp/2210225 into the same topic, so that they\u0027ll work together.",
+      "parentUuid": "02c9c38e_8edb6fb9",
+      "range": {
+        "startLine": 255,
+        "startChar": 0,
+        "endLine": 255,
+        "endChar": 79
+      },
+      "revId": "6bf7175517fa47201f5c988282216419cb1fc9aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
