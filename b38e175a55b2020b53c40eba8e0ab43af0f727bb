@@ -1,5 +1,29 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bad957a1_437ef72d",
+        "filename": "arch/cargo2android.json",
+        "patchSetId": 6
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-09-13T13:47:58Z",
+      "side": 1,
+      "message": "not sure about the renaming, it isn\u0027t a patch file. i\u0027d agree that some kind of extension would be a good idea to indicate that it isn\u0027t a normal .bp file.\n\nmaybe \"cargo2android.bp.fragment\"",
+      "range": {
+        "startLine": 2,
+        "startChar": 23,
+        "endLine": 2,
+        "endChar": 49
+      },
+      "revId": "b38e175a55b2020b53c40eba8e0ab43af0f727bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
