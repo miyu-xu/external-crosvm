@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -252,7 +252,12 @@ impl arch::LinuxArch for AArch64 {
 
         // Allocate memory for the pVM firmware.
         if matches!(
+<<<<<<< HEAD   (b38e17 run all2android crosvm merge)
             components.protection_type, ProtectionType::UnprotectedWithFirmware
+=======
+            components.hv_cfg.protection_type,
+            ProtectionType::Protected | ProtectionType::UnprotectedWithFirmware
+>>>>>>> BRANCH (693f5e gpu: move resource bridge related code to a separate struct.)
         ) {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
@@ -351,7 +356,7 @@ impl arch::LinuxArch for AArch64 {
                 use_pmu,
                 has_bios,
                 image_size,
-                components.protection_type,
+                components.hv_cfg.protection_type,
             )?;
             has_pvtime &= vcpu.has_pvtime_support();
             vcpus.push(vcpu);
@@ -373,7 +378,7 @@ impl arch::LinuxArch for AArch64 {
             .map_err(Error::MapPvtimeError)?;
         }
 
-        match components.protection_type {
+        match components.hv_cfg.protection_type {
             ProtectionType::Protected => {
                 // Allocate memory for the pVM firmware and tell the hypervisor to load it.
                 vm.load_protected_vm_firmware(
@@ -464,7 +469,7 @@ impl arch::LinuxArch for AArch64 {
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         arch::add_serial_devices(
-            components.protection_type,
+            components.hv_cfg.protection_type,
             &mmio_bus,
             com_evt_1_3.get_trigger(),
             com_evt_2_4.get_trigger(),

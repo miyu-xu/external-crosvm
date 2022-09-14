@@ -118,11 +118,11 @@ all-linux = [
     "virgl_renderer",
     "x",
     ]
-win64 = ["devices/stats", "balloon", "haxm"]
+win64 = ["stats", "balloon", "haxm"]
 audio = ["devices/audio"]
 audio_cras = ["devices/audio_cras"]
 balloon = ["devices/balloon", "vm_control/balloon"]
-chromeos = ["base/chromeos", "audio_cras", "devices/chromeos"]
+chromeos = ["base/chromeos", "audio_cras", "devices/chromeos", "panic-memfd"]
 composite-disk = ["protos/composite-disk", "protobuf", "disk/composite-disk"]
 crash-report = []
 default = ["audio", "balloon", "gpu", "qcow", "usb"]
@@ -144,11 +144,13 @@ linux-armhf = [
     ]
 linux-x86_64 = ["all-linux", "plugin"]
 linux-aarch64 = ["all-linux"]
+panic-memfd = []
 plugin = ["protos/plugin", "crosvm_plugin", "kvm", "kvm_sys", "protobuf"]
 plugin-render-server = []
 power-monitor-powerd = ["arch/power-monitor-powerd"]
 qcow = ["disk/qcow"]
 slirp = ["devices/slirp"]
+stats = ["devices/stats"]
 tpm = ["devices/tpm"]
 usb = ["devices/usb"]
 video-decoder = ["devices/video-decoder"]
@@ -229,6 +231,9 @@ tracing = { path = "tracing" }
 tube_transporter = { path = "tube_transporter" }
 winapi = "*"
 win_util = { path = "win_util"}
+
+[build-dependencies]
+cc = "*"
 
 [dev-dependencies]
 base = "*"

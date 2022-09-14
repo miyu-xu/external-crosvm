@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,11 @@ use std::fmt;
 
 use audio_streams::StreamSourceGenerator;
 #[cfg(feature = "audio_cras")]
-use libcras::{CrasClientType, CrasSocketType, CrasStreamSourceGenerator};
+use libcras::CrasClientType;
+#[cfg(feature = "audio_cras")]
+use libcras::CrasSocketType;
+#[cfg(feature = "audio_cras")]
+use libcras::CrasStreamSourceGenerator;
 use serde::Serialize;
 
 use crate::args::*;

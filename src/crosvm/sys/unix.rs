@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -1149,6 +1149,11 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         direct_fixed_evts: cfg.direct_fixed_evts.clone(),
         no_smt: cfg.no_smt,
         hugepages: cfg.hugepages,
+        hv_cfg: hypervisor::Config {
+            #[cfg(target_arch = "aarch64")]
+            mte: cfg.mte,
+            protection_type: cfg.protection_type,
+        },
         vm_image,
         android_fstab: cfg
             .android_fstab
@@ -1173,12 +1178,13 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .collect::<Result<Vec<SDT>>>()?,
         rt_cpus: cfg.rt_cpus.clone(),
         delay_rt: cfg.delay_rt,
-        protection_type: cfg.protection_type,
         #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
         gdb: None,
         dmi_path: cfg.dmi_path.clone(),
         no_i8042: cfg.no_i8042,
         no_rtc: cfg.no_rtc,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        oem_strings: cfg.oem_strings.clone(),
         host_cpu_topology: cfg.host_cpu_topology,
         itmt: cfg.itmt,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -1248,8 +1254,7 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
             cfg.kvm_device_path.display(),
         )
     })?;
-    let vm =
-        KvmVm::new(&kvm, guest_mem, components.protection_type).context("failed to create vm")?;
+    let vm = KvmVm::new(&kvm, guest_mem, components.hv_cfg).context("failed to create vm")?;
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if cfg.itmt {

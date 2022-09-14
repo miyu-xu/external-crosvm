@@ -198,6 +198,7 @@ dependencies = [
  "libc",
  "log",
  "once_cell",
+ "protobuf",
  "rand",
  "regex",
  "remain",
@@ -404,6 +405,7 @@ dependencies = [
  "base",
  "bit_field",
  "broker_ipc",
+ "cc",
  "cfg-if",
  "cros_async",
  "crosvm_plugin",
@@ -1906,6 +1908,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tube_transporter",
 ]
 
 [[package]]

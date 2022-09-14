@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -63,7 +63,6 @@ cfg_if::cfg_if! {
 
         static KVM_PATH: &str = "/dev/kvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
-        static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
 
@@ -535,7 +534,11 @@ fn jail_config_default_pivot_root() -> PathBuf {
 
 #[cfg(unix)]
 fn jail_config_default_seccomp_policy_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(SECCOMP_POLICY_DIR))
+    if cfg!(feature = "chromeos") {
+        Some(PathBuf::from("/usr/share/policy/crosvm"))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, serde_keyvalue::FromKeyValues)]
@@ -1232,6 +1235,8 @@ pub struct Config {
     pub memory: Option<u64>,
     pub memory_file: Option<PathBuf>,
     pub mmio_address_ranges: Vec<AddressRange>,
+    #[cfg(target_arch = "aarch64")]
+    pub mte: bool,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
     pub net_vq_pairs: Option<u16>,
@@ -1239,6 +1244,8 @@ pub struct Config {
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub oem_strings: Vec<String>,
     pub params: Vec<String>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pci_low_start: Option<u64>,
@@ -1435,6 +1442,8 @@ impl Default for Config {
             memory: None,
             memory_file: None,
             mmio_address_ranges: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            mte: false,
             #[cfg(windows)]
             net_vhost_user_tube: None,
             net_vq_pairs: None,
@@ -1442,6 +1451,8 @@ impl Default for Config {
             no_i8042: false,
             no_rtc: false,
             no_smt: false,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            oem_strings: Vec::new(),
             params: Vec::new(),
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             pci_low_start: None,
@@ -2165,8 +2176,10 @@ mod tests {
             config,
             JailConfig {
                 pivot_root: jail_config_default_pivot_root(),
-                #[cfg(unix)]
-                seccomp_policy_dir: jail_config_default_seccomp_policy_dir(),
+                #[cfg(feature = "chromeos")]
+                seccomp_policy_dir: Some(PathBuf::from("/usr/share/policy/crosvm")),
+                #[cfg(all(unix, not(feature = "chromeos")))]
+                seccomp_policy_dir: None,
                 seccomp_log_failures: false,
             }
         );

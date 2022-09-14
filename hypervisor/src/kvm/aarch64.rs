@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@ use libc::ENOTSUP;
 use libc::ENXIO;
 use vm_memory::GuestAddress;
 
+use super::Config;
 use super::Kvm;
 use super::KvmCap;
 use super::KvmVcpu;
@@ -76,6 +77,16 @@ impl Kvm {
 }
 
 impl KvmVm {
+    /// Does platform specific initialization for the KvmVm.
+    pub fn init_arch(&self, cfg: &Config) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        if cfg.mte {
+            // Safe because it does not take pointer arguments.
+            unsafe { self.enable_raw_capability(KvmCap::ArmMte, 0, &[0, 0, 0, 0])? }
+        }
+        Ok(())
+    }
+
     /// Checks if a particular `VmCap` is available, or returns None if arch-independent
     /// Vm.check_capability() should handle the check.
     pub fn check_capability_arch(&self, _c: VmCap) -> Option<bool> {
@@ -561,7 +572,7 @@ mod tests {
     fn set_gsi_routing() {
         let kvm = Kvm::new().unwrap();
         let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
-        let vm = KvmVm::new(&kvm, gm, ProtectionType::Unprotected).unwrap();
+        let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
         vm.create_irq_chip().unwrap();
         vm.set_gsi_routing(&[]).unwrap();
         vm.set_gsi_routing(&[IrqRoute {
