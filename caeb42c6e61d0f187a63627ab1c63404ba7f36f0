@@ -1,0 +1,113 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d4c6e622_ea42c2d9",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T17:57:12Z",
+      "side": 1,
+      "message": "use \u0027set -ex\u0027\n\ne - for stopping when there is an error\nx - for printing commands as they run",
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "47596ba4_5626da87",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T17:57:12Z",
+      "side": 1,
+      "message": "in order for this script to work, you must also be lunched in. I think it\u0027s fine to assume that whoever is running this script is already lunched.\n\nYou can drop the \u0027source\u0027 and at the top, add \"if [ -z $ANDROID_BUILD_TOP ]; then echo \"forgot to lunch?\" \u0026\u0026 exit 1; fi\"\n\nTechnically, we should re-lunch after syncing, but I don\u0027t think it matters for this",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 5,
+        "endChar": 43
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bf248c5d_ff20dc85",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T17:57:12Z",
+      "side": 1,
+      "message": "we may want to warn at the top of the script, given L7. Doing a full build (L8) isn\u0027t necessary.",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 8,
+        "endChar": 1
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d9e6f282_49cbe4b4",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T17:57:12Z",
+      "side": 1,
+      "message": "we are already assumed to be in this directory from L4, but maybe after above changes, it makes sense",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 9,
+        "endChar": 37
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b1266693_4fe4cce0",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T17:57:12Z",
+      "side": 1,
+      "message": "This branch may already exist - check this at the top of the script and exit early. Otherwise, you are likely to get an error from running it multiple times.",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 16
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
