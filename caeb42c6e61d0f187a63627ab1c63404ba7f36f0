@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d3487283_bb5055f2",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d4c6e622_ea42c2d9",
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1eae1af1_1fbbc6ca",
@@ -35,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b3cf1a92_54f4b4d6",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "1eae1af1_1fbbc6ca",
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "47596ba4_5626da87",
@@ -48,6 +84,30 @@
       "writtenOn": "2022-09-14T17:57:12Z",
       "side": 1,
       "message": "in order for this script to work, you must also be lunched in. I think it\u0027s fine to assume that whoever is running this script is already lunched.\n\nYou can drop the \u0027source\u0027 and at the top, add \"if [ -z $ANDROID_BUILD_TOP ]; then echo \"forgot to lunch?\" \u0026\u0026 exit 1; fi\"\n\nTechnically, we should re-lunch after syncing, but I don\u0027t think it matters for this",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 5,
+        "endChar": 43
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fbbd0f01_ac54bf27",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "47596ba4_5626da87",
       "range": {
         "startLine": 4,
         "startChar": 0,
@@ -107,6 +167,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "e22b4734_c05deaee",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "Would we want to only sync crosvm then? I was really going with the steps we normally have. As for the build, removing it. Realized I\u0027m just used to building after a sync.",
+      "parentUuid": "892c693d_0ebe7c74",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 8,
+        "endChar": 1
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d9e6f282_49cbe4b4",
         "filename": "merge-setup.sh",
         "patchSetId": 1
@@ -118,6 +202,30 @@
       "writtenOn": "2022-09-14T17:57:12Z",
       "side": 1,
       "message": "we are already assumed to be in this directory from L4, but maybe after above changes, it makes sense",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 9,
+        "endChar": 37
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "873289bd_e194518c",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "It is indeed redundant, however I think moving it to the top of the script would be okay as well. While expectations are that we are in the directory, I think it\u0027s a fair addition that ensures we\u0027re in the right folder and not some subdirectory running ../merge-setup.sh",
+      "parentUuid": "d9e6f282_49cbe4b4",
       "range": {
         "startLine": 9,
         "startChar": 0,
@@ -164,6 +272,30 @@
       "writtenOn": "2022-09-14T18:31:44Z",
       "side": 1,
       "message": "if we drop the sync, then you could probably do this as the first step, before all the slow stuff\n\nmay also make sense to take the branch name as an argument to the script, but i can add that when i want it",
+      "parentUuid": "b1266693_4fe4cce0",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 16
+      },
+      "revId": "caeb42c6e61d0f187a63627ab1c63404ba7f36f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e6d34772_8f26ecbb",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-14T18:46:03Z",
+      "side": 1,
+      "message": "Done",
       "parentUuid": "b1266693_4fe4cce0",
       "range": {
         "startLine": 11,
