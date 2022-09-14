@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "26735ebc_c9f125ee",
+        "filename": "src/crosvm/sys/unix/jail_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-14T21:27:06Z",
+      "side": 0,
+      "message": "this still needs a bug - also - because artifacts are created in random locations, the root run_c2a.sh fails (though - at the end, once it has already produced the desired output)",
+      "range": {
+        "startLine": 21,
+        "startChar": 0,
+        "endLine": 21,
+        "endChar": 37
+      },
+      "revId": "cd3381ccc114659542acdb42b2ca02d2efb01898",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
