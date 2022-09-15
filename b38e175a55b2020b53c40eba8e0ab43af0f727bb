@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d0ff37ce_8f757f42",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-15T18:32:39Z",
+      "side": -1,
+      "message": "Interesting?",
+      "range": {
+        "startLine": 1,
+        "startChar": 41,
+        "endLine": 1,
+        "endChar": 63
+      },
+      "revId": "b38e175a55b2020b53c40eba8e0ab43af0f727bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
