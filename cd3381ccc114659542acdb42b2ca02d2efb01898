@@ -22,6 +22,30 @@
       },
       "revId": "cd3381ccc114659542acdb42b2ca02d2efb01898",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "077d0736_9faf47f6",
+        "filename": "src/crosvm/sys/unix/jail_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-15T18:31:57Z",
+      "side": 0,
+      "message": "-\u003e b/246968493",
+      "parentUuid": "26735ebc_c9f125ee",
+      "range": {
+        "startLine": 21,
+        "startChar": 0,
+        "endLine": 21,
+        "endChar": 37
+      },
+      "revId": "cd3381ccc114659542acdb42b2ca02d2efb01898",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
