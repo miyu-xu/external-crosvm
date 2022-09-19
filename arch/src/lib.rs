@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -73,7 +73,6 @@ use hypervisor::Hypervisor as HypervisorArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use hypervisor::HypervisorX86_64 as HypervisorArch;
 use hypervisor::IoEventAddress;
-use hypervisor::ProtectionType;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use hypervisor::VcpuAArch64 as VcpuArch;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -154,6 +153,7 @@ pub struct VmComponents {
     pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub host_cpu_topology: bool,
     pub hugepages: bool,
+    pub hv_cfg: hypervisor::Config,
     pub initrd_image: Option<File>,
     pub itmt: bool,
     pub memory_size: u64,
@@ -161,15 +161,16 @@ pub struct VmComponents {
     pub no_rtc: bool,
     pub no_smt: bool,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub oem_strings: Vec<String>,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pci_low_start: Option<u64>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pcie_ecam: Option<AddressRange>,
     pub pflash_block_size: u32,
     pub pflash_image: Option<File>,
-    pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
     /// A file to load as pVM firmware. Must be `Some` iff
-    /// `protection_type == ProtectionType::UnprotectedWithFirmware`.
+    /// `hv_cfg.protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<File>,
     pub rt_cpus: Vec<usize>,
     pub swiotlb: Option<u64>,

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -569,7 +569,7 @@ impl arch::LinuxArch for X8664arch {
         V: VmX86_64,
         Vcpu: VcpuX86_64,
     {
-        if components.protection_type != ProtectionType::Unprotected {
+        if components.hv_cfg.protection_type != ProtectionType::Unprotected {
             return Err(Error::UnsupportedProtectionType);
         }
 
@@ -688,14 +688,14 @@ impl arch::LinuxArch for X8664arch {
             Self::setup_legacy_cmos_device(&io_bus, components.memory_size)?;
         }
         Self::setup_serial_devices(
-            components.protection_type,
+            components.hv_cfg.protection_type,
             irq_chip.as_irq_chip_mut(),
             &io_bus,
             serial_parameters,
             serial_jail,
         )?;
         Self::setup_debugcon_devices(
-            components.protection_type,
+            components.hv_cfg.protection_type,
             &io_bus,
             serial_parameters,
             debugcon_jail,
@@ -767,7 +767,8 @@ impl arch::LinuxArch for X8664arch {
             mptable::setup_mptable(&mem, vcpu_count as u8, &pci_irqs)
                 .map_err(Error::SetupMptable)?;
         }
-        smbios::setup_smbios(&mem, components.dmi_path).map_err(Error::SetupSmbios)?;
+        smbios::setup_smbios(&mem, components.dmi_path, &components.oem_strings)
+            .map_err(Error::SetupSmbios)?;
 
         let host_cpus = if components.host_cpu_topology {
             components.vcpu_affinity.clone()

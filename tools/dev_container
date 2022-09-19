@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-#
+
 # Usage:
 #
 # To get an interactive shell for development:
@@ -129,6 +129,7 @@ def main(
     interactive: bool = False,
     podman: bool = PODMAN_IS_DEFAULT,
     self_test: bool = False,
+    pull: bool = False,
 ):
     chdir(CROSVM_ROOT)
 
@@ -158,6 +159,10 @@ def main(
 
     if clean:
         delete_container(docker)
+
+    if pull:
+        docker("pull", f"gcr.io/crosvm-infra/crosvm_dev:{IMAGE_VERSION}").fg()
+        return
 
     # If a command is provided run non-interactive unless explicitly asked for.
     tty_args = []

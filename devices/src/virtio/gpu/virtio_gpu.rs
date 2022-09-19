@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -570,15 +570,6 @@ impl VirtioGpu {
     pub fn create_fence(&mut self, rutabaga_fence: RutabagaFence) -> VirtioGpuResult {
         self.rutabaga.create_fence(rutabaga_fence)?;
         Ok(OkNoData)
-    }
-
-    pub fn needs_fence_poll(&mut self) -> bool {
-        self.rutabaga.use_timer_based_fence_polling
-    }
-
-    /// Returns an array of RutabagaFence, describing completed fences.
-    pub fn fence_poll(&mut self) -> Vec<RutabagaFence> {
-        self.rutabaga.poll()
     }
 
     /// Polls the Rutabaga backend.
