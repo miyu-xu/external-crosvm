@@ -1,0 +1,33 @@
+// Copyright 2022 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::DisplayModeTrait;
+
+// This struct is only used for argument parsing.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum UnixDisplayModeArg {
+    Windowed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum UnixDisplayMode {
+    Windowed { width: u32, height: u32 },
+}
+
+impl DisplayModeTrait for UnixDisplayMode {
+    fn get_virtual_display_size(&self) -> (u32, u32) {
+        match self {
+            Self::Windowed { width, height, .. } => (*width, *height),
+        }
+    }
+}
+
+impl From<UnixDisplayMode> for UnixDisplayModeArg {
+    fn from(mode: UnixDisplayMode) -> UnixDisplayModeArg {
+        UnixDisplayModeArg::Windowed
+    }
+}
