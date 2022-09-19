@@ -773,9 +773,14 @@ impl VirtioGpu {
 
     /// Gets the EDID for the specified scanout ID. We return a virtual EDID that is identical
     /// for all scanouts.
-    pub fn get_edid(&self, _scanout_id: u32) -> VirtioGpuResult {
-        let (width, height) = self.display_info()[0];
-        EdidBytes::new(&DisplayInfo::new(width, height, self.refresh_rate))
+    pub fn get_edid(&self, scanout_id: u32) -> VirtioGpuResult {
+        let display_infos = self.display_info();
+
+        let (width, height) = display_infos
+            .get(scanout_id as usize)
+            .ok_or(ErrEdid(format!("Invalid scanout id: {}", scanout_id)))?;
+
+        EdidBytes::new(&DisplayInfo::new(*width, *height, self.refresh_rate))
     }
 
     /// Creates a rutabaga context.
