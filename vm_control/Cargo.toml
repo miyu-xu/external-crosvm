@@ -7,6 +7,7 @@ edition = "2021"
 [features]
 balloon = []
 gdb = ["gdbstub", "gdbstub_arch"]
+gpu = ["gpu_control"]
 
 [dependencies]
 anyhow = "*"
@@ -16,6 +17,7 @@ cfg-if = "*"
 data_model = { path = "../common/data_model" }
 gdbstub = { version = "0.6.3", optional = true }
 gdbstub_arch = { version = "0.2.4", optional = true }
+gpu_control = { path = "../common/gpu_control", optional = true }
 hypervisor = { path = "../hypervisor" }
 libc = "*"
 remain = "*"
