@@ -108,6 +108,9 @@ rust_binary {
                 "gfxstream",
                 "gpu",
             ],
+            rustlibs: [
+                "libgpu_control",
+            ],
         },
         android: {
             shared_libs: [
@@ -230,6 +233,9 @@ rust_test {
             features: [
                 "gfxstream",
                 "gpu",
+            ],
+            rustlibs: [
+                "libgpu_control",
             ],
         },
         android: {

@@ -1,0 +1,18 @@
+[package]
+name = "gpu_control"
+version = "0.1.0"
+authors = ["The Chromium OS Authors"]
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cfg-if = "1.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "*"
+serde_keyvalue = { path = "../../serde_keyvalue", features = ["argh_derive"] }
+
+[target.'cfg(windows)'.dependencies]
+base = { path = "../../base" }
+winapi = "*"
