@@ -133,6 +133,7 @@ pub enum CrossPlatformCommands {
     Powerbtn(PowerbtnCommand),
     Sleepbtn(SleepCommand),
     Gpe(GpeCommand),
+    Gpu(GpuCommand),
     Usb(UsbCommand),
     Version(VersionCommand),
     Vfio(VfioCrosvmCommand),
@@ -320,6 +321,14 @@ pub struct UsbCommand {
 }
 
 #[derive(FromArgs)]
+#[argh(subcommand, name = "gpu")]
+/// Manage attached virtual GPU device.
+pub struct GpuCommand {
+    #[argh(subcommand)]
+    pub command: GpuSubCommand,
+}
+
+#[derive(FromArgs)]
 #[argh(subcommand, name = "version")]
 /// Show package version.
 pub struct VersionCommand {}
@@ -384,6 +393,50 @@ pub enum CrossPlatformDevicesCommands {
 pub enum DeviceSubcommand {
     CrossPlatform(CrossPlatformDevicesCommands),
     Sys(super::sys::cmdline::DeviceSubcommand),
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+pub enum GpuSubCommand {
+    AddDisplay(GpuAddDisplayCommand),
+    ListDisplays(GpuListDisplaysCommand),
+    RemoveDisplay(GpuRemoveDisplayCommand),
+}
+
+#[derive(FromArgs)]
+/// Attach a display to the GPU device.
+#[argh(subcommand, name = "add-display")]
+pub struct GpuAddDisplayCommand {
+    #[argh(option)]
+    /// display width
+    pub width: u32,
+    #[argh(option)]
+    /// display height
+    pub height: u32,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[derive(FromArgs)]
+/// List displays attached to the GPU device.
+#[argh(subcommand, name = "list-displays")]
+pub struct GpuListDisplaysCommand {
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[derive(FromArgs)]
+/// Detach a display from the GPU device.
+#[argh(subcommand, name = "remove-display")]
+pub struct GpuRemoveDisplayCommand {
+    #[argh(option)]
+    /// display id
+    pub display_id: u32,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
 }
 
 #[derive(FromArgs)]

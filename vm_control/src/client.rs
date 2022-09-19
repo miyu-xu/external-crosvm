@@ -45,6 +45,67 @@ pub fn vms_request<T: AsRef<Path> + std::fmt::Debug>(
     Ok(())
 }
 
+pub enum ModifyGpuError {
+    SocketFailed,
+    UnexpectedResponse(VmResponse),
+    UnknownCommand(String),
+    GpuControl(GpuControlResult),
+}
+
+impl fmt::Display for ModifyGpuError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ModifyGpuError::*;
+
+        match self {
+            SocketFailed => write!(f, "socket failed"),
+            UnexpectedResponse(r) => write!(f, "unexpected response: {}", r),
+            UnknownCommand(c) => write!(f, "unknown display command: `{}`", c),
+            GpuControl(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+pub type ModifyGpuResult<T> = std::result::Result<T, ModifyGpuError>;
+
+pub fn do_gpu_display_add<T: AsRef<Path> + std::fmt::Debug>(
+    control_socket_path: T,
+    width: u32,
+    height: u32,
+) -> ModifyGpuResult<GpuControlResult> {
+    let request = VmRequest::GpuCommand(GpuControlCommand::AddDisplay { width, height });
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyGpuError::SocketFailed)?;
+    match response {
+        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyGpuError::UnexpectedResponse(r)),
+    }
+}
+
+pub fn do_gpu_display_list<T: AsRef<Path> + std::fmt::Debug>(
+    control_socket_path: T,
+) -> ModifyGpuResult<GpuControlResult> {
+    let request = VmRequest::GpuCommand(GpuControlCommand::ListDisplays);
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyGpuError::SocketFailed)?;
+    match response {
+        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyGpuError::UnexpectedResponse(r)),
+    }
+}
+
+pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
+    control_socket_path: T,
+    display_id: u32,
+) -> ModifyGpuResult<GpuControlResult> {
+    let request = VmRequest::GpuCommand(GpuControlCommand::RemoveDisplay { display_id });
+    let response = handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyGpuError::SocketFailed)?;
+    match response {
+        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
+        r => Err(ModifyGpuError::UnexpectedResponse(r)),
+    }
+}
+
 pub fn do_usb_attach<T: AsRef<Path> + std::fmt::Debug>(
     socket_path: T,
     dev_path: &Path,
