@@ -417,6 +417,7 @@ dependencies = [
  "futures",
  "gdbstub",
  "gdbstub_arch",
+ "gpu_control",
  "gpu_display",
  "hypervisor",
  "kernel_cmdline",
@@ -568,6 +569,7 @@ dependencies = [
  "ffmpeg",
  "fuse",
  "futures",
+ "gpu_control",
  "gpu_display",
  "hypervisor",
  "kvm_sys",
@@ -838,6 +840,15 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
+]
+
+[[package]]
+name = "gpu_control"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "serde",
+ "serde_keyvalue",
 ]
 
 [[package]]
@@ -1866,6 +1877,7 @@ dependencies = [
  "data_model",
  "gdbstub",
  "gdbstub_arch",
+ "gpu_control",
  "hypervisor",
  "libc",
  "remain",

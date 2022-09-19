@@ -19,19 +19,23 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
-    features: ["balloon"],
+    features: [
+        "balloon",
+    ],
     rustlibs: [
         "libanyhow",
         "libballoon_control",
         "libbase_rust",
         "libcfg_if",
         "libdata_model",
+        "libgpu_control",
         "libhypervisor",
         "liblibc",
         "libresources",
         "librutabaga_gfx",
         "libserde",
         "libserde_json",
+        "libserde_keyvalue",
         "libsync_rust",
         "libthiserror",
         "libvm_memory",
@@ -41,6 +45,11 @@ rust_library {
         "//apex_available:platform",
     ],
     target: {
+        host: {
+            features: [
+                "gpu",
+            ],
+        },
         host_linux: {
             features: [
                 "gdb",
@@ -69,13 +78,17 @@ rust_test {
         unit_test: true,
     },
     edition: "2021",
-    features: ["balloon"],
+    features: [
+        "balloon",
+        "gpu",
+    ],
     rustlibs: [
         "libanyhow",
         "libballoon_control",
         "libbase_rust",
         "libcfg_if",
         "libdata_model",
+        "libgpu_control",
         "libhypervisor",
         "liblibc",
         "libresources",

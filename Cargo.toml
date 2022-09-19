@@ -131,7 +131,7 @@ direct = ["balloon", "devices/direct", "arch/direct", "x86_64/direct"]
 ffmpeg = ["devices/ffmpeg"]
 gdb = ["gdbstub", "gdbstub_arch", "arch/gdb", "vm_control/gdb", "x86_64/gdb"]
 gfxstream = ["devices/gfxstream"]
-gpu = ["devices/gpu"]
+gpu = ["devices/gpu", "gpu_control", "vm_control/gpu"]
 haxm = ["hypervisor/haxm"]
 whpx = ["devices/whpx", "hypervisor/whpx"]
 vaapi = ["devices/vaapi"]
@@ -179,6 +179,7 @@ disk = { path = "disk" }
 enumn = "0.1.0"
 gdbstub = { version = "0.6.3", optional = true }
 gdbstub_arch = { version = "0.2.4", optional = true }
+gpu_control = { path = "common/gpu_control", optional = true }
 rutabaga_gfx = { path = "rutabaga_gfx"}
 hypervisor = { path = "hypervisor" }
 kernel_cmdline = { path = "kernel_cmdline" }
@@ -245,6 +246,7 @@ base = { path = "base" }
 cros_async =  { path = "cros_async" }
 cros_fuzz = { path = "common/cros-fuzz" } # ignored by ebuild
 data_model = { path = "common/data_model" }
+gpu_control = { path = "common/gpu_control" } # ignored by ebuild
 libcras = { path = "libcras_stub" } # ignored by ebuild
 p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
