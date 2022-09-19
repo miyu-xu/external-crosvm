@@ -42,6 +42,7 @@ use super::VirtioScanoutBlobData;
 use crate::virtio::gpu::edid::DisplayInfo;
 use crate::virtio::gpu::edid::EdidBytes;
 use crate::virtio::gpu::GpuDisplayParameters;
+use crate::virtio::gpu::VIRTIO_GPU_MAX_SCANOUTS;
 use crate::virtio::resource_bridge::BufferInfo;
 use crate::virtio::resource_bridge::PlaneInfo;
 use crate::virtio::resource_bridge::ResourceInfo;
@@ -268,6 +269,7 @@ impl VirtioGpuScanout {
 pub struct VirtioGpu {
     display: Rc<RefCell<GpuDisplay>>,
     scanouts: Vec<VirtioGpuScanout>,
+    scanouts_updated: Arc<Mutex<bool>>,
     cursor_scanout: VirtioGpuScanout,
     // Maps event devices to scanout number.
     event_devices: Map<u32, u32>,
@@ -307,6 +309,7 @@ impl VirtioGpu {
     pub fn new(
         display: GpuDisplay,
         display_params: Vec<GpuDisplayParameters>,
+        display_event: Arc<Mutex<bool>>,
         rutabaga_builder: RutabagaBuilder,
         event_devices: Vec<EventDevice>,
         mapper: Box<dyn SharedMemoryMapper>,
@@ -343,6 +346,7 @@ impl VirtioGpu {
         let mut virtio_gpu = VirtioGpu {
             display: Rc::new(RefCell::new(display)),
             scanouts,
+            scanouts_updated: display_event,
             cursor_scanout,
             event_devices: Default::default(),
             mapper,
@@ -387,6 +391,39 @@ impl VirtioGpu {
             .iter()
             .map(|scanout| (scanout.width, scanout.height))
             .collect::<Vec<_>>()
+    }
+
+    /// Connects a new display with the specified width and height to the device.
+    pub fn add_display(&mut self, width: u32, height: u32) -> GpuControlResult {
+        if self.scanouts.len() >= VIRTIO_GPU_MAX_SCANOUTS {
+            return GpuControlResult::TooManyDisplays(VIRTIO_GPU_MAX_SCANOUTS);
+        }
+
+        let scanout_id = self.scanouts.len() as u32;
+        self.scanouts.push(VirtioGpuScanout::new(width, height, scanout_id));
+        *self.scanouts_updated.lock() = true;
+
+        GpuControlResult::Ok
+    }
+
+    /// Returns the list of currently connected displays.
+    pub fn list_displays(&self) -> GpuControlResult {
+        GpuControlResult::DisplayList {
+            displays: self.display_info(),
+        }
+    }
+
+    /// Removes the specified display from the device..
+    pub fn remove_display(&mut self, display_id: u32) -> GpuControlResult {
+        let scanout_id_usize = display_id as usize;
+        if scanout_id_usize >= self.scanouts.len() {
+            return GpuControlResult::NoSuchDisplay { display_id };
+        }
+
+        self.scanouts.remove(scanout_id_usize);
+        *self.scanouts_updated.lock() = true;
+
+        GpuControlResult::Ok
     }
 
     /// Processes the internal `display` events and returns `true` if any display was closed.

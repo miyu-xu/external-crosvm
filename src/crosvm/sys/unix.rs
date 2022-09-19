@@ -312,6 +312,7 @@ fn create_virtio_devices(
             devs.push(create_gpu_device(
                 cfg,
                 vm_evt_wrtube,
+                gpu_control_tube,
                 resource_bridges,
                 // Use the unnamed socket for GPU display screens.
                 cfg.wayland_socket_paths.get(""),
@@ -1380,6 +1381,9 @@ where
         info!("crosvm entering multiprocess mode");
     }
 
+    #[cfg(feature = "gpu")]
+    let (gpu_control_tube, display_device_tube) = Tube::pair().context("failed to create gpu tube")?;
+
     #[cfg(feature = "usb")]
     let (usb_control_tube, usb_provider) =
         HostBackendDeviceProvider::new().context("failed to create usb provider")?;
@@ -1814,6 +1818,8 @@ where
         #[cfg(feature = "balloon")]
         balloon_host_tube,
         &disk_host_tubes,
+        #[cfg(feature = "gpu")]
+        gpu_control_tube,
         #[cfg(feature = "usb")]
         usb_control_tube,
         vm_evt_rdtube,
@@ -2200,6 +2206,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut control_tubes: Vec<TaggedControlTube>,
     #[cfg(feature = "balloon")] balloon_host_tube: Option<Tube>,
     disk_host_tubes: &[Tube],
+    #[cfg(feature = "gpu")] gpu_control_tube: Tube,
     #[cfg(feature = "usb")] usb_control_tube: Tube,
     vm_evt_rdtube: RecvTube,
     vm_evt_wrtube: SendTube,
@@ -2557,6 +2564,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                             &mut balloon_stats_id,
                                             disk_host_tubes,
                                             &mut linux.pm,
+                                            #[cfg(feature = "gpu")]
+                                            Some(&gpu_control_tube),
+                                            #[cfg(not(feature = "gpu"))]
+                                            None,
                                             #[cfg(feature = "usb")]
                                             Some(&usb_control_tube),
                                             #[cfg(not(feature = "usb"))]

@@ -43,16 +43,21 @@ use crosvm::cmdline::CrossPlatformCommands;
 use crosvm::cmdline::CrossPlatformDevicesCommands;
 #[cfg(windows)]
 use sys::windows::metrics;
+use vm_control::client::do_gpu_display_add;
+use vm_control::client::do_gpu_display_list;
+use vm_control::client::do_gpu_display_remove;
 use vm_control::client::do_modify_battery;
 use vm_control::client::do_usb_attach;
 use vm_control::client::do_usb_detach;
 use vm_control::client::do_usb_list;
 use vm_control::client::handle_request;
 use vm_control::client::vms_request;
+use vm_control::client::ModifyGpuResult;
 use vm_control::client::ModifyUsbResult;
 #[cfg(feature = "balloon")]
 use vm_control::BalloonControlCommand;
 use vm_control::DiskControlCommand;
+use vm_control::GpuControlResult;
 use vm_control::HotPlugDeviceInfo;
 use vm_control::HotPlugDeviceType;
 use vm_control::UsbControlResult;
@@ -409,6 +414,36 @@ fn make_rt(cmd: cmdline::MakeRTCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::MakeRT, cmd.socket_path)
 }
 
+fn gpu_display_add(cmd: cmdline::GpuAddDisplayCommand) -> ModifyGpuResult<GpuControlResult> {
+    do_gpu_display_add(cmd.socket_path, cmd.width, cmd.height)
+}
+
+fn gpu_display_list(cmd: cmdline::GpuListDisplaysCommand) -> ModifyGpuResult<GpuControlResult> {
+    do_gpu_display_list(cmd.socket_path)
+}
+
+fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplayCommand) -> ModifyGpuResult<GpuControlResult> {
+    do_gpu_display_remove(cmd.socket_path, cmd.display_id)
+}
+
+fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
+    let result = match cmd.command {
+        cmdline::GpuSubCommand::AddDisplay(cmd) => gpu_display_add(cmd),
+        cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
+        cmdline::GpuSubCommand::RemoveDisplay(cmd) => gpu_display_remove(cmd),
+    };
+    match result {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 fn usb_attach(cmd: UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
@@ -595,6 +630,9 @@ fn crosvm_main() -> Result<CommandStatus> {
                     }
                     CrossPlatformCommands::Gpe(cmd) => {
                         inject_gpe(cmd).map_err(|_| anyhow!("gpe subcommand failed"))
+                    }
+                    CrossPlatformCommands::Gpu(cmd) => {
+                        modify_gpu(cmd).map_err(|_| anyhow!("gpu subcommand failed"))
                     }
                     CrossPlatformCommands::Usb(cmd) => {
                         modify_usb(cmd).map_err(|_| anyhow!("usb subcommand failed"))
