@@ -27,8 +27,6 @@ rust_test {
     features: [
         "audio",
         "balloon",
-        "gpu",
-        "gpu_display",
         "usb",
         "virgl_renderer_next",
     ],
@@ -92,6 +90,7 @@ rust_test {
             features: [
                 "gfxstream",
                 "gpu",
+                "gpu_display",
             ],
             rustlibs: [
                 "libgpu_display",
@@ -114,8 +113,6 @@ rust_library {
     features: [
         "audio",
         "balloon",
-        "gpu",
-        "gpu_display",
         "usb",
         "virgl_renderer_next",
     ],
@@ -179,6 +176,7 @@ rust_library {
             features: [
                 "gfxstream",
                 "gpu",
+                "gpu_display",
             ],
             rustlibs: [
                 "libgpu_display",
