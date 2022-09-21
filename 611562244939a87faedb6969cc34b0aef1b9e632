@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1ccee6ab_ac26a144",
+        "filename": "merge-setup.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-21T00:51:27Z",
+      "side": 1,
+      "message": "only if the sync option is specified?",
+      "range": {
+        "startLine": 19,
+        "startChar": 0,
+        "endLine": 23,
+        "endChar": 2
+      },
+      "revId": "611562244939a87faedb6969cc34b0aef1b9e632",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1791f673_e793bd48",
+        "filename": "merge-setup.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 32,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-21T00:51:27Z",
+      "side": 1,
+      "message": "all the checks should be before any long-running operation (the concern is that if rustup takes 5min, while it\u0027s running, we check email, 30min later, we look, and nothing happened)",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 32,
+        "endChar": 2
+      },
+      "revId": "611562244939a87faedb6969cc34b0aef1b9e632",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
