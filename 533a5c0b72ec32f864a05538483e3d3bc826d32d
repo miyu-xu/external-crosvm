@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "bb104147_7f749cef",
+        "filename": "merge-setup.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 14,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-21T00:44:51Z",
+      "side": 1,
+      "message": "Done, modified a bit so that it\u0027s more accurate.",
+      "parentUuid": "b80f7dd4_ac027a7f",
+      "revId": "533a5c0b72ec32f864a05538483e3d3bc826d32d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "deadbd9f_988dad80",
@@ -31,6 +49,30 @@
       "writtenOn": "2022-09-20T00:42:13Z",
       "side": 1,
       "message": "this should be before we merge or do any long-running operations",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 19,
+        "endChar": 2
+      },
+      "revId": "533a5c0b72ec32f864a05538483e3d3bc826d32d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "00606c09_f4b38244",
+        "filename": "merge-setup.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 19,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-21T00:44:51Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "deadbd9f_988dad80",
       "range": {
         "startLine": 16,
         "startChar": 0,
