@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "142b8253_0f5929db",
+        "filename": "merge-setup.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-21T00:58:52Z",
+      "side": 1,
+      "message": "Fixed - guess it\u0027s nice to have double confirmation in a way (adding flag AND agreeing)",
+      "parentUuid": "1ccee6ab_ac26a144",
+      "range": {
+        "startLine": 19,
+        "startChar": 0,
+        "endLine": 23,
+        "endChar": 2
+      },
+      "revId": "611562244939a87faedb6969cc34b0aef1b9e632",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1791f673_e793bd48",
@@ -37,6 +61,30 @@
       "writtenOn": "2022-09-21T00:51:27Z",
       "side": 1,
       "message": "all the checks should be before any long-running operation (the concern is that if rustup takes 5min, while it\u0027s running, we check email, 30min later, we look, and nothing happened)",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 32,
+        "endChar": 2
+      },
+      "revId": "611562244939a87faedb6969cc34b0aef1b9e632",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bf6dd2ad_bf96086d",
+        "filename": "merge-setup.sh",
+        "patchSetId": 3
+      },
+      "lineNbr": 32,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-21T00:58:52Z",
+      "side": 1,
+      "message": "Fair point! Done!",
+      "parentUuid": "1791f673_e793bd48",
       "range": {
         "startLine": 29,
         "startChar": 0,
