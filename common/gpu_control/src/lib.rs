@@ -50,7 +50,7 @@ pub struct DisplayParametersArgs {
     pub refresh_rate: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, FromKeyValues)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, FromKeyValues)]
 #[serde(try_from = "DisplayParametersArgs", into = "DisplayParametersArgs")]
 pub struct DisplayParameters {
     pub mode: DisplayMode,
@@ -133,10 +133,10 @@ pub enum GpuControlCommand {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum GpuControlResult {
     Ok,
-    DisplayList { displays: Vec<(u32, u32)> },
+    DisplayList { displays: Vec<DisplayParameters> },
     TooManyDisplays(usize),
     NoSuchDisplay { display_id: u32 },
 }
@@ -148,14 +148,11 @@ impl Display for GpuControlResult {
         match self {
             Ok => write!(f, "ok"),
             DisplayList { displays } => {
-                write!(f, "Displays {{")?;
-                for (display_index, display) in displays.iter().enumerate() {
-                    write!(f, "\n  Display {} {{", display_index)?;
-                    write!(f, "\n    width: {}", display.0)?;
-                    write!(f, "\n    height: {}", display.1)?;
-                    write!(f, "\n  }}")?;
-                }
-                write!(f, "\n}}")
+                let json : serde_json::Value = serde_json::json!({
+                    "displays": displays,
+                });
+                let json_pretty = serde_json::to_string_pretty(&json).map_err(|_| std::fmt::Error)?;
+                write!(f, "{}", json_pretty)
             }
             TooManyDisplays(n) => write!(f, "too_many_displays {}", n),
             NoSuchDisplay { display_id } => write!(f, "no_such_display {}", display_id),

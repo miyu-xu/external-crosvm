@@ -86,17 +86,21 @@ struct VirtioGpuScanout {
     scanout_type: SurfaceType,
     // If this scanout is a primary scanout, the scanout id.
     scanout_id: Option<u32>,
+    // If this scanout is a primary scanout, the display properties.
+    display_params: Option<GpuDisplayParameters>,
     // If this scanout is a cursor scanout, the scanout that this is cursor is overlayed onto.
     parent_surface_id: Option<u32>,
 }
 
 impl VirtioGpuScanout {
-    fn new(width: u32, height: u32, scanout_id: u32) -> VirtioGpuScanout {
+    fn new_primary(scanout_id: u32, params: GpuDisplayParameters) -> VirtioGpuScanout {
+        let (width, height) = params.get_virtual_display_size();
         VirtioGpuScanout {
             width,
             height,
             scanout_type: SurfaceType::Scanout,
             scanout_id: Some(scanout_id),
+            display_params: Some(params),
             surface_id: None,
             resource_id: None,
             parent_surface_id: None,
@@ -111,6 +115,7 @@ impl VirtioGpuScanout {
             height: 64,
             scanout_type: SurfaceType::Cursor,
             scanout_id: None,
+            display_params: None,
             surface_id: None,
             resource_id: None,
             parent_surface_id: None,
@@ -340,8 +345,7 @@ impl VirtioGpu {
             .iter()
             .enumerate()
             .map(|(display_index, display_param)| {
-                let (width, height) = display_param.get_virtual_display_size();
-                VirtioGpuScanout::new(width, height, display_index as u32)
+                VirtioGpuScanout::new_primary(display_index as u32, *display_param)
             })
             .collect::<Vec<_>>();
         let cursor_scanout = VirtioGpuScanout::new_cursor();
@@ -398,17 +402,15 @@ impl VirtioGpu {
 
     /// Connects new displays to the device.
     fn add_displays(&mut self, displays: Vec<DisplayParameters>) -> GpuControlResult {
-        base::error!("jasonjason add displays:{:?}", displays);
-
         if self.scanouts.len() + displays.len() >= VIRTIO_GPU_MAX_SCANOUTS {
             return GpuControlResult::TooManyDisplays(VIRTIO_GPU_MAX_SCANOUTS);
         }
 
         let mut scanout_id = self.scanouts.len() as u32;
 
-        for display in displays {
-            let (width, height) = display.get_virtual_display_size();
-            self.scanouts.push(VirtioGpuScanout::new(width, height, scanout_id));
+        for display_params in displays {
+            let (width, height) = display_params.get_virtual_display_size();
+            self.scanouts.push(VirtioGpuScanout::new_primary(scanout_id, display_params));
             scanout_id += 1;
         }
 
@@ -420,14 +422,15 @@ impl VirtioGpu {
     /// Returns the list of displays currently connected to the device.
     fn list_displays(&self) -> GpuControlResult {
         GpuControlResult::DisplayList {
-            displays: self.display_info(),
+            displays: self.scanouts
+                .iter()
+                .map(|scanout| scanout.display_params.unwrap())
+                .collect::<Vec<_>>()
         }
     }
 
     /// Removes the specified displays from the device.
     fn remove_displays(&mut self, display_ids: Vec<u32>) -> GpuControlResult {
-        base::error!("jasonjason remove displays:{:?}", display_ids);
-
         let mut display_ids : Vec<usize> = display_ids
             .iter()
             .map(|x| *x as usize)
@@ -458,7 +461,10 @@ impl VirtioGpu {
         match cmd {
             GpuControlCommand::AddDisplays { displays } => {
                 let result = self.add_displays(displays);
-                let need_config_update = result == GpuControlResult::Ok;
+                let need_config_update = match result {
+                    GpuControlResult::Ok => true,
+                    _ => false,
+                };
                 (result, need_config_update)
             }
             GpuControlCommand::ListDisplays => {
@@ -466,7 +472,10 @@ impl VirtioGpu {
             }
             GpuControlCommand::RemoveDisplays { display_ids } => {
                 let result = self.remove_displays(display_ids);
-                let need_config_update = result == GpuControlResult::Ok;
+                let need_config_update = match result {
+                    GpuControlResult::Ok => true,
+                    _ => false,
+                };
                 (result, need_config_update)
             }
         }

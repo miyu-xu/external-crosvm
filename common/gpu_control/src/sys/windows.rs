@@ -11,14 +11,14 @@ const DISPLAY_WIDTH_SOFT_MAX: u32 = 1920;
 const DISPLAY_HEIGHT_SOFT_MAX: u32 = 1080;
 
 // This struct is only used for argument parsing.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WinDisplayModeArg {
     Windowed,
     BorderlessFullScreen,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum WinDisplayMode<T> {
     Windowed { width: u32, height: u32 },
     BorderlessFullScreen(PhantomData<T>),

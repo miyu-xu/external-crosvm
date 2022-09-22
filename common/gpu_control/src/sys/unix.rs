@@ -8,12 +8,12 @@ use serde::Serialize;
 use crate::DisplayModeTrait;
 
 // This struct is only used for argument parsing.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum UnixDisplayModeArg {
     Windowed,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum UnixDisplayMode {
     Windowed { width: u32, height: u32 },
 }
