@@ -22,6 +22,30 @@
       },
       "revId": "f7b4b33bc8c4e7f35ab90db1a91e77f8f5a8c951",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "df0221de_fcce651b",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-09-23T18:10:04Z",
+      "side": 1,
+      "message": "i agree, there are a couple tests in here it would be nice to have. i\u0027ll take a closer look as part of http://b/242733327. really we want cargo2android to somehow take into account both the x86 and arm64 configs when generating the rules",
+      "parentUuid": "e24bb207_34598c23",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 0
+      },
+      "revId": "f7b4b33bc8c4e7f35ab90db1a91e77f8f5a8c951",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
