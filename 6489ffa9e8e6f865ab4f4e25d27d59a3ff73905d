@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f56fa497_be3d07ec",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-09-23T20:52:43Z",
+      "side": 1,
+      "message": "hey btw this breaks git bisect right? now that we have built-in git rebase of merges, should we still have this in a separate CL?",
+      "revId": "6489ffa9e8e6f865ab4f4e25d27d59a3ff73905d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
