@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e24bb207_34598c23",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-23T17:53:45Z",
+      "side": 1,
+      "message": "I\u0027m guessing arm64 tests were removed because we\u0027re running on x86_64, and as such x86_64 remained? \n\nI think we\u0027d want to invest some time at automating an arm64 env and run the tests as well, wdyt?",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 0
+      },
+      "revId": "f7b4b33bc8c4e7f35ab90db1a91e77f8f5a8c951",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
