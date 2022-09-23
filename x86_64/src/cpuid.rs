@@ -204,8 +204,13 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
             }
         }
         7 => {
+<<<<<<< HEAD   (f7b4b3 ANDROID: Clean all2android.sh run)
             // b/228795137 Clear X86 FSRM feature. Broken on cuttlefish boot. Will remove once
             // rootcaused and resolved.
+=======
+            // b/228795137 Clear X86 FSRM feature which breaks Bruschetta boot. Remove
+            // once this has been fixed.
+>>>>>>> BRANCH (2a8339 rutabaga_gfx: make non-sandboxed opaque fd mapping explicit)
             entry.cpuid.edx &= !(1 << EDX_FSRM_SHIFT);
 
             if ctx.cpu_config.host_cpu_topology && entry.index == 0 {
