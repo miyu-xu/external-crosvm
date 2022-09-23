@@ -52,6 +52,24 @@
       "parentUuid": "b80d75db_4959de65",
       "revId": "eb9d1cff65360435a46e76141403a5fded7d86c3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5a287d00_e67ae717",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2022-09-23T16:23:32Z",
+      "side": 1,
+      "message": "Sorry, we haven\u0027t had time to debug this yet, this bug should definitely remain open as the issue is mysterious.",
+      "parentUuid": "fff4313a_aaab9fff",
+      "revId": "eb9d1cff65360435a46e76141403a5fded7d86c3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
