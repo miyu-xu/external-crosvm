@@ -22,6 +22,30 @@
       },
       "revId": "74bb2d8510df60ae02eb4054e1a61dcb8c550eb8",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4bd57745_2fe29c6d",
+        "filename": "libcras_stub/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-09-23T17:50:41Z",
+      "side": 1,
+      "message": "this is a crosvm internal crate. we can send this change upstream i think. they seem to usually use paths like this for internal crates but there are some exceptions, maybe just done out of convenience",
+      "parentUuid": "72ae90f6_ab98d7ad",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 51
+      },
+      "revId": "74bb2d8510df60ae02eb4054e1a61dcb8c550eb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
