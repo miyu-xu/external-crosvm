@@ -46,6 +46,30 @@
       },
       "revId": "74bb2d8510df60ae02eb4054e1a61dcb8c550eb8",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ca588c38_3fcb9a21",
+        "filename": "libcras_stub/Cargo.toml",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-09-26T17:30:07Z",
+      "side": 1,
+      "message": "resolving. i think this is just adding a bit to an existing problem we are already tracking.",
+      "parentUuid": "4bd57745_2fe29c6d",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 51
+      },
+      "revId": "74bb2d8510df60ae02eb4054e1a61dcb8c550eb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

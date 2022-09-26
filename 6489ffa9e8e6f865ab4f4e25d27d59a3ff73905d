@@ -16,6 +16,24 @@
       "message": "hey btw this breaks git bisect right? now that we have built-in git rebase of merges, should we still have this in a separate CL?",
       "revId": "6489ffa9e8e6f865ab4f4e25d27d59a3ff73905d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4c8c583e_3205a6d5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-09-26T17:30:07Z",
+      "side": 1,
+      "message": "\u003e this breaks git bisect right?\n\ngood point. i think i mentioned bisect w.r.t. something else recently (i can\u0027t remember what it was) and hadn\u0027t considered how often topics would cause trouble for a normal `git bisect`. do you think it is worth trying to be bisect friendly when possible or is it a lost cause?\n\ni\u0027ve added another CL to this chain that i think it worth being separate so it is easy to revert, so i\u0027m going to keep things split out for now\n\n\u003e now that we have built-in git rebase of merges\n\ni\u0027m not aware that git\u0027s support got any better since we last discussed this. iiuc, it tries to keep the merge commit and tries to preserve some of the conflict resolution, but doesn\u0027t make any promises about keeping all the changes",
+      "parentUuid": "f56fa497_be3d07ec",
+      "revId": "6489ffa9e8e6f865ab4f4e25d27d59a3ff73905d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
