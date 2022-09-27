@@ -13,7 +13,7 @@ use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::block::asynchronous::NUM_QUEUES;
+use crate::virtio::block::asynchronous::DEFAULT_NUM_QUEUES;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_BLK_SIZE;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_DISCARD;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_FLUSH;
@@ -58,7 +58,7 @@ impl Block {
 
         let mut handler = VhostUserHandler::new_from_connection(
             connection,
-            NUM_QUEUES.into(), /* queues_num */
+            DEFAULT_NUM_QUEUES.into(), /* queues_num */
             allow_features,
             init_features,
             allow_protocol_features,
