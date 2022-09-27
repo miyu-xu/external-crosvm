@@ -42,6 +42,6 @@ fi
 source $ANDROID_BUILD_TOP/build/envsetup.sh
 m blueprint_tools
 m crosvm
-repo start merge
+repo start merge_$(date +%b%d)
 git merge --log aosp/upstream-main
 ./external/crosvm/tools/install-deps
