@@ -22,6 +22,30 @@
       },
       "revId": "a1482220e7187f4d06e217d4f79c540f6da5ee06",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "10995a08_d5f5e8d6",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 47,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-09-27T19:32:10Z",
+      "side": 1,
+      "message": "Much better! Thanks.",
+      "parentUuid": "7c1d9e97_2b2ce051",
+      "range": {
+        "startLine": 47,
+        "startChar": 0,
+        "endLine": 47,
+        "endChar": 2
+      },
+      "revId": "a1482220e7187f4d06e217d4f79c540f6da5ee06",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
