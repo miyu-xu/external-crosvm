@@ -53,6 +53,7 @@ pub struct VirtioMmioDevice {
 
     interrupt: Option<Interrupt>,
     interrupt_evt: Option<IrqEdgeEvent>,
+    async_intr_status: bool,
     queues: Vec<Queue>,
     queue_evts: Vec<Event>,
     mem: GuestMemory,
@@ -69,7 +70,11 @@ pub struct VirtioMmioDevice {
 
 impl VirtioMmioDevice {
     /// Constructs a new MMIO transport for the given virtio device.
-    pub fn new(mem: GuestMemory, device: Box<dyn VirtioDevice>) -> Result<Self> {
+    pub fn new(
+        mem: GuestMemory,
+        device: Box<dyn VirtioDevice>,
+        async_intr_status: bool,
+    ) -> Result<Self> {
         let mut queue_evts = Vec::new();
         for _ in device.queue_max_sizes() {
             queue_evts.push(Event::new()?)
@@ -85,6 +90,7 @@ impl VirtioMmioDevice {
             device_activated: false,
             interrupt: None,
             interrupt_evt: None,
+            async_intr_status,
             queues,
             queue_evts,
             mem,
@@ -151,7 +157,7 @@ impl VirtioMmioDevice {
         };
 
         let mem = self.mem.clone();
-        let interrupt = Interrupt::new_mmio(interrupt_evt);
+        let interrupt = Interrupt::new_mmio(interrupt_evt, self.async_intr_status);
         self.interrupt = Some(interrupt.clone());
 
         match self.clone_queue_evts() {
