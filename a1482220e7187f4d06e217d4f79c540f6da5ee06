@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7c1d9e97_2b2ce051",
+        "filename": "merge-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 47,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-09-27T18:25:11Z",
+      "side": 1,
+      "message": "Still CR+2, but how about we use $ANDROID_BUILD_TOP/external/crosvm/tools/install-deps? Just for the sake of consistency",
+      "range": {
+        "startLine": 47,
+        "startChar": 0,
+        "endLine": 47,
+        "endChar": 2
+      },
+      "revId": "a1482220e7187f4d06e217d4f79c540f6da5ee06",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
