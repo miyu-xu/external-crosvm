@@ -133,7 +133,7 @@ pub enum GpuControlCommand {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum GpuControlResult {
-    Ok,
+    DisplaysUpdated,
     DisplayList { displays: Vec<DisplayParameters> },
     TooManyDisplays(usize),
     NoSuchDisplay { display_id: u32 },
@@ -144,7 +144,7 @@ impl Display for GpuControlResult {
         use self::GpuControlResult::*;
 
         match self {
-            Ok => write!(f, "ok"),
+            DisplaysUpdated => write!(f, "displays updated"),
             DisplayList { displays } => {
                 let json: serde_json::Value = serde_json::json!({
                     "displays": displays,

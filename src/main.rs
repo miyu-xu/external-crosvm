@@ -422,17 +422,17 @@ fn make_rt(cmd: cmdline::MakeRTCommand) -> std::result::Result<(), ()> {
 }
 
 #[cfg(feature = "gpu")]
-fn gpu_display_add(cmd: cmdline::GpuAddDisplaysCommand) -> ModifyGpuResult<GpuControlResult> {
+fn gpu_display_add(cmd: cmdline::GpuAddDisplaysCommand) -> ModifyGpuResult {
     do_gpu_display_add(cmd.socket_path, cmd.gpu_display)
 }
 
 #[cfg(feature = "gpu")]
-fn gpu_display_list(cmd: cmdline::GpuListDisplaysCommand) -> ModifyGpuResult<GpuControlResult> {
+fn gpu_display_list(cmd: cmdline::GpuListDisplaysCommand) -> ModifyGpuResult {
     do_gpu_display_list(cmd.socket_path)
 }
 
 #[cfg(feature = "gpu")]
-fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult<GpuControlResult> {
+fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult {
     do_gpu_display_remove(cmd.socket_path, cmd.display_id)
 }
 

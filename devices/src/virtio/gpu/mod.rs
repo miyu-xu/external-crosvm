@@ -15,6 +15,8 @@ use std::io::Read;
 use std::mem::size_of;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 
@@ -183,7 +185,7 @@ impl QueueReader for SharedQueueReader {
 fn build(
     display_backends: &[DisplayBackend],
     display_params: Vec<GpuDisplayParameters>,
-    display_event: Arc<Mutex<bool>>,
+    display_event: Arc<AtomicBool>,
     rutabaga_builder: RutabagaBuilder,
     event_devices: Vec<EventDevice>,
     mapper: Box<dyn SharedMemoryMapper>,
@@ -310,7 +312,7 @@ impl Frontend {
     pub fn process_gpu_control_command(
         &mut self,
         cmd: GpuControlCommand,
-    ) -> (GpuControlResult, bool) {
+    ) -> GpuControlResult {
         self.virtio_gpu.process_gpu_control_command(cmd)
     }
 
@@ -853,8 +855,11 @@ impl Worker {
                             }
                         };
 
-                        let (resp, config_updated) = self.state.process_gpu_control_command(req);
-                        needs_config_interrupt |= config_updated;
+                        let resp = self.state.process_gpu_control_command(req);
+
+                        if let GpuControlResult::DisplaysUpdated = resp {
+                            needs_config_interrupt = true;
+                        }
 
                         if let Err(e) = self.gpu_control_tube.send(&resp) {
                             error!("display control socket failed send: {}", e);
@@ -966,7 +971,7 @@ pub struct Gpu {
     worker_thread: Option<thread::JoinHandle<()>>,
     display_backends: Vec<DisplayBackend>,
     display_params: Vec<GpuDisplayParameters>,
-    display_event: Arc<Mutex<bool>>,
+    display_event: Arc<AtomicBool>,
     rutabaga_builder: Option<RutabagaBuilder>,
     pci_bar_size: u64,
     external_blob: bool,
@@ -1056,7 +1061,7 @@ impl Gpu {
             worker_thread: None,
             display_backends,
             display_params,
-            display_event: Arc::new(Mutex::new(false)),
+            display_event: Arc::new(AtomicBool::new(false)),
             rutabaga_builder: Some(rutabaga_builder),
             pci_bar_size: gpu_parameters.pci_bar_size,
             external_blob,
@@ -1111,7 +1116,7 @@ impl Gpu {
         let mut events_read = 0;
 
         {
-            if *self.display_event.lock() {
+            if self.display_event.load(Ordering::Relaxed) {
                 events_read |= VIRTIO_GPU_EVENT_DISPLAY;
             }
         }
@@ -1241,7 +1246,7 @@ impl VirtioDevice for Gpu {
         let mut cfg = self.get_config();
         copy_config(cfg.as_mut_slice(), offset, data, 0);
         if (cfg.events_clear.to_native() & VIRTIO_GPU_EVENT_DISPLAY) != 0 {
-            *self.display_event.lock() = false;
+            self.display_event.store(false, Ordering::Relaxed);
         }
     }
 

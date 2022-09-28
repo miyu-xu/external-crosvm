@@ -31,42 +31,42 @@ impl fmt::Display for ModifyGpuError {
     }
 }
 
-pub type ModifyGpuResult<T> = std::result::Result<T, ModifyGpuError>;
+pub type ModifyGpuResult = std::result::Result<GpuControlResult, ModifyGpuError>;
+
+impl From<VmResponse> for ModifyGpuResult {
+    fn from(response: VmResponse) -> Self {
+        match response {
+            VmResponse::GpuResponse(gpu_response) => Ok(gpu_response),
+            r => Err(ModifyGpuError::UnexpectedResponse(r)),
+        }
+    }
+}
 
 pub fn do_gpu_display_add<T: AsRef<Path> + std::fmt::Debug>(
     control_socket_path: T,
     displays: Vec<DisplayParameters>,
-) -> ModifyGpuResult<GpuControlResult> {
+) -> ModifyGpuResult {
     let request = VmRequest::GpuCommand(GpuControlCommand::AddDisplays { displays });
-    let response =
-        handle_request(&request, control_socket_path).map_err(|_| ModifyGpuError::SocketFailed)?;
-    match response {
-        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
-        r => Err(ModifyGpuError::UnexpectedResponse(r)),
-    }
+    handle_request(&request, control_socket_path)
+        .map(|r| ModifyGpuResult::from(r))
+        .map_err(|_| ModifyGpuError::SocketFailed)?
 }
 
 pub fn do_gpu_display_list<T: AsRef<Path> + std::fmt::Debug>(
     control_socket_path: T,
-) -> ModifyGpuResult<GpuControlResult> {
+) -> ModifyGpuResult {
     let request = VmRequest::GpuCommand(GpuControlCommand::ListDisplays);
-    let response =
-        handle_request(&request, control_socket_path).map_err(|_| ModifyGpuError::SocketFailed)?;
-    match response {
-        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
-        r => Err(ModifyGpuError::UnexpectedResponse(r)),
-    }
+    handle_request(&request, control_socket_path)
+        .map(|r| ModifyGpuResult::from(r))
+        .map_err(|_| ModifyGpuError::SocketFailed)?
 }
 
 pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
     control_socket_path: T,
     display_ids: Vec<u32>,
-) -> ModifyGpuResult<GpuControlResult> {
+) -> ModifyGpuResult {
     let request = VmRequest::GpuCommand(GpuControlCommand::RemoveDisplays { display_ids });
-    let response =
-        handle_request(&request, control_socket_path).map_err(|_| ModifyGpuError::SocketFailed)?;
-    match response {
-        VmResponse::GpuResponse(display_resp) => Ok(display_resp),
-        r => Err(ModifyGpuError::UnexpectedResponse(r)),
-    }
+    handle_request(&request, control_socket_path)
+        .map(|r| ModifyGpuResult::from(r))
+        .map_err(|_| ModifyGpuError::SocketFailed)?
 }
