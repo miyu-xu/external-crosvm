@@ -44,4 +44,4 @@ m blueprint_tools
 m crosvm
 repo start merge
 git merge --log aosp/upstream-main
-./external/crosvm/tools/install-deps
+$ANDROID_BUILD_TOP/external/crosvm/tools/install-deps
