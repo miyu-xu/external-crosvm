@@ -27,6 +27,8 @@ use crate::AARCH64_GIC_CPUI_SIZE;
 use crate::AARCH64_GIC_DIST_BASE;
 use crate::AARCH64_GIC_DIST_SIZE;
 use crate::AARCH64_GIC_REDIST_SIZE;
+// This is the start of DRAM in the physical address space.
+use crate::AARCH64_PHYS_MEM_START;
 use crate::AARCH64_PMU_IRQ;
 // These are RTC related constants
 use crate::AARCH64_RTC_ADDR;
@@ -59,12 +61,16 @@ const IRQ_TYPE_LEVEL_LOW: u32 = 0x00000008;
 
 fn create_memory_node(fdt: &mut FdtWriter, guest_mem: &GuestMemory) -> Result<()> {
     for region in guest_mem.guest_memory_regions() {
+        if region.0.offset() != AARCH64_PHYS_MEM_START {
+            continue;
+        }
         let mem_reg_prop = [region.0.offset(), region.1 as u64];
 
         let memory_node = fdt.begin_node("memory")?;
         fdt.property_string("device_type", "memory")?;
         fdt.property_array_u64("reg", &mem_reg_prop)?;
         fdt.end_node(memory_node)?;
+        return Ok(());
     }
 
     Ok(())
