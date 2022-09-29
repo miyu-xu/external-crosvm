@@ -274,7 +274,8 @@ impl arch::LinuxArch for AArch64 {
 
         // Allocate memory for the pVM firmware.
         if matches!(
-            components.hv_cfg.protection_type, ProtectionType::UnprotectedWithFirmware
+            components.hv_cfg.protection_type,
+            ProtectionType::Protected | ProtectionType::UnprotectedWithFirmware
         ) {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
@@ -397,7 +398,7 @@ impl arch::LinuxArch for AArch64 {
 
         match components.hv_cfg.protection_type {
             ProtectionType::Protected => {
-                // Allocate memory for the pVM firmware and tell the hypervisor to load it.
+                // Tell the hypervisor to load the pVM firmware.
                 vm.load_protected_vm_firmware(
                     GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                     AARCH64_PROTECTED_VM_FW_MAX_SIZE,
