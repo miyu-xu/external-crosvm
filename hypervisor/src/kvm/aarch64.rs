@@ -182,6 +182,10 @@ impl VmAArch64 for KvmVm {
                 .build()
                 .map_err(|_| Error::new(EINVAL))?;
             self.add_memory_region(fw_addr, Box::new(mem), false, false)?;
+            let mem = MemoryMappingBuilder::new(2 << 20)
+                .build()
+                .map_err(|_| Error::new(EINVAL))?;
+            self.add_memory_region(0x7fe00000, Box::new(mem), false, false)?;
             self.set_protected_vm_firmware_ipa(fw_addr)
         }
     }
