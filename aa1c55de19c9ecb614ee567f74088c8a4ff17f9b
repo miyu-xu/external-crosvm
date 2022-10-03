@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "29b569ff_15d45754",
+        "filename": "/MERGE_LIST",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-03T20:32:04Z",
+      "side": 1,
+      "message": "FYI: This commit (https://crrev.com/c/3931568) switched the default async executor from uring to epoll. We should keep an eye on the AVF benchmark dashboard after the merge lands.",
+      "revId": "aa1c55de19c9ecb614ee567f74088c8a4ff17f9b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
