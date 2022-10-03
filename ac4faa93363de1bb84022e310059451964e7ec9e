@@ -16,6 +16,23 @@
       "message": "`Bug: 244553205` as well",
       "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "56a18d1b_dd4fc343",
+        "filename": "hypervisor/src/kvm/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-03T20:41:54Z",
+      "side": 1,
+      "message": "can you add a comment referencing the bug",
+      "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
