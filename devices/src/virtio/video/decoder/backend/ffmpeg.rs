@@ -33,6 +33,9 @@ use base::MemoryMappingArena;
 use thiserror::Error as ThisError;
 
 use crate::virtio::video::decoder::backend::*;
+use crate::virtio::video::ffmpeg::GuestResourceToAvFrameError;
+use crate::virtio::video::ffmpeg::MemoryMappingAvBufferSource;
+use crate::virtio::video::ffmpeg::TryAsAvFrameExt;
 use crate::virtio::video::format::FormatDesc;
 use crate::virtio::video::format::FormatRange;
 use crate::virtio::video::format::FrameFormat;
@@ -131,6 +134,8 @@ pub struct FfmpegDecoderSession {
 enum TrySendFrameError {
     #[error("error while converting frame: {0}")]
     CannotConvertFrame(#[from] ConversionError),
+    #[error("error while constructing AvFrame: {0}")]
+    IntoAvFrame(#[from] GuestResourceToAvFrameError),
     #[error("error while sending picture ready event: {0}")]
     BrokenPipe(#[from] base::Error),
 }
@@ -386,7 +391,10 @@ impl FfmpegDecoderSession {
         };
 
         // Convert the frame into the target buffer and emit the picture ready event.
-        format_converter.convert(&avframe, target_buffer)?;
+        format_converter.convert(
+            &avframe,
+            &mut target_buffer.try_as_av_frame(MemoryMappingAvBufferSource::from)?,
+        )?;
         self.event_queue.queue_event(picture_ready_event)?;
 
         Ok(true)
@@ -411,10 +419,8 @@ impl DecoderSession for FfmpegDecoderSession {
             SessionState::AwaitingBufferCount | SessionState::Drc => {
                 let avcontext = self.context.as_ref();
 
-                let dst_pix_format = match format {
-                    Format::NV12 => AVPixelFormat_AV_PIX_FMT_NV12,
-                    _ => return Err(VideoError::InvalidFormat),
-                };
+                let dst_pix_format: AvPixelFormat =
+                    format.try_into().map_err(|_| VideoError::InvalidFormat)?;
 
                 self.state = SessionState::Decoding {
                     output_queue: OutputQueue::new(buffer_count),
@@ -422,7 +428,7 @@ impl DecoderSession for FfmpegDecoderSession {
                         avcontext.width as usize,
                         avcontext.height as usize,
                         avcontext.pix_fmt as i32,
-                        dst_pix_format,
+                        dst_pix_format.pix_fmt(),
                     )
                     .context("while setting output parameters")
                     .map_err(VideoError::BackendFailure)?,
@@ -992,8 +998,10 @@ mod tests {
                     }
                 ));
 
+                let out_format = Format::NV12;
+
                 session
-                    .set_output_parameters(NUM_OUTPUT_BUFFERS, Format::NV12)
+                    .set_output_parameters(NUM_OUTPUT_BUFFERS, out_format)
                     .unwrap();
 
                 // Pass the buffers we will decode into.
@@ -1007,12 +1015,17 @@ mod tests {
                                     FramePlane {
                                         offset: 0,
                                         stride: H264_STREAM_WIDTH as usize,
+                                        size: (H264_STREAM_WIDTH * H264_STREAM_HEIGHT) as usize,
                                     },
                                     FramePlane {
                                         offset: (H264_STREAM_WIDTH * H264_STREAM_HEIGHT) as usize,
                                         stride: H264_STREAM_WIDTH as usize,
+                                        size: (H264_STREAM_WIDTH * H264_STREAM_HEIGHT) as usize,
                                     },
                                 ],
+                                width: H264_STREAM_WIDTH as _,
+                                height: H264_STREAM_HEIGHT as _,
+                                format: out_format,
                             },
                         )
                         .unwrap();
