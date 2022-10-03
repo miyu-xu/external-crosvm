@@ -5,6 +5,7 @@ authors = ["The Chromium OS Authors"]
 edition = "2021"
 
 [features]
+arc_quota = ["dbus", "protobuf", "system_api"]
 audio = []
 audio_cras = ["libcras"]
 balloon = []
@@ -66,7 +67,11 @@ serde_json = "1"
 serde_keyvalue = { path = "../serde_keyvalue", features = ["argh_derive"] }
 smallvec = "1.6.1"
 sync = { path = "../common/sync" }
+<<<<<<< HEAD   (141ec8 Merge "ANDROID: use absolute path in merge-setup.sh for inst)
 system_api = { path = "../system_api_stub", optional = true }
+=======
+system_api = { path = "../system_api", optional = true }
+>>>>>>> BRANCH (646b6e crosvm-fuzz: Migrate crosvm-fuzz to cargo fuzz)
 thiserror = "1.0.20"
 tpm2 = { path = "../tpm2", optional = true }
 tracing = { path = "../tracing" }
