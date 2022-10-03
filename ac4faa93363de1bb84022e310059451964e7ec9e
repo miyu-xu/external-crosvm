@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38bef999_0b9479ed",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1059815
+      },
+      "writtenOn": "2022-10-03T12:34:16Z",
+      "side": 1,
+      "message": "`Bug: 244553205` as well",
+      "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
