@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f0599a04_69063202",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-04T18:12:42Z",
+      "side": 1,
+      "message": "This CL is included in the pending merge for this week https://r.android.com/2240037, should be submitted soon.",
+      "revId": "7c0bbf155d19c2f9193961ba02ff025b7cfb1f50",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
