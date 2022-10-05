@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "18fe166c_add0fc4b",
+        "filename": "devices/src/vmwdt.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-10-05T17:08:38Z",
+      "side": 1,
+      "message": "How about adding a new `VmEventType` variant and plumbing it through to a new exit status, so that virtualizationservice can use that rather than parsing the logs?",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
