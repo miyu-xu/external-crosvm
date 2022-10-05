@@ -175,6 +175,8 @@ impl Vmwdt {
                             }
                         } else {
                             // The guest ran but it did not send the periodic event
+                            // Print a message before rebooting the guest
+                            error!("VCPU_STALL_DETECTOR requested reset");
                             if let Err(_e) =
                                 reset_evt_wrtube.send::<VmEventType>(&VmEventType::Reset)
                             {
