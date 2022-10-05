@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "697cf028_36d5076a",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 565,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-10-05T20:37:08Z",
+      "side": 1,
+      "message": "I think it would be reasonable to make these non-optional and just change the existing callers to pass `QUEUE_SIZE` and `NUM_QUEUES` as appropriate, but I\u0027m OK with either way.\n\n(It would probably also be clearer to rename these to `DEFAULT_QUEUE_SIZE` and `DEFAULT_NUM_QUEUES`, but that can be a separate cleanup change if you want.)",
+      "revId": "583c2964a15e0c419babe8862e9c5045ba666545",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f11222bf_9bfea4d7",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 585,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-10-05T20:37:08Z",
+      "side": 1,
+      "message": "We could use `NonZeroU16` rather than `u16` to encode this requirement in the type system rather than making it a runtime check.",
+      "revId": "583c2964a15e0c419babe8862e9c5045ba666545",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "72f3b2a4_9120411f",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 876,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-10-05T20:37:08Z",
+      "side": 1,
+      "message": "This line, as well as some of the lines below, exceed the 100-character limit; please run `tools/fmt` (or just `rustfmt` this file individually).",
+      "revId": "583c2964a15e0c419babe8862e9c5045ba666545",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
