@@ -34,6 +34,24 @@
       "parentUuid": "18fe166c_add0fc4b",
       "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6cd7036b_e06cfa35",
+        "filename": "devices/src/vmwdt.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1942270
+      },
+      "writtenOn": "2022-10-06T11:38:44Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3d1bf22f_18774d2e",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
