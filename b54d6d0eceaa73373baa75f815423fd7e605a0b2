@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "27b5a244_e6b14ee9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-10-06T13:12:51Z",
+      "side": 1,
+      "message": "Please submit this patch to upstream crosvm (https://chromium-review.googlesource.com/q/project:crosvm%252Fcrosvm+status:open), it will get to AOSP in the next weekly merge.",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "18fe166c_add0fc4b",
         "filename": "devices/src/vmwdt.rs",
         "patchSetId": 1
@@ -50,6 +67,24 @@
       "side": 1,
       "message": "Done",
       "parentUuid": "3d1bf22f_18774d2e",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "30b38d4d_8e242964",
+        "filename": "devices/src/vmwdt.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2022-10-06T13:12:51Z",
+      "side": 1,
+      "message": "Yes, adding variants to those enums too is fine. I really don\u0027t think we should we should be relying on crosvm log messages, we might want to stop sending them to stderr in future and just rely on logcat, and also someone else working on crosvm upstream could easily refactor the code or reword the log messages without realising that Android is relying on the log messages as an API. This is what we have exit statuses for, and we already use them to distinguish other reasons for a VM stopping.",
+      "parentUuid": "6cd7036b_e06cfa35",
       "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
