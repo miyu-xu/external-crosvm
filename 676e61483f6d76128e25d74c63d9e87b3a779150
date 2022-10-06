@@ -1,0 +1,147 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4573ab00_811d56eb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "I didn\u0027t look in detail inside of the gunyah crate.",
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "67e9a929_a5dbc6a4",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 598,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "right - b/c it\u0027s derived information - makes sense",
+      "range": {
+        "startLine": 598,
+        "startChar": 0,
+        "endLine": 598,
+        "endChar": 117
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6adb0819_eb048496",
+        "filename": "devices/src/irqchip/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "license headers would be needed on all these as well - as they are being upstreamed",
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d6d645c0_9f5ea127",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/bindings.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "so - the major risk right now is that these are not currently in the kernel upstream. Are we tracking which values/ioctls/etc are upstreamed? How stable is this surface?",
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "94439751_68786620",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 692,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "should we combine this with kvm_path and use it as \u0027hypervisor path\u0027? I think the CLI being hypervisor specific would prevent certain types of re-use. It shouldn\u0027t matter for one path, and it needs to be configured anyway, but I would prefer to avoid \"gunyah_A, gunyah_B, etc..\" alongside \"kvm_A, kvm_B, etc...\"",
+      "range": {
+        "startLine": 689,
+        "startChar": 0,
+        "endLine": 692,
+        "endChar": 44
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "27dbf83f_b83bd359",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "though maybe this ship has sailed, especially with three hypervisors that all look the same here, they could share the option",
+      "range": {
+        "startLine": 67,
+        "startChar": 0,
+        "endLine": 67,
+        "endChar": 55
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bf10a83c_853fc2c2",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1389,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T20:21:20Z",
+      "side": 1,
+      "message": "nit/aside: out of curiosity - has anyone tried looking at making \u0027kvm\u0027 a feature as well or compiling it out (for symmetry). It would expose the structure of shared code between hypervisors vs hypervisor-specific code explicitly.",
+      "range": {
+        "startLine": 1389,
+        "startChar": 0,
+        "endLine": 1389,
+        "endChar": 67
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
