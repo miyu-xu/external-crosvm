@@ -16,6 +16,24 @@
       "message": "How about adding a new `VmEventType` variant and plumbing it through to a new exit status, so that virtualizationservice can use that rather than parsing the logs?",
       "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3d1bf22f_18774d2e",
+        "filename": "devices/src/vmwdt.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1942270
+      },
+      "writtenOn": "2022-10-06T09:38:23Z",
+      "side": 1,
+      "message": "Thanks for the suggestion, I was thinking to do this in the beginning but I used this approach with parsing stderr because:\n- there are multiple levels of error code remapping in crovm, at least 3 so adding one value in VmEventType would also imply defining there:\n```\nVmEventType::NewResetType\n    -\u003e ExitState::NewResetType \n                        -\u003e CommandStatus::NewResetType -\u003e another remap to an integer))\n```\n- parsing the crosvm `stderr` is not completely different from what we do when we parse string messages from the pipe which is tied to the crosvm serial console\n- parsing the logs can be easily extended with new types",
+      "parentUuid": "18fe166c_add0fc4b",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
