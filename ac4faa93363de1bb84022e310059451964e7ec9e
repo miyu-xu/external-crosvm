@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b8d82bd1_f65be374",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-10-06T16:24:06Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "38bef999_0b9479ed",
+      "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "56a18d1b_dd4fc343",
@@ -31,6 +49,24 @@
       "writtenOn": "2022-10-03T20:41:54Z",
       "side": 1,
       "message": "can you add a comment referencing the bug",
+      "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7daf5326_4ffe8d33",
+        "filename": "hypervisor/src/kvm/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-10-06T16:24:06Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "56a18d1b_dd4fc343",
       "revId": "ac4faa93363de1bb84022e310059451964e7ec9e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
