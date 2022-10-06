@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "40d54a79_9d886fcb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1942270
+      },
+      "writtenOn": "2022-10-06T15:03:52Z",
+      "side": 1,
+      "message": "Thanks, I will drop this.",
+      "parentUuid": "27b5a244_e6b14ee9",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "18fe166c_add0fc4b",
@@ -85,6 +103,24 @@
       "side": 1,
       "message": "Yes, adding variants to those enums too is fine. I really don\u0027t think we should we should be relying on crosvm log messages, we might want to stop sending them to stderr in future and just rely on logcat, and also someone else working on crosvm upstream could easily refactor the code or reword the log messages without realising that Android is relying on the log messages as an API. This is what we have exit statuses for, and we already use them to distinguish other reasons for a VM stopping.",
       "parentUuid": "6cd7036b_e06cfa35",
+      "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6ab0a2f6_d32e83d4",
+        "filename": "devices/src/vmwdt.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1942270
+      },
+      "writtenOn": "2022-10-06T15:03:52Z",
+      "side": 1,
+      "message": "Thanks for the feedback ! I will try to create a new PR with your suggestion. In the meantime I will abandon this and re-target (https://chromium-review.googlesource.com/q/project:crosvm%252Fcrosvm+status:open)",
+      "parentUuid": "30b38d4d_8e242964",
       "revId": "b54d6d0eceaa73373baa75f815423fd7e605a0b2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
