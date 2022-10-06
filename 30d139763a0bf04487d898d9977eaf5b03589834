@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "909fc504_812346ae",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-06T00:01:42Z",
+      "side": 1,
+      "message": "Hey, I think the only thing we need would be a unit test/integration test. Though, I love the idea.\n\nFrederick - can you look wrt relationship to backcompat work/consistency w/ approach to dump device state? Maybe we can get a free test out of this as well for backcompat? 😄",
+      "revId": "30d139763a0bf04487d898d9977eaf5b03589834",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
