@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1146f1b4_32cffc4e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1014491
+      },
+      "writtenOn": "2022-10-07T17:28:47Z",
+      "side": 1,
+      "message": "FTR, we suspect that this change might have caused boot flakiness on Cuttlefish ARM64 target: b/251820426",
+      "revId": "960c262fb3971f202e8b5c9127012956b04dfad1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
