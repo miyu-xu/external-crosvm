@@ -1,13 +1,15 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! Runs a virtual machine
 
+#[cfg(any(feature = "composite-disk", feature = "qcow"))]
 use std::fs::OpenOptions;
 use std::path::Path;
 
 use anyhow::anyhow;
+use anyhow::Context;
 use anyhow::Result;
 use argh::FromArgs;
 use base::error;
@@ -34,6 +36,7 @@ use disk::create_zero_filler;
 use disk::ImagePartitionType;
 #[cfg(feature = "composite-disk")]
 use disk::PartitionInfo;
+#[cfg(feature = "qcow")]
 use disk::QcowFile;
 mod sys;
 use crosvm::cmdline::Command;
@@ -71,6 +74,7 @@ enum CommandStatus {
     VmStop,
     VmCrash,
     GuestPanic,
+    InvalidArgs,
 }
 
 fn to_command_status(result: Result<sys::ExitState>) -> Result<CommandStatus> {
@@ -337,6 +341,7 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
     Ok(())
 }
 
+#[cfg(feature = "qcow")]
 fn create_qcow2(cmd: cmdline::CreateQcow2Command) -> std::result::Result<(), ()> {
     if !(cmd.size.is_some() ^ cmd.backing_file.is_some()) {
         println!(
@@ -454,7 +459,6 @@ fn pkg_version() -> std::result::Result<(), ()> {
 //
 // As a special case, `-` is not treated as a flag, since it is typically used to represent
 // `stdin`/`stdout`.
-#[cfg_attr(windows, allow(unused))]
 fn is_flag(arg: &str) -> bool {
     arg.len() > 1 && arg.starts_with('-')
 }
@@ -476,8 +480,6 @@ fn prepare_argh_args<I: IntoIterator<Item = String>>(args_iter: I) -> Vec<String
                 args.push("--balloon-bias-mib".to_string());
             }
             "-h" => args.push("--help".to_string()),
-            // TODO(238361778): This block should work on windows as well.
-            #[cfg(unix)]
             arg if is_flag(arg) => {
                 // Split `--arg=val` into `--arg val`, since argh doesn't support the former.
                 if let Some((key, value)) = arg.split_once("=") {
@@ -511,11 +513,13 @@ fn crosvm_main() -> Result<CommandStatus> {
     let args = match crosvm::cmdline::CrosvmCmdlineArgs::from_args(&args[..1], &args[1..]) {
         Ok(args) => args,
         Err(e) => {
-            eprintln!("{}", e.output);
-            return Ok(CommandStatus::Success);
+            eprintln!("arg parsing failed: {}", e.output);
+            return Ok(CommandStatus::InvalidArgs);
         }
     };
     let extended_status = args.extended_status;
+
+    info!("CLI arguments parsed.");
 
     let mut log_config = LogConfig {
         filter: &args.log_level,
@@ -523,6 +527,11 @@ fn crosvm_main() -> Result<CommandStatus> {
         syslog: !args.no_syslog,
         ..Default::default()
     };
+
+    if let Some(async_executor) = args.async_executor {
+        cros_async::Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
 
     let ret = match args.command {
         Command::CrossPlatform(command) => {
@@ -538,15 +547,13 @@ fn crosvm_main() -> Result<CommandStatus> {
                 // On windows, the device command handles its own logging setup, so we can't handle it below
                 // otherwise logging will double init.
                 if cfg!(unix) {
-                    syslog::init_with(log_config)
-                        .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+                    syslog::init_with(log_config).context("failed to initialize syslog")?;
                 }
                 start_device(cmd)
                     .map_err(|_| anyhow!("start_device subcommand failed"))
                     .map(|_| CommandStatus::Success)
             } else {
-                syslog::init_with(log_config)
-                    .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+                syslog::init_with(log_config).context("failed to initialize syslog")?;
 
                 match command {
                     #[cfg(feature = "balloon")]
@@ -563,6 +570,7 @@ fn crosvm_main() -> Result<CommandStatus> {
                     #[cfg(feature = "composite-disk")]
                     CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)
                         .map_err(|_| anyhow!("create_composite subcommand failed")),
+                    #[cfg(feature = "qcow")]
                     CrossPlatformCommands::CreateQcow2(cmd) => {
                         create_qcow2(cmd).map_err(|_| anyhow!("create_qcow2 subcommand failed"))
                     }
@@ -609,8 +617,7 @@ fn crosvm_main() -> Result<CommandStatus> {
             // On windows, the sys commands handle their own logging setup, so we can't handle it
             // below otherwise logging will double init.
             if cfg!(unix) {
-                syslog::init_with(log_config)
-                    .map_err(|e| anyhow!("failed to initialize syslog: {}", e))?;
+                syslog::init_with(log_config).context("failed to initialize syslog")?;
             }
             sys::run_command(command).map(|_| CommandStatus::Success)
         }
@@ -630,6 +637,8 @@ fn crosvm_main() -> Result<CommandStatus> {
 }
 
 fn main() {
+    syslog::early_init();
+    info!("CrosVM started.");
     let res = crosvm_main();
     let exit_code = match &res {
         Ok(CommandStatus::Success | CommandStatus::VmStop) => {
@@ -648,6 +657,7 @@ fn main() {
             info!("exiting with guest panic");
             34
         }
+        Ok(CommandStatus::InvalidArgs) => 35,
         Err(e) => {
             let exit_code = error_to_exit_code(&res);
             error!("exiting with error {}:{:?}", exit_code, e);

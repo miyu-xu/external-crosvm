@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -43,6 +44,7 @@ impl PcieRootPort {
                 0,
                 secondary_bus_num,
                 slot_implemented,
+                true,
             ),
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
@@ -53,7 +55,7 @@ impl PcieRootPort {
     /// Constructs a new PCIE root port which associated with the host physical pcie RP
     pub fn new_from_host(pcie_host: PcieHostPort, slot_implemented: bool) -> Result<Self> {
         Ok(PcieRootPort {
-            pcie_port: PciePort::new_from_host(pcie_host, slot_implemented)
+            pcie_port: PciePort::new_from_host(pcie_host, slot_implemented, true)
                 .context("PciePort::new_from_host failed")?,
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
@@ -141,7 +143,7 @@ impl HotPlugBus for PcieRootPort {
         }
 
         self.pcie_port
-            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
         self.pcie_port.trigger_hp_or_pme_interrupt();
     }
 
@@ -158,8 +160,7 @@ impl HotPlugBus for PcieRootPort {
                 self.removed_downstream.push(*guest_pci_addr);
             }
 
-            self.pcie_port
-                .set_slot_status(PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
             self.pcie_port.trigger_hp_or_pme_interrupt();
 
             if self.pcie_port.is_host() {

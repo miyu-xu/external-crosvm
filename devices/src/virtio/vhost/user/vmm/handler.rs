@@ -1,11 +1,11 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 mod sys;
 mod worker;
 
-use std::io::Write;
+use std::sync::Mutex;
 use std::thread;
 
 use base::error;
@@ -21,13 +21,13 @@ use vmm_vhost::message::VhostUserShmemMapMsg;
 use vmm_vhost::message::VhostUserShmemUnmapMsg;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 use vmm_vhost::HandlerResult;
+use vmm_vhost::MasterReqHandler;
 use vmm_vhost::VhostBackend;
 use vmm_vhost::VhostUserMaster;
 use vmm_vhost::VhostUserMasterReqHandlerMut;
 use vmm_vhost::VhostUserMemoryRegionInfo;
 use vmm_vhost::VringConfigData;
 
-use crate::virtio::vhost::user::vmm::handler::sys::BackendReqHandler;
 use crate::virtio::vhost::user::vmm::handler::sys::SocketMaster;
 use crate::virtio::vhost::user::vmm::Error;
 use crate::virtio::vhost::user::vmm::Result;
@@ -35,6 +35,8 @@ use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::SharedMemoryMapper;
 use crate::virtio::SharedMemoryRegion;
+
+type BackendReqHandler = MasterReqHandler<Mutex<BackendReqHandlerImpl>>;
 
 fn set_features(vu: &mut SocketMaster, avail_features: u64, ack_features: u64) -> Result<u64> {
     let features = avail_features & ack_features;
@@ -50,6 +52,9 @@ pub struct VhostUserHandler {
     backend_req_handler: Option<BackendReqHandler>,
     // Shared memory region info. IPC result from backend is saved with outer Option.
     shmem_region: Option<Option<SharedMemoryRegion>>,
+    // On Windows, we need a backend pid to support backend requests.
+    #[cfg(windows)]
+    backend_pid: Option<u32>,
 }
 
 impl VhostUserHandler {
@@ -59,6 +64,7 @@ impl VhostUserHandler {
         allow_features: u64,
         init_features: u64,
         allow_protocol_features: VhostUserProtocolFeatures,
+        #[cfg(windows)] backend_pid: Option<u32>,
     ) -> Result<Self> {
         vu.set_owner().map_err(Error::SetOwner)?;
 
@@ -82,6 +88,8 @@ impl VhostUserHandler {
             protocol_features,
             backend_req_handler: None,
             shmem_region: None,
+            #[cfg(windows)]
+            backend_pid,
         })
     }
 
@@ -110,45 +118,34 @@ impl VhostUserHandler {
     }
 
     /// Gets the device configuration space at `offset` and writes it into `data`.
-    pub fn read_config<T>(&mut self, offset: u64, mut data: &mut [u8]) -> Result<()> {
-        let config_len = std::mem::size_of::<T>() as u64;
-        let data_len = data.len() as u64;
-        offset
-            .checked_add(data_len)
-            .and_then(|l| if l <= config_len { Some(()) } else { None })
-            .ok_or(Error::InvalidConfigOffset {
-                data_len,
-                offset,
-                config_len,
-            })?;
-
-        let buf = vec![0u8; config_len as usize];
+    pub fn read_config(&mut self, offset: u64, data: &mut [u8]) -> Result<()> {
         let (_, config) = self
             .vu
-            .get_config(0, config_len as u32, VhostUserConfigFlags::WRITABLE, &buf)
+            .get_config(
+                offset
+                    .try_into()
+                    .map_err(|_| Error::InvalidConfigOffset(offset))?,
+                data.len()
+                    .try_into()
+                    .map_err(|_| Error::InvalidConfigLen(data.len()))?,
+                VhostUserConfigFlags::WRITABLE,
+                data,
+            )
             .map_err(Error::GetConfig)?;
-
-        data.write_all(
-            &config[offset as usize..std::cmp::min(data_len + offset, config_len) as usize],
-        )
-        .map_err(Error::CopyConfig)
+        data.copy_from_slice(&config);
+        Ok(())
     }
 
     /// Writes `data` into the device configuration space at `offset`.
-    pub fn write_config<T>(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        let config_len = std::mem::size_of::<T>() as u64;
-        let data_len = data.len() as u64;
-        offset
-            .checked_add(data_len)
-            .and_then(|l| if l <= config_len { Some(()) } else { None })
-            .ok_or(Error::InvalidConfigOffset {
-                data_len,
-                offset,
-                config_len,
-            })?;
-
+    pub fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
         self.vu
-            .set_config(offset as u32, VhostUserConfigFlags::empty(), data)
+            .set_config(
+                offset
+                    .try_into()
+                    .map_err(|_| Error::InvalidConfigOffset(offset))?,
+                VhostUserConfigFlags::empty(),
+                data,
+            )
             .map_err(Error::SetConfig)
     }
 
@@ -342,9 +339,10 @@ impl VhostUserMasterReqHandlerMut for BackendReqHandlerImpl {
                     .map_err(|_| std::io::Error::from_raw_os_error(libc::EIO))?,
                 offset: req.fd_offset,
                 size: req.len,
+                gpu_blob: false,
             },
             req.shm_offset,
-            Protection::from(req.flags.bits() as libc::c_int),
+            Protection::from(req.flags),
         ) {
             Ok(()) => Ok(0),
             Err(e) => {

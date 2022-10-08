@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -200,6 +200,10 @@ impl ProxyDevice {
                     unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
                 device.on_sandboxed();
                 child_proc(child_tube, &mut device);
+
+                // Explicitly drop the device so that its Drop implementation has a chance to run
+                // before the call to `libc::exit()`.
+                std::mem::drop(device);
 
                 // We're explicitly not using std::process::exit here to avoid the cleanup of
                 // stdout/stderr globals. This can cause cascading panics and SIGILL if a worker

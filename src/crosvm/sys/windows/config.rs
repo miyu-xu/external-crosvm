@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,6 @@ use devices::virtio::DEFAULT_REFRESH_RATE;
 #[cfg(feature = "audio")]
 use devices::Ac97Parameters;
 use devices::SerialParameters;
-use metrics::event_details_proto::EmulatorProcessType;
 #[cfg(feature = "gpu")]
 use rutabaga_gfx::calculate_context_mask;
 #[cfg(feature = "gpu")]
@@ -486,34 +485,6 @@ pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
     Ok(())
 }
 
-/// Each type of process should have its own type here. This affects both exit
-/// handling and sandboxing policy.
-///
-/// WARNING: do NOT change the values items in this enum. The enum value is used in our exit codes,
-/// and relied upon by metrics analysis. The max value for this enum is 0x1F = 31 as it is
-/// restricted to five bits per `crate::crosvm::sys::windows::exit::to_process_type_error`.
-#[derive(Clone, Copy, PartialEq, Debug, enumn::N)]
-#[repr(u8)]
-pub enum ProcessType {
-    Block = 1,
-    Main = 2,
-    Metrics = 3,
-    Net = 4,
-    Slirp = 5,
-}
-
-impl From<ProcessType> for EmulatorProcessType {
-    fn from(process_type: ProcessType) -> Self {
-        match process_type {
-            ProcessType::Block => EmulatorProcessType::PROCESS_TYPE_BLOCK,
-            ProcessType::Main => EmulatorProcessType::PROCESS_TYPE_MAIN,
-            ProcessType::Metrics => EmulatorProcessType::PROCESS_TYPE_METRICS,
-            ProcessType::Net => EmulatorProcessType::PROCESS_TYPE_NET,
-            ProcessType::Slirp => EmulatorProcessType::PROCESS_TYPE_SLIRP,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum IrqChipKind {
     /// All interrupt controllers are emulated in the kernel.
@@ -757,14 +728,10 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_hidden() {
-        let display_params = parse_gpu_options(format!("hidden=true").as_str())
-            .unwrap()
-            .display_params;
+        let display_params = parse_gpu_options("hidden=true").unwrap().display_params;
         assert!(display_params[0].hidden);
 
-        let display_params = parse_gpu_options(format!("hidden=false").as_str())
-            .unwrap()
-            .display_params;
+        let display_params = parse_gpu_options("hidden=false").unwrap().display_params;
         assert!(matches!(display_params[0].hidden, false));
     }
 

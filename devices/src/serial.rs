@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -119,9 +119,7 @@ impl Serial {
             system_params,
         }
     }
-}
 
-impl Serial {
     /// Returns a unique ID for the serial device.
     pub fn device_id() -> DeviceId {
         CrosvmDeviceId::Serial.into()

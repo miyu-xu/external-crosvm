@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -212,6 +212,20 @@ pub trait MemoryMapper: Send {
 
     /// Exports the specified IO region.
     ///
+    /// # Safety
+    ///
+    /// The memory in the region specified by hva and size must be
+    /// memory external to rust.
+    unsafe fn vfio_dma_map(
+        &mut self,
+        _iova: u64,
+        _hva: u64,
+        _size: u64,
+        _prot: Protection,
+    ) -> Result<AddMapResult> {
+        bail!("not supported");
+    }
+
     /// Multiple MemRegions should be returned when the gpa is discontiguous or perms are different.
     fn export(&mut self, _iova: u64, _size: u64) -> Result<Vec<MemRegion>> {
         bail!("not supported");

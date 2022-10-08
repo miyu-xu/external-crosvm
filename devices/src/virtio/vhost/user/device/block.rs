@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,13 +17,13 @@ use base::warn;
 use base::Event;
 use base::Timer;
 use cros_async::sync::Mutex as AsyncMutex;
+use cros_async::AsyncTube;
 use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::TimerAsync;
 use data_model::DataInit;
 use futures::future::AbortHandle;
 use futures::future::Abortable;
-use sync::Mutex;
 pub use sys::start_device as run_block_device;
 pub use sys::Options;
 use vm_memory::GuestMemory;
@@ -32,8 +32,8 @@ use vmm_vhost::message::*;
 use crate::virtio;
 use crate::virtio::block::asynchronous::flush_disk;
 use crate::virtio::block::asynchronous::handle_queue;
+use crate::virtio::block::asynchronous::handle_vhost_user_command_tube;
 use crate::virtio::block::asynchronous::BlockAsync;
-use crate::virtio::block::build_config_space;
 use crate::virtio::block::DiskState;
 use crate::virtio::copy_config;
 use crate::virtio::vhost::user::device::handler::sys::Doorbell;
@@ -108,6 +108,15 @@ impl VhostUserDevice for BlockAsync {
         ))
         .detach();
 
+        if let Some(control_tube) = self.control_tube.take() {
+            let async_tube = AsyncTube::new(ex, control_tube)?;
+            ex.spawn_local(handle_vhost_user_command_tube(
+                async_tube,
+                Rc::clone(&disk_state),
+            ))
+            .detach();
+        }
+
         Ok(Box::new(BlockBackend {
             ex: ex.clone(),
             disk_state,
@@ -171,7 +180,7 @@ impl VhostUserBackend for BlockBackend {
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         let config_space = {
             let disk_size = self.disk_size.load(Ordering::Relaxed);
-            build_config_space(disk_size, self.seg_max, self.block_size, NUM_QUEUES)
+            BlockAsync::build_config_space(disk_size, self.seg_max, self.block_size, NUM_QUEUES)
         };
         copy_config(data, 0, config_space.as_slice(), offset);
     }
@@ -185,7 +194,7 @@ impl VhostUserBackend for BlockBackend {
         idx: usize,
         mut queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Arc<Mutex<Doorbell>>,
+        doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
         if let Some(handle) = self.workers.get_mut(idx).and_then(Option::take) {

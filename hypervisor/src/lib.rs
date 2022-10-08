@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -380,7 +380,7 @@ pub enum IoEventAddress {
 }
 
 /// Used in `Vm::register_ioevent` to indicate a size and optionally value to match.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 pub enum Datamatch {
     AnyLength,
     U8(Option<u8>),
@@ -557,4 +557,22 @@ pub enum ProtectionType {
     /// protected VM firmware loaded, and simulating protected mode as much as possible. This is
     /// useful for debugging the protected VM firmware and other protected mode issues.
     UnprotectedWithFirmware,
+}
+
+#[derive(Clone, Copy)]
+pub struct Config {
+    #[cfg(target_arch = "aarch64")]
+    /// enable the Memory Tagging Extension in the guest
+    pub mte: bool,
+    pub protection_type: ProtectionType,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            #[cfg(target_arch = "aarch64")]
+            mte: false,
+            protection_type: ProtectionType::Unprotected,
+        }
+    }
 }

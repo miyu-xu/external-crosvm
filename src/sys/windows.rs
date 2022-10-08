@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -57,7 +57,6 @@ use base::warn;
 use base::BlockingMode;
 use base::Event;
 use base::EventToken;
-use base::ExternalMapping;
 #[cfg(feature = "gpu")]
 use base::FramingMode;
 use base::FromRawDescriptor;
@@ -80,6 +79,7 @@ use devices::tsc::standard_deviation;
 use devices::tsc::TscSyncMitigations;
 use devices::virtio;
 use devices::virtio::block::block::DiskOption;
+#[cfg(feature = "balloon")]
 use devices::virtio::BalloonMode;
 use devices::virtio::Console;
 #[cfg(feature = "slirp")]
@@ -188,7 +188,6 @@ use vm_control::ServiceSendToGpu;
 use vm_control::VmMemoryRequest;
 use vm_control::VmRunMode;
 use vm_memory::GuestMemory;
-use winapi::um::winnt::FILE_SHARE_READ;
 #[cfg(feature = "whpx")]
 use x86_64::cpuid::adjust_cpuid;
 #[cfg(feature = "whpx")]
@@ -210,6 +209,7 @@ use crate::crosvm::sys::config::IrqChipKind;
 use crate::crosvm::sys::windows::exit::Exit;
 use crate::crosvm::sys::windows::exit::ExitContext;
 use crate::crosvm::sys::windows::exit::ExitContextAnyhow;
+#[cfg(feature = "stats")]
 use crate::crosvm::sys::windows::stats::StatisticsCollector;
 use crate::sys::windows::metrics::log_descriptor;
 use crate::sys::windows::metrics::MetricEventType;
@@ -238,7 +238,7 @@ pub enum ExitState {
 type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 
 fn create_vhost_user_block_device(cfg: &Config, disk_device_tube: Tube) -> DeviceResult {
-    let features = virtio::base_features(cfg.protected_vm);
+    let features = virtio::base_features(cfg.protection_type);
     let dev = virtio::vhost::user::vmm::Block::new(features, disk_device_tube).exit_context(
         Exit::VhostUserBlockDeviceNew,
         "failed to set up vhost-user block device",
@@ -251,24 +251,10 @@ fn create_vhost_user_block_device(cfg: &Config, disk_device_tube: Tube) -> Devic
 }
 
 fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) -> DeviceResult {
-    // Lock the disk image to prevent other crosvm instances from using it, unless it is read_only.
-    let share_flags = if disk.read_only { FILE_SHARE_READ } else { 0 };
-    let raw_image: File = OpenOptions::new()
-        .read(true)
-        .write(!disk.read_only)
-        .share_mode(share_flags)
-        .open(&disk.path)
-        .with_exit_context(Exit::Disk, || {
-            format!("failed to load disk image {}", disk.path.display())
-        })?;
-
-    let disk_file =
-        disk::create_disk_file(raw_image, disk.sparse, disk::MAX_NESTING_DEPTH, &disk.path)
-            .exit_context(Exit::CreateAsyncDisk, "failed to create virtual disk")?;
-    let features = virtio::base_features(cfg.protected_vm);
-    let dev = virtio::Block::new(
+    let features = virtio::base_features(cfg.protection_type);
+    let dev = virtio::BlockAsync::new(
         features,
-        disk_file,
+        disk.open()?,
         disk.read_only,
         disk.sparse,
         disk.block_size,
@@ -290,34 +276,40 @@ fn create_gpu_device(
     gpu_device_tube: Tube,
     resource_bridges: Vec<Tube>,
     event_devices: Vec<EventDevice>,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
     #[cfg(feature = "kiwi")] gpu_device_service_tube: Tube,
 ) -> DeviceResult {
     let gpu_parameters = cfg
         .gpu_parameters
         .as_ref()
         .expect("No GPU parameters provided in config!");
-    let display_backends = vec![virtio::DisplayBackend::WinAPI(
-        (&gpu_parameters.display_params).into(),
+    let display_backends = vec![virtio::DisplayBackend::WinApi(
+        (&gpu_parameters.display_params[0]).into(),
     )];
+    let wndproc_thread = virtio::gpu::start_wndproc_thread(
+        #[cfg(feature = "kiwi")]
+        gpu_parameters.display_params[0]
+            .gpu_main_display_tube
+            .clone(),
+        #[cfg(not(feature = "kiwi"))]
+        None,
+    )
+    .expect("Failed to start wndproc_thread!");
 
-    let features = virtio::base_features(cfg.protected_vm);
+    let features = virtio::base_features(cfg.protection_type);
     let dev = virtio::Gpu::new(
         vm_evt_wrtube
             .try_clone()
             .exit_context(Exit::CloneTube, "failed to clone tube")?,
-        Some(gpu_device_tube),
-        NonZeroU8::new(1).unwrap(), // number of scanouts
         resource_bridges,
         display_backends,
         gpu_parameters,
         event_devices,
-        map_request,
         /* external_blob= */ false,
         features,
         BTreeMap::new(),
         #[cfg(feature = "kiwi")]
         Some(gpu_device_service_tube),
+        wndproc_thread,
     );
 
     Ok(VirtioDeviceStub {
@@ -339,7 +331,7 @@ fn create_multi_touch_device(
         event_pipe,
         width,
         height,
-        virtio::base_features(cfg.protected_vm),
+        virtio::base_features(cfg.protection_type),
     )
     .exit_context(Exit::InputDeviceNew, "failed to set up input device")?;
     Ok(VirtioDeviceStub {
@@ -350,7 +342,7 @@ fn create_multi_touch_device(
 
 #[cfg(feature = "gpu")]
 fn create_mouse_device(cfg: &Config, event_pipe: StreamChannel, idx: u32) -> DeviceResult {
-    let dev = virtio::new_mouse(idx, event_pipe, virtio::base_features(cfg.protected_vm))
+    let dev = virtio::new_mouse(idx, event_pipe, virtio::base_features(cfg.protection_type))
         .exit_context(Exit::InputDeviceNew, "failed to set up input device")?;
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -376,7 +368,7 @@ fn create_net_device(
 
 #[cfg(feature = "slirp")]
 fn create_vhost_user_net_device(cfg: &Config, net_device_tube: Tube) -> DeviceResult {
-    let features = virtio::base_features(cfg.protected_vm);
+    let features = virtio::base_features(cfg.protection_type);
     let dev = virtio::vhost::user::vmm::Net::new(features, net_device_tube).exit_context(
         Exit::VhostUserNetDeviceNew,
         "failed to set up vhost-user net device",
@@ -389,7 +381,7 @@ fn create_vhost_user_net_device(cfg: &Config, net_device_tube: Tube) -> DeviceRe
 }
 
 fn create_rng_device(cfg: &Config) -> DeviceResult {
-    let dev = virtio::Rng::new(virtio::base_features(cfg.protected_vm))
+    let dev = virtio::Rng::new(virtio::base_features(cfg.protection_type))
         .exit_context(Exit::RngDeviceNew, "failed to set up rng")?;
 
     Ok(VirtioDeviceStub {
@@ -402,7 +394,7 @@ fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult
     let mut keep_rds = Vec::new();
     let evt = Event::new().exit_context(Exit::CreateEvent, "failed to create event")?;
     let dev = param
-        .create_serial_device::<Console>(cfg.protected_vm, &evt, &mut keep_rds)
+        .create_serial_device::<Console>(cfg.protection_type, &evt, &mut keep_rds)
         .exit_context(Exit::CreateConsole, "failed to create console device")?;
 
     Ok(VirtioDeviceStub {
@@ -412,6 +404,7 @@ fn create_console_device(cfg: &Config, param: &SerialParameters) -> DeviceResult
 }
 
 #[allow(dead_code)] // TODO(b/234031017): balloon device startup gets stuck on Windows
+#[cfg(feature = "balloon")]
 fn create_balloon_device(
     cfg: &Config,
     balloon_device_tube: Tube,
@@ -420,7 +413,7 @@ fn create_balloon_device(
     init_balloon_size: u64,
 ) -> DeviceResult {
     let dev = virtio::Balloon::new(
-        virtio::base_features(cfg.protected_vm),
+        virtio::base_features(cfg.protection_type),
         balloon_device_tube,
         dynamic_mapping_device_tube,
         inflate_tube,
@@ -446,7 +439,7 @@ fn create_vsock_device(cfg: &Config) -> DeviceResult {
     let dev = virtio::Vsock::new(
         cfg.cid.unwrap_or(DEFAULT_GUEST_CID),
         cfg.host_guid.clone(),
-        virtio::base_features(cfg.protected_vm),
+        virtio::base_features(cfg.protection_type),
     )
     .exit_context(
         Exit::UserspaceVsockDeviceNew,
@@ -470,7 +463,6 @@ fn create_virtio_devices(
     _dynamic_mapping_device_tube: Option<Tube>,
     _inflate_tube: Option<Tube>,
     _init_balloon_size: u64,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
     #[cfg(feature = "kiwi")] gpu_device_service_tube: Tube,
     tsc_frequency: u64,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
@@ -573,7 +565,7 @@ fn create_virtio_devices(
         let dev = virtio::new_keyboard(
             /* idx= */ 0,
             virtio_input_pipe,
-            virtio::base_features(cfg.protected_vm),
+            virtio::base_features(cfg.protection_type),
         )
         .exit_context(Exit::InputDeviceNew, "failed to set up input device")?;
         devs.push(VirtioDeviceStub {
@@ -588,7 +580,6 @@ fn create_virtio_devices(
             gpu_device_tube,
             resource_bridges,
             event_devices,
-            map_request,
             #[cfg(feature = "kiwi")]
             gpu_device_service_tube,
         )?);
@@ -610,7 +601,6 @@ fn create_devices(
     dynamic_mapping_device_tube: Option<Tube>,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
     #[allow(unused)] ac97_device_tubes: Vec<Tube>,
     #[cfg(feature = "kiwi")] gpu_device_service_tube: Tube,
     tsc_frequency: u64,
@@ -625,7 +615,6 @@ fn create_devices(
         dynamic_mapping_device_tube,
         inflate_tube,
         init_balloon_size,
-        map_request,
         #[cfg(feature = "kiwi")]
         gpu_device_service_tube,
         tsc_frequency,
@@ -757,9 +746,8 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     broker_shutdown_evt: Option<Event>,
     balloon_host_tube: Option<Tube>,
     pvclock_host_tube: Option<Tube>,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
     mut gralloc: RutabagaGralloc,
-    stats: Option<Arc<Mutex<StatisticsCollector>>>,
+    #[cfg(feature = "stats")] stats: Option<Arc<Mutex<StatisticsCollector>>>,
     #[cfg(feature = "kiwi")] service_pipe_name: Option<String>,
     ac97_host_tubes: Vec<Tube>,
     memory_size_mb: u64,
@@ -785,7 +773,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         },
         #[cfg(feature = "kiwi")]
         ServiceIpc,
-        #[cfg(feature = "proto-tube-hack")]
+        #[cfg(feature = "kiwi")]
         ProtoIpc,
         #[cfg(all(feature = "kiwi", feature = "anti-tamper"))]
         AntiTamper,
@@ -799,7 +787,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         Tube::pair_with_buffer_size(anti_tamper::MAX_CHALLENGE_SIZE)
             .expect("Could not create Tube::pair()!");
 
-    #[cfg(feature = "proto-tube-hack")]
+    #[cfg(feature = "kiwi")]
     let (proto_main_loop_tube, proto_service_ipc_tube) =
         base::ProtoTube::pair_with_buffer_size(anti_tamper::MAX_CHALLENGE_SIZE)
             .expect("Could not create Tube::pair()!");
@@ -808,7 +796,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     let _service_ipc = ServiceIpc::start_ipc_listening_loops(
         service_pipe_name,
         ipc_service_ipc_tube,
-        #[cfg(feature = "proto-tube-hack")]
+        #[cfg(feature = "kiwi")]
         proto_service_ipc_tube,
     );
 
@@ -838,7 +826,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         (vm_evt_rdtube.get_read_notifier(), Token::VmEvent),
         #[cfg(feature = "kiwi")]
         (ipc_main_loop_tube.get_read_notifier(), Token::ServiceIpc),
-        #[cfg(feature = "proto-tube-hack")]
+        #[cfg(feature = "kiwi")]
         (proto_main_loop_tube.get_read_notifier(), Token::ProtoIpc),
     ])
     .exit_context(
@@ -893,16 +881,12 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             .collect(),
     };
 
-    #[cfg(all(
-        feature = "kiwi",
-        feature = "anti-tamper",
-        not(feature = "proto-tube-hack")
-    ))]
+    #[cfg(all(feature = "kiwi", feature = "anti-tamper", not(feature = "kiwi")))]
     let (anti_tamper_main_thread_tube, anti_tamper_dedicated_thread_tube) =
         Tube::pair_with_buffer_size(anti_tamper::MAX_CHALLENGE_SIZE)
             .expect("Could not create Tube::pair()!");
 
-    #[cfg(all(feature = "kiwi", feature = "anti-tamper", feature = "proto-tube-hack"))]
+    #[cfg(all(feature = "anti-tamper", feature = "kiwi"))]
     let (anti_tamper_main_thread_tube, anti_tamper_dedicated_thread_tube) =
         base::ProtoTube::pair_with_buffer_size(anti_tamper::MAX_CHALLENGE_SIZE)
             .expect("Could not create Tube::pair()!");
@@ -936,6 +920,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         &exit_evt,
         &vm_evt_wrtube,
         &pvclock_host_tube,
+        #[cfg(feature = "stats")]
         &stats,
         host_cpu_topology,
         run_mode_arc.clone(),
@@ -1000,8 +985,8 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                         let response = request.execute(
                                             &mut guest_os.vm,
                                             &mut sys_allocator_mutex.lock(),
-                                            Arc::clone(&map_request),
                                             &mut gralloc,
+                                            &mut None,
                                         );
                                         if let Err(e) = tube.send(&response) {
                                             error!("failed to send VmMemoryControlResponse: {}", e);
@@ -1100,7 +1085,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         }
                     }
                 }
-                #[cfg(feature = "proto-tube-hack")]
+                #[cfg(feature = "kiwi")]
                 Token::ProtoIpc => {
                     anti_tamper::forward_security_challenge(
                         &proto_main_loop_tube,
@@ -1183,9 +1168,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 
                             run_mode_arc.set_and_notify(VmRunMode::Running);
                         }
-                        #[cfg(any(not(feature = "anti-tamper"), feature = "proto-tube-hack"))]
+                        #[cfg(any(not(feature = "anti-tamper"), feature = "kiwi"))]
                         MessageFromService::ReceiveSecurityChallenge(_) => {}
-                        #[cfg(all(feature = "anti-tamper", not(feature = "proto-tube-hack")))]
+                        #[cfg(all(feature = "anti-tamper", not(feature = "kiwi")))]
                         MessageFromService::ReceiveSecurityChallenge(security_challenge) => {
                             if let Err(_e) = anti_tamper_main_thread_tube.send(&security_challenge)
                             {
@@ -1268,29 +1253,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     },
                     Err(_e) => {}
                 },
-                #[cfg(all(
-                    feature = "kiwi",
-                    feature = "anti-tamper",
-                    not(feature = "proto-tube-hack")
-                ))]
-                Token::AntiTamper => {
-                    match anti_tamper_main_thread_tube.recv::<MessageToService>() {
-                        Ok(msg) => {
-                            if let Err(_e) = ipc_main_loop_tube.send(&msg) {
-                                #[cfg(debug_assertions)]
-                                error!("Failed to send anti-tamper signal to the service: {}", _e);
-                            }
-                        }
-                        Err(_e) => {
-                            #[cfg(debug_assertions)]
-                            error!(
-                                "Failed to receive challenge signal from anti-tamper thread: {}",
-                                _e
-                            );
-                        }
-                    }
-                }
-                #[cfg(all(feature = "kiwi", feature = "anti-tamper", feature = "proto-tube-hack"))]
+                #[cfg(all(feature = "kiwi", feature = "anti-tamper"))]
                 Token::AntiTamper => anti_tamper::forward_security_signal(
                     &anti_tamper_main_thread_tube,
                     &ipc_main_loop_tube,
@@ -1315,7 +1278,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         _ => {}
                     }*/
                 }
-                #[cfg(feature = "proto-tube-hack")]
+                #[cfg(feature = "kiwi")]
                 Token::ProtoIpc => {}
                 #[cfg(feature = "kiwi")]
                 Token::ServiceIpc => {}
@@ -1378,6 +1341,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 
     let _ = irq_join_handle.join();
 
+    #[cfg(feature = "stats")]
     if let Some(stats) = stats {
         println!("Statistics Collected:\n{}", stats.lock());
         println!("Statistics JSON:\n{}", stats.lock().json());
@@ -1587,7 +1551,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
                 .ok_or_else(|| anyhow!("requested swiotlb size too large"))?,
         )
     } else {
-        match cfg.protected_vm {
+        match cfg.protection_type {
             ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware => {
                 Some(64 * 1024 * 1024)
             }
@@ -1626,6 +1590,9 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         cpu_capacity: cfg.cpu_capacity.clone(),
         no_smt: cfg.no_smt,
         hugepages: cfg.hugepages,
+        hv_cfg: hypervisor::Config {
+            protection_type: cfg.protection_type,
+        },
         vm_image,
         android_fstab: cfg
             .android_fstab
@@ -1652,7 +1619,6 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .collect::<Result<Vec<SDT>>>()?,
         rt_cpus: cfg.rt_cpus.clone(),
         delay_rt: cfg.delay_rt,
-        protected_vm: cfg.protected_vm,
         dmi_path: cfg.dmi_path.clone(),
         no_i8042: cfg.no_i8042,
         no_rtc: cfg.no_rtc,
@@ -1665,6 +1631,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         pci_low_start: cfg.pci_low_start,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         pcie_ecam: cfg.pcie_ecam,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        oem_strings: cfg.oem_strings.clone(),
     })
 }
 
@@ -2048,7 +2016,6 @@ where
 
     let gralloc =
         RutabagaGralloc::new().exit_context(Exit::CreateGralloc, "failed to create gralloc")?;
-    let map_request: Arc<Mutex<Option<ExternalMapping>>> = Arc::new(Mutex::new(None));
 
     let (vm_evt_wrtube, vm_evt_rdtube) =
         Tube::directional_pair().context("failed to create vm event tube")?;
@@ -2121,7 +2088,6 @@ where
         dynamic_mapping_device_tube,
         /* inflate_tube= */ None,
         init_balloon_size,
-        Arc::clone(&map_request),
         ac97_host_tubes,
         #[cfg(feature = "kiwi")]
         gpu_device_service_tube,
@@ -2149,6 +2115,7 @@ where
 
     let _render_node_host = ();
 
+    #[cfg(feature = "stats")]
     let stats = if cfg.exit_stats {
         Some(Arc::new(Mutex::new(StatisticsCollector::new())))
     } else {
@@ -2165,8 +2132,8 @@ where
         cfg.broker_shutdown_event.take(),
         balloon_host_tube,
         pvclock_host_tube,
-        Arc::clone(&map_request),
         gralloc,
+        #[cfg(feature = "stats")]
         stats,
         #[cfg(feature = "kiwi")]
         cfg.service_pipe_name,

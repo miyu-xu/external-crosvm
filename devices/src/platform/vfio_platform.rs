@@ -1,6 +1,7 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::fs::File;
 use std::sync::Arc;
 use std::u32;
@@ -204,6 +205,7 @@ impl VfioPlatformDevice {
                             descriptor,
                             offset,
                             size: mmap_size,
+                            gpu_blob: false,
                         },
                         dest: VmMemoryDestination::GuestPhysicalAddress(guest_map_start),
                         prot: Protection::read_write(),

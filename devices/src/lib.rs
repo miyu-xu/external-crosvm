@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,6 +43,7 @@ cfg_if::cfg_if! {
     }
 }
 
+pub use self::acpi::ACPIPMFixedEvent;
 pub use self::acpi::ACPIPMResource;
 pub use self::bat::BatteryError;
 pub use self::bat::GoldfishBattery;
@@ -88,6 +89,7 @@ pub use self::pci::PciInterruptPin;
 pub use self::pci::PciRoot;
 pub use self::pci::PciRootCommand;
 pub use self::pci::PciVirtualConfigMmio;
+pub use self::pci::PreferredIrq;
 pub use self::pci::StubPciDevice;
 pub use self::pci::StubPciParameters;
 pub use self::pl030::Pl030;
@@ -99,6 +101,7 @@ pub use self::serial_device::SerialParameters;
 pub use self::serial_device::SerialType;
 #[cfg(feature = "tpm")]
 pub use self::software_tpm::SoftwareTpm;
+pub use self::virtio::VirtioMmioDevice;
 pub use self::virtio::VirtioPciDevice;
 #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
 pub use self::vtpm_proxy::VtpmProxy;
@@ -122,7 +125,7 @@ cfg_if::cfg_if! {
         pub use self::pci::{
             CoIommuDev, CoIommuParameters, CoIommuUnpinPolicy,
             PvPanicCode, PcieRootPort, PcieHostPort,
-            PvPanicPciDevice, VfioPciDevice, PciBridge,
+            PvPanicPciDevice, VfioPciDevice, PciBridge, PcieDownstreamPort, PcieUpstreamPort
         };
         pub use self::platform::VfioPlatformDevice;
         pub use self::proxy::Error as ProxyError;

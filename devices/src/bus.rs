@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,7 @@ use crate::PciAddress;
 use crate::PciDevice;
 #[cfg(unix)]
 use crate::VfioPlatformDevice;
+use crate::VirtioMmioDevice;
 
 /// Information about how a device was accessed.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
@@ -125,6 +126,11 @@ pub trait BusDevice: Send {
 
     /// Invoked when the device is destroyed
     fn destroy_device(&mut self) {}
+
+    /// Returns the secondary bus number if this bus device is pci bridge
+    fn is_bridge(&self) -> Option<u8> {
+        None
+    }
 }
 
 pub trait BusDeviceSync: BusDevice + Sync {
@@ -141,7 +147,7 @@ pub trait BusResumeDevice: Send {
 /// The key to identify hotplug device from host view.
 /// like host sysfs path for vfio pci device, host disk file
 /// path for virtio block device
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum HostHotPlugKey {
     UpstreamPort { host_addr: PciAddress },
     DownstreamPort { host_addr: PciAddress },
@@ -196,6 +202,15 @@ pub trait BusDeviceObj {
     }
     #[cfg(unix)]
     fn into_platform_device(self: Box<Self>) -> Option<Box<VfioPlatformDevice>> {
+        None
+    }
+    fn as_virtio_mmio_device(&self) -> Option<&VirtioMmioDevice> {
+        None
+    }
+    fn as_virtio_mmio_device_mut(&mut self) -> Option<&mut VirtioMmioDevice> {
+        None
+    }
+    fn into_virtio_mmio_device(self: Box<Self>) -> Option<Box<VirtioMmioDevice>> {
         None
     }
 }

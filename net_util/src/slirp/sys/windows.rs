@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@ use std::os::raw::*;
 use std::os::windows::io::AsRawHandle;
 use std::thread;
 
+use base::info;
 use base::named_pipes;
 use base::named_pipes::BlockingMode;
 use base::named_pipes::FramingMode;
@@ -123,6 +124,7 @@ impl Slirp {
 
         let disable_access_to_host = !cfg!("guest-to-host-net-loopback");
 
+        info!("starting slirp loop...");
         match handler::start_slirp(
             slirp_pipe,
             shutdown_event,

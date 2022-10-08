@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Copyright 2022 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,6 +12,7 @@ DEPS = [
 def RunSteps(api):
     with api.crosvm.container_build_context():
         api.crosvm.step_in_container("Build", ["cargo", "build"])
+        api.crosvm.upload_coverage("coverage.lcov")
 
 
 def GenTests(api):

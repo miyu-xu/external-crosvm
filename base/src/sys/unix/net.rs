@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -717,6 +717,17 @@ pub struct UnixSeqpacketListener {
 impl UnixSeqpacketListener {
     /// Creates a new `UnixSeqpacketListener` bound to the given path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        if path.as_ref().starts_with("/proc/self/fd/") {
+            let fd = path
+                .as_ref()
+                .file_name()
+                .expect("Failed to get fd filename")
+                .to_str()
+                .expect("fd filename should be unicode")
+                .parse::<i32>()
+                .expect("fd should be an integer");
+            return Ok(UnixSeqpacketListener { fd });
+        }
         // Safe socket initialization since we handle the returned error.
         let fd = unsafe {
             match libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET, 0) {

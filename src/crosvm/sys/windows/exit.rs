@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 use anyhow::Context;
-
-use crate::crosvm::sys::config::ProcessType;
+use win_util::ProcessType;
 
 pub type ExitCode = i32;
 

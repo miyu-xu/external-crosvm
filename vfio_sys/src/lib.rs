@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -51,7 +51,7 @@ ioctl_io_nr!(
 );
 
 ioctl_io_nr!(
-    ACPI_GPE_FORWARD_SET,
+    ACPI_EVT_FORWARD_SET,
     PLAT_IRQ_FORWARD_TYPE,
-    GPE_FORWARD_BASE
+    ACPI_EVT_FORWARD_BASE
 );

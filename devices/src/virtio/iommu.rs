@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,6 +31,8 @@ use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
 use base::Event;
+use base::MappedRegion;
+use base::MemoryMapping;
 use base::Protection;
 use base::RawDescriptor;
 use base::Result as SysResult;
@@ -44,6 +46,7 @@ use data_model::DataInit;
 use data_model::Le64;
 use futures::select;
 use futures::FutureExt;
+use hypervisor::MemSlot;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error;
@@ -168,6 +171,12 @@ pub enum IommuError {
 // value: reference counter and MemoryMapperTrait
 type DomainMap = BTreeMap<u32, (u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>)>;
 
+struct DmabufRegionEntry {
+    mmap: MemoryMapping,
+    mem_slot: MemSlot,
+    len: u64,
+}
+
 // Shared state for the virtio-iommu device.
 struct State {
     mem: GuestMemory,
@@ -186,6 +195,9 @@ struct State {
     // key: endpoint PCI address
     // value: reference counter and MemoryMapperTrait
     endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
+    // Contains dmabuf regions
+    // key: guest physical address
+    dmabuf_mem: BTreeMap<u64, DmabufRegionEntry>,
 }
 
 impl State {
@@ -393,15 +405,40 @@ impl State {
         if let Some(mapper) = self.domain_map.get(&domain) {
             let size = u64::from(req.virt_end) - u64::from(req.virt_start) + 1u64;
 
-            let vfio_map_result = mapper.1.lock().add_map(MappingInfo {
-                iova: req.virt_start.into(),
-                gpa: GuestAddress(req.phys_start.into()),
-                size,
-                prot: match write_en {
-                    true => Protection::read_write(),
-                    false => Protection::read(),
+            let dmabuf_map = self
+                .dmabuf_mem
+                .range(..=u64::from(req.phys_start))
+                .next_back()
+                .and_then(|(addr, region)| {
+                    if u64::from(req.phys_start) + size <= addr + region.len {
+                        Some(region.mmap.as_ptr() as u64 + (u64::from(req.phys_start) - addr))
+                    } else {
+                        None
+                    }
+                });
+
+            let prot = match write_en {
+                true => Protection::read_write(),
+                false => Protection::read(),
+            };
+
+            let vfio_map_result = match dmabuf_map {
+                // Safe because [dmabuf_map, dmabuf_map + size) refers to an external mmap'ed region.
+                Some(dmabuf_map) => unsafe {
+                    mapper.1.lock().vfio_dma_map(
+                        req.virt_start.into(),
+                        dmabuf_map as u64,
+                        size,
+                        prot,
+                    )
                 },
-            });
+                None => mapper.1.lock().add_map(MappingInfo {
+                    iova: req.virt_start.into(),
+                    gpa: GuestAddress(req.phys_start.into()),
+                    size,
+                    prot,
+                }),
+            };
 
             match vfio_map_result {
                 Ok(AddMapResult::Ok) => (),
@@ -565,7 +602,7 @@ async fn request_queue<I: SignalableInterrupt>(
     state: &Rc<RefCell<State>>,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: &I,
+    interrupt: I,
 ) -> Result<()> {
     loop {
         let mem = state.borrow().mem.clone();
@@ -596,7 +633,7 @@ async fn request_queue<I: SignalableInterrupt>(
         }
 
         queue.add_used(&mem, desc_index, len as u32);
-        queue.trigger_interrupt(&mem, interrupt);
+        queue.trigger_interrupt(&mem, &interrupt);
     }
 }
 
@@ -617,8 +654,6 @@ fn run(
         .into_iter()
         .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue"))
         .collect();
-    let interrupt = Rc::new(RefCell::new(interrupt));
-    let interrupt_ref = &*interrupt.borrow();
 
     let (req_queue, req_evt) = (queues.remove(0), evts_async.remove(0));
 
@@ -640,7 +675,7 @@ fn run(
 
     let f_handle_translate_request =
         sys::handle_translate_request(&ex, &state, request_tube, response_tubes);
-    let f_request = request_queue(&state, req_queue, req_evt, interrupt_ref);
+    let f_request = request_queue(&state, req_queue, req_evt, interrupt);
 
     let command_tube = AsyncTube::new(&ex, iommu_device_tube).unwrap();
     // Future to handle command messages from host, such as passing vfio containers.
@@ -721,7 +756,9 @@ impl Iommu {
         };
 
         let mut avail_features: u64 = base_features;
-        avail_features |= 1 << VIRTIO_IOMMU_F_MAP_UNMAP | 1 << VIRTIO_IOMMU_F_INPUT_RANGE;
+        avail_features |= 1 << VIRTIO_IOMMU_F_MAP_UNMAP
+            | 1 << VIRTIO_IOMMU_F_INPUT_RANGE
+            | 1 << VIRTIO_IOMMU_F_MMIO;
 
         if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
             avail_features |= 1 << VIRTIO_IOMMU_F_PROBE;
@@ -835,6 +872,7 @@ impl VirtioDevice for Iommu {
                             endpoint_map: BTreeMap::new(),
                             domain_map: BTreeMap::new(),
                             endpoints: eps,
+                            dmabuf_mem: BTreeMap::new(),
                         };
                         let result = run(
                             state,

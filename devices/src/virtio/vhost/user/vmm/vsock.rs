@@ -1,22 +1,19 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::thread;
 
 use base::error;
 use base::Event;
 use base::RawDescriptor;
-use data_model::Le64;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
 use crate::virtio::vhost::user::vmm::handler::VhostUserHandler;
-use crate::virtio::vhost::user::vmm::Error;
+use crate::virtio::vhost::user::vmm::Connection;
 use crate::virtio::vhost::user::vmm::Result;
 use crate::virtio::vhost::vsock;
 use crate::virtio::DeviceType;
@@ -32,16 +29,14 @@ pub struct Vsock {
 }
 
 impl Vsock {
-    pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Vsock> {
-        let socket = UnixStream::connect(socket_path).map_err(Error::SocketConnect)?;
-
+    pub fn new(base_features: u64, connection: Connection) -> Result<Vsock> {
         let init_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let allow_features = init_features | base_features;
         let allow_protocol_features =
             VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::CONFIG;
 
-        let mut handler = VhostUserHandler::new_from_stream(
-            socket,
+        let mut handler = VhostUserHandler::new_from_connection(
+            connection,
             vsock::QUEUE_SIZES.len() as u64,
             allow_features,
             init_features,
@@ -95,7 +90,7 @@ impl VirtioDevice for Vsock {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        if let Err(e) = self.handler.borrow_mut().read_config::<Le64>(offset, data) {
+        if let Err(e) = self.handler.borrow_mut().read_config(offset, data) {
             error!("failed to read config: {}", e);
         }
     }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,26 @@ use serde::Serialize;
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::IntoRawDescriptor;
+use crate::descriptor::SafeDescriptor;
 use crate::platform::Event as PlatformEvent;
-pub use crate::platform::EventReadResult;
 use crate::RawDescriptor;
 use crate::Result;
+
+/// Result of reading an Event with a timeout.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EventReadResult {
+    /// Number of times the event has been written to. Always non-negative.
+    Count(u64),
+    /// Timed out before witnessing a write.
+    Timeout,
+}
 
 /// See the [platform-specific Event struct](crate::platform::Event) for struct- and method-level
 /// documentation.
 // TODO(b:231344063) Move/update documentation.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Event(pub PlatformEvent);
+pub struct Event(pub(crate) PlatformEvent);
 impl Event {
     pub fn new() -> Result<Event> {
         PlatformEvent::new().map(Event)
@@ -58,5 +67,11 @@ impl FromRawDescriptor for Event {
 impl IntoRawDescriptor for Event {
     fn into_raw_descriptor(self) -> RawDescriptor {
         self.0.into_raw_descriptor()
+    }
+}
+
+impl From<Event> for SafeDescriptor {
+    fn from(evt: Event) -> Self {
+        Self::from(evt.0)
     }
 }

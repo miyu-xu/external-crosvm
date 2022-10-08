@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -108,12 +108,18 @@ pub enum Error {
     #[cfg(windows)]
     #[error("failed to flush named pipe: {0}")]
     Flush(io::Error),
+    #[cfg(unix)]
+    #[error("byte framing mode is not supported")]
+    InvalidFramingMode,
     #[error("failed to serialize/deserialize json from packet: {0}")]
     Json(serde_json::Error),
     #[error("cancelled a queued async operation")]
     OperationCancelled,
     #[error("failed to crate tube pair: {0}")]
     Pair(io::Error),
+    #[cfg(windows)]
+    #[error("encountered protobuf error: {0}")]
+    Proto(protobuf::ProtobufError),
     #[error("failed to receive packet: {0}")]
     Recv(io::Error),
     #[error("Received a message with a zero sized body. This should not happen.")]
@@ -124,6 +130,8 @@ pub enum Error {
     SendIo(io::Error),
     #[error("failed to write packet to intermediate buffer: {0}")]
     SendIoBuf(io::Error),
+    #[error("attempted to send too many file descriptors")]
+    SendTooManyFds,
     #[error("failed to set recv timeout: {0}")]
     SetRecvTimeout(io::Error),
     #[error("failed to set send timeout: {0}")]

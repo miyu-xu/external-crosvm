@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,7 @@ pub fn handle_request<T: AsRef<Path> + std::fmt::Debug>(
 ) -> HandleRequestResult {
     match UnixSeqpacket::connect(&socket_path) {
         Ok(s) => {
-            let socket = Tube::new(s);
+            let socket = Tube::new_from_unix_seqpacket(s);
             if let Err(e) = socket.send(request) {
                 error!(
                     "failed to send request to socket at '{:?}': {}",

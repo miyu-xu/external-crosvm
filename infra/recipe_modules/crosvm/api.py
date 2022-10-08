@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Copyright 2022 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -144,6 +144,26 @@ class CrosvmApi(recipe_api.RecipeApi):
         result.presentation.step_text = value
         return value
 
+    def upload_coverage(self, filename):
+        with self.m.step.nest("Uploading coverage"):
+            codecov = self.m.cipd.ensure_tool("crosvm/codecov/${platform}", "latest")
+            sha = self.get_git_sha()
+            self.m.step(
+                "Uploading to covecov.io",
+                [
+                    "bash",
+                    self.resource("codecov_wrapper.sh"),
+                    codecov,
+                    "--nonZero",  # Enables error codes
+                    "--slug=google/crosvm",
+                    "--sha=" + sha,
+                    "--branch=main",
+                    "-X=search",  # Don't search for coverage files, just upload the file below.
+                    "-f",
+                    filename,
+                ],
+            )
+
     def __prepare_rust(self):
         """
         Prepares the rust toolchain via rustup.
@@ -246,6 +266,14 @@ class CrosvmApi(recipe_api.RecipeApi):
                         self.source_dir.join("tools/dev_container"),
                         "--verbose",
                         "--stop",
+                    ],
+                )
+                self.m.step(
+                    "Force pull dev_container",
+                    [
+                        "vpython3",
+                        self.source_dir.join("tools/dev_container"),
+                        "--pull",
                     ],
                 )
                 self.m.crosvm.step_in_container("Ensure dev container exists", ["true"])

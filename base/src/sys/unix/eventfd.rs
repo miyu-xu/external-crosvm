@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,7 @@ use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::IntoRawDescriptor;
 use crate::descriptor::SafeDescriptor;
+use crate::EventReadResult;
 
 /// A safe wrapper around a Linux eventfd (man 2 eventfd).
 ///
@@ -31,17 +32,8 @@ use crate::descriptor::SafeDescriptor;
 /// and out of the KVM API. They can also be polled like any other file descriptor.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct EventFd {
+pub(crate) struct EventFd {
     event_handle: SafeDescriptor,
-}
-
-/// Wrapper around the return value of doing a read on an EventFd which distinguishes between
-/// getting a valid count of the number of times the eventfd has been written to and timing out
-/// waiting for the count to be non-zero.
-#[derive(Debug, PartialEq, Eq)]
-pub enum EventReadResult {
-    Count(u64),
-    Timeout,
 }
 
 impl EventFd {
