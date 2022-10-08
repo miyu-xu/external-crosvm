@@ -1,9 +1,8 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::path::Path;
 use std::thread;
 
 use anyhow::Result;
@@ -15,9 +14,9 @@ use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
 use crate::virtio::device_constants::video::all_backend_virtio_features;
-use crate::virtio::device_constants::video::virtio_video_config;
 use crate::virtio::device_constants::video::VideoDeviceType;
 use crate::virtio::device_constants::video::QUEUE_SIZES;
+use crate::virtio::vhost::user::vmm::Connection;
 use crate::virtio::vhost::user::vmm::VhostUserHandler;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
@@ -33,9 +32,9 @@ pub struct Video {
 }
 
 impl Video {
-    pub fn new<P: AsRef<Path>>(
+    pub fn new(
         base_features: u64,
-        socket_path: P,
+        connection: Connection,
         device_type: VideoDeviceType,
     ) -> Result<Video> {
         let allow_features = base_features
@@ -45,8 +44,8 @@ impl Video {
         let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
 
-        let handler = VhostUserHandler::new_from_path(
-            socket_path,
+        let handler = VhostUserHandler::new_from_connection(
+            connection,
             QUEUE_SIZES.len() as u64,
             allow_features,
             init_features,
@@ -90,11 +89,7 @@ impl VirtioDevice for Video {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        if let Err(e) = self
-            .handler
-            .borrow_mut()
-            .read_config::<virtio_video_config>(offset, data)
-        {
+        if let Err(e) = self.handler.borrow_mut().read_config(offset, data) {
             error!("failed to read video config: {}", e);
         }
     }

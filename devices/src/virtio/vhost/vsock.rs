@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -55,17 +55,24 @@ pub struct Vsock {
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
     pub fn new(base_features: u64, vhost_config: &VhostVsockConfig) -> anyhow::Result<Vsock> {
+        let vhost_vsock_device_default = PathBuf::from(VHOST_VSOCK_DEFAULT_PATH);
+        let vhost_vsock_device = vhost_config
+            .device
+            .as_ref()
+            .unwrap_or(&vhost_vsock_device_default);
         let device_file = open_file(
-            vhost_config
-                .device
-                .as_ref()
-                .unwrap_or(&PathBuf::from(VHOST_VSOCK_DEFAULT_PATH)),
+            vhost_vsock_device,
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK),
         )
-        .context("failed to open virtual socket device")?;
+        .with_context(|| {
+            format!(
+                "failed to open virtual socket device {}",
+                vhost_vsock_device.display(),
+            )
+        })?;
 
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
         let handle = VhostVsockHandle::new(device_file);
@@ -197,6 +204,7 @@ impl VirtioDevice for Vsock {
                         acked_features,
                         kill_evt,
                         None,
+                        self.supports_iommu(),
                     );
                     let activate_vqs = |handle: &VhostVsockHandle| -> Result<()> {
                         handle.set_cid(cid).map_err(Error::VhostVsockSetCid)?;

@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -71,11 +71,11 @@ use tube_transporter::TubeToken;
 use tube_transporter::TubeTransferData;
 use tube_transporter::TubeTransporter;
 use win_util::get_exit_code_process;
+use win_util::ProcessType;
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::um::processthreadsapi::TerminateProcess;
 
 use crate::bail_exit_code;
-use crate::crosvm::sys::config::ProcessType;
 use crate::crosvm::sys::windows::exit::to_process_type_error;
 use crate::crosvm::sys::windows::exit::Exit;
 use crate::crosvm::sys::windows::exit::ExitCode;
@@ -618,7 +618,7 @@ fn run_internal(mut cfg: Config) -> Result<()> {
                 None
             };
             anti_tamper::setup_common_metric_invariants(
-                &&cfg.product_version,
+                &cfg.product_version,
                 &cfg.product_channel,
                 &use_vulkan,
             );
@@ -704,13 +704,13 @@ fn init_broker_crash_reporting(cfg: &mut Config) -> Result<()> {
         // children.
         cfg.crash_pipe_name = Some(
             crash_report::setup_crash_reporting(create_crash_report_attrs(
-                &cfg,
+                cfg,
                 product_type::BROKER,
             ))
             .exit_context(Exit::CrashReportingInit, "failed to init crash reporting")?,
         );
     } else {
-        crash_report::setup_crash_reporting(create_crash_report_attrs(&cfg, product_type::BROKER))
+        crash_report::setup_crash_reporting(create_crash_report_attrs(cfg, product_type::BROKER))
             .exit_context(Exit::CrashReportingInit, "failed to init crash reporting")?;
     }
 

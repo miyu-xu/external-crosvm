@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,6 +36,9 @@ use super::MemRegion;
 #[sorted]
 #[derive(ThisError, Debug)]
 pub enum Error {
+    /// An error with EventAsync.
+    #[error("An error with an EventAsync: {0}")]
+    EventAsync(base::Error),
     /// An error with a polled(FD) source.
     #[error("An error with a poll source: {0}")]
     Poll(crate::sys::unix::poll_source::Error),
@@ -77,6 +80,7 @@ impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         use Error::*;
         match e {
+            EventAsync(e) => e.into(),
             Poll(e) => e.into(),
             Uring(e) => e.into(),
         }
@@ -271,7 +275,7 @@ mod tests {
     use crate::sys::unix::executor::async_poll_from_local;
     use crate::sys::unix::executor::async_uring_from;
     use crate::sys::unix::executor::async_uring_from_local;
-    use crate::sys::unix::uring_executor::use_uring;
+    use crate::sys::unix::uring_executor::is_uring_stable;
     use crate::sys::unix::FdExecutor;
     use crate::sys::unix::PollSource;
     use crate::sys::unix::URingExecutor;
@@ -315,7 +319,7 @@ mod tests {
 
     #[test]
     fn await_uring_from_poll() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         // Start a uring operation and then await the result from an FdExecutor.
@@ -349,7 +353,7 @@ mod tests {
 
     #[test]
     fn await_poll_from_uring() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         // Start a poll operation and then await the result from a URingExecutor.
@@ -383,7 +387,7 @@ mod tests {
 
     #[test]
     fn readvec() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go<F: AsRawDescriptor>(async_source: Box<dyn IoSourceExt<F>>) {
@@ -419,7 +423,7 @@ mod tests {
 
     #[test]
     fn writevec() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go<F: AsRawDescriptor>(async_source: Box<dyn IoSourceExt<F>>) {
@@ -454,7 +458,7 @@ mod tests {
 
     #[test]
     fn readmem() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go<F: AsRawDescriptor>(async_source: Box<dyn IoSourceExt<F>>) {
@@ -507,7 +511,7 @@ mod tests {
 
     #[test]
     fn writemem() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go<F: AsRawDescriptor>(async_source: Box<dyn IoSourceExt<F>>) {
@@ -546,7 +550,7 @@ mod tests {
 
     #[test]
     fn read_u64s() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go(async_source: File, ex: URingExecutor) -> u64 {
@@ -562,7 +566,7 @@ mod tests {
 
     #[test]
     fn read_eventfds() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -601,7 +605,7 @@ mod tests {
 
     #[test]
     fn fsync() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
         async fn go<F: AsRawDescriptor>(source: Box<dyn IoSourceExt<F>>) {

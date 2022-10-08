@@ -26,7 +26,12 @@ rust_test {
     edition: "2021",
     features: [
         "audio",
+        "balloon",
+        "gpu",
+        "gpu_display",
+        "rutabaga_gfx",
         "usb",
+        "virgl_renderer_next",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -46,6 +51,7 @@ rust_test {
         "libdisk",
         "libfuse_rust",
         "libfutures",
+        "libgpu_display",
         "libhypervisor",
         "libkvm_sys",
         "liblibc",
@@ -60,6 +66,7 @@ rust_test {
         "libpower_monitor",
         "librand",
         "libresources",
+        "librutabaga_gfx",
         "libserde",
         "libserde_json",
         "libserde_keyvalue",
@@ -91,21 +98,7 @@ rust_test {
                 "libgpu_display",
                 "librutabaga_gfx",
             ],
-            shared_libs: [
-                "libvirglrenderer",
-                "libgfxstream_backend",
-            ],
-        },
-        android: {
-            shared_libs: [
-                "libcutils",
-                "libdrm",
-            ],
-            static_libs: [
-                "libepoxy",
-                "libgbm",
-                "libvirglrenderer",
-            ],
+            shared_libs: ["libgfxstream_backend"],
         },
     },
 }
@@ -121,7 +114,12 @@ rust_library {
     edition: "2021",
     features: [
         "audio",
+        "balloon",
+        "gpu",
+        "gpu_display",
+        "rutabaga_gfx",
         "usb",
+        "virgl_renderer_next",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -139,6 +137,7 @@ rust_library {
         "libdisk",
         "libfuse_rust",
         "libfutures",
+        "libgpu_display",
         "libhypervisor",
         "libkvm_sys",
         "liblibc",
@@ -153,6 +152,7 @@ rust_library {
         "libpower_monitor",
         "librand",
         "libresources",
+        "librutabaga_gfx",
         "libserde",
         "libserde_json",
         "libserde_keyvalue",

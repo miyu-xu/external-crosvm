@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,7 @@ mod tpm;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 mod video;
 mod virtio_device;
+mod virtio_mmio_device;
 mod virtio_pci_common_config;
 mod virtio_pci_device;
 
@@ -48,6 +49,7 @@ pub use self::tpm::*;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub use self::video::*;
 pub use self::virtio_device::*;
+pub use self::virtio_mmio_device::*;
 pub use self::virtio_pci_device::*;
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
@@ -125,8 +127,8 @@ pub enum DeviceType {
     Fs = virtio_ids::VIRTIO_ID_FS,
     Pmem = virtio_ids::VIRTIO_ID_PMEM,
     Mac80211HwSim = virtio_ids::VIRTIO_ID_MAC80211_HWSIM,
-    VideoEnc = virtio_ids::VIRTIO_ID_VIDEO_ENC,
-    VideoDec = virtio_ids::VIRTIO_ID_VIDEO_DEC,
+    VideoEnc = virtio_ids::VIRTIO_ID_VIDEO_ENCODER,
+    VideoDec = virtio_ids::VIRTIO_ID_VIDEO_DECODER,
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     VhostUser = virtio_ids::VIRTIO_ID_VHOST_USER,
@@ -189,10 +191,10 @@ pub fn copy_config(dst: &mut [u8], dst_offset: u64, src: &[u8], src_offset: u64)
 }
 
 /// Returns the set of reserved base features common to all virtio devices.
-pub fn base_features(protected_vm: ProtectionType) -> u64 {
+pub fn base_features(protection_type: ProtectionType) -> u64 {
     let mut features: u64 = 1 << VIRTIO_F_VERSION_1 | 1 << VIRTIO_RING_F_EVENT_IDX;
 
-    if protected_vm != ProtectionType::Unprotected {
+    if protection_type != ProtectionType::Unprotected {
         features |= 1 << VIRTIO_F_ACCESS_PLATFORM;
     }
 

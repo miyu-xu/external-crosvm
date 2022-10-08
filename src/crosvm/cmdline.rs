@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ cfg_if::cfg_if! {
         use devices::virtio::vhost::user::device::parse_wayland_sock;
 
         use super::sys::config::{
-            parse_coiommu_params, VfioCommand, parse_vfio, parse_vfio_platform,
+            VfioCommand, parse_vfio, parse_vfio_platform,
         };
         use super::config::SharedDir;
     } else if #[cfg(windows)] {
@@ -30,6 +30,7 @@ use arch::Pstore;
 use arch::VcpuAffinity;
 use argh::FromArgs;
 use base::getpid;
+use cros_async::ExecutorKind;
 use devices::virtio::block::block::DiskOption;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::device_constants::video::VideoDeviceConfig;
@@ -88,7 +89,6 @@ use crate::crosvm::config::HypervisorKind;
 use crate::crosvm::config::TouchDeviceOption;
 use crate::crosvm::config::VhostUserFsOption;
 use crate::crosvm::config::VhostUserOption;
-use crate::crosvm::config::VhostUserWlOption;
 use crate::crosvm::config::VvuOption;
 
 #[derive(FromArgs)]
@@ -106,6 +106,10 @@ pub struct CrosvmCmdlineArgs {
     #[argh(switch)]
     /// disable output to syslog
     pub no_syslog: bool,
+    /// configure async executor backend; "uring" or "epoll" on Linux, "handle" on Windows.
+    /// If this option is omitted on Linux, "epoll" is used by default.
+    #[argh(option, arg_name = "EXECUTOR")]
+    pub async_executor: Option<ExecutorKind>,
     #[argh(subcommand)]
     pub command: Command,
 }
@@ -121,6 +125,7 @@ pub enum CrossPlatformCommands {
     Battery(BatteryCommand),
     #[cfg(feature = "composite-disk")]
     CreateComposite(CreateCompositeCommand),
+    #[cfg(feature = "qcow")]
     CreateQcow2(CreateQcow2Command),
     Device(DeviceCommand),
     Disk(DiskCommand),
@@ -198,6 +203,7 @@ pub struct CreateCompositeCommand {
     pub partitions: Vec<String>,
 }
 
+#[cfg(feature = "qcow")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "create_qcow2")]
 /// Create Qcow2 image given path and size
@@ -381,7 +387,7 @@ pub enum CrossPlatformDevicesCommands {
 #[derive(argh_helpers::FlattenSubcommand)]
 pub enum DeviceSubcommand {
     CrossPlatform(CrossPlatformDevicesCommands),
-    Sys(super::sys::cmdline::DevicesSubcommand),
+    Sys(super::sys::cmdline::DeviceSubcommand),
 }
 
 #[derive(FromArgs)]
@@ -487,8 +493,7 @@ pub struct RunCommand {
     #[cfg(unix)]
     #[argh(
         option,
-        arg_name = "unpin_policy=POLICY,unpin_interval=NUM,unpin_limit=NUM,unpin_gen_threshold=NUM",
-        from_str_fn(parse_coiommu_params)
+        arg_name = "unpin_policy=POLICY,unpin_interval=NUM,unpin_limit=NUM,unpin_gen_threshold=NUM"
     )]
     /// comma separated key=value pairs for setting up coiommu
     /// devices.
@@ -516,30 +521,6 @@ pub struct RunCommand {
     )]
     /// group the given CPUs into a cluster (default: no clusters)
     pub cpu_clusters: Vec<Vec<usize>>,
-    #[cfg(feature = "audio_cras")]
-    #[argh(
-        option,
-        arg_name = "[capture=true,client=crosvm,socket=unified,\
-        num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]",
-        long = "cras-snd"
-    )]
-    /// comma separated key=value pairs for setting up virtio snd
-    /// devices.
-    /// Possible key values:
-    ///     capture=(false,true) - Disable/enable audio capture.
-    ///         Default is false.
-    ///     client_type=(crosvm,arcvm,borealis) - Set specific
-    ///         client type for cras backend. Default is crosvm.
-    ///     socket_type=(legacy,unified) Set specific socket type
-    ///         for cras backend. Default is unified.
-    ///     num_output_devices=INT - Set number of output PCM
-    ///         devices.
-    ///     num_input_devices=INT - Set number of input PCM devices.
-    ///     num_output_streams=INT - Set number of output PCM
-    ///         streams per device.
-    ///     num_input_streams=INT - Set number of input PCM streams
-    ///         per device.
-    pub cras_snds: Vec<SndParameters>,
     #[cfg(feature = "crash-report")]
     #[argh(option, long = "crash-pipe-name", arg_name = "\\\\.\\pipe\\PIPE_NAME")]
     /// the crash handler ipc pipe name.
@@ -551,6 +532,14 @@ pub struct RunCommand {
     #[argh(option, arg_name = "irq")]
     /// enable interrupt passthrough
     pub direct_edge_irq: Vec<u32>,
+    #[cfg(feature = "direct")]
+    #[argh(
+        option,
+        long = "direct-fixed-event",
+        arg_name = "event=gbllock|powerbtn|sleepbtn|rtc"
+    )]
+    /// enable ACPI fixed event interrupt and register access passthrough
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
     #[cfg(feature = "direct")]
     #[argh(option, arg_name = "gpe")]
     /// enable GPE interrupt and register access passthrough
@@ -585,7 +574,7 @@ pub struct RunCommand {
         option,
         short = 'd',
         long = "disk",
-        arg_name = "PATH[,key=value[,key=value[,...]]",
+        arg_name = "PATH[,key=value[,key=value[,...]]]",
         from_str_fn(numbered_disk_option)
     )]
     /// path to a disk image followed by optional comma-separated
@@ -643,19 +632,29 @@ pub struct RunCommand {
     /// force use of a calibrated TSC cpuid leaf (0x15) even if the hypervisor
     /// doesn't require one.
     pub force_calibrated_tsc_leaf: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     #[argh(option, arg_name = "PORT")]
     /// (EXPERIMENTAL) gdb on the given port
     pub gdb: Option<u32>,
     #[cfg(feature = "gpu")]
-    #[argh(option, arg_name = "[width=INT,height=INT]")]
+    #[argh(option)]
     /// (EXPERIMENTAL) Comma separated key=value pairs for setting
     /// up a display on the virtio-gpu device
     /// Possible key values:
+    ///     mode=(borderless_full_screen|windowed) - Whether to show
+    ///        the window on the host in full screen or windowed
+    ///        mode. If not specified, windowed mode is used by
+    ///        default.
     ///     width=INT - The width of the virtual display connected
-    ///        to the virtio-gpu.
-    ///     height=INT - The height of the virtual display
-    ///        connected to the virtio-gpu
+    ///        to the virtio-gpu. Can't be set with the
+    ///        borderless_full_screen display mode.
+    ///     height=INT - The height of the virtual display connected
+    ///        to the virtio-gpu. Can't be set with the
+    ///        borderless_full_screen display mode.
+    ///     hidden[=true|=false] - If the display window is
+    ///        initially hidden (default: false).
+    ///     refresh-rate=INT - Force a specific vsync generation
+    ///        rate in hertz on the guest (default: 60)
     #[cfg(unix)]
     pub gpu_display: Vec<GpuDisplayParameters>,
     #[cfg(feature = "gpu")]
@@ -764,6 +763,10 @@ pub struct RunCommand {
     )]
     /// MMIO address ranges
     pub mmio_address_ranges: Option<Vec<AddressRange>>,
+    #[cfg(target_arch = "aarch64")]
+    #[argh(switch)]
+    /// enable the Memory Tagging Extension in the guest
+    pub mte: bool,
     #[cfg(unix)]
     #[argh(option, arg_name = "N")]
     /// virtio net virtual queue pairs. (default: 1)
@@ -792,6 +795,10 @@ pub struct RunCommand {
     #[argh(switch)]
     /// don't use usb devices in the guest
     pub no_usb: bool,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[argh(option, arg_name = "OEM_STRING")]
+    /// SMBIOS OEM string values to add to the DMI tables
+    pub oem_strings: Vec<String>,
     #[argh(option, short = 'p', arg_name = "PARAMS")]
     /// extra kernel or plugin command line arguments. Can be given more than once
     pub params: Vec<String>,
@@ -898,13 +905,9 @@ pub struct RunCommand {
     #[argh(switch)]
     /// enable virtio-pvclock.
     pub pvclock: bool,
-    // Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
-    #[argh(option, long = "unprotected-vm-with-firmware", arg_name = "PATH")]
-    /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
-    pub pvm_fw: Option<PathBuf>,
     #[argh(
         option,
-        arg_name = "PATH[,key=value[,key=value[,...]]",
+        arg_name = "PATH[,key=value[,key=value[,...]]]",
         short = 'r',
         from_str_fn(numbered_disk_option)
     )]
@@ -928,7 +931,7 @@ pub struct RunCommand {
     #[argh(
         option,
         long = "rwdisk",
-        arg_name = "PATH[,key=value[,key=value[,...]]",
+        arg_name = "PATH[,key=value[,key=value[,...]]]",
         from_str_fn(numbered_disk_option)
     )]
     /// path to a read-write disk image followed by optional
@@ -944,7 +947,7 @@ pub struct RunCommand {
     rwdisks: Vec<(usize, DiskOption)>,
     #[argh(
         option,
-        arg_name = "PATH[,key=value[,key=value[,...]]",
+        arg_name = "PATH[,key=value[,key=value[,...]]]",
         from_str_fn(numbered_disk_option)
     )]
     /// path to a read-write root disk image followed by optional
@@ -982,10 +985,14 @@ pub struct RunCommand {
     /// Possible key values:
     ///     type=(stdout,syslog,sink,file) - Where to route the
     ///        serial device
-    ///     hardware=(serial,virtio-console) - Which type of serial
-    ///        hardware to emulate. Defaults to 8250 UART (serial).
+    ///     hardware=(serial,virtio-console,debugcon) - Which type
+    ///        of serial hardware to emulate. Defaults to 8250 UART
+    ///        (serial).
     ///     num=(1,2,3,4) - Serial Device Number. If not provided,
     ///        num will default to 1.
+    ///     debugcon_port=PORT - Port for the debugcon device to
+    ///        listen to. Defaults to 0x402, which is what OVMF
+    ///        expects.
     ///     path=PATH - The path to the file to write to when
     ///        type=file
     ///     input=PATH - The path to the file to read from when not
@@ -1114,6 +1121,10 @@ pub struct RunCommand {
     #[argh(option, arg_name = "NAME[,...]")]
     /// comma-separated names of the task profiles to apply to all threads in crosvm including the vCPU threads
     pub task_profiles: Vec<String>,
+    // Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
+    #[argh(option, long = "unprotected-vm-with-firmware", arg_name = "PATH")]
+    /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
+    pub unprotected_vm_with_firmware: Option<PathBuf>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[argh(
         option,
@@ -1203,7 +1214,7 @@ pub struct RunCommand {
     pub vhost_user_vsock: Vec<VhostUserOption>,
     #[argh(option, arg_name = "SOCKET_PATH")]
     /// path to a vhost-user socket for wayland
-    pub vhost_user_wl: Option<VhostUserWlOption>,
+    pub vhost_user_wl: Option<VhostUserOption>,
     #[cfg(unix)]
     #[argh(option, arg_name = "SOCKET_PATH")]
     /// path to the vhost-vsock device. (default /dev/vhost-vsock)
@@ -1225,9 +1236,6 @@ pub struct RunCommand {
     #[argh(option, long = "evdev", arg_name = "PATH")]
     /// path to an event device node. The device will be grabbed (unusable from the host) and made available to the guest with the same configuration it shows on the host
     pub virtio_input_evdevs: Vec<PathBuf>,
-    #[argh(switch, long = "virtio-iommu")]
-    /// add a virtio-iommu device
-    pub virtio_iommu: bool,
     #[argh(option, long = "keyboard", arg_name = "PATH")]
     /// path to a socket from where to read keyboard input events and write status updates to
     pub virtio_keyboard: Vec<PathBuf>,
@@ -1327,12 +1335,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vhost_net_device_path = p;
         }
 
-        if let Some(p) = cmd.android_fstab {
-            if !p.exists() {
-                return Err(format!("android-fstab path {:?} does not exist", p));
-            }
-            cfg.android_fstab = Some(p);
-        }
+        cfg.android_fstab = cmd.android_fstab;
 
         cfg.params.extend(cmd.params);
 
@@ -1362,6 +1365,13 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         #[cfg(target_arch = "aarch64")]
         {
+            if cmd.mte && !(cmd.pmem_devices.is_empty() && cmd.rw_pmem_devices.is_empty()) {
+                return Err(
+                    "--mte cannot be specified together with --pmem-device or --rw-pmem-device"
+                        .to_string(),
+                );
+            }
+            cfg.mte = cmd.mte;
             cfg.swiotlb = cmd.swiotlb;
         }
 
@@ -1613,18 +1623,12 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.virtio_switches = cmd.virtio_switches;
         cfg.virtio_input_evdevs = cmd.virtio_input_evdevs;
 
-        cfg.virtio_iommu = cmd.virtio_iommu;
-
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             cfg.split_irqchip = cmd.split_irqchip;
         }
 
         cfg.initrd_path = cmd.initrd_path;
-
-        if cmd.disable_sandbox {
-            cfg.jail_config = None;
-        }
 
         if let Some(p) = cmd.bios {
             if cfg.executable_path.is_some() {
@@ -1655,17 +1659,6 @@ impl TryFrom<RunCommand> for super::config::Config {
         #[cfg(feature = "audio")]
         {
             cfg.virtio_snds = cmd.virtio_snds;
-        }
-        #[cfg(feature = "audio_cras")]
-        {
-            // cmd.cras_snds is the old parameter for virtio snd with cras backend.
-            cfg.virtio_snds
-                .extend(cmd.cras_snds.into_iter().map(|s| SndParameters {
-                    backend: devices::virtio::parameters::StreamSourceBackend::Sys(
-                        devices::virtio::snd::sys::StreamSourceBackend::CRAS,
-                    ),
-                    ..s
-                }));
         }
 
         #[cfg(feature = "gpu")]
@@ -1734,42 +1727,43 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.net_vq_pairs = cmd.net_vq_pairs;
         }
 
-        if cmd.protected_vm && cmd.protected_vm_without_firmware && cmd.pvm_fw.is_some() {
+        let protection_flags = [
+            cmd.protected_vm,
+            cmd.protected_vm_without_firmware,
+            cmd.unprotected_vm_with_firmware.is_some(),
+        ];
+
+        if protection_flags.into_iter().filter(|b| *b).count() > 1 {
             return Err("Only one protection mode has to be specified".to_string());
         }
 
-        if cmd.protected_vm {
-            cfg.protected_vm = ProtectionType::Protected;
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
-            cfg.usb = false;
-            // Protected VMs can't trust the RNG device, so don't provide it.
-            cfg.rng = false;
+        cfg.protection_type = if cmd.protected_vm {
+            ProtectionType::Protected
         } else if cmd.protected_vm_without_firmware {
-            cfg.protected_vm = ProtectionType::ProtectedWithoutFirmware;
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
-            cfg.usb = false;
-            // Protected VMs can't trust the RNG device, so don't provide it.
-            cfg.rng = false;
-        } else if let Some(p) = cmd.pvm_fw {
+            ProtectionType::ProtectedWithoutFirmware
+        } else if let Some(p) = cmd.unprotected_vm_with_firmware {
             if !p.exists() || !p.is_file() {
                 return Err(
                     "unprotected-vm-with-firmware path should be an existing file".to_string(),
                 );
             }
-            cfg.protected_vm = ProtectionType::UnprotectedWithFirmware;
+            cfg.pvm_fw = Some(p);
+            ProtectionType::UnprotectedWithFirmware
+        } else {
+            ProtectionType::Unprotected
+        };
+
+        if !matches!(cfg.protection_type, ProtectionType::Unprotected) {
             // Balloon and USB devices only work for unprotected VMs.
             cfg.balloon = false;
             cfg.usb = false;
             // Protected VMs can't trust the RNG device, so don't provide it.
             cfg.rng = false;
-            cfg.pvm_fw = Some(p);
         }
 
         cfg.battery_config = cmd.battery;
 
-        #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+        #[cfg(feature = "gdb")]
         {
             cfg.gdb = cmd.gdb;
         }
@@ -1783,7 +1777,11 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.pci_low_start = cmd.pci_low_start;
             cfg.no_i8042 = cmd.no_i8042;
             cfg.no_rtc = cmd.no_rtc;
+            cfg.oem_strings = cmd.oem_strings;
 
+            if !cfg.oem_strings.is_empty() && cfg.dmi_path.is_some() {
+                return Err("unable to use oem-strings and dmi-path together".to_string());
+            }
             for (index, msr_config) in cmd.userspace_msr {
                 if cfg.userspace_msr.insert(index, msr_config).is_some() {
                     return Err(String::from("msr must be unique"));
@@ -1798,6 +1796,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.vhost_user_blk = cmd.vhost_user_blk;
         cfg.vhost_user_console = cmd.vhost_user_console;
+        cfg.vhost_user_fs = cmd.vhost_user_fs;
         cfg.vhost_user_gpu = cmd.vhost_user_gpu;
         cfg.vhost_user_mac80211_hwsim = cmd.vhost_user_mac80211_hwsim;
         cfg.vhost_user_net = cmd.vhost_user_net;
@@ -1812,6 +1811,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.direct_level_irq = cmd.direct_level_irq;
             cfg.direct_edge_irq = cmd.direct_edge_irq;
             cfg.direct_gpe = cmd.direct_gpe;
+            cfg.direct_fixed_evts = cmd.direct_fixed_evts;
             cfg.pcie_rp = cmd.pcie_rp;
             cfg.mmio_address_ranges = cmd.mmio_address_ranges.unwrap_or_default();
         }
@@ -1859,6 +1859,12 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vfio.extend(cmd.vfio);
             cfg.vfio.extend(cmd.vfio_platform);
             cfg.vfio_isolate_hotplug = cmd.vfio_isolate_hotplug;
+        }
+
+        // `--disable-sandbox` has the effect of disabling sandboxing altogether, so make sure
+        // to handle it after other sandboxing options since they implicitly enable it.
+        if cmd.disable_sandbox {
+            cfg.jail_config = None;
         }
 
         // Now do validation of constructed config

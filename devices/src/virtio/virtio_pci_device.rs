@@ -1,10 +1,8 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -281,7 +279,7 @@ pub struct VirtioPciDevice {
     device_activated: bool,
     disable_intx: bool,
 
-    interrupt_status: Arc<AtomicUsize>,
+    interrupt: Option<Interrupt>,
     interrupt_evt: Option<IrqLevelEvent>,
     queues: Vec<Queue>,
     queue_evts: Vec<Event>,
@@ -366,7 +364,7 @@ impl VirtioPciDevice {
             device,
             device_activated: false,
             disable_intx,
-            interrupt_status: Arc::new(AtomicUsize::new(0)),
+            interrupt: None,
             interrupt_evt: None,
             queues,
             queue_evts,
@@ -495,11 +493,11 @@ impl VirtioPciDevice {
         let mem = self.mem.clone();
 
         let interrupt = Interrupt::new(
-            self.interrupt_status.clone(),
             interrupt_evt,
             Some(self.msix_config.clone()),
             self.common_config.msix_config,
         );
+        self.interrupt = Some(interrupt.clone());
 
         match self.clone_queue_evts() {
             Ok(queue_evts) => {
@@ -590,21 +588,11 @@ impl PciDevice for VirtioPciDevice {
         rds
     }
 
-    fn assign_irq(
-        &mut self,
-        irq_evt: &IrqLevelEvent,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        self.interrupt_evt = Some(irq_evt.try_clone().ok()?);
-        let gsi = irq_num?;
-        let pin = self.pci_address.map_or(
-            PciInterruptPin::IntA,
-            PciConfiguration::suggested_interrupt_pin,
-        );
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
+        self.interrupt_evt = Some(irq_evt);
         if !self.disable_intx {
-            self.config_regs.set_irq(gsi as u8, pin);
+            self.config_regs.set_irq(irq_num as u8, pin);
         }
-        Some((gsi, pin))
     }
 
     fn allocate_io_bars(
@@ -821,7 +809,11 @@ impl PciDevice for VirtioPciDevice {
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.get_mut(0) {
                         // Reading this register resets it to 0.
-                        *v = self.interrupt_status.swap(0, Ordering::SeqCst) as u8;
+                        *v = if let Some(interrupt) = &self.interrupt {
+                            interrupt.read_and_reset_interrupt_status()
+                        } else {
+                            0
+                        };
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {
@@ -870,8 +862,9 @@ impl PciDevice for VirtioPciDevice {
                 ),
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.get(0) {
-                        self.interrupt_status
-                            .fetch_and(!(*v as usize), Ordering::SeqCst);
+                        if let Some(interrupt) = &self.interrupt {
+                            interrupt.clear_interrupt_status_bits(*v);
+                        }
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {

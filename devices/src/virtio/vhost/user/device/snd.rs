@@ -1,9 +1,8 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -21,7 +20,6 @@ use futures::future::AbortHandle;
 use futures::future::Abortable;
 use hypervisor::ProtectionType;
 use once_cell::sync::OnceCell;
-use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
@@ -35,16 +33,12 @@ use crate::virtio::snd::common_backend::async_funcs::send_pcm_response_worker;
 use crate::virtio::snd::common_backend::create_stream_source_generators;
 use crate::virtio::snd::common_backend::hardcoded_snd_data;
 use crate::virtio::snd::common_backend::hardcoded_virtio_snd_config;
+use crate::virtio::snd::common_backend::stream_info::StreamInfo;
 use crate::virtio::snd::common_backend::PcmResponse;
 use crate::virtio::snd::common_backend::SndData;
-use crate::virtio::snd::common_backend::StreamInfo;
 use crate::virtio::snd::common_backend::MAX_QUEUE_NUM;
 use crate::virtio::snd::common_backend::MAX_VRING_LEN;
 use crate::virtio::snd::parameters::Parameters;
-#[cfg(feature = "audio_cras")]
-use crate::virtio::snd::parameters::StreamSourceBackend as Backend;
-#[cfg(feature = "audio_cras")]
-use crate::virtio::snd::sys::StreamSourceBackend as SysBackend;
 use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::VhostUserBackend;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
@@ -175,7 +169,7 @@ impl VhostUserBackend for SndBackend {
         idx: usize,
         mut queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Arc<Mutex<Doorbell>>,
+        doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
         if let Some(handle) = self.workers.get_mut(idx).and_then(Option::take) {
@@ -202,7 +196,7 @@ impl VhostUserBackend for SndBackend {
                 ex.spawn_local(Abortable::new(
                     async move {
                         handle_ctrl_queue(
-                            ex, &mem, &streams, &*snd_data, queue, kick_evt, &doorbell, tx_send,
+                            ex, &mem, &streams, &*snd_data, queue, kick_evt, doorbell, tx_send,
                             rx_send,
                         )
                         .await
@@ -234,7 +228,7 @@ impl VhostUserBackend for SndBackend {
 
                 ex.spawn_local(Abortable::new(
                     async move {
-                        send_pcm_response_worker(&*mem2, &queue2, &doorbell, &mut recv).await
+                        send_pcm_response_worker(&*mem2, &queue2, doorbell, &mut recv).await
                     },
                     registration2,
                 ))
@@ -265,32 +259,6 @@ impl VhostUserBackend for SndBackend {
     }
 }
 
-// TODO(b/241489181): Remove once cras-snd calls are changed to snd.
-#[cfg(feature = "audio_cras")]
-#[derive(FromArgs)]
-#[argh(subcommand, name = "cras-snd")]
-/// CRAS snd device
-pub struct CrasOptions {
-    #[argh(option, arg_name = "PATH")]
-    /// path to a socket
-    socket: Option<String>,
-    #[argh(option, arg_name = "CONFIG")]
-    /// VFIO-PCI device name (e.g. '0000:00:07.0')
-    vfio: Option<String>,
-    #[argh(option, arg_name = "CONFIG")]
-    /// comma separated key=value pairs for setting up cras snd devices.
-    /// Possible key values:
-    /// capture - Enable audio capture. Default to false.
-    /// client_type - Set specific client type for cras backend.
-    /// num_output_devices - Set number of output PCM devices.
-    /// num_input_devices - Set number of input PCM devices.
-    /// num_output_streams - Set number of output PCM streams per device.
-    /// num_input_streams - Set number of input PCM streams per device.
-    /// Example: [capture=true,client=crosvm,socket=unified,
-    /// num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]
-    config: Option<String>,
-}
-
 #[derive(FromArgs)]
 #[argh(subcommand, name = "snd")]
 /// Snd device
@@ -301,7 +269,13 @@ pub struct Options {
     #[argh(option, arg_name = "STRING")]
     /// VFIO-PCI device name (e.g. '0000:00:07.0')
     vfio: Option<String>,
-    #[argh(option, arg_name = "CONFIG")]
+    #[argh(
+        option,
+        arg_name = "CONFIG",
+        from_str_fn(snd_parameters_from_str),
+        default = "Default::default()",
+        long = "config"
+    )]
     /// comma separated key=value pairs for setting up cras snd devices.
     /// Possible key values:
     /// capture - Enable audio capture. Default to false.
@@ -314,41 +288,17 @@ pub struct Options {
     /// num_input_streams - Set number of input PCM streams per device.
     /// Example: [capture=true,backend=BACKEND,
     /// num_output_devices=1,num_input_devices=1,num_output_streams=1,num_input_streams=1]
-    config: Option<String>,
+    params: Parameters,
 }
 
-// TODO(b/241489181): Remove once cras-snd calls are changed to snd.
-#[cfg(feature = "audio_cras")]
-pub fn run_cras_snd_device(opts: CrasOptions) -> anyhow::Result<()> {
-    let params = opts
-        .config
-        .unwrap_or("".to_string())
-        .parse::<Parameters>()?;
-    let params = Parameters {
-        backend: Backend::Sys(SysBackend::CRAS),
-        ..params
-    };
-
-    run(params, opts.socket, opts.vfio)
+fn snd_parameters_from_str(input: &str) -> Result<Parameters, String> {
+    serde_keyvalue::from_key_values(input).map_err(|e| e.to_string())
 }
 
 /// Starts a vhost-user snd device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn run_snd_device(opts: Options) -> anyhow::Result<()> {
-    let params = opts
-        .config
-        .unwrap_or("".to_string())
-        .parse::<Parameters>()?;
-
-    run(params, opts.socket, opts.vfio)
-}
-
-fn run(
-    params: Parameters,
-    socket_path: Option<String>,
-    vfio: Option<String>,
-) -> anyhow::Result<()> {
-    let snd_device = Box::new(SndBackend::new(params)?);
+    let snd_device = Box::new(SndBackend::new(opts.params)?);
 
     // Child, we can continue by spawning the executor and set up the device
     let ex = Executor::new().context("Failed to create executor")?;
@@ -356,8 +306,8 @@ fn run(
     let _ = SND_EXECUTOR.set(ex.clone());
 
     let listener = VhostUserListener::new_from_socket_or_vfio(
-        &socket_path,
-        &vfio,
+        &opts.socket,
+        &opts.vfio,
         snd_device.max_queue_num(),
         None,
     )?;

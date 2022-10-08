@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@ mod ac97_mixer;
 // TODO(b:236297362): build it on windows as weil.
 #[cfg(all(unix, feature = "audio"))]
 mod ac97_regs;
+mod acpi;
 #[cfg(unix)]
 mod coiommu;
 mod msi;
@@ -40,6 +41,7 @@ pub use self::ac97::Ac97Backend;
 pub use self::ac97::Ac97Dev;
 #[cfg(all(unix, feature = "audio"))]
 pub use self::ac97::Ac97Parameters;
+pub use self::acpi::DeviceVcfgRegister;
 #[cfg(unix)]
 pub use self::coiommu::CoIommuDev;
 #[cfg(unix)]
@@ -70,6 +72,7 @@ pub use self::pci_device::BarRange;
 pub use self::pci_device::Error as PciDeviceError;
 pub use self::pci_device::PciBus;
 pub use self::pci_device::PciDevice;
+pub use self::pci_device::PreferredIrq;
 pub use self::pci_root::PciConfigIo;
 pub use self::pci_root::PciConfigMmio;
 pub use self::pci_root::PciRoot;
@@ -78,9 +81,13 @@ pub use self::pci_root::PciVirtualConfigMmio;
 #[cfg(unix)]
 pub use self::pcie::PciBridge;
 #[cfg(unix)]
+pub use self::pcie::PcieDownstreamPort;
+#[cfg(unix)]
 pub use self::pcie::PcieHostPort;
 #[cfg(unix)]
 pub use self::pcie::PcieRootPort;
+#[cfg(unix)]
+pub use self::pcie::PcieUpstreamPort;
 pub use self::pvpanic::PvPanicCode;
 pub use self::pvpanic::PvPanicPciDevice;
 pub use self::stub::StubPciDevice;
@@ -89,7 +96,7 @@ pub use self::stub::StubPciParameters;
 pub use self::vfio_pci::VfioPciDevice;
 
 /// PCI has four interrupt pins A->D.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub enum PciInterruptPin {
     IntA,
     IntB,
@@ -127,6 +134,7 @@ pub enum CrosvmDeviceId {
     UserspaceIrqChip = 16,
     VmWatchdog = 17,
     Pflash = 18,
+    VirtioMmio = 19,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -152,6 +160,7 @@ impl TryFrom<u16> for CrosvmDeviceId {
             16 => Ok(CrosvmDeviceId::UserspaceIrqChip),
             17 => Ok(CrosvmDeviceId::VmWatchdog),
             18 => Ok(CrosvmDeviceId::Pflash),
+            19 => Ok(CrosvmDeviceId::VirtioMmio),
             _ => Err(base::Error::new(EINVAL)),
         }
     }

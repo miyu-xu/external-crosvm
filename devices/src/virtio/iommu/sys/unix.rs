@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,16 @@ pub mod vfio_wrapper;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use base::error;
+use base::MemoryMappingBuilder;
 use base::TubeError;
 use cros_async::AsyncTube;
 use cros_async::Executor;
+use hypervisor::MemSlot;
 use sync::Mutex;
 use vm_control::VirtioIOMMURequest;
 use vm_control::VirtioIOMMUResponse;
@@ -22,10 +25,13 @@ use vm_control::VirtioIOMMUVfioResult;
 use self::vfio_wrapper::VfioWrapper;
 use crate::virtio::iommu::ipc_memory_mapper::IommuRequest;
 use crate::virtio::iommu::ipc_memory_mapper::IommuResponse;
+use crate::virtio::iommu::DmabufRegionEntry;
 use crate::virtio::iommu::Result;
 use crate::virtio::iommu::State;
 use crate::virtio::IommuError;
 use crate::VfioContainer;
+
+const VIRTIO_IOMMU_PAGE_SHIFT: u32 = 12;
 
 impl State {
     pub(in crate::virtio::iommu) fn handle_add_vfio_device(
@@ -65,6 +71,52 @@ impl State {
         VirtioIOMMUVfioResult::Ok
     }
 
+    pub(in crate::virtio::iommu) fn handle_map_dmabuf(
+        &mut self,
+        mem_slot: MemSlot,
+        gfn: u64,
+        size: u64,
+        dma_buf: File,
+    ) -> VirtioIOMMUVfioResult {
+        let mmap = match MemoryMappingBuilder::new(size as usize)
+            .from_file(&dma_buf)
+            .build()
+        {
+            Ok(v) => v,
+            Err(_) => {
+                error!("failed to mmap dma_buf");
+                return VirtioIOMMUVfioResult::InvalidParam;
+            }
+        };
+        self.dmabuf_mem.insert(
+            gfn << VIRTIO_IOMMU_PAGE_SHIFT,
+            DmabufRegionEntry {
+                mmap,
+                mem_slot,
+                len: size,
+            },
+        );
+
+        VirtioIOMMUVfioResult::Ok
+    }
+
+    pub(in crate::virtio::iommu) fn handle_unmap_dmabuf(
+        &mut self,
+        mem_slot: MemSlot,
+    ) -> VirtioIOMMUVfioResult {
+        if let Some(range) = self
+            .dmabuf_mem
+            .iter()
+            .find(|(_, dmabuf_entry)| dmabuf_entry.mem_slot == mem_slot)
+            .map(|entry| *entry.0)
+        {
+            self.dmabuf_mem.remove(&range);
+            VirtioIOMMUVfioResult::Ok
+        } else {
+            VirtioIOMMUVfioResult::NoSuchMappedDmabuf
+        }
+    }
+
     pub(in crate::virtio::iommu) fn handle_vfio(
         &mut self,
         vfio_cmd: VirtioIOMMUVfioCommand,
@@ -87,6 +139,13 @@ impl State {
                 }
             },
             VfioDeviceDel { endpoint_addr } => self.handle_del_vfio_device(endpoint_addr),
+            VfioDmabufMap {
+                mem_slot,
+                gfn,
+                size,
+                dma_buf,
+            } => self.handle_map_dmabuf(mem_slot, gfn, size, File::from(dma_buf)),
+            VfioDmabufUnmap(mem_slot) => self.handle_unmap_dmabuf(mem_slot),
         };
         VirtioIOMMUResponse::VfioResponse(vfio_result)
     }
@@ -124,7 +183,7 @@ pub(in crate::virtio::iommu) async fn handle_translate_request(
     let request_tube = match request_tube {
         Some(r) => r,
         None => {
-            let () = futures::future::pending().await;
+            futures::future::pending::<()>().await;
             return Ok(());
         }
     };
@@ -142,9 +201,8 @@ pub(in crate::virtio::iommu) async fn handle_translate_request(
                 return Err(IommuError::Tube(e));
             }
         };
-        let state = state.borrow_mut();
-        let resp = match state.endpoints.get(&req.get_endpoint_id()) {
-            Some(mapper) => match req {
+        let resp = if let Some(mapper) = state.borrow().endpoints.get(&req.get_endpoint_id()) {
+            match req {
                 IommuRequest::Export { iova, size, .. } => {
                     mapper.lock().export(iova, size).map(IommuResponse::Export)
                 }
@@ -156,11 +214,10 @@ pub(in crate::virtio::iommu) async fn handle_translate_request(
                     .lock()
                     .start_export_session(ex)
                     .map(IommuResponse::StartExportSession),
-            },
-            None => {
-                error!("endpoint {} not found", req.get_endpoint_id());
-                continue;
             }
+        } else {
+            error!("endpoint {} not found", req.get_endpoint_id());
+            continue;
         };
         let resp: IommuResponse = match resp {
             Ok(resp) => resp,

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,21 +34,22 @@ cfg_if::cfg_if! {
         pub use self::console::*;
         pub use self::fs::*;
         pub use self::video::*;
+
+        pub type Connection = std::os::unix::net::UnixStream;
     } else if #[cfg(windows)] {
         #[cfg(feature = "slirp")]
         pub mod net;
 
         #[cfg(feature = "slirp")]
         pub use self::net::*;
+
+        pub type Connection = base::Tube;
     }
 }
 
 #[sorted]
 #[derive(ThisError, Debug)]
 pub enum Error {
-    /// Failed to copy config to a buffer.
-    #[error("failed to copy config to a buffer: {0}")]
-    CopyConfig(std::io::Error),
     /// Failed to create `base::Event`.
     #[error("failed to create Event: {0}")]
     CreateEvent(base::Error),
@@ -73,13 +74,12 @@ pub enum Error {
     /// Failed to get vring base offset.
     #[error("failed to get vring base offset: {0}")]
     GetVringBase(VhostError),
+    /// Invalid config length is given.
+    #[error("invalid config length is given: {0}")]
+    InvalidConfigLen(usize),
     /// Invalid config offset is given.
-    #[error("invalid config offset is given: {data_len} + {offset} > {config_len}")]
-    InvalidConfigOffset {
-        data_len: u64,
-        offset: u64,
-        config_len: u64,
-    },
+    #[error("invalid config offset is given: {0}")]
+    InvalidConfigOffset(u64),
     /// MSI-X config is unavailable.
     #[error("MSI-X config is unavailable")]
     MsixConfigUnavailable,

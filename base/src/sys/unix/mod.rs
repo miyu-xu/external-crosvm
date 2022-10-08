@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,6 +30,7 @@ mod mmap;
 pub mod net;
 mod netlink;
 mod notifiers;
+pub mod panic_handler;
 pub mod platform_timer_resolution;
 mod poll;
 mod priority;
@@ -65,12 +66,7 @@ use std::time::Duration;
 pub use acpi_event::*;
 pub use capabilities::drop_capabilities;
 pub use descriptor::*;
-// EventFd is deprecated. Use Event instead. EventFd will be removed as soon as rest of the current
-// users migrate.
-// TODO(b:231344063): Remove EventFd.
-pub use eventfd::EventFd as Event;
-pub use eventfd::EventFd;
-pub use eventfd::EventReadResult;
+pub(crate) use eventfd::EventFd as Event;
 pub use file_flags::*;
 pub use file_traits::AsRawFds;
 pub use file_traits::FileAllocate;

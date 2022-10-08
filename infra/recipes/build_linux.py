@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Copyright 2022 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -18,6 +18,8 @@ DEPS = [
 
 PROPERTIES = BuildLinuxProperties
 
+COVERAGE_FILE = "coverage.lcov"
+
 
 def get_test_args(api, properties):
     "Returns architecture specific arguments for ./tools/run_tests"
@@ -25,15 +27,17 @@ def get_test_args(api, properties):
     test_arch = properties.test_arch
     args = []
     if test_arch == "" or test_arch == "x86_64":
-        args += ["--target=host"]
+        args += []
     elif test_arch == "aarch64":
-        args += ["--target=vm:aarch64"]
+        args += ["--platform=aarch64"]
     elif test_arch == "armhf":
-        args += ["--target=vm:aarch64", "--build-target=armhf"]
+        args += ["--platform=armhf"]
     else:
         raise api.step.StepFailure("Unknown test_arch " + test_arch)
     if properties.crosvm_direct:
         args += ["--crosvm-direct"]
+    if properties.coverage:
+        args += ["--generate-lcov", COVERAGE_FILE]
     return args
 
 
@@ -58,6 +62,8 @@ def RunSteps(api, properties):
             ]
             + get_test_args(api, properties),
         )
+        if properties.coverage:
+            api.crosvm.upload_coverage(COVERAGE_FILE)
 
 
 def GenTests(api):
@@ -69,6 +75,13 @@ def GenTests(api):
         )
         + api.properties(BuildLinuxProperties(test_arch="x86_64"))
         + api.post_process(filter_steps)
+    )
+    yield (
+        api.test(
+            "build_x86_64_coverage",
+            api.buildbucket.ci_build(project="crosvm/crosvm"),
+        )
+        + api.properties(BuildLinuxProperties(test_arch="x86_64", coverage=True))
     )
     yield (
         api.test(

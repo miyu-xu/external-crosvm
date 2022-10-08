@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -125,8 +125,8 @@ fn serial_parameters_default_num() -> u8 {
 }
 
 fn serial_parameters_default_debugcon_port() -> u16 {
-    // Default to the port bochs uses.
-    0xe9
+    // Default to the port OVMF expects.
+    0x402
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, FromKeyValues)]
@@ -156,7 +156,7 @@ impl SerialParameters {
     ///                process. `evt` will always be added to this vector by this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         evt: &Event,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> std::result::Result<T, Error> {
@@ -206,11 +206,17 @@ impl SerialParameters {
                 None => return Err(Error::PathRequired),
             },
             SerialType::SystemSerialType => {
-                return create_system_type_serial_device(self, protected_vm, evt, input, keep_rds);
+                return create_system_type_serial_device(
+                    self,
+                    protection_type,
+                    evt,
+                    input,
+                    keep_rds,
+                );
             }
         };
         Ok(T::new(
-            protected_vm,
+            protection_type,
             evt,
             input,
             output,
@@ -247,7 +253,7 @@ mod tests {
                 earlycon: false,
                 stdin: false,
                 out_timestamp: false,
-                debugcon_port: 0xe9,
+                debugcon_port: 0x402,
             }
         );
 

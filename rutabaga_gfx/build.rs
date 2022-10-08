@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -137,13 +137,18 @@ fn build_virglrenderer(out_dir: &Path) -> Result<()> {
 }
 
 #[cfg(feature = "virgl_renderer")]
-fn virglrenderer() -> Result<()> {
+fn virglrenderer_deps() -> Result<()> {
     // System provided runtime dependencies.
     pkg_config::Config::new().probe("epoxy")?;
     pkg_config::Config::new().probe("libdrm")?;
+    Ok(())
+}
 
+#[cfg(feature = "virgl_renderer")]
+fn virglrenderer() -> Result<()> {
     // Use virglrenderer package from the standard system location if available.
     if pkg_config::Config::new().probe("virglrenderer").is_ok() {
+        virglrenderer_deps()?;
         return Ok(());
     }
 
@@ -161,6 +166,9 @@ fn virglrenderer() -> Result<()> {
     println!("cargo:rustc-link-search={}", minigbm_out.display());
     println!("cargo:rustc-link-lib=static=virglrenderer");
     println!("cargo:rustc-link-lib=static=gbm");
+
+    virglrenderer_deps()?;
+
     Ok(())
 }
 

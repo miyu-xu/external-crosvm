@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -72,6 +72,9 @@ pub enum Error {
     /// Get features failed.
     #[error("failed to get features: {0}")]
     VhostGetFeatures(VhostError),
+    /// Vhost IOTLB required but not supported.
+    #[error("Vhost IOTLB required but not supported")]
+    VhostIotlbUnsupported,
     /// Failed to create vhost event.
     #[error("failed to create vhost event: {0}")]
     VhostIrqCreate(SysError),

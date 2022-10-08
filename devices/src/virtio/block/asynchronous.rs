@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,8 +35,11 @@ use cros_async::Executor;
 use cros_async::SelectResult;
 use cros_async::TimerAsync;
 use data_model::DataInit;
+use data_model::Le16;
+use data_model::Le32;
+use data_model::Le64;
 use disk::AsyncDisk;
-use disk::ToAsyncDisk;
+use disk::DiskFile;
 use futures::pin_mut;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
@@ -46,10 +49,29 @@ use vm_control::DiskControlCommand;
 use vm_control::DiskControlResult;
 use vm_memory::GuestMemory;
 
-use super::common::*;
 use crate::virtio::async_utils;
 use crate::virtio::block::sys::*;
 use crate::virtio::copy_config;
+use crate::virtio::device_constants::block::virtio_blk_config;
+use crate::virtio::device_constants::block::virtio_blk_discard_write_zeroes;
+use crate::virtio::device_constants::block::virtio_blk_req_header;
+use crate::virtio::device_constants::block::VIRTIO_BLK_DISCARD_WRITE_ZEROES_FLAG_UNMAP;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_BLK_SIZE;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_DISCARD;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_FLUSH;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_MQ;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_RO;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_SEG_MAX;
+use crate::virtio::device_constants::block::VIRTIO_BLK_F_WRITE_ZEROES;
+use crate::virtio::device_constants::block::VIRTIO_BLK_S_IOERR;
+use crate::virtio::device_constants::block::VIRTIO_BLK_S_OK;
+use crate::virtio::device_constants::block::VIRTIO_BLK_S_UNSUPP;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_DISCARD;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_FLUSH;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_GET_ID;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_IN;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_OUT;
+use crate::virtio::device_constants::block::VIRTIO_BLK_T_WRITE_ZEROES;
 use crate::virtio::DescriptorChain;
 use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
@@ -61,12 +83,24 @@ use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
 
 const QUEUE_SIZE: u16 = 256;
-const NUM_QUEUES: u16 = 16;
+pub const NUM_QUEUES: u16 = 16;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES as usize];
+
+const SECTOR_SHIFT: u8 = 9;
+const SECTOR_SIZE: u64 = 0x01 << SECTOR_SHIFT;
+
+const MAX_DISCARD_SECTORS: u32 = u32::MAX;
+const MAX_WRITE_ZEROES_SECTORS: u32 = u32::MAX;
+// Arbitrary limits for number of discard/write zeroes segments.
+const MAX_DISCARD_SEG: u32 = 32;
+const MAX_WRITE_ZEROES_SEG: u32 = 32;
+// Hard-coded to 64 KiB (in 512-byte sectors) for now,
+// but this should probably be based on cluster size for qcow.
+const DISCARD_SECTOR_ALIGNMENT: u32 = 128;
 
 #[sorted]
 #[derive(ThisError, Debug)]
-enum ExecuteError {
+pub enum ExecuteError {
     #[error("failed to copy ID string: {0}")]
     CopyId(io::Error),
     #[error("virtio descriptor error: {0}")]
@@ -150,6 +184,14 @@ pub enum ControlError {
     #[error("couldn't read the resample event: {0}")]
     ReadResampleEvent(AsyncError),
 }
+
+/// Maximum length of the virtio-block ID string field.
+pub const ID_LEN: usize = 20;
+
+/// Virtio block device identifier.
+/// This is an ASCII string terminated by a \0, unless all 20 bytes are used,
+/// in which case the \0 terminator is omitted.
+pub type BlockId = [u8; ID_LEN];
 
 /// Tracks the state of an anynchronous disk.
 pub struct DiskState {
@@ -253,7 +295,7 @@ pub async fn process_one_chain<I: SignalableInterrupt>(
 // There is one async task running `handle_queue` per virtio queue in use.
 // Receives messages from the guest and queues a task to complete the operations with the async
 // executor.
-pub async fn handle_queue<I: SignalableInterrupt + Clone + 'static>(
+pub async fn handle_queue<I: SignalableInterrupt + 'static>(
     ex: Executor,
     mem: GuestMemory,
     disk_state: Rc<AsyncMutex<DiskState>>,
@@ -293,15 +335,30 @@ pub async fn handle_queue<I: SignalableInterrupt + Clone + 'static>(
     }
 }
 
+/// handles the disk control requests from the vhost user backend control server.
+pub async fn handle_vhost_user_command_tube(
+    command_tube: AsyncTube,
+    disk_state: Rc<AsyncMutex<DiskState>>,
+) -> Result<(), ExecuteError> {
+    // Process the commands. Sets |interrupt| to None since vhost user backend
+    // currently does not support sending interrupts to the guest kernel.
+    // TODO(b/191845881): Use backend to frontend vhost user message
+    // CONFIG_CHANGE_MSG to notify the guest kernel once sending such message
+    // is supported.
+    handle_command_tube(&Some(command_tube), None, Rc::clone(&disk_state)).await
+}
+
+// TODO(b/191845881): Update argument |interrupt| from Option to non-Option value
+// once we enable sending vhost-user message from the backend to the frontend.
 async fn handle_command_tube(
     command_tube: &Option<AsyncTube>,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Option<Interrupt>,
     disk_state: Rc<AsyncMutex<DiskState>>,
 ) -> Result<(), ExecuteError> {
     let command_tube = match command_tube {
         Some(c) => c,
         None => {
-            let () = futures::future::pending().await;
+            futures::future::pending::<()>().await;
             return Ok(());
         }
     };
@@ -320,7 +377,9 @@ async fn handle_command_tube(
                     .await
                     .map_err(ExecuteError::SendingResponse)?;
                 if let DiskControlResult::Ok = resp {
-                    interrupt.borrow().signal_config_changed();
+                    if let Some(interrupt) = &interrupt {
+                        interrupt.signal_config_changed();
+                    }
                 }
             }
             Err(e) => return Err(ExecuteError::ReceivingCommand(e)),
@@ -405,18 +464,16 @@ fn run_worker(
         return Err("Number of queues and events must match.".to_string());
     }
 
-    let interrupt = Rc::new(RefCell::new(interrupt));
-
     // One flush timer per disk.
     let timer = Timer::new().expect("Failed to create a timer");
     let flush_timer_armed = Rc::new(RefCell::new(false));
 
     // Process any requests to resample the irq value.
-    let resample = async_utils::handle_irq_resample(&ex, Rc::clone(&interrupt));
+    let resample = async_utils::handle_irq_resample(&ex, interrupt.clone());
     pin_mut!(resample);
 
     // Handles control requests.
-    let control = handle_command_tube(control_tube, Rc::clone(&interrupt), disk_state.clone());
+    let control = handle_command_tube(control_tube, Some(interrupt.clone()), disk_state.clone());
     pin_mut!(control);
 
     // Handle all the queues in one sub-select call.
@@ -444,7 +501,7 @@ fn run_worker(
                 Rc::clone(disk_state),
                 Rc::clone(&queue),
                 event,
-                Rc::clone(&interrupt),
+                interrupt.clone(),
                 Rc::clone(&flush_timer),
                 Rc::clone(&flush_timer_armed),
             )
@@ -481,7 +538,7 @@ fn run_worker(
 /// Virtio device for exposing block level read/write operations on a host file.
 pub struct BlockAsync {
     // We keep these members crate-public as they are accessed by the vhost-user device.
-    pub(crate) disk_image: Option<Box<dyn ToAsyncDisk>>,
+    pub(crate) disk_image: Option<Box<dyn DiskFile>>,
     pub(crate) disk_size: Arc<AtomicU64>,
     pub(crate) avail_features: u64,
     pub(crate) read_only: bool,
@@ -489,16 +546,16 @@ pub struct BlockAsync {
     pub(crate) seg_max: u32,
     pub(crate) block_size: u32,
     pub(crate) id: Option<BlockId>,
+    pub(crate) control_tube: Option<Tube>,
     kill_evt: Option<Event>,
-    worker_thread: Option<thread::JoinHandle<(Box<dyn ToAsyncDisk>, Option<Tube>)>>,
-    control_tube: Option<Tube>,
+    worker_thread: Option<thread::JoinHandle<(Box<dyn DiskFile>, Option<Tube>)>>,
 }
 
 impl BlockAsync {
     /// Create a new virtio block device that operates on the given AsyncDisk.
     pub fn new(
         base_features: u64,
-        disk_image: Box<dyn ToAsyncDisk>,
+        disk_image: Box<dyn DiskFile>,
         read_only: bool,
         sparse: bool,
         block_size: u32,
@@ -521,7 +578,7 @@ impl BlockAsync {
             );
         }
 
-        let avail_features = build_avail_features(base_features, read_only, sparse, true);
+        let avail_features = Self::build_avail_features(base_features, read_only, sparse, true);
 
         let seg_max = get_seg_max(QUEUE_SIZE);
 
@@ -538,6 +595,31 @@ impl BlockAsync {
             worker_thread: None,
             control_tube,
         })
+    }
+
+    /// Returns the feature flags given the specified attributes.
+    fn build_avail_features(
+        base_features: u64,
+        read_only: bool,
+        sparse: bool,
+        multi_queue: bool,
+    ) -> u64 {
+        let mut avail_features = base_features;
+        avail_features |= 1 << VIRTIO_BLK_F_FLUSH;
+        if read_only {
+            avail_features |= 1 << VIRTIO_BLK_F_RO;
+        } else {
+            if sparse {
+                avail_features |= 1 << VIRTIO_BLK_F_DISCARD;
+            }
+            avail_features |= 1 << VIRTIO_BLK_F_WRITE_ZEROES;
+        }
+        avail_features |= 1 << VIRTIO_BLK_F_SEG_MAX;
+        avail_features |= 1 << VIRTIO_BLK_F_BLK_SIZE;
+        if multi_queue {
+            avail_features |= 1 << VIRTIO_BLK_F_MQ;
+        }
+        avail_features
     }
 
     // Execute a single block device request.
@@ -705,6 +787,29 @@ impl BlockAsync {
         };
         Ok(())
     }
+
+    /// Builds and returns the config structure used to specify block features.
+    pub fn build_config_space(
+        disk_size: u64,
+        seg_max: u32,
+        block_size: u32,
+        num_queues: u16,
+    ) -> virtio_blk_config {
+        virtio_blk_config {
+            // If the image is not a multiple of the sector size, the tail bits are not exposed.
+            capacity: Le64::from(disk_size >> SECTOR_SHIFT),
+            seg_max: Le32::from(seg_max),
+            blk_size: Le32::from(block_size),
+            num_queues: Le16::from(num_queues),
+            max_discard_sectors: Le32::from(MAX_DISCARD_SECTORS),
+            discard_sector_alignment: Le32::from(DISCARD_SECTOR_ALIGNMENT),
+            max_write_zeroes_sectors: Le32::from(MAX_WRITE_ZEROES_SECTORS),
+            write_zeroes_may_unmap: 1,
+            max_discard_seg: Le32::from(MAX_DISCARD_SEG),
+            max_write_zeroes_seg: Le32::from(MAX_WRITE_ZEROES_SEG),
+            ..Default::default()
+        }
+    }
 }
 
 impl Drop for BlockAsync {
@@ -750,7 +855,7 @@ impl VirtioDevice for BlockAsync {
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         let config_space = {
             let disk_size = self.disk_size.load(Ordering::Acquire);
-            build_config_space(disk_size, self.seg_max, self.block_size, NUM_QUEUES)
+            Self::build_config_space(disk_size, self.seg_max, self.block_size, NUM_QUEUES)
         };
         copy_config(data, 0, config_space.as_slice(), offset);
     }

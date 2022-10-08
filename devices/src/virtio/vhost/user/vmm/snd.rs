@@ -1,10 +1,8 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::thread;
 
 use base::error;
@@ -14,9 +12,8 @@ use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
-use crate::virtio::device_constants::snd::virtio_snd_config;
 use crate::virtio::vhost::user::vmm::handler::VhostUserHandler;
-use crate::virtio::vhost::user::vmm::Error;
+use crate::virtio::vhost::user::vmm::Connection;
 use crate::virtio::vhost::user::vmm::Result;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
@@ -38,17 +35,15 @@ const NUM_QUEUES: usize = 4;
 
 impl Snd {
     // Create a vhost-user snd device.
-    pub fn new<P: AsRef<Path>>(base_features: u64, socket_path: P) -> Result<Snd> {
-        let socket = UnixStream::connect(&socket_path).map_err(Error::SocketConnect)?;
-
+    pub fn new(base_features: u64, connection: Connection) -> Result<Snd> {
         let allow_features = 1u64 << crate::virtio::VIRTIO_F_VERSION_1
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         let allow_protocol_features =
             VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::CONFIG;
 
-        let mut handler = VhostUserHandler::new_from_stream(
-            socket,
+        let mut handler = VhostUserHandler::new_from_connection(
+            connection,
             NUM_QUEUES as u64,
             allow_features,
             init_features,
@@ -89,11 +84,7 @@ impl VirtioDevice for Snd {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        if let Err(e) = self
-            .handler
-            .borrow_mut()
-            .read_config::<virtio_snd_config>(offset, data)
-        {
+        if let Err(e) = self.handler.borrow_mut().read_config(offset, data) {
             error!("failed to read config: {}", e);
         }
     }

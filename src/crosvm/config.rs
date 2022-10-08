@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,7 +50,6 @@ use vm_control::BatteryType;
 use x86_64::set_enable_pnp_data_msr_config;
 
 use super::argument::parse_hex_or_decimal;
-use super::check_opt_path;
 pub(crate) use super::sys::HypervisorKind;
 
 cfg_if::cfg_if! {
@@ -64,7 +63,6 @@ cfg_if::cfg_if! {
 
         static KVM_PATH: &str = "/dev/kvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
-        static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
 
@@ -72,9 +70,12 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const ONE_MB: u64 = 1 << 20;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -125,19 +126,6 @@ impl FromStr for VhostUserFsOption {
             .to_owned();
 
         Ok(Self { socket, tag })
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct VhostUserWlOption {
-    pub socket: PathBuf,
-}
-
-impl FromStr for VhostUserWlOption {
-    type Err = <PathBuf as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self { socket: s.parse()? })
     }
 }
 
@@ -533,7 +521,11 @@ fn jail_config_default_pivot_root() -> PathBuf {
 
 #[cfg(unix)]
 fn jail_config_default_seccomp_policy_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(SECCOMP_POLICY_DIR))
+    if cfg!(feature = "chromeos") {
+        Some(PathBuf::from("/usr/share/policy/crosvm"))
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, serde_keyvalue::FromKeyValues)]
@@ -614,6 +606,7 @@ pub fn parse_pstore(value: &str) -> Result<Pstore, String> {
     })
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
     let mut rw_type: Option<MsrRWType> = None;
     let mut action: Option<MsrAction> = None;
@@ -671,27 +664,33 @@ pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), Stri
     ))
 }
 
-pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
-    let serial_setting: SerialParameters = from_key_values(s)?;
-
-    if serial_setting.stdin && serial_setting.input.is_some() {
+pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
+    if params.stdin && params.input.is_some() {
         return Err("Cannot specify both stdin and input options".to_string());
     }
-    if serial_setting.num < 1 {
+    if params.num < 1 {
         return Err(invalid_value_err(
-            serial_setting.num.to_string(),
+            params.num.to_string(),
             "Serial port num must be at least 1",
         ));
     }
 
-    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+    if params.hardware == SerialHardware::Serial && params.num > 4 {
         return Err(invalid_value_err(
-            format!("{}", serial_setting.num),
+            format!("{}", params.num),
             "Serial port num must be 4 or less",
         ));
     }
 
-    Ok(serial_setting)
+    Ok(())
+}
+
+pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
+    let params: SerialParameters = from_key_values(s)?;
+
+    validate_serial_parameters(&params)?;
+
+    Ok(params)
 }
 
 #[cfg(feature = "plugin")]
@@ -884,7 +883,6 @@ pub fn parse_ac97_options(s: &str) -> Result<Ac97Parameters, String> {
                     .map_err(|e| format!("invalid capture option: {}", e))?;
             }
             _ => {
-                #[cfg(feature = "audio_cras")]
                 super::sys::config::parse_ac97_options(&mut ac97_params, k, v)?;
             }
         }
@@ -1169,6 +1167,8 @@ pub struct Config {
     #[cfg(feature = "direct")]
     pub direct_edge_irq: Vec<u32>,
     #[cfg(feature = "direct")]
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
+    #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
     #[cfg(feature = "direct")]
     pub direct_level_irq: Vec<u32>,
@@ -1189,7 +1189,7 @@ pub struct Config {
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub force_calibrated_tsc_leaf: bool,
     pub force_s2idle: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     pub gdb: Option<u32>,
     #[cfg(feature = "gpu")]
     pub gpu_parameters: Option<GpuParameters>,
@@ -1221,6 +1221,8 @@ pub struct Config {
     pub memory: Option<u64>,
     pub memory_file: Option<PathBuf>,
     pub mmio_address_ranges: Vec<AddressRange>,
+    #[cfg(target_arch = "aarch64")]
+    pub mte: bool,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
     pub net_vq_pairs: Option<u16>,
@@ -1228,6 +1230,8 @@ pub struct Config {
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub oem_strings: Vec<String>,
     pub params: Vec<String>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pci_low_start: Option<u64>,
@@ -1253,11 +1257,11 @@ pub struct Config {
     pub product_name: Option<String>,
     #[cfg(windows)]
     pub product_version: Option<String>,
-    pub protected_vm: ProtectionType,
+    pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
     #[cfg(windows)]
     pub pvclock: bool,
-    /// Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
     pub rng: bool,
     pub rt_cpus: Vec<usize>,
@@ -1307,7 +1311,7 @@ pub struct Config {
     pub vhost_user_snd: Vec<VhostUserOption>,
     pub vhost_user_video_dec: Option<VhostUserOption>,
     pub vhost_user_vsock: Vec<VhostUserOption>,
-    pub vhost_user_wl: Option<VhostUserWlOption>,
+    pub vhost_user_wl: Option<VhostUserOption>,
     #[cfg(unix)]
     pub vhost_vsock_device: Option<PathBuf>,
     #[cfg(feature = "video-decoder")]
@@ -1315,7 +1319,6 @@ pub struct Config {
     #[cfg(feature = "video-encoder")]
     pub video_enc: Option<VideoDeviceConfig>,
     pub virtio_input_evdevs: Vec<PathBuf>,
-    pub virtio_iommu: bool,
     pub virtio_keyboard: Vec<PathBuf>,
     pub virtio_mice: Vec<PathBuf>,
     pub virtio_multi_touch: Vec<TouchDeviceOption>,
@@ -1363,6 +1366,8 @@ impl Default for Config {
             #[cfg(feature = "direct")]
             direct_edge_irq: Vec::new(),
             #[cfg(feature = "direct")]
+            direct_fixed_evts: Vec::new(),
+            #[cfg(feature = "direct")]
             direct_gpe: Vec::new(),
             #[cfg(feature = "direct")]
             direct_level_irq: Vec::new(),
@@ -1383,7 +1388,7 @@ impl Default for Config {
             file_backed_mappings: Vec::new(),
             force_calibrated_tsc_leaf: false,
             force_s2idle: false,
-            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            #[cfg(feature = "gdb")]
             gdb: None,
             #[cfg(feature = "gpu")]
             gpu_parameters: None,
@@ -1423,6 +1428,8 @@ impl Default for Config {
             memory: None,
             memory_file: None,
             mmio_address_ranges: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            mte: false,
             #[cfg(windows)]
             net_vhost_user_tube: None,
             net_vq_pairs: None,
@@ -1430,6 +1437,8 @@ impl Default for Config {
             no_i8042: false,
             no_rtc: false,
             no_smt: false,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            oem_strings: Vec::new(),
             params: Vec::new(),
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             pci_low_start: None,
@@ -1451,7 +1460,7 @@ impl Default for Config {
             process_invariants_data_size: None,
             #[cfg(windows)]
             product_name: None,
-            protected_vm: ProtectionType::Unprotected,
+            protection_type: ProtectionType::Unprotected,
             pstore: None,
             #[cfg(windows)]
             pvclock: false,
@@ -1510,7 +1519,6 @@ impl Default for Config {
             #[cfg(feature = "video-encoder")]
             video_enc: None,
             virtio_input_evdevs: Vec::new(),
-            virtio_iommu: false,
             virtio_keyboard: Vec::new(),
             virtio_mice: Vec::new(),
             virtio_multi_touch: Vec::new(),
@@ -1529,57 +1537,8 @@ impl Default for Config {
 }
 
 pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
-    if !match &cfg.executable_path {
-        Some(Executable::Bios(p)) => p,
-        Some(Executable::Kernel(p)) => p,
-        Some(Executable::Plugin(p)) => p,
-        None => {
-            return Err("Executable is not specified".to_string());
-        }
-    }
-    .exists()
-    {
-        return Err("Executable does not exist".to_string());
-    }
-
-    check_opt_path!(cfg.android_fstab);
-
-    check_opt_path!(cfg.vcpu_cgroup_path);
-
-    check_opt_path!(cfg.balloon_control);
-
-    check_opt_path!(cfg.dmi_path);
-
-    for disk in cfg.disks.iter() {
-        if !disk.path.exists() {
-            return Err(format!("Disk path {:?} does not exist", disk.path));
-        }
-    }
-
-    for disk in cfg.pmem_devices.iter() {
-        if !disk.path.exists() {
-            return Err(format!("PMEM device path {:?} does not exist", disk.path));
-        }
-    }
-
-    for dev in cfg.virtio_input_evdevs.iter() {
-        if !dev.exists() {
-            return Err(format!("Virtio evdev device path {:?} does not exist", dev));
-        }
-    }
-
-    for p in cfg.acpi_tables.iter() {
-        if !p.exists() {
-            return Err(format!("ACPI table path {:?} does not exist", p));
-        }
-        if !p.is_file() {
-            return Err(String::from("the acpi-table path should be a file"));
-        }
-    }
-
-    #[cfg(feature = "audio")]
-    {
-        check_opt_path!(cfg.sound);
+    if cfg.executable_path.is_none() {
+        return Err("Executable is not specified".to_string());
     }
 
     if cfg.plugin_root.is_some() && !executable_is_plugin(&cfg.executable_path) {
@@ -1590,7 +1549,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
     {
         crate::crosvm::sys::validate_gpu_config(cfg)?;
     }
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     if cfg.gdb.is_some() && cfg.vcpu_count.unwrap_or(1) != 1 {
         return Err("`gdb` requires the number of vCPU to be 1".to_string());
     }
@@ -2156,6 +2115,7 @@ mod tests {
         assert_eq!(params.size, 0x2000);
     }
 
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn parse_userspace_msr_options_test() {
         let (pass_cpu0_index, pass_cpu0_cfg) =
@@ -2202,8 +2162,10 @@ mod tests {
             config,
             JailConfig {
                 pivot_root: jail_config_default_pivot_root(),
-                #[cfg(unix)]
-                seccomp_policy_dir: jail_config_default_seccomp_policy_dir(),
+                #[cfg(feature = "chromeos")]
+                seccomp_policy_dir: Some(PathBuf::from("/usr/share/policy/crosvm")),
+                #[cfg(all(unix, not(feature = "chromeos")))]
+                seccomp_policy_dir: None,
                 seccomp_log_failures: false,
             }
         );

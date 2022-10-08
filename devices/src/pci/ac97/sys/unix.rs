@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ use crate::pci::ac97::Ac97Parameters;
 use crate::pci::pci_device;
 use crate::pci::pci_device::Result;
 
-pub(in crate::pci::ac97) type AudioStreamSource = Box<dyn ShmStreamSource<base::Error>>;
+pub(crate) type AudioStreamSource = Box<dyn ShmStreamSource<base::Error>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Ac97Backend {

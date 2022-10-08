@@ -1,12 +1,10 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 mod sys;
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
@@ -186,9 +184,49 @@ where
     }
 }
 
-// Processes one message's list of addresses.
+// Release a list of guest memory ranges back to the host system.
 // Unpin requests for each inflate range will be sent via `release_memory_tube`
 // if provided, and then `desc_handler` will be called for each inflate range.
+fn release_ranges<F>(
+    release_memory_tube: &Option<Tube>,
+    inflate_ranges: Vec<(u64, u64)>,
+    desc_handler: &mut F,
+) -> descriptor_utils::Result<()>
+where
+    F: FnMut(GuestAddress, u64),
+{
+    if let Some(tube) = release_memory_tube {
+        let unpin_ranges = inflate_ranges
+            .iter()
+            .map(|v| {
+                (
+                    v.0 >> VIRTIO_BALLOON_PFN_SHIFT,
+                    v.1 / VIRTIO_BALLOON_PF_SIZE,
+                )
+            })
+            .collect();
+        let req = UnpinRequest {
+            ranges: unpin_ranges,
+        };
+        if let Err(e) = tube.send(&req) {
+            error!("failed to send unpin request: {}", e);
+        } else {
+            match tube.recv() {
+                Ok(resp) => match resp {
+                    UnpinResponse::Success => invoke_desc_handler(inflate_ranges, desc_handler),
+                    UnpinResponse::Failed => error!("failed to handle unpin request"),
+                },
+                Err(e) => error!("failed to handle get unpin response: {}", e),
+            }
+        }
+    } else {
+        invoke_desc_handler(inflate_ranges, desc_handler);
+    }
+
+    Ok(())
+}
+
+// Processes one message's list of addresses.
 fn handle_address_chain<F>(
     release_memory_tube: &Option<Tube>,
     avail_desc: DescriptorChain,
@@ -234,35 +272,7 @@ where
         inflate_ranges.push((range_start, range_size));
     }
 
-    if let Some(tube) = release_memory_tube {
-        let unpin_ranges = inflate_ranges
-            .iter()
-            .map(|v| {
-                (
-                    v.0 >> VIRTIO_BALLOON_PFN_SHIFT,
-                    v.1 / VIRTIO_BALLOON_PF_SIZE,
-                )
-            })
-            .collect();
-        let req = UnpinRequest {
-            ranges: unpin_ranges,
-        };
-        if let Err(e) = tube.send(&req) {
-            error!("failed to send unpin request: {}", e);
-        } else {
-            match tube.recv() {
-                Ok(resp) => match resp {
-                    UnpinResponse::Success => invoke_desc_handler(inflate_ranges, desc_handler),
-                    UnpinResponse::Failed => error!("failed to handle unpin request"),
-                },
-                Err(e) => error!("failed to handle get unpin response: {}", e),
-            }
-        }
-    } else {
-        invoke_desc_handler(inflate_ranges, desc_handler);
-    }
-
-    Ok(())
+    release_ranges(release_memory_tube, inflate_ranges, desc_handler)
 }
 
 // Async task that handles the main balloon inflate and deflate queues.
@@ -271,7 +281,7 @@ async fn handle_queue<F>(
     mut queue: Queue,
     mut queue_event: EventAsync,
     release_memory_tube: &Option<Tube>,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     mut desc_handler: F,
 ) where
     F: FnMut(GuestAddress, u64),
@@ -291,7 +301,56 @@ async fn handle_queue<F>(
             error!("balloon: failed to process inflate addresses: {}", e);
         }
         queue.add_used(mem, index, 0);
-        queue.trigger_interrupt(mem, &*interrupt.borrow());
+        queue.trigger_interrupt(mem, &interrupt);
+    }
+}
+
+// Processes one page-reporting descriptor.
+fn handle_reported_buffer<F>(
+    release_memory_tube: &Option<Tube>,
+    avail_desc: DescriptorChain,
+    desc_handler: &mut F,
+) -> descriptor_utils::Result<()>
+where
+    F: FnMut(GuestAddress, u64),
+{
+    let mut reported_ranges: Vec<(u64, u64)> = Vec::new();
+    let regions = avail_desc.into_iter();
+    for desc in regions {
+        let (desc_regions, _exported) = desc.into_mem_regions();
+        for r in desc_regions {
+            reported_ranges.push((r.gpa.offset(), r.len));
+        }
+    }
+
+    release_ranges(release_memory_tube, reported_ranges, desc_handler)
+}
+
+// Async task that handles the page reporting queue.
+async fn handle_reporting_queue<F>(
+    mem: &GuestMemory,
+    mut queue: Queue,
+    mut queue_event: EventAsync,
+    release_memory_tube: &Option<Tube>,
+    interrupt: Interrupt,
+    mut desc_handler: F,
+) where
+    F: FnMut(GuestAddress, u64),
+{
+    loop {
+        let avail_desc = match queue.next_async(mem, &mut queue_event).await {
+            Err(e) => {
+                error!("Failed to read descriptor {}", e);
+                return;
+            }
+            Ok(d) => d,
+        };
+        let index = avail_desc.index;
+        if let Err(e) = handle_reported_buffer(release_memory_tube, avail_desc, &mut desc_handler) {
+            error!("balloon: failed to process reported buffer: {}", e);
+        }
+        queue.add_used(mem, index, 0);
+        queue.trigger_interrupt(mem, &interrupt);
     }
 }
 
@@ -320,7 +379,7 @@ async fn handle_stats_queue(
     mut stats_rx: mpsc::Receiver<u64>,
     command_tube: &AsyncTube,
     state: Arc<AsyncMutex<BalloonState>>,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
 ) {
     // Consume the first stats buffer sent from the guest at startup. It was not
     // requested by anyone, and the stats are stale.
@@ -343,7 +402,7 @@ async fn handle_stats_queue(
 
         // Request a new stats_desc to the guest.
         queue.add_used(mem, index, 0);
-        queue.trigger_interrupt(mem, &*interrupt.borrow());
+        queue.trigger_interrupt(mem, &interrupt);
 
         let stats_desc = match queue.next_async(mem, &mut queue_event).await {
             Err(e) => {
@@ -377,7 +436,7 @@ async fn handle_stats_queue(
 
 async fn handle_event(
     state: Arc<AsyncMutex<BalloonState>>,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     r: &mut Reader,
     command_tube: &AsyncTube,
 ) -> Result<()> {
@@ -390,7 +449,7 @@ async fn handle_event(
                 let mut state = state.lock().await;
                 if state.failable_update {
                     state.num_pages = state.actual_pages;
-                    interrupt.borrow().signal_config_changed();
+                    interrupt.signal_config_changed();
 
                     state.failable_update = false;
                     return sys::send_adjusted_response_async(command_tube, state.actual_pages)
@@ -413,7 +472,7 @@ async fn handle_events_queue(
     mut queue: Queue,
     mut queue_event: EventAsync,
     state: Arc<AsyncMutex<BalloonState>>,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     command_tube: &AsyncTube,
 ) -> Result<()> {
     loop {
@@ -430,7 +489,7 @@ async fn handle_events_queue(
         };
 
         queue.add_used(mem, index, 0);
-        queue.trigger_interrupt(mem, &*interrupt.borrow());
+        queue.trigger_interrupt(mem, &interrupt);
     }
 }
 
@@ -438,7 +497,7 @@ async fn handle_events_queue(
 // requesting that the guest balloon be adjusted or to report guest memory statistics.
 async fn handle_command_tube(
     command_tube: &AsyncTube,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     state: Arc<AsyncMutex<BalloonState>>,
     mut stats_tx: mpsc::Sender<u64>,
 ) -> Result<()> {
@@ -453,7 +512,7 @@ async fn handle_command_tube(
                     let mut state = state.lock().await;
 
                     state.num_pages = num_pages;
-                    interrupt.borrow().signal_config_changed();
+                    interrupt.signal_config_changed();
 
                     if allow_failure {
                         if num_pages == state.actual_pages {
@@ -491,9 +550,6 @@ fn run_worker(
     state: Arc<AsyncMutex<BalloonState>>,
     acked_features: u64,
 ) -> Option<Tube> {
-    // Wrap the interrupt in a `RefCell` so it can be shared between async functions.
-    let interrupt = Rc::new(RefCell::new(interrupt));
-
     let ex = Executor::new().unwrap();
     let command_tube = AsyncTube::new(&ex, command_tube).unwrap();
 
@@ -565,7 +621,7 @@ fn run_worker(
 
         // The next queue is used for reporting messages
         let reporting = if (acked_features & (1 << VIRTIO_BALLOON_F_PAGE_REPORTING)) != 0 {
-            handle_queue(
+            handle_reporting_queue(
                 &mem,
                 queues.pop_front().unwrap(),
                 queue_evts.pop_front().unwrap(),
