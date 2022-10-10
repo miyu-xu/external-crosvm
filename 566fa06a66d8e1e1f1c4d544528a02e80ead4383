@@ -16,6 +16,24 @@
       "message": "unrelated: maybe should use `$(nproc)` or some function of it for the `-j`",
       "revId": "566fa06a66d8e1e1f1c4d544528a02e80ead4383",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "adb22ebe_3ba24874",
+        "filename": "merge-setup.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 38,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-10-10T18:11:13Z",
+      "side": 1,
+      "message": "+1!",
+      "parentUuid": "0fc8dbd9_87a2b3f2",
+      "revId": "566fa06a66d8e1e1f1c4d544528a02e80ead4383",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
