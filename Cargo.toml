@@ -67,6 +67,7 @@ members = [
     "e2e_tests",
     "fuse",
     "gpu_display",
+    "gunyah_sys",
     "hypervisor",
     "io_uring",
     "kernel_cmdline",
