@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0fc8dbd9_87a2b3f2",
+        "filename": "merge-setup.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 38,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-10T18:04:34Z",
+      "side": 1,
+      "message": "unrelated: maybe should use `$(nproc)` or some function of it for the `-j`",
+      "revId": "566fa06a66d8e1e1f1c4d544528a02e80ead4383",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
