@@ -1049,6 +1049,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gunyah_sys"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "data_model",
+ "libc",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1091,6 +1100,7 @@ dependencies = [
  "fnv",
  "gdbstub",
  "gdbstub_arch",
+ "gunyah_sys",
  "kvm",
  "kvm_sys",
  "libc",
