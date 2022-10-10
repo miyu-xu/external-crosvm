@@ -17,11 +17,16 @@ use once_cell::sync::Lazy;
 
 use crate::crosvm::config::JailConfig;
 
+<<<<<<< HEAD   (0eca07 Merge "Revert "ANDROID: re-enable AsyncConsole"")
 static EMBEDDED_BPFS: Lazy<std::collections::HashMap<&str, Vec<u8>>> = Lazy::new(|| {
     {
         std::collections::HashMap::<&str, Vec<u8>>::new()
     }
 });
+=======
+pub static EMBEDDED_BPFS: Lazy<std::collections::HashMap<&str, Vec<u8>>> =
+    Lazy::new(|| include!(concat!(env!("OUT_DIR"), "/bpf_includes.in")));
+>>>>>>> BRANCH (53cd18 p9: use *at() functions for set_attr)
 
 pub(super) struct SandboxConfig<'a> {
     pub(super) limit_caps: bool,
