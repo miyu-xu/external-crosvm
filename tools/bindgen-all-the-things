@@ -22,6 +22,7 @@ dirs=(
     io_uring
     kernel_loader
     kvm_sys
+    gunyah_sys
     media/ffmpeg
     media/libva
     media/libvda
