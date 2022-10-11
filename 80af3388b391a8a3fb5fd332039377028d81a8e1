@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "869ff339_68f0ec99",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 8
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-11T13:32:51Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d3044e3d_e0e15251",
+      "range": {
+        "startLine": 37,
+        "startChar": 37,
+        "endLine": 37,
+        "endChar": 42
+      },
+      "revId": "80af3388b391a8a3fb5fd332039377028d81a8e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "9ad456fb_2a30151a",
@@ -37,6 +61,30 @@
       "writtenOn": "2022-08-25T16:10:27Z",
       "side": 1,
       "message": "In hypervisors where interrupt_status is updated asynchronously, inject the interrupt even if the previous interrupt \"appears to be\" already pending.",
+      "range": {
+        "startLine": 67,
+        "startChar": 26,
+        "endLine": 67,
+        "endChar": 35
+      },
+      "revId": "80af3388b391a8a3fb5fd332039377028d81a8e1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e5fb9f0b_532c5994",
+        "filename": "devices/src/virtio/interrupt.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-11T13:32:51Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9ad456fb_2a30151a",
       "range": {
         "startLine": 67,
         "startChar": 26,

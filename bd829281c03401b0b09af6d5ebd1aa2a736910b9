@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "07ceac3a_0610ca43",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 10
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-11T13:32:51Z",
+      "side": 1,
+      "message": "Thank you for the review comments. I have addressed all of them in Patch-Set 10.\nThis patch is not for fixing a bug. This is for adding a feature. I had been advised (by internal folks who submitted patches to crosvm recently) to create a buganizer for review discussions. Actually not sure whether the \"BUG\" link in the commit message is required or not.\n\nCould you please review patchset 10?",
+      "revId": "bd829281c03401b0b09af6d5ebd1aa2a736910b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
