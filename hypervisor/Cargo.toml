@@ -9,8 +9,10 @@ haxm = []
 whpx = []
 gdb = ["gdbstub", "gdbstub_arch"]
 geniezone = []
+gunyah = []
 
 [dependencies]
+anyhow = "*"
 bit_field = { path = "../bit_field" }
 bitflags = "1"
 cros_fdt = { path = "../cros_fdt" }
