@@ -227,6 +227,12 @@ whpx = ["devices/whpx", "hypervisor/whpx"]
 ## Enables a libslirp based network device. Currently only supported on Windows.
 slirp = ["devices/slirp", "net_util/slirp"]
 
+#! ### Linux-specific feature flags
+#!
+#! These feature flags are only available on Linux builds of crosvm.
+
+## Enables the use of the Gunyah hypervisor
+gunyah = ["hypervisor/gunyah"]
 
 #! ### Non-additive feature flags
 #!
