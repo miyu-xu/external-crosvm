@@ -232,7 +232,7 @@ slirp = ["devices/slirp", "net_util/slirp"]
 #! These feature flags are only available on Linux builds of crosvm.
 
 ## Enables the use of the Gunyah hypervisor
-gunyah = ["hypervisor/gunyah"]
+gunyah = ["hypervisor/gunyah", "devices/gunyah"]
 
 #! ### Non-additive feature flags
 #!
