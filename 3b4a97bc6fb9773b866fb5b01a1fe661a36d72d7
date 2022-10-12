@@ -48,6 +48,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e81e53b7_b31112c6",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-12T05:03:08Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "0b9f786c_4885b059",
+      "range": {
+        "startLine": 10,
+        "startChar": 7,
+        "endLine": 11,
+        "endChar": 57
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3195ce20_6f832158",
@@ -61,6 +85,24 @@
       "writtenOn": "2022-08-25T18:08:46Z",
       "side": 1,
       "message": "This is only modifying the non-async version of the block device; do we want to apply this to the asynchronous one too? (devices/src/virtio/block/asynchronous.rs)\n\nI am also working on migrating all disk image formats to async and removing the non-async version: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3824068",
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "10946430_57ccfeea",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-12T05:03:08Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "3195ce20_6f832158",
       "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -88,6 +130,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a5c49e8d_43fe9c51",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 458,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-12T05:03:08Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "09ac7008_713cbc11",
+      "range": {
+        "startLine": 458,
+        "startChar": 23,
+        "endLine": 458,
+        "endChar": 24
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2bf42a40_4d6bc8db",
@@ -101,6 +167,30 @@
       "writtenOn": "2022-08-25T21:04:51Z",
       "side": 1,
       "message": "If we increase the number of queues, this will break. Could we use `vec![queue_size; NUM_QUEUES]` instead?",
+      "range": {
+        "startLine": 515,
+        "startChar": 25,
+        "endLine": 515,
+        "endChar": 34
+      },
+      "revId": "3b4a97bc6fb9773b866fb5b01a1fe661a36d72d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "08ce90ad_ed65e8a6",
+        "filename": "devices/src/virtio/block/block.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 515,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-12T05:03:08Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "2bf42a40_4d6bc8db",
       "range": {
         "startLine": 515,
         "startChar": 25,
