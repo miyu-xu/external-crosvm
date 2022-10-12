@@ -230,6 +230,9 @@ vaapi = ["devices/vaapi"]
 ## filesystem if mounted, for easier debugging with tools like trace-cmd.
 trace_marker = ["cros_tracing/trace_marker"]
 
+## Enables the use of the Gunyah hypervisor
+gunyah = ["hypervisor/gunyah"]
+
 #! ### Windows-specific feature flags
 #!
 #! These feature flags are only available on Windows builds of crosvm.

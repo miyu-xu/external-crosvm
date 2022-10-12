@@ -15,6 +15,8 @@ pub mod kvm;
 pub mod whpx;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod x86_64;
+#[cfg(all(unix, feature = "gunyah"))]
+pub mod gunyah;
 
 use std::os::raw::c_int;
 
