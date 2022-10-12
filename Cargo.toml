@@ -231,7 +231,7 @@ vaapi = ["devices/vaapi"]
 trace_marker = ["cros_tracing/trace_marker"]
 
 ## Enables the use of the Gunyah hypervisor
-gunyah = ["hypervisor/gunyah"]
+gunyah = ["hypervisor/gunyah", "devices/gunyah"]
 
 #! ### Windows-specific feature flags
 #!
