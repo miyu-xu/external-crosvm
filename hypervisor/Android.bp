@@ -30,6 +30,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -72,6 +73,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -114,6 +116,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -156,6 +159,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -198,6 +202,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -240,6 +245,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -282,6 +288,7 @@ rust_test {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
@@ -319,6 +326,7 @@ rust_library {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbit_field",
         "libbitflags",
