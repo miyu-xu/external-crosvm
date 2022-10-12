@@ -8,8 +8,10 @@ edition = "2021"
 haxm = []
 whpx = []
 gdb = ["gdbstub", "gdbstub_arch"]
+gunyah = []
 
 [dependencies]
+anyhow = "*"
 bit_field = { path = "../bit_field" }
 bitflags = "1"
 cros_fdt = { path = "../cros_fdt" }
