@@ -6,6 +6,7 @@
 mod aarch64;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
+use base::sys::BlockedSignal;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_64;
@@ -1255,28 +1256,6 @@ impl From<&IrqRoute> for kvm_irq_routing_entry {
                 ..Default::default()
             },
         }
-    }
-}
-
-// Represents a temporarily blocked signal. It will unblock the signal when dropped.
-struct BlockedSignal {
-    signal_num: c_int,
-}
-
-impl BlockedSignal {
-    // Returns a `BlockedSignal` if the specified signal can be blocked, otherwise None.
-    fn new(signal_num: c_int) -> Option<BlockedSignal> {
-        if block_signal(signal_num).is_ok() {
-            Some(BlockedSignal { signal_num })
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for BlockedSignal {
-    fn drop(&mut self) {
-        unblock_signal(self.signal_num).expect("failed to restore signal mask");
     }
 }
 
