@@ -1,0 +1,96 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "144605dc_946c9f42",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 583,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-10-13T04:16:56Z",
+      "side": 1,
+      "message": "Nit: might be more readable as `multi_queue`",
+      "range": {
+        "startLine": 583,
+        "startChar": 12,
+        "endLine": 583,
+        "endChar": 15
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "22021c24_6cafbccf",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 1135,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-10-13T04:16:56Z",
+      "side": 1,
+      "message": "Nit: could we prefer being more verbose here? e.g. `check_runtime_blk_queue_configurability`?",
+      "range": {
+        "startLine": 1135,
+        "startChar": 25,
+        "endLine": 1135,
+        "endChar": 26
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7081beac_f37717d3",
+        "filename": "devices/src/virtio/block/asynchronous.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 1141,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-10-13T04:16:56Z",
+      "side": 1,
+      "message": "Nit: this looks like two separate test cases. Does it make sense to split it into two test functions?",
+      "range": {
+        "startLine": 1140,
+        "startChar": 6,
+        "endLine": 1141,
+        "endChar": 9
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bbee4a0f_208e35c3",
+        "filename": "devices/src/virtio/vhost/user/vmm/block.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-10-13T04:16:56Z",
+      "side": 1,
+      "message": "Hmm. Shouldn\u0027t this be the number of supported queues for the device? It looks like a cached value, but it\u0027s not clear to me whether we refresh it before a value that\u0027s too small could cause problems.\n\nKeiichi: WDYT?",
+      "range": {
+        "startLine": 61,
+        "startChar": 11,
+        "endLine": 61,
+        "endChar": 55
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
