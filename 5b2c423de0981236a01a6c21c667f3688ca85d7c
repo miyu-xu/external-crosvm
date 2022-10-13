@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "93cd5f1f_5608027c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2022-10-13T11:45:22Z",
+      "side": 1,
+      "message": "Fix has been merged upstream.\n\nThis CL is ready to be taken over during the next AOSP merge; see b/253110856#comment3.",
+      "revId": "5b2c423de0981236a01a6c21c667f3688ca85d7c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
