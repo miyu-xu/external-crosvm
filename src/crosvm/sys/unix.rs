@@ -1370,8 +1370,49 @@ fn run_kvm(
     )
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+#[cfg(feature = "gunyah")]
+fn run_gunyah(
+    cfg: Config,
+    components: VmComponents,
+    guest_mem: GuestMemory,
+    #[cfg(feature = "swap")] swap_controller: Option<SwapController>,
+) -> Result<ExitState> {
+    use devices::GunyahIrqChip;
+    use hypervisor::gunyah::{GunyahVcpu, GunyahVm, Gunyah};
+
+    let gunyah = Gunyah::new_with_path(&&cfg.gunyah_device_path).with_context(|| {
+        format!("failed to open Gunyah device {}", cfg.gunyah_device_path.display())
+    })?;
+    let vm = GunyahVm::new(&gunyah, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protection_type,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        bail!("Failed to create protected VM");
+    }
+
+    let vm_clone = vm.try_clone()?;
+
+    run_vm::<GunyahVcpu, GunyahVm>(
+        cfg,
+        components,
+        vm,
+        &mut GunyahIrqChip::new(vm_clone)?,
+        None)
+}
+
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(feature = "gunyah")]
+    if cfg.gunyah_device_path.exists() {
+        return Ok(HypervisorKind::Gunyah);
+    }
+    bail!("no hypervisor enabled!");
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
@@ -1408,13 +1449,21 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
         .map(|swap_dir| SwapController::launch(guest_mem.clone(), swap_dir.clone()))
         .transpose()?;
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
         HypervisorKind::Kvm => run_kvm(
+            cfg,
+            components,
+            guest_mem,
+            #[cfg(feature = "swap")]
+            swap_controller,
+        ),
+        #[cfg(feature = "gunyah")]
+        HypervisorKind::Gunyah => run_gunyah(
             cfg,
             components,
             guest_mem,
