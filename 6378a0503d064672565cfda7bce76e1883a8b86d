@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b6450139_28484071",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-14T14:10:28Z",
+      "side": 1,
+      "message": "Uploaded Patch 6 with fixes.\n\nCould you please review?\n\nThanks,\nSreenad.",
+      "revId": "6378a0503d064672565cfda7bce76e1883a8b86d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
