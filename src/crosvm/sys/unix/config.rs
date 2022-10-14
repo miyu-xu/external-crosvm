@@ -18,6 +18,8 @@ use crate::crosvm::config::Config;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HypervisorKind {
     Kvm,
+    #[cfg(feature = "gunyah")]
+    Gunyah,
 }
 
 impl FromStr for HypervisorKind {
@@ -26,6 +28,8 @@ impl FromStr for HypervisorKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "kvm" => Ok(HypervisorKind::Kvm),
+            #[cfg(feature = "gunyah")]
+            "gunyah" => Ok(HypervisorKind::Gunyah),
             _ => Err("invalid hypervisor backend"),
         }
     }
