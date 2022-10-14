@@ -211,6 +211,30 @@
       },
       "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "87e61424_e2c3db11",
+        "filename": "devices/src/virtio/vhost/user/vmm/block.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1583282
+      },
+      "writtenOn": "2022-10-14T22:42:50Z",
+      "side": 1,
+      "message": "Ah gotcha, so we don\u0027t use the fact that this value can be something other than the default yet in the vhost-user case. We can always fix that if/when we need it.\n\nLooking at the imports, I think we\u0027re using the same constant in both places (DEFAULT_NUM_QUEUES) already? So this looks good to me.",
+      "parentUuid": "e8735e70_78aa0b9d",
+      "range": {
+        "startLine": 61,
+        "startChar": 11,
+        "endLine": 61,
+        "endChar": 55
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
