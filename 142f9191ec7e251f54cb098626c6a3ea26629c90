@@ -187,6 +187,30 @@
       },
       "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e8735e70_78aa0b9d",
+        "filename": "devices/src/virtio/vhost/user/vmm/block.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1971194
+      },
+      "writtenOn": "2022-10-14T16:50:41Z",
+      "side": 1,
+      "message": "The vhost-user is a mechanism to run device emulation in a separate process. So, we need to make sure the frontend (the vmm side) and the backend (the device side) use the same queue sizes.\n\nAs for Noah\u0027s concern, I guess this CL is fine because we don\u0027t allow changing queue sizes for vhost-user. This line is for the front-end and [this](https://android.googlesource.com/platform/external/crosvm/+/refs/changes/55/2197155/5/devices/src/virtio/vhost/user/device/block.rs#142) is for the back-end. As far as we\u0027re using the same constant value at this two places, I think vhost-user should work.\n\nI think we should use the same `DEFAULT_NUM_QUEUES` in the backend implementation, but we don\u0027t need to do it in this CL.\nNoah, does it make sense?",
+      "parentUuid": "a6137351_91d1a611",
+      "range": {
+        "startLine": 61,
+        "startChar": 11,
+        "endLine": 61,
+        "endChar": 55
+      },
+      "revId": "142f9191ec7e251f54cb098626c6a3ea26629c90",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
