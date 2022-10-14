@@ -1425,8 +1425,61 @@ fn run_kvm(cfg: Config, components: VmComponents) -> Result<ExitState> {
     )
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+#[cfg(all(
+    unix,
+    any(target_arch = "arm", target_arch = "aarch64"),
+    feature = "gunyah"
+))]
+fn run_gunyah(cfg: Config, components: VmComponents) -> Result<ExitState> {
+    use devices::GunyahIrqChip;
+    use hypervisor::gunyah::{Gunyah, GunyahVcpu, GunyahVm};
+
+    let gunyah = Gunyah::new_with_path(&cfg.gunyah_device_path).with_context(|| {
+        format!(
+            "failed to open Gunyah device {}",
+            cfg.gunyah_device_path.display()
+        )
+    })?;
+
+    let CreateGuestMemoryResult {
+        guest_mem,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    } = create_guest_memory(&cfg, &components, &gunyah)?;
+
+    let vm = GunyahVm::new(&gunyah, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
+        bail!("Failed to create protected VM");
+    }
+
+    let vm_clone = vm.try_clone()?;
+
+    run_vm::<GunyahVcpu, GunyahVm>(
+        cfg,
+        components,
+        vm,
+        &mut GunyahIrqChip::new(vm_clone)?,
+        None,
+        #[cfg(feature = "swap")]
+        None,
+    )
+}
+
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(all(
+        unix,
+        any(target_arch = "arm", target_arch = "aarch64"),
+        feature = "gunyah"
+    ))]
+    if cfg.gunyah_device_path.exists() {
+        return Ok(HypervisorKind::Gunyah);
+    }
+    bail!("no hypervisor enabled!");
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
@@ -1437,13 +1490,19 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
 
     let components = setup_vm_components(&cfg)?;
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
         HypervisorKind::Kvm => run_kvm(cfg, components),
+        #[cfg(all(
+            unix,
+            any(target_arch = "arm", target_arch = "aarch64"),
+            feature = "gunyah"
+        ))]
+        HypervisorKind::Gunyah => run_gunyah(cfg, components),
     }
 }
 
