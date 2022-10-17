@@ -171,15 +171,39 @@ where
     let elf = read_elf(kernel_image, ei_class)?;
     let mut start = None;
     let mut end = 0;
+    let mut load_addr;
+    let mut entry: GuestAddress = kernel_start;
+    let mut use_offsets = false;
 
+    // Check whether the p_paddr in program headers must be used as offset
+    // into provided kernel_start guest memory or to use it as actual guest
+    // memory address where segments will be loaded.
+    for phdr in &elf.program_headers {
+        if phdr.p_type != elf::PT_LOAD {
+            continue;
+        }
+
+        // If first loadable segement address and entry point are both 0, then
+        // use p_paddr for all loadable segments as offset into guest memory
+        if phdr.p_paddr == 0 && elf.file_header.e_entry == 0 {
+            use_offsets = true;
+        }
+        break;
+    }
     // Read in each section pointed to by the program headers.
     for phdr in &elf.program_headers {
         if phdr.p_type != elf::PT_LOAD {
             continue;
         }
 
-        if phdr.p_paddr < kernel_start.offset() {
+        if use_offsets {
+            load_addr = kernel_start
+                .checked_add(phdr.p_paddr)
+                .ok_or(Error::InvalidProgramHeaderAddress)?;
+        } else if phdr.p_paddr < kernel_start.offset() {
             return Err(Error::ProgramHeaderAddressOutOfRange);
+        } else {
+            load_addr = GuestAddress(phdr.p_paddr);
         }
 
         if start.is_none() {
@@ -200,11 +224,7 @@ where
             .map_err(|_| Error::SeekKernelStart)?;
 
         guest_mem
-            .read_to_memory(
-                GuestAddress(phdr.p_paddr),
-                kernel_image,
-                phdr.p_filesz as usize,
-            )
+            .read_to_memory(load_addr, kernel_image, phdr.p_filesz as usize)
             .map_err(|_| Error::ReadKernelImage)?;
     }
 
@@ -217,17 +237,19 @@ where
 
     let address_range = AddressRange { start, end };
 
-    // `e_entry` of 0 means there is no entry point, which we do not want to allow.
-    // The entry point address must also fall within one of the loaded sections.
+    // If using the p_paddr as guest mem address rather than as offset into guest memory,
+    // then entry point address must also fall within one of the loaded sections.
     // We approximate this by checking whether it within the bounds of the first and last sections.
-    if elf.file_header.e_entry == 0 || !address_range.contains(elf.file_header.e_entry) {
-        return Err(Error::InvalidEntryPoint);
+    if !use_offsets {
+        if !address_range.contains(elf.file_header.e_entry) {
+            return Err(Error::InvalidEntryPoint);
+        }
+        entry = GuestAddress(elf.file_header.e_entry);
     }
-
     Ok(LoadedKernel {
         address_range,
         size,
-        entry: GuestAddress(elf.file_header.e_entry),
+        entry,
     })
 }
 
