@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c7d0932_8a3ece36",
+        "filename": "devices/src/virtio/virtio_mmio_device.rs",
+        "patchSetId": 11
+      },
+      "lineNbr": 452,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-10-17T20:11:58Z",
+      "side": 1,
+      "message": "This looks like an unrelated whitespace change.",
+      "revId": "92b5e8a31e4a607ed229a588fd688e5ee6290588",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
