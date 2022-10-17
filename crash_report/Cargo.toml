@@ -10,5 +10,4 @@ edition = "2021"
 base = { path = "../base" }
 anyhow = "1.0.32"
 serde = "*"
-win_util = { path = "../win_util"}
 

@@ -641,16 +641,12 @@ pub struct RunCommand {
     /// (EXPERIMENTAL) Comma separated key=value pairs for setting
     /// up a display on the virtio-gpu device
     /// Possible key values:
-    ///     mode=(borderless_full_screen|windowed) - Whether to show
-    ///        the window on the host in full screen or windowed
-    ///        mode. If not specified, windowed mode is used by
-    ///        default.
-    ///     width=INT - The width of the virtual display connected
-    ///        to the virtio-gpu. Can't be set with the
-    ///        borderless_full_screen display mode.
-    ///     height=INT - The height of the virtual display connected
-    ///        to the virtio-gpu. Can't be set with the
-    ///        borderless_full_screen display mode.
+    ///     mode=(borderless_full_screen|windowed[width,height]) -
+    ///        Whether to show the window on the host in full
+    ///        screen or windowed mode. If not specified, windowed
+    ///        mode is used by default. "windowed" can also be
+    ///        specified explicitly to use a window size different
+    ///        from the default one.
     ///     hidden[=true|=false] - If the display window is
     ///        initially hidden (default: false).
     ///     refresh-rate=INT - Force a specific vsync generation
@@ -1280,7 +1276,7 @@ pub struct RunCommand {
     #[argh(option, long = "trackpad", arg_name = "PATH:WIDTH:HEIGHT")]
     /// path to a socket from where to read trackpad input events and write status updates to, optionally followed by screen width and height (defaults to 800x1280)
     pub virtio_trackpad: Vec<TouchDeviceOption>,
-    #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
     #[argh(switch)]
     /// enable the virtio-tpm connection to vtpm daemon
     pub vtpm_proxy: bool,
@@ -1610,7 +1606,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.software_tpm = cmd.software_tpm;
         }
 
-        #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+        #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
         {
             cfg.vtpm_proxy = cmd.vtpm_proxy;
         }
@@ -1754,8 +1750,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         };
 
         if !matches!(cfg.protection_type, ProtectionType::Unprotected) {
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
+            // USB devices only work for unprotected VMs.
             cfg.usb = false;
             // Protected VMs can't trust the RNG device, so don't provide it.
             cfg.rng = false;
