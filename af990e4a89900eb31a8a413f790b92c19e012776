@@ -70,6 +70,30 @@
       },
       "revId": "af990e4a89900eb31a8a413f790b92c19e012776",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ad972c74_90b1ec50",
+        "filename": "vm_control/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-18T22:39:59Z",
+      "side": 1,
+      "message": "Done + I cleaned up a few existing instances where we were enabling gpu and/or virgl_renderer on the device builds. I confirmed that the binary size dropped back down to 4.9 MiB\n\nI think there is still more trimming that can be done, but I\u0027m going to hold off until I find a better way to manage it.",
+      "parentUuid": "87798625_f3dab7f2",
+      "range": {
+        "startLine": 27,
+        "startChar": 8,
+        "endLine": 27,
+        "endChar": 14
+      },
+      "revId": "af990e4a89900eb31a8a413f790b92c19e012776",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
