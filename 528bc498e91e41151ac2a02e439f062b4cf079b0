@@ -3,6 +3,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "215dba97_b0e88eda",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 13
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-18T23:19:59Z",
+      "side": 1,
+      "message": "does this mean you are prefetching all the mmio registers from crosvm ahead of time? how do you maintain causality?\n\nif the guest does `read register_x` -\u003e `write register_y` -\u003e `read register_z`, do you block the final read until after crosvm witnesses the write and you refresh the gunyah\u0027s view of `register_z`?",
+      "range": {
+        "startLine": 19,
+        "startChar": 33,
+        "endLine": 21,
+        "endChar": 70
+      },
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "36ab1e65_88ecfb2e",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 13
