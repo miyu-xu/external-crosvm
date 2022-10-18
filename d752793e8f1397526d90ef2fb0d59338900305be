@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a6c69d6e_244dd901",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1086523
+      },
+      "writtenOn": "2022-10-18T21:25:22Z",
+      "side": 1,
+      "message": "The current submodules are invalid and will block native git workflow from working",
+      "revId": "d752793e8f1397526d90ef2fb0d59338900305be",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
