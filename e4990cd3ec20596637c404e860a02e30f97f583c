@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2340181d_beb3f37b",
+        "filename": "devices/Android.bp",
+        "patchSetId": 5
+      },
+      "lineNbr": 187,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-18T22:42:18Z",
+      "side": 1,
+      "message": "idk why bpfmt keeps these empty lines",
+      "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
