@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f58a4262_74be1994",
+        "filename": "vm_control/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2022-10-18T15:39:06Z",
+      "side": 1,
+      "message": "Drive-by-comment: I think we might need to rename `external/crosvm/vm_control/cargo2android_gdb.bp.patch` to a more generic `cargo2android_libs.bp` for `vm_control` and only enable the `gpu` feature in the `host` targets similar to what `external/crosvm/devices/cargo2android_libs.bp` is doing. Upstream https://crrev.com/c/3911102 moved some of the GPU parameters to `vm_control` to support display hotplug from the command line. aosp/2221461 may help as a reference for building changes.",
+      "range": {
+        "startLine": 27,
+        "startChar": 8,
+        "endLine": 27,
+        "endChar": 14
+      },
+      "revId": "af990e4a89900eb31a8a413f790b92c19e012776",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
