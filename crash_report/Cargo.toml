@@ -10,4 +10,10 @@ edition = "2021"
 base = { path = "../base" }
 anyhow = "1.0.32"
 serde = "*"
+<<<<<<< HEAD   (8e4fa0 ANDROID: Revert^2 "Allocate pVM firmware memory consistently)
+=======
+
+[target.'cfg(windows)'.dependencies]
+win_util = { path = "../win_util"}
+>>>>>>> BRANCH (ba1ddb broker: remove cmd /c in ping tests)
 
