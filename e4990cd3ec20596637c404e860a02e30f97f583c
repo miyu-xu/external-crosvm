@@ -33,6 +33,24 @@
       "message": "nit: empty line?",
       "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b1aae593_33954abf",
+        "filename": "devices/cargo2android_libs.bp.patch",
+        "patchSetId": 5
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-18T23:10:24Z",
+      "side": 1,
+      "message": "this is the normal empty line that basically every editor (specifically vim in this case) adds to the end by default",
+      "parentUuid": "4fe823b6_b16d69d6",
+      "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
