@@ -16,6 +16,23 @@
       "message": "idk why bpfmt keeps these empty lines",
       "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4fe823b6_b16d69d6",
+        "filename": "devices/cargo2android_libs.bp.patch",
+        "patchSetId": 5
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-10-18T22:45:59Z",
+      "side": 1,
+      "message": "nit: empty line?",
+      "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
