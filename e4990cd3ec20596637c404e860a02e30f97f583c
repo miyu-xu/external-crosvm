@@ -51,6 +51,24 @@
       "parentUuid": "4fe823b6_b16d69d6",
       "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "56e2a68c_7e7b38ad",
+        "filename": "devices/cargo2android_libs.bp.patch",
+        "patchSetId": 5
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-18T23:15:48Z",
+      "side": 1,
+      "message": "who is not using vim !?!?!? 😊",
+      "parentUuid": "b1aae593_33954abf",
+      "revId": "e4990cd3ec20596637c404e860a02e30f97f583c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
