@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "36ab1e65_88ecfb2e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 13
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-18T17:55:37Z",
+      "side": 1,
+      "message": "FYI - there are conflicts with this and upstream crosvm - we\u0027re looking into it!",
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
