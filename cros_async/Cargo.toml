@@ -22,7 +22,11 @@ thiserror = "1.0.20"
 audio_streams = { path = "../common/audio_streams" } # provided by ebuild
 anyhow = "1.0"
 serde = "*"
+<<<<<<< HEAD   (8e4fa0 ANDROID: Revert^2 "Allocate pVM firmware memory consistently)
 serde_keyvalue = { path = "../serde_keyvalue", features = ["argh_derive"] }
+=======
+serde_keyvalue = { path = "../serde_keyvalue", features = ["argh_derive"] } # provided by ebuild
+>>>>>>> BRANCH (ba1ddb broker: remove cmd /c in ping tests)
 
 [target.'cfg(unix)'.dependencies]
 io_uring = { path = "../io_uring" } # provided by ebuild
@@ -42,5 +46,3 @@ futures = { version = "*", features = ["executor"] }
 futures-executor = { version = "0.3", features = ["thread-pool"] }
 futures-util = "0.3"
 tempfile = "3"
-
-
