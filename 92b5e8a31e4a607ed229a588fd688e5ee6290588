@@ -16,6 +16,24 @@
       "message": "This looks like an unrelated whitespace change.",
       "revId": "92b5e8a31e4a607ed229a588fd688e5ee6290588",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "acf95c07_a0e9f374",
+        "filename": "devices/src/virtio/virtio_mmio_device.rs",
+        "patchSetId": 11
+      },
+      "lineNbr": 452,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-18T05:49:27Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4c7d0932_8a3ece36",
+      "revId": "92b5e8a31e4a607ed229a588fd688e5ee6290588",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
