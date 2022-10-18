@@ -46,6 +46,30 @@
       },
       "revId": "af990e4a89900eb31a8a413f790b92c19e012776",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "87798625_f3dab7f2",
+        "filename": "vm_control/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2022-10-18T18:32:17Z",
+      "side": 1,
+      "message": "\u003e maybe it is contributing to the bloat buster warning.\n\nYeah, I think that is because before this, the GPU feature was only enabled on the host target but now it is unconditionally enabled on both `host` and `guest`.",
+      "parentUuid": "a0457276_cf223c1f",
+      "range": {
+        "startLine": 27,
+        "startChar": 8,
+        "endLine": 27,
+        "endChar": 14
+      },
+      "revId": "af990e4a89900eb31a8a413f790b92c19e012776",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
