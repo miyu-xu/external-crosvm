@@ -96,6 +96,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a6e73e74_006587e2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 13
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-19T17:57:23Z",
+      "side": 1,
+      "message": "I\u0027m also curious if you plan on doing something like this for the PCI transport as well (for AVF).",
+      "parentUuid": "fc2677c5_3bf5dd67",
+      "range": {
+        "startLine": 19,
+        "startChar": 33,
+        "endLine": 21,
+        "endChar": 70
+      },
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "36ab1e65_88ecfb2e",
