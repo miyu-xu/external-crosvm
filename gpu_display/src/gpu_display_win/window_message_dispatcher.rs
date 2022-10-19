@@ -65,11 +65,6 @@ impl DisplayEventDispatcher {
             .borrow_mut()
             .insert(event_device_id, event_device);
     }
-
-    fn release_event_device(&mut self, event_device_id: &ObjectId) {
-        info!("Releasing event device (ID: {:?})", event_device_id);
-        self.event_devices.borrow_mut().remove(event_device_id);
-    }
 }
 
 /// This class is used for dispatching thread and window messages. It should be created before any
@@ -88,7 +83,7 @@ impl<T: HandleWindowMessage> WindowMessageDispatcher<T> {
     /// This function should only be called once from the WndProc thread. It will take the ownership
     /// of the `Window` object, and drop it before the underlying window is completely gone.
     /// TODO(b/238680252): This should be good enough for supporting multi-windowing, but we should
-    /// revisit it if we also want to manage some child windows of the CrosVM window.
+    /// revisit it if we also want to manage some child windows of the crosvm window.
     pub fn create(window: Window) -> Result<Pin<Box<Self>>> {
         let mut dispatcher = Box::pin(Self {
             message_processor: Default::default(),
@@ -205,10 +200,6 @@ impl<T: HandleWindowMessage> WindowMessageDispatcher<T> {
             } => {
                 self.display_event_dispatcher
                     .import_event_device(event_device_id, event_device);
-            }
-            DisplaySendToWndProc::ReleaseEventDevice(event_device_id) => {
-                self.display_event_dispatcher
-                    .release_event_device(&event_device_id);
             }
         }
     }

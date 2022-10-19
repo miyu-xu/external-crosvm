@@ -233,16 +233,19 @@ pub enum ExitState {
     Crash,
     #[allow(dead_code)]
     GuestPanic,
+    WatchdogReset,
 }
 
 type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 
 fn create_vhost_user_block_device(cfg: &Config, disk_device_tube: Tube) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev = virtio::vhost::user::vmm::Block::new(features, disk_device_tube).exit_context(
-        Exit::VhostUserBlockDeviceNew,
-        "failed to set up vhost-user block device",
-    )?;
+    let dev =
+        virtio::vhost::user::vmm::VhostUserVirtioDevice::new_block(features, disk_device_tube)
+            .exit_context(
+                Exit::VhostUserBlockDeviceNew,
+                "failed to set up vhost-user block device",
+            )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -369,7 +372,8 @@ fn create_net_device(
 #[cfg(feature = "slirp")]
 fn create_vhost_user_net_device(cfg: &Config, net_device_tube: Tube) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev = virtio::vhost::user::vmm::Net::new(features, net_device_tube).exit_context(
+    let dev = virtio::vhost::user::vmm::VhostUserVirtioDevice::new_net(features, net_device_tube)
+        .exit_context(
         Exit::VhostUserNetDeviceNew,
         "failed to set up vhost-user net device",
     )?;
@@ -963,6 +967,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                             VmEventType::Panic(_) => {
                                 error!("got pvpanic event. this event is not expected on Windows.");
                             }
+                            VmEventType::WatchdogReset => {
+                                info!("vcpu stall detected");
+                                exit_state = ExitState::WatchdogReset;
+                            }
                         }
                         break 'poll;
                     }
@@ -986,7 +994,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                             &mut guest_os.vm,
                                             &mut sys_allocator_mutex.lock(),
                                             &mut gralloc,
-                                            &mut None,
+                                            None,
                                         );
                                         if let Err(e) = tube.send(&response) {
                                             error!("failed to send VmMemoryControlResponse: {}", e);
@@ -1550,13 +1558,10 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             size.checked_mul(1024 * 1024)
                 .ok_or_else(|| anyhow!("requested swiotlb size too large"))?,
         )
+    } else if matches!(cfg.protection_type, ProtectionType::Unprotected) {
+        None
     } else {
-        match cfg.protection_type {
-            ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware => {
-                Some(64 * 1024 * 1024)
-            }
-            ProtectionType::Unprotected | ProtectionType::UnprotectedWithFirmware => None,
-        }
+        Some(64 * 1024 * 1024)
     };
 
     let (pflash_image, pflash_block_size) = if let Some(pflash_parameters) = &cfg.pflash_parameters

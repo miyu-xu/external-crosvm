@@ -27,11 +27,7 @@ rust_test {
     features: [
         "audio",
         "balloon",
-        "gpu",
-        "gpu_display",
-        "rutabaga_gfx",
         "usb",
-        "virgl_renderer_next",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -51,7 +47,6 @@ rust_test {
         "libdisk",
         "libfuse_rust",
         "libfutures",
-        "libgpu_display",
         "libhypervisor",
         "libkvm_sys",
         "liblibc",
@@ -93,6 +88,8 @@ rust_test {
             features: [
                 "gfxstream",
                 "gpu",
+                "gpu_display",
+                "virgl_renderer_next",
             ],
             rustlibs: [
                 "libgpu_display",
@@ -101,6 +98,7 @@ rust_test {
             shared_libs: ["libgfxstream_backend"],
         },
     },
+
 }
 
 rust_library {
@@ -115,11 +113,7 @@ rust_library {
     features: [
         "audio",
         "balloon",
-        "gpu",
-        "gpu_display",
-        "rutabaga_gfx",
         "usb",
-        "virgl_renderer_next",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -137,7 +131,6 @@ rust_library {
         "libdisk",
         "libfuse_rust",
         "libfutures",
-        "libgpu_display",
         "libhypervisor",
         "libkvm_sys",
         "liblibc",
@@ -181,6 +174,8 @@ rust_library {
             features: [
                 "gfxstream",
                 "gpu",
+                "gpu_display",
+                "virgl_renderer_next",
             ],
             rustlibs: [
                 "libgpu_display",
@@ -189,4 +184,5 @@ rust_library {
             shared_libs: ["libgfxstream_backend"],
         },
     },
+
 }

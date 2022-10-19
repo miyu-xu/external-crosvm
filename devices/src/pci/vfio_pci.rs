@@ -51,6 +51,7 @@ use vm_control::VmRequest;
 use vm_control::VmResponse;
 
 use crate::pci::acpi::DeviceVcfgRegister;
+use crate::pci::acpi::PowerResourceMethod;
 use crate::pci::acpi::SHM_OFFSET;
 use crate::pci::msi::MsiConfig;
 use crate::pci::msi::MsiStatus;
@@ -1140,7 +1141,6 @@ impl VfioPciDevice {
                             descriptor,
                             offset,
                             size: mmap_size,
-                            gpu_blob: false,
                         },
                         dest: VmMemoryDestination::GuestPhysicalAddress(guest_map_start),
                         prot: Protection::read_write(),
@@ -2027,12 +2027,24 @@ impl PciDevice for VfioPciDevice {
         0
     }
 
-    fn write_virtual_config_register(&mut self, reg_idx: usize, _value: u32) {
-        warn!(
-            "{} write unsupported register {}",
-            self.debug_label(),
-            reg_idx
-        )
+    fn write_virtual_config_register(&mut self, reg_idx: usize, value: u32) {
+        match reg_idx {
+            0 => {
+                match value {
+                    0 => {
+                        let _ = self.device.pm_low_power_enter();
+                    }
+                    _ => {
+                        let _ = self.device.pm_low_power_exit();
+                    }
+                };
+            }
+            _ => warn!(
+                "{} write unsupported register {}",
+                self.debug_label(),
+                reg_idx
+            ),
+        };
     }
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
@@ -2148,6 +2160,11 @@ impl PciDevice for VfioPciDevice {
                     .create_shm_mmap()
                     .map(|shm| (vcfg_offset + SHM_OFFSET, shm));
                 self.vcfg_shm_mmap = vcfg_register.create_shm_mmap();
+                // All vfio-pci devices should have virtual _PRx method, otherwise
+                // host couldn't know whether device has enter into suspend state,
+                // host would always think it is in active state, so its parent PCIe
+                // switch couldn't enter into suspend state.
+                PowerResourceMethod {}.to_aml_bytes(&mut amls);
             }
         }
 

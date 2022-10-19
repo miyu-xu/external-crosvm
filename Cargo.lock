@@ -385,6 +385,7 @@ dependencies = [
  "pin-utils",
  "remain",
  "serde",
+ "serde_keyvalue",
  "slab",
  "smallvec",
  "sync",
@@ -455,12 +456,14 @@ dependencies = [
  "net_util",
  "once_cell",
  "p9",
+ "prebuilts",
  "protobuf",
  "protos",
  "rand",
  "remain",
  "resources",
  "rutabaga_gfx",
+ "sandbox",
  "scudo",
  "serde",
  "serde_json",
@@ -981,6 +984,7 @@ dependencies = [
  "base",
  "cfg-if",
  "libc",
+ "prebuilts",
  "tempfile",
 ]
 
@@ -1257,6 +1261,7 @@ dependencies = [
 name = "net_util"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base",
  "cfg-if",
  "cros_async",
@@ -1266,6 +1271,7 @@ dependencies = [
  "metrics",
  "net_sys",
  "pcap-file",
+ "prebuilts",
  "remain",
  "serde",
  "smallvec",
@@ -1391,6 +1397,14 @@ name = "ppv-lite86"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb9f9e6e233e5c4a35559a617bf40a4ec447db2e84c20b55a6f83167b7e57872"
+
+[[package]]
+name = "prebuilts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -1583,6 +1597,17 @@ name = "ryu"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3f6f92acf49d1b98f7a81226834412ada05458b7364277387724a237f062695"
+
+[[package]]
+name = "sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base",
+ "prebuilts",
+ "win_util",
+ "winapi",
+]
 
 [[package]]
 name = "scudo"
@@ -1945,6 +1970,7 @@ dependencies = [
  "rutabaga_gfx",
  "serde",
  "serde_json",
+ "serde_keyvalue",
  "sync",
  "thiserror",
  "vm_memory",

@@ -5,7 +5,6 @@
 mod edid;
 mod parameters;
 mod protocol;
-mod sys;
 mod virtio_gpu;
 
 use std::cell::RefCell;
@@ -15,6 +14,8 @@ use std::io::Read;
 use std::mem::size_of;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 
@@ -26,7 +27,7 @@ use base::AsRawDescriptor;
 use base::Event;
 use base::EventToken;
 use base::RawDescriptor;
-#[cfg(feature = "virgl_renderer_next")]
+use base::Result;
 use base::SafeDescriptor;
 use base::SendTube;
 use base::Tube;
@@ -35,16 +36,18 @@ use base::WaitContext;
 use data_model::*;
 pub use gpu_display::EventDevice;
 use gpu_display::*;
-pub use parameters::DisplayMode as GpuDisplayMode;
-pub use parameters::DisplayParameters as GpuDisplayParameters;
 pub use parameters::GpuParameters;
-pub use parameters::DEFAULT_DISPLAY_HEIGHT;
-pub use parameters::DEFAULT_DISPLAY_WIDTH;
-pub use parameters::DEFAULT_REFRESH_RATE;
 use rutabaga_gfx::*;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
+pub use vm_control::gpu::DisplayMode as GpuDisplayMode;
+pub use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
+use vm_control::gpu::GpuControlCommand;
+use vm_control::gpu::GpuControlResult;
+pub use vm_control::gpu::DEFAULT_DISPLAY_HEIGHT;
+pub use vm_control::gpu::DEFAULT_DISPLAY_WIDTH;
+pub use vm_control::gpu::DEFAULT_REFRESH_RATE;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
@@ -181,6 +184,7 @@ impl QueueReader for SharedQueueReader {
 fn build(
     display_backends: &[DisplayBackend],
     display_params: Vec<GpuDisplayParameters>,
+    display_event: Arc<AtomicBool>,
     rutabaga_builder: RutabagaBuilder,
     event_devices: Vec<EventDevice>,
     mapper: Box<dyn SharedMemoryMapper>,
@@ -216,6 +220,7 @@ fn build(
     VirtioGpu::new(
         display,
         display_params,
+        display_event,
         rutabaga_builder,
         event_devices,
         mapper,
@@ -320,6 +325,12 @@ impl Frontend {
             .context("Error sending resource bridge response")?;
 
         Ok(())
+    }
+
+    /// Processes the GPU control command and returns the result with a bool indicating if the
+    /// GPU device's config needs to be updated.
+    pub fn process_gpu_control_command(&mut self, cmd: GpuControlCommand) -> GpuControlResult {
+        self.virtio_gpu.process_gpu_control_command(cmd)
     }
 
     fn process_gpu_command(
@@ -742,20 +753,68 @@ impl Frontend {
     }
 }
 
-#[derive(EventToken)]
+#[derive(EventToken, PartialEq, Clone, Copy, Debug)]
 enum WorkerToken {
     CtrlQueue,
     CursorQueue,
     Display,
+    #[cfg(unix)]
+    GpuControl,
     InterruptResample,
     Kill,
-    ResourceBridge { index: usize },
+    ResourceBridge {
+        index: usize,
+    },
     VirtioGpuPoll,
+}
+
+struct EventManager<'a> {
+    pub wait_ctx: WaitContext<WorkerToken>,
+    events: Vec<(&'a dyn AsRawDescriptor, WorkerToken)>,
+}
+
+impl<'a> EventManager<'a> {
+    pub fn new() -> Result<EventManager<'a>> {
+        Ok(EventManager {
+            wait_ctx: WaitContext::new()?,
+            events: vec![],
+        })
+    }
+
+    pub fn build_with(
+        triggers: &[(&'a dyn AsRawDescriptor, WorkerToken)],
+    ) -> Result<EventManager<'a>> {
+        let mut manager = EventManager::new()?;
+        manager.wait_ctx.add_many(triggers)?;
+
+        for (descriptor, token) in triggers {
+            manager.events.push((*descriptor, *token));
+        }
+        Ok(manager)
+    }
+
+    pub fn add(&mut self, descriptor: &'a dyn AsRawDescriptor, token: WorkerToken) -> Result<()> {
+        self.wait_ctx.add(descriptor, token)?;
+        self.events.push((descriptor, token));
+        Ok(())
+    }
+
+    pub fn delete(&mut self, token: WorkerToken) {
+        self.events.retain(|event| {
+            if event.1 == token {
+                self.wait_ctx.delete(event.0).ok();
+                return false;
+            }
+            true
+        });
+    }
 }
 
 struct Worker {
     interrupt: Arc<Interrupt>,
     exit_evt_wrtube: SendTube,
+    #[cfg(unix)]
+    gpu_control_tube: Tube,
     mem: GuestMemory,
     ctrl_queue: SharedQueueReader,
     ctrl_evt: Event,
@@ -768,36 +827,52 @@ struct Worker {
 
 impl Worker {
     fn run(&mut self) {
-        let mut wait_ctx: WaitContext<WorkerToken> = match WaitContext::build_with(&[
+        let display_desc =
+            match SafeDescriptor::try_from(&*self.state.display().borrow() as &dyn AsRawDescriptor)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("failed getting event descriptor for display: {}", e);
+                    return;
+                }
+            };
+
+        let mut event_manager = match EventManager::build_with(&[
             (&self.ctrl_evt, WorkerToken::CtrlQueue),
             (&self.cursor_evt, WorkerToken::CursorQueue),
-            (&*self.state.display().borrow(), WorkerToken::Display),
+            (&display_desc, WorkerToken::Display),
+            #[cfg(unix)]
+            (&self.gpu_control_tube, WorkerToken::GpuControl),
             (&self.kill_evt, WorkerToken::Kill),
         ]) {
-            Ok(pc) => pc,
+            Ok(v) => v,
             Err(e) => {
                 error!("failed creating WaitContext: {}", e);
                 return;
             }
         };
+
         if let Some(resample_evt) = self.interrupt.get_resample_evt() {
-            if wait_ctx
-                .add(resample_evt, WorkerToken::InterruptResample)
-                .is_err()
-            {
-                error!("failed creating WaitContext");
+            if let Err(e) = event_manager.add(resample_evt, WorkerToken::InterruptResample) {
+                error!(
+                    "failed adding interrupt resample event to WaitContext: {}",
+                    e
+                );
                 return;
             }
         }
 
-        if let Some(poll_desc) = self.state.virtio_gpu.poll_descriptor() {
-            if let Err(e) = wait_ctx.add(&poll_desc, WorkerToken::VirtioGpuPoll) {
-                error!("failed adding poll eventfd to WaitContext: {}", e);
+        let poll_desc: SafeDescriptor;
+        if let Some(desc) = self.state.virtio_gpu.poll_descriptor() {
+            poll_desc = desc;
+            if let Err(e) = event_manager.add(&poll_desc, WorkerToken::VirtioGpuPoll) {
+                error!("failed adding poll event to WaitContext: {}", e);
                 return;
             }
         }
 
-        self.resource_bridges.add_to_wait_context(&mut wait_ctx);
+        self.resource_bridges
+            .add_to_wait_context(&mut event_manager.wait_ctx);
 
         // TODO(davidriley): The entire main loop processing is somewhat racey and incorrect with
         // respect to cursor vs control queue processing.  As both currently and originally
@@ -808,7 +883,7 @@ impl Worker {
         // isn't used so this isn't a huge issue.
 
         'wait: loop {
-            let events = match wait_ctx.wait() {
+            let events = match event_manager.wait_ctx.wait() {
                 Ok(v) => v,
                 Err(e) => {
                     error!("failed polling for events: {}", e);
@@ -818,14 +893,16 @@ impl Worker {
             let mut signal_used_cursor = false;
             let mut signal_used_ctrl = false;
             let mut ctrl_available = false;
+            let mut needs_config_interrupt = false;
 
-            // This display isn't typically used when the virt-wl device is available and it can
-            // lead to hung fds (crbug.com/1027379). Disable if it's hung.
+            // Remove event triggers that have been hung-up to prevent unnecessary worker wake-ups
+            // (see b/244486346#comment62 for context).
             for event in events.iter().filter(|e| e.is_hungup) {
-                if let WorkerToken::Display = event.token {
-                    error!("default display hang-up detected");
-                    let _ = wait_ctx.delete(&*self.state.display().borrow());
-                }
+                error!(
+                    "unhandled virtio-gpu worker event hang-up detected: {:?}",
+                    event.token
+                );
+                event_manager.delete(event.token);
             }
 
             for event in events.iter().filter(|e| e.is_readable) {
@@ -846,6 +923,27 @@ impl Worker {
                         let close_requested = self.state.process_display();
                         if close_requested {
                             let _ = self.exit_evt_wrtube.send::<VmEventType>(&VmEventType::Exit);
+                        }
+                    }
+                    #[cfg(unix)]
+                    WorkerToken::GpuControl => {
+                        let req = match self.gpu_control_tube.recv() {
+                            Ok(req) => req,
+                            Err(e) => {
+                                error!("gpu control socket failed recv: {:?}", e);
+                                break 'wait;
+                            }
+                        };
+
+                        let resp = self.state.process_gpu_control_command(req);
+
+                        if let GpuControlResult::DisplaysUpdated = resp {
+                            needs_config_interrupt = true;
+                        }
+
+                        if let Err(e) = self.gpu_control_tube.send(&resp) {
+                            error!("display control socket failed send: {}", e);
+                            break 'wait;
                         }
                     }
                     WorkerToken::ResourceBridge { index } => {
@@ -880,7 +978,7 @@ impl Worker {
             // and the resource bridge request come in at the same time after the control queue is
             // processed above and before the corresponding bridge is processed below.
             self.resource_bridges
-                .process_resource_bridges(&mut self.state, &mut wait_ctx);
+                .process_resource_bridges(&mut self.state, &mut event_manager.wait_ctx);
 
             if signal_used_ctrl {
                 self.ctrl_queue.signal_used(&self.mem);
@@ -888,6 +986,10 @@ impl Worker {
 
             if signal_used_cursor {
                 self.cursor_queue.signal_used(&self.mem);
+            }
+
+            if needs_config_interrupt {
+                self.interrupt.signal_config_changed();
             }
         }
     }
@@ -924,7 +1026,7 @@ impl DisplayBackend {
             DisplayBackend::X(display) => GpuDisplay::open_x(display.as_ref()),
             DisplayBackend::Stub => GpuDisplay::open_stub(),
             #[cfg(windows)]
-            DisplayBackend::WinAPI(display_properties) => match wndproc_thread.take() {
+            DisplayBackend::WinApi(display_properties) => match wndproc_thread.take() {
                 Some(wndproc_thread) => GpuDisplay::open_winapi(
                     wndproc_thread,
                     /* win_metrics= */ None,
@@ -941,14 +1043,16 @@ impl DisplayBackend {
 
 pub struct Gpu {
     exit_evt_wrtube: SendTube,
+    #[cfg(unix)]
+    gpu_control_tube: Option<Tube>,
     mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridges: Option<ResourceBridges>,
     event_devices: Vec<EventDevice>,
     kill_evt: Option<Event>,
-    config_event: bool,
     worker_thread: Option<thread::JoinHandle<()>>,
     display_backends: Vec<DisplayBackend>,
     display_params: Vec<GpuDisplayParameters>,
+    display_event: Arc<AtomicBool>,
     rutabaga_builder: Option<RutabagaBuilder>,
     pci_bar_size: u64,
     external_blob: bool,
@@ -967,6 +1071,7 @@ pub struct Gpu {
 impl Gpu {
     pub fn new(
         exit_evt_wrtube: SendTube,
+        #[cfg(unix)] gpu_control_tube: Tube,
         resource_bridges: Vec<Tube>,
         display_backends: Vec<DisplayBackend>,
         gpu_parameters: &GpuParameters,
@@ -1029,14 +1134,16 @@ impl Gpu {
 
         Gpu {
             exit_evt_wrtube,
+            #[cfg(unix)]
+            gpu_control_tube: Some(gpu_control_tube),
             mapper: None,
             resource_bridges: Some(ResourceBridges::new(resource_bridges)),
             event_devices,
-            config_event: false,
             kill_evt: None,
             worker_thread: None,
             display_backends,
             display_params,
+            display_event: Arc::new(AtomicBool::new(false)),
             rutabaga_builder: Some(rutabaga_builder),
             pci_bar_size: gpu_parameters.pci_bar_size,
             external_blob,
@@ -1070,6 +1177,7 @@ impl Gpu {
         build(
             &self.display_backends,
             self.display_params.clone(),
+            self.display_event.clone(),
             rutabaga_builder,
             event_devices,
             mapper,
@@ -1088,7 +1196,8 @@ impl Gpu {
 
     fn get_config(&self) -> virtio_gpu_config {
         let mut events_read = 0;
-        if self.config_event {
+
+        if self.display_event.load(Ordering::Relaxed) {
             events_read |= VIRTIO_GPU_EVENT_DISPLAY;
         }
 
@@ -1122,7 +1231,7 @@ impl Gpu {
         virtio_gpu_config {
             events_read: Le32::from(events_read),
             events_clear: Le32::from(0),
-            num_scanouts: Le32::from(self.display_params.len() as u32),
+            num_scanouts: Le32::from(VIRTIO_GPU_MAX_SCANOUTS as u32),
             num_capsets: Le32::from(num_capsets),
         }
     }
@@ -1144,8 +1253,13 @@ impl Drop for Gpu {
 impl VirtioDevice for Gpu {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         let mut keep_rds = Vec::new();
+
+        // To find the RawDescriptor associated with stdout and stderr on Windows is difficult.
+        // Resource bridges are used only for Wayland displays. There is also no meaningful way
+        // casting the underlying DMA buffer wrapped in File to a copyable RawDescriptor.
         // TODO(davidriley): Remove once virgl has another path to include
         // debugging logs.
+        #[cfg(unix)]
         if cfg!(debug_assertions) {
             keep_rds.push(libc::STDOUT_FILENO);
             keep_rds.push(libc::STDERR_FILENO);
@@ -1163,6 +1277,11 @@ impl VirtioDevice for Gpu {
         }
 
         keep_rds.push(self.exit_evt_wrtube.as_raw_descriptor());
+
+        #[cfg(unix)]
+        if let Some(gpu_control_tube) = &self.gpu_control_tube {
+            keep_rds.push(gpu_control_tube.as_raw_descriptor());
+        }
 
         if let Some(resource_bridges) = &self.resource_bridges {
             resource_bridges.append_raw_descriptors(&mut keep_rds);
@@ -1215,7 +1334,7 @@ impl VirtioDevice for Gpu {
         let mut cfg = self.get_config();
         copy_config(cfg.as_mut_slice(), offset, data, 0);
         if (cfg.events_clear.to_native() & VIRTIO_GPU_EVENT_DISPLAY) != 0 {
-            self.config_event = false;
+            self.display_event.store(false, Ordering::Relaxed);
         }
     }
 
@@ -1234,6 +1353,15 @@ impl VirtioDevice for Gpu {
             Ok(e) => e,
             Err(e) => {
                 error!("error cloning exit tube: {}", e);
+                return;
+            }
+        };
+
+        #[cfg(unix)]
+        let gpu_control_tube = match self.gpu_control_tube.take() {
+            Some(gpu_control_tube) => gpu_control_tube,
+            None => {
+                error!("gpu_control_tube is none");
                 return;
             }
         };
@@ -1262,6 +1390,7 @@ impl VirtioDevice for Gpu {
         let cursor_evt = queue_evts.remove(0);
         let display_backends = self.display_backends.clone();
         let display_params = self.display_params.clone();
+        let display_event = self.display_event.clone();
         let event_devices = self.event_devices.split_off(0);
         let external_blob = self.external_blob;
         let udmabuf = self.udmabuf;
@@ -1288,6 +1417,7 @@ impl VirtioDevice for Gpu {
                         let virtio_gpu = match build(
                             &display_backends,
                             display_params,
+                            display_event,
                             rutabaga_builder,
                             event_devices,
                             mapper,
@@ -1306,6 +1436,8 @@ impl VirtioDevice for Gpu {
                         Worker {
                             interrupt: irq,
                             exit_evt_wrtube,
+                            #[cfg(unix)]
+                            gpu_control_tube,
                             mem,
                             ctrl_queue: ctrl_queue.clone(),
                             ctrl_evt,
@@ -1339,6 +1471,10 @@ impl VirtioDevice for Gpu {
 
     fn set_shared_memory_mapper(&mut self, mapper: Box<dyn SharedMemoryMapper>) {
         self.mapper = Some(mapper);
+    }
+
+    fn expose_shmem_descriptors_with_viommu(&self) -> bool {
+        true
     }
 }
 

@@ -95,8 +95,7 @@ CRATE_OPTIONS: Dict[str, List[TestOption]] = {
         TestOption.UNIT_AS_INTEGRATION_TEST,
     ],
     "disk": [TestOption.DO_NOT_RUN_AARCH64, TestOption.DO_NOT_RUN_ARMHF],  # b/202294155
-    # FFmpeg 5.0 not available on Debian Bullseye used in container images.
-    "ffmpeg": [TestOption.DO_NOT_BUILD],
+    "ffmpeg": [TestOption.DO_NOT_BUILD_ARMHF],
     "cros-fuzz": [TestOption.DO_NOT_BUILD],
     "fuzz": [TestOption.DO_NOT_BUILD],
     "hypervisor": [
@@ -131,6 +130,7 @@ CRATE_OPTIONS: Dict[str, List[TestOption]] = {
     ],
     "libvda": [TestOption.DO_NOT_BUILD],  # b/202293971
     "rutabaga_gfx": [TestOption.DO_NOT_BUILD_ARMHF],  # b/210015864
+    "sandbox": [TestOption.DO_NOT_RUN],
     "vhost": [TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL, TestOption.UNIT_AS_INTEGRATION_TEST],
     "vm_control": [TestOption.DO_NOT_BUILD_ARMHF],  # b/210015864
 }

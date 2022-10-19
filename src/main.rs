@@ -44,12 +44,20 @@ use crosvm::cmdline::CrossPlatformCommands;
 use crosvm::cmdline::CrossPlatformDevicesCommands;
 #[cfg(windows)]
 use sys::windows::metrics;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_display_add;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_display_list;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_display_remove;
 use vm_control::client::do_modify_battery;
 use vm_control::client::do_usb_attach;
 use vm_control::client::do_usb_detach;
 use vm_control::client::do_usb_list;
 use vm_control::client::handle_request;
 use vm_control::client::vms_request;
+#[cfg(feature = "gpu")]
+use vm_control::client::ModifyGpuResult;
 use vm_control::client::ModifyUsbResult;
 #[cfg(feature = "balloon")]
 use vm_control::BalloonControlCommand;
@@ -68,20 +76,42 @@ use crate::sys::init_log;
 #[global_allocator]
 static ALLOCATOR: scudo::GlobalScudoAllocator = scudo::GlobalScudoAllocator;
 
+#[repr(i32)]
+#[derive(Clone, Copy)]
+/// Exit code from crosvm,
 enum CommandStatus {
-    Success,
-    VmReset,
-    VmStop,
-    VmCrash,
-    GuestPanic,
-    InvalidArgs,
+    /// Exit with success. Also used to mean VM stopped successfully.
+    SuccessOrVmStop = 0,
+    /// VM requested reset.
+    VmReset = 32,
+    /// VM crashed.
+    VmCrash = 33,
+    /// VM exit due to kernel panic in guest.
+    GuestPanic = 34,
+    /// Invalid argument was given to crosvm.
+    InvalidArgs = 35,
+    /// VM exit due to vcpu stall detection.
+    WatchdogReset = 36,
+}
+
+impl CommandStatus {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::SuccessOrVmStop => "exiting with success",
+            Self::VmReset => "exiting with reset",
+            Self::VmCrash => "exiting with crash",
+            Self::GuestPanic => "exiting with guest panic",
+            Self::InvalidArgs => "invalid argument",
+            Self::WatchdogReset => "exiting with watchdog reset",
+        }
+    }
 }
 
 fn to_command_status(result: Result<sys::ExitState>) -> Result<CommandStatus> {
     match result {
         Ok(sys::ExitState::Stop) => {
             info!("crosvm has exited normally");
-            Ok(CommandStatus::VmStop)
+            Ok(CommandStatus::SuccessOrVmStop)
         }
         Ok(sys::ExitState::Reset) => {
             info!("crosvm has exited normally due to reset request");
@@ -94,6 +124,10 @@ fn to_command_status(result: Result<sys::ExitState>) -> Result<CommandStatus> {
         Ok(sys::ExitState::GuestPanic) => {
             info!("crosvm has exited due to a kernel panic in guest");
             Ok(CommandStatus::GuestPanic)
+        }
+        Ok(sys::ExitState::WatchdogReset) => {
+            info!("crosvm has exited due to watchdog reboot");
+            Ok(CommandStatus::WatchdogReset)
         }
         Err(e) => {
             error!("crosvm has exited with error: {:#}", e);
@@ -119,7 +153,7 @@ where
         let res = match crosvm::plugin::run_config(cfg) {
             Ok(_) => {
                 info!("crosvm and plugin have exited normally");
-                Ok(CommandStatus::VmStop)
+                Ok(CommandStatus::SuccessOrVmStop)
             }
             Err(e) => {
                 eprintln!("{:#}", e);
@@ -410,6 +444,40 @@ fn make_rt(cmd: cmdline::MakeRTCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::MakeRT, cmd.socket_path)
 }
 
+#[cfg(feature = "gpu")]
+fn gpu_display_add(cmd: cmdline::GpuAddDisplaysCommand) -> ModifyGpuResult {
+    do_gpu_display_add(cmd.socket_path, cmd.gpu_display)
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_display_list(cmd: cmdline::GpuListDisplaysCommand) -> ModifyGpuResult {
+    do_gpu_display_list(cmd.socket_path)
+}
+
+#[cfg(feature = "gpu")]
+fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult {
+    do_gpu_display_remove(cmd.socket_path, cmd.display_id)
+}
+
+#[cfg(feature = "gpu")]
+fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
+    let result = match cmd.command {
+        cmdline::GpuSubCommand::AddDisplays(cmd) => gpu_display_add(cmd),
+        cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
+        cmdline::GpuSubCommand::RemoveDisplays(cmd) => gpu_display_remove(cmd),
+    };
+    match result {
+        Ok(response) => {
+            println!("{}", response);
+            Ok(())
+        }
+        Err(e) => {
+            println!("error {}", e);
+            Err(())
+        }
+    }
+}
+
 fn usb_attach(cmd: UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
@@ -551,7 +619,7 @@ fn crosvm_main() -> Result<CommandStatus> {
                 }
                 start_device(cmd)
                     .map_err(|_| anyhow!("start_device subcommand failed"))
-                    .map(|_| CommandStatus::Success)
+                    .map(|_| CommandStatus::SuccessOrVmStop)
             } else {
                 syslog::init_with(log_config).context("failed to initialize syslog")?;
 
@@ -577,6 +645,10 @@ fn crosvm_main() -> Result<CommandStatus> {
                     CrossPlatformCommands::Device(_) => unreachable!(),
                     CrossPlatformCommands::Disk(cmd) => {
                         disk_cmd(cmd).map_err(|_| anyhow!("disk subcommand failed"))
+                    }
+                    #[cfg(feature = "gpu")]
+                    CrossPlatformCommands::Gpu(cmd) => {
+                        modify_gpu(cmd).map_err(|_| anyhow!("gpu subcommand failed"))
                     }
                     CrossPlatformCommands::MakeRT(cmd) => {
                         make_rt(cmd).map_err(|_| anyhow!("make_rt subcommand failed"))
@@ -610,7 +682,7 @@ fn crosvm_main() -> Result<CommandStatus> {
                         modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
                     }
                 }
-                .map(|_| CommandStatus::Success)
+                .map(|_| CommandStatus::SuccessOrVmStop)
             }
         }
         cmdline::Command::Sys(command) => {
@@ -619,7 +691,7 @@ fn crosvm_main() -> Result<CommandStatus> {
             if cfg!(unix) {
                 syslog::init_with(log_config).context("failed to initialize syslog")?;
             }
-            sys::run_command(command).map(|_| CommandStatus::Success)
+            sys::run_command(command).map(|_| CommandStatus::SuccessOrVmStop)
         }
     };
 
@@ -631,33 +703,21 @@ fn crosvm_main() -> Result<CommandStatus> {
         if extended_status {
             s
         } else {
-            CommandStatus::Success
+            CommandStatus::SuccessOrVmStop
         }
     })
 }
 
 fn main() {
     syslog::early_init();
-    info!("CrosVM started.");
+    info!("crosvm started.");
     let res = crosvm_main();
+
     let exit_code = match &res {
-        Ok(CommandStatus::Success | CommandStatus::VmStop) => {
-            info!("exiting with success");
-            0
+        Ok(code) => {
+            info!("{}", code.message());
+            *code as i32
         }
-        Ok(CommandStatus::VmReset) => {
-            info!("exiting with reset");
-            32
-        }
-        Ok(CommandStatus::VmCrash) => {
-            info!("exiting with crash");
-            33
-        }
-        Ok(CommandStatus::GuestPanic) => {
-            info!("exiting with guest panic");
-            34
-        }
-        Ok(CommandStatus::InvalidArgs) => 35,
         Err(e) => {
             let exit_code = error_to_exit_code(&res);
             error!("exiting with error {}:{:?}", exit_code, e);

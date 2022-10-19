@@ -8,7 +8,7 @@ cfg_if::cfg_if! {
 
         use base::RawDescriptor;
         #[cfg(feature = "gpu")]
-        use devices::virtio::GpuDisplayParameters;
+        use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
         use devices::virtio::vhost::user::device::parse_wayland_sock;
 
         use super::sys::config::{
@@ -129,6 +129,8 @@ pub enum CrossPlatformCommands {
     CreateQcow2(CreateQcow2Command),
     Device(DeviceCommand),
     Disk(DiskCommand),
+    #[cfg(feature = "gpu")]
+    Gpu(GpuCommand),
     MakeRT(MakeRTCommand),
     Resume(ResumeCommand),
     Run(RunCommand),
@@ -323,6 +325,15 @@ pub struct UsbCommand {
     pub command: UsbSubCommand,
 }
 
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+#[argh(subcommand, name = "gpu")]
+/// Manage attached virtual GPU device.
+pub struct GpuCommand {
+    #[argh(subcommand)]
+    pub command: GpuSubCommand,
+}
+
 #[derive(FromArgs)]
 #[argh(subcommand, name = "version")]
 /// Show package version.
@@ -388,6 +399,52 @@ pub enum CrossPlatformDevicesCommands {
 pub enum DeviceSubcommand {
     CrossPlatform(CrossPlatformDevicesCommands),
     Sys(super::sys::cmdline::DeviceSubcommand),
+}
+
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+#[argh(subcommand)]
+pub enum GpuSubCommand {
+    AddDisplays(GpuAddDisplaysCommand),
+    ListDisplays(GpuListDisplaysCommand),
+    RemoveDisplays(GpuRemoveDisplaysCommand),
+}
+
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+/// Attach a new display to the GPU device.
+#[argh(subcommand, name = "add-displays")]
+pub struct GpuAddDisplaysCommand {
+    #[argh(option)]
+    /// displays
+    pub gpu_display: Vec<vm_control::gpu::DisplayParameters>,
+
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+/// List the displays currently attached to the GPU device.
+#[argh(subcommand, name = "list-displays")]
+pub struct GpuListDisplaysCommand {
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+/// Detach an existing display from the GPU device.
+#[argh(subcommand, name = "remove-displays")]
+pub struct GpuRemoveDisplaysCommand {
+    #[argh(option)]
+    /// display id
+    pub display_id: Vec<u32>,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
 }
 
 #[derive(FromArgs)]
@@ -641,16 +698,12 @@ pub struct RunCommand {
     /// (EXPERIMENTAL) Comma separated key=value pairs for setting
     /// up a display on the virtio-gpu device
     /// Possible key values:
-    ///     mode=(borderless_full_screen|windowed) - Whether to show
-    ///        the window on the host in full screen or windowed
-    ///        mode. If not specified, windowed mode is used by
-    ///        default.
-    ///     width=INT - The width of the virtual display connected
-    ///        to the virtio-gpu. Can't be set with the
-    ///        borderless_full_screen display mode.
-    ///     height=INT - The height of the virtual display connected
-    ///        to the virtio-gpu. Can't be set with the
-    ///        borderless_full_screen display mode.
+    ///     mode=(borderless_full_screen|windowed[width,height]) -
+    ///        Whether to show the window on the host in full
+    ///        screen or windowed mode. If not specified, windowed
+    ///        mode is used by default. "windowed" can also be
+    ///        specified explicitly to use a window size different
+    ///        from the default one.
     ///     hidden[=true|=false] - If the display window is
     ///        initially hidden (default: false).
     ///     refresh-rate=INT - Force a specific vsync generation
@@ -894,6 +947,9 @@ pub struct RunCommand {
     #[argh(switch)]
     /// prevent host access to guest memory
     pub protected_vm: bool,
+    #[argh(option, long = "protected-vm-with-firmware", arg_name = "PATH")]
+    /// (EXPERIMENTAL/FOR DEBUGGING) Use custom VM firmware to run in protected mode
+    pub protected_vm_with_firmware: Option<PathBuf>,
     #[argh(switch)]
     /// (EXPERIMENTAL) prevent host access to guest memory, but don't use protected VM firmware
     protected_vm_without_firmware: bool,
@@ -1280,7 +1336,7 @@ pub struct RunCommand {
     #[argh(option, long = "trackpad", arg_name = "PATH:WIDTH:HEIGHT")]
     /// path to a socket from where to read trackpad input events and write status updates to, optionally followed by screen width and height (defaults to 800x1280)
     pub virtio_trackpad: Vec<TouchDeviceOption>,
-    #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
     #[argh(switch)]
     /// enable the virtio-tpm connection to vtpm daemon
     pub vtpm_proxy: bool,
@@ -1610,7 +1666,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.software_tpm = cmd.software_tpm;
         }
 
-        #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+        #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
         {
             cfg.vtpm_proxy = cmd.vtpm_proxy;
         }
@@ -1729,6 +1785,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         let protection_flags = [
             cmd.protected_vm,
+            cmd.protected_vm_with_firmware.is_some(),
             cmd.protected_vm_without_firmware,
             cmd.unprotected_vm_with_firmware.is_some(),
         ];
@@ -1741,6 +1798,14 @@ impl TryFrom<RunCommand> for super::config::Config {
             ProtectionType::Protected
         } else if cmd.protected_vm_without_firmware {
             ProtectionType::ProtectedWithoutFirmware
+        } else if let Some(p) = cmd.protected_vm_with_firmware {
+            if !p.exists() || !p.is_file() {
+                return Err(
+                    "protected-vm-with-firmware path should be an existing file".to_string()
+                );
+            }
+            cfg.pvm_fw = Some(p);
+            ProtectionType::ProtectedWithCustomFirmware
         } else if let Some(p) = cmd.unprotected_vm_with_firmware {
             if !p.exists() || !p.is_file() {
                 return Err(
@@ -1754,8 +1819,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         };
 
         if !matches!(cfg.protection_type, ProtectionType::Unprotected) {
-            // Balloon and USB devices only work for unprotected VMs.
-            cfg.balloon = false;
+            // USB devices only work for unprotected VMs.
             cfg.usb = false;
             // Protected VMs can't trust the RNG device, so don't provide it.
             cfg.rng = false;
