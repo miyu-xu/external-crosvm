@@ -48,6 +48,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "602128ee_2a8e3bb7",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 13
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-19T14:00:42Z",
+      "side": 1,
+      "message": "Yes, MMIO registers from crosvm are written to the memory before VM start. GuestVM will be able to read and write into this memory. Writes to INT_ACK is required during a data transfer. Crosvm checks for pending interrupts before injecting.",
+      "parentUuid": "97908ce9_83c8e328",
+      "range": {
+        "startLine": 19,
+        "startChar": 33,
+        "endLine": 21,
+        "endChar": 70
+      },
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "36ab1e65_88ecfb2e",
@@ -61,6 +85,24 @@
       "writtenOn": "2022-10-18T17:55:37Z",
       "side": 1,
       "message": "FYI - there are conflicts with this and upstream crosvm - we\u0027re looking into it!",
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e7ad0181_88adf6bb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 13
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-19T14:00:42Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "36ab1e65_88ecfb2e",
       "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
