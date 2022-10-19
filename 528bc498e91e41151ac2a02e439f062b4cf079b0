@@ -105,6 +105,23 @@
       "parentUuid": "36ab1e65_88ecfb2e",
       "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8f48da8c_7a03acfd",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 13
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1960706
+      },
+      "writtenOn": "2022-10-19T14:14:39Z",
+      "side": 1,
+      "message": "Hi, Steven, @smoreland@google.com,\n\nI can fix the merge conflicts and copy the changes as a comment here or in the buganizer if that is okay. I do not know exactly to which branch I need to apply this change to land this in upstream crosvm.\n\nI tried to pick this change to \u0027main\u0027 branch of crosvm and it applied fine.\nhttps://chromium.googlesource.com/crosvm/crosvm\n\nJust share me the link to repository and branch.\n\nThanks,\nSreenad.",
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
