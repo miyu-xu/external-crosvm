@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "97908ce9_83c8e328",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 13
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-19T02:04:32Z",
+      "side": 1,
+      "message": "Nevermind the second part of that comment, it wasn\u0027t well thought out.\n\n\u003e does this mean you are prefetching all the mmio registers from crosvm ahead of time? how do you maintain causality?\n\nI\u0027m not an expert here, so possibly missing something obvious, but I guess the answer is that you aren\u0027t, because the idea in this CL is that crosvm can\u0027t witness the write from the guest when making a decision. It is hard to imagine this is going to be the only race condition caused by this technique unless the crosvm device implementations are written with knowledge that they are operating under this looser memory model.",
+      "parentUuid": "215dba97_b0e88eda",
+      "range": {
+        "startLine": 19,
+        "startChar": 33,
+        "endLine": 21,
+        "endChar": 70
+      },
+      "revId": "528bc498e91e41151ac2a02e439f062b4cf079b0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "36ab1e65_88ecfb2e",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 13
