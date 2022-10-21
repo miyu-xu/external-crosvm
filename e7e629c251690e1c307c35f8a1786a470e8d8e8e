@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "40a08642_a008b3d0",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-21T20:40:17Z",
+      "side": 1,
+      "message": "fancy grep https://github.com/BurntSushi/ripgrep",
+      "parentUuid": "ecbcdc1c_772e7f3b",
+      "range": {
+        "startLine": 13,
+        "startChar": 4,
+        "endLine": 13,
+        "endChar": 6
+      },
+      "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f2753310_1c4178f2",
