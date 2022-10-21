@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ecbcdc1c_772e7f3b",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-10-21T20:15:13Z",
+      "side": 1,
+      "message": "intrigued - what is rg?",
+      "range": {
+        "startLine": 13,
+        "startChar": 4,
+        "endLine": 13,
+        "endChar": 6
+      },
+      "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f2753310_1c4178f2",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-10-21T20:15:13Z",
+      "side": 1,
+      "message": "nit: formatting.\nTEST-MAPPING I\u0027ve seen so far all have the same formatting - https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/TEST_MAPPING",
+      "range": {
+        "startLine": 7,
+        "startChar": 4,
+        "endLine": 7,
+        "endChar": 41
+      },
+      "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
