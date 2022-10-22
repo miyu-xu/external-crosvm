@@ -16,6 +16,24 @@
       "message": "I think it would be too painful to revert this at this point. That said, the block device changes that switch to async feel worth taking a closer look at. Maybe if they cleanly revert by themselves we could consider that for a temp fix",
       "revId": "374ef88c1b4e0bf716b80c460504f951c5b46206",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9001ee51_409bab6a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1088076
+      },
+      "writtenOn": "2022-10-22T22:29:31Z",
+      "side": 1,
+      "message": "I\u0027m doing bisect to narrow down the cf stability issue. so far this topic is the top suspect. I will document the details in the bug. \n\nThe CL has been merged for too long and the revert can\u0027t be merged on ToT without conflict now. If there is any fix you have, we can experiment them on ToT build.",
+      "parentUuid": "f416f5ee_492f61a3",
+      "revId": "374ef88c1b4e0bf716b80c460504f951c5b46206",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
