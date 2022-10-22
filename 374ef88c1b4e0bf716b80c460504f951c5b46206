@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f416f5ee_492f61a3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-22T21:27:04Z",
+      "side": 1,
+      "message": "I think it would be too painful to revert this at this point. That said, the block device changes that switch to async feel worth taking a closer look at. Maybe if they cleanly revert by themselves we could consider that for a temp fix",
+      "revId": "374ef88c1b4e0bf716b80c460504f951c5b46206",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
