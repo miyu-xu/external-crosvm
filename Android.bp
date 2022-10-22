@@ -45,7 +45,6 @@ rust_binary {
     features: [
         "audio",
         "balloon",
-        "qcow",
         "usb",
     ],
     rustlibs: [
@@ -59,7 +58,6 @@ rust_binary {
         "libbit_field",
         "libbroker_ipc",
         "libcfg_if",
-        "libcros_async",
         "libdata_model",
         "libdevices",
         "libdisk",
@@ -167,7 +165,6 @@ rust_test {
     features: [
         "audio",
         "balloon",
-        "qcow",
         "usb",
     ],
     rustlibs: [
@@ -181,7 +178,6 @@ rust_test {
         "libbit_field",
         "libbroker_ipc",
         "libcfg_if",
-        "libcros_async",
         "libdata_model",
         "libdevices",
         "libdisk",
