@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io;
+use std::rc::Rc;
 use std::thread;
 
 use base::error;
@@ -158,7 +160,7 @@ async fn handle_queue(
     mem: &GuestMemory,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: Interrupt,
+    interrupt: Rc<RefCell<Interrupt>>,
     pmem_device_tube: Tube,
     mapping_arena_slot: u32,
     mapping_size: usize,
@@ -186,7 +188,7 @@ async fn handle_queue(
             }
         };
         queue.add_used(mem, index, written as u32);
-        queue.trigger_interrupt(mem, &interrupt);
+        queue.trigger_interrupt(mem, &*interrupt.borrow());
     }
 }
 
@@ -200,6 +202,9 @@ fn run_worker(
     mapping_arena_slot: u32,
     mapping_size: usize,
 ) {
+    // Wrap the interrupt in a `RefCell` so it can be shared between async functions.
+    let interrupt = Rc::new(RefCell::new(interrupt));
+
     let ex = Executor::new().unwrap();
 
     let queue_evt = EventAsync::new(queue_evt, &ex).expect("failed to set up the queue event");

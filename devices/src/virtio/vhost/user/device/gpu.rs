@@ -60,7 +60,7 @@ const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
 #[derive(Clone)]
 struct SharedReader {
     queue: Arc<Mutex<Queue>>,
-    doorbell: Doorbell,
+    doorbell: Arc<Mutex<Doorbell>>,
 }
 
 impl gpu::QueueReader for SharedReader {
@@ -231,7 +231,7 @@ impl VhostUserBackend for GpuBackend {
         idx: usize,
         queue: Queue,
         mem: GuestMemory,
-        doorbell: Doorbell,
+        doorbell: Arc<Mutex<Doorbell>>,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
         if let Some(task) = self.workers.get_mut(idx).and_then(Option::take) {

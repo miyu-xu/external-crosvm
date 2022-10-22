@@ -66,6 +66,7 @@ use vmm_vhost::message::VhostUserMemoryRegion;
 use vmm_vhost::message::VhostUserMsgHeader;
 use vmm_vhost::message::VhostUserMsgValidator;
 use vmm_vhost::message::VhostUserShmemMapMsg;
+use vmm_vhost::message::VhostUserShmemMapMsgFlags;
 use vmm_vhost::message::VhostUserShmemUnmapMsg;
 use vmm_vhost::message::VhostUserU64;
 use vmm_vhost::Error as VhostError;
@@ -983,7 +984,15 @@ impl Worker {
             .export(msg.fd_offset, msg.len)
             .context("failed to export")?;
 
-        let prot = Protection::from(msg.flags);
+        let prot = match (
+            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_R),
+            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_W),
+        ) {
+            (true, true) => Protection::read_write(),
+            (true, false) => Protection::read(),
+            (false, true) => Protection::write(),
+            (false, false) => bail!("unsupported protection"),
+        };
         let regions = regions
             .iter()
             .map(|r| {

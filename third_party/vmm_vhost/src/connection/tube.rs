@@ -4,26 +4,19 @@
 //! Structs for Tube based endpoint. Listeners are not used with Tubes, since they are essentially
 //! fancy socket pairs.
 
-use std::cmp::min;
-use std::fs::File;
-use std::io::IoSlice;
-use std::io::IoSliceMut;
-use std::marker::PhantomData;
+use std::io::{IoSlice, IoSliceMut};
 use std::path::Path;
 use std::ptr::copy_nonoverlapping;
 
-use base::AsRawDescriptor;
-use base::FromRawDescriptor;
-use base::RawDescriptor;
-use base::Tube;
-use serde::Deserialize;
-use serde::Serialize;
+use base::{AsRawDescriptor, FromRawDescriptor, RawDescriptor, Tube};
+use serde::{Deserialize, Serialize};
 
-use crate::connection::Endpoint;
-use crate::connection::Req;
+use super::{Error, Result};
+use crate::connection::{Endpoint, Req};
 use crate::message::SlaveReq;
-use crate::Error;
-use crate::Result;
+use std::cmp::min;
+use std::fs::File;
+use std::marker::PhantomData;
 
 #[derive(Serialize, Deserialize)]
 struct RawDescriptorContainer {
@@ -166,21 +159,13 @@ impl<R: Req> AsRawDescriptor for TubeEndpoint<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::IoSlice;
-    use std::io::Read;
-    use std::io::Seek;
-    use std::io::SeekFrom;
-    use std::io::Write;
-    use std::mem;
-
-    use base::AsRawDescriptor;
-    use base::Tube;
-    use tempfile::tempfile;
-
     use super::*;
     use crate::connection::EndpointExt;
-    use crate::message::MasterReq;
-    use crate::message::VhostUserMsgHeader;
+    use crate::message::{MasterReq, VhostUserMsgHeader};
+    use base::{AsRawDescriptor, Tube};
+    use std::io::{IoSlice, Read, Seek, SeekFrom, Write};
+    use std::mem;
+    use tempfile::tempfile;
 
     fn create_pair() -> (TubeEndpoint<MasterReq>, TubeEndpoint<MasterReq>) {
         let (master_tube, slave_tube) = Tube::pair().unwrap();

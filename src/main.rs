@@ -4,7 +4,6 @@
 
 //! Runs a virtual machine
 
-#[cfg(any(feature = "composite-disk", feature = "qcow"))]
 use std::fs::OpenOptions;
 use std::path::Path;
 
@@ -35,7 +34,6 @@ use disk::create_zero_filler;
 use disk::ImagePartitionType;
 #[cfg(feature = "composite-disk")]
 use disk::PartitionInfo;
-#[cfg(feature = "qcow")]
 use disk::QcowFile;
 mod sys;
 use crosvm::cmdline::Command;
@@ -340,7 +338,6 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
     Ok(())
 }
 
-#[cfg(feature = "qcow")]
 fn create_qcow2(cmd: cmdline::CreateQcow2Command) -> std::result::Result<(), ()> {
     if !(cmd.size.is_some() ^ cmd.backing_file.is_some()) {
         println!(
@@ -566,7 +563,6 @@ fn crosvm_main() -> Result<CommandStatus> {
                     #[cfg(feature = "composite-disk")]
                     CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)
                         .map_err(|_| anyhow!("create_composite subcommand failed")),
-                    #[cfg(feature = "qcow")]
                     CrossPlatformCommands::CreateQcow2(cmd) => {
                         create_qcow2(cmd).map_err(|_| anyhow!("create_qcow2 subcommand failed"))
                     }

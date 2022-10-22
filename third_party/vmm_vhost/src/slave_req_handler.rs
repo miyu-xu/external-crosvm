@@ -1,23 +1,18 @@
 // Copyright (C) 2019 Alibaba Cloud Computing. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use base::{AsRawDescriptor, RawDescriptor};
 use std::fs::File;
 use std::mem;
 use std::slice;
 use std::sync::Mutex;
 
-use base::AsRawDescriptor;
-use base::RawDescriptor;
 use data_model::DataInit;
 
-use crate::connection::Endpoint;
-use crate::connection::EndpointExt;
-use crate::message::*;
-use crate::take_single_file;
-use crate::Error;
-use crate::MasterReqEndpoint;
-use crate::Result;
-use crate::SystemStream;
+use super::connection::{Endpoint, EndpointExt};
+use super::message::*;
+use super::{take_single_file, Error, Result};
+use crate::{MasterReqEndpoint, SystemStream};
 
 #[derive(PartialEq, Eq, Debug)]
 /// Vhost-user protocol variants used for the communication.
@@ -966,9 +961,7 @@ mod tests {
     use base::INVALID_DESCRIPTOR;
 
     use super::*;
-    use crate::dummy_slave::DummySlaveReqHandler;
-    use crate::MasterReqEndpoint;
-    use crate::SystemStream;
+    use crate::{dummy_slave::DummySlaveReqHandler, MasterReqEndpoint, SystemStream};
 
     #[test]
     fn test_slave_req_handler_new() {

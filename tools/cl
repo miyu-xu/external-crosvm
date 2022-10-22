@@ -4,9 +4,8 @@
 # found in the LICENSE file.
 
 import functools
-from os import chdir
 from pathlib import Path
-from impl.common import CROSVM_ROOT, GerritChange, confirm, run_commands, cmd
+from impl.common import GerritChange, confirm, run_commands, cmd
 import sys
 
 USAGE = """\
@@ -185,18 +184,18 @@ def rebase():
     branch_name = git("branch --show-current").stdout()
     upstream_branch_name = branch_name + "-upstream"
 
-    if git("rev-parse", upstream_branch_name).success():
-        print(f"Overwriting existing branch {upstream_branch_name}")
-        git("log -n1", upstream_branch_name).fg()
-
-    git("fetch -q origin main").fg()
-    git("checkout -B", upstream_branch_name, "origin/main").fg()
+    print(f"Checking out '{upstream_branch_name}'")
+    rev = git("rev-parse", upstream_branch_name).stdout(check=False)
+    if rev:
+        print(f"Leaving behind previous revision of {upstream_branch_name}: {rev}")
+    git("fetch origin").fg()
+    git("checkout -B", upstream_branch_name, "origin/main").fg(quiet=True)
 
     print(f"Cherry-picking changes from {branch_name}")
     git(f"cherry-pick {branch_name}@{{u}}..{branch_name}").fg()
 
 
-def upload(dry_run: bool = False):
+def upload():
     """
     Uploads changes to the crosvm main branch.
     """
@@ -219,10 +218,9 @@ def upload(dry_run: bool = False):
             return
         print()
 
-    git("push origin HEAD:refs/for/main").fg(dry_run=dry_run)
+    git("push origin HEAD:refs/for/main").fg()
 
 
 if __name__ == "__main__":
-    chdir(CROSVM_ROOT)
     prerequisites()
     run_commands(upload, rebase, status, prune, usage=USAGE)

@@ -872,10 +872,10 @@ impl Queue {
     /// inject interrupt into guest on this queue
     /// return true: interrupt is injected into guest for this queue
     ///        false: interrupt isn't injected
-    pub fn trigger_interrupt<I: SignalableInterrupt>(
+    pub fn trigger_interrupt(
         &mut self,
         mem: &GuestMemory,
-        interrupt: &I,
+        interrupt: &dyn SignalableInterrupt,
     ) -> bool {
         if self.queue_wants_interrupt(mem) {
             self.last_used = self.next_used;
@@ -899,6 +899,8 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
 
     use memoffset::offset_of;
 
@@ -1001,7 +1003,12 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
+        let interrupt = Interrupt::new(
+            Arc::new(AtomicUsize::new(0)),
+            IrqLevelEvent::new().unwrap(),
+            None,
+            10,
+        );
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;
@@ -1070,7 +1077,12 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
+        let interrupt = Interrupt::new(
+            Arc::new(AtomicUsize::new(0)),
+            IrqLevelEvent::new().unwrap(),
+            None,
+            10,
+        );
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;

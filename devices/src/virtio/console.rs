@@ -370,13 +370,13 @@ pub struct Console {
 
 impl Console {
     fn new(
-        protection_type: ProtectionType,
+        protected_vm: ProtectionType,
         input: Option<ConsoleInput>,
         output: Option<Box<dyn io::Write + Send>>,
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
         Console {
-            base_features: base_features(protection_type),
+            base_features: base_features(protected_vm),
             in_avail_evt: None,
             kill_evt: None,
             worker_thread: None,

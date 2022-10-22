@@ -11,7 +11,6 @@ use acpi_tables::sdt::SDT;
 use anyhow::bail;
 use base::error;
 use base::Event;
-use base::MemoryMapping;
 use base::RawDescriptor;
 use hypervisor::Datamatch;
 use remain::sorted;
@@ -301,12 +300,6 @@ impl PciBus {
     }
 }
 
-pub enum PreferredIrq {
-    None,
-    Any,
-    Fixed { pin: PciInterruptPin, gsi: u32 },
-}
-
 pub trait PciDevice: Send {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String;
@@ -326,12 +319,11 @@ pub trait PciDevice: Send {
     fn keep_rds(&self) -> Vec<RawDescriptor>;
 
     /// Preferred IRQ for this device.
-    /// The device may request a specific pin and IRQ number by returning a `Fixed` value.
-    /// If a device does not support INTx# interrupts at all, it should return `None`.
+    /// The device may request a specific pin and IRQ number by returning a non-`None` value.
     /// Otherwise, an appropriate IRQ will be allocated automatically.
     /// The device's `assign_irq` function will be called with its assigned IRQ either way.
-    fn preferred_irq(&self) -> PreferredIrq {
-        PreferredIrq::Any
+    fn preferred_irq(&self) -> Option<(PciInterruptPin, u32)> {
+        None
     }
 
     /// Assign a legacy PCI IRQ to this device.
@@ -401,12 +393,6 @@ pub trait PciDevice: Send {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn generate_acpi(&mut self, sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         Some(sdts)
-    }
-
-    /// Construct customized acpi method, and return the AML code and
-    /// shared memory
-    fn generate_acpi_methods(&mut self) -> (Vec<u8>, Option<(u32, MemoryMapping)>) {
-        (Vec::new(), None)
     }
 
     /// Invoked when the device is destroyed
@@ -625,7 +611,7 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         (**self).keep_rds()
     }
-    fn preferred_irq(&self) -> PreferredIrq {
+    fn preferred_irq(&self) -> Option<(PciInterruptPin, u32)> {
         (**self).preferred_irq()
     }
     fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
@@ -672,10 +658,6 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn generate_acpi(&mut self, sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         (**self).generate_acpi(sdts)
-    }
-
-    fn generate_acpi_methods(&mut self) -> (Vec<u8>, Option<(u32, MemoryMapping)>) {
-        (**self).generate_acpi_methods()
     }
 
     fn destroy_device(&mut self) {

@@ -23,7 +23,7 @@ impl SerialDevice for Serial {
     ///
     /// The stream `input` should not block, instead returning 0 bytes if are no bytes available.
     fn new(
-        _protection_type: ProtectionType,
+        _protected_vm: ProtectionType,
         interrupt_evt: Event,
         input: Option<Box<dyn SerialInput>>,
         out: Option<Box<dyn io::Write + Send>>,

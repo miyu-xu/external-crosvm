@@ -16,7 +16,7 @@ use crate::SerialDevice;
 
 impl SerialDevice for Console {
     fn new(
-        protection_type: ProtectionType,
+        protected_vm: ProtectionType,
         _event: Event,
         input: Option<Box<dyn SerialInput>>,
         out: Option<Box<dyn io::Write + Send>>,
@@ -26,7 +26,7 @@ impl SerialDevice for Console {
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
         Console::new(
-            protection_type,
+            protected_vm,
             input.map(ConsoleInput::FromRead),
             out,
             keep_rds,

@@ -8,8 +8,9 @@ pub(crate) mod tests {
     use crate::connection::TubeEndpoint;
     use crate::master::Master;
     use crate::message::MasterReq;
-    use crate::slave_req_handler::SlaveReqHandler;
-    use crate::slave_req_handler::VhostUserSlaveReqHandler;
+    #[cfg(feature = "device")]
+    use crate::slave_req_handler::{SlaveReqHandler, VhostUserSlaveReqHandler};
+
     use crate::SystemStream;
     pub(crate) type TestEndpoint = TubeEndpoint<MasterReq>;
     pub(crate) type TestMaster = Master<TestEndpoint>;

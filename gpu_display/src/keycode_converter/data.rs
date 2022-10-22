@@ -297,7 +297,7 @@ pub const KEYCODE_MAP: [MapEntry; 88] = [
         mac: 0x0027,
     },
     MapEntry {
-        linux_keycode: 41,
+        linux_keycode: 399,
         xkb: 0x0031,
         win: 0x0029,
         mac: 0x0032,

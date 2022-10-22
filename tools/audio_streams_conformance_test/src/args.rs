@@ -10,20 +10,17 @@ use audio_streams::*;
 use serde::Serialize;
 
 use super::error::Error;
-use super::sys::StreamSource as SysStreamSource;
 
 // maybe use StreamSourceGenerator directly
 #[derive(Copy, Clone, Debug, PartialEq, Serialize)]
 pub enum StreamSourceEnum {
     NoopStream,
-    Sys(SysStreamSource),
 }
 
 impl fmt::Display for StreamSourceEnum {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             StreamSourceEnum::NoopStream => write!(f, "noop"),
-            StreamSourceEnum::Sys(stream_source) => stream_source.fmt(f),
         }
     }
 }
@@ -33,7 +30,7 @@ impl FromStr for StreamSourceEnum {
     fn from_str(s: &str) -> ::std::result::Result<StreamSourceEnum, Self::Err> {
         match s {
             "noop" => Ok(StreamSourceEnum::NoopStream),
-            _ => SysStreamSource::try_from(s).map(StreamSourceEnum::Sys),
+            _ => Err(Error::InvalidStreamSuorce(s.to_owned())),
         }
     }
 }
@@ -63,7 +60,7 @@ fn default_stream_source() -> StreamSourceEnum {
 }
 
 #[derive(Copy, Clone, Debug, FromArgs, Serialize)]
-/// audio_streams_conformance_test
+/// test test
 pub struct Args {
     /// the StreamSource to use for playback. (default: noop).
     #[argh(
@@ -72,7 +69,7 @@ pub struct Args {
         default = "default_stream_source()",
         from_str_fn(StreamSourceEnum::from_str)
     )]
-    pub stream_source: StreamSourceEnum,
+    pub playback_source: StreamSourceEnum,
     /// the channel numbers. (default: 2)
     #[argh(option, short = 'c', default = "default_channels()")]
     pub channels: usize,
@@ -110,7 +107,7 @@ Sample rate: {} frames/s
 Buffer size: {} frames
 Iterations: {}
           "#,
-            self.stream_source,
+            self.playback_source,
             self.channels,
             self.format,
             self.rate,

@@ -6,27 +6,16 @@
 use std::fs::File;
 use std::mem;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use base::AsRawDescriptor;
-use base::Event;
-use base::RawDescriptor;
-use base::INVALID_DESCRIPTOR;
+use base::{AsRawDescriptor, Event, RawDescriptor, INVALID_DESCRIPTOR};
 use data_model::DataInit;
 
-use crate::backend::VhostBackend;
-use crate::backend::VhostUserMemoryRegionInfo;
-use crate::backend::VringConfigData;
-use crate::connection::Endpoint;
-use crate::connection::EndpointExt;
-use crate::message::*;
-use crate::take_single_file;
-use crate::Error as VhostUserError;
-use crate::Result as VhostUserResult;
-use crate::Result;
-use crate::SystemStream;
+use super::connection::{Endpoint, EndpointExt};
+use super::message::*;
+use super::{take_single_file, Error as VhostUserError, Result as VhostUserResult};
+use crate::backend::{VhostBackend, VhostUserMemoryRegionInfo, VringConfigData};
+use crate::{Result, SystemStream};
 
 /// Trait for vhost-user master to provide extra methods not covered by the VhostBackend yet.
 pub trait VhostUserMaster: VhostBackend {
@@ -805,12 +794,9 @@ impl<E: Endpoint<MasterReq>> MasterInternal<E> {
 
 #[cfg(test)]
 mod tests {
-    use base::INVALID_DESCRIPTOR;
-
     use super::*;
-    use crate::connection::tests::create_pair;
-    use crate::connection::tests::TestEndpoint;
-    use crate::connection::tests::TestMaster;
+    use crate::connection::tests::{create_pair, TestEndpoint, TestMaster};
+    use base::INVALID_DESCRIPTOR;
 
     #[test]
     fn create_master() {

@@ -47,8 +47,7 @@ pub mod message;
 pub mod connection;
 
 mod sys;
-pub use sys::SystemStream;
-pub use sys::*;
+pub use sys::{SystemStream, *};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "vmm")] {
@@ -212,22 +211,17 @@ mod dummy_slave;
 
 #[cfg(all(test, feature = "vmm", feature = "device"))]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::Barrier;
-    use std::sync::Mutex;
+    use base::AsRawDescriptor;
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
 
-    use base::AsRawDescriptor;
-    use tempfile::tempfile;
-
+    use super::connection::tests::*;
+    use super::dummy_slave::{DummySlaveReqHandler, VIRTIO_FEATURES};
+    use super::message::*;
     use super::*;
     use crate::backend::VhostBackend;
-    use crate::connection::tests::*;
-    use crate::dummy_slave::DummySlaveReqHandler;
-    use crate::dummy_slave::VIRTIO_FEATURES;
-    use crate::message::*;
-    use crate::VhostUserMemoryRegionInfo;
-    use crate::VringConfigData;
+    use crate::{VhostUserMemoryRegionInfo, VringConfigData};
+    use tempfile::tempfile;
 
     #[test]
     fn create_dummy_slave() {

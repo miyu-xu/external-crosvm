@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -279,7 +281,7 @@ pub struct VirtioPciDevice {
     device_activated: bool,
     disable_intx: bool,
 
-    interrupt: Option<Interrupt>,
+    interrupt_status: Arc<AtomicUsize>,
     interrupt_evt: Option<IrqLevelEvent>,
     queues: Vec<Queue>,
     queue_evts: Vec<Event>,
@@ -364,7 +366,7 @@ impl VirtioPciDevice {
             device,
             device_activated: false,
             disable_intx,
-            interrupt: None,
+            interrupt_status: Arc::new(AtomicUsize::new(0)),
             interrupt_evt: None,
             queues,
             queue_evts,
@@ -493,11 +495,11 @@ impl VirtioPciDevice {
         let mem = self.mem.clone();
 
         let interrupt = Interrupt::new(
+            self.interrupt_status.clone(),
             interrupt_evt,
             Some(self.msix_config.clone()),
             self.common_config.msix_config,
         );
-        self.interrupt = Some(interrupt.clone());
 
         match self.clone_queue_evts() {
             Ok(queue_evts) => {
@@ -809,11 +811,7 @@ impl PciDevice for VirtioPciDevice {
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.get_mut(0) {
                         // Reading this register resets it to 0.
-                        *v = if let Some(interrupt) = &self.interrupt {
-                            interrupt.read_and_reset_interrupt_status()
-                        } else {
-                            0
-                        };
+                        *v = self.interrupt_status.swap(0, Ordering::SeqCst) as u8;
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {
@@ -862,9 +860,8 @@ impl PciDevice for VirtioPciDevice {
                 ),
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.get(0) {
-                        if let Some(interrupt) = &self.interrupt {
-                            interrupt.clear_interrupt_status_bits(*v);
-                        }
+                        self.interrupt_status
+                            .fetch_and(!(*v as usize), Ordering::SeqCst);
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {

@@ -4,7 +4,7 @@
 
 //! GPU related things
 //! depends on "gpu" feature
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 
@@ -27,34 +27,20 @@ pub fn get_gpu_cache_info<'a>(
     let mut dir = None;
     let mut env = Vec::new();
 
-    // TODO (renatopereyra): Remove deprecated env vars once all src/third_party/mesa* are updated.
     if let Some(cache_dir) = cache_dir {
         if !Path::new(cache_dir).exists() {
             warn!("shader caching dir {} does not exist", cache_dir);
-            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
-
-            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else if cfg!(any(target_arch = "arm", target_arch = "aarch64")) && sandbox {
             warn!("shader caching not yet supported on ARM with sandbox enabled");
-            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
-
-            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else {
             dir = Some(cache_dir.as_str());
 
-            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "false"));
             env.push(("MESA_GLSL_CACHE_DIR", cache_dir.as_str()));
-
-            env.push(("MESA_SHADER_CACHE_DISABLE", "false"));
-            env.push(("MESA_SHADER_CACHE_DIR", cache_dir.as_str()));
             if let Some(cache_size) = cache_size {
-                // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
                 env.push(("MESA_GLSL_CACHE_MAX_SIZE", cache_size.as_str()));
-
-                env.push(("MESA_SHADER_CACHE_MAX_SIZE", cache_size.as_str()));
             }
         }
     }
@@ -105,7 +91,7 @@ pub fn create_gpu_device(
         event_devices,
         map_request,
         cfg.jail_config.is_some(),
-        virtio::base_features(cfg.protection_type),
+        virtio::base_features(cfg.protected_vm),
         cfg.wayland_socket_paths.clone(),
     );
 
@@ -156,16 +142,18 @@ pub struct GpuRenderServerParameters {
 }
 
 fn get_gpu_render_server_environment(cache_info: Option<&GpuCacheInfo>) -> Result<Vec<String>> {
-    let mut env = HashMap::<String, String>::new();
+    let mut env = Vec::new();
+    let mut env_keys = HashSet::new();
     let os_env_len = env::vars_os().count();
 
     if let Some(cache_info) = cache_info {
-        env.reserve(os_env_len + cache_info.environment.len());
+        env_keys.reserve(cache_info.environment.len() + os_env_len);
         for (key, val) in cache_info.environment.iter() {
-            env.insert(key.to_string(), val.to_string());
+            env.push(format!("{}={}", key, val));
+            env_keys.insert(key.to_string());
         }
     } else {
-        env.reserve(os_env_len);
+        env_keys.reserve(os_env_len);
     }
 
     for (key_os, val_os) in env::vars_os() {
@@ -173,15 +161,19 @@ fn get_gpu_render_server_environment(cache_info: Option<&GpuCacheInfo>) -> Resul
         let into_string_err = |_| anyhow!("invalid environment key/val");
         let key = key_os.into_string().map_err(into_string_err)?;
         let val = val_os.into_string().map_err(into_string_err)?;
-        env.entry(key).or_insert(val);
+
+        if !env_keys.contains(&key) {
+            env.push(format!("{}={}", key, val));
+            env_keys.insert(key);
+        }
     }
 
     // TODO(b/237493180): workaround to enable ETC2 format emulation in RADV for ARCVM
-    if !env.contains_key("radv_require_etc2") {
-        env.insert("radv_require_etc2".to_string(), "true".to_string());
+    if !env_keys.contains("radv_require_etc2") {
+        env.push("radv_require_etc2=true".to_string());
     }
 
-    Ok(env.iter().map(|(k, v)| format!("{}={}", k, v)).collect())
+    Ok(env)
 }
 
 pub fn start_gpu_render_server(

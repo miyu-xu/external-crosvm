@@ -31,7 +31,7 @@ use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
-#[cfg(any(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(target_arch = "x86_64"))]
 use std::thread;
 #[cfg(feature = "balloon")]
 use std::time::Duration;
@@ -55,7 +55,6 @@ use base::UnixSeqpacket;
 use base::UnixSeqpacketListener;
 use base::UnlinkUnixSeqpacketListener;
 use base::*;
-use cros_async::Executor;
 use device_helpers::*;
 use devices::serial_device::SerialHardware;
 use devices::vfio::VfioCommonSetup;
@@ -198,12 +197,12 @@ fn create_virtio_devices(
     let mut devs = Vec::new();
 
     for opt in &cfg.vhost_user_gpu {
-        devs.push(create_vhost_user_gpu_device(cfg.protection_type, opt)?);
+        devs.push(create_vhost_user_gpu_device(cfg.protected_vm, opt)?);
     }
 
     for opt in &cfg.vvu_proxy {
         devs.push(create_vvu_proxy_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             opt,
             vvu_proxy_device_tubes.remove(0),
@@ -228,7 +227,7 @@ fn create_virtio_devices(
         }
 
         devs.push(create_wayland_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             &cfg.wayland_socket_paths,
             wl_resource_bridge,
@@ -259,9 +258,10 @@ fn create_virtio_devices(
             let display_param = if gpu_parameters.display_params.is_empty() {
                 Default::default()
             } else {
-                gpu_parameters.display_params[0].clone()
+                gpu_parameters.display_params[0]
             };
-            let (gpu_display_w, gpu_display_h) = display_param.get_virtual_display_size();
+            let gpu_display_w = display_param.width;
+            let gpu_display_h = display_param.height;
 
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
@@ -281,7 +281,7 @@ fn create_virtio_devices(
                     virtio_dev_socket,
                     multi_touch_width,
                     multi_touch_height,
-                    virtio::base_features(cfg.protection_type),
+                    virtio::base_features(cfg.protected_vm),
                 )
                 .context("failed to set up mouse device")?;
                 devs.push(VirtioDeviceStub {
@@ -299,7 +299,7 @@ fn create_virtio_devices(
                     // the multi_touch options, which begin at 0.
                     u32::MAX,
                     virtio_dev_socket,
-                    virtio::base_features(cfg.protection_type),
+                    virtio::base_features(cfg.protected_vm),
                 )
                 .context("failed to set up keyboard device")?;
                 devs.push(VirtioDeviceStub {
@@ -328,32 +328,27 @@ fn create_virtio_devices(
         .iter()
         .filter(|(_k, v)| v.hardware == SerialHardware::VirtioConsole)
     {
-        let dev = param.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?;
+        let dev = param.create_virtio_device_and_jail(cfg.protected_vm, &cfg.jail_config)?;
         devs.push(dev);
     }
 
     for disk in &cfg.disks {
         let disk_config = DiskConfig::new(disk, Some(disk_device_tubes.remove(0)));
-        devs.push(
-            disk_config.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?,
-        );
+        devs.push(disk_config.create_virtio_device_and_jail(cfg.protected_vm, &cfg.jail_config)?);
     }
 
     for blk in &cfg.vhost_user_blk {
-        devs.push(create_vhost_user_block_device(cfg.protection_type, blk)?);
+        devs.push(create_vhost_user_block_device(cfg.protected_vm, blk)?);
     }
 
     for console in &cfg.vhost_user_console {
-        devs.push(create_vhost_user_console_device(
-            cfg.protection_type,
-            console,
-        )?);
+        devs.push(create_vhost_user_console_device(cfg.protected_vm, console)?);
     }
 
     for (index, pmem_disk) in cfg.pmem_devices.iter().enumerate() {
         let pmem_device_tube = pmem_device_tubes.remove(0);
         devs.push(create_pmem_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             vm,
             resources,
@@ -364,14 +359,14 @@ fn create_virtio_devices(
     }
 
     if cfg.rng {
-        devs.push(create_rng_device(cfg.protection_type, &cfg.jail_config)?);
+        devs.push(create_rng_device(cfg.protected_vm, &cfg.jail_config)?);
     }
 
     #[cfg(feature = "tpm")]
     {
         if cfg.software_tpm {
             devs.push(create_software_tpm_device(
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
             )?);
         }
@@ -381,7 +376,7 @@ fn create_virtio_devices(
     {
         if cfg.vtpm_proxy {
             devs.push(create_vtpm_proxy_device(
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
             )?);
         }
@@ -389,7 +384,7 @@ fn create_virtio_devices(
 
     for (idx, single_touch_spec) in cfg.virtio_single_touch.iter().enumerate() {
         devs.push(create_single_touch_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             single_touch_spec,
             idx as u32,
@@ -398,7 +393,7 @@ fn create_virtio_devices(
 
     for (idx, multi_touch_spec) in cfg.virtio_multi_touch.iter().enumerate() {
         devs.push(create_multi_touch_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             multi_touch_spec,
             idx as u32,
@@ -407,7 +402,7 @@ fn create_virtio_devices(
 
     for (idx, trackpad_spec) in cfg.virtio_trackpad.iter().enumerate() {
         devs.push(create_trackpad_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             trackpad_spec,
             idx as u32,
@@ -416,7 +411,7 @@ fn create_virtio_devices(
 
     for (idx, mouse_socket) in cfg.virtio_mice.iter().enumerate() {
         devs.push(create_mouse_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             mouse_socket,
             idx as u32,
@@ -425,7 +420,7 @@ fn create_virtio_devices(
 
     for (idx, keyboard_socket) in cfg.virtio_keyboard.iter().enumerate() {
         devs.push(create_keyboard_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             keyboard_socket,
             idx as u32,
@@ -434,7 +429,7 @@ fn create_virtio_devices(
 
     for (idx, switches_socket) in cfg.virtio_switches.iter().enumerate() {
         devs.push(create_switches_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             switches_socket,
             idx as u32,
@@ -443,7 +438,7 @@ fn create_virtio_devices(
 
     for dev_path in &cfg.virtio_input_evdevs {
         devs.push(create_vinput_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             dev_path,
         )?);
@@ -454,7 +449,7 @@ fn create_virtio_devices(
         let balloon_features =
             (cfg.balloon_page_reporting as u64) << BalloonFeatures::PageReporting as u64;
         devs.push(create_balloon_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             if cfg.strict_balloon {
                 BalloonMode::Strict
@@ -471,7 +466,7 @@ fn create_virtio_devices(
     // We checked above that if the IP is defined, then the netmask is, too.
     for tap_fd in &cfg.tap_fd {
         devs.push(create_tap_net_device_from_fd(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             cfg.net_vq_pairs.unwrap_or(1),
             cfg.vcpu_count.unwrap_or(1),
@@ -486,7 +481,7 @@ fn create_virtio_devices(
             bail!("vhost-user-net cannot be used with any of --host-ip, --netmask or --mac");
         }
         devs.push(create_net_device_from_config(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             cfg.net_vq_pairs.unwrap_or(1),
             cfg.vcpu_count.unwrap_or(1),
@@ -503,7 +498,7 @@ fn create_virtio_devices(
 
     for tap_name in &cfg.tap_name {
         devs.push(create_tap_net_device_from_name(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             cfg.net_vq_pairs.unwrap_or(1),
             cfg.vcpu_count.unwrap_or(1),
@@ -512,22 +507,22 @@ fn create_virtio_devices(
     }
 
     for net in &cfg.vhost_user_net {
-        devs.push(create_vhost_user_net_device(cfg.protection_type, net)?);
+        devs.push(create_vhost_user_net_device(cfg.protected_vm, net)?);
     }
 
     for vsock in &cfg.vhost_user_vsock {
-        devs.push(create_vhost_user_vsock_device(cfg.protection_type, vsock)?);
+        devs.push(create_vhost_user_vsock_device(cfg.protected_vm, vsock)?);
     }
 
     for opt in &cfg.vhost_user_wl {
-        devs.push(create_vhost_user_wl_device(cfg.protection_type, opt)?);
+        devs.push(create_vhost_user_wl_device(cfg.protected_vm, opt)?);
     }
 
     #[cfg(feature = "audio")]
     {
         for virtio_snd in &cfg.virtio_snds {
             devs.push(create_virtio_snd_device(
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
                 virtio_snd.clone(),
             )?);
@@ -541,7 +536,7 @@ fn create_virtio_devices(
                 video_dec_backend,
                 &mut devs,
                 video_dec_tube,
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
                 VideoDeviceType::Decoder,
             )?;
@@ -549,7 +544,7 @@ fn create_virtio_devices(
     }
     if let Some(socket_path) = &cfg.vhost_user_video_dec {
         devs.push(create_vhost_user_video_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             socket_path,
             VideoDeviceType::Decoder,
         )?);
@@ -562,7 +557,7 @@ fn create_virtio_devices(
                 video_enc_backend,
                 &mut devs,
                 video_enc_tube,
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
                 VideoDeviceType::Encoder,
             )?;
@@ -575,7 +570,7 @@ fn create_virtio_devices(
             cid,
         };
         devs.push(create_vhost_vsock_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             &vhost_config,
         )?);
@@ -583,14 +578,14 @@ fn create_virtio_devices(
 
     for vhost_user_fs in &cfg.vhost_user_fs {
         devs.push(create_vhost_user_fs_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             vhost_user_fs,
         )?);
     }
 
     for vhost_user_snd in &cfg.vhost_user_snd {
         devs.push(create_vhost_user_snd_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             vhost_user_snd,
         )?);
     }
@@ -610,7 +605,7 @@ fn create_virtio_devices(
             SharedDirKind::FS => {
                 let device_tube = fs_device_tubes.remove(0);
                 create_fs_device(
-                    cfg.protection_type,
+                    cfg.protected_vm,
                     &cfg.jail_config,
                     uid_map,
                     gid_map,
@@ -621,7 +616,7 @@ fn create_virtio_devices(
                 )?
             }
             SharedDirKind::P9 => create_9p_device(
-                cfg.protection_type,
+                cfg.protected_vm,
                 &cfg.jail_config,
                 uid_map,
                 gid_map,
@@ -635,7 +630,7 @@ fn create_virtio_devices(
 
     if let Some(vhost_user_mac80211_hwsim) = &cfg.vhost_user_mac80211_hwsim {
         devs.push(create_vhost_user_mac80211_hwsim_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             vhost_user_mac80211_hwsim,
         )?);
     }
@@ -644,7 +639,7 @@ fn create_virtio_devices(
     if let Some(path) = &cfg.sound {
         devs.push(create_sound_device(
             path,
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
         )?);
     }
@@ -1106,7 +1101,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
                 .ok_or_else(|| anyhow!("requested swiotlb size too large"))?,
         )
     } else {
-        match cfg.protection_type {
+        match cfg.protected_vm {
             ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware => {
                 Some(64 * 1024 * 1024)
             }
@@ -1173,7 +1168,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .collect::<Result<Vec<SDT>>>()?,
         rt_cpus: cfg.rt_cpus.clone(),
         delay_rt: cfg.delay_rt,
-        protection_type: cfg.protection_type,
+        protected_vm: cfg.protected_vm,
         #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
         gdb: None,
         dmi_path: cfg.dmi_path.clone(),
@@ -1248,8 +1243,7 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
             cfg.kvm_device_path.display(),
         )
     })?;
-    let vm =
-        KvmVm::new(&kvm, guest_mem, components.protection_type).context("failed to create vm")?;
+    let vm = KvmVm::new(&kvm, guest_mem, components.protected_vm).context("failed to create vm")?;
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if cfg.itmt {
@@ -1270,7 +1264,7 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
 
     // Check that the VM was actually created in protected mode as expected.
     if matches!(
-        cfg.protection_type,
+        cfg.protected_vm,
         ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
     ) && !vm.check_capability(VmCap::Protected)
     {
@@ -1452,10 +1446,7 @@ where
     }
 
     let battery = if cfg.battery_config.is_some() {
-        #[cfg_attr(
-            not(feature = "power-monitor-powerd"),
-            allow(clippy::manual_map, clippy::needless_match)
-        )]
+        #[cfg_attr(not(feature = "power-monitor-powerd"), allow(clippy::manual_map))]
         let jail = match simple_jail(&cfg.jail_config, "battery")? {
             #[cfg_attr(not(feature = "power-monitor-powerd"), allow(unused_mut))]
             Some(mut jail) => {
@@ -1683,7 +1674,7 @@ where
     {
         let (iommu_host_tube, iommu_device_tube) = Tube::pair().context("failed to create tube")?;
         let iommu_dev = create_iommu_device(
-            cfg.protection_type,
+            cfg.protected_vm,
             &cfg.jail_config,
             iova_max_addr.unwrap_or(u64::MAX),
             iommu_attached_endpoints,
@@ -2883,51 +2874,6 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
     }
 }
 
-fn process_vhost_user_control_request(tube: Tube, disk_host_tubes: &[Tube]) -> Result<()> {
-    let command = tube
-        .recv::<VmRequest>()
-        .context("failed to receive VmRequest")?;
-    let resp = match command {
-        VmRequest::DiskCommand {
-            disk_index,
-            ref command,
-        } => match &disk_host_tubes.get(disk_index) {
-            Some(tube) => handle_disk_command(command, tube),
-            None => VmResponse::Err(base::Error::new(libc::ENODEV)),
-        },
-        request => {
-            error!(
-                "Request {:?} currently not supported in vhost user backend",
-                request
-            );
-            VmResponse::Err(base::Error::new(libc::EPERM))
-        }
-    };
-
-    tube.send(&resp).context("failed to send VmResponse")?;
-    Ok(())
-}
-
-fn start_vhost_user_control_server(
-    control_server_socket: UnlinkUnixSeqpacketListener,
-    disk_host_tubes: Vec<Tube>,
-) {
-    info!("Start vhost-user control server");
-    loop {
-        match control_server_socket.accept() {
-            Ok(socket) => {
-                let tube = Tube::new_from_unix_seqpacket(socket);
-                if let Err(e) = process_vhost_user_control_request(tube, &disk_host_tubes) {
-                    error!("failed to process control request: {:#}", e);
-                }
-            }
-            Err(e) => {
-                error!("failed to establish connection: {}", e);
-            }
-        }
-    }
-}
-
 pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
     struct DeviceJailInfo {
         // Unique name for the device, in the form `foomatic-0`.
@@ -2966,41 +2912,16 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
         Some(opts.jail)
     };
 
-    // Create control server socket
-    let control_server_socket = opts.control_socket.map(|path| {
-        UnlinkUnixSeqpacketListener(
-            UnixSeqpacketListener::bind(path).expect("Could not bind socket"),
-        )
-    });
-
     // Create serial devices.
     for (i, params) in opts.serial.iter().enumerate() {
         let serial_config = &params.device_params;
         add_device(i, serial_config, &params.vhost, &jail, &mut devices_jails)?;
     }
 
-    let mut disk_host_tubes = Vec::new();
-    let control_socket_exists = control_server_socket.is_some();
     // Create block devices.
     for (i, params) in opts.block.iter().enumerate() {
-        let tube = if control_socket_exists {
-            let (host_tube, device_tube) = Tube::pair().context("failed to create tube")?;
-            disk_host_tubes.push(host_tube);
-            Some(device_tube)
-        } else {
-            None
-        };
-        let disk_config = DiskConfig::new(&params.device_params, tube);
+        let disk_config = DiskConfig::new(&params.device_params, None);
         add_device(i, &disk_config, &params.vhost, &jail, &mut devices_jails)?;
-    }
-
-    let ex = Executor::new()?;
-    if let Some(control_server_socket) = control_server_socket {
-        // Start the control server in the parent process.
-        ex.spawn_blocking(move || {
-            start_vhost_user_control_server(control_server_socket, disk_host_tubes)
-        })
-        .detach();
     }
 
     // Now wait for all device processes to return.

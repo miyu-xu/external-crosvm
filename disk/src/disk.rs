@@ -30,14 +30,8 @@ use cros_async::Executor;
 use cros_async::IoSourceExt;
 use thiserror::Error as ThisError;
 
-mod asynchronous;
-#[allow(unused)]
-pub(crate) use asynchronous::AsyncDiskFileWrapper;
-#[cfg(feature = "qcow")]
 mod qcow;
-#[cfg(feature = "qcow")]
 pub use qcow::QcowFile;
-#[cfg(feature = "qcow")]
 pub use qcow::QCOW_MAGIC;
 mod sys;
 
@@ -64,11 +58,8 @@ pub use composite::PartitionInfo;
 #[cfg(feature = "composite-disk")]
 pub use gpt::Error as GptError;
 
-#[cfg(feature = "android-sparse")]
 mod android_sparse;
-#[cfg(feature = "android-sparse")]
 use android_sparse::AndroidSparse;
-#[cfg(feature = "android-sparse")]
 use android_sparse::SPARSE_HEADER_MAGIC;
 
 /// Nesting depth limit for disk formats that can open other disk files.
@@ -80,7 +71,6 @@ pub enum Error {
     BlockDeviceNew(base::Error),
     #[error("requested file conversion not supported")]
     ConversionNotSupported,
-    #[cfg(feature = "android-sparse")]
     #[error("failure in android sparse disk: {0}")]
     CreateAndroidSparseDisk(android_sparse::Error),
     #[cfg(feature = "composite-disk")]
@@ -92,15 +82,10 @@ pub enum Error {
     Fallocate(cros_async::AsyncError),
     #[error("failure with fsync: {0}")]
     Fsync(cros_async::AsyncError),
-    #[error("failure with fsync: {0}")]
-    IoFsync(io::Error),
     #[error("checking host fs type: {0}")]
     HostFsType(base::Error),
     #[error("maximum disk nesting depth exceeded")]
     MaxNestingDepthExceeded,
-    #[error("failure to punch hole: {0}")]
-    PunchHole(io::Error),
-    #[cfg(feature = "qcow")]
     #[error("failure in qcow: {0}")]
     QcowError(qcow::Error),
     #[error("failed to read data: {0}")]
@@ -119,8 +104,6 @@ pub enum Error {
     WriteFromMem(cros_async::AsyncError),
     #[error("failed to write from vec: {0}")]
     WriteFromVec(cros_async::AsyncError),
-    #[error("failed to write zeroes: {0}")]
-    WriteZeroes(io::Error),
     #[error("failed to write data: {0}")]
     WritingData(io::Error),
     #[cfg(windows)]
@@ -156,7 +139,6 @@ pub trait DiskFile:
     + PunchHole
     + WriteZeroesAt
     + FileAllocate
-    + ToAsyncDisk
     + Send
     + AsRawDescriptors
     + Debug
@@ -170,7 +152,6 @@ impl<
             + FileReadWriteAtVolatile
             + WriteZeroesAt
             + FileAllocate
-            + ToAsyncDisk
             + Send
             + AsRawDescriptors
             + Debug,
@@ -247,14 +228,10 @@ pub fn detect_image_type(file: &File) -> Result<ImageType> {
         }
     }
 
-    #[allow(unused_variables)] // magic4 is only used with the qcow or android-sparse features.
     if let Some(magic4) = magic.data.get(0..4) {
-        #[cfg(feature = "qcow")]
         if magic4 == QCOW_MAGIC.to_be_bytes() {
             return Ok(ImageType::Qcow2);
-        }
-        #[cfg(feature = "android-sparse")]
-        if magic4 == SPARSE_HEADER_MAGIC.to_le_bytes() {
+        } else if magic4 == SPARSE_HEADER_MAGIC.to_le_bytes() {
             return Ok(ImageType::AndroidSparse);
         }
     }
@@ -262,22 +239,38 @@ pub fn detect_image_type(file: &File) -> Result<ImageType> {
     Ok(ImageType::Raw)
 }
 
+/// Check if the image file type can be used for async disk access.
+pub fn async_ok(raw_image: &File) -> Result<bool> {
+    let image_type = detect_image_type(raw_image)?;
+    Ok(match image_type {
+        ImageType::Raw => true,
+        ImageType::Qcow2 | ImageType::AndroidSparse | ImageType::CompositeDisk => false,
+    })
+}
+
+/// Inspect the image file type and create an appropriate disk file to match it.
+pub fn create_async_disk_file(raw_image: File) -> Result<Box<dyn ToAsyncDisk>> {
+    let image_type = detect_image_type(&raw_image)?;
+    Ok(match image_type {
+        ImageType::Raw => Box::new(raw_image) as Box<dyn ToAsyncDisk>,
+        ImageType::Qcow2 | ImageType::AndroidSparse | ImageType::CompositeDisk => {
+            return Err(Error::UnknownType)
+        }
+    })
+}
+
 /// Inspect the image file type and create an appropriate disk file to match it.
 pub fn create_disk_file(
     raw_image: File,
     is_sparse_file: bool,
-    // max_nesting_depth is only used if the composite-disk or qcow features are enabled.
-    #[allow(unused_variables)] mut max_nesting_depth: u32,
+    mut max_nesting_depth: u32,
     // image_path is only used if the composite-disk feature is enabled.
     #[allow(unused_variables)] image_path: &Path,
 ) -> Result<Box<dyn DiskFile>> {
     if max_nesting_depth == 0 {
         return Err(Error::MaxNestingDepthExceeded);
     }
-    #[allow(unused_assignments)]
-    {
-        max_nesting_depth -= 1;
-    }
+    max_nesting_depth -= 1;
 
     let image_type = detect_image_type(&raw_image)?;
     Ok(match image_type {
@@ -285,7 +278,6 @@ pub fn create_disk_file(
             sys::apply_raw_disk_file_options(&raw_image, is_sparse_file)?;
             Box::new(raw_image) as Box<dyn DiskFile>
         }
-        #[cfg(feature = "qcow")]
         ImageType::Qcow2 => {
             Box::new(QcowFile::from(raw_image, max_nesting_depth).map_err(Error::QcowError)?)
                 as Box<dyn DiskFile>
@@ -303,13 +295,12 @@ pub fn create_disk_file(
                 .map_err(Error::CreateCompositeDisk)?,
             ) as Box<dyn DiskFile>
         }
-        #[cfg(feature = "android-sparse")]
+        #[cfg(not(feature = "composite-disk"))]
+        ImageType::CompositeDisk => return Err(Error::UnknownType),
         ImageType::AndroidSparse => {
             Box::new(AndroidSparse::from_file(raw_image).map_err(Error::CreateAndroidSparseDisk)?)
                 as Box<dyn DiskFile>
         }
-        #[allow(unreachable_patterns)]
-        _ => return Err(Error::UnknownType),
     })
 }
 
@@ -317,7 +308,7 @@ pub fn create_disk_file(
 #[async_trait(?Send)]
 pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
     /// Returns the inner file consuming self.
-    fn into_inner(self: Box<Self>) -> Box<dyn DiskFile>;
+    fn into_inner(self: Box<Self>) -> Box<dyn ToAsyncDisk>;
 
     /// Asynchronously fsyncs any completed operations to the disk.
     async fn fsync(&self) -> Result<()>;
@@ -325,7 +316,7 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
     /// Reads from the file at 'file_offset' in to memory `mem` at `mem_offsets`.
     /// `mem_offsets` is similar to an iovec except relative to the start of `mem`.
     async fn read_to_mem<'a>(
-        &'a self,
+        &self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         mem_offsets: &'a [cros_async::MemRegion],
@@ -333,7 +324,7 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
 
     /// Writes to the file at 'file_offset' from memory `mem` at `mem_offsets`.
     async fn write_from_mem<'a>(
-        &'a self,
+        &self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         mem_offsets: &'a [cros_async::MemRegion],
@@ -379,7 +370,7 @@ impl FileAllocate for SingleFileDisk {
 
 #[async_trait(?Send)]
 impl AsyncDisk for SingleFileDisk {
-    fn into_inner(self: Box<Self>) -> Box<dyn DiskFile> {
+    fn into_inner(self: Box<Self>) -> Box<dyn ToAsyncDisk> {
         Box::new(self.inner.into_source())
     }
 
@@ -388,7 +379,7 @@ impl AsyncDisk for SingleFileDisk {
     }
 
     async fn read_to_mem<'a>(
-        &'a self,
+        &self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         mem_offsets: &'a [cros_async::MemRegion],
@@ -400,7 +391,7 @@ impl AsyncDisk for SingleFileDisk {
     }
 
     async fn write_from_mem<'a>(
-        &'a self,
+        &self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         mem_offsets: &'a [cros_async::MemRegion],

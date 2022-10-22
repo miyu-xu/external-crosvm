@@ -40,7 +40,6 @@ use crate::virtio::vhost::user::device::vvu::pci::VvuPciDevice;
 use crate::virtio::SignalableInterrupt;
 
 /// A Doorbell that supports both regular call events and signaling through a VVU device.
-#[derive(Clone)]
 pub enum Doorbell {
     Call(CallEvent),
     Vfio(DoorbellRegion),

@@ -1757,7 +1757,7 @@ impl BlockedSignal {
 
 impl Drop for BlockedSignal {
     fn drop(&mut self) {
-        unblock_signal(self.signal_num).expect("failed to restore signal mask");
+        let _ = unblock_signal(self.signal_num).expect("failed to restore signal mask");
     }
 }
 
