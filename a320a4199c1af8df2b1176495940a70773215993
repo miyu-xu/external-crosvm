@@ -22,6 +22,30 @@
       },
       "revId": "a320a4199c1af8df2b1176495940a70773215993",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "117f35f7_b1de1cfc",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-10-24T23:37:15Z",
+      "side": 1,
+      "message": "Looks like a bunch of deprecated things. https://paste.googleplex.com/5982753718796288\n\nAs far as I can tell, none of those instances were added in this merge. Maybe something with the @deprecated changed?",
+      "parentUuid": "3d4e0d99_c899f3cb",
+      "range": {
+        "startLine": 15,
+        "startChar": 13,
+        "endLine": 17,
+        "endChar": 0
+      },
+      "revId": "a320a4199c1af8df2b1176495940a70773215993",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
