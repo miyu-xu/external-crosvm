@@ -70,6 +70,30 @@
       },
       "revId": "a320a4199c1af8df2b1176495940a70773215993",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f8d3da6_ec011dba",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-10-24T23:42:56Z",
+      "side": 1,
+      "message": "I wouldn\u0027t say it\u0027s worth blocking on, would be nice to have them go away over the next merges if possible though! - LGTM",
+      "parentUuid": "0ec254fa_e6be3423",
+      "range": {
+        "startLine": 15,
+        "startChar": 13,
+        "endLine": 17,
+        "endChar": 0
+      },
+      "revId": "a320a4199c1af8df2b1176495940a70773215993",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
