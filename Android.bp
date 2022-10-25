@@ -63,6 +63,7 @@ rust_binary {
         "libbroker_ipc",
         "libcfg_if",
         "libcros_async",
+        "libcrosvm_cli",
         "libdata_model",
         "libdevices",
         "libdisk",
@@ -95,6 +96,7 @@ rust_binary {
     ],
     proc_macros: [
         "libargh_helpers",
+        "libdocument_features",
         "libenumn",
         "libremain",
     ],
@@ -191,6 +193,7 @@ rust_test {
         "libbroker_ipc",
         "libcfg_if",
         "libcros_async",
+        "libcrosvm_cli",
         "libdata_model",
         "libdevices",
         "libdisk",
@@ -224,6 +227,7 @@ rust_test {
     ],
     proc_macros: [
         "libargh_helpers",
+        "libdocument_features",
         "libenumn",
         "libremain",
     ],
