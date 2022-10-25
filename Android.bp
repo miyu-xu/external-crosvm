@@ -96,7 +96,6 @@ rust_binary {
     ],
     proc_macros: [
         "libargh_helpers",
-        "libdocument_features",
         "libenumn",
         "libremain",
     ],
@@ -227,7 +226,6 @@ rust_test {
     ],
     proc_macros: [
         "libargh_helpers",
-        "libdocument_features",
         "libenumn",
         "libremain",
     ],
