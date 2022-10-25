@@ -51,6 +51,24 @@
       "message": "Is this still needed? I see the bug is open",
       "revId": "374ef88c1b4e0bf716b80c460504f951c5b46206",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "40a25482_bb54ac31",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1088076
+      },
+      "writtenOn": "2022-10-25T04:30:54Z",
+      "side": 1,
+      "message": "no, I don\u0027t plan to merge the revert. It\u0027s impossible to fix the merge conflict at this point. Let\u0027s narrow down to the culprit commit first.",
+      "parentUuid": "4b2d8fa3_cd82921b",
+      "revId": "374ef88c1b4e0bf716b80c460504f951c5b46206",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
