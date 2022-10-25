@@ -69,6 +69,30 @@
       },
       "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "69ed6ac2_4dec2c74",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-25T01:07:29Z",
+      "side": 1,
+      "message": "we might pretty-it, I honestly like the compact format - given some are commented out, it\u0027ll be easier to deal with for a bit :)",
+      "parentUuid": "f2753310_1c4178f2",
+      "range": {
+        "startLine": 7,
+        "startChar": 4,
+        "endLine": 7,
+        "endChar": 41
+      },
+      "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
