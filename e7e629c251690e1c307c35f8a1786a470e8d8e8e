@@ -93,6 +93,30 @@
       },
       "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "789ad43b_bd491f0f",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-25T02:35:14Z",
+      "side": 1,
+      "message": "Keeping it like this for now",
+      "parentUuid": "69ed6ac2_4dec2c74",
+      "range": {
+        "startLine": 7,
+        "startChar": 4,
+        "endLine": 7,
+        "endChar": 41
+      },
+      "revId": "e7e629c251690e1c307c35f8a1786a470e8d8e8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
