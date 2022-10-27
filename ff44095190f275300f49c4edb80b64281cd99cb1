@@ -16,6 +16,23 @@
       "message": "+adelva for OWNERS...",
       "revId": "ff44095190f275300f49c4edb80b64281cd99cb1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ead6b125_b22e24c6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1003224
+      },
+      "writtenOn": "2022-10-27T22:53:51Z",
+      "side": 1,
+      "message": "adelva: this is correct, right? the extra policies aren\u0027t 64-bit versus 32-bit, they\u0027re \"do we support this architecture as the _host_\"?",
+      "revId": "ff44095190f275300f49c4edb80b64281cd99cb1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
