@@ -22,6 +22,30 @@
       },
       "revId": "42d9cecad830d02ebc13fcc6db80c83c447d762b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1b4f7826_9a1abab4",
+        "filename": "cros_fdt/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1359095
+      },
+      "writtenOn": "2022-10-27T16:45:12Z",
+      "side": 1,
+      "message": "cargo2ndroid preserves whatever license is declared, so: yes.",
+      "parentUuid": "d6a823f3_e651c5a0",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 162
+      },
+      "revId": "42d9cecad830d02ebc13fcc6db80c83c447d762b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
