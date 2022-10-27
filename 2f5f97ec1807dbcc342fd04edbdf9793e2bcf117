@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "341140a2_c7d2081b",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-10-27T20:30:53Z",
+      "side": 1,
+      "message": "can you change this to \"ANDROID: Add clone3...\" (if I do it, it\u0027ll need an additional reviewer)?\n\nand also - add this change to chromium upstream? :D",
+      "revId": "2f5f97ec1807dbcc342fd04edbdf9793e2bcf117",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
