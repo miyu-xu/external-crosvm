@@ -155,6 +155,8 @@ const AARCH64_PMU_IRQ: u32 = 7;
 pub enum Error {
     #[error("failed to allocate IRQ number")]
     AllocateIrq,
+    #[error("failed to allocate swiotlb")]
+    AllocateSwiotlb(resources::Error),
     #[error("bios could not be loaded: {0}")]
     BiosLoadFailure(arch::LoadImageError),
     #[error("failed to build arm pvtime memory: {0}")]
@@ -283,6 +285,11 @@ impl arch::LinuxArch for AArch64 {
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
             ));
+        }
+
+        if let Some(size) = components.swiotlb {
+            // memory_regions.push((GuestAddress(0x100_0000_0000 - size), size));
+            memory_regions.push((GuestAddress(AARCH64_PHYS_MEM_START + components.memory_size), size));
         }
 
         Ok(memory_regions)
@@ -590,7 +597,10 @@ impl arch::LinuxArch for AArch64 {
             irq_chip.get_vgic_version() == DeviceKind::ArmVgicV3,
             use_pmu,
             psci_version,
-            components.swiotlb,
+            components.swiotlb.map(|size| {
+                let addr = AARCH64_PHYS_MEM_START + components.memory_size;
+                Ok((Some(addr), size))
+            }).transpose().map_err(Error::AllocateSwiotlb)?,
             bat_mmio_base_and_irq,
             vmwdt_cfg,
         )
