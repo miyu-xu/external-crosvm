@@ -34,6 +34,24 @@
       "parentUuid": "341140a2_c7d2081b",
       "revId": "2f5f97ec1807dbcc342fd04edbdf9793e2bcf117",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e694bd6c_f85b377d",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2022-10-27T20:37:43Z",
+      "side": 1,
+      "message": "https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3988330",
+      "parentUuid": "008fe788_5e00496d",
+      "revId": "2f5f97ec1807dbcc342fd04edbdf9793e2bcf117",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
