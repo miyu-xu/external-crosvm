@@ -121,6 +121,7 @@ pub enum CrossPlatformCommands {
     Battery(BatteryCommand),
     #[cfg(feature = "composite-disk")]
     CreateComposite(CreateCompositeCommand),
+    #[cfg(feature = "qcow")]
     CreateQcow2(CreateQcow2Command),
     Device(DeviceCommand),
     Disk(DiskCommand),
@@ -198,6 +199,7 @@ pub struct CreateCompositeCommand {
     pub partitions: Vec<String>,
 }
 
+#[cfg(feature = "qcow")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "create_qcow2")]
 /// Create Qcow2 image given path and size
@@ -1764,6 +1766,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.vhost_user_blk = cmd.vhost_user_blk;
         cfg.vhost_user_console = cmd.vhost_user_console;
+        cfg.vhost_user_fs = cmd.vhost_user_fs;
         cfg.vhost_user_gpu = cmd.vhost_user_gpu;
         cfg.vhost_user_mac80211_hwsim = cmd.vhost_user_mac80211_hwsim;
         cfg.vhost_user_net = cmd.vhost_user_net;

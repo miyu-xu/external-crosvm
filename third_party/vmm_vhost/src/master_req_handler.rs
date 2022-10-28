@@ -7,22 +7,25 @@ use std::fs::File;
 use std::mem;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
-use std::sync::Mutex;
-
-#[cfg(unix)]
-use super::connection::{socket::Endpoint as SocketEndpoint, EndpointExt};
-use super::message::*;
-use super::HandlerResult;
-#[cfg(unix)]
-use super::{Error, Result};
-#[cfg(unix)]
-use crate::SystemStream;
 #[cfg(unix)]
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use base::AsRawDescriptor;
-#[cfg(unix)]
 use base::RawDescriptor;
+
+#[cfg(unix)]
+use crate::connection::socket::Endpoint as SocketEndpoint;
+#[cfg(unix)]
+use crate::connection::EndpointExt;
+use crate::message::*;
+#[cfg(unix)]
+use crate::Error;
+use crate::HandlerResult;
+#[cfg(unix)]
+use crate::Result;
+#[cfg(unix)]
+use crate::SystemStream;
 
 /// Define services provided by masters for the slave communication channel.
 ///
@@ -463,11 +466,12 @@ impl<S: VhostUserMasterReqHandler> AsRawDescriptor for MasterReqHandler<S> {
 #[cfg(unix)]
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use base::{AsRawDescriptor, INVALID_DESCRIPTOR};
-    #[cfg(feature = "device")]
-    use base::{Descriptor, FromRawDescriptor};
+    use base::AsRawDescriptor;
+    use base::Descriptor;
+    use base::FromRawDescriptor;
+    use base::INVALID_DESCRIPTOR;
 
+    use super::*;
     #[cfg(feature = "device")]
     use crate::Slave;
 
