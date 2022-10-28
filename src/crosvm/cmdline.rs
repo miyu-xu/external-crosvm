@@ -1311,12 +1311,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vhost_net_device_path = p;
         }
 
-        if let Some(p) = cmd.android_fstab {
-            if !p.exists() {
-                return Err(format!("android-fstab path {:?} does not exist", p));
-            }
-            cfg.android_fstab = Some(p);
-        }
+        cfg.android_fstab = cmd.android_fstab;
 
         cfg.params.extend(cmd.params);
 
@@ -1769,6 +1764,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.vhost_user_blk = cmd.vhost_user_blk;
         cfg.vhost_user_console = cmd.vhost_user_console;
+        cfg.vhost_user_fs = cmd.vhost_user_fs;
         cfg.vhost_user_gpu = cmd.vhost_user_gpu;
         cfg.vhost_user_mac80211_hwsim = cmd.vhost_user_mac80211_hwsim;
         cfg.vhost_user_net = cmd.vhost_user_net;
