@@ -107,3 +107,11 @@ rust_test {
         },
     },
 }
+
+// Errors in cargo.out:
+// error: linking with `cc` failed: exit status: 1
+// error: could not compile `rutabaga_gfx` due to previous error
+
+// // Errors when listing tests:
+// // error: linking with `cc` failed: exit status: 1
+// // error: could not compile `rutabaga_gfx` due to previous error

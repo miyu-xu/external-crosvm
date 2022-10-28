@@ -20,6 +20,7 @@ index e3468dba..41e84a72 100644
 +        "libprotobuf",  // Added manually
 +        "libprotos",  // Added manually
          "libserde",
+         "libsync_rust",
          "libtempfile",
          "libthiserror",
 +        "libuuid",  // Added manually

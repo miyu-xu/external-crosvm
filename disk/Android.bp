@@ -32,6 +32,7 @@ rust_test {
         "libfutures",
         "liblibc",
         "libserde",
+        "libsync_rust",
         "libtempfile",
         "libthiserror",
         "libvm_memory",
@@ -65,6 +66,7 @@ rust_library {
         "libprotobuf", // Added manually
         "libprotos", // Added manually
         "libserde",
+        "libsync_rust",
         "libtempfile",
         "libthiserror",
         "libuuid", // Added manually
