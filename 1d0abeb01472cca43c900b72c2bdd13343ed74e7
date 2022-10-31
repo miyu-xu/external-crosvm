@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cecae98c_096dc614",
+        "filename": "/MERGE_LIST",
+        "patchSetId": 1
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-10-31T20:57:47Z",
+      "side": 1,
+      "message": "NOTE: I messed up and used an older commit as the base, so this also includes commits that were actually merged in https://r.android.com/2200200 already. That merge was very simple. I think it has been faithfully reproduced here and there is no issue.",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 67,
+        "endChar": 46
+      },
+      "revId": "1d0abeb01472cca43c900b72c2bdd13343ed74e7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
