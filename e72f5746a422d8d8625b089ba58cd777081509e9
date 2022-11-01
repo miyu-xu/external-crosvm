@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "52a9d286_1b963b6b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-01T20:38:28Z",
+      "side": 1,
+      "message": "As part of the arm64 Linux kernel loader change (https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3976062), I am planning on changing `AARCH64_KERNEL_OFFSET` to 0, effectively loading the kernel (whether it\u0027s an ARM64 Linux image or an ELF) at the very beginning of guest memory.\n\nOnce AARCH64_KERNEL_OFFSET is 0, does this patch affect the final load address? I think it should be equivalent to what this patch is trying to accomplish without changing the ELF code, although I don\u0027t have a setup to verify this locally.",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
