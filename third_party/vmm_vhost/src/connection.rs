@@ -16,17 +16,19 @@ cfg_if::cfg_if! {
     }
 }
 
-use base::RawDescriptor;
 use std::fs::File;
-use std::io::{IoSlice, IoSliceMut};
+use std::io::IoSlice;
+use std::io::IoSliceMut;
 use std::mem;
 use std::path::Path;
 
+use base::RawDescriptor;
 use data_model::DataInit;
 
-use super::message::*;
-use super::{Error, Result};
 use crate::connection::Req;
+use crate::message::*;
+use crate::Error;
+use crate::Result;
 
 /// Listener for accepting connections.
 pub trait Listener: Sized {
