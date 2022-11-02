@@ -34,6 +34,24 @@
       "parentUuid": "52a9d286_1b963b6b",
       "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "495eadc8_37be4441",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-02T10:32:21Z",
+      "side": 1,
+      "message": "Just a note on this -\n\nIt (specifying offset in p_paddr) used to be possible before these changes were introduced. \n\nhttps://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3673613/9/kernel_loader/src/lib.rs\n\nhttps://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/3673612/10/kernel_loader/src/lib.rs\n\nI am trying to bring back that functionality with this change so that both options can be supported with the current code.",
+      "parentUuid": "6259fc9e_21dc555f",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
