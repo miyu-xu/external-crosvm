@@ -16,6 +16,24 @@
       "message": "As part of the arm64 Linux kernel loader change (https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3976062), I am planning on changing `AARCH64_KERNEL_OFFSET` to 0, effectively loading the kernel (whether it\u0027s an ARM64 Linux image or an ELF) at the very beginning of guest memory.\n\nOnce AARCH64_KERNEL_OFFSET is 0, does this patch affect the final load address? I think it should be equivalent to what this patch is trying to accomplish without changing the ELF code, although I don\u0027t have a setup to verify this locally.",
       "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6259fc9e_21dc555f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-02T10:11:06Z",
+      "side": 1,
+      "message": "This change is trying to allow specify offset into guest memory rather that IPA itself in the p_paddr field of ELF program headers.\n\nFor ex, without this change, we need to specify the IPA addresses in p_paddr(PhysAddr) for ELF file as below -\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  LOAD           0x001000 0x80000000 0x80000000 0x9ea008 0x9ea008 RWE 0x1000\n  LOAD           0x9ec000 0x82000000 0x82000000 0x0f439 0x0f439 RWE 0x1000\n  LOAD           0x9fc000 0x82100000 0x82100000 0x1af56d 0x1af56d RWE 0x1000\n  LOAD           0xbac000 0x83fff000 0x83fff000 0x00e8c 0x00e8c RWE 0x1000\n\nWith this change, we can now specify only offset in the p_paddr(PhysAddr) as below:\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  LOAD           0x001000 0x00000000 0x00000000 0x9ea008 0x9ea008 RWE 0x1000\n  LOAD           0x9ec000 0x02000000 0x02000000 0x0f439 0x0f439 RWE 0x1000\n  LOAD           0x9fc000 0x02100000 0x02100000 0x1af56d 0x1af56d RWE 0x1000\n  LOAD           0xbac000 0x03fff000 0x03fff000 0x00e8c 0x00e8c RWE 0x1000\n\nYour change (https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3976062) is also still needed to remove the 8MB offset restriction and that is independent of this change.\n\nThis change is more about accepting the ELF image that can specify offset rather than IPA address. It provides flexibility to the user to not worry about IPA address range to use for ELF file.",
+      "parentUuid": "52a9d286_1b963b6b",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
