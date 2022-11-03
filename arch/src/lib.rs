@@ -54,6 +54,7 @@ use devices::PciDeviceError;
 use devices::PciInterruptPin;
 use devices::PciRoot;
 use devices::PciRootCommand;
+use devices::PreferredIrq;
 #[cfg(unix)]
 use devices::ProxyDevice;
 use devices::SerialHardware;
@@ -473,7 +474,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     // Do not suggest INTx for hot-plug devices.
     let intx_event = devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-    if let Some((pin, gsi)) = device.preferred_irq() {
+    if let PreferredIrq::Fixed { pin, gsi } = device.preferred_irq() {
         resources.reserve_irq(gsi);
 
         device.assign_irq(
@@ -737,11 +738,13 @@ pub fn generate_pci_root(
     resources: &mut SystemAllocator,
     vm: &mut impl Vm,
     max_irqs: usize,
+    vcfg_base: Option<u64>,
 ) -> Result<
     (
         PciRoot,
         Vec<(PciAddress, u32, PciInterruptPin)>,
         BTreeMap<u32, String>,
+        BTreeMap<PciAddress, Vec<u8>>,
     ),
     DeviceRegistrationError,
 > {
@@ -781,66 +784,76 @@ pub fn generate_pci_root(
     for (dev_idx, (device, _jail)) in devices.iter_mut().enumerate() {
         let pci_address = device_addrs[dev_idx];
 
-        let (pin, gsi) = if let Some((pin, gsi)) = device.preferred_irq() {
-            // The device reported a preferred IRQ, so use that rather than allocating one.
-            resources.reserve_irq(gsi);
-            (pin, gsi)
-        } else {
-            // The device did not provide a preferred IRQ, so allocate one.
+        let irq = match device.preferred_irq() {
+            PreferredIrq::Fixed { pin, gsi } => {
+                // The device reported a preferred IRQ, so use that rather than allocating one.
+                resources.reserve_irq(gsi);
+                Some((pin, gsi))
+            }
+            PreferredIrq::Any => {
+                // The device did not provide a preferred IRQ but requested one, so allocate one.
 
-            // Choose a pin based on the slot's function number. Function 0 must always use INTA#
-            // per the PCI spec, and we choose to distribute the remaining functions evenly across
-            // the other pins.
-            let pin = match pci_address.func % 4 {
-                0 => PciInterruptPin::IntA,
-                1 => PciInterruptPin::IntB,
-                2 => PciInterruptPin::IntC,
-                _ => PciInterruptPin::IntD,
-            };
-
-            // If an IRQ number has already been assigned for a different function with this (bus,
-            // device, pin) combination, use it. Otherwise allocate a new one and insert it into the
-            // map.
-            let pin_key = (pci_address.bus, pci_address.dev, pin);
-            let irq_num = if let Some(irq_num) = dev_pin_irq.get(&pin_key) {
-                *irq_num
-            } else {
-                // If we have allocated fewer than `max_irqs` total, add a new irq to the `irqs`
-                // pool. Otherwise, share one of the existing `irqs`.
-                let irq_num = if irqs.len() < max_irqs {
-                    let irq_num = resources
-                        .allocate_irq()
-                        .ok_or(DeviceRegistrationError::AllocateIrq)?;
-                    irqs.push(irq_num);
-                    irq_num
-                } else {
-                    // Pick one of the existing IRQs to share, using `dev_idx` to distribute IRQ
-                    // sharing evenly across devices.
-                    irqs[dev_idx % max_irqs]
+                // Choose a pin based on the slot's function number. Function 0 must always use
+                // INTA# for single-function devices per the PCI spec, and we choose to use INTA#
+                // for function 0 on multifunction devices and distribute the remaining functions
+                // evenly across the other pins.
+                let pin = match pci_address.func % 4 {
+                    0 => PciInterruptPin::IntA,
+                    1 => PciInterruptPin::IntB,
+                    2 => PciInterruptPin::IntC,
+                    _ => PciInterruptPin::IntD,
                 };
 
-                dev_pin_irq.insert(pin_key, irq_num);
-                irq_num
-            };
-            (pin, irq_num)
+                // If an IRQ number has already been assigned for a different function with this
+                // (bus, device, pin) combination, use it. Otherwise allocate a new one and insert
+                // it into the map.
+                let pin_key = (pci_address.bus, pci_address.dev, pin);
+                let irq_num = if let Some(irq_num) = dev_pin_irq.get(&pin_key) {
+                    *irq_num
+                } else {
+                    // If we have allocated fewer than `max_irqs` total, add a new irq to the `irqs`
+                    // pool. Otherwise, share one of the existing `irqs`.
+                    let irq_num = if irqs.len() < max_irqs {
+                        let irq_num = resources
+                            .allocate_irq()
+                            .ok_or(DeviceRegistrationError::AllocateIrq)?;
+                        irqs.push(irq_num);
+                        irq_num
+                    } else {
+                        // Pick one of the existing IRQs to share, using `dev_idx` to distribute IRQ
+                        // sharing evenly across devices.
+                        irqs[dev_idx % max_irqs]
+                    };
+
+                    dev_pin_irq.insert(pin_key, irq_num);
+                    irq_num
+                };
+                Some((pin, irq_num))
+            }
+            PreferredIrq::None => {
+                // The device does not want an INTx# IRQ.
+                None
+            }
         };
 
-        let intx_event =
-            devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
+        if let Some((pin, gsi)) = irq {
+            let intx_event =
+                devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-        device.assign_irq(
-            intx_event
-                .try_clone()
-                .map_err(DeviceRegistrationError::EventClone)?,
-            pin,
-            gsi,
-        );
+            device.assign_irq(
+                intx_event
+                    .try_clone()
+                    .map_err(DeviceRegistrationError::EventClone)?,
+                pin,
+                gsi,
+            );
 
-        irq_chip
-            .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
-            .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+            irq_chip
+                .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
+                .map_err(DeviceRegistrationError::RegisterIrqfd)?;
 
-        pci_irqs.push((pci_address, gsi, pin));
+            pci_irqs.push((pci_address, gsi, pin));
+        }
     }
 
     // To prevent issues where device's on_sandbox may spawn thread before all
@@ -854,6 +867,7 @@ pub fn generate_pci_root(
             .partition(|(_, (_, jail))| jail.is_some());
         sandboxed.into_iter().chain(non_sandboxed.into_iter())
     };
+    let mut amls = BTreeMap::new();
     for (dev_idx, dev_value) in devices {
         #[cfg(unix)]
         let (mut device, jail) = dev_value;
@@ -875,6 +889,21 @@ pub fn generate_pci_root(
             vm.register_ioevent(event, io_addr, datamatch)
                 .map_err(DeviceRegistrationError::RegisterIoevent)?;
             keep_rds.push(event.as_raw_descriptor());
+        }
+
+        if let Some(vcfg_base) = vcfg_base {
+            let (methods, shm) = device.generate_acpi_methods();
+            if !methods.is_empty() {
+                amls.insert(address, methods);
+            }
+            if let Some((offset, mmap)) = shm {
+                let _ = vm.add_memory_region(
+                    GuestAddress(vcfg_base + offset as u64),
+                    Box::new(mmap),
+                    false,
+                    false,
+                );
+            }
         }
 
         #[cfg(unix)]
@@ -906,7 +935,7 @@ pub fn generate_pci_root(
         }
     }
 
-    Ok((root, pci_irqs, pid_labels))
+    Ok((root, pci_irqs, pid_labels, amls))
 }
 
 /// Errors for image loading.
