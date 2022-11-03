@@ -44,6 +44,7 @@ rust_binary {
     features: [
         "audio",
         "balloon",
+        "qcow",
         "usb",
     ],
     rustlibs: [
@@ -164,6 +165,7 @@ rust_test {
     features: [
         "audio",
         "balloon",
+        "qcow",
         "usb",
     ],
     rustlibs: [
