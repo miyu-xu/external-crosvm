@@ -53,6 +53,7 @@ rust_library {
     srcs: ["src/disk.rs"],
     edition: "2021",
     features: [
+        "android-sparse", // Added manually
         "composite-disk", // Added manually
         "qcow",
     ],
