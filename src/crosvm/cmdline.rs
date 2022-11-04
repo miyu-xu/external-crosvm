@@ -1561,6 +1561,10 @@ pub struct RunCommand {
     /// path to the vhost-net device. (default /dev/vhost-net)
     pub vhost_net_device: Option<PathBuf>,
 
+    #[argh(switch)]
+    /// use vhost for scmi
+    pub vhost_scmi: bool,
+
     #[argh(option, arg_name = "SOCKET_PATH")]
     /// path to a socket for vhost-user block
     pub vhost_user_blk: Vec<VhostUserOption>,
@@ -2004,6 +2008,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.vhost_net = cmd.vhost_net;
+
+        cfg.vhost_scmi = cmd.vhost_scmi;
 
         #[cfg(feature = "tpm")]
         {

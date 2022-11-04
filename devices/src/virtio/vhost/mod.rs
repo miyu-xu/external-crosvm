@@ -26,10 +26,14 @@ cfg_if::cfg_if! {
     if #[cfg(unix)] {
         mod net;
         pub mod vsock;
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        pub mod scmi;
         mod worker;
 
         pub use self::net::Net;
         pub use self::vsock::Vsock;
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        pub use self::scmi::Scmi;
     } else if #[cfg(windows)] {}
 }
 
@@ -87,6 +91,9 @@ pub enum Error {
     /// Failed to open vhost device.
     #[error("failed to open vhost device: {0}")]
     VhostOpen(VhostError),
+    /// Failed to start vhost-scmi driver.
+    #[error("failed to start vhost-scmi driver: {0}")]
+    VhostScmiStart(VhostError),
     /// Set features failed.
     #[error("failed to set features: {0}")]
     VhostSetFeatures(VhostError),
