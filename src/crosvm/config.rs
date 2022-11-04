@@ -73,6 +73,7 @@ cfg_if::cfg_if! {
 
         static KVM_PATH: &str = "/dev/kvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
+        static VHOST_SCMI_PATH: &str = "/dev/vhost-scmi";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
 
@@ -1197,6 +1198,9 @@ pub struct Config {
     pub vhost_net: bool,
     #[cfg(unix)]
     pub vhost_net_device_path: PathBuf,
+    pub vhost_scmi: bool,
+    #[cfg(unix)]
+    pub vhost_scmi_device: PathBuf,
     pub vhost_user_blk: Vec<VhostUserOption>,
     pub vhost_user_console: Vec<VhostUserOption>,
     pub vhost_user_fs: Vec<VhostUserFsOption>,
@@ -1408,6 +1412,9 @@ impl Default for Config {
             vhost_net: false,
             #[cfg(unix)]
             vhost_net_device_path: PathBuf::from(VHOST_NET_PATH),
+            vhost_scmi: false,
+            #[cfg(unix)]
+            vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),
             vhost_user_video_dec: Vec::new(),
