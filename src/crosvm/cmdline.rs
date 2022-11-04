@@ -2143,6 +2143,13 @@ pub struct RunCommand {
     /// path to the vhost-net device. (default /dev/vhost-net)
     pub vhost_net_device: Option<PathBuf>,
 
+    #[cfg(unix)]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[argh(switch)]
+    #[merge(strategy = overwrite_option)]
+    /// use vhost for scmi
+    pub vhost_scmi: Option<bool>,
+
     #[argh(option, arg_name = "SOCKET_PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
@@ -2758,6 +2765,12 @@ impl TryFrom<RunCommand> for super::config::Config {
                     }
                 }
             }
+        }
+
+        #[cfg(unix)]
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        {
+            cfg.vhost_scmi = cmd.vhost_scmi.unwrap_or_default();
         }
 
         #[cfg(feature = "tpm")]
