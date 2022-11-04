@@ -133,6 +133,7 @@ pub enum DeviceType {
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     VhostUser = virtio_ids::VIRTIO_ID_VHOST_USER,
+    Scmi = virtio_ids::VIRTIO_ID_SCMI,
 }
 
 /// Prints a string representation of the given virtio device type.
@@ -163,6 +164,7 @@ impl std::fmt::Display for DeviceType {
             DeviceType::VideoDec => write!(f, "video-decoder"),
             DeviceType::VideoEnc => write!(f, "video-encoder"),
             DeviceType::Mac80211HwSim => write!(f, "mac-80211-hw-sim"),
+            DeviceType::Scmi => write!(f, "scmi"),
         }
     }
 }
