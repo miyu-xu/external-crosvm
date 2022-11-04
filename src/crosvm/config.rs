@@ -81,6 +81,7 @@ cfg_if::cfg_if! {
         use libc::{getegid, geteuid};
 
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
+        static VHOST_SCMI_PATH: &str = "/dev/vhost-scmi";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
     }
@@ -1214,6 +1215,11 @@ pub struct Config {
     pub vfio_isolate_hotplug: bool,
     #[cfg(unix)]
     pub vhost_net_device_path: PathBuf,
+    #[cfg(unix)]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub vhost_scmi: bool,
+    #[cfg(unix)]
+    pub vhost_scmi_device: PathBuf,
     pub vhost_user_blk: Vec<VhostUserOption>,
     pub vhost_user_console: Vec<VhostUserOption>,
     pub vhost_user_fs: Vec<VhostUserFsOption>,
@@ -1424,6 +1430,11 @@ impl Default for Config {
             vfio_isolate_hotplug: false,
             #[cfg(unix)]
             vhost_net_device_path: PathBuf::from(VHOST_NET_PATH),
+            #[cfg(unix)]
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            vhost_scmi: false,
+            #[cfg(unix)]
+            vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),
             vhost_user_video_dec: Vec::new(),
