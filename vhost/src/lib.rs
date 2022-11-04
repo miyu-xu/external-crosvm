@@ -6,6 +6,7 @@
 
 #[cfg(unix)]
 pub mod net;
+mod scmi;
 mod vsock;
 
 use std::alloc::Layout;
@@ -30,6 +31,7 @@ use vm_memory::GuestMemoryError;
 pub use crate::net::Net;
 #[cfg(unix)]
 pub use crate::net::NetT;
+pub use crate::scmi::Scmi;
 pub use crate::vsock::Vsock;
 
 #[sorted]

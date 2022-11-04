@@ -21,3 +21,4 @@ pub const VIRTIO_F_IOMMU_PLATFORM: u32 = 33;
 pub const VIRTIO_F_RING_PACKED: u32 = 34;
 pub const VIRTIO_F_ORDER_PLATFORM: u32 = 36;
 pub const VIRTIO_F_SR_IOV: u32 = 37;
+pub const VIRTIO_SCMI_F_P2A_CHANNELS: ::std::os::raw::c_uint = 0;

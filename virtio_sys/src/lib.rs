@@ -75,3 +75,4 @@ ioctl_iow_nr!(
     ::std::os::raw::c_ulonglong
 );
 ioctl_iow_nr!(VHOST_VSOCK_SET_RUNNING, VHOST, 0x61, ::std::os::raw::c_int);
+ioctl_iow_nr!(VHOST_SCMI_SET_RUNNING, VHOST, 0x81, ::std::os::raw::c_int);
