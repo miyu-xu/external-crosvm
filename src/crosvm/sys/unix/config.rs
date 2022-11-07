@@ -20,6 +20,8 @@ use devices::SerialParameters;
 use serde::Deserialize;
 use serde::Serialize;
 
+#[cfg(feature = "gpu")]
+use crate::crosvm::cmdline::FixedGpuParameters;
 use crate::crosvm::config::invalid_value_err;
 use crate::crosvm::config::Config;
 
@@ -36,47 +38,6 @@ impl FromStr for HypervisorKind {
             "kvm" => Ok(HypervisorKind::Kvm),
             _ => Err("invalid hypervisor backend"),
         }
-    }
-}
-
-#[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
-pub fn parse_gpu_render_server_options(
-    s: &str,
-) -> Result<crate::crosvm::sys::GpuRenderServerParameters, String> {
-    use crate::crosvm::sys::GpuRenderServerParameters;
-
-    let mut path: Option<PathBuf> = None;
-    let mut cache_path = None;
-    let mut cache_size = None;
-
-    let opts = s
-        .split(',')
-        .map(|frag| frag.split('='))
-        .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-    for (k, v) in opts {
-        match k {
-            "path" => path = Some(PathBuf::from_str(v).map_err(|e| invalid_value_err(v, e))?),
-            "cache-path" => cache_path = Some(v.to_string()),
-            "cache-size" => cache_size = Some(v.to_string()),
-            "" => {}
-            _ => {
-                return Err(format!("invalid gpu-render-server parameter {}", k));
-            }
-        }
-    }
-
-    if let Some(p) = path {
-        Ok(GpuRenderServerParameters {
-            path: p,
-            cache_path,
-            cache_size,
-        })
-    } else {
-        Err(invalid_value_err(
-            s,
-            "gpu-render-server must include 'path'",
-        ))
     }
 }
 
@@ -126,10 +87,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
 }
 
 #[cfg(feature = "gpu")]
-pub fn parse_gpu_options(s: &str) -> Result<GpuParameters, String> {
-    use crate::crosvm::config::from_key_values;
-    let mut gpu_params: GpuParameters = from_key_values(s)?;
-
+pub fn fixup_gpu_options(mut gpu_params: GpuParameters) -> Result<FixedGpuParameters, String> {
     if let (Some(width), Some(height)) = (
         gpu_params.__width_compat.take(),
         gpu_params.__height_compat.take(),
@@ -157,7 +115,7 @@ pub fn parse_gpu_options(s: &str) -> Result<GpuParameters, String> {
         }
     }
 
-    Ok(gpu_params)
+    Ok(FixedGpuParameters(gpu_params))
 }
 
 #[cfg(feature = "gpu")]
@@ -340,6 +298,12 @@ mod tests {
         parse_ac97_options("socket_type=legacy").expect("parse should have succeded");
     }
 
+    /// Parses and fix up a `GpuParameters` from a command-line option string.
+    #[cfg(feature = "gpu")]
+    fn parse_gpu_options(s: &str) -> Result<GpuParameters, String> {
+        from_key_values::<FixedGpuParameters>(s).map(|p| p.0)
+    }
+
     #[test]
     fn parse_coiommu_options() {
         use std::time::Duration;
@@ -431,24 +395,27 @@ mod tests {
     fn parse_gpu_options_mode() {
         use devices::virtio::gpu::GpuMode;
 
-        let gpu_params: GpuParameters = from_key_values("backend=2d").unwrap();
+        let gpu_params = parse_gpu_options("backend=2d").unwrap();
         assert_eq!(gpu_params.mode, GpuMode::Mode2D);
 
-        let gpu_params: GpuParameters = from_key_values("backend=2D").unwrap();
+        let gpu_params = parse_gpu_options("backend=2D").unwrap();
         assert_eq!(gpu_params.mode, GpuMode::Mode2D);
 
-        let gpu_params: GpuParameters = from_key_values("backend=3d").unwrap();
-        assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
+        #[cfg(feature = "virgl_renderer")]
+        {
+            let gpu_params = parse_gpu_options("backend=3d").unwrap();
+            assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
 
-        let gpu_params: GpuParameters = from_key_values("backend=3D").unwrap();
-        assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
+            let gpu_params = parse_gpu_options("backend=3D").unwrap();
+            assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
 
-        let gpu_params: GpuParameters = from_key_values("backend=virglrenderer").unwrap();
-        assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
+            let gpu_params = parse_gpu_options("backend=virglrenderer").unwrap();
+            assert_eq!(gpu_params.mode, GpuMode::ModeVirglRenderer);
+        }
 
         #[cfg(feature = "gfxstream")]
         {
-            let gpu_params: GpuParameters = from_key_values("backend=gfxstream").unwrap();
+            let gpu_params = parse_gpu_options("backend=gfxstream").unwrap();
             assert_eq!(gpu_params.mode, GpuMode::ModeGfxstream);
         }
     }
@@ -462,7 +429,7 @@ mod tests {
             };
         }
 
-        let gpu_params: GpuParameters = from_key_values("").unwrap();
+        let gpu_params = parse_gpu_options("").unwrap();
         assert_default!(gpu_params.renderer_use_egl);
         assert_default!(gpu_params.renderer_use_gles);
         assert_default!(gpu_params.renderer_use_glx);
@@ -470,7 +437,7 @@ mod tests {
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
-        let gpu_params: GpuParameters = from_key_values("egl=false,gles=false").unwrap();
+        let gpu_params = parse_gpu_options("egl=false,gles=false").unwrap();
         assert_eq!(gpu_params.renderer_use_egl, false);
         assert_eq!(gpu_params.renderer_use_gles, false);
         assert_default!(gpu_params.renderer_use_glx);
@@ -478,7 +445,7 @@ mod tests {
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
-        let gpu_params: GpuParameters = from_key_values("surfaceless=false,glx").unwrap();
+        let gpu_params = parse_gpu_options("surfaceless=false,glx").unwrap();
         assert_default!(gpu_params.renderer_use_egl);
         assert_default!(gpu_params.renderer_use_gles);
         assert_eq!(gpu_params.renderer_use_surfaceless, false);
@@ -486,7 +453,7 @@ mod tests {
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
-        let gpu_params: GpuParameters = from_key_values("vulkan,udmabuf").unwrap();
+        let gpu_params = parse_gpu_options("vulkan,udmabuf").unwrap();
         assert_default!(gpu_params.renderer_use_egl);
         assert_default!(gpu_params.renderer_use_gles);
         assert_default!(gpu_params.renderer_use_glx);
@@ -494,53 +461,50 @@ mod tests {
         assert_eq!(gpu_params.use_vulkan, Some(true));
         assert_eq!(gpu_params.udmabuf, true);
 
-        assert!(from_key_values::<GpuParameters>("egl=false,gles=true,foomatic").is_err());
+        assert!(parse_gpu_options("egl=false,gles=true,foomatic").is_err());
     }
 
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_default_vulkan_support() {
+        #[cfg(feature = "virgl_renderer")]
         {
-            let gpu_params: GpuParameters = parse_gpu_options("backend=virglrenderer").unwrap();
+            let gpu_params = parse_gpu_options("backend=virglrenderer").unwrap();
             assert_eq!(gpu_params.use_vulkan, None);
         }
 
         #[cfg(feature = "gfxstream")]
         {
-            let gpu_params: GpuParameters = parse_gpu_options("backend=gfxstream").unwrap();
+            let gpu_params = parse_gpu_options("backend=gfxstream").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(true));
         }
     }
 
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", feature = "virglrenderer"))]
     #[test]
     fn parse_gpu_options_with_vulkan_specified() {
         {
-            let gpu_params: GpuParameters = from_key_values("vulkan=true").unwrap();
+            let gpu_params = parse_gpu_options("vulkan=true").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(true));
         }
         {
-            let gpu_params: GpuParameters =
-                parse_gpu_options("backend=virglrenderer,vulkan=true").unwrap();
+            let gpu_params = parse_gpu_options("backend=virglrenderer,vulkan=true").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(true));
         }
         {
-            let gpu_params: GpuParameters =
-                parse_gpu_options("vulkan=true,backend=virglrenderer").unwrap();
+            let gpu_params = parse_gpu_options("vulkan=true,backend=virglrenderer").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(true));
         }
         {
-            let gpu_params: GpuParameters = parse_gpu_options("vulkan=false").unwrap();
+            let gpu_params = parse_gpu_options("vulkan=false").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(false));
         }
         {
-            let gpu_params: GpuParameters =
-                parse_gpu_options("backend=virglrenderer,vulkan=false").unwrap();
+            let gpu_params = parse_gpu_options("backend=virglrenderer,vulkan=false").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(false));
         }
         {
-            let gpu_params: GpuParameters =
-                parse_gpu_options("vulkan=false,backend=virglrenderer").unwrap();
+            let gpu_params = parse_gpu_options("vulkan=false,backend=virglrenderer").unwrap();
             assert_eq!(gpu_params.use_vulkan, Some(false));
         }
         {
@@ -551,19 +515,18 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", feature = "virgl_renderer"))]
     #[test]
     fn parse_gpu_options_gfxstream_with_wsi_specified() {
         use rutabaga_gfx::RutabagaWsi;
 
-        let gpu_params: GpuParameters = parse_gpu_options("backend=virglrenderer,wsi=vk").unwrap();
+        let gpu_params = parse_gpu_options("backend=virglrenderer,wsi=vk").unwrap();
         assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
 
-        let gpu_params: GpuParameters =
-            parse_gpu_options("backend=virglrenderer,wsi=vulkan").unwrap();
+        let gpu_params = parse_gpu_options("backend=virglrenderer,wsi=vulkan").unwrap();
         assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
 
-        let gpu_params: GpuParameters = parse_gpu_options("wsi=vk,backend=virglrenderer").unwrap();
+        let gpu_params = parse_gpu_options("wsi=vk,backend=virglrenderer").unwrap();
         assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
 
         assert!(parse_gpu_options("backend=virglrenderer,wsi=invalid_value").is_err());
@@ -577,8 +540,7 @@ mod tests {
         use rutabaga_gfx::RUTABAGA_CAPSET_CROSS_DOMAIN;
         use rutabaga_gfx::RUTABAGA_CAPSET_VIRGL;
 
-        let gpu_params: GpuParameters =
-            from_key_values("context-types=virgl:cross-domain").unwrap();
+        let gpu_params = parse_gpu_options("context-types=virgl:cross-domain").unwrap();
         assert_eq!(
             gpu_params.context_mask,
             (1 << RUTABAGA_CAPSET_VIRGL) | (1 << RUTABAGA_CAPSET_CROSS_DOMAIN)
@@ -588,8 +550,7 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_cache() {
-        let gpu_params: GpuParameters =
-            from_key_values("cache-path=/path/to/cache,cache-size=16384").unwrap();
+        let gpu_params = parse_gpu_options("cache-path=/path/to/cache,cache-size=16384").unwrap();
         assert_eq!(gpu_params.cache_path, Some("/path/to/cache".into()));
         assert_eq!(gpu_params.cache_size, Some("16384".into()));
     }
@@ -597,7 +558,7 @@ mod tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn parse_gpu_options_pci_bar() {
-        let gpu_params: GpuParameters = from_key_values("pci-bar-size=0x100000").unwrap();
+        let gpu_params = parse_gpu_options("pci-bar-size=0x100000").unwrap();
         assert_eq!(gpu_params.pci_bar_size, 0x100000);
     }
 

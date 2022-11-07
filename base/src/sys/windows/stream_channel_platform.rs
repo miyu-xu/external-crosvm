@@ -19,11 +19,11 @@ use super::named_pipes::PipeConnection;
 use super::stream_channel::BlockingMode;
 use super::stream_channel::FramingMode;
 use super::MultiProcessMutex;
-use super::PlatformEvent;
 use super::RawDescriptor;
 use super::Result;
 use crate::descriptor::AsRawDescriptor;
 use crate::CloseNotifier;
+use crate::Event;
 use crate::ReadNotifier;
 
 impl From<FramingMode> for named_pipes::FramingMode {
@@ -59,9 +59,9 @@ pub const DEFAULT_BUFFER_SIZE: usize = 50 * 1024;
 #[derive(Deserialize, Debug)]
 pub struct StreamChannel {
     pipe_conn: named_pipes::PipeConnection,
-    write_notify: PlatformEvent,
-    read_notify: PlatformEvent,
-    pipe_closed: PlatformEvent,
+    write_notify: Event,
+    read_notify: Event,
+    pipe_closed: Event,
 
     // Held when reading on this end, to prevent additional writes from corrupting notification
     // state.
@@ -305,8 +305,8 @@ impl StreamChannel {
         pipe_b: PipeConnection,
         send_buffer_size: usize,
     ) -> Result<(StreamChannel, StreamChannel)> {
-        let (notify_a_write, notify_b_write) = (PlatformEvent::new()?, PlatformEvent::new()?);
-        let pipe_closed = PlatformEvent::new()?;
+        let (notify_a_write, notify_b_write) = (Event::new()?, Event::new()?);
+        let pipe_closed = Event::new()?;
 
         let write_lock_a = MultiProcessMutex::new()?;
         let write_lock_b = MultiProcessMutex::new()?;
@@ -371,7 +371,7 @@ impl StreamChannel {
     /// Blocks until the pipe buffer is empty.
     /// NOTE: that this will only work for server pipes on Windows.
     pub fn flush_blocking(&self) -> io::Result<()> {
-        self.pipe_conn.flush_data_blocking().map_err(|e| e)
+        self.pipe_conn.flush_data_blocking()
     }
 }
 
