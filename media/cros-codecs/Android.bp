@@ -10,30 +10,11 @@ package {
     default_applicable_licenses: ["external_crosvm_license"],
 }
 
-rust_library {
-    name: "libvp8",
-    defaults: ["crosvm_defaults"],
-    host_supported: true,
-    crate_name: "vp8",
-    cargo_env_compat: true,
-    cargo_pkg_version: "0.1.0",
-    srcs: ["src/lib.rs"],
-    edition: "2021",
-    rustlibs: [
-        "libanyhow",
-        "libbytes",
-        "liblog_rust",
-    ],
-    apex_available: [
-        "//apex_available:platform",
-    ],
-}
-
 rust_test {
-    name: "vp8_test_src_lib",
+    name: "cros-codecs_test_src_lib",
     defaults: ["crosvm_defaults"],
     host_supported: true,
-    crate_name: "vp8",
+    crate_name: "cros_codecs",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
@@ -45,7 +26,36 @@ rust_test {
     edition: "2021",
     rustlibs: [
         "libanyhow",
+        "libbitreader",
         "libbytes",
+        "libcrc32fast",
+        "libdowncast_rs",
         "liblog_rust",
+        "libthiserror",
+    ],
+    proc_macros: ["libenumn"],
+}
+
+rust_library {
+    name: "libcros_codecs",
+    defaults: ["crosvm_defaults"],
+    host_supported: true,
+    crate_name: "cros_codecs",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libanyhow",
+        "libbitreader",
+        "libbytes",
+        "libcrc32fast",
+        "libdowncast_rs",
+        "liblog_rust",
+        "libthiserror",
+    ],
+    proc_macros: ["libenumn"],
+    apex_available: [
+        "//apex_available:platform",
     ],
 }
