@@ -13,11 +13,10 @@ package {
 rust_test {
     name: "base_test_src_lib",
     defaults: ["crosvm_defaults"],
-    // has rustc warnings
+    // Manually modified to false. run_c2a was failing with the patch
     host_supported: false, // Can't seem to access syslog in TH host tests.
     crate_name: "base",
     cargo_env_compat: true,
-    cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
@@ -27,6 +26,80 @@ rust_test {
     edition: "2021",
     rustlibs: [
         "libaudio_streams",
+        "libcfg_if",
+        "libchrono",
+        "libdata_model",
+        "libenv_logger",
+        "liblibc",
+        "liblog_rust",
+        "libonce_cell",
+        "libserde",
+        "libserde_json",
+        "libsmallvec",
+        "libsync_rust",
+        "libtempfile",
+        "libthiserror",
+        "libuuid",
+    ],
+    proc_macros: [
+        "libbase_event_token_derive",
+        "libremain",
+    ],
+}
+
+rust_test {
+    name: "base_test_tests_tube",
+    defaults: ["crosvm_defaults"],
+    host_supported: true,
+    crate_name: "tube",
+    cargo_env_compat: true,
+    srcs: ["tests/tube.rs"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    test_options: {
+        unit_test: true,
+    },
+    edition: "2021",
+    rustlibs: [
+        "libaudio_streams",
+        "libbase_rust",
+        "libcfg_if",
+        "libchrono",
+        "libdata_model",
+        "libenv_logger",
+        "liblibc",
+        "liblog_rust",
+        "libonce_cell",
+        "libserde",
+        "libserde_json",
+        "libsmallvec",
+        "libsync_rust",
+        "libtempfile",
+        "libthiserror",
+        "libuuid",
+    ],
+    proc_macros: [
+        "libbase_event_token_derive",
+        "libremain",
+    ],
+}
+
+rust_test {
+    name: "base_test_tests_unix_main",
+    defaults: ["crosvm_defaults"],
+    host_supported: true,
+    crate_name: "unix",
+    cargo_env_compat: true,
+    srcs: ["tests/unix/main.rs"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    test_options: {
+        unit_test: true,
+    },
+    edition: "2021",
+    rustlibs: [
+        "libaudio_streams",
+        "libbase_rust",
         "libcfg_if",
         "libchrono",
         "libdata_model",
@@ -71,11 +144,9 @@ rust_library {
     name: "libbase_rust",
     defaults: ["crosvm_defaults"],
     stem: "libbase",
-    // has rustc warnings
     host_supported: true,
     crate_name: "base",
     cargo_env_compat: true,
-    cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
     rustlibs: [
