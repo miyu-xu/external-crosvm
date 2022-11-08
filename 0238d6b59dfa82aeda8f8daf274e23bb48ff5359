@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9091c4cf_ec033b86",
+        "filename": "media/cros-codecs/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-11-08T23:41:26Z",
+      "side": 0,
+      "message": "can you put the license back?",
+      "range": {
+        "startLine": 3,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 0
+      },
+      "revId": "0238d6b59dfa82aeda8f8daf274e23bb48ff5359",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
