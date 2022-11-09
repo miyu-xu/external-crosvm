@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "6a90f857_feb85de5",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-11-09T19:36:30Z",
+      "side": 1,
+      "message": "I haven\u0027t actually - but I\u0027m not sure what the reason behind that patch initially failing is. Would love some guidance!",
+      "parentUuid": "88f63dee_c5a29d67",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 16,
+        "endChar": 69
+      },
+      "revId": "ca4173053199c6ea3631dc6ccb97c96c0be2e9fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6e14de8e_b8fe501b",
         "filename": "base/Android.bp",
         "patchSetId": 1
@@ -37,6 +61,30 @@
       "writtenOn": "2022-11-08T23:31:30Z",
       "side": 1,
       "message": "add this to TEST_MAPPING or add a bug to add it after this merges?",
+      "range": {
+        "startLine": 51,
+        "startChar": 11,
+        "endLine": 51,
+        "endChar": 31
+      },
+      "revId": "ca4173053199c6ea3631dc6ccb97c96c0be2e9fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "181a23a1_b84561e4",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 51,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-11-09T19:36:30Z",
+      "side": 1,
+      "message": "Done - added in a separate CL",
+      "parentUuid": "6e14de8e_b8fe501b",
       "range": {
         "startLine": 51,
         "startChar": 11,
@@ -66,6 +114,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "18064287_14b31d07",
+        "filename": "gpu_display/cargo2android.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-11-09T19:36:30Z",
+      "side": 1,
+      "message": "cargo2android was complaining: ERROR: Unable to retrieve package version for all of these packages.\n\nAnd done.",
+      "parentUuid": "3738a0a6_08669303",
+      "revId": "ca4173053199c6ea3631dc6ccb97c96c0be2e9fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6efa90f6_5b75bf5f",
         "filename": "x86_64/Android.bp",
         "patchSetId": 1
@@ -77,6 +143,30 @@
       "writtenOn": "2022-11-08T23:31:30Z",
       "side": 1,
       "message": "(same for all tests)",
+      "range": {
+        "startLine": 139,
+        "startChar": 11,
+        "endLine": 139,
+        "endChar": 45
+      },
+      "revId": "ca4173053199c6ea3631dc6ccb97c96c0be2e9fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1e93f260_86c8891b",
+        "filename": "x86_64/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 139,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-11-09T19:36:30Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "6efa90f6_5b75bf5f",
       "range": {
         "startLine": 139,
         "startChar": 11,
