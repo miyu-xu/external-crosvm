@@ -48,6 +48,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8a39bd1d_7f7e1f40",
+        "filename": "base/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-11-09T22:11:28Z",
+      "side": 1,
+      "message": "Figured out - Done in separate CL",
+      "parentUuid": "6a90f857_feb85de5",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 16,
+        "endChar": 69
+      },
+      "revId": "ca4173053199c6ea3631dc6ccb97c96c0be2e9fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6e14de8e_b8fe501b",
