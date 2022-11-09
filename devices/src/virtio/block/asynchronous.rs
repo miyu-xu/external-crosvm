@@ -86,7 +86,7 @@ use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
 
 const DEFAULT_QUEUE_SIZE: u16 = 256;
-pub const DEFAULT_NUM_QUEUES: u16 = 16;
+pub const DEFAULT_NUM_QUEUES: u16 = 1;
 
 const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = 0x01 << SECTOR_SHIFT;
