@@ -1172,6 +1172,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         pcie_ecam: cfg.pcie_ecam,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         pci_low_start: cfg.pci_low_start,
+        use_fixed_memory: cfg.use_fixed_memory,
+        vm_name: cfg.vm_name.clone(),
     })
 }
 
@@ -1226,14 +1228,29 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
 }
 
 #[cfg(feature = "gunyah")]
-fn run_gh(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
+fn run_gh(cfg: Config, mut components: VmComponents) -> Result<ExitState> {
     use devices::GunyahKernelIrqChip;
     use hypervisor::gunyah::{GunyahVcpu, GunyahVm, Gunyah};
+    let vm;
 
     let gh = Gunyah::new_with_path(&&cfg.gunyah_device_path).with_context(|| {
         format!("failed to open Gunyah device {}", cfg.gunyah_device_path.display())
     })?;
-    let vm = GunyahVm::new(&gh, guest_mem, components.protected_vm).context("failed to create vm")?;
+    if !components.use_fixed_memory {
+        let guest_mem = prepare_guest_memory(&cfg, &components)?;
+
+        vm = GunyahVm::new(&gh, guest_mem, components.protected_vm).context("failed to create vm")?;
+    } else {
+        let guest_mem_layout =
+            Arch::guest_memory_layout(&components).context("failed to create guest memory layout")?;
+
+        let vm_name = components.vm_name.as_ref().unwrap();
+        vm = GunyahVm::new_guestmem_with_fixed_memory(&gh, &guest_mem_layout,
+                        vm_name,
+                        components.protected_vm).context("failed to create vm")?;
+
+        components.memory_size = vm.get_memory().memory_size();
+    }
 
     // Check that the VM was actually created in protected mode as expected.
     if matches!(
@@ -1362,7 +1379,24 @@ fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
     let components = setup_vm_components(&cfg)?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
+    let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
+    debug!("creating {:?} hypervisor", hypervisor);
+
+    match hypervisor {
+        HypervisorKind::Kvm => {
+            let guest_mem = prepare_guest_memory(&cfg, &components)?;
+            run_kvm(cfg, components, guest_mem)
+        },
+        #[cfg(feature = "gunyah")]
+        HypervisorKind::Gunyah => {
+            run_gh(cfg, components)
+        },
+    }
+}
+
+pub fn prepare_guest_memory(cfg: &Config, components: &VmComponents) -> Result<GuestMemory> {
     let guest_mem_layout =
         Arch::guest_memory_layout(&components).context("failed to create guest memory layout")?;
 
@@ -1379,17 +1413,7 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
         mem_policy |= MemoryPolicy::LOCK_GUEST_MEMORY;
     }
     guest_mem.set_memory_policy(mem_policy);
-
-    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
-    let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
-
-    debug!("creating {:?} hypervisor", hypervisor);
-
-    match hypervisor {
-        HypervisorKind::Kvm => run_kvm(cfg, components, guest_mem),
-        #[cfg(feature = "gunyah")]
-        HypervisorKind::Gunyah => run_gh(cfg, components, guest_mem),
-    }
+    Ok(guest_mem)
 }
 
 fn run_vm<Vcpu, V>(

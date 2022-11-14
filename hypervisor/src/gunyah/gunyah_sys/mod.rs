@@ -26,6 +26,7 @@ ioctl_iowr_nr!(GH_VM_IOEVENTFD, GH_IOCTL_TYPE, 0x45, gh_ioeventfd);
 ioctl_iow_nr!(GH_VM_IRQFD, GH_IOCTL_TYPE, 0x46, gh_irqfd);
 ioctl_iowr_nr!(GH_VM_CREATE_DEVICE, GH_IOCTL_TYPE, 0x47, gh_create_device);
 ioctl_io_nr!(GH_VM_CHECK_EXTENSION, GH_IOCTL_TYPE, 0x48);
+ioctl_iow_nr!(GH_SET_VM_NAME, GH_IOCTL_TYPE, 0x49, fw_name);
 
 /* vcpu ioctls */
 ioctl_io_nr!(GH_VCPU_RUN, GH_IOCTL_TYPE, 0x80);

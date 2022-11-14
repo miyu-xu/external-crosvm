@@ -11,7 +11,7 @@ use libc::{EFAULT, EINVAL, EIO, ENOENT, ENOSPC, EOVERFLOW, ENOTSUP};
 use base::{
     errno_result, ioctl_with_ref, ioctl_with_val, pagesize, AsRawDescriptor, Error, Event,
     FromRawDescriptor, MappedRegion, MmapError, Protection, RawDescriptor, Result, SafeDescriptor,
-    ioctl_with_mut_ref,
+    ioctl_with_mut_ref, info,
 };
 use sync::Mutex;
 use vm_memory::{GuestAddress, GuestMemory};
@@ -41,7 +41,9 @@ use base::MemoryMappingBuilderUnix;
 use crate::gunyah::GH_VCPU_RUN;
 use crate::gunyah::{GH_SYSTEM_EVENT_SHUTDOWN, GH_SYSTEM_EVENT_CRASH, GH_EXIT_MMIO, GH_EXIT_SHUTDOWN, GH_EXIT_HLT, GH_EXIT_INTR, GH_EXIT_WATCHDOG, GH_EXIT_SYSTEM_EVENT};
 
-
+use std::fs::File;
+use std::os::unix::io::FromRawFd;
+use vm_memory::MemoryRegion;
 
 
 /// A wrapper around using a GUNYAH Vcpu.
@@ -309,6 +311,39 @@ impl Vcpu for GunyahVcpu {
     }
 }
 
+fn map_guest_mem(ranges: &[(GuestAddress, u64)], file: File) -> std::result::Result<GuestMemory, Error> {
+    assert_eq!(ranges.len(), 1);
+    let offset = 0;
+    let guest_base = ranges[0].0;
+    let mut size = ranges[0].1;
+
+    let metadata = file.metadata()
+                        .map_err(|e| {
+                        error!("{}", format!("failed to metadata of file {:?} err {}", file, e));
+                        }).unwrap();
+    if size != metadata.len() {
+        size = metadata.len();
+        info!("as fixed memory is selected, memory size is restricted to {}", size);
+    }
+    if size % pagesize() as u64 != 0 {
+        error!("size {} is not page aligned", size);
+        return Err(Error::new(EINVAL));
+    }
+
+    let memory_region = MemoryRegion::new_from_file(size, guest_base, offset, Arc::new(file))
+                        .map_err(|e| {
+			error!("{}", format!("failed to create mem region, addr:{}, size:{}. Err: {}", guest_base, size, e));
+                        }).unwrap();
+    let mut regions = Vec::<MemoryRegion>::new();
+    regions.push(memory_region);
+
+    let guest_mem = GuestMemory::from_regions(regions)
+                    .map_err(|e| {
+                    error!("{}", format!("failed to create GuestMemory from the regions provided {}", e));
+                    }).unwrap();
+    Ok(guest_mem)
+}
+
 /// A wrapper around creating and using a GUNYAH VM.
 pub struct GunyahVm {
     gunyah: Gunyah,
@@ -361,6 +396,62 @@ impl GunyahVm {
             gunyah: gunyah.try_clone()?,
             vm: vm_descriptor,
             guest_mem,
+            mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
+            mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
+        })
+    }
+
+    pub fn new_guestmem_with_fixed_memory(
+        gunyah: &Gunyah,
+        guest_mem_layout: &[(GuestAddress, u64)],
+        vm_name: &str,
+        protection_type: ProtectionType,
+    ) -> Result<GunyahVm> {
+        // Safe because we know descriptor is a real gunyah descriptor as this module is the only
+        // one that can make Gunyah objects.
+        let ret = unsafe {
+            ioctl_with_val(
+                gunyah,
+                GH_CREATE_VM(),
+                gunyah.get_vm_type(protection_type)? as c_ulong,
+            )
+        };
+
+        if ret < 0 {
+            return errno_result();
+        }
+        // Safe because we verify that ret is valid and we own the fd.
+        let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
+
+	let mut fw_name = fw_name {_name: [0; 16],};
+        fw_name._name.get_mut(..vm_name.len()).ok_or_else(|| Error::new(EINVAL))?;
+        let vm_name: String = vm_name.chars().collect();
+
+        let ret = unsafe {
+            ioctl_with_ref(
+                &vm_descriptor,
+                GH_SET_VM_NAME(),
+                &fw_name,
+            )
+        };
+
+        if ret < 0 {
+            return errno_result();
+        }
+
+        let file = unsafe { File::from_raw_fd(vm_descriptor.as_raw_descriptor()) };
+        let guest_mem = match self::map_guest_mem(&guest_mem_layout, file) {
+            Ok(guest_mem) => guest_mem,
+            Err(e) => {
+                error!("failed to mmap the guest memory");
+                return Err(Error::new(EINVAL));
+            },
+        };
+
+        Ok(GunyahVm {
+            gunyah: gunyah.try_clone()?,
+            vm: vm_descriptor,
+            guest_mem: guest_mem,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
         })

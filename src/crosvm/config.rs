@@ -1303,6 +1303,7 @@ pub struct Config {
     #[cfg(target_os = "android")]
     pub task_profiles: Vec<String>,
     pub usb: bool,
+    pub use_fixed_memory: bool,
     pub userspace_msr: BTreeMap<u32, MsrConfig>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
@@ -1340,6 +1341,7 @@ pub struct Config {
     pub virtio_snds: Vec<SndParameters>,
     pub virtio_switches: Vec<PathBuf>,
     pub virtio_trackpad: Vec<TouchDeviceOption>,
+    pub vm_name: Option<String>,
     #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
     pub vtpm_proxy: bool,
     pub vvu_proxy: Vec<VvuOption>,
@@ -1501,6 +1503,7 @@ impl Default for Config {
             tap_name: Vec::new(),
             #[cfg(target_os = "android")]
             task_profiles: Vec::new(),
+            use_fixed_memory: false,
             usb: true,
             userspace_msr: BTreeMap::new(),
             vcpu_affinity: None,
@@ -1538,6 +1541,7 @@ impl Default for Config {
             virtio_snds: Vec::new(),
             virtio_switches: Vec::new(),
             virtio_trackpad: Vec::new(),
+            vm_name: None,
             #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
             vtpm_proxy: false,
             vvu_proxy: Vec::new(),
