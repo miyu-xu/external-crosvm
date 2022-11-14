@@ -169,9 +169,11 @@ pub struct VmComponents {
     pub pvm_fw: Option<File>,
     pub rt_cpus: Vec<usize>,
     pub swiotlb: Option<u64>,
+    pub use_fixed_memory: bool,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
     pub vm_image: VmImage,
+    pub vm_name: Vec<String>,
 }
 
 /// Holds the elements needed to run a Linux VM. Created by `build_vm`.

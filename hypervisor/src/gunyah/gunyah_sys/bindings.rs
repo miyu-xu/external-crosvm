@@ -1144,6 +1144,13 @@ fn bindgen_test_layout_gh_userspace_memory_region() {
     }
     test_field_userspace_addr();
 }
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct fw_name {
+        pub _name: [::std::os::raw::c_char; 16usize],
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct gh_create_device {
