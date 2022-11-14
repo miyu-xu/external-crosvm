@@ -1,0 +1,13 @@
+diff --git a/proto_build_tools/Android.bp b/proto_build_tools/Android.bp
+index aa7dfd17..38488569 100644
+--- a/proto_build_tools/Android.bp
++++ b/proto_build_tools/Android.bp
+@@ -11,7 +11,7 @@ rust_library {
+     srcs: ["src/lib.rs"],
+     edition: "2021",
+     rustlibs: [
+-        "libprotoc_rust",
++        "libprotobuf",
+     ],
+     apex_available: [
+         "//apex_available:platform",

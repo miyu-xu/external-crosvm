@@ -13,14 +13,17 @@ use libva::Config;
 use libva::Context;
 use libva::Display;
 use libva::Image;
-use libva::Picture;
 use libva::PictureSync;
 use libva::Surface;
 use libva::VAConfigAttrib;
 use libva::VAConfigAttribType;
 
+use crate::decoders::DecodedHandle as DecodedHandleTrait;
+use crate::decoders::DynPicture;
 use crate::decoders::Error as VideoDecoderError;
+use crate::decoders::FrameInfo;
 use crate::decoders::MappableHandle;
+use crate::decoders::Picture;
 use crate::decoders::Result as VideoDecoderResult;
 use crate::decoders::StatelessBackendError;
 use crate::i420_copy;
@@ -96,16 +99,39 @@ pub fn supported_formats_for_rt_format(
     Ok(supported_formats)
 }
 
-/// A trait for objects that hold a Surface.
-pub trait SurfaceContainer {
-    /// Return the inner surface.
-    fn into_surface(self) -> Result<Option<Surface>>;
+pub trait IntoSurface: TryInto<Option<Surface>> {}
+
+impl<T: FrameInfo> TryInto<Option<Surface>> for crate::decoders::Picture<T, GenericBackendHandle> {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<Option<Surface>, Self::Error> {
+        let backend_handle = self.backend_handle;
+
+        let backend_handle = match backend_handle {
+            Some(backend_handle) => backend_handle,
+            None => return Ok(None),
+        };
+
+        let surface = match backend_handle.0 {
+            GenericBackendHandleInner::Ready { picture, .. } => picture.take_surface().map(Some),
+            GenericBackendHandleInner::Pending(id) => {
+                return Err(anyhow!(
+                "Attempting to retrieve a surface (id: {:?}) that might have operations pending.",
+                id
+            ))
+            }
+        };
+
+        surface
+    }
 }
 
+impl<T: FrameInfo> IntoSurface for crate::decoders::Picture<T, GenericBackendHandle> {}
+
 /// A decoded frame handle.
-pub struct DecodedHandle<T: SurfaceContainer> {
+pub struct DecodedHandle<T: IntoSurface> {
     /// The actual object backing the handle.
-    inner: Option<Rc<T>>,
+    inner: Option<Rc<RefCell<T>>>,
     /// The decoder resolution when this frame was processed. Not all codecs
     /// send resolution data in every frame header.
     resolution: Resolution,
@@ -116,7 +142,7 @@ pub struct DecodedHandle<T: SurfaceContainer> {
     pub display_order: Option<u64>,
 }
 
-impl<T: SurfaceContainer> Clone for DecodedHandle<T> {
+impl<T: IntoSurface> Clone for DecodedHandle<T> {
     // See https://stegosaurusdormant.com/understanding-derive-clone/ on why
     // this cannot be derived. Note that T probably doesn't implement Clone, but
     // it's not a problem, since Rc is Clone.
@@ -130,9 +156,13 @@ impl<T: SurfaceContainer> Clone for DecodedHandle<T> {
     }
 }
 
-impl<T: SurfaceContainer> DecodedHandle<T> {
+impl<T: IntoSurface> DecodedHandle<T> {
     /// Creates a new handle
-    pub fn new(inner: Rc<T>, resolution: Resolution, surface_pool: SurfacePoolHandle) -> Self {
+    pub fn new(
+        inner: Rc<RefCell<T>>,
+        resolution: Resolution,
+        surface_pool: SurfacePoolHandle,
+    ) -> Self {
         Self {
             inner: Some(inner),
             resolution,
@@ -141,7 +171,7 @@ impl<T: SurfaceContainer> DecodedHandle<T> {
         }
     }
 
-    pub fn inner(&self) -> &Rc<T> {
+    pub fn inner(&self) -> &Rc<RefCell<T>> {
         // The Option is used as a well known strategy to move out of a field
         // when dropping. This is needed for the surface pool to be able to
         // retrieve the surface from the handle.
@@ -149,19 +179,38 @@ impl<T: SurfaceContainer> DecodedHandle<T> {
     }
 }
 
-impl<T: SurfaceContainer> Drop for DecodedHandle<T> {
+impl<T: IntoSurface> Drop for DecodedHandle<T> {
     fn drop(&mut self) {
-        if let Ok(inner) = Rc::try_unwrap(self.inner.take().unwrap()) {
+        if let Ok(inner) = Rc::try_unwrap(self.inner.take().unwrap()).map(|i| i.into_inner()) {
             let pool = &mut self.surface_pool;
 
             // Only retrieve if the resolutions match, otherwise let the stale Surface drop.
             if *pool.current_resolution() == self.resolution {
                 // Retrieve if not currently used by another field.
-                if let Ok(Some(surface)) = inner.into_surface() {
+                if let Ok(Some(surface)) = inner.try_into() {
                     pool.add_surface(surface);
                 }
             }
         }
+    }
+}
+
+impl<CodecData: FrameInfo> DecodedHandleTrait
+    for DecodedHandle<Picture<CodecData, GenericBackendHandle>>
+{
+    type CodecData = CodecData;
+    type BackendHandle = GenericBackendHandle;
+
+    fn picture_container(&self) -> &Rc<RefCell<Picture<Self::CodecData, Self::BackendHandle>>> {
+        self.inner()
+    }
+
+    fn display_order(&self) -> Option<u64> {
+        self.display_order
+    }
+
+    fn set_display_order(&mut self, display_order: u64) {
+        self.display_order = Some(display_order)
     }
 }
 
@@ -186,11 +235,6 @@ impl SurfacePoolHandle {
         &self.current_resolution
     }
 
-    /// Sets the current resolution for the pool
-    pub fn set_current_resolution(&mut self, resolution: Resolution) {
-        self.current_resolution = resolution;
-    }
-
     /// Adds a new surface to the pool
     pub fn add_surface(&mut self, surface: Surface) {
         self.surfaces.borrow_mut().push_back(surface)
@@ -200,11 +244,6 @@ impl SurfacePoolHandle {
     pub fn get_surface(&mut self) -> Option<Surface> {
         let mut vec = self.surfaces.borrow_mut();
         vec.pop_front()
-    }
-
-    /// Drops all surfaces from the pool
-    pub fn drop_surfaces(&mut self) {
-        self.surfaces = Default::default();
     }
 
     /// Returns new number of surfaces left.
@@ -314,13 +353,28 @@ impl StreamMetadataState {
 }
 
 /// The VA-API backend handle.
-pub struct GenericBackendHandle {
-    pub(crate) inner: GenericBackendHandleInner,
-}
+///
+/// This is just a wrapper around the `GenericBackendHandleInner` enum in order to make its variants
+/// private.
+pub struct GenericBackendHandle(GenericBackendHandleInner);
 
 impl GenericBackendHandle {
-    pub(crate) fn new(inner: GenericBackendHandleInner) -> Self {
-        Self { inner }
+    /// Creates a new pending handle on `surface_id`.
+    pub(crate) fn new_pending(surface_id: u32) -> Self {
+        Self(GenericBackendHandleInner::Pending(surface_id))
+    }
+
+    /// Creates a new ready handle on a completed `picture`.
+    pub(crate) fn new_ready(
+        picture: libva::Picture<PictureSync>,
+        map_format: Rc<libva::VAImageFormat>,
+        display_resolution: Resolution,
+    ) -> Self {
+        Self(GenericBackendHandleInner::Ready {
+            map_format,
+            picture,
+            display_resolution,
+        })
     }
 
     /// Returns a mapped VAImage. this maps the VASurface onto our address space.
@@ -329,7 +383,7 @@ impl GenericBackendHandle {
     ///
     /// Note that DynMappableHandle is downcastable.
     pub fn image(&mut self) -> Result<Image> {
-        match &mut self.inner {
+        match &mut self.0 {
             GenericBackendHandleInner::Ready {
                 map_format,
                 picture,
@@ -351,52 +405,79 @@ impl GenericBackendHandle {
             GenericBackendHandleInner::Pending(_) => Err(anyhow!("Mapping failed")),
         }
     }
+
+    /// Returns the picture of this handle.
+    pub fn picture(&self) -> Option<&libva::Picture<PictureSync>> {
+        match &self.0 {
+            GenericBackendHandleInner::Ready { picture, .. } => Some(picture),
+            GenericBackendHandleInner::Pending(_) => None,
+        }
+    }
+
+    /// Returns the id of the VA surface backing this handle.
+    pub fn surface_id(&self) -> libva::VASurfaceID {
+        match &self.0 {
+            GenericBackendHandleInner::Ready { picture, .. } => picture.surface().id(),
+            GenericBackendHandleInner::Pending(id) => *id,
+        }
+    }
+
+    /// Returns `true` if this handle is ready.
+    pub fn is_ready(&self) -> bool {
+        matches!(self.0, GenericBackendHandleInner::Ready { .. })
+    }
+}
+
+impl Clone for GenericBackendHandle {
+    fn clone(&self) -> Self {
+        match &self.0 {
+            GenericBackendHandleInner::Ready {
+                map_format,
+                picture,
+                display_resolution: resolution,
+            } => GenericBackendHandle::new_ready(
+                libva::Picture::new_from_same_surface(picture.timestamp(), picture),
+                Rc::clone(map_format),
+                *resolution,
+            ),
+            GenericBackendHandleInner::Pending(id) => GenericBackendHandle::new_pending(*id),
+        }
+    }
 }
 
 /// A type so we do not expose the enum in the public interface, as enum members
 /// are inherently public.
-pub(crate) enum GenericBackendHandleInner {
+enum GenericBackendHandleInner {
     Ready {
-        context: Rc<Context>,
         map_format: Rc<libva::VAImageFormat>,
-        picture: Picture<PictureSync>,
+        picture: libva::Picture<PictureSync>,
         display_resolution: Resolution,
     },
     Pending(libva::VASurfaceID),
 }
 
-impl MappableHandle for GenericBackendHandle {
-    fn map(&mut self) -> VideoDecoderResult<Box<dyn AsRef<[u8]> + '_>> {
-        let image = self.image()?;
-        Ok(Box::new(image))
-    }
-
+impl<'a> MappableHandle for Image<'a> {
     fn read(&mut self, buffer: &mut [u8]) -> VideoDecoderResult<()> {
-        let map_format = match &self.inner {
-            GenericBackendHandleInner::Ready { map_format, .. } => Rc::clone(map_format),
-            GenericBackendHandleInner::Pending(_) => {
-                return Err(VideoDecoderError::StatelessBackendError(
-                    StatelessBackendError::ResourceNotReady,
-                ))
-            }
-        };
-
-        let image = self.image()?;
-        let image_inner = image.image();
+        let image_size = self.image_size();
+        let image_inner = self.image();
 
         let width = image_inner.width as u32;
         let height = image_inner.height as u32;
 
-        match map_format.fourcc {
-            libva::constants::VA_FOURCC_NV12 => {
-                if buffer.len() < (width * height * 3 / 2) as usize {
-                    return Err(VideoDecoderError::StatelessBackendError(
-                        StatelessBackendError::Other(anyhow!("Buffer is too small")),
-                    ));
-                }
+        if buffer.len() != image_size {
+            return Err(VideoDecoderError::StatelessBackendError(
+                StatelessBackendError::Other(anyhow!(
+                    "buffer size is {} while image size is {}",
+                    buffer.len(),
+                    image_size
+                )),
+            ));
+        }
 
+        match image_inner.format.fourcc {
+            libva::constants::VA_FOURCC_NV12 => {
                 nv12_copy(
-                    image.as_ref(),
+                    self.as_ref(),
                     buffer,
                     width,
                     height,
@@ -405,14 +486,8 @@ impl MappableHandle for GenericBackendHandle {
                 );
             }
             libva::constants::VA_FOURCC_I420 => {
-                if buffer.len() < (width * height * 3 / 2) as usize {
-                    return Err(VideoDecoderError::StatelessBackendError(
-                        StatelessBackendError::Other(anyhow!("Buffer is too small")),
-                    ));
-                }
-
                 i420_copy(
-                    image.as_ref(),
+                    self.as_ref(),
                     buffer,
                     width,
                     height,
@@ -430,14 +505,20 @@ impl MappableHandle for GenericBackendHandle {
         Ok(())
     }
 
-    fn mapped_resolution(&mut self) -> VideoDecoderResult<Resolution> {
-        let image = self.image()?;
-        let image = image.image();
+    fn image_size(&mut self) -> usize {
+        let image = self.image();
 
-        Ok(Resolution {
-            width: u32::from(image.width),
-            height: u32::from(image.height),
-        })
+        crate::decoded_frame_size(
+            (&image.format).try_into().unwrap(),
+            image.width,
+            image.height,
+        )
+    }
+}
+
+impl<CodecData: FrameInfo> DynPicture for Picture<CodecData, GenericBackendHandle> {
+    fn dyn_mappable_handle_mut<'a>(&'a mut self) -> Box<dyn MappableHandle + 'a> {
+        Box::new(self.backend_handle.as_mut().unwrap().image().unwrap())
     }
 }
 

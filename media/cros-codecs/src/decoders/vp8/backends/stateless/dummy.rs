@@ -5,112 +5,19 @@
 // This file contains a dummy backend whose only purpose is to let the decoder
 // run so we can test it in isolation.
 
-use std::cell::Ref;
 use std::cell::RefCell;
-use std::cell::RefMut;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::decoders::vp8::backends::stateless::ContainedPicture;
-use crate::decoders::vp8::backends::stateless::DecodedHandle;
 use crate::decoders::vp8::backends::stateless::StatelessDecoderBackend;
-use crate::decoders::vp8::picture::Picture;
-use crate::decoders::DynDecodedHandle;
-use crate::decoders::DynPicture;
+use crate::decoders::vp8::backends::stateless::Vp8Picture;
 use crate::decoders::VideoDecoderBackend;
+use crate::utils::dummy::*;
 use crate::DecodedFormat;
 use crate::Resolution;
 
-pub type AssociatedDummyHandle = <Backend as StatelessDecoderBackend>::Handle;
-
-pub type AssociatedDummyBackendHandle = <AssociatedDummyHandle as DecodedHandle>::BackendHandle;
-
-pub struct MappedHandle;
-
-impl AsRef<[u8]> for MappedHandle {
-    fn as_ref(&self) -> &[u8] {
-        &[]
-    }
-}
-
-pub struct BackendHandle;
-
-impl crate::decoders::MappableHandle for BackendHandle {
-    fn map(&mut self) -> crate::decoders::Result<Box<dyn AsRef<[u8]> + '_>> {
-        Ok(Box::new(MappedHandle {}))
-    }
-
-    fn read(&mut self, _: &mut [u8]) -> crate::decoders::Result<()> {
-        Ok(())
-    }
-
-    fn mapped_resolution(&mut self) -> crate::decoders::Result<Resolution> {
-        Ok(Resolution {
-            width: 1,
-            height: 1,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct Handle {
-    handle: Rc<RefCell<Picture<BackendHandle>>>,
-}
-
 pub struct Backend;
-
-impl DecodedHandle for Handle {
-    type BackendHandle = BackendHandle;
-
-    fn picture(&self) -> Ref<Picture<Self::BackendHandle>> {
-        self.handle.borrow()
-    }
-
-    fn picture_mut(&self) -> RefMut<Picture<Self::BackendHandle>> {
-        self.handle.borrow_mut()
-    }
-
-    fn picture_container(&self) -> ContainedPicture<Self::BackendHandle> {
-        self.handle.clone()
-    }
-
-    fn timestamp(&self) -> u64 {
-        0
-    }
-
-    fn display_resolution(&self) -> Resolution {
-        Default::default()
-    }
-
-    fn display_order(&self) -> Option<u64> {
-        None
-    }
-
-    fn set_display_order(&mut self, _: u64) {}
-}
-
-impl DynDecodedHandle for Handle {
-    fn dyn_picture(&self) -> Ref<dyn crate::decoders::DynPicture> {
-        self.picture()
-    }
-
-    fn dyn_picture_mut(&self) -> RefMut<dyn DynPicture> {
-        self.picture_mut()
-    }
-
-    fn timestamp(&self) -> u64 {
-        DecodedHandle::timestamp(self)
-    }
-
-    fn display_resolution(&self) -> Resolution {
-        DecodedHandle::display_resolution(self)
-    }
-
-    fn display_order(&self) -> Option<u64> {
-        DecodedHandle::display_order(self)
-    }
-}
 
 impl VideoDecoderBackend for Backend {
     fn num_resources_total(&self) -> usize {
@@ -143,7 +50,7 @@ impl VideoDecoderBackend for Backend {
 }
 
 impl StatelessDecoderBackend for Backend {
-    type Handle = Handle;
+    type Handle = Handle<Vp8Picture<BackendHandle>>;
 
     fn new_sequence(&mut self, _: &crate::decoders::vp8::parser::Header) -> super::Result<()> {
         Ok(())
@@ -151,7 +58,7 @@ impl StatelessDecoderBackend for Backend {
 
     fn submit_picture(
         &mut self,
-        picture: Picture<super::AsBackendHandle<Self::Handle>>,
+        picture: Vp8Picture<super::AsBackendHandle<Self::Handle>>,
         _: Option<&Self::Handle>,
         _: Option<&Self::Handle>,
         _: Option<&Self::Handle>,
