@@ -9,15 +9,19 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use arch::set_default_serial_parameters;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrAction;
 use arch::MsrConfig;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrFilter;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrRWType;
 use arch::MsrValueFrom;
 use arch::Pstore;
 use arch::VcpuAffinity;
 use base::debug;
 use base::pagesize;
+use cros_async::ExecutorKind;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
 use devices::virtio::block::block::DiskOption;
@@ -551,9 +555,7 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
             let parse = |s: &str| -> Result<u64, String> {
                 match parse_hex_or_decimal(s) {
                     Ok(v) => Ok(v),
-                    Err(_) => {
-                        return Err(invalid_value_err(s, "expected u64 value"));
-                    }
+                    Err(_) => Err(invalid_value_err(s, "expected u64 value")),
                 }
             };
             Ok(AddressRange {
@@ -1095,6 +1097,7 @@ pub struct Config {
     pub ac97_parameters: Vec<Ac97Parameters>,
     pub acpi_tables: Vec<PathBuf>,
     pub android_fstab: Option<PathBuf>,
+    pub async_executor: Option<ExecutorKind>,
     pub balloon: bool,
     pub balloon_bias: i64,
     pub balloon_control: Option<PathBuf>,
@@ -1295,6 +1298,7 @@ impl Default for Config {
             ac97_parameters: Vec::new(),
             acpi_tables: Vec::new(),
             android_fstab: None,
+            async_executor: None,
             balloon: true,
             balloon_bias: 0,
             balloon_control: None,
@@ -1501,7 +1505,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
 
     #[cfg(feature = "gpu")]
     {
-        crate::crosvm::sys::validate_gpu_config(cfg)?;
+        crate::crosvm::gpu_config::validate_gpu_config(cfg)?;
     }
     #[cfg(feature = "gdb")]
     if cfg.gdb.is_some() && cfg.vcpu_count.unwrap_or(1) != 1 {

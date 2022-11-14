@@ -75,12 +75,17 @@ members = [
     "kvm",
     "libcras_stub",
     "linux_input_sys",
+    "media/cros-codecs",
+    "media/ffmpeg",
+    "media/libva",
+    "media/libvda",
     "metrics",
     "net_sys",
     "net_util",
     "power_monitor",
     "prebuilts",
     "protos",
+    "proto_build_tools",
     "qcow_utils",
     "resources",
     "rutabaga_gfx",
@@ -150,6 +155,7 @@ stats = ["devices/stats"]
 tpm = ["devices/tpm"]
 
 ## Enables USB host device passthrough via an emulated XHCI controller.
+## USB is supported only on unix/linux. The feature is a no-op on windows.
 usb = ["devices/usb"]
 
 ## Enables the non-upstream virtio wayland protocol. This can be used in conjuction with the gpu
@@ -309,7 +315,7 @@ all-x86_64 = ["all-aarch64", "plugin", "scudo"]
 all-armhf = [
     "composite-disk",
     "default",
-    "gdb",
+    "gdb", # no effect because gdb is not supported for armhf
     "libvda-stub",
     "tpm",
     ]
@@ -386,7 +392,7 @@ x86_64 = { path = "x86_64" }
 aarch64 = { path = "aarch64" }
 
 [target.'cfg(unix)'.dependencies]
-minijail = "*" # provided by ebuild
+minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
 p9 = "*"
 
 [target.'cfg(windows)'.dependencies]

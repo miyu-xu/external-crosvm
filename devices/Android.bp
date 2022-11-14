@@ -13,6 +13,7 @@ package {
 rust_test {
     name: "devices_test_src_lib",
     defaults: ["crosvm_defaults"],
+    // has rustc warnings
     host_supported: true,
     crate_name: "devices",
     cargo_env_compat: true,
@@ -104,6 +105,7 @@ rust_test {
 rust_test {
     name: "devices_test_tests_irqchip_main",
     defaults: ["crosvm_defaults"],
+    // has rustc warnings
     host_supported: true,
     crate_name: "irqchip",
     cargo_env_compat: true,
@@ -196,6 +198,7 @@ rust_test {
 rust_library {
     name: "libdevices",
     defaults: ["crosvm_defaults"],
+    // has rustc warnings
     host_supported: true,
     crate_name: "devices",
     cargo_env_compat: true,

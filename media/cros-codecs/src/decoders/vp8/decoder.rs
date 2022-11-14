@@ -5,14 +5,14 @@
 use anyhow::anyhow;
 use anyhow::Result;
 
-use crate::decoders::vp8::backends::stateless::DecodedHandle;
 use crate::decoders::vp8::backends::stateless::StatelessDecoderBackend;
 use crate::decoders::vp8::parser::Frame;
 use crate::decoders::vp8::parser::Header;
 use crate::decoders::vp8::parser::Parser;
-use crate::decoders::vp8::picture::Picture;
 use crate::decoders::BlockingMode;
+use crate::decoders::DecodedHandle;
 use crate::decoders::DynDecodedHandle;
+use crate::decoders::Picture;
 use crate::decoders::Result as VideoDecoderResult;
 use crate::decoders::VideoDecoder;
 use crate::Resolution;
@@ -62,7 +62,7 @@ impl Default for NegotiationStatus {
     }
 }
 
-pub struct Decoder<T> {
+pub struct Decoder<T: DecodedHandle<CodecData = Header>> {
     /// A parser to extract bitstream data and build frame data in turn
     parser: Parser,
 
@@ -97,7 +97,7 @@ pub struct Decoder<T> {
     test_params: TestParams<T>,
 }
 
-impl<T: DecodedHandle + DynDecodedHandle + 'static> Decoder<T> {
+impl<T: DecodedHandle<CodecData = Header> + DynDecodedHandle + 'static> Decoder<T> {
     /// Create a new codec backend for VP8.
     pub fn new(
         backend: Box<dyn StatelessDecoderBackend<Handle = T>>,
@@ -132,7 +132,7 @@ impl<T: DecodedHandle + DynDecodedHandle + 'static> Decoder<T> {
         golden_ref_picture: &mut Option<T>,
         alt_ref_picture: &mut Option<T>,
     ) -> Result<()> {
-        let header = &decoded_frame.picture().header;
+        let header = &decoded_frame.picture().data;
 
         if header.key_frame() {
             Decoder::replace_reference(last_picture, decoded_frame);
@@ -229,7 +229,7 @@ impl<T: DecodedHandle + DynDecodedHandle + 'static> Decoder<T> {
         timestamp: u64,
         queued_parser_state: Option<Parser>,
     ) -> Result<T> {
-        let picture = Picture::new(frame.header, None, timestamp);
+        let picture = Picture::new_vp8(frame.header, None, timestamp);
 
         let parser = match &queued_parser_state {
             Some(parser) => parser,
@@ -283,7 +283,9 @@ impl<T: DecodedHandle + DynDecodedHandle + 'static> Decoder<T> {
     }
 }
 
-impl<T: DecodedHandle + DynDecodedHandle + 'static> VideoDecoder for Decoder<T> {
+impl<T: DecodedHandle<CodecData = Header> + DynDecodedHandle + 'static> VideoDecoder
+    for Decoder<T>
+{
     fn decode(
         &mut self,
         timestamp: u64,
@@ -345,7 +347,7 @@ impl<T: DecodedHandle + DynDecodedHandle + 'static> VideoDecoder for Decoder<T> 
 
             let mut handle = self.handle_frame(key_frame, timestamp, Some(*parser))?;
 
-            if handle.picture().header.show_frame() {
+            if handle.picture().data.show_frame() {
                 let order = self.current_display_order;
 
                 handle.set_display_order(order);
@@ -365,7 +367,7 @@ impl<T: DecodedHandle + DynDecodedHandle + 'static> VideoDecoder for Decoder<T> 
 
         self.backend.poll(self.blocking_mode)?;
 
-        if handle.picture().header.show_frame() {
+        if handle.picture().data.show_frame() {
             let order = self.current_display_order;
 
             handle.set_display_order(order);
@@ -461,9 +463,10 @@ pub mod tests {
     use bytes::Buf;
 
     use crate::decoders::vp8::backends::stateless::dummy::Backend;
-    use crate::decoders::vp8::backends::stateless::DecodedHandle;
     use crate::decoders::vp8::decoder::Decoder;
+    use crate::decoders::vp8::parser::Header;
     use crate::decoders::BlockingMode;
+    use crate::decoders::DecodedHandle;
     use crate::decoders::DynDecodedHandle;
     use crate::decoders::VideoDecoder;
 
@@ -485,7 +488,7 @@ pub mod tests {
     }
 
     pub fn run_decoding_loop<
-        Handle: DecodedHandle + DynDecodedHandle + 'static,
+        Handle: DecodedHandle<CodecData = Header> + DynDecodedHandle + 'static,
         F: FnMut(&mut Decoder<Handle>),
     >(
         decoder: &mut Decoder<Handle>,
@@ -515,7 +518,7 @@ pub mod tests {
         }
     }
 
-    pub fn process_ready_frames<Handle: DecodedHandle + DynDecodedHandle>(
+    pub fn process_ready_frames<Handle: DecodedHandle<CodecData = Header> + DynDecodedHandle>(
         decoder: &mut Decoder<Handle>,
         action: &mut dyn FnMut(&mut Decoder<Handle>, &Handle),
     ) {
