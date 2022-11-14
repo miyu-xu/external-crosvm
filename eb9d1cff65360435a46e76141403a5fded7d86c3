@@ -70,6 +70,24 @@
       "parentUuid": "fff4313a_aaab9fff",
       "revId": "eb9d1cff65360435a46e76141403a5fded7d86c3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8e4816c3_fa36ac54",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1466604
+      },
+      "writtenOn": "2022-11-14T14:18:38Z",
+      "side": 1,
+      "message": "Resolved by https://r.android.com/2240037",
+      "parentUuid": "5a287d00_e67ae717",
+      "revId": "eb9d1cff65360435a46e76141403a5fded7d86c3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
