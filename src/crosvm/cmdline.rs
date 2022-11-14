@@ -1108,6 +1108,11 @@ pub struct RunCommand {
     #[argh(option, arg_name = "NAME[,...]")]
     /// comma-separated names of the task profiles to apply to all threads in crosvm including the vCPU threads
     pub task_profiles: Vec<String>,
+    #[argh(switch)]
+    /// this allows VM to be loaded in memory carveout/fixed memory, rather than using
+    /// runtime-allocated memory by CrosVM.
+    /// This is only applicable to Guest VMs running on Gunyah Hypervisor.
+    pub use_fixed_memory: bool,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[argh(
         option,
@@ -1263,6 +1268,9 @@ pub struct RunCommand {
     #[argh(option, long = "trackpad", arg_name = "PATH:WIDTH:HEIGHT")]
     /// path to a socket from where to read trackpad input events and write status updates to, optionally followed by screen width and height (defaults to 800x1280)
     pub virtio_trackpad: Vec<TouchDeviceOption>,
+    #[argh(option, long = "vm-name", arg_name = "NAME")]
+    /// name of the vm to be set
+    pub vm_name: Option<String>,
     #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
     #[argh(switch)]
     /// enable the virtio-tpm connection to vtpm daemon
@@ -1353,6 +1361,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.delay_rt = cmd.delay_rt;
+
+        cfg.use_fixed_memory = cmd.use_fixed_memory;
 
         cfg.memory = cmd.memory;
 
@@ -1834,6 +1844,14 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.init_memory = cmd.init_memory;
 
         cfg.strict_balloon = cmd.strict_balloon;
+
+        if cfg.use_fixed_memory && cmd.vm_name.is_none() {
+            return Err("vm_name has to be set to use fixed memory option"
+                .to_string(),
+            );
+        }
+
+        cfg.vm_name = cmd.vm_name;
 
         #[cfg(target_os = "android")]
         {
