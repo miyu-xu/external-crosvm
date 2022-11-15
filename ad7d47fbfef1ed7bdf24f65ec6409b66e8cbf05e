@@ -1,0 +1,242 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "72c73ddc_bbea453c",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "It would be nice to have the expansion of \"SCMI\" at least once somewhere in either the commit message or command line help text.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "818700ea_c596ac50",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "Missing copyright header",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a170c07f_7d7d6bbd",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 39,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "The generic non-SCMI flags specified here (F_VERSION_1, F_ANY_LAYOUT, etc.) should already be part of `base_features` and should not be added by the device itself.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "11088ee8_c6c68944",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "The Virtio 1.2 [specification] section about SCMI devices (5.17.4, Device Types \u003e SCMI Device \u003e Device configuration layout) says \"There is no configuration data for the device.\"\n\nIs there a patch/update to the spec to define this configuration data?\n\n(It also seems like we never set `dev_enable` to anything other than 0.)\n\n[specification]: https://docs.oasis-open.org/virtio/virtio/v1.2/cs01/virtio-v1.2-cs01.html#x1-6090004",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5ad53fff_25342afe",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "nit: this message mentions the worker thread, but we haven\u0027t spawned the thread yet.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "65664732_caf6a3db",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 173,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "This should probably use `error!()` rather than `println!()`.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b4d7343f_6cec0a79",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 641,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "nit: please leave a blank line between blocks",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1b717110_0022d55d",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1132,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "This references a new `vhost_scmi_device` jail configuration, but the corresponding policy files seem to be missing from the review - could you check that you added all files?",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e4c1b335_437d6daa",
+        "filename": "vhost/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "I think SCMI is an ARM-specific device type, so it probably makes sense to add a `#[cfg(target_arch \u003d \"aarch64\")]` check (with the same check on any code calling into it).",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ae2984f0_dc026280",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "Missing copyright header",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f800d33f_5367c37c",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "Please use one import per line style as used in the rest of the codebase.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "39f15e9c_0f695790",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 19,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "The parameter can probably be a `\u0026Path` rather than `\u0026PathBuf`, as we only need a path reference to pass to `open()`.\n\n(For maximum flexibility, we could accept `AsRef\u003cPath\u003e`, but that\u0027s probably overkill in this case.)",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d99d0d13_3f34b791",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "`unsafe` blocks should have a safety comment: https://rust-lang.github.io/rust-clippy/master/#undocumented_unsafe_blocks",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c64d4d5d_5c052cc4",
+        "filename": "virtio_sys/src/virtio_config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 24,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-15T23:17:08Z",
+      "side": 1,
+      "message": "This file is meant to include only generic virtio device and queue features; features specific to one device type should be added to `devices/src/virtio/device_constants.rs` (or in the implementation of the device itself if they don\u0027t need to be shared between files).\n\nThis file is generated automatically (as mentioned in the first line), so any manual changes will be lost when the bindings are regenerated.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
