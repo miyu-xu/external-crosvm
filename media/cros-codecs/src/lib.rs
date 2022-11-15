@@ -46,7 +46,7 @@ pub fn nv12_copy(
     for _ in 0..height / 2 {
         dst[..width].copy_from_slice(&src[..width]);
         dst = &mut dst[width..];
-        src = &src[strides[1_usize] as usize..];
+        src = &src[strides[1] as usize..];
     }
 }
 
@@ -79,7 +79,7 @@ pub fn i420_copy(
     for _ in 0..height / 2 {
         dst[..width].copy_from_slice(&src[..width]);
         dst = &mut dst[width..];
-        src = &src[strides[1_usize] as usize..];
+        src = &src[strides[1] as usize..];
     }
 
     // Advance to the offset of the V plane
@@ -89,6 +89,15 @@ pub fn i420_copy(
     for _ in 0..height / 2 {
         dst[..width].copy_from_slice(&src[..width]);
         dst = &mut dst[width..];
-        src = &src[strides[2_usize] as usize..];
+        src = &src[strides[2] as usize..];
+    }
+}
+
+/// Returns the size required to store a frame of `format` with size `width`x`height`, without any
+/// padding. This is the minimum size of the destination buffer passed to `nv12_copy` or
+/// `i420_copy`.
+pub fn decoded_frame_size(format: DecodedFormat, width: u16, height: u16) -> usize {
+    match format {
+        DecodedFormat::I420 | DecodedFormat::NV12 => width as usize * height as usize * 3 / 2,
     }
 }

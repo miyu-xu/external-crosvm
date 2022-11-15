@@ -78,9 +78,7 @@ WIN64_DISABLED_CRATES = [
 ]
 
 CRATE_OPTIONS: Dict[str, List[TestOption]] = {
-    "cros_async": [TestOption.LARGE, TestOption.RUN_EXCLUSIVE],
     "crosvm-fuzz": [TestOption.DO_NOT_BUILD],  # b/194499769
-    "disk": [TestOption.DO_NOT_RUN_AARCH64, TestOption.DO_NOT_RUN_ARMHF],  # b/202294155
     "cros-fuzz": [TestOption.DO_NOT_BUILD],
     "fuzz": [TestOption.DO_NOT_BUILD],
     "hypervisor": [
@@ -91,11 +89,8 @@ CRATE_OPTIONS: Dict[str, List[TestOption]] = {
         TestOption.DO_NOT_RUN_AARCH64,
     ],
     "io_uring": [TestOption.DO_NOT_RUN],  # b/202294403
-    "kvm_sys": [TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL],
     "kvm": [
         TestOption.DO_NOT_RUN_AARCH64,
-        TestOption.DO_NOT_RUN_ARMHF,
-        TestOption.DO_NOT_RUN_ON_FOREIGN_KERNEL,
     ],  # b/181674144
     "libvda": [TestOption.DO_NOT_RUN],  # b/202293971
     "sandbox": [TestOption.DO_NOT_RUN],
