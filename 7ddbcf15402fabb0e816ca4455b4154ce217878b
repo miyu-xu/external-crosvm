@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "469b2e5b_a2a1714a",
+        "filename": "metrics/out/event_details.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1622,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-11-15T01:09:54Z",
+      "side": 1,
+      "message": "Are there metrics tests in presubmits? Are we confident this is an ok change?",
+      "range": {
+        "startLine": 1622,
+        "startChar": 8,
+        "endLine": 1622,
+        "endChar": 10
+      },
+      "revId": "7ddbcf15402fabb0e816ca4455b4154ce217878b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
