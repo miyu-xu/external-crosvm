@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 use std::cell::Ref;
+use std::cell::RefCell;
 use std::cell::RefMut;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use thiserror::Error;
 
@@ -27,13 +29,13 @@ pub enum Error {
 
 #[derive(Error, Debug)]
 pub enum StatelessBackendError {
-    #[error("Not enough resources to proceed with the operation now.")]
+    #[error("not enough resources to proceed with the operation now")]
     OutOfResources,
-    #[error("This resource is not ready.")]
+    #[error("this resource is not ready")]
     ResourceNotReady,
-    #[error("This format is not supported.")]
+    #[error("this format is not supported")]
     UnsupportedFormat,
-    #[error("Negotiation failed")]
+    #[error("negotiation failed")]
     NegotiationFailed(anyhow::Error),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -134,30 +136,50 @@ pub trait VideoDecoder {
 }
 
 pub trait DynDecodedHandle {
-    fn dyn_picture(&self) -> Ref<dyn DynPicture>;
     fn dyn_picture_mut(&self) -> RefMut<dyn DynPicture>;
     fn timestamp(&self) -> u64;
     fn display_resolution(&self) -> Resolution;
     fn display_order(&self) -> Option<u64>;
 }
 
+impl<T> DynDecodedHandle for T
+where
+    T: DecodedHandle,
+    Picture<T::CodecData, T::BackendHandle>: DynPicture,
+{
+    fn dyn_picture_mut(&self) -> RefMut<dyn DynPicture> {
+        DecodedHandle::picture_mut(self)
+    }
+
+    fn timestamp(&self) -> u64 {
+        DecodedHandle::timestamp(self)
+    }
+
+    fn display_resolution(&self) -> Resolution {
+        DecodedHandle::display_resolution(self)
+    }
+
+    fn display_order(&self) -> Option<u64> {
+        DecodedHandle::display_order(self)
+    }
+}
+
 pub trait DynPicture {
-    fn dyn_mappable_handle(&self) -> &dyn MappableHandle;
-    fn dyn_mappable_handle_mut(&mut self) -> &mut dyn MappableHandle;
+    /// Gets an exclusive reference to the backend handle of this picture.
+    /// Assumes that this picture is backed by a handle and panics if not the case.
+    fn dyn_mappable_handle_mut<'a>(&'a mut self) -> Box<dyn MappableHandle + 'a>;
 }
 
 /// A trait for types that can be mapped into the client's address space.
-pub trait MappableHandle: downcast_rs::Downcast {
-    /// Map &self as-is into the client's address space. The bytes may be laid out
-    /// in a hardware-optimized way.
-    fn map(&mut self) -> Result<Box<dyn AsRef<[u8]> + '_>>;
-
+pub trait MappableHandle {
     /// Read the contents of `self` into `buffer`.
+    ///
+    /// The size of `buffer` must be equal to `image_size()`, or an error will be returned.
     fn read(&mut self, buffer: &mut [u8]) -> Result<()>;
 
-    fn mapped_resolution(&mut self) -> Result<Resolution>;
+    /// Returns the size of the `buffer` argument required to call `read` on this handle.
+    fn image_size(&mut self) -> usize;
 }
-downcast_rs::impl_downcast!(MappableHandle);
 
 /// Instructs the decoder on whether it should block on the decode operations.
 /// Nonblocking mode is conditional on backend support.
@@ -170,5 +192,71 @@ pub enum BlockingMode {
 impl Default for BlockingMode {
     fn default() -> Self {
         Self::Blocking
+    }
+}
+
+/// Codec-specific information for a single frame.
+pub trait FrameInfo {
+    /// Returns the display resolution of this frame.
+    fn display_resolution(&self) -> Resolution;
+}
+
+/// Type for a picture being decoded by a stateless codec.
+///
+/// This contains the codec-specific state of the picture, as well as the backend-specific handle
+/// representing the memory into which the frame will be decoded.
+pub struct Picture<CodecData: FrameInfo, BackendHandle> {
+    /// Codec-specific data for this picture.
+    pub data: CodecData,
+    /// Backend-specific handle with the memory needed by the backend to back this picture.
+    pub backend_handle: Option<BackendHandle>,
+    /// A number that identifies the picture.
+    timestamp: u64,
+}
+
+impl<CodecData: FrameInfo, BackendHandle> Picture<CodecData, BackendHandle> {
+    /// Whether two pictures are the same.
+    pub fn same(lhs: &Rc<RefCell<Self>>, rhs: &Rc<RefCell<Self>>) -> bool {
+        Rc::ptr_eq(lhs, rhs)
+    }
+
+    /// Get a reference to the picture's timestamp.
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+}
+
+/// The handle type used by the stateless decoder backend. The only requirement
+/// from implementors is that they give access to the underlying Picture and
+/// that they can be (cheaply) cloned.
+pub trait DecodedHandle: Clone {
+    /// Codec-specific data for the handle.
+    type CodecData: FrameInfo;
+    /// The type of the handle used by the backend.
+    type BackendHandle;
+
+    /// Returns the actual container of the inner `Picture`.
+    fn picture_container(&self) -> &Rc<RefCell<Picture<Self::CodecData, Self::BackendHandle>>>;
+    /// Returns the display order for this picture, if set by the decoder.
+    fn display_order(&self) -> Option<u64>;
+    /// Sets the display order for this picture.
+    fn set_display_order(&mut self, display_order: u64);
+
+    /// Returns a shared reference to the inner `Picture`.
+    fn picture(&self) -> Ref<Picture<Self::CodecData, Self::BackendHandle>> {
+        self.picture_container().borrow()
+    }
+    /// Returns a mutable reference to the inner `Picture`.
+    fn picture_mut(&self) -> RefMut<Picture<Self::CodecData, Self::BackendHandle>> {
+        self.picture_container().borrow_mut()
+    }
+    /// Returns the timestamp for the picture.
+    fn timestamp(&self) -> u64 {
+        self.picture().timestamp()
+    }
+
+    /// Returns the display resolution at the time this handle was decoded.
+    fn display_resolution(&self) -> Resolution {
+        self.picture().data.display_resolution()
     }
 }

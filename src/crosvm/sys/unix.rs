@@ -31,8 +31,6 @@ use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
-#[cfg(any(target_arch = "x86_64", feature = "gdb"))]
-use std::thread;
 #[cfg(feature = "balloon")]
 use std::time::Duration;
 
@@ -1391,6 +1389,11 @@ fn get_default_hypervisor() -> Result<HypervisorKind> {
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
+    if let Some(async_executor) = cfg.async_executor {
+        Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
+
     let components = setup_vm_components(&cfg)?;
 
     let guest_mem_layout =
@@ -1835,7 +1838,7 @@ where
         }
 
         let pci_root = linux.root_config.clone();
-        thread::Builder::new()
+        std::thread::Builder::new()
             .name("pci_root".to_string())
             .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube))?;
     }
@@ -2465,7 +2468,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             to_vcpu_channels,
             from_vcpu_channel.unwrap(), // Must succeed to unwrap()
         );
-        thread::Builder::new()
+        std::thread::Builder::new()
             .name("gdb".to_owned())
             .spawn(move || gdb_thread(target, gdb_port_num))
             .context("failed to spawn GDB thread")?;
@@ -2616,7 +2619,11 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                                 target_arch = "x86",
                                                 target_arch = "x86_64"
                                             )))]
-                                            VmResponse::Ok
+                                            {
+                                                // Suppress warnings.
+                                                let _ = (device, add);
+                                                VmResponse::Ok
+                                            }
                                         }
                                         _ => request.execute(
                                             &mut run_mode_opt,
@@ -2919,6 +2926,8 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
         .or_else(|_| Minijail::new())
         .with_context(|| format!("failed to create empty jail for {}", name))?;
 
+    let tz = std::env::var("TZ").unwrap_or_default();
+
     // Safe because we are keeping all the descriptors needed for the child to function.
     match unsafe { jail.fork(Some(&keep_rds)).context("error while forking")? } {
         0 => {
@@ -2940,6 +2949,9 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             // Safe because we trimmed the name to 15 characters (and pthread_setname_np will return
             // an error if we don't anyway).
             let _ = unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
+
+            // Preserve TZ for `chrono::Local` (b/257987535).
+            std::env::set_var("TZ", tz);
 
             // Run the device loop and terminate the child process once it exits.
             let res = match listener.run_device(device) {
@@ -3009,6 +3021,11 @@ fn start_vhost_user_control_server(
 }
 
 pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
+    if let Some(async_executor) = opts.async_executor {
+        Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
+
     struct DeviceJailInfo {
         // Unique name for the device, in the form `foomatic-0`.
         name: String,
