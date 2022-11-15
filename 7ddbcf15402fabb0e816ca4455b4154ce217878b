@@ -22,6 +22,30 @@
       },
       "revId": "7ddbcf15402fabb0e816ca4455b4154ce217878b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd3a9f40_fee9c904",
+        "filename": "metrics/out/event_details.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1622,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-11-15T05:33:05Z",
+      "side": 1,
+      "message": "I wouldn\u0027t be worried about the encoding since it came from the protobuf compiler (also `strlen(\"protos/\") \u003d 7` and `0x1a - 0x13 \u003d 7`, so at least this part checks out).\n\nIf something depended on the data inside the proto descriptor, then we might have a problem. I think we don\u0027t actually use the metrics code though (it is a stub for some B* specific feature last I checked), so it probably isn\u0027t a big risk.\n\nStill, I wonder why we lost the path prefix.",
+      "parentUuid": "469b2e5b_a2a1714a",
+      "range": {
+        "startLine": 1622,
+        "startChar": 8,
+        "endLine": 1622,
+        "endChar": 10
+      },
+      "revId": "7ddbcf15402fabb0e816ca4455b4154ce217878b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
