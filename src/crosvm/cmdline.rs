@@ -57,7 +57,7 @@ use serde_keyvalue::FromKeyValues;
 use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
 
 #[cfg(feature = "gpu")]
-use super::sys::config::fixup_gpu_options;
+use super::gpu_config::fixup_gpu_options;
 #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
 use super::sys::GpuRenderServerParameters;
 use crate::crosvm::config::from_key_values;
@@ -113,10 +113,6 @@ pub struct CrosvmCmdlineArgs {
     #[argh(switch)]
     /// disable output to syslog
     pub no_syslog: bool,
-    /// configure async executor backend; "uring" or "epoll" on Linux, "handle" on Windows.
-    /// If this option is omitted on Linux, "epoll" is used by default.
-    #[argh(option, arg_name = "EXECUTOR")]
-    pub async_executor: Option<ExecutorKind>,
     #[argh(subcommand)]
     pub command: Command,
 }
@@ -389,6 +385,11 @@ pub struct VfioCrosvmCommand {
 #[argh(subcommand, name = "device")]
 /// Start a device process
 pub struct DeviceCommand {
+    /// configure async executor backend; "uring" or "epoll" on Linux, "handle" on Windows.
+    /// If this option is omitted on Linux, "epoll" is used by default.
+    #[argh(option, arg_name = "EXECUTOR")]
+    pub async_executor: Option<ExecutorKind>,
+
     #[argh(subcommand)]
     pub command: DeviceSubcommand,
 }
@@ -589,6 +590,11 @@ pub struct RunCommand {
     #[serde(skip)] // TODO(b/255223604)
     /// path to Android fstab
     pub android_fstab: Option<PathBuf>,
+
+    /// configure async executor backend; "uring" or "epoll" on Linux, "handle" on Windows.
+    /// If this option is omitted on Linux, "epoll" is used by default.
+    #[argh(option, arg_name = "EXECUTOR")]
+    pub async_executor: Option<ExecutorKind>,
 
     #[argh(option, arg_name = "N")]
     #[serde(skip)] // TODO(b/255223604)
@@ -1724,6 +1730,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.android_fstab = cmd.android_fstab;
+
+        cfg.async_executor = cmd.async_executor;
 
         cfg.params.extend(cmd.params);
 

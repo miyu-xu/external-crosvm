@@ -204,6 +204,7 @@ dependencies = [
  "env_logger",
  "libc",
  "log",
+ "minijail",
  "once_cell",
  "protobuf",
  "rand",
@@ -767,6 +768,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "prebuilts",
+ "rand",
  "tempfile",
 ]
 
@@ -1317,8 +1319,8 @@ dependencies = [
  "cfg-if",
  "chrono",
  "libc",
+ "proto_build_tools",
  "protobuf",
- "protoc-rust",
  "serde",
  "serde_json",
  "sync",
@@ -1549,6 +1551,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "proto_build_tools"
+version = "0.1.0"
+dependencies = [
+ "protoc-rust",
+]
+
+[[package]]
 name = "protobuf"
 version = "2.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1594,8 +1603,8 @@ name = "protos"
 version = "0.1.0"
 dependencies = [
  "kvm_sys",
+ "proto_build_tools",
  "protobuf",
- "protoc-rust",
 ]
 
 [[package]]

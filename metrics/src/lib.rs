@@ -17,8 +17,14 @@ mod metrics_cleanup;
 mod metrics_requests;
 mod noop;
 mod sys;
+<<<<<<< HEAD   (3eb3aa Merge changes from topic "crosvm-merge-20221031")
 // Exports a <name>_proto module for each proto file
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+=======
+pub mod protos {
+    include!(concat!(env!("OUT_DIR"), "/metrics_protos/generated.rs"));
+}
+>>>>>>> BRANCH (ba3e2f Add clippy tag for safety docs)
 
 pub use controller::MetricsController;
 pub use event_types::MetricEventType;
