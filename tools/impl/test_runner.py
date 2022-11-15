@@ -240,18 +240,17 @@ def build_all_binaries(target: TestTarget, crosvm_direct: bool, instrument_cover
     """Discover all crates and build them."""
     build_env = os.environ.copy()
     build_env.update(test_target.get_cargo_env(target))
+
+    build_env.setdefault("RUSTFLAGS", "")
+    build_env["RUSTFLAGS"] += " -D warnings"
     if instrument_coverage:
-        build_env["RUSTFLAGS"] = "-C instrument-coverage"
+        build_env["RUSTFLAGS"] += " -C instrument-coverage"
 
     print("Building crosvm workspace")
     features = target.build_triple.feature_flag
     extra_args: List[str] = []
     if crosvm_direct:
         features += ",direct"
-        extra_args.append("--no-default-features")
-
-    # TODO(:b:241251677) Enable default features on windows.
-    if target.build_triple.sys == "windows":
         extra_args.append("--no-default-features")
 
     cargo_args = [
