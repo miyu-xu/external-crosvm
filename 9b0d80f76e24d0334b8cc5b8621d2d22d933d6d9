@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d88e33ac_934db90e",
+        "filename": "proto_build_tools/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-11-15T00:07:25Z",
+      "side": 1,
+      "message": "I wasn\u0027t sure how/if we converted this in the past. Why there\u0027s a separate protoc.",
+      "range": {
+        "startLine": 9,
+        "startChar": 10,
+        "endLine": 9,
+        "endChar": 24
+      },
+      "revId": "9b0d80f76e24d0334b8cc5b8621d2d22d933d6d9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
