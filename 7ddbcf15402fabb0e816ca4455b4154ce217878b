@@ -46,6 +46,30 @@
       },
       "revId": "7ddbcf15402fabb0e816ca4455b4154ce217878b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "130ab099_a221646b",
+        "filename": "metrics/out/event_details.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1622,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-11-15T17:40:04Z",
+      "side": 1,
+      "message": "The build was changed, how these are built (into separate lib proto_build_tools), and I also redid how Android forks here, because the code was all rewritten (and added comments on what I did and filed a bug to remove it later).",
+      "parentUuid": "bd3a9f40_fee9c904",
+      "range": {
+        "startLine": 1622,
+        "startChar": 8,
+        "endLine": 1622,
+        "endChar": 10
+      },
+      "revId": "7ddbcf15402fabb0e816ca4455b4154ce217878b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
