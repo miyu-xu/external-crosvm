@@ -28,6 +28,7 @@ def RunSteps(api):
                 "repo",
                 "sync",
                 "-j8",
+                "--current-branch",
             ],
             cros=True,
         )
@@ -38,12 +39,9 @@ def RunSteps(api):
             cros=True,
         )
 
-        # Ignore errors from unshallow as repo sync sometimes resulted in full git history
         api.crosvm.step_in_container(
-            "Unshallow crosvm", ["git", "fetch", "cros", "--unshallow"], cros=True, ok_ret="any"
+            "Unshallow crosvm", ["git", "fetch", "cros", "--unshallow"], cros=True
         )
-
-        api.crosvm.step_in_container("Print current git log", ["git", "log"], cros=True)
 
         api.crosvm.step_in_container(
             "Fetch upstream crosvm", ["git", "fetch", "upstream"], cros=True

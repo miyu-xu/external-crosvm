@@ -400,14 +400,13 @@ impl VirtioDevice for VirtioSnd {
                 }
             });
 
-        let join_handle = match worker_result {
+        match worker_result {
             Err(e) => {
                 error!("failed to spawn virtio_snd worker: {}", e);
                 return;
             }
-            Ok(join_handle) => join_handle,
-        };
-        self.worker_threads.push(join_handle);
+            Ok(join_handle) => self.worker_threads.push(join_handle),
+        }
     }
 
     fn reset(&mut self) -> bool {

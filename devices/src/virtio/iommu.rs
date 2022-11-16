@@ -897,6 +897,7 @@ impl VirtioDevice for Iommu {
             }
             None => {
                 error!("failed to start virtio-iommu worker: No control tube");
+                return;
             }
         }
     }

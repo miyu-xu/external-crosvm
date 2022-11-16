@@ -199,10 +199,10 @@ impl CrateMemoryMapping {
     }
 
     pub fn from_raw_ptr(addr: RawDescriptor, size: usize) -> Result<CrateMemoryMapping> {
-        MemoryMapping::from_raw_ptr(addr, size).map(|mapping| CrateMemoryMapping {
+        return MemoryMapping::from_raw_ptr(addr, size).map(|mapping| CrateMemoryMapping {
             mapping,
             _file_descriptor: None,
-        })
+        });
     }
 }
 

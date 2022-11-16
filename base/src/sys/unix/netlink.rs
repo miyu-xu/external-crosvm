@@ -79,7 +79,7 @@ pub struct NlAttrWithData<'a> {
 }
 
 fn nlattr_align(offset: usize) -> usize {
-    (offset + NLATTR_ALIGN_TO - 1) & !(NLATTR_ALIGN_TO - 1)
+    return (offset + NLATTR_ALIGN_TO - 1) & !(NLATTR_ALIGN_TO - 1);
 }
 
 /// Iterator over `struct NlAttr` as received from a netlink socket.
@@ -308,12 +308,12 @@ impl NetlinkGenericSocket {
 
         // Return the answer
         match self.recv() {
-            Ok(msg) => Ok(msg),
+            Ok(msg) => return Ok(msg),
             Err(e) => {
                 error!("recv get_family returned with error {}", e);
-                Err(e)
+                return Err(e);
             }
-        }
+        };
     }
 }
 

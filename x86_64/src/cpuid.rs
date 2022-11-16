@@ -365,7 +365,7 @@ pub fn cpu_manufacturer() -> CpuManufacturer {
     } else if result.ebx == INTEL_EBX && result.edx == INTEL_EDX && result.ecx == INTEL_ECX {
         return CpuManufacturer::Intel;
     }
-    CpuManufacturer::Unknown
+    return CpuManufacturer::Unknown;
 }
 
 #[cfg(test)]

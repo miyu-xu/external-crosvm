@@ -1168,7 +1168,7 @@ impl Gpu {
         #[cfg(feature = "gfxstream")]
         let rutabaga_builder = rutabaga_builder
             .set_use_guest_angle(gpu_parameters.gfxstream_use_guest_angle.unwrap_or_default())
-            .set_support_gles31(gpu_parameters.gfxstream_support_gles31.unwrap_or_default());
+            .set_support_gles31(gpu_parameters.gfxstream_support_gles31);
 
         Gpu {
             exit_evt_wrtube,
@@ -1485,12 +1485,14 @@ impl VirtioDevice for Gpu {
                         .run()
                     });
 
-            self.worker_thread = match worker_result {
+            match worker_result {
                 Err(e) => {
                     error!("failed to spawn virtio_gpu worker: {}", e);
                     return;
                 }
-                Ok(join_handle) => Some(join_handle),
+                Ok(join_handle) => {
+                    self.worker_thread = Some(join_handle);
+                }
             }
         }
     }

@@ -146,7 +146,7 @@ impl FfmpegEncoderSession {
                 self.is_flushing = true;
                 Ok(true)
             }
-            None => Ok(false),
+            None => return Ok(false),
         }
     }
 

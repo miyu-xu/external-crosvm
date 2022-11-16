@@ -136,7 +136,7 @@ where
                     .map_err(NetError::WaitContextDisableTap)?;
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
         }
     }
     pub(in crate::virtio) fn handle_rx_queue(

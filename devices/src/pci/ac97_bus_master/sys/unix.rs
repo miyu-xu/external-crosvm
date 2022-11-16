@@ -455,33 +455,17 @@ mod tests {
     use crate::pci::ac97_bus_master::tests::stop;
 
     #[test]
-    fn run_multi_tube_playback_2() {
+    fn run_multi_tube_playback() {
         start_playback(2, 48000);
-    }
-
-    #[test]
-    fn run_multi_tube_playback_4() {
         start_playback(4, 48000);
-    }
-
-    #[test]
-    fn run_multi_tube_playback_6() {
         start_playback(6, 48000);
     }
 
     #[test]
-    fn run_multi_rate_playback_32() {
+    fn run_multi_rate_playback() {
         start_playback(2, 32000);
-    }
-
-    #[test]
-    fn run_multi_rate_playback_44() {
         start_playback(2, 44100);
-    }
-
-    #[test]
-    fn run_multi_rate_playback_48() {
-        start_playback(2, 32000);
+        start_playback(2, 48000);
     }
 
     fn start_playback(num_channels: usize, rate: u16) {
@@ -587,12 +571,8 @@ mod tests {
     }
 
     #[test]
-    fn run_capture_input() {
+    fn run_capture() {
         start_capture(Ac97Function::Input);
-    }
-
-    #[test]
-    fn run_capture_microphone() {
         start_capture(Ac97Function::Microphone);
     }
 

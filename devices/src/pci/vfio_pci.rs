@@ -543,11 +543,15 @@ fn get_next_from_extcap_header(cap_header: u32) -> u32 {
 }
 
 fn is_skipped_ext_cap(cap_id: u16) -> bool {
-    matches!(
-        cap_id,
+    match cap_id {
         // SR-IOV/ARI/Resizable_BAR capabilities are not well handled and should not be exposed
-        PCI_EXT_CAP_ID_ARI | PCI_EXT_CAP_ID_SRIOV | PCI_EXT_CAP_ID_REBAR
-    )
+        PCI_EXT_CAP_ID_ARI | PCI_EXT_CAP_ID_SRIOV | PCI_EXT_CAP_ID_REBAR => {
+            return true;
+        }
+        _ => {
+            return false;
+        }
+    }
 }
 
 enum DeviceData {

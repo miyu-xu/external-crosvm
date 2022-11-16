@@ -284,7 +284,7 @@ impl PciBus {
             }
         }
 
-        false
+        return false;
     }
 
     // Returns the hotplug bus that this device is on.
@@ -298,7 +298,7 @@ impl PciBus {
                 return hotplug_bus;
             }
         }
-        None
+        return None;
     }
 }
 

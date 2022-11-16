@@ -137,11 +137,11 @@ impl WlBackend {
 
 impl VhostUserBackend for WlBackend {
     fn max_queue_num(&self) -> usize {
-        MAX_QUEUE_NUM
+        return MAX_QUEUE_NUM;
     }
 
     fn max_vring_len(&self) -> u16 {
-        MAX_VRING_LEN
+        return MAX_VRING_LEN;
     }
 
     fn features(&self) -> u64 {

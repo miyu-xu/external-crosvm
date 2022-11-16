@@ -159,13 +159,6 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
                 let mut short_path = PathBuf::with_capacity(MAX_SOCKET_PATH_LENGTH);
                 short_path.push("/proc/self/fd/");
 
-                let parent_path = path
-                    .parent()
-                    .ok_or_else(|| Error::InvalidPath(path.clone()))?;
-                let file_name = path
-                    .file_name()
-                    .ok_or_else(|| Error::InvalidPath(path.clone()))?;
-
                 // We don't actually want to open this
                 // directory for reading, but the stdlib
                 // requires all files be opened as at
@@ -173,11 +166,11 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
                 // appeandable.
                 let dir = OpenOptions::new()
                     .read(true)
-                    .open(parent_path)
-                    .map_err(|e| Error::FileOpen(e, parent_path.into()))?;
+                    .open(path.parent().ok_or(Error::InvalidPath)?)
+                    .map_err(Error::FileError)?;
 
                 short_path.push(dir.as_raw_descriptor().to_string());
-                short_path.push(file_name);
+                short_path.push(path.file_name().ok_or(Error::InvalidPath)?);
                 path_cow = Cow::Owned(short_path);
                 _dir_fd = Some(dir);
             }
@@ -185,14 +178,14 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
             // The shortened path may still be too long,
             // in which case we must give up here.
             if path_cow.as_os_str().len() >= MAX_SOCKET_PATH_LENGTH {
-                return Err(Error::InvalidPath(path_cow.into()));
+                return Err(Error::InvalidPath);
             }
 
             // There's a race condition between
             // vmlog_forwarder making the logging socket and
             // crosvm starting up, so we loop here until it's
             // available.
-            let sock = UnixDatagram::unbound().map_err(Error::SocketCreate)?;
+            let sock = UnixDatagram::unbound().map_err(Error::FileError)?;
             loop {
                 match sock.connect(&path_cow) {
                     Ok(_) => break,
@@ -206,7 +199,7 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
                             }
                             _ => {
                                 error!("Unexpected error connecting to logging socket: {:?}", e);
-                                return Err(Error::SocketConnect(e));
+                                return Err(Error::FileError(e));
                             }
                         }
                     }
@@ -214,7 +207,7 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
             }
             keep_rds.push(sock.as_raw_descriptor());
             let output: Option<Box<dyn Write + Send>> = Some(Box::new(WriteSocket::new(sock)));
-            Ok(T::new(
+            return Ok(T::new(
                 protection_type,
                 evt,
                 input,
@@ -222,8 +215,8 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
                 None,
                 false,
                 keep_rds.to_vec(),
-            ))
+            ));
         }
-        None => Err(Error::PathRequired),
+        None => return Err(Error::PathRequired),
     }
 }

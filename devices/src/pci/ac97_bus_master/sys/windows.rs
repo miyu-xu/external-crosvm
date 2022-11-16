@@ -129,7 +129,7 @@ impl Ac97BusMaster {
         exit_event: Event,
         audio_server: AudioStreamSource,
     ) -> JoinHandle<Result<(), AudioError>> {
-        thread::Builder::new()
+        return thread::Builder::new()
             .name("Ac97BusMaster event loop".to_string())
             .spawn(move || {
                 #[derive(EventToken)]
@@ -174,7 +174,7 @@ impl Ac97BusMaster {
                 }
                 Ok(())
             })
-            .unwrap()
+            .unwrap();
     }
 
     // Windows doesn't need a reference to the guest memory raw descriptor because we are

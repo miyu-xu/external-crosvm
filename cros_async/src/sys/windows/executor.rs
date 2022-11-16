@@ -7,7 +7,6 @@ use std::future::Future;
 use async_task::Task;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
-use serde::Serialize;
 use thiserror::Error as ThisError;
 
 use super::HandleExecutor;
@@ -127,9 +126,7 @@ pub enum Executor {
 }
 
 /// An enum to express the kind of the backend of `Executor`
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, serde_keyvalue::FromKeyValues,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, serde_keyvalue::FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub enum ExecutorKind {
     Handle,

@@ -11,12 +11,11 @@ use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
 
-use rand::Rng;
-
 use fixture::Config;
 use fixture::TestVm;
 
 const HOST_CID: u64 = 2;
+const GUEST_CID: u64 = 5;
 const VSOCK_COM_PORT: u64 = 11111;
 
 const SERVER_TIMEOUT_IN_SEC: u64 = 3;
@@ -25,16 +24,9 @@ const CLIENT_WAIT_DURATION: Duration = Duration::from_millis(1000);
 const MESSAGE_TO_HOST: &str = "Connection from the host is successfully established";
 const MESSAGE_TO_GUEST: &str = "Connection from the guest is successfully established";
 
-// generate a random CID to avoid conflicts with other VMs run on different processes
-fn generate_guest_cid() -> u32 {
-    // avoid special CIDs and negative values
-    rand::thread_rng().gen_range(3..0x8000_0000)
-}
-
 #[test]
 fn host_to_guest_connection() {
-    let guest_cid = generate_guest_cid();
-    let config = Config::new().extra_args(vec!["--cid".to_string(), guest_cid.to_string()]);
+    let config = Config::new().extra_args(vec!["--cid".to_string(), GUEST_CID.to_string()]);
     let mut vm = TestVm::new(config).unwrap();
 
     let handle_guest = thread::spawn(move || {
@@ -51,7 +43,7 @@ fn host_to_guest_connection() {
         .args(["--idle-timeout", "1"])
         .args([
             "--vsock",
-            &guest_cid.to_string(),
+            &GUEST_CID.to_string(),
             &VSOCK_COM_PORT.to_string(),
         ])
         .output()
@@ -65,8 +57,7 @@ fn host_to_guest_connection() {
 
 #[test]
 fn guest_to_host_connection() {
-    let guest_cid = generate_guest_cid();
-    let config = Config::new().extra_args(vec!["--cid".to_string(), guest_cid.to_string()]);
+    let config = Config::new().extra_args(vec!["--cid".to_string(), GUEST_CID.to_string()]);
     let mut vm = TestVm::new(config).unwrap();
 
     let echo = Command::new("echo")

@@ -57,7 +57,7 @@ impl Drop for VhostUserConsoleDevice {
 
 impl VhostUserDevice for VhostUserConsoleDevice {
     fn max_queue_num(&self) -> usize {
-        MAX_QUEUE_NUM
+        return MAX_QUEUE_NUM;
     }
 
     fn into_backend(self: Box<Self>, ex: &Executor) -> anyhow::Result<Box<dyn VhostUserBackend>> {

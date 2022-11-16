@@ -256,12 +256,14 @@ where
                                 (worker, tap)
                             });
 
-                        self.worker_thread = match worker_result {
+                        match worker_result {
                             Err(e) => {
                                 error!("failed to spawn vhost_net worker: {}", e);
                                 return;
                             }
-                            Ok(join_handle) => Some(join_handle),
+                            Ok(join_handle) => {
+                                self.worker_thread = Some(join_handle);
+                            }
                         }
                     }
                 }

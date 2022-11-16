@@ -141,7 +141,7 @@ class CrosvmApi(recipe_api.RecipeApi):
 
                 return self.m.context(env=env, env_prefixes=env_prefixes, cwd=self.source_dir)
 
-    def step_in_container(self, step_name, command, cros=False, **kwargs):
+    def step_in_container(self, step_name, command, cros=False):
         """
         Runs a luci step inside the crosvm dev container.
         """
@@ -154,7 +154,6 @@ class CrosvmApi(recipe_api.RecipeApi):
             ]
             + (["--cros"] if cros else [])
             + command,
-            **kwargs
         )
 
     def prepare_git(self):
