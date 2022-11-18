@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "94179dad_a1cff970",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "72c73ddc_bbea453c",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "818700ea_c596ac50",
@@ -35,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "778669b9_7a897072",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "818700ea_c596ac50",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a170c07f_7d7d6bbd",
@@ -48,6 +84,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "The generic non-SCMI flags specified here (F_VERSION_1, F_ANY_LAYOUT, etc.) should already be part of `base_features` and should not be added by the device itself.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4c22c759_c07d4086",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 39,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a170c07f_7d7d6bbd",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -71,6 +125,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "ece5c3bb_0d852d7f",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Sure will check and get back on this.",
+      "parentUuid": "11088ee8_c6c68944",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "5ad53fff_25342afe",
         "filename": "devices/src/virtio/vhost/scmi.rs",
         "patchSetId": 1
@@ -82,6 +154,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "nit: this message mentions the worker thread, but we haven\u0027t spawned the thread yet.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e8b7772b_dd7ccc9b",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5ad53fff_25342afe",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -103,6 +193,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "011a7100_6d0ee99f",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 173,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "65664732_caf6a3db",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b4d7343f_6cec0a79",
@@ -116,6 +224,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "nit: please leave a blank line between blocks",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f2ebd1ee_62075ffe",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 641,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "b4d7343f_6cec0a79",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -139,6 +265,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "fbf62093_4bf13194",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1132,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Sure, let me check and get back",
+      "parentUuid": "1b717110_0022d55d",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "e4c1b335_437d6daa",
         "filename": "vhost/src/lib.rs",
         "patchSetId": 1
@@ -150,6 +294,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "I think SCMI is an ARM-specific device type, so it probably makes sense to add a `#[cfg(target_arch \u003d \"aarch64\")]` check (with the same check on any code calling into it).",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "555a3e29_a80c552c",
+        "filename": "vhost/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "e4c1b335_437d6daa",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -171,6 +333,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "44eedbfa_f23c83a1",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ae2984f0_dc026280",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f800d33f_5367c37c",
@@ -184,6 +364,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "Please use one import per line style as used in the rest of the codebase.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3eec0975_29774420",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f800d33f_5367c37c",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -205,6 +403,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d29cc711_056263a8",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 19,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "39f15e9c_0f695790",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d99d0d13_3f34b791",
@@ -222,6 +438,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3b2ee08b_a1f1ecc1",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d99d0d13_3f34b791",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c64d4d5d_5c052cc4",
@@ -235,6 +469,24 @@
       "writtenOn": "2022-11-15T23:17:08Z",
       "side": 1,
       "message": "This file is meant to include only generic virtio device and queue features; features specific to one device type should be added to `devices/src/virtio/device_constants.rs` (or in the implementation of the device itself if they don\u0027t need to be shared between files).\n\nThis file is generated automatically (as mentioned in the first line), so any manual changes will be lost when the bindings are regenerated.",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "01dba784_7adff1d9",
+        "filename": "virtio_sys/src/virtio_config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 24,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-18T12:14:01Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c64d4d5d_5c052cc4",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
