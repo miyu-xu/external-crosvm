@@ -86,6 +86,24 @@
       "message": "Could this be accomplished by passing the physical address to GuestAddress offset as a parameter to the load_elf function instead? For aarch64, we would pass `AARCH64_PHYS_MEM_START` and for x86, we would just pass 0. Then the load address could be calculated as `GuestAddress(phdr.p_paddr + phys_to_guest_offset)` and nothing else would need to change (hopefully).\n\nI am not really comfortable with the tricky behavior change based on special fields in the first program header.",
       "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0599d608_346d4757",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-18T22:42:28Z",
+      "side": 1,
+      "message": "I made a quick patch to try this out, but I don\u0027t have a good test case for aarch64, so please see if this works for you: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4035738",
+      "parentUuid": "644c4a28_6f339dd4",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
