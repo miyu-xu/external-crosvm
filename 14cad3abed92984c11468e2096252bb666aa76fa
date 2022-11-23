@@ -1,0 +1,67 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c13aced_90b62264",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-11-23T21:17:11Z",
+      "side": 1,
+      "message": "are all of the previous options still relevant when this is set?",
+      "range": {
+        "startLine": 172,
+        "startChar": 0,
+        "endLine": 172,
+        "endChar": 31
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "05e61ceb_a62ac5b9",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 335,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-11-23T21:17:11Z",
+      "side": 1,
+      "message": "format",
+      "range": {
+        "startLine": 335,
+        "startChar": 1,
+        "endLine": 335,
+        "endChar": 2
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "76dbf339_235149df",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1306,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-11-23T21:17:11Z",
+      "side": 1,
+      "message": "do we know why all these config options are duplicated?",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
