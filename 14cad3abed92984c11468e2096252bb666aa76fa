@@ -134,6 +134,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "523721a9_0fdadb25",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 429,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T22:07:51Z",
+      "side": 1,
+      "message": "(or rather `get_mut()` in this case, since we will want to write into the resulting slice)",
+      "parentUuid": "5dc990d6_bb82006d",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "9e226d6c_4af64b3e",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 1
