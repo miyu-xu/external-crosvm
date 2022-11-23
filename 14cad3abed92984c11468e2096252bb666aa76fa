@@ -225,6 +225,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "85ac431e_44f0c0d4",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1306,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T22:01:20Z",
+      "side": 1,
+      "message": "The arguments are parsed into the `RunCommand` struct in cmdline.rs, and then the options are validated and converted to `Config` that is passed to the code that runs the VM (we can probably clean this up eventually, but for now it\u0027s necessary to duplicate the fields in each struct).",
+      "parentUuid": "76dbf339_235149df",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "55695988_b9e2a9e5",
         "filename": "src/crosvm/sys/unix.rs",
         "patchSetId": 1
