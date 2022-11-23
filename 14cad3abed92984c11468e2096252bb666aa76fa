@@ -26,6 +26,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "05b2bef3_51c9e7b0",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 320,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "`File::from_raw_fd()` will take ownership of the file descriptor, so this is not safe to call if we also keep the `SafeDescriptor` around in the caller. (For example, both `File` and `SafeDescriptor` will try to close the file descriptor when they are dropped.)\n\nIf we really need both alive at once, then the `SafeDescriptor` needs to be cloned first to get a dup\u0027d fd, and then we can use the safe `From\u003cSafeDescriptor\u003e for File` conversion:\n\n```\nlet file: File \u003d vm_descriptor.try_clone().map_err(...)?.into();\n```\n\n(This function would need to be be changed to accept a `SafeDescriptor` or just `File` directly, leaving the caller responsible for the conversion.)",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "05e61ceb_a62ac5b9",
         "filename": "hypervisor/src/gunyah/vm.rs",
         "patchSetId": 1
@@ -49,6 +66,148 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "6f65adda_cf03393f",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 405,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "nit: maybe mention \"fixed memory\" in the function name (or at least in a doc comment) if that is the only case where this function is used",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d13e617a_61c3ecdc",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "nit: this could probably be clearer as a method on `Gunyah` rather than a `GunyahVm` associated function (move this to `impl Gunyah` and use a `\u0026self` parameter in place of `gunyah: \u0026Gunyah`)",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3102daaf_5e38cede",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 408,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "This function probably doesn\u0027t need to take ownership of the `vm_name`, so it can likely just be a `\u0026str` (also see the other comment in cmdline about the `Vec` - I\u0027m assuming we only really want a single name string) - this would avoid the need for `.clone()` when calling this function, which will copy the string content.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5dc990d6_bb82006d",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 429,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "The array indexing operation `[..vm_name.len()]` will panic if `vm_name` is longer than the `fw_name` field, so this should check and return an error. You can use something like `fw_name._name.get(..vm_name.len())`, which will return `None` if the range is out of bounds.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9e226d6c_4af64b3e",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1112,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "This probably needs a bit more description to be meaningful to someone reading the `--help` output without the context in the commit message.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ffb7096b_fae1e8de",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1113,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "I think this option would fit nicely into the recently-added [`MemOptions`] structure in upstream crosvm (this patch series seems to be based on a very outdated version of the crosvm tree, so it\u0027s not present here yet).\n\n[`MemOptions`]: https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform/crosvm/src/crosvm/config.rs;l\u003d114;drc\u003d21e083a108c3bf3db4c3b210d3a2a961443286c9",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "30b745de_27908a8d",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1269,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "nit: `--vm-name` seems like it would be more consistent with the rest of the options (drop the `set`)",
+      "range": {
+        "startLine": 1269,
+        "startChar": 27,
+        "endLine": 1269,
+        "endChar": 38
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5bb1d6d4_5d8ee999",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1271,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "Can there be more than one VM name? If not, this should probably be just a single `String`, or `Option\u003cString\u003e` if it\u0027s important to distinguish between not-specified and empty-string.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "76dbf339_235149df",
         "filename": "src/crosvm/config.rs",
         "patchSetId": 1
@@ -60,6 +219,23 @@
       "writtenOn": "2022-11-23T21:17:11Z",
       "side": 1,
       "message": "do we know why all these config options are duplicated?",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "55695988_b9e2a9e5",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1415,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T21:59:21Z",
+      "side": 1,
+      "message": "nit: unnecessary `return` statement (just use `Ok(guest_mem)`) - please make sure `tools/health-check` doesn\u0027t report any issues.",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
