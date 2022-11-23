@@ -104,6 +104,24 @@
       "parentUuid": "644c4a28_6f339dd4",
       "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5a60ca58_3da66506",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-23T06:05:43Z",
+      "side": 1,
+      "message": "The new change looks good and works fine. Please go ahead and merge it.",
+      "parentUuid": "0599d608_346d4757",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
