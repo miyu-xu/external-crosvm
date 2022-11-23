@@ -1,0 +1,171 @@
+tests = true
+workspace = true
+workspace_excludes = [
+  "audio_streams_conformance_test",
+  "baremetal",
+  "cros_asyncv2",
+  "cros_fuzz",
+  "crosvm-fuzz",
+  "crosvm_plugin",
+  "e2e_tests",
+  "ffmpeg",
+  "gpu_buffer",  # i.e. rutabaga_gralloc
+  "libva",
+  "libvda",
+  "p9-fuzz",
+  "prebuilts",
+  "proto_build_tools",
+  "qcow_utils",
+  "rutabaga_gfx_ffi",
+  "sandbox",
+  "system_api",
+  "tpm2",
+  "tpm2-sys",
+  "tube_transporter",
+  "win_audio",
+  "win_util",
+]
+features = [
+  "audio",
+  "balloon",
+  # TODO: The "protos" crate has been modified such that it doesn't work with cargo. If we fix that,
+  # we can remove a some patch files and enable "composite-disk" here.
+  # "composite-disk",
+  "disk/android-sparse",
+  "gdb",
+  "qcow",
+  "usb",
+  # TODO: Enable these in the root crate instead. May be difficult because of host-vs-device
+  # difference that are handled in patches in, e.g., the "devices" crate.
+  "rutabaga_gfx/virgl_renderer",
+  "rutabaga_gfx/virgl_renderer_next",
+]
+global_defaults = "crosvm_defaults"
+apex_available = []
+
+module_blocklist = [
+  "libprebuilts",
+  "libproto_build_tools",
+  "liblibva",
+  "libva_test_src_lib",
+  # These are all tests that cargo2android.py ignored, probably because the
+  # `cargo test` run reported 0 tests.
+  # TODO: replicate the empty test detection if this list is annoying to maintain.
+  "aarch64_test_src_lib",
+  "anti_tamper_test_src_lib",
+  "argh_helpers_test_src_lib",
+  "balloon_control_test_src_lib",
+  "bit_field_derive_test_bit_field_derive",
+  "bit_field_test_src_lib",
+  "broker_ipc_test_src_lib",
+  "crash_report_test_src_lib",
+  "cros_tracing_test_src_lib",
+  "crosvm_cli_test_src_lib",
+  "crosvm_control_test_src_lib",
+  "crosvm_test_tests_plugins",
+  "gpu_display_test_examples_simple",
+  "gpu_display_test_examples_simple_open",
+  "gpu_display_test_src_lib",
+  "hypervisor_test_src_lib",
+  "hypervisor_test_tests_mmio_fetch_memory",
+  "io_uring_test_src_lib",
+  "kvm_sys_test_src_lib",
+  "kvm_test_src_lib",
+  "libcras_test_src_libcras",
+  "linux_input_sys_test_src_lib",
+  "metrics_test_src_lib",
+  "net_sys_test_src_lib",
+  "power_monitor_test_src_lib",
+  "prebuilts_test_src_lib",
+  "protos_test_src_lib",
+  "serde_keyvalue_derive_test_src_lib",
+  "sync_test_src_lib",
+  "usb_sys_test_src_lib",
+  "vfio_sys_test_src_lib",
+  "vhost_test_src_lib",
+  "virtio_sys_test_src_lib",
+  "wire_format_derive_test_wire_format_derive",
+]
+
+[module_name_overrides]
+"libbase" = "libbase_rust"
+"libbase64" = "libbase64_rust"
+"libfuse" = "libfuse_rust"
+"liblog" = "liblog_rust"
+"libminijail" = "libminijail_rust"
+"libsync" = "libsync_rust"
+"libx86_64" = "libx86_64_rust"
+
+[package.crosvm]
+no_presubmit = true
+add_toplevel_block = "cargo2android_defaults.bp"
+add_module_block = "cargo2android_module.bp.patch"
+patch = "patches/Android.bp.patch"
+dep_blocklist = [
+  # Keep cargo2android from adding ISA specific deps so that we can add them
+  # correctly via patches.
+  "libx86_64_rust",
+  "libaarch64_rust",
+]
+
+[package.cros_async]
+no_presubmit = true
+
+[package.devices]
+no_presubmit = true
+add_module_block = "devices/cargo2android_libs.bp.patch"
+
+[package.hypervisor]
+no_presubmit = true
+
+[package.io_uring]
+no_presubmit = true
+
+[package.kvm]
+no_presubmit = true
+
+[package.kvm_sys]
+no_presubmit = true
+
+[package.net_util]
+no_presubmit = true
+
+[package.vhost]
+no_presubmit = true
+
+[package.x86_64]
+no_presubmit = true
+add_module_block = "x86_64/cargo2android_gdb.bp"
+
+[package.base]
+patch = "base/patches/Android.bp.patch"
+
+[package.base_event_token_derive]
+# TODO: This is a proc macro crate. Should disable device tests by default for them.
+device_supported = false
+
+[package.arch]
+add_module_block = "arch/cargo2android_gdb.bp.patch"
+
+[package.vm_control]
+add_module_block = "vm_control/cargo2android.bp.patch"
+
+[package.aarch64]
+add_module_block = "aarch64/cargo2android_arch.bp"
+
+[package.gpu_display]
+add_toplevel_block = "gpu_display/cargo2android.bp"
+patch = "gpu_display/patches/Android.bp.patch"
+
+[package.protos]
+add_toplevel_block = "protos/cargo2android_protobuf.bp"
+patch = "protos/patches/Android.bp.patch"
+
+[package.disk]
+patch = "disk/patches/Android.bp.patch"
+
+[package.rutabaga_gfx]
+patch = "rutabaga_gfx/patches/Android.bp.patch"
+
+[package.metrics]
+copy_out = true
