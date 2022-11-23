@@ -60,6 +60,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "4bf8ad72_42fed7ac",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/bindings.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T22:37:21Z",
+      "side": 1,
+      "message": "We would like bindings to be reproducible (so they can be regenerated as needed for  bindgen/Rust updates or header changes), either by:\n\n1 - Writing a `bindgen.sh` script like the other ones in the crosvm tree to regenerate the bindings automatically from a fixed version of the Linux kernel source tree.\n\nor\n\n2 - Adding the bindgen command plus any other necessary instructions (e.g. how to get the right version of the headers) to a comment header in the generated file.\n\n(Option 1 is preferred, but it\u0027s OK to do it manually for now if the headers are not available in the kernel yet.)\n\nIdeally this should also be filtered down to the relevant definitions using bindgen\u0027s `--allowlist-type`, `--allowlist-function`, etc. with regexes that just match the Gunyah declarations (for example, `__BITS_PER_LONG`, `__kernel_uid32_t`, etc. are not relevant and don\u0027t need to be in the bindings). You can also set `--no-layout-tests` to cut down on a lot of the cruft.",
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d6d645c0_9f5ea127",
         "filename": "hypervisor/src/gunyah/gunyah_sys/bindings.rs",
         "patchSetId": 2
@@ -88,6 +105,30 @@
       "writtenOn": "2022-10-06T20:21:20Z",
       "side": 1,
       "message": "should we combine this with kvm_path and use it as \u0027hypervisor path\u0027? I think the CLI being hypervisor specific would prevent certain types of re-use. It shouldn\u0027t matter for one path, and it needs to be configured anyway, but I would prefer to avoid \"gunyah_A, gunyah_B, etc..\" alongside \"kvm_A, kvm_B, etc...\"",
+      "range": {
+        "startLine": 689,
+        "startChar": 0,
+        "endLine": 692,
+        "endChar": 44
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b7b2f124_bc93e0b5",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 692,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T22:37:21Z",
+      "side": 1,
+      "message": "I agree, something like `--hypervisor-device` would be nice, but it might be tricky since we couldn\u0027t have a single default path that makes sense for both KVM and Gunyah. Possibly we could leave the default as `None` and fill in the default path in the per-hypervisor setup code instead of filling it in the `Default` impl of `Config`.\n\n(It would also be good to keep supporting the old name at least temporarily so we don\u0027t break existing users.)",
+      "parentUuid": "94439751_68786620",
       "range": {
         "startLine": 689,
         "startChar": 0,
@@ -134,6 +175,30 @@
       "writtenOn": "2022-10-06T20:21:20Z",
       "side": 1,
       "message": "nit/aside: out of curiosity - has anyone tried looking at making \u0027kvm\u0027 a feature as well or compiling it out (for symmetry). It would expose the structure of shared code between hypervisors vs hypervisor-specific code explicitly.",
+      "range": {
+        "startLine": 1389,
+        "startChar": 0,
+        "endLine": 1389,
+        "endChar": 67
+      },
+      "revId": "676e61483f6d76128e25d74c63d9e87b3a779150",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2e6170e9_b9678bf9",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1389,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-11-23T22:37:21Z",
+      "side": 1,
+      "message": "There is a lot of code that assumes `#[cfg(unix)]` implies KVM, but I think it would be a worthwhile cleanup to put KVM hypervisor support behind `--features\u003dkvm` and fix those implicit assumptions.\n\nNobody is working on this right now, as far as I\u0027m aware, but it should be easier  once we have a second hypervisor implementation to validate everything still compiles with kvm disabled.",
+      "parentUuid": "bf10a83c_853fc2c2",
       "range": {
         "startLine": 1389,
         "startChar": 0,
