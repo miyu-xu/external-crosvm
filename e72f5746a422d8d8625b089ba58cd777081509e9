@@ -122,6 +122,23 @@
       "parentUuid": "0599d608_346d4757",
       "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6c68fda1_64760a58",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-11-28T08:25:37Z",
+      "side": 1,
+      "message": "Daniel,\n\nCan you please use this buganizer for your change so that context will be clear - https://partnerissuetracker.corp.google.com/issues/255697205\n\nThanks,",
+      "revId": "e72f5746a422d8d8625b089ba58cd777081509e9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
