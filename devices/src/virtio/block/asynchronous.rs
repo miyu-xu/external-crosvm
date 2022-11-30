@@ -322,7 +322,11 @@ pub async fn handle_queue<I: SignalableInterrupt + 'static>(
             let flush_timer = Rc::clone(&flush_timer);
             let flush_timer_armed = Rc::clone(&flush_timer_armed);
 
-            ex.spawn_local(async move {
+            // ANDROID(b/251366833): We've temporarily disabled concurrent request processing to
+            // debug an issue.
+            //
+            // ex.spawn_local(async move {
+            {
                 process_one_chain(
                     queue,
                     descriptor_chain,
@@ -333,8 +337,9 @@ pub async fn handle_queue<I: SignalableInterrupt + 'static>(
                     flush_timer_armed,
                 )
                 .await
-            })
-            .detach();
+            }
+            // })
+            // .detach();
         }
     }
 }
