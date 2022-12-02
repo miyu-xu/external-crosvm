@@ -231,6 +231,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "0fcc80d1_5cc101fb",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:53:15Z",
+      "side": 1,
+      "message": "Sorry this isn\u0027t yet corrected, I will do it in the next patch along with new comments that I may receive on patchset#2.",
+      "parentUuid": "e8b7772b_dd7ccc9b",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "65664732_caf6a3db",
         "filename": "devices/src/virtio/vhost/scmi.rs",
         "patchSetId": 1
@@ -260,6 +278,24 @@
       "side": 1,
       "message": "Done",
       "parentUuid": "65664732_caf6a3db",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "06d293f9_425342dd",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 173,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:53:15Z",
+      "side": 1,
+      "message": "Sorry this isn\u0027t yet corrected, I will do it in the next patch along with new comments that I may receive on patchset#2.",
+      "parentUuid": "011a7100_6d0ee99f",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
