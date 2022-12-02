@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f28587c4_ae24d04c",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Yes, expect that it needs another mandatory param vm-name. In the new patchset, I took care of this dependency and print error that fails to meet it.\n\nAlso, memory size provided by user will be overwritten later with an information print indicating the same to user. Apart from these two differences, don\u0027t see any other options that might be impacted.",
+      "parentUuid": "4c13aced_90b62264",
+      "range": {
+        "startLine": 172,
+        "startChar": 0,
+        "endLine": 172,
+        "endChar": 31
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "05b2bef3_51c9e7b0",
@@ -37,6 +61,24 @@
       "writtenOn": "2022-11-23T21:59:21Z",
       "side": 1,
       "message": "`File::from_raw_fd()` will take ownership of the file descriptor, so this is not safe to call if we also keep the `SafeDescriptor` around in the caller. (For example, both `File` and `SafeDescriptor` will try to close the file descriptor when they are dropped.)\n\nIf we really need both alive at once, then the `SafeDescriptor` needs to be cloned first to get a dup\u0027d fd, and then we can use the safe `From\u003cSafeDescriptor\u003e for File` conversion:\n\n```\nlet file: File \u003d vm_descriptor.try_clone().map_err(...)?.into();\n```\n\n(This function would need to be be changed to accept a `SafeDescriptor` or just `File` directly, leaving the caller responsible for the conversion.)",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d727fa38_cc4dd0b3",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 320,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Taking File directly in the patchset#2. Please take a look.",
+      "parentUuid": "05b2bef3_51c9e7b0",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -81,6 +123,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9dc95a4a_8f81d546",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 405,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "6f65adda_cf03393f",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d13e617a_61c3ecdc",
@@ -100,6 +160,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d2b21298_74f00ad7",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "I think this needs to be here only as its creating a new instance of GunyahVm after creating a VM, setting name etc which are VM specific. Please review and let me know your comments.",
+      "parentUuid": "d13e617a_61c3ecdc",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3102daaf_5e38cede",
         "filename": "hypervisor/src/gunyah/vm.rs",
         "patchSetId": 1
@@ -111,6 +189,24 @@
       "writtenOn": "2022-11-23T21:59:21Z",
       "side": 1,
       "message": "This function probably doesn\u0027t need to take ownership of the `vm_name`, so it can likely just be a `\u0026str` (also see the other comment in cmdline about the `Vec` - I\u0027m assuming we only really want a single name string) - this would avoid the need for `.clone()` when calling this function, which will copy the string content.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7413793d_d1c39cac",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 408,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3102daaf_5e38cede",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -150,6 +246,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "426c9148_c3928fe8",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 429,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "523721a9_0fdadb25",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "9e226d6c_4af64b3e",
@@ -167,6 +281,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "02c6109e_0f0108ab",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1112,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9e226d6c_4af64b3e",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ffb7096b_fae1e8de",
@@ -180,6 +312,24 @@
       "writtenOn": "2022-11-23T21:59:21Z",
       "side": 1,
       "message": "I think this option would fit nicely into the recently-added [`MemOptions`] structure in upstream crosvm (this patch series seems to be based on a very outdated version of the crosvm tree, so it\u0027s not present here yet).\n\n[`MemOptions`]: https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform/crosvm/src/crosvm/config.rs;l\u003d114;drc\u003d21e083a108c3bf3db4c3b210d3a2a961443286c9",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9733dc1b_cd3a9cd7",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1113,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Sure, will use that structure in the final change, once the base Gunyah patches on which this change is dependent is moved to a more latest crosvm tree.",
+      "parentUuid": "ffb7096b_fae1e8de",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -207,6 +357,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "46c1a45b_b559e1e9",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1269,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "30b745de_27908a8d",
+      "range": {
+        "startLine": 1269,
+        "startChar": 27,
+        "endLine": 1269,
+        "endChar": 38
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "5bb1d6d4_5d8ee999",
@@ -220,6 +394,24 @@
       "writtenOn": "2022-11-23T21:59:21Z",
       "side": 1,
       "message": "Can there be more than one VM name? If not, this should probably be just a single `String`, or `Option\u003cString\u003e` if it\u0027s important to distinguish between not-specified and empty-string.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8608f2fb_e281ee21",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1271,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5bb1d6d4_5d8ee999",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -259,6 +451,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e6f9a010_acc82849",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1306,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "85ac431e_44f0c0d4",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "55695988_b9e2a9e5",
@@ -272,6 +482,24 @@
       "writtenOn": "2022-11-23T21:59:21Z",
       "side": 1,
       "message": "nit: unnecessary `return` statement (just use `Ok(guest_mem)`) - please make sure `tools/health-check` doesn\u0027t report any issues.",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3920999f_cb387ef0",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1415,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:09:03Z",
+      "side": 1,
+      "message": "Addressed the comment. Sure will make sure to run tools/health-check on the final change before merging it.",
+      "parentUuid": "55695988_b9e2a9e5",
       "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
