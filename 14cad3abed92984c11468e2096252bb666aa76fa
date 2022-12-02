@@ -106,6 +106,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "33015040_c9899a90",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 335,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:11:08Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "05e61ceb_a62ac5b9",
+      "range": {
+        "startLine": 335,
+        "startChar": 1,
+        "endLine": 335,
+        "endChar": 2
+      },
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6f65adda_cf03393f",
