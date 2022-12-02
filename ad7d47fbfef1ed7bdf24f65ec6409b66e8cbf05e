@@ -90,6 +90,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "847ed513_d4f60696",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:48:23Z",
+      "side": 1,
+      "message": "Based on the internal discussion, at this point we are following AOSP guidelines for these changes. According to which, there is no need for any copyright/license markings.",
+      "parentUuid": "778669b9_7a897072",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a170c07f_7d7d6bbd",
         "filename": "devices/src/virtio/vhost/scmi.rs",
         "patchSetId": 1
@@ -154,6 +172,24 @@
       "side": 1,
       "message": "Sure will check and get back on this.",
       "parentUuid": "11088ee8_c6c68944",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4951cf4f_36ca7a2a",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:48:23Z",
+      "side": 1,
+      "message": "Yes, its not needed. Removed it in the latest patchset.",
+      "parentUuid": "ece5c3bb_0d852d7f",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -294,6 +330,24 @@
       "side": 1,
       "message": "Sure, let me check and get back",
       "parentUuid": "1b717110_0022d55d",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "60efe451_f08d2acb",
+        "filename": "src/crosvm/sys/unix/device_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1132,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:48:23Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "fbf62093_4bf13194",
       "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
