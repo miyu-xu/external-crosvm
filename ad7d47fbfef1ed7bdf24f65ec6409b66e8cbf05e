@@ -53,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "122e4e4e_13acdaa4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-02T05:54:40Z",
+      "side": 1,
+      "message": "Done - patchset 2 is uploaded",
+      "parentUuid": "e8453ecc_a80ede99",
+      "revId": "ad7d47fbfef1ed7bdf24f65ec6409b66e8cbf05e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "818700ea_c596ac50",
