@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -286,7 +286,7 @@ fn ascii_casefold_lookup(proc: &File, parent: &File, name: &[u8]) -> io::Result<
 fn lookup(parent: &File, name: &CStr) -> io::Result<File> {
     // Safe because this doesn't modify any memory and we check the return value.
     let fd = syscall!(unsafe {
-        libc::openat(
+        libc::openat64(
             parent.as_raw_fd(),
             name.as_ptr(),
             libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
@@ -341,7 +341,7 @@ fn open_fid(proc: &File, path: &File, p9_flags: u32) -> io::Result<File> {
     // Safe because this doesn't modify any memory and we check the return value. We need to
     // clear the O_NOFOLLOW flag because we want to follow the proc symlink.
     let fd = syscall!(unsafe {
-        libc::openat(
+        libc::openat64(
             proc.as_raw_fd(),
             pathname.as_ptr(),
             flags & !libc::O_NOFOLLOW,
@@ -401,7 +401,7 @@ impl Server {
 
         // Safe because this doesn't modify any memory and we check the return value.
         let fd = syscall!(unsafe {
-            libc::openat(
+            libc::openat64(
                 libc::AT_FDCWD,
                 proc_cstr.as_ptr(),
                 libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
@@ -488,7 +488,7 @@ impl Server {
 
                 // Safe because this doesn't modify any memory and we check the return value.
                 let fd = syscall!(unsafe {
-                    libc::openat(
+                    libc::openat64(
                         libc::AT_FDCWD,
                         root.as_ptr(),
                         libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
@@ -702,7 +702,7 @@ impl Server {
 
         // Safe because this doesn't modify any memory and we check the return value.
         let fd = syscall!(unsafe {
-            libc::openat(fid.path.as_raw_fd(), name.as_ptr(), flags, lcreate.mode)
+            libc::openat64(fid.path.as_raw_fd(), name.as_ptr(), flags, lcreate.mode)
         })?;
 
         // Safe because we just opened this fd and we know it is valid.
@@ -711,6 +711,7 @@ impl Server {
         let iounit = st.st_blksize as u32;
 
         fid.file = Some(file);
+        fid.filetype = FileType::Regular;
 
         // This fid now refers to the newly created file so we need to update the O_PATH fd for it
         // as well.
@@ -775,21 +776,13 @@ impl Server {
 
     fn set_attr(&mut self, set_attr: &Tsetattr) -> io::Result<()> {
         let fid = self.fids.get(&set_attr.fid).ok_or_else(ebadf)?;
-
-        let file = if let Some(ref file) = fid.file {
-            MaybeOwned::Borrowed(file)
-        } else {
-            let flags = match fid.filetype {
-                FileType::Regular => P9_RDWR,
-                FileType::Directory => P9_RDONLY | P9_DIRECTORY,
-                FileType::Other => P9_RDWR,
-            };
-            MaybeOwned::Owned(open_fid(&self.proc, &fid.path, P9_NONBLOCK | flags)?)
-        };
+        let path = string_to_cstring(format!("self/fd/{}", fid.path.as_raw_fd()))?;
 
         if set_attr.valid & P9_SETATTR_MODE != 0 {
             // Safe because this doesn't modify any memory and we check the return value.
-            syscall!(unsafe { libc::fchmod(file.as_raw_fd(), set_attr.mode) })?;
+            syscall!(unsafe {
+                libc::fchmodat(self.proc.as_raw_fd(), path.as_ptr(), set_attr.mode, 0)
+            })?;
         }
 
         if set_attr.valid & (P9_SETATTR_UID | P9_SETATTR_GID) != 0 {
@@ -805,10 +798,18 @@ impl Server {
             };
 
             // Safe because this doesn't modify any memory and we check the return value.
-            syscall!(unsafe { libc::fchown(file.as_raw_fd(), uid, gid) })?;
+            syscall!(unsafe { libc::fchownat(self.proc.as_raw_fd(), path.as_ptr(), uid, gid, 0) })?;
         }
 
         if set_attr.valid & P9_SETATTR_SIZE != 0 {
+            let file = if fid.filetype == FileType::Directory {
+                return Err(io::Error::from_raw_os_error(libc::EISDIR));
+            } else if let Some(ref file) = fid.file {
+                MaybeOwned::Borrowed(file)
+            } else {
+                MaybeOwned::Owned(open_fid(&self.proc, &fid.path, P9_NONBLOCK | P9_RDWR)?)
+            };
+
             file.set_len(set_attr.size)?;
         }
 
@@ -837,7 +838,14 @@ impl Server {
             ];
 
             // Safe because file is valid and we have initialized times fully.
-            let ret = unsafe { libc::futimens(file.as_raw_fd(), &times as *const libc::timespec) };
+            let ret = unsafe {
+                libc::utimensat(
+                    self.proc.as_raw_fd(),
+                    path.as_ptr(),
+                    &times as *const libc::timespec,
+                    0,
+                )
+            };
             if ret < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -849,10 +857,12 @@ impl Server {
             // Setting -1 as the uid and gid will not actually change anything but will
             // still update the ctime.
             let ret = unsafe {
-                libc::fchown(
-                    file.as_raw_fd(),
+                libc::fchownat(
+                    self.proc.as_raw_fd(),
+                    path.as_ptr(),
                     libc::uid_t::max_value(),
                     libc::gid_t::max_value(),
+                    0,
                 )
             };
             if ret < 0 {
@@ -962,9 +972,9 @@ impl Server {
         syscall!(unsafe {
             // Safe because zero-filled libc::stat is a valid value, fstat
             // populates the struct fields.
-            let mut stbuf: libc::stat = std::mem::zeroed();
+            let mut stbuf: libc::stat64 = std::mem::zeroed();
             // Safe because this doesn't modify memory and we check the return value.
-            libc::fstat(fd, &mut stbuf)
+            libc::fstat64(fd, &mut stbuf)
         })?;
 
         Ok(Rlock {
@@ -986,8 +996,8 @@ impl Server {
 
         // Safe because this doesn't modify memory and we check the return value.
         syscall!(unsafe {
-            let mut stbuf: libc::stat = std::mem::zeroed();
-            libc::fstat(fd, &mut stbuf)
+            let mut stbuf: libc::stat64 = std::mem::zeroed();
+            libc::fstat64(fd, &mut stbuf)
         })?;
 
         Ok(Rgetlock {

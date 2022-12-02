@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -249,6 +249,7 @@ mod tests {
     use vm_memory::GuestMemory;
 
     use super::*;
+    use crate::Suspendable;
 
     struct DummyDevice(DeviceType);
     const QUEUE_SIZE: u16 = 256;
@@ -276,6 +277,8 @@ mod tests {
             DUMMY_FEATURES
         }
     }
+
+    impl Suspendable for DummyDevice {}
 
     #[test]
     fn write_base_regs() {

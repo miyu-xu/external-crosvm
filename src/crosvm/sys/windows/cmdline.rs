@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,7 +41,7 @@ pub struct RunMetricsCommand {
     pub bootstrap: usize,
 }
 
-const RUN_MP_CMD_NAME: &'static str = "run-mp";
+const RUN_MP_CMD_NAME: &str = "run-mp";
 
 /// Start a new mp crosvm instance
 pub struct RunMPCommand {
@@ -68,6 +68,9 @@ impl SubCommand for RunMPCommand {
         description: "Start a new mp crosvm instance",
     };
 }
+
+// Suppress complaint about RunMPCommand and RunMetricsCommand having a large size variation.
+#[allow(clippy::large_enum_variant)]
 #[derive(FromArgs)]
 #[argh(subcommand)]
 /// Windows Devices
@@ -143,8 +146,12 @@ mod tests {
                 "568",
             ]);
         }
-        if cfg!(feature = "gpu") {
+        if cfg!(all(feature = "gpu", feature = "gfxstream")) {
             args.extend(["--gpu", "angle=true,backend=gfxstream,egl=true,gles=false,glx=false,refresh_rate=60,surfaceless=false,vulkan=true,wsi=vk,display_mode=borderless_full_screen,hidden"]);
+            args.extend([
+                "--gpu-display",
+                "mode=borderless_full_screen,hidden,refresh-rate=60",
+            ]);
         }
         if cfg!(feature = "audio") {
             args.extend(["--ac97", "backend=win_audio"]);

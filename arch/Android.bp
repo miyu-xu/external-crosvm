@@ -24,12 +24,20 @@ rust_test {
         unit_test: true,
     },
     edition: "2021",
+    features: [
+        "gdb",
+        "gdbstub",
+        "gdbstub_arch",
+    ],
     rustlibs: [
         "libacpi_tables",
         "libanyhow",
         "libbase_rust",
         "libcfg_if",
+        "libcros_fdt",
         "libdevices",
+        "libgdbstub",
+        "libgdbstub_arch",
         "libhypervisor",
         "libkernel_cmdline",
         "liblibc",
@@ -37,6 +45,7 @@ rust_test {
         "libpower_monitor",
         "libresources",
         "libserde",
+        "libserde_keyvalue",
         "libsync_rust",
         "libthiserror",
         "libvm_control",
@@ -47,8 +56,10 @@ rust_test {
         host_linux: {
             features: [
                 "gdb",
+                "gdbstub",
             ],
             rustlibs: [
+                "libgdbstub",
                 "libgdbstub_arch",
             ],
         },
@@ -65,12 +76,20 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    features: [
+        "gdb",
+        "gdbstub",
+        "gdbstub_arch",
+    ],
     rustlibs: [
         "libacpi_tables",
         "libanyhow",
         "libbase_rust",
         "libcfg_if",
+        "libcros_fdt",
         "libdevices",
+        "libgdbstub",
+        "libgdbstub_arch",
         "libhypervisor",
         "libkernel_cmdline",
         "liblibc",
@@ -78,6 +97,7 @@ rust_library {
         "libpower_monitor",
         "libresources",
         "libserde",
+        "libserde_keyvalue",
         "libsync_rust",
         "libthiserror",
         "libvm_control",
@@ -91,8 +111,10 @@ rust_library {
         host_linux: {
             features: [
                 "gdb",
+                "gdbstub",
             ],
             rustlibs: [
+                "libgdbstub",
                 "libgdbstub_arch",
             ],
         },

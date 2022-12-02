@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -319,9 +319,7 @@ impl VioSClient {
             return Ok(());
         }
         self.recv_thread_state.lock().running = false;
-        self.recv_event
-            .write(1u64)
-            .map_err(Error::EventWriteError)?;
+        self.recv_event.signal().map_err(Error::EventWriteError)?;
         if let Some(handle) = self.recv_thread.lock().take() {
             return match handle.join() {
                 Ok(r) => r,
@@ -680,13 +678,13 @@ fn spawn_recv_thread(
                         let state_cpy = *state.lock();
                         if state_cpy.reporting_events {
                             event_queue.lock().push_back(evt);
-                            event_notifier.write(1).map_err(Error::EventWriteError)?;
+                            event_notifier.signal().map_err(Error::EventWriteError)?;
                         } // else just drop the events
                     }
                     Token::Notification => {
                         // Just consume the notification and check for termination on the next
                         // iteration
-                        if let Err(e) = event.read() {
+                        if let Err(e) = event.wait() {
                             error!("Failed to consume notification from recv thread: {:?}", e);
                         }
                     }

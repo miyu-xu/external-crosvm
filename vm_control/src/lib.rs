@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,10 @@
 //! The wire message format is a little-endian C-struct of fixed size, along with a file descriptor
 //! if the request type expects one.
 
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 pub mod gdb;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 
 #[cfg(unix)]
 use base::MemoryMappingBuilderUnix;
@@ -40,8 +42,6 @@ use balloon_control::BalloonTubeCommand;
 #[cfg(feature = "balloon")]
 use balloon_control::BalloonTubeResult;
 use base::error;
-use base::info;
-use base::warn;
 use base::with_as_descriptor;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -69,12 +69,12 @@ use libc::ERANGE;
 use remain::sorted;
 use resources::Alloc;
 use resources::SystemAllocator;
+use rutabaga_gfx::DeviceId;
 use rutabaga_gfx::RutabagaGralloc;
 use rutabaga_gfx::RutabagaHandle;
 use rutabaga_gfx::VulkanInfo;
 use serde::Deserialize;
 use serde::Serialize;
-use sync::Condvar;
 use sync::Mutex;
 use sys::kill_handle;
 #[cfg(unix)]
@@ -93,13 +93,21 @@ use crate::display::MouseMode;
 use crate::display::WindowEvent;
 use crate::display::WindowMode;
 use crate::display::WindowVisibility;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-pub use crate::gdb::*;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebug;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebugStatus;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebugStatusMessage;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuControlCommand;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuControlResult;
 
 /// Control the state of a particular VM CPU.
 #[derive(Clone, Debug)]
 pub enum VcpuControl {
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     Debug(VcpuDebug),
     RunState(VmRunMode),
     MakeRT,
@@ -224,7 +232,7 @@ impl UsbControlAttachedDevice {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UsbControlResult {
     Ok { port: u8 },
     NoAvailablePort,
@@ -271,25 +279,23 @@ pub enum VmMemorySource {
         offset: u64,
         /// Size of the mapping in bytes.
         size: u64,
-        gpu_blob: bool,
     },
     /// Register memory mapped by Vulkano.
     Vulkan {
         descriptor: SafeDescriptor,
         handle_type: u32,
         memory_idx: u32,
-        physical_device_idx: u32,
+        device_id: DeviceId,
         size: u64,
     },
     /// Register the current rutabaga external mapping.
-    ExternalMapping { size: u64 },
+    ExternalMapping { ptr: u64, size: u64 },
 }
 
 impl VmMemorySource {
     /// Map the resource and return its mapping and size in bytes.
     pub fn map(
         self,
-        map_request: Arc<Mutex<Option<ExternalMapping>>>,
         gralloc: &mut RutabagaGralloc,
         prot: Protection,
     ) -> Result<(Box<dyn MappedRegion>, u64, Option<SafeDescriptor>)> {
@@ -298,11 +304,10 @@ impl VmMemorySource {
                 descriptor,
                 offset,
                 size,
-                gpu_blob,
             } => (
                 map_descriptor(&descriptor, offset, size, prot)?,
                 size,
-                if gpu_blob { Some(descriptor) } else { None },
+                Some(descriptor),
             ),
 
             VmMemorySource::SharedMemory(shm) => {
@@ -312,7 +317,7 @@ impl VmMemorySource {
                 descriptor,
                 handle_type,
                 memory_idx,
-                physical_device_idx,
+                device_id,
                 size,
             } => {
                 let mapped_region = match gralloc.import_and_map(
@@ -322,7 +327,7 @@ impl VmMemorySource {
                     },
                     VulkanInfo {
                         memory_idx,
-                        physical_device_idx,
+                        device_id,
                     },
                     size,
                 ) {
@@ -334,13 +339,11 @@ impl VmMemorySource {
                 };
                 (mapped_region, size, None)
             }
-            VmMemorySource::ExternalMapping { size } => {
-                let mem = map_request
-                    .lock()
-                    .take()
-                    .ok_or_else(|| VmMemoryResponse::Err(SysError::new(EINVAL)))
-                    .unwrap();
-                let mapped_region: Box<dyn MappedRegion> = Box::new(mem);
+            VmMemorySource::ExternalMapping { ptr, size } => {
+                let mapped_region: Box<dyn MappedRegion> = Box::new(ExternalMapping {
+                    ptr,
+                    size: size as usize,
+                });
                 (mapped_region, size, None)
             }
         };
@@ -433,17 +436,15 @@ impl VmMemoryRequest {
         self,
         vm: &mut impl Vm,
         sys_allocator: &mut SystemAllocator,
-        map_request: Arc<Mutex<Option<ExternalMapping>>>,
         gralloc: &mut RutabagaGralloc,
-        iommu_client: &mut Option<VmMemoryRequestIommuClient>,
+        iommu_client: Option<&mut VmMemoryRequestIommuClient>,
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match self {
             RegisterMemory { source, dest, prot } => {
                 // Correct on Windows because callers of this IPC guarantee descriptor is a mapping
                 // handle.
-                let (mapped_region, size, descriptor) = match source.map(map_request, gralloc, prot)
-                {
+                let (mapped_region, size, descriptor) = match source.map(gralloc, prot) {
                     Ok((region, size, descriptor)) => (region, size, descriptor),
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
@@ -502,7 +503,7 @@ impl VmMemoryRequest {
                                 )) => VmMemoryResponse::Ok,
                                 resp => {
                                     error!("Unexpected message response: {:?}", resp);
-                                    return VmMemoryResponse::Err(SysError::new(EINVAL));
+                                    VmMemoryResponse::Err(SysError::new(EINVAL))
                                 }
                             }
                         } else {
@@ -678,7 +679,7 @@ pub enum VmIrqResponse {
     Err(SysError),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum BatControlResult {
     Ok,
     NoBatDevice,
@@ -905,6 +906,23 @@ pub enum PvClockCommandResponse {
     Err(SysError),
 }
 
+/// Commands for vmm-swap feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SwapCommand {
+    Enable,
+    Status,
+    StartPageFaultLogging,
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "swap")] {
+        use swap::Status as SwapStatus;
+    } else {
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        pub enum SwapStatus {}
+    }
+}
+
 ///
 /// A request to the main process to perform some operation on the VM.
 ///
@@ -919,6 +937,8 @@ pub enum VmRequest {
     Sleepbtn,
     /// Suspend the VM's VCPUs until resume.
     Suspend,
+    /// Swap the memory content into files on a disk
+    Swap(SwapCommand),
     /// Resume the VM's VCPUs that were previously suspended.
     Resume,
     /// Inject a general-purpose event.
@@ -935,6 +955,9 @@ pub enum VmRequest {
     },
     /// Command to use controller.
     UsbCommand(UsbControlCommand),
+    #[cfg(feature = "gpu")]
+    /// Command to modify the gpu.
+    GpuCommand(GpuControlCommand),
     /// Command to set battery.
     BatCommand(BatteryType, BatControlCommand),
     /// Command to add/remove multiple pci devices
@@ -942,6 +965,24 @@ pub enum VmRequest {
         device: HotPlugDeviceInfo,
         add: bool,
     },
+}
+
+pub fn handle_disk_command(command: &DiskControlCommand, disk_host_tube: &Tube) -> VmResponse {
+    // Forward the request to the block device process via its control socket.
+    if let Err(e) = disk_host_tube.send(command) {
+        error!("disk socket send failed: {}", e);
+        return VmResponse::Err(SysError::new(EINVAL));
+    }
+
+    // Wait for the disk control command to be processed
+    match disk_host_tube.recv() {
+        Ok(DiskControlResult::Ok) => VmResponse::Ok,
+        Ok(DiskControlResult::Err(e)) => VmResponse::Err(e),
+        Err(e) => {
+            error!("disk socket recv failed: {}", e);
+            VmResponse::Err(SysError::new(EINVAL))
+        }
+    }
 }
 
 /// WARNING: descriptor must be a mapping handle on Windows.
@@ -964,35 +1005,6 @@ fn map_descriptor(
     }
 }
 
-fn generate_sleep_button_event(
-    pm: &mut Option<Arc<Mutex<dyn PmResource>>>,
-    guest_suspended_cvar: &Arc<(Mutex<bool>, Condvar)>,
-) {
-    // During suspend also emulate sleepbtn, which allows to suspend VM (if running e.g. acpid and
-    // reacts on sleep button events)
-    if let Some(pm) = pm {
-        pm.lock().slpbtn_evt();
-    } else {
-        error!("generating sleepbtn during suspend not supported");
-    }
-
-    let (lock, cvar) = &**guest_suspended_cvar;
-    let mut guest_suspended = lock.lock();
-
-    *guest_suspended = false;
-
-    // Wait for notification about guest suspension, if not received after 15sec,
-    // proceed anyway.
-    let result = cvar.wait_timeout(guest_suspended, std::time::Duration::from_secs(15));
-    guest_suspended = result.0;
-
-    if result.1.timed_out() {
-        warn!("Guest suspension timeout - proceeding anyway");
-    } else if *guest_suspended {
-        info!("Guest suspended");
-    }
-}
-
 impl VmRequest {
     /// Executes this request on the given Vm and other mutable state.
     ///
@@ -1005,12 +1017,13 @@ impl VmRequest {
         #[cfg(feature = "balloon")] balloon_host_tube: Option<&Tube>,
         #[cfg(feature = "balloon")] balloon_stats_id: &mut u64,
         disk_host_tubes: &[Tube],
-        pm: &mut Option<Arc<Mutex<dyn PmResource>>>,
+        pm: &mut Option<Arc<Mutex<dyn PmResource + Send>>>,
+        #[cfg(feature = "gpu")] gpu_control_tube: &Tube,
         usb_control_tube: Option<&Tube>,
         bat_control: &mut Option<BatControl>,
         vcpu_handles: &[(JoinHandle<()>, mpsc::Sender<VcpuControl>)],
         force_s2idle: bool,
-        guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
     ) -> VmResponse {
         match *self {
             VmRequest::Exit => {
@@ -1036,12 +1049,47 @@ impl VmRequest {
                 }
             }
             VmRequest::Suspend => {
-                if force_s2idle {
-                    generate_sleep_button_event(pm, &guest_suspended_cvar);
-                }
-
                 *run_mode = Some(VmRunMode::Suspending);
                 VmResponse::Ok
+            }
+            VmRequest::Swap(SwapCommand::Enable) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.enable() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap enable failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::Status) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.status() {
+                        Ok(status) => VmResponse::SwapStatus(status),
+                        Err(e) => {
+                            error!("swap status failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::StartPageFaultLogging) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.start_page_fault_logging() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap log_page_fault failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
             }
             VmRequest::Resume => {
                 *run_mode = Some(VmRunMode::Running);
@@ -1147,24 +1195,23 @@ impl VmRequest {
             VmRequest::DiskCommand {
                 disk_index,
                 ref command,
-            } => {
-                // Forward the request to the block device process via its control socket.
-                if let Some(sock) = disk_host_tubes.get(disk_index) {
-                    if let Err(e) = sock.send(command) {
-                        error!("disk socket send failed: {}", e);
-                        VmResponse::Err(SysError::new(EINVAL))
-                    } else {
-                        match sock.recv() {
-                            Ok(DiskControlResult::Ok) => VmResponse::Ok,
-                            Ok(DiskControlResult::Err(e)) => VmResponse::Err(e),
-                            Err(e) => {
-                                error!("disk socket recv failed: {}", e);
-                                VmResponse::Err(SysError::new(EINVAL))
-                            }
-                        }
+            } => match &disk_host_tubes.get(disk_index) {
+                Some(tube) => handle_disk_command(command, tube),
+                None => VmResponse::Err(SysError::new(ENODEV)),
+            },
+            #[cfg(feature = "gpu")]
+            VmRequest::GpuCommand(ref cmd) => {
+                let res = gpu_control_tube.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to gpu control socket: {}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match gpu_control_tube.recv() {
+                    Ok(response) => VmResponse::GpuResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from gpu control socket: {}", e);
+                        VmResponse::Err(SysError::new(EIO))
                     }
-                } else {
-                    VmResponse::Err(SysError::new(ENODEV))
                 }
             }
             VmRequest::UsbCommand(ref cmd) => {
@@ -1221,7 +1268,7 @@ impl VmRequest {
 /// Indication of success or failure of a `VmRequest`.
 ///
 /// Success is usually indicated `VmResponse::Ok` unless there is data associated with the response.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VmResponse {
     /// Indicates the request was executed successfully.
     Ok,
@@ -1237,8 +1284,13 @@ pub enum VmResponse {
     },
     /// Results of usb control commands.
     UsbResponse(UsbControlResult),
+    #[cfg(feature = "gpu")]
+    /// Results of gpu control commands.
+    GpuResponse(GpuControlResult),
     /// Results of battery control commands.
     BatResponse(BatControlResult),
+    /// Results of swap status command.
+    SwapStatus(SwapStatus),
 }
 
 impl Display for VmResponse {
@@ -1266,7 +1318,17 @@ impl Display for VmResponse {
                 )
             }
             UsbResponse(result) => write!(f, "usb control request get result {:?}", result),
+            #[cfg(feature = "gpu")]
+            GpuResponse(result) => write!(f, "gpu control request result {:?}", result),
             BatResponse(result) => write!(f, "{}", result),
+            SwapStatus(status) => {
+                write!(
+                    f,
+                    "{}",
+                    serde_json::to_string(&status)
+                        .unwrap_or_else(|_| "invalid_response".to_string()),
+                )
+            }
         }
     }
 }
@@ -1336,8 +1398,8 @@ mod tests {
         res.send(&e1).unwrap();
 
         let recv_event: Event = req.recv().unwrap();
-        recv_event.write(1).unwrap();
-        assert_eq!(e1.read().unwrap(), 1);
+        recv_event.signal().unwrap();
+        e1.wait().unwrap();
     }
 }
 

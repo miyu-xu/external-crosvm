@@ -1,21 +1,18 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! Implements pci devices and busses.
 
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_bus_master;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_mixer;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_regs;
+mod acpi;
 #[cfg(unix)]
 mod coiommu;
 mod msi;
@@ -33,13 +30,14 @@ mod vfio_pci;
 
 use libc::EINVAL;
 
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Backend;
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Dev;
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Parameters;
+pub use self::acpi::DeviceVcfgRegister;
+pub use self::acpi::PowerResourceMethod;
 #[cfg(unix)]
 pub use self::coiommu::CoIommuDev;
 #[cfg(unix)]
@@ -70,6 +68,7 @@ pub use self::pci_device::BarRange;
 pub use self::pci_device::Error as PciDeviceError;
 pub use self::pci_device::PciBus;
 pub use self::pci_device::PciDevice;
+pub use self::pci_device::PreferredIrq;
 pub use self::pci_root::PciConfigIo;
 pub use self::pci_root::PciConfigMmio;
 pub use self::pci_root::PciRoot;

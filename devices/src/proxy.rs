@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,6 +27,7 @@ use crate::BusDevice;
 use crate::BusRange;
 use crate::BusType;
 use crate::DeviceId;
+use crate::Suspendable;
 
 /// Errors for proxy devices.
 #[sorted]
@@ -187,6 +188,8 @@ impl ProxyDevice {
         keep_rds.sort_unstable();
         keep_rds.dedup();
 
+        let tz = std::env::var("TZ").unwrap_or_default();
+
         // Forking here is safe as long as the program is still single threaded.
         // We own the jail object and nobody else will try to reuse it.
         let pid = match unsafe { jail.fork(Some(&keep_rds)) }.map_err(Error::ForkingJail)? {
@@ -198,8 +201,16 @@ impl ProxyDevice {
                 // thread_name is a valid pointer and setting name of this thread should be safe.
                 let _ =
                     unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
+
+                // Preserve TZ for `chrono::Local` (b/257987535).
+                std::env::set_var("TZ", tz);
+
                 device.on_sandboxed();
                 child_proc(child_tube, &mut device);
+
+                // Explicitly drop the device so that its Drop implementation has a chance to run
+                // before the call to `libc::exit()`.
+                std::mem::drop(device);
 
                 // We're explicitly not using std::process::exit here to avoid the cleanup of
                 // stdout/stderr globals. This can cause cascading panics and SIGILL if a worker
@@ -355,6 +366,8 @@ impl BusDevice for ProxyDevice {
     }
 }
 
+impl Suspendable for ProxyDevice {}
+
 impl Drop for ProxyDevice {
     fn drop(&mut self) {
         self.sync_send(&Command::Shutdown);
@@ -415,6 +428,8 @@ mod tests {
             self.config as u32
         }
     }
+
+    impl Suspendable for EchoDevice {}
 
     fn new_proxied_echo_device() -> ProxyDevice {
         let device = EchoDevice::new();

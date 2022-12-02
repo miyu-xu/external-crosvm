@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -210,11 +210,12 @@ impl DescriptorChain {
 
     fn is_valid(&self) -> bool {
         if self.len > 0 {
-            if self.regions.iter().any(|r| {
-                self.mem
-                    .checked_offset(r.gpa, r.len as u64 - 1u64)
-                    .is_none()
-            }) {
+            // Each region in `self.regions` must be a contiguous range in `self.mem`.
+            if !self
+                .regions
+                .iter()
+                .all(|r| self.mem.is_valid_range(r.gpa, r.len as u64))
+            {
                 return false;
             }
         }
@@ -479,7 +480,7 @@ impl Queue {
         Ok(())
     }
 
-    /// Releases memory exported by a previous call to [export_memory].
+    /// Releases memory exported by a previous call to [`Queue::export_memory()`].
     pub fn release_exported_memory(&mut self) {
         self.exported_desc_table = None;
         self.exported_avail_ring = None;
@@ -872,10 +873,10 @@ impl Queue {
     /// inject interrupt into guest on this queue
     /// return true: interrupt is injected into guest for this queue
     ///        false: interrupt isn't injected
-    pub fn trigger_interrupt(
+    pub fn trigger_interrupt<I: SignalableInterrupt>(
         &mut self,
         mem: &GuestMemory,
-        interrupt: &dyn SignalableInterrupt,
+        interrupt: &I,
     ) -> bool {
         if self.queue_wants_interrupt(mem) {
             self.last_used = self.next_used;
@@ -899,8 +900,6 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
 
     use memoffset::offset_of;
 
@@ -1003,12 +1002,7 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(
-            Arc::new(AtomicUsize::new(0)),
-            IrqLevelEvent::new().unwrap(),
-            None,
-            10,
-        );
+        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;
@@ -1077,12 +1071,7 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(
-            Arc::new(AtomicUsize::new(0)),
-            IrqLevelEvent::new().unwrap(),
-            None,
-            10,
-        );
+        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;

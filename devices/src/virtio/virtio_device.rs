@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,7 @@ use crate::pci::PciBarConfiguration;
 use crate::pci::PciBarIndex;
 use crate::pci::PciCapability;
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
+use crate::Suspendable;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VirtioTransportType {
@@ -57,7 +58,7 @@ pub trait SharedMemoryMapper: Send {
 /// and all the events, memory, and queues for device operation will be moved into the device.
 /// Optionally, a virtio device can implement device reset in which it returns said resources and
 /// resets its internal.
-pub trait VirtioDevice: Send {
+pub trait VirtioDevice: Send + Suspendable {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String {
         format!("virtio-{}", self.device_type())
@@ -176,6 +177,15 @@ pub trait VirtioDevice: Send {
     /// Returns the device's shared memory region if present.
     fn get_shared_memory_region(&self) -> Option<SharedMemoryRegion> {
         None
+    }
+
+    /// If true, VFIO passthrough devices can access descriptors mapped into
+    /// this region by mapping the corresponding addresses from this device's
+    /// PCI bar into their IO address space with virtio-iommu.
+    ///
+    /// NOTE: Not all vm_control::VmMemorySource types are supported.
+    fn expose_shmem_descriptors_with_viommu(&self) -> bool {
+        false
     }
 
     /// Provides the trait object used to map files into the device's shared

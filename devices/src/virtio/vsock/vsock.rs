@@ -1,6 +1,9 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+// TODO(247548758): Remove this once all the wanrning are fixed.
+#![allow(clippy::await_holding_lock)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,6 +30,7 @@ use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
 use base::Event;
+use base::EventExt;
 use cros_async::select2;
 use cros_async::select6;
 use cros_async::AsyncError;
@@ -47,6 +51,7 @@ use sync::Mutex;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
 
+use crate::virtio::async_utils;
 use crate::virtio::copy_config;
 use crate::virtio::virtio_vsock_config;
 use crate::virtio::virtio_vsock_event;
@@ -61,6 +66,7 @@ use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
 use crate::virtio::TYPE_STREAM_SOCKET;
+use crate::Suspendable;
 
 #[sorted]
 #[derive(ThisError, Debug)]
@@ -161,7 +167,7 @@ impl Drop for Vsock {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -199,6 +205,8 @@ impl VirtioDevice for Vsock {
         self.features &= value;
     }
 
+    // Allow error! and early return anywhere in function
+    #[allow(clippy::needless_return)]
     fn activate(
         &mut self,
         mem: GuestMemory,
@@ -232,8 +240,7 @@ impl VirtioDevice for Vsock {
         let worker_result = thread::Builder::new()
             .name("userspace_virtio_vsock".to_string())
             .spawn(move || {
-                let mut worker =
-                    Worker::new(mem, Rc::new(RefCell::new(interrupt)), host_guid, guest_cid);
+                let mut worker = Worker::new(mem, interrupt, host_guid, guest_cid);
                 let result = worker.run(
                     queues.remove(0),     /* rx_queue */
                     queues.remove(0),     /* tx_queue */
@@ -259,6 +266,8 @@ impl VirtioDevice for Vsock {
         }
     }
 }
+
+impl Suspendable for Vsock {}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub struct PortPair {
@@ -326,7 +335,7 @@ struct VsockConnection {
 
 struct Worker {
     mem: GuestMemory,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     host_guid: Option<String>,
     guest_cid: u64,
     // Map of host port to a VsockConnection.
@@ -337,7 +346,7 @@ struct Worker {
 impl Worker {
     fn new(
         mem: GuestMemory,
-        interrupt: Rc<RefCell<Interrupt>>,
+        interrupt: Interrupt,
         host_guid: Option<String>,
         guest_cid: u64,
     ) -> Worker {
@@ -379,8 +388,7 @@ impl Worker {
                         .map_err(|e| {
                             error!("Could not clone h_event.");
                             VsockError::CloneDescriptor(e)
-                        })
-                        .map(base::Event)?;
+                        })?;
                     let evt_async = EventAsync::new(h_evt, ex).map_err(|e| {
                         error!("Could not create EventAsync.");
                         VsockError::CreateEventAsync(e)
@@ -419,7 +427,7 @@ impl Worker {
             {
                 if port.host == CONNECTION_EVENT_PORT_NUM {
                     // New connection event. Setup futures again.
-                    if let Err(e) = self.connection_event.0.reset() {
+                    if let Err(e) = self.connection_event.reset() {
                         error!("vsock: port: {}: could not reset connection_event.", port);
                         return Err(VsockError::ResetEventObject(e));
                     }
@@ -577,7 +585,7 @@ impl Worker {
                     )
                 };
                 queue.add_used(&self.mem, index, 0);
-                queue.trigger_interrupt(&self.mem, &*self.interrupt.borrow());
+                queue.trigger_interrupt(&self.mem, &self.interrupt);
             }
         }
     }
@@ -684,9 +692,12 @@ impl Worker {
                     is_buffer_full: false,
                 };
                 self.connections.write().unwrap().insert(port, connection);
-                self.connection_event
-                    .write(0) // 0 is arbitrary
-                    .unwrap_or_else(|_| panic!("Failed to signal new connection event for vsock port {}.", port));
+                self.connection_event.signal().unwrap_or_else(|_| {
+                    panic!(
+                        "Failed to signal new connection event for vsock port {}.",
+                        port
+                    )
+                });
                 true
             }
             Err(e) => {
@@ -734,7 +745,7 @@ impl Worker {
             // always be negligible, but will sometimes be non-zero in cases where
             // traffic is high on the NamedPipe, especially a duplex pipe.
             if let Ok(cloned_event) = write_completed_event.try_clone() {
-                if let Ok(async_event) = EventAsync::new(Event(cloned_event), ex) {
+                if let Ok(async_event) = EventAsync::new(cloned_event, ex) {
                     let _ = async_event.next_val().await;
                 } else {
                     error!(
@@ -869,7 +880,7 @@ impl Worker {
         mut rx_queue_evt: EventAsync,
         ex: &Executor,
     ) -> PortPair {
-        while let Some((header, mut data)) = packet_recv_queue.next().await {
+        while let Some((header, data)) = packet_recv_queue.next().await {
             if !self
                 .handle_tx_packet(header, &data, send_queue, &mut rx_queue_evt, ex)
                 .await
@@ -982,9 +993,8 @@ impl Worker {
                     )
                     .await
                     .expect("vsock: failed to write to queue");
-                    let _ = self
-                        .connection_event
-                        .write(1)
+                    self.connection_event
+                        .signal()
                         .expect("vsock: failed to write to event");
                 } else {
                     error!("vsock: Attempted to close unopened port: {}", port);
@@ -1174,7 +1184,7 @@ impl Worker {
         let bytes_written = writer.bytes_written() as u32;
         if bytes_written > 0 {
             queue.add_used(&self.mem, desc_index, bytes_written);
-            queue.trigger_interrupt(&self.mem, &*self.interrupt.borrow());
+            queue.trigger_interrupt(&self.mem, &self.interrupt);
             Ok(())
         } else {
             error!("vsock: Failed to write bytes to queue");
@@ -1222,27 +1232,6 @@ impl Worker {
             .map(|r| (r, index))
     }
 
-    // Async task that resamples the status of the interrupt when the guest sends a request by
-    // signalling the resample event associated with the interrupt.
-    // TODO(b/237811512): Extract this code which is repeated in some form across the devices.
-    async fn handle_irq_resample(ex: &Executor, interrupt: Rc<RefCell<Interrupt>>) {
-        let resample_evt = if let Some(resample_evt) = interrupt.borrow_mut().get_resample_evt() {
-            let resample_evt = resample_evt.try_clone().unwrap();
-            let resample_evt = EventAsync::new(resample_evt, ex).unwrap();
-            Some(resample_evt)
-        } else {
-            None
-        };
-        if let Some(resample_evt) = resample_evt {
-            while resample_evt.next_val().await.is_ok() {
-                interrupt.borrow_mut().do_interrupt_resample();
-            }
-        } else {
-            // No resample event, park the future.
-            let () = futures::future::pending().await;
-        }
-    }
-
     fn run(
         &mut self,
         rx_queue: Queue,
@@ -1287,7 +1276,7 @@ impl Worker {
         pin_mut!(event_handler);
 
         // Process any requests to resample the irq value.
-        let resample_handler = Self::handle_irq_resample(&ex, self.interrupt.clone());
+        let resample_handler = async_utils::handle_irq_resample(&ex, self.interrupt.clone());
         pin_mut!(resample_handler);
 
         let kill_evt = EventAsync::new(kill_evt, &ex).expect("Failed to set up the kill event");

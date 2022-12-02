@@ -2,6 +2,7 @@
 
 - [Introduction](./introduction.md)
 - [Building Crosvm](./building_crosvm.md)
+- [Testing](./testing.md)
 - [Running Crosvm](./running_crosvm/index.md)
   - [Example Usage](./running_crosvm/example_usage.md)
   - [Advanced Usage](./running_crosvm/advanced_usage.md)
@@ -13,6 +14,7 @@
   - [Block](./devices/block.md)
   - [Network](./devices/net.md)
   - [Balloon](./devices/balloon.md)
+  - [Vsock](./devices/vsock.md)
   - [Pmem](./devices/pmem.md)
   - [Wayland](./devices/wayland.md)
   - [Video (experimental)](./devices/video.md)

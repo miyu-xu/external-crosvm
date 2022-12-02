@@ -1,12 +1,17 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 
 use base::Error;
 use base::Result;
 use downcast_rs::impl_downcast;
+#[cfg(feature = "gdb")]
+use gdbstub::arch::Arch;
+#[cfg(feature = "gdb")]
+use gdbstub_arch::aarch64::AArch64 as GdbArch;
 use libc::EINVAL;
 use vm_memory::GuestAddress;
 
@@ -45,6 +50,7 @@ impl TryFrom<u32> for PsciVersion {
 pub const PSCI_0_2: PsciVersion = PsciVersion { major: 0, minor: 2 };
 pub const PSCI_1_0: PsciVersion = PsciVersion { major: 1, minor: 0 };
 
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum VcpuRegAArch64 {
     X(u8),
     Sp,
@@ -93,13 +99,41 @@ pub trait VcpuAArch64: Vcpu {
 
     /// Gets the current PSCI version.
     fn get_psci_version(&self) -> Result<PsciVersion>;
+
+    #[cfg(feature = "gdb")]
+    /// Sets up debug registers and configure vcpu for handling guest debug events.
+    fn set_guest_debug(&self, addrs: &[GuestAddress], enable_singlestep: bool) -> Result<()>;
+
+    #[cfg(feature = "gdb")]
+    /// Sets the VCPU general registers used by GDB 'G' packets.
+    fn set_gdb_registers(&self, regs: &<GdbArch as Arch>::Registers) -> Result<()>;
+
+    #[cfg(feature = "gdb")]
+    /// Gets the VCPU general registers used by GDB 'g' packets.
+    fn get_gdb_registers(&self, regs: &mut <GdbArch as Arch>::Registers) -> Result<()>;
+
+    #[cfg(feature = "gdb")]
+    /// Gets the max number of hardware breakpoints.
+    fn get_max_hw_bps(&self) -> Result<usize>;
+
+    #[cfg(feature = "gdb")]
+    /// Sets the value of a single register on this VCPU.
+    fn set_gdb_register(&self, reg: <GdbArch as Arch>::RegId, data: &[u8]) -> Result<()>;
+
+    #[cfg(feature = "gdb")]
+    /// Gets the value of a single register on this VCPU.
+    fn get_gdb_register(&self, reg: <GdbArch as Arch>::RegId, data: &mut [u8]) -> Result<usize>;
 }
 
 impl_downcast!(VcpuAArch64);
 
-/// Initial state for AArch64 VCPUs.
+/// Initial register state for AArch64 VCPUs.
 #[derive(Clone, Default)]
-pub struct VcpuInitAArch64 {}
+pub struct VcpuInitAArch64 {
+    /// Initial register state as a map of register name to value pairs. Registers that do not have
+    /// a value specified in this map will retain the original value provided by the hypervisor.
+    pub regs: BTreeMap<VcpuRegAArch64, u64>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpuConfigAArch64 {}

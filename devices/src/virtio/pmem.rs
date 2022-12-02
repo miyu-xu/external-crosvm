@@ -1,11 +1,9 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::RefCell;
 use std::fs::File;
 use std::io;
-use std::rc::Rc;
 use std::thread;
 
 use base::error;
@@ -40,6 +38,7 @@ use super::Queue;
 use super::Reader;
 use super::VirtioDevice;
 use super::Writer;
+use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
@@ -160,7 +159,7 @@ async fn handle_queue(
     mem: &GuestMemory,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: Rc<RefCell<Interrupt>>,
+    interrupt: Interrupt,
     pmem_device_tube: Tube,
     mapping_arena_slot: u32,
     mapping_size: usize,
@@ -188,7 +187,7 @@ async fn handle_queue(
             }
         };
         queue.add_used(mem, index, written as u32);
-        queue.trigger_interrupt(mem, &*interrupt.borrow());
+        queue.trigger_interrupt(mem, &interrupt);
     }
 }
 
@@ -202,9 +201,6 @@ fn run_worker(
     mapping_arena_slot: u32,
     mapping_size: usize,
 ) {
-    // Wrap the interrupt in a `RefCell` so it can be shared between async functions.
-    let interrupt = Rc::new(RefCell::new(interrupt));
-
     let ex = Executor::new().unwrap();
 
     let queue_evt = EventAsync::new(queue_evt, &ex).expect("failed to set up the queue event");
@@ -275,7 +271,7 @@ impl Drop for Pmem {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_event.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -361,15 +357,15 @@ impl VirtioDevice for Pmem {
                     )
                 });
 
-            match worker_result {
+            self.worker_thread = match worker_result {
                 Err(e) => {
                     error!("failed to spawn virtio_pmem worker: {}", e);
                     return;
                 }
-                Ok(join_handle) => {
-                    self.worker_thread = Some(join_handle);
-                }
+                Ok(join_handle) => Some(join_handle),
             }
         }
     }
 }
+
+impl Suspendable for Pmem {}

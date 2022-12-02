@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::Arc;
 use std::thread;
 
 use anyhow::Context;
@@ -25,7 +24,6 @@ use cros_async::IoSourceExt;
 use data_model::DataInit;
 use futures::FutureExt;
 use hypervisor::ProtectionType;
-use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
@@ -46,6 +44,7 @@ use crate::virtio::Queue;
 use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::SerialDevice;
+use crate::Suspendable;
 
 /// Wrapper that makes any `SerialInput` usable as an async source by providing an implementation of
 /// `IntoAsync`.
@@ -84,15 +83,13 @@ async fn run_rx_queue<I: SignalableInterrupt>(
     // the regular virtio device is switched to async.
     let mut in_buffer = VecDeque::<u8>::new();
     let mut rx_buf = vec![0u8; 4096];
-    let mut input_offset = 0u64;
 
     loop {
-        match input.read_to_vec(Some(input_offset), rx_buf).await {
+        match input.read_to_vec(None, rx_buf).await {
             // Input source has closed.
             Ok((0, _)) => break,
             Ok((size, v)) => {
                 in_buffer.extend(&v[0..size]);
-                input_offset += size as u64;
                 rx_buf = v;
             }
             Err(e) => {
@@ -206,7 +203,7 @@ impl ConsoleDevice {
 
 impl SerialDevice for ConsoleDevice {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         _evt: Event,
         input: Option<Box<dyn SerialInput>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -214,8 +211,8 @@ impl SerialDevice for ConsoleDevice {
         _out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
     ) -> ConsoleDevice {
-        let avail_features =
-            virtio::base_features(protected_vm) | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+        let avail_features = virtio::base_features(protection_type)
+            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         ConsoleDevice {
             input: input.map(AsyncSerialInput).map(AsyncQueueState::Stopped),
             output: AsyncQueueState::Stopped(output.unwrap_or_else(|| Box::new(io::sink()))),
@@ -242,7 +239,7 @@ pub struct AsyncConsole {
 
 impl SerialDevice for AsyncConsole {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         evt: Event,
         input: Option<Box<dyn SerialInput>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -252,7 +249,7 @@ impl SerialDevice for AsyncConsole {
     ) -> AsyncConsole {
         AsyncConsole {
             state: VirtioConsoleState::Stopped(ConsoleDevice::new(
-                protected_vm,
+                protection_type,
                 evt,
                 input,
                 output,
@@ -260,7 +257,7 @@ impl SerialDevice for AsyncConsole {
                 out_timestamp,
                 Default::default(),
             )),
-            base_features: base_features(protected_vm),
+            base_features: base_features(protection_type),
             keep_rds,
         }
     }
@@ -344,7 +341,6 @@ impl VirtioDevice for AsyncConsole {
             .name("virtio_console".to_string())
             .spawn(move || {
                 let mut console = console;
-                let interrupt = Arc::new(Mutex::new(interrupt));
 
                 console.start_receive_queue(
                     &ex,
@@ -390,7 +386,7 @@ impl VirtioDevice for AsyncConsole {
             VirtioConsoleState::Running {
                 kill_evt,
                 worker_thread,
-            } => match kill_evt.write(1) {
+            } => match kill_evt.signal() {
                 Ok(_) => {
                     let thread_res = match worker_thread.join() {
                         Ok(thread_res) => thread_res,
@@ -422,3 +418,5 @@ impl VirtioDevice for AsyncConsole {
         }
     }
 }
+
+impl Suspendable for AsyncConsole {}

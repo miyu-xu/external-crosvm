@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,13 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 
+use base::add_fd_flags;
+use base::error;
 use base::ioctl_with_mut_ref;
 use base::ioctl_with_ref;
 use base::ioctl_with_val;
 use base::volatile_impl;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
 use base::FileReadWriteVolatile;
@@ -25,7 +28,6 @@ use base::IoctlNr;
 use base::RawDescriptor;
 use base::ReadNotifier;
 use cros_async::IntoAsync;
-use libc::EPERM;
 
 use crate::Error;
 use crate::MacAddress;
@@ -53,6 +55,10 @@ impl Tap {
     pub unsafe fn from_raw_descriptor(descriptor: RawDescriptor) -> Result<Tap> {
         let tap_file = File::from_raw_descriptor(descriptor);
 
+        // Ensure that the file is opened non-blocking, otherwise
+        // ipvtaps with shell-provided FDs are very slow.
+        add_fd_flags(tap_file.as_raw_descriptor(), libc::O_NONBLOCK).map_err(Error::IoctlError)?;
+
         // Get the interface name since we will need it for some ioctls.
         let mut ifreq: net_sys::ifreq = Default::default();
         let ret = ioctl_with_mut_ref(&tap_file, net_sys::TUNGETIFF(), &mut ifreq);
@@ -72,7 +78,7 @@ impl Tap {
         // Open calls are safe because we give a constant nul-terminated
         // string and verify the result.
         let rd = unsafe {
-            libc::open(
+            libc::open64(
                 b"/dev/net/tun\0".as_ptr() as *const c_char,
                 libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
             )
@@ -88,12 +94,7 @@ impl Tap {
         let ret = unsafe { ioctl_with_mut_ref(&tuntap, net_sys::TUNSETIFF(), ifreq) };
 
         if ret < 0 {
-            let error = SysError::last();
-
-            // In a non-root, test environment, we won't have permission to call this; allow
-            if !(cfg!(test) && error.errno() == EPERM) {
-                return Err(Error::CreateTap(error));
-            }
+            return Err(Error::CreateTap(SysError::last()));
         }
 
         // Safe since only the name is accessed, and it's copied out.
@@ -432,12 +433,23 @@ impl ReadNotifier for Tap {
 fn create_socket() -> Result<net::UdpSocket> {
     // This is safe since we check the return value.
     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
-    if sock < 0 {
-        return Err(Error::CreateSocket(SysError::last()));
+    if sock >= 0 {
+        // This is safe; nothing else will use or hold onto the raw sock descriptor.
+        return Ok(unsafe { net::UdpSocket::from_raw_fd(sock) });
     }
 
-    // This is safe; nothing else will use or hold onto the raw sock descriptor.
-    Ok(unsafe { net::UdpSocket::from_raw_fd(sock) })
+    warn!("INET not supported on this machine. Trying to open an INET6 socket.");
+
+    // Open an AF_INET6 socket
+    let sock6 = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM, 0) };
+    if sock6 >= 0 {
+        // This is safe; nothing else will use or hold onto the raw sock descriptor.
+        return Ok(unsafe { net::UdpSocket::from_raw_fd(sock6) });
+    }
+
+    error!("Neither INET nor INET6 supported on this machine");
+
+    Err(Error::CreateSocket(SysError::last()))
 }
 
 /// Create a sockaddr_in from an IPv4 address, and expose it as
@@ -601,58 +613,4 @@ pub mod fakes {
     }
     impl TapT for FakeTap {}
     volatile_impl!(FakeTap);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tap_create() {
-        Tap::new(true, false).unwrap();
-    }
-
-    #[test]
-    fn tap_configure() {
-        let tap = Tap::new(true, false).unwrap();
-        let ip_addr: net::Ipv4Addr = "100.115.92.5".parse().unwrap();
-        let netmask: net::Ipv4Addr = "255.255.255.252".parse().unwrap();
-        let mac_addr: MacAddress = "a2:06:b9:3d:68:4d".parse().unwrap();
-
-        let ret = tap.set_ip_addr(ip_addr);
-        assert_ok_or_perm_denied(ret);
-        let ret = tap.set_netmask(netmask);
-        assert_ok_or_perm_denied(ret);
-        let ret = tap.set_mac_address(mac_addr);
-        assert_ok_or_perm_denied(ret);
-    }
-
-    /// This test will only work if the test is run with root permissions and, unlike other tests
-    /// in this file, do not return PermissionDenied. They fail because the TAP descriptor is not
-    /// initialized (as opposed to permission denial). Run this with "cargo test -- --ignored".
-    #[test]
-    #[ignore]
-    fn root_only_tests() {
-        // This line will fail to provide an initialized descriptor if the test is not run as root.
-        let tap = Tap::new(true, false).unwrap();
-        tap.set_vnet_hdr_size(16).unwrap();
-        tap.set_offload(0).unwrap();
-    }
-
-    #[test]
-    fn tap_enable() {
-        let tap = Tap::new(true, false).unwrap();
-
-        let ret = tap.enable();
-        assert_ok_or_perm_denied(ret);
-    }
-
-    fn assert_ok_or_perm_denied<T>(res: Result<T>) {
-        match res {
-            // We won't have permission in test environments; allow that
-            Ok(_t) => {}
-            Err(Error::IoctlError(e)) if e.errno() == EPERM => {}
-            Err(e) => panic!("Unexpected Error:\n{}", e),
-        }
-    }
 }

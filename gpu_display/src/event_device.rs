@@ -1,8 +1,9 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::io;
 use std::io::Error;
 use std::io::ErrorKind;
@@ -16,6 +17,8 @@ use base::StreamChannel;
 use data_model::DataInit;
 use linux_input_sys::virtio_input_event;
 use linux_input_sys::InputEventDecoder;
+use serde::Deserialize;
+use serde::Serialize;
 
 const EVENT_SIZE: usize = virtio_input_event::SIZE;
 const EVENT_BUFFER_LEN_MAX: usize = 64 * EVENT_SIZE;
@@ -34,7 +37,7 @@ const EVENT_BUFFER_LEN_MAX: usize = 64 * EVENT_SIZE;
 //     }
 // }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EventDeviceKind {
     /// Produces relative mouse motions, wheel, and button clicks while the real mouse is captured.
     Mouse,
@@ -45,6 +48,7 @@ pub enum EventDeviceKind {
 }
 
 /// Encapsulates a virtual event device, such as a mouse or keyboard
+#[derive(Deserialize, Serialize)]
 pub struct EventDevice {
     kind: EventDeviceKind,
     event_buffer: VecDeque<u8>,
@@ -174,5 +178,11 @@ impl EventDevice {
 impl AsRawDescriptor for EventDevice {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.event_socket.as_raw_descriptor()
+    }
+}
+
+impl fmt::Debug for EventDevice {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Event device ({:?})", self.kind)
     }
 }

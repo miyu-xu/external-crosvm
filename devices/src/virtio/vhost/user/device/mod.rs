@@ -1,22 +1,27 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 mod block;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod handler;
 mod listener;
 
 pub use block::run_block_device;
 pub use block::Options as BlockOptions;
 use cros_async::Executor;
+#[cfg(feature = "gpu")]
+pub use gpu::run_gpu_device;
+#[cfg(feature = "gpu")]
+pub use gpu::Options as GpuOptions;
+pub use handler::VhostBackendReqConnectionState;
 pub use handler::VhostUserBackend;
 pub use listener::sys::VhostUserListener;
 pub use listener::VhostUserListenerTrait;
 
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
-        #[cfg(feature = "gpu")]
-        mod gpu;
         mod console;
         #[cfg(feature = "audio")]
         mod snd;
@@ -33,8 +38,6 @@ cfg_if::cfg_if! {
         pub use snd::{run_snd_device, Options as SndOptions};
         pub use fs::{run_fs_device, Options as FsOptions};
         pub use net::{run_net_device, Options as NetOptions};
-        #[cfg(feature = "gpu")]
-        pub use gpu::{run_gpu_device, Options as GpuOptions};
     } else if #[cfg(windows)] {
         #[cfg(feature = "slirp")]
         mod net;

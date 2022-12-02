@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -413,7 +413,7 @@ pub struct Decoder<D: DecoderBackend> {
     mem: GuestMemory,
 }
 
-impl<'a, D: DecoderBackend> Decoder<D> {
+impl<D: DecoderBackend> Decoder<D> {
     /// Build a new decoder using the provided `backend`.
     pub fn new(backend: D, resource_bridge: Tube, mem: GuestMemory) -> Self {
         let capability = backend.get_capabilities();
@@ -526,9 +526,9 @@ impl<'a, D: DecoderBackend> Decoder<D> {
         };
 
         // Now try to resolve our resource.
-        let (resource_type, plane_formats) = match queue_type {
-            QueueType::Input => (ctx.in_params.resource_type, &ctx.in_params.plane_formats),
-            QueueType::Output => (ctx.out_params.resource_type, &ctx.out_params.plane_formats),
+        let (resource_type, params) = match queue_type {
+            QueueType::Input => (ctx.in_params.resource_type, &ctx.in_params),
+            QueueType::Output => (ctx.out_params.resource_type, &ctx.out_params),
         };
 
         let resource = match resource_type {
@@ -543,6 +543,7 @@ impl<'a, D: DecoderBackend> Decoder<D> {
                     // exactly one element.
                     unsafe { entries.get(0).unwrap().object },
                     &self.resource_bridge,
+                    params,
                 )
                 .map_err(|_| VideoError::InvalidArgument)?
             }
@@ -555,7 +556,7 @@ impl<'a, D: DecoderBackend> Decoder<D> {
                     )
                 },
                 &self.mem,
-                plane_formats,
+                params,
             )
             .map_err(|_| VideoError::InvalidArgument)?,
         };

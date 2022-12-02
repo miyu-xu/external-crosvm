@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ const X86_64_FDT_MAX_SIZE: u64 = 0x20_0000;
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-mod bootparam;
+pub mod bootparam;
 
 // boot_params is just a series of ints, it is safe to initialize it.
 unsafe impl data_model::DataInit for bootparam::boot_params {}
@@ -41,14 +41,14 @@ unsafe impl data_model::DataInit for mpspec::mpf_intel {}
 #[cfg(unix)]
 pub mod msr;
 
-mod acpi;
+pub mod acpi;
 mod bzimage;
 pub mod cpuid;
 mod gdt;
-mod interrupts;
-mod mptable;
-mod regs;
-mod smbios;
+pub mod interrupts;
+pub mod mptable;
+pub mod regs;
+pub mod smbios;
 
 use std::collections::BTreeMap;
 use std::ffi::CStr;
@@ -104,6 +104,8 @@ use devices::ProxyDevice;
 use devices::Serial;
 use devices::SerialHardware;
 use devices::SerialParameters;
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+use gdbstub_arch::x86::reg::id::X86_64CoreRegId;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
 use gdbstub_arch::x86::reg::X86SegmentRegs;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
@@ -173,7 +175,7 @@ pub enum Error {
     #[error("unable to make an Event: {0}")]
     CreateEvent(base::Error),
     #[error("failed to create fdt: {0}")]
-    CreateFdt(arch::fdt::Error),
+    CreateFdt(cros_fdt::Error),
     #[error("failed to create IOAPIC device: {0}")]
     CreateIoapicDevice(base::Error),
     #[error("failed to create a PCI root hub: {0}")]
@@ -226,6 +228,8 @@ pub enum Error {
     PageNotPresent,
     #[error("error reading guest memory {0}")]
     ReadingGuestMemory(vm_memory::GuestMemoryError),
+    #[error("single register read not supported on x86_64")]
+    ReadRegIsUnsupported,
     #[error("error reading CPU registers {0}")]
     ReadRegs(base::Error),
     #[error("error registering an IrqFd: {0}")]
@@ -264,6 +268,8 @@ pub enum Error {
     TranslatingVirtAddr,
     #[error("protected VMs not supported on x86_64")]
     UnsupportedProtectionType,
+    #[error("single register write not supported on x86_64")]
+    WriteRegIsUnsupported,
     #[error("error writing CPU registers {0}")]
     WriteRegs(base::Error),
     #[error("error writing guest memory {0}")]
@@ -286,16 +292,16 @@ enum E820Type {
 const MB: u64 = 1 << 20;
 const GB: u64 = 1 << 30;
 
-const BOOT_STACK_POINTER: u64 = 0x8000;
+pub const BOOT_STACK_POINTER: u64 = 0x8000;
 const START_OF_RAM_32BITS: u64 = if cfg!(feature = "direct") { 0x1000 } else { 0 };
 const FIRST_ADDR_PAST_32BITS: u64 = 1 << 32;
 // Linux (with 4-level paging) has a physical memory limit of 46 bits (64 TiB).
 const HIGH_MMIO_MAX_END: u64 = (1u64 << 46) - 1;
-const KERNEL_64BIT_ENTRY_OFFSET: u64 = 0x200;
-const ZERO_PAGE_OFFSET: u64 = 0x7000;
+pub const KERNEL_64BIT_ENTRY_OFFSET: u64 = 0x200;
+pub const ZERO_PAGE_OFFSET: u64 = 0x7000;
 const TSS_ADDR: u64 = 0xfffb_d000;
 
-const KERNEL_START_OFFSET: u64 = 0x20_0000;
+pub const KERNEL_START_OFFSET: u64 = 0x20_0000;
 const CMDLINE_OFFSET: u64 = 0x2_0000;
 const CMDLINE_MAX_SIZE: u64 = KERNEL_START_OFFSET - CMDLINE_OFFSET;
 const X86_64_SERIAL_1_3_IRQ: u32 = 4;
@@ -332,7 +338,7 @@ struct LowMemoryLayout {
 
 static LOW_MEMORY_LAYOUT: OnceCell<LowMemoryLayout> = OnceCell::new();
 
-fn init_low_memory_layout(pcie_ecam: Option<AddressRange>, pci_low_start: Option<u64>) {
+pub fn init_low_memory_layout(pcie_ecam: Option<AddressRange>, pci_low_start: Option<u64>) {
     LOW_MEMORY_LAYOUT.get_or_init(|| {
         // Make sure it align to 256MB for MTRR convenient
         const MEM_32BIT_GAP_SIZE: u64 = if cfg!(feature = "direct") {
@@ -382,10 +388,10 @@ fn init_low_memory_layout(pcie_ecam: Option<AddressRange>, pci_low_start: Option
     });
 }
 
-fn read_pci_mmio_before_32bit() -> AddressRange {
+pub fn read_pci_mmio_before_32bit() -> AddressRange {
     LOW_MEMORY_LAYOUT.get().unwrap().pci_mmio
 }
-fn read_pcie_cfg_mmio() -> AddressRange {
+pub fn read_pcie_cfg_mmio() -> AddressRange {
     LOW_MEMORY_LAYOUT.get().unwrap().pcie_cfg_mmio
 }
 
@@ -460,9 +466,10 @@ fn configure_system(
     )?;
 
     let zero_page_addr = GuestAddress(ZERO_PAGE_OFFSET);
-    guest_mem
-        .checked_offset(zero_page_addr, mem::size_of::<boot_params>() as u64)
-        .ok_or(Error::ZeroPagePastRamEnd)?;
+    if !guest_mem.is_valid_range(zero_page_addr, mem::size_of::<boot_params>() as u64) {
+        return Err(Error::ZeroPagePastRamEnd);
+    }
+
     guest_mem
         .write_obj_at_addr(params, zero_page_addr)
         .map_err(|_| Error::ZeroPageSetup)?;
@@ -491,7 +498,7 @@ fn add_e820_entry(params: &mut boot_params, range: AddressRange, mem_type: E820T
 /// These should be used to configure the GuestMemory structure for the platform.
 /// For x86_64 all addresses are valid from the start of the kernel except a
 /// carve out at the end of 32bit address space.
-fn arch_memory_regions(size: u64, bios_size: Option<u64>) -> Vec<(GuestAddress, u64)> {
+pub fn arch_memory_regions(size: u64, bios_size: Option<u64>) -> Vec<(GuestAddress, u64)> {
     let mem_start = START_OF_RAM_32BITS;
     let mem_end = GuestAddress(size + mem_start);
 
@@ -569,7 +576,7 @@ impl arch::LinuxArch for X8664arch {
         V: VmX86_64,
         Vcpu: VcpuX86_64,
     {
-        if components.protected_vm != ProtectionType::Unprotected {
+        if components.hv_cfg.protection_type != ProtectionType::Unprotected {
             return Err(Error::UnsupportedProtectionType);
         }
 
@@ -605,6 +612,7 @@ impl arch::LinuxArch for X8664arch {
             }
         }
 
+        let pcie_vcfg_range = Self::get_pcie_vcfg_mmio_range(&mem, &pcie_cfg_mmio_range);
         let mmio_bus = Arc::new(devices::Bus::new());
         let io_bus = Arc::new(devices::Bus::new());
 
@@ -617,7 +625,7 @@ impl arch::LinuxArch for X8664arch {
             .map(|(dev, jail_orig)| (dev.into_pci_device().unwrap(), jail_orig))
             .collect();
 
-        let (pci, pci_irqs, mut pid_debug_label_map) = arch::generate_pci_root(
+        let (pci, pci_irqs, mut pid_debug_label_map, amls) = arch::generate_pci_root(
             pci_devices,
             irq_chip.as_irq_chip_mut(),
             mmio_bus.clone(),
@@ -625,6 +633,7 @@ impl arch::LinuxArch for X8664arch {
             system_allocator,
             &mut vm,
             4, // Share the four pin interrupts (INTx#)
+            Some(pcie_vcfg_range.start),
         )
         .map_err(Error::CreatePciRoot)?;
 
@@ -644,7 +653,6 @@ impl arch::LinuxArch for X8664arch {
             .unwrap();
 
         let pcie_vcfg_mmio = Arc::new(Mutex::new(PciVirtualConfigMmio::new(pci.clone(), 13)));
-        let pcie_vcfg_range = Self::get_pcie_vcfg_mmio_range(&mem, &pcie_cfg_mmio_range);
         mmio_bus
             .insert(
                 pcie_vcfg_mmio,
@@ -687,14 +695,14 @@ impl arch::LinuxArch for X8664arch {
             Self::setup_legacy_cmos_device(&io_bus, components.memory_size)?;
         }
         Self::setup_serial_devices(
-            components.protected_vm,
+            components.hv_cfg.protection_type,
             irq_chip.as_irq_chip_mut(),
             &io_bus,
             serial_parameters,
             serial_jail,
         )?;
         Self::setup_debugcon_devices(
-            components.protected_vm,
+            components.hv_cfg.protection_type,
             &io_bus,
             serial_parameters,
             debugcon_jail,
@@ -723,7 +731,7 @@ impl arch::LinuxArch for X8664arch {
 
         // each bus occupy 1MB mmio for pcie enhanced configuration
         let max_bus = (pcie_cfg_mmio_len / 0x100000 - 1) as u8;
-        let (acpi_dev_resource, bat_control) = Self::setup_acpi_devices(
+        let (mut acpi_dev_resource, bat_control) = Self::setup_acpi_devices(
             pci.clone(),
             &mem,
             &io_bus,
@@ -743,6 +751,12 @@ impl arch::LinuxArch for X8664arch {
             &mut resume_notify_devices,
         )?;
 
+        // Create customized SSDT table
+        let sdt = acpi::create_customize_ssdt(pci.clone(), amls);
+        if let Some(sdt) = sdt {
+            acpi_dev_resource.sdts.push(sdt);
+        }
+
         irq_chip
             .finalize_devices(system_allocator, &io_bus, &mmio_bus)
             .map_err(Error::RegisterIrqfd)?;
@@ -760,7 +774,8 @@ impl arch::LinuxArch for X8664arch {
             mptable::setup_mptable(&mem, vcpu_count as u8, &pci_irqs)
                 .map_err(Error::SetupMptable)?;
         }
-        smbios::setup_smbios(&mem, components.dmi_path).map_err(Error::SetupSmbios)?;
+        smbios::setup_smbios(&mem, components.dmi_path, &components.oem_strings)
+            .map_err(Error::SetupSmbios)?;
 
         let host_cpus = if components.host_cpu_topology {
             components.vcpu_affinity.clone()
@@ -951,9 +966,13 @@ impl arch::LinuxArch for X8664arch {
         )
         .map_err(Error::ConfigurePciDevice)
     }
+}
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_read_registers<T: VcpuX86_64>(vcpu: &T) -> Result<X86_64CoreRegs> {
+#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+impl<T: VcpuX86_64> arch::GdbOps<T> for X8664arch {
+    type Error = Error;
+
+    fn read_registers(vcpu: &T) -> Result<X86_64CoreRegs> {
         // General registers: RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, r8-r15
         let gregs = vcpu.get_regs().map_err(Error::ReadRegs)?;
         let regs = [
@@ -1014,8 +1033,7 @@ impl arch::LinuxArch for X8664arch {
         Ok(regs)
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_write_registers<T: VcpuX86_64>(vcpu: &T, regs: &X86_64CoreRegs) -> Result<()> {
+    fn write_registers(vcpu: &T, regs: &X86_64CoreRegs) -> Result<()> {
         // General purpose registers (RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, r8-r15) + RIP + rflags
         let orig_gregs = vcpu.get_regs().map_err(Error::ReadRegs)?;
         let gregs = Regs {
@@ -1075,8 +1093,17 @@ impl arch::LinuxArch for X8664arch {
         Ok(())
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_read_memory<T: VcpuX86_64>(
+    #[inline]
+    fn read_register(_vcpu: &T, _reg: X86_64CoreRegId) -> Result<Vec<u8>> {
+        Err(Error::ReadRegIsUnsupported)
+    }
+
+    #[inline]
+    fn write_register(_vcpu: &T, _reg: X86_64CoreRegId, _buf: &[u8]) -> Result<()> {
+        Err(Error::WriteRegIsUnsupported)
+    }
+
+    fn read_memory(
         vcpu: &T,
         guest_mem: &GuestMemory,
         vaddr: GuestAddress,
@@ -1099,8 +1126,7 @@ impl arch::LinuxArch for X8664arch {
         Ok(buf)
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_write_memory<T: VcpuX86_64>(
+    fn write_memory(
         vcpu: &T,
         guest_mem: &GuestMemory,
         vaddr: GuestAddress,
@@ -1127,17 +1153,16 @@ impl arch::LinuxArch for X8664arch {
         Ok(())
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_enable_singlestep<T: VcpuX86_64>(vcpu: &T) -> Result<()> {
+    fn enable_singlestep(vcpu: &T) -> Result<()> {
         vcpu.set_guest_debug(&[], true /* enable_singlestep */)
             .map_err(Error::EnableSinglestep)
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    fn debug_set_hw_breakpoints<T: VcpuX86_64>(
-        vcpu: &T,
-        breakpoints: &[GuestAddress],
-    ) -> Result<()> {
+    fn get_max_hw_breakpoints(_vcpu: &T) -> Result<usize> {
+        Ok(4usize)
+    }
+
+    fn set_hw_breakpoints(vcpu: &T, breakpoints: &[GuestAddress]) -> Result<()> {
         vcpu.set_guest_debug(breakpoints, false /* enable_singlestep */)
             .map_err(Error::SetHwBreakpoint)
     }
@@ -1398,7 +1423,7 @@ impl X8664arch {
                     loaded_kernel.entry,
                 ))
             }
-            Err(kernel_loader::Error::InvalidElfMagicNumber) => {
+            Err(kernel_loader::Error::InvalidMagicNumber) => {
                 // The image failed to parse as ELF, so try to load it as a bzImage.
                 let (boot_params, bzimage_end) =
                     bzimage::load_bzimage(mem, kernel_start, kernel_image)
@@ -1420,7 +1445,7 @@ impl X8664arch {
     /// * `mem` - The memory to be used by the guest.
     /// * `cmdline` - the kernel commandline
     /// * `initrd_file` - an initial ramdisk image
-    fn setup_system_memory(
+    pub fn setup_system_memory(
         mem: &GuestMemory,
         cmdline: &CStr,
         initrd_file: Option<File>,
@@ -1513,7 +1538,7 @@ impl X8664arch {
     }
 
     /// This returns a minimal kernel command for this architecture
-    fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
+    pub fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(CMDLINE_MAX_SIZE as usize);
         cmdline.insert_str("panic=-1").unwrap();
 
@@ -1527,7 +1552,7 @@ impl X8664arch {
     /// * - `io_bus` - the IO bus object
     /// * - `pit_uses_speaker_port` - does the PIT use port 0x61 for the PC speaker
     /// * - `vm_evt_wrtube` - the event object which should receive exit events
-    fn setup_legacy_i8042_device(
+    pub fn setup_legacy_i8042_device(
         io_bus: &devices::Bus,
         pit_uses_speaker_port: bool,
         vm_evt_wrtube: SendTube,
@@ -1550,7 +1575,7 @@ impl X8664arch {
     ///
     /// * - `io_bus` - the IO bus object
     /// * - `mem_size` - the size in bytes of physical ram for the guest
-    fn setup_legacy_cmos_device(io_bus: &devices::Bus, mem_size: u64) -> Result<()> {
+    pub fn setup_legacy_cmos_device(io_bus: &devices::Bus, mem_size: u64) -> Result<()> {
         let mem_regions = arch_memory_regions(mem_size, None);
 
         let mem_below_4g = mem_regions
@@ -1593,7 +1618,7 @@ impl X8664arch {
     /// * - `irq_chip` the IrqChip object for registering irq events
     /// * - `battery` indicate whether to create the battery
     /// * - `mmio_bus` the MMIO bus to add the devices to
-    fn setup_acpi_devices(
+    pub fn setup_acpi_devices(
         pci_root: Arc<Mutex<PciRoot>>,
         mem: &GuestMemory,
         io_bus: &devices::Bus,
@@ -1779,8 +1804,8 @@ impl X8664arch {
     /// * - `irq_chip` the IrqChip object for registering irq events
     /// * - `io_bus` the I/O bus to add the devices to
     /// * - `serial_parmaters` - definitions for how the serial devices should be configured
-    fn setup_serial_devices(
-        protected_vm: ProtectionType,
+    pub fn setup_serial_devices(
+        protection_type: ProtectionType,
         irq_chip: &mut dyn IrqChip,
         io_bus: &devices::Bus,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -1790,7 +1815,7 @@ impl X8664arch {
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
 
         arch::add_serial_devices(
-            protected_vm,
+            protection_type,
             io_bus,
             com_evt_1_3.get_trigger(),
             com_evt_2_4.get_trigger(),
@@ -1815,7 +1840,7 @@ impl X8664arch {
     }
 
     fn setup_debugcon_devices(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         io_bus: &devices::Bus,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         debugcon_jail: Option<Minijail>,
@@ -1828,7 +1853,7 @@ impl X8664arch {
             let mut preserved_fds = Vec::new();
             let con = param
                 .create_serial_device::<Debugcon>(
-                    protected_vm,
+                    protection_type,
                     // Debugcon doesn't use the interrupt event
                     &Event::new().map_err(Error::CreateEvent)?,
                     &mut preserved_fds,
@@ -1923,9 +1948,6 @@ pub fn set_enable_pnp_data_msr_config(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod test_integration;
 
 #[cfg(test)]
 mod tests {

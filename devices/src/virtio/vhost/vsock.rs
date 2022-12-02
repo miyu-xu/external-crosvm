@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,6 +29,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
+use crate::Suspendable;
 
 pub const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 3;
@@ -118,7 +119,7 @@ impl Drop for Vsock {
         if self.worker_kill_evt.is_none() {
             if let Some(kill_evt) = &self.kill_evt {
                 // Ignore the result because there is nothing we can do about it.
-                let _ = kill_evt.write(1);
+                let _ = kill_evt.signal();
             }
         }
     }
@@ -176,6 +177,8 @@ impl VirtioDevice for Vsock {
         self.acked_features |= v;
     }
 
+    // Allow error! and early return anywhere in function
+    #[allow(clippy::needless_return)]
     fn activate(
         &mut self,
         mem: GuestMemory,
@@ -246,6 +249,8 @@ impl VirtioDevice for Vsock {
         }
     }
 }
+
+impl Suspendable for Vsock {}
 
 #[cfg(test)]
 mod tests {

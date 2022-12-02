@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::mem::size_of;
 
-use assertions::const_assert;
 use data_model::DataInit;
+use static_assertions::const_assert;
 
 /// Standard USB descriptor types.
 pub enum DescriptorType {

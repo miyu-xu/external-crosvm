@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,6 +46,7 @@ use crate::pci::PciDeviceError;
 use crate::pci::PciInterruptPin;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::IrqLevelEvent;
+use crate::Suspendable;
 
 // Use 82801AA because it's what qemu does.
 const PCI_DEVICE_ID_INTEL_82801AA_5: u16 = 0x2415;
@@ -75,6 +76,7 @@ pub enum Ac97Error {
     #[error("Must be cras or null")]
     InvalidBackend,
     #[cfg(windows)]
+    #[error("Must be win_audio or null")]
     InvalidBackend,
 }
 
@@ -132,6 +134,7 @@ pub struct Ac97Dev {
     irq_evt: Option<IrqLevelEvent>,
     bus_master: Ac97BusMaster,
     mixer: Ac97Mixer,
+    #[cfg_attr(windows, allow(dead_code))]
     backend: Ac97Backend,
 }
 
@@ -160,7 +163,12 @@ impl Ac97Dev {
             config_regs,
             pci_address: None,
             irq_evt: None,
-            bus_master: Ac97BusMaster::new(mem, audio_server),
+            bus_master: Ac97BusMaster::new(
+                mem,
+                audio_server,
+                #[cfg(windows)]
+                ac97_device_tube,
+            ),
             mixer: Ac97Mixer::new(),
             backend,
         }
@@ -404,6 +412,8 @@ impl PciDevice for Ac97Dev {
         }
     }
 }
+
+impl Suspendable for Ac97Dev {}
 
 #[cfg(test)]
 mod tests {

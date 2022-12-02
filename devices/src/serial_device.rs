@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,18 +36,24 @@ use crate::sys::serial_device::*;
 pub enum Error {
     #[error("Unable to clone an Event: {0}")]
     CloneEvent(base::Error),
-    #[error("Unable to open/create file: {0}")]
-    FileError(std::io::Error),
-    #[error("Serial device path is invalid")]
-    InvalidPath,
+    #[error("Unable to clone file: {0}")]
+    FileClone(std::io::Error),
+    #[error("Unable to create file '{1}': {0}")]
+    FileCreate(std::io::Error, PathBuf),
+    #[error("Unable to open file '{1}': {0}")]
+    FileOpen(std::io::Error, PathBuf),
+    #[error("Serial device path '{0} is invalid")]
+    InvalidPath(PathBuf),
     #[error("Invalid serial hardware: {0}")]
     InvalidSerialHardware(String),
     #[error("Invalid serial type: {0}")]
     InvalidSerialType(String),
     #[error("Serial device type file requires a path")]
     PathRequired,
-    #[error("Failed to create unbound socket")]
-    SocketCreateFailed,
+    #[error("Failed to connect to socket: {0}")]
+    SocketConnect(std::io::Error),
+    #[error("Failed to create unbound socket: {0}")]
+    SocketCreate(std::io::Error),
     #[error("Unable to open system type serial: {0}")]
     SystemTypeError(std::io::Error),
     #[error("Serial device type {0} not implemented")]
@@ -156,7 +162,7 @@ impl SerialParameters {
     ///                process. `evt` will always be added to this vector by this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         evt: &Event,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> std::result::Result<T, Error> {
@@ -166,7 +172,7 @@ impl SerialParameters {
             let input_path = input_path.as_path();
 
             let input_file = open_file(input_path, OpenOptions::new().read(true))
-                .map_err(|e| Error::FileError(e.into()))?;
+                .map_err(|e| Error::FileOpen(e.into(), input_path.into()))?;
 
             keep_rds.push(input_file.as_raw_descriptor());
             Some(Box::new(input_file))
@@ -195,8 +201,8 @@ impl SerialParameters {
             SerialType::File => match &self.path {
                 Some(path) => {
                     let file = open_file(path, OpenOptions::new().append(true).create(true))
-                        .map_err(|e| Error::FileError(e.into()))?;
-                    let sync = file.try_clone().map_err(Error::FileError)?;
+                        .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
+                    let sync = file.try_clone().map_err(Error::FileClone)?;
 
                     keep_rds.push(file.as_raw_descriptor());
                     keep_rds.push(sync.as_raw_descriptor());
@@ -206,11 +212,17 @@ impl SerialParameters {
                 None => return Err(Error::PathRequired),
             },
             SerialType::SystemSerialType => {
-                return create_system_type_serial_device(self, protected_vm, evt, input, keep_rds);
+                return create_system_type_serial_device(
+                    self,
+                    protection_type,
+                    evt,
+                    input,
+                    keep_rds,
+                );
             }
         };
         Ok(T::new(
-            protected_vm,
+            protection_type,
             evt,
             input,
             output,

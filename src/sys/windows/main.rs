@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,11 @@ use base::FromRawDescriptor;
 use base::RawDescriptor;
 use broker_ipc::common_child_setup;
 use broker_ipc::CommonChildStartupArgs;
-use metrics::event_details_proto::EmulatorDllDetails;
-use metrics::event_details_proto::RecordDetails;
+use crosvm_cli::sys::windows::exit::Exit;
+use crosvm_cli::sys::windows::exit::ExitContext;
+use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
+use metrics::protos::event_details::EmulatorDllDetails;
+use metrics::protos::event_details::RecordDetails;
 use metrics::MetricEventType;
 #[cfg(all(feature = "slirp"))]
 use net_util::slirp::sys::windows::SlirpStartupConfig;
@@ -36,9 +39,6 @@ use crate::crosvm::sys::cmdline::DeviceSubcommand;
 use crate::crosvm::sys::cmdline::RunMainCommand;
 #[cfg(all(feature = "slirp"))]
 use crate::crosvm::sys::cmdline::RunSlirpCommand;
-use crate::crosvm::sys::windows::exit::Exit;
-use crate::crosvm::sys::windows::exit::ExitContext;
-use crate::crosvm::sys::windows::exit::ExitContextAnyhow;
 use crate::metrics::run_metrics;
 use crate::CommandStatus;
 use crate::Config;
@@ -74,6 +74,7 @@ pub(crate) fn run_slirp(args: RunSlirpCommand) -> Result<()> {
 
     let slirp_config = bootstrap_tube.recv::<SlirpStartupConfig>().unwrap();
 
+    #[cfg(feature = "sandbox")]
     if let Some(mut target) = sandbox::TargetServices::get()
         .exit_context(Exit::SandboxError, "sandbox operation failed")?
     {
@@ -90,7 +91,7 @@ pub(crate) fn run_slirp(args: RunSlirpCommand) -> Result<()> {
 }
 
 pub fn run_broker_impl(cfg: Config) -> Result<()> {
-    tracing::init();
+    cros_tracing::init();
     crate::crosvm::sys::windows::broker::run(cfg)
 }
 
@@ -147,8 +148,9 @@ pub(crate) fn run_vm_for_broker(args: RunMainCommand) -> Result<()> {
 
     let raw_transport_tube = args.bootstrap as RawDescriptor;
 
-    let exit_state = crate::sys::windows::run_config_for_broker(raw_transport_tube);
-    crate::to_command_status(exit_state).map(|_| ())
+    let exit_state = crate::sys::windows::run_config_for_broker(raw_transport_tube)?;
+    info!("{}", CommandStatus::from(exit_state).message());
+    Ok(())
 }
 
 pub(crate) fn set_bootstrap_arguments(

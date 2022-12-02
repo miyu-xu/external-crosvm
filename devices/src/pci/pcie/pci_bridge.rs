@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::cmp::max;
 use std::cmp::min;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use crate::pci::PciHeaderType;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::IrqLevelEvent;
 use crate::PciInterruptPin;
+use crate::Suspendable;
 
 pub const BR_BUS_NUMBER_REG: usize = 0x6;
 pub const BR_BUS_SUBORDINATE_OFFSET: usize = 0x2;
@@ -208,13 +210,11 @@ fn finalize_window(
                 .prefetchable(prefetchable)
                 .align(BR_WINDOW_ALIGNMENT),
         ) {
-            Ok(addr) => return Ok((addr, size)),
-            Err(e) => {
-                return Err(PciDeviceError::PciBusWindowAllocationFailure(format!(
-                    "failed to allocate bridge window: {}",
-                    e
-                )))
-            }
+            Ok(addr) => Ok((addr, size)),
+            Err(e) => Err(PciDeviceError::PciBusWindowAllocationFailure(format!(
+                "failed to allocate bridge window: {}",
+                e
+            ))),
         }
     } else {
         // align base to 1MB
@@ -226,7 +226,7 @@ fn finalize_window(
             }
             base &= BR_WINDOW_MASK;
         }
-        return Ok((base, size));
+        Ok((base, size))
     }
 }
 
@@ -503,3 +503,5 @@ impl PciDevice for PciBridge {
         self.msi_config.lock().destroy()
     }
 }
+
+impl Suspendable for PciBridge {}

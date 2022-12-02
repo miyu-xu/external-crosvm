@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,6 +29,7 @@ use crate::virtio::virtio_device::VirtioDevice;
 use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
+use crate::Suspendable;
 
 #[macro_use]
 mod macros;
@@ -37,7 +38,7 @@ mod command;
 mod control;
 #[cfg(feature = "video-decoder")]
 mod decoder;
-mod device;
+pub mod device;
 #[cfg(feature = "video-encoder")]
 mod encoder;
 mod error;
@@ -47,7 +48,8 @@ mod params;
 mod protocol;
 mod resource;
 mod response;
-mod worker;
+mod utils;
+pub mod worker;
 
 #[cfg(all(
     feature = "video-decoder",
@@ -55,9 +57,14 @@ mod worker;
 ))]
 compile_error!("The \"video-decoder\" feature requires at least one of \"ffmpeg\", \"libvda\" or \"vaapi\" to also be enabled.");
 
-#[cfg(all(feature = "video-encoder", not(feature = "libvda")))]
-compile_error!("The \"video-encoder\" feature requires \"libvda\" to also be enabled.");
+#[cfg(all(
+    feature = "video-encoder",
+    not(any(feature = "libvda", feature = "ffmpeg"))
+))]
+compile_error!("The \"video-encoder\" feature requires at least one of \"ffmpeg\" or \"libvda\" to also be enabled.");
 
+#[cfg(feature = "ffmpeg")]
+mod ffmpeg;
 #[cfg(feature = "libvda")]
 mod vda;
 
@@ -75,6 +82,9 @@ use super::device_constants::video::QUEUE_SIZES;
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Cloning a descriptor failed
+    #[error("failed to clone a descriptor: {0}")]
+    CloneDescriptorFailed(SysError),
     /// No available descriptor in which an event is written to.
     #[error("no available descriptor in which an event is written to")]
     DescriptorNotAvailable,
@@ -82,6 +92,9 @@ pub enum Error {
     #[cfg(feature = "video-decoder")]
     #[error("failed to create a video device: {0}")]
     DeviceCreationFailed(String),
+    /// Making an EventAsync failed.
+    #[error("failed to create an EventAsync: {0}")]
+    EventAsyncCreationFailed(cros_async::AsyncError),
     /// A DescriptorChain contains invalid data.
     #[error("DescriptorChain contains invalid data: {0}")]
     InvalidDescriptorChain(DescriptorError),
@@ -133,7 +146,7 @@ impl Drop for VideoDevice {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
     }
 }
@@ -189,6 +202,8 @@ impl VirtioDevice for VideoDevice {
         copy_config(data, 0, cfg.as_mut_slice(), offset);
     }
 
+    // Allow error! and early return anywhere in function
+    #[allow(clippy::needless_return)]
     fn activate(
         &mut self,
         mem: GuestMemory,
@@ -234,14 +249,13 @@ impl VirtioDevice for VideoDevice {
             }
         };
         let mut worker = Worker::new(
-            interrupt,
             mem.clone(),
             cmd_queue,
-            cmd_evt,
+            interrupt.clone(),
             event_queue,
-            event_evt,
-            kill_evt,
+            interrupt,
         );
+
         let worker_result = match &self.device_type {
             #[cfg(feature = "video-decoder")]
             VideoDeviceType::Decoder => thread::Builder::new()
@@ -256,7 +270,7 @@ impl VirtioDevice for VideoDevice {
                             }
                         };
 
-                    if let Err(e) = worker.run(device) {
+                    if let Err(e) = worker.run(device, &cmd_evt, &event_evt, &kill_evt) {
                         error!("Failed to start decoder worker: {}", e);
                     };
                     // Don't return any information since the return value is never checked.
@@ -291,8 +305,15 @@ impl VirtioDevice for VideoDevice {
                         }
                         #[cfg(feature = "ffmpeg")]
                         VideoBackendType::Ffmpeg => {
-                            error!("ffmpeg encoder is not supported yet");
-                            return;
+                            let ffmpeg = encoder::backend::ffmpeg::FfmpegEncoder::new();
+
+                            match encoder::EncoderDevice::new(ffmpeg, resource_bridge, mem) {
+                                Ok(encoder) => Box::new(encoder),
+                                Err(e) => {
+                                    error!("Failed to create encoder device: {}", e);
+                                    return;
+                                }
+                            }
                         }
                         #[cfg(feature = "vaapi")]
                         VideoBackendType::Vaapi => {
@@ -301,7 +322,7 @@ impl VirtioDevice for VideoDevice {
                         }
                     };
 
-                    if let Err(e) = worker.run(device) {
+                    if let Err(e) = worker.run(device, &cmd_evt, &event_evt, &kill_evt) {
                         error!("Failed to start encoder worker: {}", e);
                     }
                 }),
@@ -318,6 +339,8 @@ impl VirtioDevice for VideoDevice {
         }
     }
 }
+
+impl Suspendable for VideoDevice {}
 
 #[cfg(feature = "video-decoder")]
 pub fn create_decoder_device(

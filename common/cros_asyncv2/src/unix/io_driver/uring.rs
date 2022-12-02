@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,7 +31,6 @@ use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
-use base::EventFd;
 use base::FromRawDescriptor;
 use base::LayoutAllocation;
 use base::SafeDescriptor;
@@ -419,7 +418,7 @@ impl State {
 
     fn submit_waker(&mut self) -> anyhow::Result<()> {
         let entry = opcode::Read::new(
-            Fd(self.waker.0.as_raw_fd()),
+            Fd(self.waker.0.as_raw_descriptor()),
             ptr::null_mut(),
             size_of::<u64>() as u32,
         )
@@ -605,10 +604,10 @@ fn unpack_buffer_id(bid: u16) -> (usize, usize) {
     (alloc_idx, buffer_idx)
 }
 
-pub struct Waker(EventFd);
+pub struct Waker(base::Event);
 impl Waker {
     fn new() -> anyhow::Result<Waker> {
-        EventFd::new()
+        base::Event::new()
             .map(Waker)
             .map_err(|e| anyhow!(io::Error::from(e)))
     }
@@ -621,10 +620,7 @@ impl Waker {
     }
 
     pub fn wake(&self) -> anyhow::Result<()> {
-        self.0
-            .write(1)
-            .map(drop)
-            .map_err(|e| anyhow!(io::Error::from(e)))
+        self.0.signal().map_err(|e| anyhow!(io::Error::from(e)))
     }
 }
 
@@ -797,7 +793,8 @@ pub async fn read(
     let mut read =
         opcode::Read::new(Fd(desc.as_raw_fd()), ptr::null_mut(), len).buf_group(BUFFER_GROUP);
     if let Some(offset) = offset {
-        read = read.offset(offset as libc::off64_t);
+        // TODO(b/256213235): Use offset64 instead of casting to off_t
+        read = read.offset(offset as libc::off_t);
     }
     let entry = read.build().flags(squeue::Flags::BUFFER_SELECT);
     let state = clone_state()?;
@@ -813,7 +810,8 @@ pub async fn read_iobuf<B: AsIoBufs + Unpin + 'static>(
     let iobufs = IoBufMut::as_iobufs(buf.as_iobufs());
     let mut readv = opcode::Readv::new(Fd(desc.as_raw_fd()), iobufs.as_ptr(), iobufs.len() as u32);
     if let Some(off) = offset {
-        readv = readv.offset(off as libc::off64_t);
+        // TODO(b/256213235): Use offset64 instead of casting to off_t
+        readv = readv.offset(off as libc::off_t);
     }
 
     let state = match clone_state() {
@@ -844,7 +842,8 @@ pub async fn write_iobuf<B: AsIoBufs + Unpin + 'static>(
     let mut writev =
         opcode::Writev::new(Fd(desc.as_raw_fd()), iobufs.as_ptr(), iobufs.len() as u32);
     if let Some(off) = offset {
-        writev = writev.offset(off as libc::off64_t);
+        // TODO(b/256213235): Use offset64 instead of casting to off_t
+        writev = writev.offset(off as libc::off_t);
     }
 
     let state = match clone_state() {
@@ -861,8 +860,9 @@ pub async fn fallocate(
     len: u64,
     mode: u32,
 ) -> anyhow::Result<()> {
-    let entry = opcode::Fallocate::new(Fd(desc.as_raw_fd()), len as libc::off64_t)
-        .offset(file_offset as libc::off64_t)
+    // TODO(b/256213235): Use offset64 instead of casting to off_t
+    let entry = opcode::Fallocate::new(Fd(desc.as_raw_fd()), len as libc::off_t)
+        .offset(file_offset as libc::off_t)
         .mode(mode as libc::c_int)
         .build();
     let state = clone_state()?;

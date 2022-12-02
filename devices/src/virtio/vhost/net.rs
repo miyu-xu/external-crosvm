@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
+use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 2;
@@ -122,7 +123,7 @@ where
         // Only kill the child if it claimed its event.
         if self.workers_kill_evt.is_none() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = self.kill_evt.write(1);
+            let _ = self.kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -255,14 +256,12 @@ where
                                 (worker, tap)
                             });
 
-                        match worker_result {
+                        self.worker_thread = match worker_result {
                             Err(e) => {
                                 error!("failed to spawn vhost_net worker: {}", e);
                                 return;
                             }
-                            Ok(join_handle) => {
-                                self.worker_thread = Some(join_handle);
-                            }
+                            Ok(join_handle) => Some(join_handle),
                         }
                     }
                 }
@@ -332,7 +331,7 @@ where
 
     fn reset(&mut self) -> bool {
         // Only kill the child if it claimed its event.
-        if self.workers_kill_evt.is_none() && self.kill_evt.write(1).is_err() {
+        if self.workers_kill_evt.is_none() && self.kill_evt.signal().is_err() {
             error!("{}: failed to notify the kill event", self.debug_label());
             return false;
         }
@@ -357,12 +356,17 @@ where
     }
 }
 
+impl<T, U> Suspendable for Net<T, U>
+where
+    T: TapT + 'static,
+    U: VhostNetT<T> + 'static,
+{
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::path::PathBuf;
     use std::result;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
 
     use hypervisor::ProtectionType;
     use net_util::sys::unix::fakes::FakeTap;
@@ -439,12 +443,7 @@ pub mod tests {
         // Just testing that we don't panic, for now
         net.activate(
             guest_memory,
-            Interrupt::new(
-                Arc::new(AtomicUsize::new(0)),
-                IrqLevelEvent::new().unwrap(),
-                None,
-                VIRTIO_MSI_NO_VECTOR,
-            ),
+            Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
             vec![Queue::new(1)],
             vec![Event::new().unwrap()],
         );

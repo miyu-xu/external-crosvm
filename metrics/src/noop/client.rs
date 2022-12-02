@@ -1,10 +1,10 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use base::Tube;
 
-use crate::event_details_proto::RecordDetails;
+use crate::protos::event_details::RecordDetails;
 use crate::MetricEventType;
 use crate::MetricsClientDestructor;
 

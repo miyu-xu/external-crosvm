@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,6 @@ use remain::sorted;
 
 use super::pagesize;
 use super::Error as ErrnoError;
-use crate::external_mapping::ExternalMapping;
 use crate::AsRawDescriptor;
 use crate::Descriptor;
 use crate::MappedRegion;
@@ -36,7 +35,7 @@ pub enum Error {
     InvalidAddress,
     #[error("invalid argument provided when creating mapping")]
     InvalidArgument,
-    #[error("requested offset is out of range of off_t")]
+    #[error("requested offset is out of range of off64_t")]
     InvalidOffset,
     #[error("requested memory range spans past the end of the region: offset={0} count={1} region_size={2}")]
     InvalidRange(usize, usize, usize),
@@ -89,17 +88,6 @@ impl dyn MappedRegion {
         } else {
             Err(Error::SystemCallFailed(ErrnoError::last()))
         }
-    }
-}
-
-unsafe impl MappedRegion for ExternalMapping {
-    fn as_ptr(&self) -> *mut u8 {
-        self.as_ptr()
-    }
-
-    /// Returns the size of the memory region in bytes.
-    fn size(&self) -> usize {
-        self.size()
     }
 }
 
@@ -302,14 +290,14 @@ impl MemoryMapping {
         // If fd is provided, validate fd offset is within bounds
         let (fd, offset) = match fd {
             Some((fd, offset)) => {
-                if offset > libc::off_t::max_value() as u64 {
+                if offset > libc::off64_t::max_value() as u64 {
                     return Err(Error::InvalidOffset);
                 }
-                (fd.as_raw_descriptor(), offset as libc::off_t)
+                (fd.as_raw_descriptor(), offset as libc::off64_t)
             }
             None => (-1, 0),
         };
-        let addr = libc::mmap(addr, size, prot, flags, fd, offset);
+        let addr = libc::mmap64(addr, size, prot, flags, fd, offset);
         if addr == libc::MAP_FAILED {
             return Err(Error::SystemCallFailed(ErrnoError::last()));
         }
@@ -794,12 +782,12 @@ impl CrateMemoryMapping {
     }
 
     pub fn from_raw_ptr(addr: RawDescriptor, size: usize) -> Result<CrateMemoryMapping> {
-        return MemoryMapping::from_fd_offset(&Descriptor(addr), size, 0).map(|mapping| {
+        MemoryMapping::from_fd_offset(&Descriptor(addr), size, 0).map(|mapping| {
             CrateMemoryMapping {
                 mapping,
                 _file_descriptor: None,
             }
-        });
+        })
     }
 }
 
@@ -979,7 +967,7 @@ mod tests {
     #[test]
     fn from_fd_offset_invalid() {
         let fd = tempfile().unwrap();
-        let res = MemoryMapping::from_fd_offset(&fd, 4096, (libc::off_t::max_value() as u64) + 1)
+        let res = MemoryMapping::from_fd_offset(&fd, 4096, (libc::off64_t::max_value() as u64) + 1)
             .unwrap_err();
         match res {
             Error::InvalidOffset => {}

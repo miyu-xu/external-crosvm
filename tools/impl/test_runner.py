@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,10 +12,10 @@ import subprocess
 import sys
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Dict, Iterable, List, NamedTuple
+from typing import Dict, Iterable, List, NamedTuple, Optional
 
 from . import test_target, testvm
-from .common import all_tracked_files
+from .common import all_tracked_files, very_verbose
 from .test_config import BUILD_FEATURES, CRATE_OPTIONS, TestOption
 from .test_target import TestTarget, Triple
 
@@ -24,19 +24,19 @@ Runs tests for crosvm locally, in a vm or on a remote device.
 
 To build and run all tests locally:
 
-    $ ./tools/run_tests --target=host
+    $ ./tools/run_tests
 
-To cross-compile tests for aarch64 and run them on a built-in VM:
+Unit tests will be executed directly on the host, while integration tests will be executed inside
+a built-in VM.
 
-    $ ./tools/run_tests --target=vm:aarch64
+To cross-compile tests for aarch64, armhf or windows you can use:
 
-The VM will be automatically set up and booted. It will remain running between
-test runs and can be managed with `./tools/aarch64vm`.
+    $ ./tools/run_tests --platform=aarch64
+    $ ./tools/run_tests --platform=armhf
+    $ ./tools/run_tests --platform=mingw64
 
-Tests can also be run on a remote device via SSH. However it is your
-responsiblity that runtime dependencies of crosvm are provided.
-
-    $ ./tools/run_tests --target=ssh:hostname
+The built-in VMs will be automatically set up and booted. They will remain running between
+test runs and can be managed with `./tools/aarch64vm` or `./tools/x86vmm`.
 
 The default test target can be managed with `./tools/set_test_target`
 
@@ -236,36 +236,31 @@ def cargo_build_executables(
     yield from cargo("test", cwd, ["--no-run", *flags], env)
 
 
-def build_common_crate(build_env: Dict[str, str], crate: Crate):
-    print(f"Building tests for: common/{crate.name}")
-    return list(cargo_build_executables([], env=build_env, cwd=crate.path))
-
-
 def build_all_binaries(target: TestTarget, crosvm_direct: bool, instrument_coverage: bool):
     """Discover all crates and build them."""
     build_env = os.environ.copy()
     build_env.update(test_target.get_cargo_env(target))
+
+    build_env.setdefault("RUSTFLAGS", "")
+    build_env["RUSTFLAGS"] += " -D warnings"
     if instrument_coverage:
-        build_env["RUSTFLAGS"] = "-C instrument-coverage"
+        build_env["RUSTFLAGS"] += " -C instrument-coverage"
 
     print("Building crosvm workspace")
-    features = BUILD_FEATURES[str(target.build_triple)]
+    features = target.build_triple.feature_flag
     extra_args: List[str] = []
     if crosvm_direct:
         features += ",direct"
         extra_args.append("--no-default-features")
 
-    # TODO(:b:241251677) Enable default features on windows.
-    if target.build_triple.sys == "windows":
-        extra_args.append("--no-default-features")
-
     cargo_args = [
         "--features=" + features,
         f"--target={target.build_triple}",
-        "--verbose",
         "--workspace",
         *[f"--exclude={crate}" for crate in get_workspace_excludes(target.build_triple)],
     ]
+    if very_verbose():
+        cargo_args.append("--verbose")
     cargo_args.extend(extra_args)
 
     yield from cargo_build_executables(
@@ -273,13 +268,6 @@ def build_all_binaries(target: TestTarget, crosvm_direct: bool, instrument_cover
         cwd=CROSVM_ROOT,
         env=build_env,
     )
-
-    with Pool(PARALLELISM) as pool:
-        for executables in pool.imap(
-            functools.partial(build_common_crate, build_env),
-            list_common_crates(target.build_triple),
-        ):
-            yield from executables
 
 
 def get_test_timeout(target: TestTarget, executable: Executable):
@@ -291,7 +279,12 @@ def get_test_timeout(target: TestTarget, executable: Executable):
         return timeout * EMULATION_TIMEOUT_MULTIPLIER
 
 
-def execute_test(target: TestTarget, attempts: int, collect_coverage: bool, executable: Executable):
+def execute_test(
+    target: TestTarget,
+    attempts: int,
+    collect_coverage: bool,
+    executable: Executable,
+):
     """
     Executes a single test on the given test targed
 
@@ -348,7 +341,69 @@ def execute_test(target: TestTarget, attempts: int, collect_coverage: bool, exec
                 executable.name,
                 binary_path,
                 False,
-                e.stdout.decode("utf-8") + msg,
+                e.stdout.decode("utf-8") if e.stdout else "" + msg,
+                previous_attempts,
+                [],
+            )
+        if result.success:
+            break
+        else:
+            previous_attempts.append(result)
+
+    return result  # type: ignore
+
+
+def execute_integration_test(
+    target: TestTarget,
+    attempts: int,
+    collect_coverage: bool,
+    executable: Executable,
+):
+    """
+    Executes a single integration test on the given test targed
+
+    Test output is hidden unless the test fails or VERBOSE mode is enabled.
+    """
+    args: List[str] = ["--test-threads=1"]
+    binary_path = executable.binary_path
+
+    previous_attempts: List[ExecutableResults] = []
+    for i in range(1, attempts + 1):
+        print(f"Running integration test {executable.name} on {target}... (attempt {i}/{attempts})")
+
+        try:
+            test_process = test_target.exec_file_on_target(
+                target,
+                binary_path,
+                args=args,
+                timeout=get_test_timeout(target, executable),
+                generate_profile=True,
+                stdout=None if VERBOSE else subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            profile_files: List[Path] = []
+            if collect_coverage:
+                profile_files = [*test_target.list_profile_files(binary_path)]
+                if not profile_files:
+                    print()
+                    print(f"Warning: Running {binary_path} did not produce a profile file.")
+
+            result = ExecutableResults(
+                executable.name,
+                binary_path,
+                test_process.returncode == 0,
+                test_process.stdout,
+                previous_attempts,
+                profile_files,
+            )
+        except subprocess.TimeoutExpired as e:
+            # Append a note about the timeout to the stdout of the process.
+            msg = f"\n\nProcess timed out after {e.timeout}s\n"
+            result = ExecutableResults(
+                executable.name,
+                binary_path,
+                False,
+                e.stdout.decode("utf-8") + msg if e.stdout else msg,
                 previous_attempts,
                 [],
             )
@@ -383,34 +438,49 @@ def print_test_progress(result: ExecutableResults):
 
 def execute_all(
     executables: List[Executable],
-    target: test_target.TestTarget,
+    unit_test_target: Optional[test_target.TestTarget],
+    integration_test_target: Optional[test_target.TestTarget],
     attempts: int,
     collect_coverage: bool,
 ):
     """Executes all tests in the `executables` list in parallel."""
 
-    def is_exclusive(executable: Executable):
-        return TestOption.RUN_EXCLUSIVE in CRATE_OPTIONS.get(executable.crate_name, [])
+    def is_integration_test(executable: Executable):
+        options = CRATE_OPTIONS.get(executable.crate_name, [])
+        return executable.kind == "test" or TestOption.UNIT_AS_INTEGRATION_TEST in options
 
-    pool_executables = [e for e in executables if not is_exclusive(e)]
-    sys.stdout.write(f"Running {len(pool_executables)} test binaries in parallel on {target}")
-    sys.stdout.flush()
-    with Pool(PARALLELISM) as pool:
-        for result in pool.imap(
-            functools.partial(execute_test, target, attempts, collect_coverage), pool_executables
-        ):
-            print_test_progress(result)
+    unit_tests = [e for e in executables if not is_integration_test(e)]
+    if unit_test_target:
+        sys.stdout.write(f"Running {len(unit_tests)} unit tests on {unit_test_target}")
+        sys.stdout.flush()
+        with Pool(PARALLELISM) as pool:
+            for result in pool.imap(
+                functools.partial(execute_test, unit_test_target, attempts, collect_coverage),
+                unit_tests,
+            ):
+                print_test_progress(result)
+                yield result
+        print()
+    else:
+        print("Not running unit tests as requested.")
+
+    if integration_test_target:
+        integration_tests = [e for e in executables if is_integration_test(e)]
+        sys.stdout.write(
+            f"Running {len(integration_tests)} integration tests on {integration_test_target}"
+        )
+        sys.stdout.flush()
+        for executable in integration_tests:
+            result = execute_integration_test(
+                integration_test_target, attempts, collect_coverage, executable
+            )
+            if not result.success:
+                print(result.test_log)
             yield result
-    print()
+        print()
 
-    exclusive_executables = [e for e in executables if is_exclusive(e)]
-    sys.stdout.write(f"Running {len(exclusive_executables)} test binaries on {target}")
-    sys.stdout.flush()
-    for executable in exclusive_executables:
-        result = execute_test(target, attempts, collect_coverage, executable)
-        print_test_progress(result)
-        yield result
-    print()
+    else:
+        print("Not running integration tests as requested.")
 
 
 def find_crosvm_binary(executables: List[Executable]):
@@ -469,11 +539,12 @@ def main():
     )
     parser.add_argument(
         "--target",
-        default="host",
         help="Execute tests on the selected target. See ./tools/set_test_target",
     )
     parser.add_argument(
         "--build-target",
+        "--platform",
+        "-p",
         help=(
             "Override the cargo triple to build. Shorthands are available: (x86_64, armhf, "
             + "aarch64, mingw64, msvc64)."
@@ -487,9 +558,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clean any compilation artifacts and rebuild test VM.",
+    )
+    parser.add_argument(
         "--build-only",
         action="store_true",
     )
+    parser.add_argument("--unit-tests", action="store_true")
+    parser.add_argument("--integration-tests", action="store_true")
     parser.add_argument(
         "--cov",
         action="store_true",
@@ -545,15 +623,59 @@ def main():
     collect_coverage = bool(args.generate_lcov)
     emulator_cmd = args.emulator.split(" ") if args.emulator else None
     build_target = Triple.from_shorthand(args.build_target) if args.build_target else None
-    target = test_target.TestTarget(args.target, build_target, emulator_cmd)
-    print("Test target:", target)
+
+    if args.target:
+        print("Warning: Setting --target for running crosvm tests is deprecated.")
+        print()
+        print("  Use --platform instead to specify which platform to test for. For example:")
+        print("  `./tools/run_tests --platform=aarch64` (or armhf, or mingw64)")
+        print()
+        print("  Using --platform will run unit tests directly on the host and integration tests")
+        print("  in a test VM. This is the behavior used by Luci as well.")
+        print("  Setting --target will force both unit and integration tests to run on the")
+        print("  specified target instead.")
+        target = test_target.TestTarget(args.target, build_target, emulator_cmd)
+        unit_test_target = target
+        integration_test_target = target
+    else:
+        build_target = build_target or Triple.host_default()
+        unit_test_target = test_target.TestTarget("host", build_target)
+        if str(build_target) == "x86_64-unknown-linux-gnu" and os.name == "posix":
+            print("Note: x86 tests are temporarily all run on the host until we improve the")
+            print("      performance of the built-in VM. See http://b/247139912")
+            print("")
+            integration_test_target = unit_test_target
+        elif str(build_target) == "aarch64-unknown-linux-gnu":
+            integration_test_target = test_target.TestTarget("vm:aarch64", build_target)
+        elif str(build_target) == "x86_64-pc-windows-gnu" and os.name == "nt":
+            integration_test_target = unit_test_target
+        else:
+            # Do not run integration tests in unrecognized scenarios.
+            integration_test_target = None
+
+    if args.unit_tests and not args.integration_tests:
+        integration_test_target = None
+    elif args.integration_tests and not args.unit_tests:
+        unit_test_target = None
+
+    print("Unit Test target:", unit_test_target or "skip")
+    print("Integration Test target:", integration_test_target or "skip")
+
+    main_target = integration_test_target or unit_test_target
+    if not main_target:
+        return
+
+    if args.clean:
+        if main_target.vm:
+            testvm.clean(main_target.vm)
+        subprocess.check_call(["cargo", "clean"])
 
     # Start booting VM while we build
-    if target.vm:
-        testvm.build_if_needed(target.vm)
-        testvm.up(target.vm)
+    if main_target.vm:
+        testvm.build_if_needed(main_target.vm)
+        testvm.up(main_target.vm)
 
-    executables = list(build_all_binaries(target, args.crosvm_direct, collect_coverage))
+    executables = list(build_all_binaries(main_target, args.crosvm_direct, collect_coverage))
 
     if args.build_only:
         print("Not running tests as requested.")
@@ -562,13 +684,15 @@ def main():
     # Upload dependencies plus the main crosvm binary for integration tests if the
     # crosvm binary is not excluded from testing.
     crosvm_binary = find_crosvm_binary(executables).binary_path
-    extra_files = [crosvm_binary] if not exclude_crosvm(target.build_triple) else []
+    extra_files = [crosvm_binary] if not exclude_crosvm(main_target.build_triple) else []
 
-    test_target.prepare_target(target, extra_files=extra_files)
+    test_target.prepare_target(main_target, extra_files=extra_files)
 
     # Execute all test binaries
     test_executables = [
-        e for e in executables if e.is_test and should_run_executable(e, target, args.test_names)
+        e
+        for e in executables
+        if e.is_test and should_run_executable(e, main_target, args.test_names)
     ]
 
     all_results: List[ExecutableResults] = []
@@ -576,13 +700,21 @@ def main():
         if args.repeat > 1:
             print()
             print(f"Round {i+1}/{args.repeat}:")
-        results = [*execute_all(test_executables, target, args.retry + 1, collect_coverage)]
+        results = [
+            *execute_all(
+                test_executables,
+                unit_test_target,
+                integration_test_target,
+                args.retry + 1,
+                collect_coverage,
+            )
+        ]
         if args.generate_lcov and i == args.repeat - 1:
             generate_lcov(results, crosvm_binary, args.generate_lcov, args.cov)
         all_results.extend(results)
         random.shuffle(test_executables)
 
-    flakes = [r for r in all_results if r.previous_attempts]
+    flakes = [r for r in all_results if r.previous_attempts and r.success]
     if flakes:
         print()
         print(f"There are {len(flakes)} flaky tests")

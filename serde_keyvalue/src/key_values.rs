@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,6 +34,7 @@ use num_traits::Num;
 use remain::sorted;
 use serde::de;
 use serde::Deserialize;
+use serde::Deserializer;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq)]
@@ -46,12 +47,16 @@ pub enum ErrorKind {
     Eof,
     #[error("expected a boolean")]
     ExpectedBoolean,
+    #[error("expected ']'")]
+    ExpectedCloseBracket,
     #[error("expected ','")]
     ExpectedComma,
     #[error("expected '='")]
     ExpectedEqual,
     #[error("expected an identifier")]
     ExpectedIdentifier,
+    #[error("expected '['")]
+    ExpectedOpenBracket,
     #[error("expected a string")]
     ExpectedString,
     #[error("\" and ' can only be used in quoted strings")]
@@ -99,7 +104,7 @@ type Result<T> = std::result::Result<T, ParseError>;
 /// Nom parser for valid strings.
 ///
 /// A string can be quoted (using single or double quotes) or not. If it is not quoted, the string
-/// is assumed to continue until the next ',' separating character. If it is escaped, it continues
+/// is assumed to continue until the next ',', '[', or ']' character. If it is escaped, it continues
 /// until the next non-escaped quote.
 ///
 /// The returned value is a slice into the current input if no characters to unescape were met,
@@ -129,9 +134,10 @@ fn any_string(s: &str) -> IResult<&str, Cow<str>> {
         Cow::Borrowed,
     );
 
-    // Unquoted strings end with the next comma and may not contain a quote character or be empty.
+    // Unquoted strings end with the next comma or bracket and may not contain a quote or bracket
+    // character or be empty.
     let unquoted = map(
-        take_while1(|c: char| c != ',' && c != '"' && c != '\''),
+        take_while1(|c: char| c != ',' && c != '"' && c != '\'' && c != '[' && c != ']'),
         Cow::Borrowed,
     );
 
@@ -210,7 +216,7 @@ fn any_identifier(s: &str) -> IResult<&str, &str> {
 }
 
 /// Serde deserializer for key-values strings.
-struct KeyValueDeserializer<'de> {
+pub struct KeyValueDeserializer<'de> {
     /// Full input originally received for parsing.
     original_input: &'de str,
     /// Input currently remaining to parse.
@@ -228,6 +234,9 @@ struct KeyValueDeserializer<'de> {
     /// Whether the '=' sign has been parsed after a key. The absence of '=' is only valid for
     /// boolean fields, in which case the field's value will be `true`.
     has_equal: bool,
+    /// Whether the top structure has been parsed yet or not. The top structure is the only one that
+    /// does not require to be enclosed within braces.
+    top_struct_parsed: bool,
 }
 
 impl<'de> From<&'de str> for KeyValueDeserializer<'de> {
@@ -237,13 +246,14 @@ impl<'de> From<&'de str> for KeyValueDeserializer<'de> {
             input,
             next_identifier: None,
             has_equal: false,
+            top_struct_parsed: false,
         }
     }
 }
 
 impl<'de> KeyValueDeserializer<'de> {
     /// Return an `kind` error for the current position of the input.
-    fn error_here(&self, kind: ErrorKind) -> ParseError {
+    pub fn error_here(&self, kind: ErrorKind) -> ParseError {
         ParseError {
             kind,
             pos: self.original_input.len() - self.input.len(),
@@ -252,25 +262,39 @@ impl<'de> KeyValueDeserializer<'de> {
 
     /// Returns the next char in the input string without consuming it, or None
     /// if we reached the end of input.
-    fn peek_char(&self) -> Option<char> {
+    pub fn peek_char(&self) -> Option<char> {
         self.input.chars().next()
     }
 
     /// Skip the next char in the input string.
-    fn skip_char(&mut self) {
+    pub fn skip_char(&mut self) {
         let _ = self.next_char();
     }
 
     /// Returns the next char in the input string and consume it, or returns
     /// None if we reached the end of input.
-    fn next_char(&mut self) -> Option<char> {
+    pub fn next_char(&mut self) -> Option<char> {
         let c = self.peek_char()?;
         self.input = &self.input[c.len_utf8()..];
         Some(c)
     }
 
+    /// Confirm that we have a separator (i.e. ',' or ']') character or have reached the end of the
+    /// input string.
+    fn confirm_separator(&mut self) -> Result<()> {
+        // We must have a comma or end of input after a value.
+        match self.peek_char() {
+            Some(',') => {
+                let _ = self.next_char();
+                Ok(())
+            }
+            Some(']') | None => Ok(()),
+            Some(_) => Err(self.error_here(ErrorKind::ExpectedComma)),
+        }
+    }
+
     /// Attempts to parse an identifier, either for a key or for the value of an enum type.
-    fn parse_identifier(&mut self) -> Result<&'de str> {
+    pub fn parse_identifier(&mut self) -> Result<&'de str> {
         let (remainder, res) = any_identifier(self.input)
             .finish()
             .map_err(|_| self.error_here(ErrorKind::ExpectedIdentifier))?;
@@ -280,7 +304,7 @@ impl<'de> KeyValueDeserializer<'de> {
     }
 
     /// Attempts to parse a string.
-    fn parse_string(&mut self) -> Result<Cow<'de, str>> {
+    pub fn parse_string(&mut self) -> Result<Cow<'de, str>> {
         let (remainder, res) =
             any_string(self.input)
                 .finish()
@@ -301,7 +325,7 @@ impl<'de> KeyValueDeserializer<'de> {
     }
 
     /// Attempt to parse a boolean.
-    fn parse_bool(&mut self) -> Result<bool> {
+    pub fn parse_bool(&mut self) -> Result<bool> {
         let (remainder, res) =
             any_bool(self.input)
                 .finish()
@@ -315,7 +339,7 @@ impl<'de> KeyValueDeserializer<'de> {
     }
 
     /// Attempt to parse a positive or negative number.
-    fn parse_number<T>(&mut self) -> Result<T>
+    pub fn parse_number<T>(&mut self) -> Result<T>
     where
         T: Num<FromStrRadixErr = ParseIntError>,
     {
@@ -326,6 +350,18 @@ impl<'de> KeyValueDeserializer<'de> {
         self.input = remainder;
         Ok(val)
     }
+
+    /// Consume this deserializer and return a `TrailingCharacters` error if some input was
+    /// remaining.
+    ///
+    /// This is useful to confirm that the whole input has been consumed without any extra elements.
+    pub fn finish(self) -> Result<()> {
+        if self.input.is_empty() {
+            Ok(())
+        } else {
+            Err(self.error_here(ErrorKind::TrailingCharacters))
+        }
+    }
 }
 
 impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
@@ -335,19 +371,19 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
     where
         K: de::DeserializeSeed<'de>,
     {
-        let has_next_identifier = self.next_identifier.is_some();
-
-        if self.peek_char().is_none() {
-            return Ok(None);
+        // Detect end of input or struct.
+        match self.peek_char() {
+            None | Some(']') => return Ok(None),
+            _ => (),
         }
 
         self.has_equal = false;
 
+        let had_implicit_identifier = self.next_identifier.is_some();
         let val = seed.deserialize(&mut *self).map(Some)?;
-
         // We just "deserialized" the content of `next_identifier`, so there should be no equal
         // character in the input. We can return now.
-        if has_next_identifier {
+        if had_implicit_identifier {
             self.has_equal = true;
             return Ok(val);
         }
@@ -360,7 +396,7 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
                 Ok(val)
             }
             // Ok if we are parsing a boolean where an empty value means true.
-            Some(',') | None => Ok(val),
+            Some(',') | Some(']') | None => Ok(val),
             Some(_) => Err(self.error_here(ErrorKind::ExpectedEqual)),
         }
     }
@@ -371,23 +407,67 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
     {
         let val = seed.deserialize(&mut *self)?;
 
-        // We must have a comma or end of input after a value.
-        match self.next_char() {
-            Some(',') | None => Ok(val),
-            Some(_) => Err(self.error_here(ErrorKind::ExpectedComma)),
-        }
+        self.confirm_separator()?;
+
+        Ok(val)
     }
 }
 
-struct Enum<'a, 'de: 'a>(&'a mut KeyValueDeserializer<'de>);
+/// `MapAccess` for a map with no members specified.
+///
+/// This is used to allow a struct enum type to be specified without `[` and `]`, in which case
+/// all its members will take their default value:
+///
+/// ```
+/// # use serde_keyvalue::from_key_values;
+/// # use serde::Deserialize;
+/// #[derive(Deserialize, PartialEq, Debug)]
+/// #[serde(rename_all = "kebab-case")]
+/// enum FlipMode {
+///     Active {
+///         #[serde(default)]
+///         switch1: bool,
+///         #[serde(default)]
+///         switch2: bool,
+///     },
+/// }
+/// #[derive(Deserialize, PartialEq, Debug)]
+/// struct TestStruct {
+///     mode: FlipMode,
+/// }
+/// let res: TestStruct = from_key_values("mode=active").unwrap();
+/// assert_eq!(
+///     res,
+///     TestStruct {
+///         mode: FlipMode::Active {
+///             switch1: false,
+///             switch2: false
+///         }
+///     }
+///  );
+/// ```
+struct EmptyMapAccess;
 
-impl<'a, 'de> Enum<'a, 'de> {
-    fn new(de: &'a mut KeyValueDeserializer<'de>) -> Self {
-        Self(de)
+impl<'de> de::MapAccess<'de> for EmptyMapAccess {
+    type Error = ParseError;
+
+    fn next_key_seed<K>(&mut self, _seed: K) -> Result<Option<K::Value>>
+    where
+        K: de::DeserializeSeed<'de>,
+    {
+        Ok(None)
+    }
+
+    fn next_value_seed<V>(&mut self, _seed: V) -> Result<V::Value>
+    where
+        V: de::DeserializeSeed<'de>,
+    {
+        // Never reached because `next_key_seed` never returns a valid key.
+        unreachable!()
     }
 }
 
-impl<'a, 'de> de::EnumAccess<'de> for Enum<'a, 'de> {
+impl<'a, 'de> de::EnumAccess<'de> for &'a mut KeyValueDeserializer<'de> {
     type Error = ParseError;
     type Variant = Self;
 
@@ -395,12 +475,12 @@ impl<'a, 'de> de::EnumAccess<'de> for Enum<'a, 'de> {
     where
         V: de::DeserializeSeed<'de>,
     {
-        let val = seed.deserialize(&mut *self.0)?;
+        let val = seed.deserialize(&mut *self)?;
         Ok((val, self))
     }
 }
 
-impl<'a, 'de> de::VariantAccess<'de> for Enum<'a, 'de> {
+impl<'a, 'de> de::VariantAccess<'de> for &'a mut KeyValueDeserializer<'de> {
     type Error = ParseError;
 
     fn unit_variant(self) -> Result<()> {
@@ -414,18 +494,53 @@ impl<'a, 'de> de::VariantAccess<'de> for Enum<'a, 'de> {
         unimplemented!()
     }
 
-    fn tuple_variant<V>(self, _len: usize, _visitor: V) -> Result<V::Value>
+    fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
     {
-        unimplemented!()
+        self.deserialize_tuple(len, visitor)
     }
 
-    fn struct_variant<V>(self, _fields: &'static [&'static str], _visitor: V) -> Result<V::Value>
+    fn struct_variant<V>(self, _fields: &'static [&'static str], visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
     {
-        unimplemented!()
+        if self.peek_char() == Some('[') {
+            self.next_char();
+            let val = self.deserialize_map(visitor)?;
+
+            if self.peek_char() != Some(']') {
+                Err(self.error_here(ErrorKind::ExpectedCloseBracket))
+            } else {
+                self.next_char();
+                Ok(val)
+            }
+        } else {
+            // The `EmptyMapAccess` failing to parse means that this enum must take arguments, i.e.
+            // that an opening bracket is expected.
+            visitor
+                .visit_map(EmptyMapAccess)
+                .map_err(|_| self.error_here(ErrorKind::ExpectedOpenBracket))
+        }
+    }
+}
+
+impl<'de> de::SeqAccess<'de> for KeyValueDeserializer<'de> {
+    type Error = ParseError;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
+    where
+        T: de::DeserializeSeed<'de>,
+    {
+        if self.peek_char() == Some(']') {
+            return Ok(None);
+        }
+
+        let value = seed.deserialize(&mut *self)?;
+
+        self.confirm_separator()?;
+
+        Ok(Some(value))
     }
 }
 
@@ -437,18 +552,23 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
         V: serde::de::Visitor<'de>,
     {
         match self.peek_char() {
-            Some('0'..='9') => self.deserialize_u64(visitor),
-            Some('-') => self.deserialize_i64(visitor),
-            Some('"') => self.deserialize_string(visitor),
-            // Only possible option here is boolean flag.
-            Some(',') | None => self.deserialize_bool(visitor),
-            _ => {
-                // We probably have an unquoted string, but possibly a boolean as well.
-                match any_identifier(self.input) {
-                    Ok((_, "true")) | Ok((_, "false")) => self.deserialize_bool(visitor),
-                    _ => self.deserialize_str(visitor),
-                }
-            }
+            // If we have no value following, then we are dealing with a boolean flag.
+            Some(',') | None => return self.deserialize_bool(visitor),
+            // Opening bracket means we have a sequence.
+            Some('[') => return self.deserialize_seq(visitor),
+            _ => (),
+        }
+
+        // This is ambiguous as technically any argument could be an unquoted string. However we
+        // don't have any type information here, so try to guess it on a best-effort basis...
+        if any_number::<i64>(self.input).is_ok() {
+            self.deserialize_i64(visitor)
+        } else if any_number::<u64>(self.input).is_ok() {
+            self.deserialize_u64(visitor)
+        } else if any_bool(self.input).is_ok() {
+            self.deserialize_bool(visitor)
+        } else {
+            self.deserialize_str(visitor)
         }
     }
 
@@ -607,18 +727,30 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value>
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value>
     where
         V: serde::de::Visitor<'de>,
     {
-        unimplemented!()
+        if self.peek_char() == Some('[') {
+            self.next_char();
+            let val = visitor.visit_seq(&mut *self)?;
+
+            if self.peek_char() != Some(']') {
+                Err(self.error_here(ErrorKind::ExpectedCloseBracket))
+            } else {
+                self.next_char();
+                Ok(val)
+            }
+        } else {
+            Err(self.error_here(ErrorKind::ExpectedOpenBracket))
+        }
     }
 
-    fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value>
+    fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>
     where
         V: serde::de::Visitor<'de>,
     {
-        unimplemented!()
+        self.deserialize_seq(visitor)
     }
 
     fn deserialize_tuple_struct<V>(
@@ -649,6 +781,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
     where
         V: serde::de::Visitor<'de>,
     {
+        // The top structure (i.e. the first structure that we will ever parse) does not need to be
+        // enclosed in braces, but inner structures do.
+        let top_struct_parsed = std::mem::replace(&mut self.top_struct_parsed, true);
+
+        if top_struct_parsed {
+            if self.peek_char() == Some('[') {
+                self.next_char();
+            } else {
+                return Err(self.error_here(ErrorKind::ExpectedOpenBracket));
+            }
+        }
+
         // The name of the first field of a struct can be omitted (see documentation of
         // `next_identifier` for details).
         //
@@ -669,7 +813,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
             // Not an identifier, probably means this is a value for the first field then.
             Err(_) => fields.get(0).copied(),
         };
-        visitor.visit_map(self)
+
+        let ret = visitor.visit_map(&mut *self)?;
+
+        if top_struct_parsed {
+            if self.peek_char() == Some(']') {
+                self.next_char();
+            } else {
+                return Err(self.error_here(ErrorKind::ExpectedCloseBracket));
+            }
+        }
+
+        Ok(ret)
     }
 
     fn deserialize_enum<V>(
@@ -681,7 +836,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
     where
         V: serde::de::Visitor<'de>,
     {
-        visitor.visit_enum(Enum::new(self))
+        visitor.visit_enum(self)
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
@@ -710,16 +865,15 @@ where
     T: Deserialize<'a>,
 {
     let mut deserializer = KeyValueDeserializer::from(input);
-    let t = T::deserialize(&mut deserializer)?;
-    if deserializer.input.is_empty() {
-        Ok(t)
-    } else {
-        Err(deserializer.error_here(ErrorKind::TrailingCharacters))
-    }
+    let ret = T::deserialize(&mut deserializer)?;
+    deserializer.finish()?;
+
+    Ok(ret)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     use super::*;
@@ -857,7 +1011,7 @@ mod tests {
         let res = from_key_values::<SingleStruct<String>>(kv).unwrap();
         assert_eq!(res.m, "".to_string());
 
-        // "=", "," and "'"" in quote.
+        // "=", ",", "[", "]" and "'" in quote.
         let kv = r#"m="val = [10, 20, 'a']""#;
         let res = from_key_values::<SingleStruct<String>>(kv).unwrap();
         assert_eq!(res.m, r#"val = [10, 20, 'a']"#.to_string());
@@ -873,6 +1027,17 @@ mod tests {
             }
         );
         let kv = r#"m=val='a'"#;
+        let err = from_key_values::<SingleStruct<String>>(kv).unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::InvalidCharInString,
+                pos: 6
+            }
+        );
+
+        // Brackets in unquoted strings are forbidden.
+        let kv = r#"m=val=[a]"#;
         let err = from_key_values::<SingleStruct<String>>(kv).unwrap_err();
         assert_eq!(
             err,
@@ -907,6 +1072,16 @@ mod tests {
         let kv = r#"m='Escaped slash\\'"#;
         let res = from_key_values::<SingleStruct<String>>(kv).unwrap();
         assert_eq!(res.m, r#"Escaped slash\\"#.to_string());
+    }
+
+    #[test]
+    fn deserialize_unit() {
+        from_key_values::<SingleStruct<()>>("m").unwrap();
+        from_key_values::<SingleStruct<()>>("m=").unwrap();
+
+        from_key_values::<SingleStruct<()>>("").unwrap_err();
+        from_key_values::<SingleStruct<()>>("p").unwrap_err();
+        from_key_values::<SingleStruct<()>>("m=10").unwrap_err();
     }
 
     #[test]
@@ -1096,6 +1271,35 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_untagged_enum() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        #[serde(untagged)]
+        enum TestEnum {
+            FirstVariant { first: u32 },
+            SecondVariant { second: bool },
+        }
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            #[serde(flatten)]
+            variant: TestEnum,
+        }
+
+        let res: TestStruct = from_key_values("first=10").unwrap();
+        assert_eq!(res.variant, TestEnum::FirstVariant { first: 10 });
+
+        let res: TestStruct = from_key_values("second=false").unwrap();
+        assert_eq!(res.variant, TestEnum::SecondVariant { second: false },);
+
+        let res: TestStruct = from_key_values("second").unwrap();
+        assert_eq!(res.variant, TestEnum::SecondVariant { second: true },);
+
+        from_key_values::<TestStruct>("third=10").unwrap_err();
+        from_key_values::<TestStruct>("first=some_string").unwrap_err();
+        from_key_values::<TestStruct>("second=10").unwrap_err();
+    }
+
+    #[test]
     fn deserialize_first_arg_string() {
         #[derive(Deserialize, PartialEq, Debug)]
         struct TestStruct {
@@ -1143,6 +1347,333 @@ mod tests {
             TestStruct {
                 num: 12,
                 name: "foo".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_tuple() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            size: (u32, u32),
+        }
+
+        let res: TestStruct = from_key_values("size=[320,200]").unwrap();
+        assert_eq!(res, TestStruct { size: (320, 200) });
+
+        // Unterminated tuple.
+        let err = from_key_values::<TestStruct>("size=[320]").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::SerdeError("invalid length 1, expected a tuple of size 2".into()),
+                pos: 0,
+            }
+        );
+
+        // Too many elements in tuple.
+        let err = from_key_values::<TestStruct>("size=[320,200,255]").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::ExpectedCloseBracket,
+                pos: 14,
+            }
+        );
+
+        // Non-closed sequence is invalid.
+        let err = from_key_values::<TestStruct>("size=[320,200").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::ExpectedCloseBracket,
+                pos: 13,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_vector() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            numbers: Vec<u32>,
+        }
+
+        let res: TestStruct = from_key_values("numbers=[1,2,4,8,16,32,64]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                numbers: vec![1, 2, 4, 8, 16, 32, 64],
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_vector_of_structs() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        #[serde(deny_unknown_fields)]
+        struct Display {
+            size: (u32, u32),
+            #[serde(default)]
+            disabled: bool,
+        }
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        #[serde(deny_unknown_fields)]
+        struct TestStruct {
+            displays: Vec<Display>,
+            hostname: Option<String>,
+        }
+
+        let res: TestStruct = from_key_values("displays=[[size=[640,480]]]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                displays: vec![Display {
+                    size: (640, 480),
+                    disabled: false,
+                }],
+                hostname: None,
+            }
+        );
+
+        let res: TestStruct =
+            from_key_values("hostname=crosmatic,displays=[[size=[800,600],disabled]]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                displays: vec![Display {
+                    size: (800, 600),
+                    disabled: true,
+                }],
+                hostname: Some("crosmatic".to_string()),
+            }
+        );
+
+        // First field of a struct does not need to be named even if it is not the top-level struct.
+        let res: TestStruct =
+            from_key_values("displays=[[[640,480]],[[800,600],disabled]]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                displays: vec![
+                    Display {
+                        size: (640, 480),
+                        disabled: false,
+                    },
+                    Display {
+                        size: (800, 600),
+                        disabled: true,
+                    }
+                ],
+                hostname: None,
+            }
+        );
+
+        let res: TestStruct =
+            from_key_values("displays=[[[1024,768]],[size=[800,600],disabled]],hostname=crosmatic")
+                .unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                displays: vec![
+                    Display {
+                        size: (1024, 768),
+                        disabled: false,
+                    },
+                    Display {
+                        size: (800, 600),
+                        disabled: true,
+                    }
+                ],
+                hostname: Some("crosmatic".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_set() {
+        #[derive(Deserialize, PartialEq, Eq, Debug, PartialOrd, Ord)]
+        #[serde(rename_all = "kebab-case")]
+        enum Flags {
+            Awesome,
+            Fluffy,
+            Transparent,
+        }
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            flags: BTreeSet<Flags>,
+        }
+
+        let res: TestStruct = from_key_values("flags=[awesome,fluffy]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                flags: BTreeSet::from([Flags::Awesome, Flags::Fluffy]),
+            }
+        );
+
+        // Unknown enum variant?
+        let err = from_key_values::<TestStruct>("flags=[awesome,spiky]").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::SerdeError(
+                    "unknown variant `spiky`, expected one of `awesome`, `fluffy`, `transparent`"
+                        .into()
+                ),
+                pos: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_struct_and_tuple_enum() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        #[serde(rename_all = "kebab-case")]
+        enum VideoMode {
+            Fullscreen,
+            WindowAsTuple(u32, u32),
+            WindowAsStruct { width: u32, height: u32 },
+        }
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            mode: VideoMode,
+        }
+
+        let res: TestStruct = from_key_values("mode=fullscreen").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: VideoMode::Fullscreen
+            }
+        );
+
+        let res: TestStruct = from_key_values("mode=window-as-tuple[640,480]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: VideoMode::WindowAsTuple(640, 480),
+            }
+        );
+
+        // Missing values
+        let err = from_key_values::<TestStruct>("mode=window-as-tuple").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::ExpectedOpenBracket,
+                pos: 20,
+            }
+        );
+
+        let res: TestStruct =
+            from_key_values("mode=window-as-struct[width=800,height=600]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: VideoMode::WindowAsStruct {
+                    width: 800,
+                    height: 600,
+                }
+            }
+        );
+
+        // Missing values.
+        let err = from_key_values::<TestStruct>("mode=window-as-struct").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::ExpectedOpenBracket,
+                pos: 21,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_struct_enum_with_default() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        #[serde(rename_all = "kebab-case")]
+        enum FlipMode {
+            Inactive,
+            Active {
+                #[serde(default)]
+                switch1: bool,
+                #[serde(default)]
+                switch2: bool,
+            },
+        }
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TestStruct {
+            mode: FlipMode,
+        }
+
+        // Only specify one member and expect the other to be default.
+        let res: TestStruct = from_key_values("mode=active[switch1=true]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: FlipMode::Active {
+                    switch1: true,
+                    switch2: false
+                }
+            }
+        );
+
+        // Specify boolean members without explicit value.
+        let res: TestStruct = from_key_values("mode=active[switch1,switch2]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: FlipMode::Active {
+                    switch1: true,
+                    switch2: true
+                }
+            }
+        );
+
+        // No member specified, braces present.
+        let res: TestStruct = from_key_values("mode=active[]").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: FlipMode::Active {
+                    switch1: false,
+                    switch2: false
+                }
+            }
+        );
+
+        // No member specified and no braces.
+        let res: TestStruct = from_key_values("mode=active").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: FlipMode::Active {
+                    switch1: false,
+                    switch2: false
+                }
+            }
+        );
+
+        // Non-struct variant should be recognized without braces.
+        let res: TestStruct = from_key_values("mode=inactive").unwrap();
+        assert_eq!(
+            res,
+            TestStruct {
+                mode: FlipMode::Inactive,
+            }
+        );
+
+        // Non-struct variant should not accept braces.
+        let err = from_key_values::<TestStruct>("mode=inactive[]").unwrap_err();
+        assert_eq!(
+            err,
+            ParseError {
+                kind: ErrorKind::ExpectedComma,
+                pos: 13,
             }
         );
     }

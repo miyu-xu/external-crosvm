@@ -1,8 +1,11 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::path::PathBuf;
+
 use argh::FromArgs;
+use cros_async::ExecutorKind;
 use devices::virtio::block::block::DiskOption;
 use devices::virtio::vhost::user::device;
 use devices::virtio::vhost::user::VhostUserParams;
@@ -29,7 +32,7 @@ pub enum DeviceSubcommand {
 fn parse_vu_serial_options(s: &str) -> Result<VhostUserParams<SerialParameters>, String> {
     let params: VhostUserParams<SerialParameters> = from_key_values(s)?;
 
-    validate_serial_parameters(&params.device_params)?;
+    validate_serial_parameters(&params.device)?;
 
     Ok(params)
 }
@@ -39,6 +42,10 @@ fn parse_vu_serial_options(s: &str) -> Result<VhostUserParams<SerialParameters>,
 #[argh(subcommand, name = "devices")]
 /// Start one or several jailed device processes.
 pub struct DevicesCommand {
+    /// configure async executor backend to "uring" or "epoll" (default).
+    #[argh(option, arg_name = "EXECUTOR")]
+    pub async_executor: Option<ExecutorKind>,
+
     #[argh(switch)]
     /// disable sandboxing. Will nullify the --jail option if it was present.
     pub disable_sandbox: bool,
@@ -66,6 +73,7 @@ pub struct DevicesCommand {
     /// devices. Can be given more than once.
     /// Possible key values:
     ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
+    ///        This parameter must be given in first position.
     ///     type=(stdout,syslog,sink,file) - Where to route the
     ///        serial device
     ///     hardware=(serial,virtio-console) - Which type of serial
@@ -89,6 +97,10 @@ pub struct DevicesCommand {
     #[argh(option, arg_name = "block options")]
     /// start a block device (see help from run command for options)
     pub block: Vec<VhostUserParams<DiskOption>>,
+
+    #[argh(option, short = 's', arg_name = "PATH")]
+    /// path to put the control socket.
+    pub control_socket: Option<PathBuf>,
 }
 
 #[derive(FromArgs)]
