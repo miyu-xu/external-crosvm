@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "669deaf6_54c1e59f",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-12-03T00:39:38Z",
+      "side": 1,
+      "message": "This seems a bit unusual compared to other device implementations; usually, the kill event is not created until we spawn the thread in `activate()`, and the presence of the event is used to determine whether to try killing the worker thread or not.",
+      "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38151407_573e2223",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 62,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-12-03T00:39:38Z",
+      "side": 1,
+      "message": "We should `join()` the worker thread here like other devices.",
+      "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
