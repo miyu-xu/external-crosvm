@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "75c7cc91_1408e4ae",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-05T10:53:33Z",
+      "side": 1,
+      "message": "Yes, but this seems to be how other vhost devices are doing it. So I guess it should be fine?",
+      "parentUuid": "669deaf6_54c1e59f",
+      "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "38151407_573e2223",
         "filename": "devices/src/virtio/vhost/scmi.rs",
         "patchSetId": 2
@@ -31,6 +49,24 @@
       "writtenOn": "2022-12-03T00:39:38Z",
       "side": 1,
       "message": "We should `join()` the worker thread here like other devices.",
+      "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9667dd70_6e8ae2df",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 62,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-05T10:53:33Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "38151407_573e2223",
       "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
