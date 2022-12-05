@@ -45,6 +45,7 @@ rust_test {
         "libpower_monitor",
         "libresources",
         "libserde",
+        "libserde_json",
         "libserde_keyvalue",
         "libsync_rust",
         "libthiserror",
