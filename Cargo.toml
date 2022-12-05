@@ -371,7 +371,7 @@ libc = "0.2.93"
 libcras = "*"
 # Compile out trace statements in release builds
 log = { version = "0", features = ["release_max_level_debug"]}
-merge = "0.1.0"
+# merge = "0.1.0"  # ANDROID: Disabled until imported. b/260616729
 metrics = { path = "metrics" }
 net_util = { path = "net_util" }
 once_cell = "1.7"
