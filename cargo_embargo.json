@@ -34,7 +34,6 @@
     "qcow_utils",
     "rutabaga_gfx_ffi",
     "sandbox",
-    "swap",
     "system_api",
     "tpm2",
     "tpm2-sys",
