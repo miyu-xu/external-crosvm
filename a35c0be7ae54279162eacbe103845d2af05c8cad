@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "9df79243_fdcae8ee",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-12-06T19:39:47Z",
+      "side": 1,
+      "message": "It\u0027s in the `Fixes: 261559546` line",
+      "parentUuid": "56480a97_587e55d0",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 31
+      },
+      "revId": "a35c0be7ae54279162eacbe103845d2af05c8cad",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "802fbd7b_5792b942",
