@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 pub mod fixture;
-use fixture::vm::Config;
-use fixture::vm::TestVm;
+use fixture::Config;
+use fixture::TestVm;
 
 // Tests for possible backwards compatibility issues.
 //

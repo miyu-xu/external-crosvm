@@ -239,16 +239,6 @@ mod tests {
     use crate::VhostUserMemoryRegionInfo;
     use crate::VringConfigData;
 
-    /// Utility function to process a header and a message together.
-    fn handle_request(
-        h: &mut SlaveReqHandler<Mutex<DummySlaveReqHandler>, MasterReqEndpoint>,
-    ) -> Result<()> {
-        // We assume that a header comes together with message body in tests so we don't wait before
-        // calling `process_message()`.
-        let (hdr, files) = h.recv_header()?;
-        h.process_message(hdr, files)
-    }
-
     #[test]
     fn create_dummy_slave() {
         let slave = Mutex::new(DummySlaveReqHandler::new());
@@ -264,10 +254,10 @@ mod tests {
 
         assert!(!slave.as_ref().lock().unwrap().owned);
         master.set_owner().unwrap();
-        handle_request(&mut slave).unwrap();
+        slave.handle_request().unwrap();
         assert!(slave.as_ref().lock().unwrap().owned);
         master.set_owner().unwrap();
-        assert!(handle_request(&mut slave).is_err());
+        assert!(slave.handle_request().is_err());
         assert!(slave.as_ref().lock().unwrap().owned);
     }
 
@@ -279,18 +269,18 @@ mod tests {
         let (mut master, mut slave) = create_master_slave_pair(slave_be);
 
         thread::spawn(move || {
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
             assert!(slave.as_ref().lock().unwrap().owned);
 
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
             assert_eq!(
                 slave.as_ref().lock().unwrap().acked_features,
                 VIRTIO_FEATURES & !0x1
             );
 
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
             assert_eq!(
                 slave.as_ref().lock().unwrap().acked_protocol_features,
                 VhostUserProtocolFeatures::all().bits()
@@ -323,65 +313,65 @@ mod tests {
 
         thread::spawn(move || {
             // set_own()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
             assert!(slave.as_ref().lock().unwrap().owned);
 
             // get/set_features()
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
             assert_eq!(
                 slave.as_ref().lock().unwrap().acked_features,
                 VIRTIO_FEATURES & !0x1
             );
 
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
             assert_eq!(
                 slave.as_ref().lock().unwrap().acked_protocol_features,
                 VhostUserProtocolFeatures::all().bits()
             );
 
             // get_inflight_fd()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
             // set_inflight_fd()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // get_queue_num()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // set_mem_table()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // get/set_config()
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
 
             // set_slave_request_fd
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // set_vring_enable
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // set_log_base,set_log_fd()
-            handle_request(&mut slave).unwrap_err();
-            handle_request(&mut slave).unwrap_err();
+            slave.handle_request().unwrap_err();
+            slave.handle_request().unwrap_err();
 
             // set_vring_xxx
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
+            slave.handle_request().unwrap();
 
             // get_max_mem_slots()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // add_mem_region()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             // remove_mem_region()
-            handle_request(&mut slave).unwrap();
+            slave.handle_request().unwrap();
 
             sbar.wait();
         });

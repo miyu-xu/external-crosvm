@@ -15,7 +15,7 @@ use serde::Serializer;
 use thiserror::Error as ThisError;
 
 /// Identifies a single component of a [`PciAddress`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum PciAddressComponent {
     Domain,
     Bus,
@@ -24,7 +24,7 @@ pub enum PciAddressComponent {
 }
 
 /// PCI address parsing and conversion errors.
-#[derive(ThisError, Debug, PartialEq, Eq)]
+#[derive(ThisError, Debug, PartialEq)]
 #[sorted]
 pub enum Error {
     /// The specified component was outside the valid range.

@@ -1582,7 +1582,7 @@ impl PciDevice for CoIommuDev {
             self.mmap();
         }
 
-        self.config_regs.write_reg(reg_idx, offset, data);
+        (&mut self.config_regs).write_reg(reg_idx, offset, data);
     }
 
     fn keep_rds(&self) -> Vec<RawDescriptor> {

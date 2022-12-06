@@ -80,7 +80,6 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         None,
         None,
         None,
-        None,
     )?)
     .into_backend(&ex)?;
 

@@ -39,10 +39,12 @@ impl TryFrom<bindings::VAGenericValue> for GenericValue {
             bindings::VAGenericValueType::VAGenericValueTypeFunc => {
                 Ok(Self::Func(unsafe { value.value.fn_ }))
             }
-            other => Err(anyhow!(
-                "Conversion failed for unexpected VAGenericValueType: {}",
-                other
-            )),
+            other => {
+                return Err(anyhow!(
+                    "Conversion failed for unexpected VAGenericValueType: {}",
+                    other
+                ))
+            }
         }
     }
 }

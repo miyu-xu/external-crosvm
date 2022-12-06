@@ -59,7 +59,7 @@ pub struct TransferHandle {
     fd: std::sync::Weak<File>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum TransferStatus {
     Completed,
     Error,

@@ -37,12 +37,12 @@ mod serde_context_mask {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, FromKeyValues)]
+#[derive(Debug, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 pub struct GpuParameters {
     #[serde(rename = "backend")]
     pub mode: GpuMode,
-    #[serde(rename = "displays")]
+    #[serde(skip)]
     pub display_params: Vec<DisplayParameters>,
     // `width` and `height` are supported for CLI backwards compatibility.
     #[serde(rename = "width")]

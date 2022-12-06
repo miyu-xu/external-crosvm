@@ -5,6 +5,7 @@
 //! Trait to suspend virtual hardware.
 
 use anyhow::anyhow;
+use anyhow::Result as AnyhowResult;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,14 +19,14 @@ pub enum DeviceState {
 /// suspend/resume in crosvm.
 pub trait Suspendable {
     /// Save the device state in an image that can be restored.
-    fn snapshot(&self) -> anyhow::Result<String> {
+    fn snapshot(&self) -> AnyhowResult<String> {
         Err(anyhow!(
             "Suspendable::snapshot not implemented for {}",
             std::any::type_name::<Self>()
         ))
     }
     /// Load a saved snapshot of an image.
-    fn restore(&mut self, _data: &str) -> anyhow::Result<()> {
+    fn restore(&mut self, _data: &str) -> AnyhowResult<()> {
         Err(anyhow!(
             "Suspendable::restore not implemented for {}",
             std::any::type_name::<Self>()
@@ -33,7 +34,7 @@ pub trait Suspendable {
     }
     /// Stop all threads related to the device.
     /// Sleep should be idempotent.
-    fn sleep(&mut self) -> anyhow::Result<()> {
+    fn sleep(&mut self) -> AnyhowResult<()> {
         Err(anyhow!(
             "Suspendable::sleep not implemented for {}",
             std::any::type_name::<Self>()
@@ -41,7 +42,7 @@ pub trait Suspendable {
     }
     /// Create/Resume all threads related to the device.
     /// Wake should be idempotent.
-    fn wake(&mut self) -> anyhow::Result<()> {
+    fn wake(&mut self) -> AnyhowResult<()> {
         Err(anyhow!(
             "Suspendable::wake not implemented for {}",
             std::any::type_name::<Self>()

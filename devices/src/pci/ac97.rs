@@ -369,7 +369,7 @@ impl PciDevice for Ac97Dev {
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.config_regs.write_reg(reg_idx, offset, data)
+        (&mut self.config_regs).write_reg(reg_idx, offset, data)
     }
 
     fn keep_rds(&self) -> Vec<RawDescriptor> {

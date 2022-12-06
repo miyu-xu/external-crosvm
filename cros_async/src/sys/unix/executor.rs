@@ -201,12 +201,7 @@ pub enum SetDefaultExecutorKindError {
 impl Executor {
     /// Create a new `Executor`.
     pub fn new() -> AsyncResult<Self> {
-        Executor::with_executor_kind(ExecutorKind::default())
-    }
-
-    /// Create a new `Executor` of the given `ExecutorKind`.
-    pub fn with_executor_kind(kind: ExecutorKind) -> AsyncResult<Self> {
-        match kind {
+        match ExecutorKind::default() {
             ExecutorKind::Uring => Ok(URingExecutor::new().map(Executor::Uring)?),
             ExecutorKind::Fd => Ok(FdExecutor::new()
                 .map(Executor::Fd)

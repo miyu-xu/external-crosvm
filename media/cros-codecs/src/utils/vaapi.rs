@@ -112,13 +112,17 @@ impl<T: FrameInfo> TryInto<Option<Surface>> for crate::decoders::Picture<T, Gene
             None => return Ok(None),
         };
 
-        match backend_handle.0 {
+        let surface = match backend_handle.0 {
             GenericBackendHandleInner::Ready { picture, .. } => picture.take_surface().map(Some),
-            GenericBackendHandleInner::Pending(id) => Err(anyhow!(
+            GenericBackendHandleInner::Pending(id) => {
+                return Err(anyhow!(
                 "Attempting to retrieve a surface (id: {:?}) that might have operations pending.",
                 id
-            )),
-        }
+            ))
+            }
+        };
+
+        surface
     }
 }
 
@@ -525,7 +529,7 @@ impl TryFrom<&libva::VAImageFormat> for DecodedFormat {
         match value.fourcc {
             libva::constants::VA_FOURCC_NV12 => Ok(DecodedFormat::NV12),
             libva::constants::VA_FOURCC_I420 => Ok(DecodedFormat::I420),
-            _ => Err(anyhow!("Unsupported format")),
+            _ => return Err(anyhow!("Unsupported format")),
         }
     }
 }
