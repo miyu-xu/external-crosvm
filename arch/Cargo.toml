@@ -36,6 +36,3 @@ power_monitor = { path = "../power_monitor" }
 
 [target.'cfg(windows)'.dependencies]
 winapi = "*"
-
-[dev-dependencies]
-serde_json = "*"

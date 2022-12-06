@@ -183,7 +183,7 @@ pub trait MappableHandle {
 
 /// Instructs the decoder on whether it should block on the decode operations.
 /// Nonblocking mode is conditional on backend support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BlockingMode {
     Blocking,
     NonBlocking,

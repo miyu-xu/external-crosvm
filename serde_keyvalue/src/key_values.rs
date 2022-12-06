@@ -21,7 +21,6 @@ use nom::character::complete::none_of;
 use nom::combinator::map;
 use nom::combinator::map_res;
 use nom::combinator::opt;
-use nom::combinator::peek;
 use nom::combinator::recognize;
 use nom::combinator::value;
 use nom::combinator::verify;
@@ -38,7 +37,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 #[sorted]
 #[non_exhaustive]
 #[allow(missing_docs)]
@@ -71,7 +70,7 @@ pub enum ErrorKind {
 }
 
 /// Error that may be thown while parsing a key-values string.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 pub struct ParseError {
     /// Detailed error that occurred.
     pub kind: ErrorKind,
@@ -101,30 +100,6 @@ impl de::Error for ParseError {
 }
 
 type Result<T> = std::result::Result<T, ParseError>;
-
-/// Returns `true` if `c` is a valid separator character.
-fn is_separator(c: Option<char>) -> bool {
-    matches!(c, Some(',') | Some(']') | None)
-}
-
-/// Nom parser for valid separators.
-fn any_separator(s: &str) -> IResult<&str, Option<char>> {
-    let next_char = s.chars().next();
-
-    if is_separator(next_char) {
-        let pos = if let Some(c) = next_char {
-            c.len_utf8()
-        } else {
-            0
-        };
-        Ok((&s[pos..], next_char))
-    } else {
-        Err(nom::Err::Error(nom::error::Error::new(
-            s,
-            nom::error::ErrorKind::Char,
-        )))
-    }
-}
 
 /// Nom parser for valid strings.
 ///
@@ -192,17 +167,14 @@ where
             value(2, tag("0b")),
         ));
 
-        // Recognizes the trailing separator but do not consume it.
-        let separator = peek(any_separator);
-
         // Chain of parsers: sign (optional) and radix (optional), then sequence of alphanumerical
         // characters.
         //
         // Then we take all 3 recognized elements and turn them into the string and radix to pass to
         // `from_str_radix`.
         map(
-            tuple((opt(sign), opt(radix), alphanumeric1, separator)),
-            |(sign, radix, number, _)| {
+            tuple((opt(sign), opt(radix), alphanumeric1)),
+            |(sign, radix, number)| {
                 // If the sign was specified, we need to build a string that contains it for
                 // `from_str_radix` to parse the number accurately. Otherwise, simply borrow the
                 // remainder of the input.
@@ -344,12 +316,11 @@ impl<'de> KeyValueDeserializer<'de> {
 
         self.input = remainder;
 
-        // The character following a string will be either a comma, a closing bracket, or EOS. If
-        // we have something else, this means an unquoted string should probably have been quoted.
-        if is_separator(self.peek_char()) {
-            Ok(res)
-        } else {
-            Err(self.error_here(ErrorKind::InvalidCharInString))
+        // The character following a string will be either a comma or EOS. If we have something
+        // else, this means an unquoted string should probably have been quoted.
+        match self.peek_char() {
+            Some(',') | None => Ok(res),
+            Some(_) => Err(self.error_here(ErrorKind::InvalidCharInString)),
         }
     }
 
@@ -425,8 +396,8 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
                 Ok(val)
             }
             // Ok if we are parsing a boolean where an empty value means true.
-            c if is_separator(c) => Ok(val),
-            _ => Err(self.error_here(ErrorKind::ExpectedEqual)),
+            Some(',') | Some(']') | None => Ok(val),
+            Some(_) => Err(self.error_here(ErrorKind::ExpectedEqual)),
         }
     }
 
@@ -450,7 +421,7 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
 /// ```
 /// # use serde_keyvalue::from_key_values;
 /// # use serde::Deserialize;
-/// #[derive(Deserialize, PartialEq, Eq, Debug)]
+/// #[derive(Deserialize, PartialEq, Debug)]
 /// #[serde(rename_all = "kebab-case")]
 /// enum FlipMode {
 ///     Active {
@@ -460,7 +431,7 @@ impl<'de> de::MapAccess<'de> for KeyValueDeserializer<'de> {
 ///         switch2: bool,
 ///     },
 /// }
-/// #[derive(Deserialize, PartialEq, Eq, Debug)]
+/// #[derive(Deserialize, PartialEq, Debug)]
 /// struct TestStruct {
 ///     mode: FlipMode,
 /// }
@@ -582,7 +553,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
     {
         match self.peek_char() {
             // If we have no value following, then we are dealing with a boolean flag.
-            c if is_separator(c) => return self.deserialize_bool(visitor),
+            Some(',') | None => return self.deserialize_bool(visitor),
             // Opening bracket means we have a sequence.
             Some('[') => return self.deserialize_seq(visitor),
             _ => (),
@@ -835,12 +806,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut KeyValueDeserializer<'de> {
                     if fields.contains(&s) {
                         None
                     } else {
-                        fields.first().copied()
+                        fields.get(0).copied()
                     }
                 }
             },
             // Not an identifier, probably means this is a value for the first field then.
-            Err(_) => fields.first().copied(),
+            Err(_) => fields.get(0).copied(),
         };
 
         let ret = visitor.visit_map(&mut *self)?;
@@ -910,25 +881,6 @@ mod tests {
     #[derive(Deserialize, PartialEq, Debug)]
     struct SingleStruct<T> {
         m: T,
-    }
-
-    #[test]
-    fn nom_any_separator() {
-        let test_str = ",foo";
-        assert_eq!(any_separator(test_str), Ok((&test_str[1..], Some(','))));
-        let test_str = "]bar";
-        assert_eq!(any_separator(test_str), Ok((&test_str[1..], Some(']'))));
-        let test_str = "";
-        assert_eq!(any_separator(test_str), Ok((test_str, None)));
-
-        let test_str = "something,anything";
-        assert_eq!(
-            any_separator(test_str),
-            Err(nom::Err::Error(nom::error::Error::new(
-                test_str,
-                nom::error::ErrorKind::Char
-            )))
-        );
     }
 
     #[test]
@@ -1452,56 +1404,6 @@ mod tests {
             res,
             TestStruct {
                 numbers: vec![1, 2, 4, 8, 16, 32, 64],
-            }
-        );
-    }
-
-    #[test]
-    fn deserialize_vector_of_strings() {
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct TestStruct {
-            strs: Vec<String>,
-        }
-
-        // Unquoted strings
-        let res: TestStruct =
-            from_key_values(r#"strs=[singleword,camel_cased,kebab-cased]"#).unwrap();
-        assert_eq!(
-            res,
-            TestStruct {
-                strs: vec![
-                    "singleword".into(),
-                    "camel_cased".into(),
-                    "kebab-cased".into()
-                ],
-            }
-        );
-
-        // All quoted strings
-        let res: TestStruct =
-            from_key_values(r#"strs=["first string","second string","third string"]"#).unwrap();
-        assert_eq!(
-            res,
-            TestStruct {
-                strs: vec![
-                    "first string".into(),
-                    "second string".into(),
-                    "third string".into()
-                ],
-            }
-        );
-
-        // Mix
-        let res: TestStruct =
-            from_key_values(r#"strs=[unquoted,"quoted string",'quoted with escape "']"#).unwrap();
-        assert_eq!(
-            res,
-            TestStruct {
-                strs: vec![
-                    "unquoted".into(),
-                    "quoted string".into(),
-                    "quoted with escape \"".into()
-                ],
             }
         );
     }

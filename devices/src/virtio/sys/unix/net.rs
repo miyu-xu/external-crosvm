@@ -152,11 +152,11 @@ where
         Ok(())
     }
     pub(super) fn process_rx(&mut self) -> result::Result<(), NetError> {
-        process_rx(
-            &self.interrupt,
+        return process_rx(
+            self.interrupt.as_ref(),
             &mut self.rx_queue,
             &self.mem,
             &mut self.tap,
-        )
+        );
     }
 }

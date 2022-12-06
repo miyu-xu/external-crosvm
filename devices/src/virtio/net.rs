@@ -8,6 +8,7 @@ use std::mem;
 use std::net::Ipv4Addr;
 use std::os::raw::c_uint;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::thread;
 
 use base::error;
@@ -139,7 +140,7 @@ pub enum NetError {
     WriteBuffer(io::Error),
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum NetParametersMode {
     #[serde(rename_all = "kebab-case")]
@@ -156,7 +157,7 @@ pub enum NetParametersMode {
     },
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct NetParameters {
     #[serde(flatten)]
     pub mode: NetParametersMode,
@@ -304,7 +305,7 @@ pub enum Token {
 }
 
 pub(super) struct Worker<T: TapT> {
-    pub(super) interrupt: Interrupt,
+    pub(super) interrupt: Arc<Interrupt>,
     pub(super) mem: GuestMemory,
     pub(super) rx_queue: Queue,
     pub(super) tx_queue: Queue,
@@ -330,7 +331,7 @@ where
 {
     fn process_tx(&mut self) {
         process_tx(
-            &self.interrupt,
+            self.interrupt.as_ref(),
             &mut self.tx_queue,
             &self.mem,
             &mut self.tap,
@@ -344,7 +345,7 @@ where
         };
 
         process_ctrl(
-            &self.interrupt,
+            self.interrupt.as_ref(),
             ctrl_queue,
             &self.mem,
             &mut self.tap,
@@ -725,10 +726,11 @@ where
             );
             return;
         }
+        let interrupt_arc = Arc::new(interrupt);
         for i in 0..vq_pairs {
             let tap = self.taps.remove(0);
             let acked_features = self.acked_features;
-            let interrupt = interrupt.clone();
+            let interrupt = interrupt_arc.clone();
             let memory = mem.clone();
             let kill_evt = self.workers_kill_evt.remove(0);
             // Queues alternate between rx0, tx0, rx1, tx1, ..., rxN, txN, ctrl.
@@ -749,35 +751,34 @@ where
             };
             #[cfg(windows)]
             let overlapped_wrapper = OverlappedWrapper::new(true).unwrap();
-            let worker_result =
-                thread::Builder::new()
-                    .name(format!("v_net:{i}"))
-                    .spawn(move || {
-                        let mut worker = Worker {
-                            interrupt,
-                            mem: memory,
-                            rx_queue,
-                            tx_queue,
-                            ctrl_queue,
-                            tap,
-                            #[cfg(windows)]
-                            overlapped_wrapper,
-                            acked_features,
-                            vq_pairs: pairs,
-                            #[cfg(windows)]
-                            rx_buf: [0u8; MAX_BUFFER_SIZE],
-                            #[cfg(windows)]
-                            rx_count: 0,
-                            #[cfg(windows)]
-                            deferred_rx: false,
-                            kill_evt,
-                        };
-                        let result = worker.run(rx_queue_evt, tx_queue_evt, ctrl_queue_evt);
-                        if let Err(e) = result {
-                            error!("net worker thread exited with error: {}", e);
-                        }
-                        worker
-                    });
+            let worker_result = thread::Builder::new()
+                .name(format!("virtio_net worker {}", i))
+                .spawn(move || {
+                    let mut worker = Worker {
+                        interrupt,
+                        mem: memory,
+                        rx_queue,
+                        tx_queue,
+                        ctrl_queue,
+                        tap,
+                        #[cfg(windows)]
+                        overlapped_wrapper,
+                        acked_features,
+                        vq_pairs: pairs,
+                        #[cfg(windows)]
+                        rx_buf: [0u8; MAX_BUFFER_SIZE],
+                        #[cfg(windows)]
+                        rx_count: 0,
+                        #[cfg(windows)]
+                        deferred_rx: false,
+                        kill_evt,
+                    };
+                    let result = worker.run(rx_queue_evt, tx_queue_evt, ctrl_queue_evt);
+                    if let Err(e) = result {
+                        error!("net worker thread exited with error: {}", e);
+                    }
+                    worker
+                });
 
             match worker_result {
                 Err(e) => {

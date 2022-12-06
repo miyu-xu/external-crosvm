@@ -252,7 +252,6 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
                 self.disk.id,
                 disk_device_tube,
                 None,
-                self.disk.async_executor,
                 None,
             )
             .context("failed to create block device")?,
@@ -264,8 +263,15 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
         let disk = self.disk;
+
         let disk_device_tube = self.device_tube.take();
+        if let Some(device_tube) = &disk_device_tube {
+            keep_rds.push(device_tube.as_raw_descriptor());
+        }
+
         let disk_image = disk.open()?;
+        keep_rds.extend(disk_image.as_raw_descriptors());
+
         let block = Box::new(
             virtio::BlockAsync::new(
                 virtio::base_features(ProtectionType::Unprotected),
@@ -276,12 +282,10 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
                 disk.id,
                 disk_device_tube,
                 None,
-                disk.async_executor,
                 None,
             )
             .context("failed to create block device")?,
         );
-        keep_rds.extend(block.keep_rds());
 
         Ok(block)
     }

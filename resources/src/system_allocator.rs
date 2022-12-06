@@ -18,7 +18,7 @@ use crate::Result;
 /// MMIO address Type
 ///    Low: address allocated from low_address_space
 ///    High: address allocated from high_address_space
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum MmioType {
     Low,
     High,

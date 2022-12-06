@@ -11,7 +11,7 @@ use thiserror::Error;
 
 /// The error type for command line building operations.
 #[sorted]
-#[derive(Error, PartialEq, Eq, Debug)]
+#[derive(Error, PartialEq, Debug)]
 pub enum Error {
     /// Key/Value Operation would have had an equals sign in it.
     #[error("string contains an equals sign")]

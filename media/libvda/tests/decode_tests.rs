@@ -12,7 +12,6 @@ fn create_vda_instance() -> VdaInstance {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_create_instance() {
     let instance = create_vda_instance();
     let caps = instance.get_capabilities();
@@ -22,7 +21,6 @@ fn test_create_instance() {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_initialize_decode_session() {
     let instance = create_vda_instance();
     let _session = instance
@@ -31,7 +29,6 @@ fn test_initialize_decode_session() {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_decode_and_get_picture_ready_fake() {
     let instance = create_vda_instance();
     let mut session = instance

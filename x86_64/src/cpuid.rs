@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::CpuManufacturer;
 
 #[sorted]
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum Error {
     #[error("GetSupportedCpus ioctl failed: {0}")]
     GetSupportedCpusFailed(base::Error),

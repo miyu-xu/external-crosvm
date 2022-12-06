@@ -20,8 +20,6 @@ use futures::select;
 use futures::FutureExt;
 use tube_transporter::TubeTransferDataList;
 use tube_transporter::TubeTransporterReader;
-use vmm_vhost::message::MasterReq;
-use vmm_vhost::message::VhostUserMsgHeader;
 use vmm_vhost::SlaveReqHandler;
 
 use crate::virtio::vhost::user::device::handler::CallEvent;
@@ -68,33 +66,12 @@ impl DeviceRequestHandler<VhostUserRegularOps> {
         pin_mut!(close_event_fut);
         pin_mut!(exit_event_fut);
 
-        let mut pending_header: Option<(
-            VhostUserMsgHeader<MasterReq>,
-            Option<Vec<std::fs::File>>,
-        )> = None;
         loop {
             select! {
                 _read_res = read_event_fut => {
-                    match pending_header.take() {
-                        None => {
-                            let (hdr, files) = req_handler
-                                .recv_header()
-                                .context("failed to handle a vhost-user request")?;
-                            if req_handler.needs_wait_for_payload(&hdr) {
-                                // Wait for the message body being notified.
-                                pending_header = Some((hdr, files));
-                            } else {
-                                req_handler
-                                    .process_message(hdr, files)
-                                    .context("failed to handle a vhost-user request")?;
-                            }
-                        }
-                        Some((hdr, files)) => {
-                            req_handler
-                                .process_message(hdr, files)
-                                .context("failed to handle a vhost-user request")?;
-                        }
-                    }
+                    req_handler
+                        .handle_request()
+                        .context("failed to handle a vhost-user request")?;
                     read_event_fut.set(read_event.next_val().fuse());
                 }
                 // Tube closed event.

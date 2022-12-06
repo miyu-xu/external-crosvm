@@ -66,7 +66,6 @@ use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 
-use crate::descriptor::AsRawDescriptor;
 use crate::platform::syslog::PlatformSyslog;
 use crate::platform::RawDescriptor;
 
@@ -297,7 +296,6 @@ impl State {
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Stderr);
             loggers.push(Box::new(builder.build()));
-            descriptors.push(std::io::stderr().as_raw_descriptor());
         }
 
         if let Some(fd) = cfg.pipe_fd {

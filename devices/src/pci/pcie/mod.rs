@@ -81,7 +81,7 @@ const PMC_POWER_STATE_MASK: u16 = 0x3;
 const PMC_POWER_STATE_D0: u16 = 0;
 const PMC_POWER_STATE_D3: u16 = 0x3;
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum PciDevicePower {
     D0 = 0,
     D3 = 3,

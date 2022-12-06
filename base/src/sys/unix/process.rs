@@ -8,7 +8,6 @@
 
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
-use std::os::unix::process::ExitStatusExt;
 use std::process;
 
 use log::warn;
@@ -17,6 +16,7 @@ use minijail::Minijail;
 use crate::error;
 use crate::unix::wait_for_pid;
 use crate::unix::Pid;
+use crate::unix::WaitStatus;
 use crate::RawDescriptor;
 
 /// Child represents the forked process.
@@ -31,18 +31,20 @@ impl Child {
         let (_, status) = wait_for_pid(self.pid, 0)?;
         // suppress warning from the drop().
         let _ = ManuallyDrop::new(self);
-        if let Some(exit_code) = status.code() {
-            Ok(exit_code as u8)
-        } else if let Some(signal) = status.signal() {
-            let exit_code = if signal as i32 >= 128 {
-                warn!("wait for child: unexpected signal({:?})", signal);
-                255
-            } else {
-                128 + signal as u8
-            };
-            Ok(exit_code)
-        } else {
-            unreachable!("waitpid with option 0 only waits for exited and signaled status");
+        match status {
+            WaitStatus::Exited(exit_code) => Ok(exit_code),
+            WaitStatus::Signaled(signal) => {
+                let exit_code = if signal as i32 >= 128 {
+                    warn!("wait for child: unexpected signal({:?})", signal);
+                    255
+                } else {
+                    128 + signal as u8
+                };
+                Ok(exit_code)
+            }
+            _ => {
+                unreachable!("waitpid with option 0 only waits for exited and signaled status");
+            }
         }
     }
 }

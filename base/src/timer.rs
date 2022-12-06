@@ -41,8 +41,8 @@ impl Timer {
 // timer will "expire", meaning it has reached it's duration, or the caller will time out
 // waiting for the timer to expire. If no timeout option is provieded to the wait call
 // then it can only return WaitResult::Expired or an error.
-#[derive(PartialEq, Eq, Debug)]
-enum WaitResult {
+#[derive(PartialEq, Debug)]
+pub enum WaitResult {
     Expired,
     Timeout,
 }
@@ -107,7 +107,7 @@ impl FakeTimer {
     /// - `WaitResult::Expired` if the timer expired.
     /// - `WaitResult::Timeout` if `timeout` was not `None` and the timer did not expire within the
     ///   specified timeout period.
-    fn wait_for(&mut self, timeout: Option<Duration>) -> Result<WaitResult> {
+    pub fn wait_for(&mut self, timeout: Option<Duration>) -> Result<WaitResult> {
         let wait_start = Instant::now();
         loop {
             if let Some(timeout) = timeout {
@@ -143,8 +143,8 @@ impl FakeTimer {
     }
 
     /// Waits until the timer expires.
-    pub fn wait(&mut self) -> Result<()> {
-        self.wait_for(None).map(|_| ())
+    pub fn wait(&mut self) -> Result<WaitResult> {
+        self.wait_for(None)
     }
 
     /// After a timer is triggered from an EventContext, mark the timer as having been waited for.
@@ -291,7 +291,9 @@ mod tests {
 
         clock.lock().add_ns(200);
 
-        assert_eq!(tfd.wait().is_ok(), true);
+        let result = tfd.wait().expect("unable to wait for timer");
+
+        assert_eq!(result, WaitResult::Expired);
     }
 
     #[test]
@@ -330,10 +332,38 @@ mod tests {
 
         clock.lock().add_ns(300);
 
+        let mut result = tfd.wait().expect("unable to wait for timer");
         // An expiration from the initial expiry and from 1 repeat.
-        assert_eq!(tfd.wait().is_ok(), true);
+        assert_eq!(result, WaitResult::Expired);
 
         clock.lock().add_ns(300);
-        assert_eq!(tfd.wait().is_ok(), true);
+        result = tfd.wait().expect("unable to wait for timer");
+        assert_eq!(result, WaitResult::Expired);
+    }
+
+    #[test]
+    #[ignore]
+    fn zero_interval() {
+        // This test relies on the host having a reliable clock and not being
+        // overloaded, so it's marked as "ignore".  You can run by running
+        // cargo test -p base timer -- --ignored
+
+        let mut tfd = Timer::new().expect("failed to create timer");
+
+        let dur = Duration::from_nanos(200);
+        // interval is 0, so should not repeat
+        let interval = Duration::from_nanos(0);
+
+        tfd.reset(dur, Some(interval)).expect("failed to arm timer");
+
+        // should wait successfully the first time
+        tfd.wait().expect("unable to wait for timer");
+
+        // now this wait should timeout
+        let wr = tfd
+            .wait_for(Some(Duration::from_secs(1)))
+            .expect("unable to wait on timer");
+
+        assert_eq!(wr, WaitResult::Timeout);
     }
 }
