@@ -423,8 +423,7 @@ which = "4"
 
 [dev-dependencies]
 base = "*"
-# ANDROID: Not needed, should delete upstream.
-# prebuilts = { path = "prebuilts" }
+prebuilts = { path = "prebuilts" }
 
 [patch.crates-io]
 audio_streams = { path = "common/audio_streams" }
