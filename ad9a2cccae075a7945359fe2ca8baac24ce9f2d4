@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "abf694fa_4987f309",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-06T18:42:52Z",
+      "side": 1,
+      "message": "I think this one is safe, removing it from the revert topic",
+      "revId": "ad9a2cccae075a7945359fe2ca8baac24ce9f2d4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
