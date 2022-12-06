@@ -28,7 +28,6 @@ fn create_config() -> Config {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_create_instance() {
     let instance = create_vea_instance();
     let caps = instance.get_capabilities();
@@ -38,7 +37,6 @@ fn test_create_instance() {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_initialize_encode_session() {
     let instance = create_vea_instance();
     let config = create_config();
@@ -49,7 +47,6 @@ fn test_initialize_encode_session() {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_encode_and_get_buffer_back() {
     let instance = create_vea_instance();
     let config = create_config();
@@ -82,7 +79,6 @@ fn test_encode_and_get_buffer_back() {
 }
 
 #[test]
-#[cfg_attr(feature = "libvda-stub", ignore = "Ignored when using libvda-stub")]
 fn test_use_output_buffer_and_get_buffer_back() {
     let instance = create_vea_instance();
     let config = create_config();

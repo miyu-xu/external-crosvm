@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use std::io::Read;
+use std::ops::Deref;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
@@ -32,7 +33,7 @@ use crate::virtio::Writer;
 
 pub struct Worker {
     // Lock order: Must never hold more than one queue lock at the same time.
-    interrupt: Interrupt,
+    interrupt: Arc<Interrupt>,
     control_queue: Arc<Mutex<Queue>>,
     control_queue_evt: Event,
     event_queue: Queue,
@@ -48,7 +49,7 @@ impl Worker {
     /// Creates a new virtio-snd worker.
     pub fn try_new(
         vios_client: Arc<VioSClient>,
-        interrupt: Interrupt,
+        interrupt: Arc<Interrupt>,
         guest_memory: GuestMemory,
         control_queue: Arc<Mutex<Queue>>,
         control_queue_evt: Event,
@@ -87,7 +88,7 @@ impl Worker {
         let senders: Vec<Sender<StreamMsg>> =
             streams.iter().map(|sp| sp.msg_sender().clone()).collect();
         let io_thread = thread::Builder::new()
-            .name("v_snd_io".to_string())
+            .name(String::from("virtio_snd_io"))
             .spawn(move || {
                 try_set_real_time_priority();
 
@@ -217,7 +218,7 @@ impl Worker {
                     avail_desc,
                     &self.guest_memory,
                     &self.control_queue,
-                    &self.interrupt,
+                    self.interrupt.deref(),
                 );
             }
             let mut read_buf = vec![0u8; available_bytes];
@@ -293,7 +294,7 @@ impl Worker {
                             desc_index,
                             writer.bytes_written() as u32,
                         );
-                        queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+                        queue_lock.trigger_interrupt(&self.guest_memory, self.interrupt.deref());
                     }
                 }
                 VIRTIO_SND_R_CHMAP_INFO => {
@@ -373,7 +374,7 @@ impl Worker {
                         avail_desc,
                         &self.guest_memory,
                         &self.control_queue,
-                        &self.interrupt,
+                        self.interrupt.deref(),
                     )?;
                 }
             }
@@ -395,7 +396,7 @@ impl Worker {
                 );
                 {
                     self.event_queue
-                        .trigger_interrupt(&self.guest_memory, &self.interrupt);
+                        .trigger_interrupt(&self.guest_memory, self.interrupt.deref());
                 }
             } else {
                 warn!("virtio-snd: Dropping event because there are no buffers in virtqueue");
@@ -431,7 +432,7 @@ impl Worker {
                 desc,
                 &self.guest_memory,
                 &self.control_queue,
-                &self.interrupt,
+                self.interrupt.deref(),
             );
         }
         let mut params: virtio_snd_pcm_set_params = Default::default();
@@ -449,7 +450,7 @@ impl Worker {
                 desc,
                 &self.guest_memory,
                 &self.control_queue,
-                &self.interrupt,
+                self.interrupt.deref(),
             )
         }
     }
@@ -472,7 +473,7 @@ impl Worker {
                 },
                 &self.guest_memory,
                 &self.control_queue,
-                &self.interrupt,
+                self.interrupt.deref(),
             );
         }
         let mut pcm_hdr: virtio_snd_pcm_hdr = Default::default();
@@ -496,7 +497,7 @@ impl Worker {
                 },
                 &self.guest_memory,
                 &self.control_queue,
-                &self.interrupt,
+                self.interrupt.deref(),
             )
         }
     }
@@ -525,7 +526,7 @@ impl Worker {
                 desc_index,
                 writer.bytes_written() as u32,
             );
-            queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+            queue_lock.trigger_interrupt(&self.guest_memory, self.interrupt.deref());
         }
         Ok(())
     }
@@ -538,7 +539,7 @@ impl Drop for Worker {
 }
 
 fn io_loop(
-    interrupt: Interrupt,
+    interrupt: Arc<Interrupt>,
     guest_memory: GuestMemory,
     tx_queue: Arc<Mutex<Queue>>,
     tx_queue_evt: Event,
@@ -593,7 +594,7 @@ fn io_loop(
                         avail_desc,
                         &guest_memory,
                         queue,
-                        &interrupt,
+                        interrupt.deref(),
                     )?;
                 } else {
                     StreamProxy::send_msg(

@@ -33,7 +33,6 @@ use cros_async::AsyncError;
 use cros_async::AsyncTube;
 use cros_async::EventAsync;
 use cros_async::Executor;
-use cros_async::ExecutorKind;
 use cros_async::SelectResult;
 use cros_async::TimerAsync;
 use data_model::DataInit;
@@ -576,7 +575,6 @@ pub struct BlockAsync {
     pub(crate) id: Option<BlockId>,
     pub(crate) control_tube: Option<Tube>,
     pub(crate) queue_sizes: Vec<u16>,
-    pub(crate) executor_kind: ExecutorKind,
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<(Box<dyn DiskFile>, Option<Tube>)>>,
 }
@@ -592,7 +590,6 @@ impl BlockAsync {
         id: Option<BlockId>,
         control_tube: Option<Tube>,
         queue_size: Option<u16>,
-        executor_kind: Option<ExecutorKind>,
         num_queues: Option<u16>,
     ) -> SysResult<BlockAsync> {
         if block_size % SECTOR_SIZE as u32 != 0 {
@@ -627,7 +624,6 @@ impl BlockAsync {
             Self::build_avail_features(base_features, read_only, sparse, multi_queue);
 
         let seg_max = get_seg_max(q_size);
-        let executor_kind = executor_kind.unwrap_or_default();
 
         Ok(BlockAsync {
             disk_image: Some(disk_image),
@@ -642,7 +638,6 @@ impl BlockAsync {
             kill_evt: None,
             worker_thread: None,
             control_tube,
-            executor_kind,
         })
     }
 
@@ -934,15 +929,13 @@ impl VirtioDevice for BlockAsync {
         let sparse = self.sparse;
         let disk_size = self.disk_size.clone();
         let id = self.id.take();
-        let executor_kind = self.executor_kind;
         if let Some(disk_image) = self.disk_image.take() {
             let control_tube = self.control_tube.take();
             let worker_result =
                 thread::Builder::new()
                     .name("virtio_blk".to_string())
                     .spawn(move || {
-                        let ex = Executor::with_executor_kind(executor_kind)
-                            .expect("Failed to create an executor");
+                        let ex = Executor::new().expect("Failed to create an executor");
 
                         let async_control = control_tube
                             .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
@@ -1055,7 +1048,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .unwrap();
         let mut num_sectors = [0u8; 4];
@@ -1083,7 +1075,6 @@ mod tests {
             true,
             false,
             4096,
-            None,
             None,
             None,
             None,
@@ -1116,7 +1107,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
             )
             .unwrap();
             // writable device should set VIRTIO_BLK_F_FLUSH + VIRTIO_BLK_F_DISCARD
@@ -1139,7 +1129,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
             )
             .unwrap();
             // writable device should set VIRTIO_F_FLUSH + VIRTIO_BLK_F_RO
@@ -1158,7 +1147,6 @@ mod tests {
                 true,
                 true,
                 512,
-                None,
                 None,
                 None,
                 None,
@@ -1191,7 +1179,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .unwrap();
         assert_eq!(
@@ -1210,7 +1197,6 @@ mod tests {
             None,
             None,
             Some(128),
-            None,
             Some(1),
         )
         .unwrap();

@@ -33,11 +33,10 @@ cc = "1.0.25"
 pkg-config = "0.3.11"
 cfg-if = "1.0.0"
 
-[[example]]
+[[bin]]
 name = "simple"
 path = "examples/simple.rs"
 
-[[example]]
+[[bin]]
 name = "simple_open"
 path = "examples/simple_open.rs"
-required-features = ["x"]

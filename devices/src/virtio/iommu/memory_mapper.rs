@@ -125,7 +125,7 @@ pub enum RemoveMapResult {
     OverlapFailure,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum AddMapResult {
     Ok,
     OverlapFailure,

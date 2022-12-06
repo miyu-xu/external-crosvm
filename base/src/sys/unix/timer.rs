@@ -24,6 +24,7 @@ use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::SafeDescriptor;
 use crate::timer::Timer;
+use crate::timer::WaitResult;
 
 impl AsRawFd for Timer {
     fn as_raw_fd(&self) -> RawFd {
@@ -80,26 +81,50 @@ impl Timer {
         self.set_time(None, None)
     }
 
-    /// Waits until the timer expires.
-    pub fn wait(&mut self) -> Result<()> {
+    /// Waits until the timer expires or an optional wait timeout expires, whichever happens first.
+    ///
+    /// # Returns
+    ///
+    /// - `WaitResult::Expired` if the timer expired.
+    /// - `WaitResult::Timeout` if `timeout` was not `None` and the timer did not expire within the
+    ///   specified timeout period.
+    pub fn wait_for(&mut self, timeout: Option<Duration>) -> Result<WaitResult> {
         let mut pfd = libc::pollfd {
             fd: self.as_raw_descriptor(),
             events: POLLIN,
             revents: 0,
         };
 
-        // Safe because this only modifies |pfd| and we check the return value
-        let ret = handle_eintr_errno!(unsafe {
-            libc::ppoll(
-                &mut pfd as *mut libc::pollfd,
-                1,
-                ptr::null_mut(),
-                ptr::null_mut(),
-            )
-        });
+        let ret = if let Some(timeout_inner) = timeout {
+            let timeoutspec = duration_to_timespec(timeout_inner);
+            // Safe because this only modifies |pfd| and we check the return value
+            unsafe {
+                libc::ppoll(
+                    &mut pfd as *mut libc::pollfd,
+                    1,
+                    &timeoutspec,
+                    ptr::null_mut(),
+                )
+            }
+        } else {
+            // Safe because this only modifies |pfd| and we check the return value
+            unsafe {
+                libc::ppoll(
+                    &mut pfd as *mut libc::pollfd,
+                    1,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            }
+        };
 
         if ret < 0 {
             return errno_result();
+        }
+
+        // no return events (revents) means we got a timeout
+        if pfd.revents == 0 {
+            return Ok(WaitResult::Timeout);
         }
 
         // EAGAIN is a valid error in the case where another thread has called timerfd_settime
@@ -108,7 +133,12 @@ impl Timer {
         // WaitResult::Expired.
         let _ = self.mark_waited()?;
 
-        Ok(())
+        Ok(WaitResult::Expired)
+    }
+
+    /// Waits until the timer expires.
+    pub fn wait(&mut self) -> Result<WaitResult> {
+        self.wait_for(None)
     }
 
     /// After a timer is triggered from an EventContext, mark the timer as having been waited for.

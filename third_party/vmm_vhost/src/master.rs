@@ -410,7 +410,8 @@ impl<E: Endpoint<MasterReq>> VhostUserMaster for Master<E> {
             return Err(VhostUserError::InvalidParam);
         }
 
-        let val = VhostUserVringState::new(queue_index as u32, enable.into());
+        let flag = if enable { 1 } else { 0 };
+        let val = VhostUserVringState::new(queue_index as u32, flag);
         let hdr = node.send_request_with_body(MasterReq::SET_VRING_ENABLE, &val, None)?;
         node.wait_for_ack(&hdr)
     }

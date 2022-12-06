@@ -30,7 +30,7 @@ static EXECUTOR: Lazy<CancellableBlockingPool> =
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(PartialEq, Eq, PartialOrd)]
+#[derive(PartialEq, PartialOrd)]
 enum WindDownStates {
     Armed,
     Disarmed,
@@ -63,7 +63,7 @@ pub enum TimeoutAction {
     Panic,
 }
 
-#[derive(ThisError, Debug, PartialEq, Eq)]
+#[derive(ThisError, Debug, PartialEq)]
 pub enum Error {
     #[error("Timeout occurred while trying to join threads")]
     Timedout,
