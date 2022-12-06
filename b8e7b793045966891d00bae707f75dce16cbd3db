@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0ca703da_ec7acfc8",
+        "filename": "Cargo.toml",
+        "patchSetId": 4
+      },
+      "lineNbr": 427,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-12-06T00:14:21Z",
+      "side": 1,
+      "message": "file bug or do?",
+      "range": {
+        "startLine": 426,
+        "startChar": 0,
+        "endLine": 427,
+        "endChar": 36
+      },
+      "revId": "b8e7b793045966891d00bae707f75dce16cbd3db",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "585c04a0_30585f5c",
+        "filename": "aarch64/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2022-12-06T00:14:21Z",
+      "side": 1,
+      "message": "WDYT - give it a different name to avoid confusion?",
+      "range": {
+        "startLine": 1,
+        "startChar": 29,
+        "endLine": 1,
+        "endChar": 42
+      },
+      "revId": "b8e7b793045966891d00bae707f75dce16cbd3db",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
