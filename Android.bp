@@ -120,9 +120,6 @@ rust_binary {
                 "libprocessgroup",
             ],
         },
-        darwin: {
-            enabled: false,
-        },
         host_linux: {
             features: [
                 "gdb",
