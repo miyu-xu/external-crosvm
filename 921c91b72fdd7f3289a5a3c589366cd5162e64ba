@@ -16,6 +16,24 @@
       "message": "looks like the merge commit stopped being a merge in the revert now this is showing up as all modified files. Is this a problem?",
       "revId": "921c91b72fdd7f3289a5a3c589366cd5162e64ba",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cc829aba_e3dbd004",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-07T17:31:59Z",
+      "side": 1,
+      "message": "ah, thanks for noticing. i guess we shouldn\u0027t use the gerrit UI to revert merges. i\u0027ll fix it",
+      "parentUuid": "d08e6b98_e346ea73",
+      "revId": "921c91b72fdd7f3289a5a3c589366cd5162e64ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
