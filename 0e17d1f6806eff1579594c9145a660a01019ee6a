@@ -36,6 +36,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e00efaab_dec6ca66",
+        "filename": "devices/src/virtio/vhost/scmi.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-07T08:54:06Z",
+      "side": 1,
+      "message": "marking as resolved as I think you are fine with it and  gave CR +1.",
+      "parentUuid": "75c7cc91_1408e4ae",
+      "revId": "0e17d1f6806eff1579594c9145a660a01019ee6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "38151407_573e2223",

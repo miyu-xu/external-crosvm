@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2ca63904_06b22800",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-07T08:54:06Z",
+      "side": 1,
+      "message": "Summary of new changes in this new patchset -\n\nMoved to tip code of crosvm. This patchset needed some changes as per tip code.\nAlso, resolved cargo clippy and rustfmt warnings.",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "662a7c85_bab64b57",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2022-12-07T08:54:06Z",
+      "side": 1,
+      "message": "There was a comment earlier, to use single line style on previous patchset. But I have reverted that back as rustfmt recommends this style.",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
