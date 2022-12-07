@@ -401,7 +401,7 @@ x86_64 = { path = "x86_64" }
 aarch64 = { path = "aarch64" }
 
 [target.'cfg(unix)'.dependencies]
-minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
+minijail = "*" # provided by ebuild
 p9 = "*"
 
 [target.'cfg(target_os="linux")'.dependencies]
@@ -440,4 +440,4 @@ libcras = { path = "libcras_stub" } # ignored by ebuild
 p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
 wire_format_derive = { path = "common/p9/wire_format_derive" } # ignored by ebuild
-minijail = { path = "../minijail/rust/minijail" } # ignored by ebuild
+minijail = { path = "third_party/minijail/rust/minijail" } # ignored by ebuild
