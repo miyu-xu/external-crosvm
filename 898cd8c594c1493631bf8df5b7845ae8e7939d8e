@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5b6e0538_50306421",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 1
+      },
+      "lineNbr": 56,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-07T19:37:32Z",
+      "side": 1,
+      "message": "looks like CuttlefishDisplayHotplugTest doesn\u0027t work when run in presubmit like this\n\n```\njava.io.FileNotFoundException: Failed to find Cuttlefish config file.\n\tat com.android.cuttlefish.tests.utils.CuttlefishControlLocalRunner.\u003cinit\u003e(CuttlefishControlLocalRunner.java:57)\n...\n```",
+      "range": {
+        "startLine": 56,
+        "startChar": 14,
+        "endLine": 56,
+        "endChar": 42
+      },
+      "revId": "898cd8c594c1493631bf8df5b7845ae8e7939d8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
