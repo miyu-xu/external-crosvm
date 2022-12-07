@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d08e6b98_e346ea73",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-12-07T16:10:08Z",
+      "side": 1,
+      "message": "looks like the merge commit stopped being a merge in the revert now this is showing up as all modified files. Is this a problem?",
+      "revId": "921c91b72fdd7f3289a5a3c589366cd5162e64ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
