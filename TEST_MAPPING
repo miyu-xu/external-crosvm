@@ -45,15 +45,23 @@
     {"name": "usb_util_test_src_lib"},
     // {"name": "vhost_test_src_lib"},
     {"name": "vm_control_test_src_lib"},
-    {"name": "vm_memory_test_src_lib"}
+    {"name": "vm_memory_test_src_lib"},
     // {"name": "vmm_vhost_test_src_lib"},
     // {"name": "x86_64_test_src_lib"}
     // {"name": "x86_64_test_tests_integration_main"},
-    // {"name": "x86_64_test_tests_unix"}
+    // {"name": "x86_64_test_tests_unix"},
+
+    // Some CF tests that aren't in the CF TEST_MAPPING, but have a decent
+    // likelyhood of being broken by a crosvm update.
+    {"name": "CuttlefishDisplayHotplugTest"},
+    {"name": "GfxstreamEnabledTest"}
   ],
   "imports": [
     {
       "path": "packages/modules/Virtualization"
+    },
+    {
+      "path": "device/google/cuttlefish"
     }
   ]
 }
