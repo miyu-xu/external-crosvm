@@ -51,6 +51,13 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+mod gz;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+pub use self::gz::GzKernelIrqChip;
+
 pub type IrqEventIndex = usize;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

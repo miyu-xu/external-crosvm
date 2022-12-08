@@ -222,6 +222,9 @@ haxm = ["hypervisor/haxm"]
 ## Enables the use of the WHPX hypervisor
 whpx = ["devices/whpx", "hypervisor/whpx"]
 
+## Enables the use of the GenieZone hypervisor
+gz = ["hypervisor/gz", "devices/gz"]
+
 ## Enables a libslirp based network device. Currently only supported on Windows.
 slirp = ["devices/slirp", "net_util/slirp"]
 
