@@ -28,6 +28,7 @@ use std::ops::RangeInclusive;
 use std::os::unix::prelude::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -93,6 +94,9 @@ use devices::IrqChipAArch64 as IrqChipArch;
 use devices::IrqChipX86_64 as IrqChipArch;
 use devices::IrqEventIndex;
 use devices::IrqEventSource;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+use devices::GzKernelIrqChip;
 use devices::KvmKernelIrqChip;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::KvmSplitIrqChip;
@@ -122,6 +126,15 @@ use devices::VirtioPciDevice;
 use devices::XhciController;
 #[cfg(feature = "gpu")]
 use gpu::*;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+use hypervisor::gz::Gz;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+use hypervisor::gz::GzVcpu;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+use hypervisor::gz::GzVm;
 use hypervisor::kvm::Kvm;
 use hypervisor::kvm::KvmVcpu;
 use hypervisor::kvm::KvmVm;
@@ -1406,8 +1419,66 @@ fn run_kvm(
     )
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "gz")]
+fn run_gz(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
+    let gzvm = Gz::new_with_path(&PathBuf::from("/dev/gzvm")).with_context(|| {
+        format!(
+            "failed to open GenieZone device {}",
+            cfg.kvm_device_path.display(),
+        )
+    })?;
+    let vm = GzVm::new(&gzvm, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protection_type,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        bail!("Failed to create protected VM");
+    }
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    enum KvmIrqChip {
+        Kernel(GzKernelIrqChip),
+    }
+
+    impl KvmIrqChip {
+        fn as_mut(&mut self) -> &mut dyn IrqChipArch {
+            match self {
+                KvmIrqChip::Kernel(i) => i,
+            }
+        }
+    }
+
+    let ioapic_host_tube;
+    let mut irq_chip = if cfg.split_irqchip {
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        unimplemented!("KVM split irqchip mode only supported on x86 processors");
+    } else {
+        ioapic_host_tube = None;
+
+        KvmIrqChip::Kernel(
+            GzKernelIrqChip::new(vm_clone, components.vcpu_count)
+                .context("failed to create IRQ chip")?,
+        )
+
+    };
+
+    run_vm::<GzVcpu, GzVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+}
+
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(feature = "gz")]
+    if cfg.gz_device_path.exists() {
+        return Ok(HypervisorKind::Gz);
+    }
+    bail!("no hypervisor enabled!");
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
@@ -1444,7 +1515,7 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
         .map(|swap_dir| SwapController::launch(guest_mem.clone(), swap_dir.clone()))
         .transpose()?;
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
@@ -1456,6 +1527,13 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
             guest_mem,
             #[cfg(feature = "swap")]
             swap_controller,
+        ),
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        #[cfg(feature = "gz")]
+	    HypervisorKind::Gz => run_gz(
+            cfg,
+            components,
+            guest_mem,
         ),
     }
 }

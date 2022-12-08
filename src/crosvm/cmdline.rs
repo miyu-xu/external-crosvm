@@ -1204,6 +1204,12 @@ pub struct RunCommand {
     ///     cache-size=SIZE - The maximum size of the shader cache
     pub gpu_render_server: Option<GpuRenderServerParameters>,
 
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(all(unix, feature = "gz"))]
+    #[argh(option, long = "gz-device", arg_name = "PATH")]
+    /// path to the GZVM device. (default /dev/gzvm)
+    pub gz_device_path: Option<PathBuf>,
+
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_false)]
@@ -2186,6 +2192,12 @@ impl TryFrom<RunCommand> for super::config::Config {
         #[cfg(unix)]
         if let Some(p) = cmd.kvm_device {
             cfg.kvm_device_path = p;
+        }
+
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        #[cfg(all(unix, feature = "gz"))]
+        if let Some(p) = cmd.gz_device_path {
+            cfg.gz_device_path = p;
         }
 
         #[cfg(unix)]

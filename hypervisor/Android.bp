@@ -310,6 +310,7 @@ rust_library {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gz",
     ],
     rustlibs: [
         "libbase_rust",
