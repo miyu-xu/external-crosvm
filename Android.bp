@@ -120,19 +120,7 @@ rust_binary {
                 "libprocessgroup",
             ],
         },
-        darwin: {
-            enabled: false,
-        },
         host_linux: {
-            features: [
-                "gdb",
-                "gdbstub",
-            ],
-            rustlibs: [
-                "libgdbstub",
-                "libgdbstub_arch",
-                "libthiserror",
-            ],
             shared_libs: [
                 "libprocessgroup",
             ],
@@ -250,15 +238,6 @@ rust_test {
             ],
         },
         host_linux: {
-            features: [
-                "gdb",
-                "gdbstub",
-            ],
-            rustlibs: [
-                "libgdbstub",
-                "libgdbstub_arch",
-                "libthiserror",
-            ],
             shared_libs: [
                 "libprocessgroup",
             ],
