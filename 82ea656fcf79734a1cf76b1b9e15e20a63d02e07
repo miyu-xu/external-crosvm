@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "96e6ac58_9c52686d",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:58:14Z",
+      "side": 1,
+      "message": "not good! or do you just mean it doesn\u0027t build without the rest of the CLs in the chain?",
+      "revId": "82ea656fcf79734a1cf76b1b9e15e20a63d02e07",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
