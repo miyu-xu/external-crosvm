@@ -1,0 +1,124 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "017f2626_12c68260",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 322,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "\"failed to get metadata\" (?)",
+      "range": {
+        "startLine": 322,
+        "startChar": 46,
+        "endLine": 322,
+        "endChar": 64
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b3098733_73b54241",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 335,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "`error!` supports formatting, so this simplifies to\n\n```\nerror!(\"failed to create mem region, addr:{}, size:{}. Err: {}\", guest_base, size, e)\n```\n\nalso, if you are just going to immediately `unwrap`, it is better to do\n\n```\nMemoryRegion::new_from_file()\n    .unwrap_or_else(|e| panic!(\"failed to create mem region, addr:{}, size:{}. Err: {}\", guest_base, size, e))\n```\n\nsame elsewhere in this function",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c1cfa3b2_d6476e25",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 340,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "```\nlet guest_mem \u003d GuestMemory::from_regions(vec![memory_region])\n```",
+      "range": {
+        "startLine": 337,
+        "startChar": 0,
+        "endLine": 340,
+        "endChar": 54
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f06825c1_0f9b0540",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 428,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "Should be able to fold these two lines into\n\n```\nfw_name._name\n    .get_mut(..vm_name.len())\n    .ok_or_else(|| Error::new(EINVAL))?\n    .copy_from_slice(vm_name.as_bytes());\n```",
+      "range": {
+        "startLine": 427,
+        "startChar": 0,
+        "endLine": 428,
+        "endChar": 75
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c5154e66_10756e5a",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 442,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "this is not OK, there will be double ownership of the file descriptor. you\u0027ll need to `dup` it first\n\nalternatively, it might be feasible to use an `Arc\u003cFile\u003e` instead of `SafeDescriptor` in `GunyahVm`, then you can just clone the `Arc` to share the FD between `GunyahVm` and the `MemoryRegion`",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "358378a2_b2b34a62",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1272,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "can you mention this is only used by gunyah at the moment?\n\nalso, it seems to be ignored if use_fixed_memory isn\u0027t enabled. can you either fix that or document it\n\nalso, document the 16 byte max",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

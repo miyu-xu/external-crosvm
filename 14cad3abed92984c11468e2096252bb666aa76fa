@@ -200,6 +200,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a7b7146a_2b87a87c",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:46:38Z",
+      "side": 1,
+      "message": "FWIW, there are ways to make it work, e.g. marking the fields of `GunyahVm` as `pub(crate)`.\n\nThe KVM code is using this same pattern though, so I think it makes sense to keep as is.",
+      "parentUuid": "d2b21298_74f00ad7",
+      "revId": "14cad3abed92984c11468e2096252bb666aa76fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3102daaf_5e38cede",
