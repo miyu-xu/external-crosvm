@@ -106,6 +106,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c2b5b2da_5ec8fc83",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 442,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-12T23:50:20Z",
+      "side": 1,
+      "message": "i just noticed there is already a comment thread about this and Daniel suggested\n\n```\nlet file: File \u003d vm_descriptor.try_clone().map_err(...)?.into();\n```\n\nwhich you should be able to use as a drop in replacement here",
+      "parentUuid": "c5154e66_10756e5a",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "358378a2_b2b34a62",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 3
