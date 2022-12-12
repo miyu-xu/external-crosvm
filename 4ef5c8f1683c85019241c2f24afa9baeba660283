@@ -50,6 +50,24 @@
       "message": "There was a comment earlier, to use single line style on previous patchset. But I have reverted that back as rustfmt recommends this style.",
       "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "74407669_bf0c9edc",
+        "filename": "vhost/src/scmi.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 5,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2022-12-12T18:46:22Z",
+      "side": 1,
+      "message": "Upstream crosvm uses one-import-per-line style, but anyway this can be fixed when it is submitted to the upstream repository.",
+      "parentUuid": "662a7c85_bab64b57",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
