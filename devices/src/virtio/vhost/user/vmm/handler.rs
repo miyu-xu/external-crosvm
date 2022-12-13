@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use base::error;
+use base::warn;
 use base::info;
 use base::AsRawDescriptor;
 use base::Event;
@@ -71,6 +72,7 @@ impl VhostUserHandler {
         allow_protocol_features: VhostUserProtocolFeatures,
         #[cfg(windows)] backend_pid: Option<u32>,
     ) -> Result<Self> {
+        warn!("VhostUserHandler");
         vu.set_owner().map_err(Error::SetOwner)?;
 
         let avail_features = allow_features & vu.get_features().map_err(Error::GetFeatures)?;
@@ -256,6 +258,9 @@ impl VhostUserHandler {
         label: &str,
     ) -> Result<(thread::JoinHandle<()>, Event)> {
         self.set_mem_table(&mem)?;
+        warn!("Virtqueue activate");
+
+        let e = Event::new().unwrap();
 
         let msix_config_opt = interrupt
             .get_msix_config()
@@ -268,7 +273,7 @@ impl VhostUserHandler {
             let irqfd = msix_config
                 .get_irqfd(queue.vector() as usize)
                 .unwrap_or_else(|| interrupt.get_interrupt_evt());
-            self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd)?;
+            self.activate_vring(&mem, queue_index, queue, queue_evt, &e)?;
         }
 
         drop(msix_config);
@@ -286,6 +291,20 @@ impl VhostUserHandler {
                 .unwrap()
                 .set_interrupt(interrupt.clone());
         }
+        warn!("Virtqueue Event loop starting");
+
+        let interrupt_clone = interrupt.clone();
+        let rxqueue = queues[0].vector();
+
+        thread::Builder::new()
+            .name("aaaaa".to_string())
+            .spawn(move || {
+                warn!("Virtqueue Event loop started");
+                loop {
+                    e.wait();
+                    interrupt_clone.signal_used_queue(rxqueue);
+                }
+            }).map_err(Error::SpawnWorker);
 
         thread::Builder::new()
             .name(label.clone())
