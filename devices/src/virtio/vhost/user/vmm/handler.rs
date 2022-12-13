@@ -10,6 +10,7 @@ use std::thread;
 
 use base::error;
 use base::info;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
 use base::Protection;
@@ -263,12 +264,18 @@ impl VhostUserHandler {
             .ok_or(Error::MsixConfigUnavailable)?;
         let msix_config = msix_config_opt.lock();
 
+        let non_msix_evt = Event::new().unwrap();
         for (queue_index, queue) in queues.iter().enumerate() {
             let queue_evt = &queue_evts[queue_index];
-            let irqfd = msix_config
-                .get_irqfd(queue.vector() as usize)
-                .unwrap_or_else(|| interrupt.get_interrupt_evt());
-            self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd)?;
+            let irqfd = msix_config.get_irqfd(queue.vector() as usize);
+            match irqfd {
+                Some(irqfd_evt) => {
+                    self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd_evt)?;
+                }
+                None => {
+                    self.activate_vring(&mem, queue_index, queue, queue_evt, &non_msix_evt)?;
+                }
+            }
         }
 
         drop(msix_config);
@@ -294,6 +301,7 @@ impl VhostUserHandler {
                     queues,
                     mem,
                     kill_evt,
+                    non_msix_evt,
                     backend_req_handler,
                 };
 
