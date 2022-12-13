@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6fdc7f39_741daff9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-12-13T21:06:24Z",
+      "side": 1,
+      "message": "presubmit failures: https://b.corp.google.com/issues/262286480",
+      "revId": "197b9498204dd1761683eca1b8608c86bef9bada",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
