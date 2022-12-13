@@ -10,6 +10,7 @@ use std::thread;
 
 use base::error;
 use base::info;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
 use base::Protection;
@@ -263,15 +264,41 @@ impl VhostUserHandler {
             .ok_or(Error::MsixConfigUnavailable)?;
         let msix_config = msix_config_opt.lock();
 
+        let mut non_msix_vector = None;
+        let interrupt_clone = interrupt.clone();
         for (queue_index, queue) in queues.iter().enumerate() {
             let queue_evt = &queue_evts[queue_index];
-            let irqfd = msix_config
-                .get_irqfd(queue.vector() as usize)
-                .unwrap_or_else(|| interrupt.get_interrupt_evt());
-            self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd)?;
+            let irqfd = msix_config.get_irqfd(queue.vector() as usize);
+            match irqfd {
+                Some(irqfd_evt) => {
+                    self.activate_vring(&mem, queue_index, queue, queue_evt, irqfd_evt)?;
+                }
+                None => {
+                    self.activate_vring(
+                        &mem,
+                        queue_index,
+                        queue,
+                        queue_evt,
+                        interrupt_clone.get_interrupt_evt(),
+                    )?;
+                    if non_msix_vector == None {
+                        non_msix_vector = Some(queues[queue_index].vector());
+                    }
+                }
+            }
         }
 
         drop(msix_config);
+
+        if let Some(vector) = non_msix_vector {
+            thread::Builder::new()
+                .name(format!("vhost_user_non_msix_interrupt_{}", label.clone()))
+                .spawn(move || loop {
+                    interrupt_clone.get_interrupt_evt().wait();
+                    interrupt_clone.signal_used_queue(vector);
+                })
+                .map_err(Error::SpawnWorker);
+        }
 
         let label = format!("vhost_user_virtio_{}", label);
         let kill_evt = Event::new().map_err(Error::CreateEvent)?;
