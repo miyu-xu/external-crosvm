@@ -8,6 +8,7 @@
     // we can remove a some patch files and enable "composite-disk" here.
     // "composite-disk",
     "gdb",
+    "gunyah",
     "qcow",
     "usb",
     // TODO: Enable these in the root crate instead. May be difficult because of host-vs-device
@@ -154,6 +155,9 @@
     "gpu_display": {
       "add_toplevel_block": "gpu_display/cargo2android.bp",
       "patch": "gpu_display/patches/Android.bp.patch"
+    },
+    "gunyah_sys": {
+      "no_presubmit": true
     },
     "hypervisor": {
       "no_presubmit": true
