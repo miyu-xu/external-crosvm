@@ -17,6 +17,7 @@ use devices::pl030::PL030_AMBA_ID;
 use devices::PciAddress;
 use devices::PciInterruptPin;
 use hypervisor::PsciVersion;
+use hypervisor::VmAArch64;
 use hypervisor::PSCI_0_2;
 use hypervisor::PSCI_1_0;
 use rand::rngs::OsRng;
@@ -534,7 +535,8 @@ fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> 
 /// * `bat_mmio_base_and_irq` - The battery base address and irq number
 /// * `vmwdt_cfg` - The virtual watchdog configuration
 /// * `dump_device_tree_blob` - Option path to write DTB to
-pub fn create_fdt(
+/// * `vm` - The virtual machine
+pub fn create_fdt<V>(
     fdt_max_size: usize,
     guest_mem: &GuestMemory,
     pci_irqs: Vec<(PciAddress, u32, PciInterruptPin)>,
@@ -555,7 +557,11 @@ pub fn create_fdt(
     bat_mmio_base_and_irq: Option<(u64, u32)>,
     vmwdt_cfg: VmWdtConfig,
     dump_device_tree_blob: Option<PathBuf>,
-) -> Result<()> {
+    vm: &V,
+) -> Result<()>
+where
+    V: VmAArch64,
+{
     let mut fdt = FdtWriter::new(&[]);
 
     // The whole thing is put into one giant node with some top level properties
@@ -588,6 +594,7 @@ pub fn create_fdt(
         create_battery_node(&mut fdt, bat_mmio_base, bat_irq)?;
     }
     create_vmwdt_node(&mut fdt, vmwdt_cfg)?;
+    vm.create_fdt(&mut fdt)?;
     // End giant node
     fdt.end_node(root_node)?;
 

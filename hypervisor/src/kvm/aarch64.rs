@@ -16,6 +16,7 @@ use base::ioctl_with_val;
 use base::warn;
 use base::Error;
 use base::Result;
+use cros_fdt::FdtWriter;
 #[cfg(feature = "gdb")]
 use gdbstub::arch::Arch;
 #[cfg(feature = "gdb")]
@@ -205,6 +206,10 @@ impl VmAArch64 for KvmVm {
         // create_vcpu is declared separately in VmAArch64 and VmX86, so it can return VcpuAArch64
         // or VcpuX86.  But both use the same implementation in KvmVm::create_kvm_vcpu.
         Ok(Box::new(self.create_kvm_vcpu(id)?))
+    }
+
+    fn create_fdt(&self, _fdt: &mut FdtWriter) -> cros_fdt::Result<()> {
+        Ok(())
     }
 }
 
