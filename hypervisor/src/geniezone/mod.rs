@@ -183,6 +183,14 @@ impl VmAArch64 for GeniezoneVm {
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuAArch64>> {
         Ok(Box::new(GeniezoneVm::create_vcpu(self, id)?))
     }
+
+    fn create_fdt(
+        &self,
+        _fdt: &mut FdtWriter,
+        _phandles: &BTreeMap<&str, u32>,
+    ) -> cros_fdt::Result<()> {
+        Ok(())
+    }
 }
 
 impl GeniezoneVcpu {
