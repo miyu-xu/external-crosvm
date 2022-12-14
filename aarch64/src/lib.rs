@@ -628,7 +628,7 @@ impl arch::LinuxArch for AArch64 {
             timeout_sec: VMWDT_DEFAULT_TIMEOUT_SEC,
         };
 
-        fdt::create_fdt(
+        fdt::create_fdt::<V>(
             AARCH64_FDT_MAX_SIZE as usize,
             &mem,
             pci_irqs,
@@ -651,6 +651,7 @@ impl arch::LinuxArch for AArch64 {
             }).transpose().map_err(Error::AllocateSwiotlb)?,
             bat_mmio_base_and_irq,
             vmwdt_cfg,
+            &vm,
             dump_dtb_path,
         )
         .map_err(Error::CreateFdt)?;
