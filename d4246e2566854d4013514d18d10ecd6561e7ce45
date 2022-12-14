@@ -38,6 +38,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b58a51bf_79d3bcd6",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 282,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-14T14:20:30Z",
+      "side": 1,
+      "message": "I also think that setting `Event` per queue look better. Let\u0027s isolate readers per events.\n\nnit : The reason why I implemented like this was to make it similar with the original one, since the function `interrupt.get_interrupt_evt()` doesn\u0027t seem as creating a new event, unlike `get_irqfd`.",
+      "parentUuid": "f552ce68_12cc177d",
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f270e876_fb1b9a62",
         "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
         "patchSetId": 2
@@ -49,6 +67,30 @@
       "writtenOn": "2022-12-14T12:25:58Z",
       "side": 1,
       "message": "instead of spawning new thread, let\u0027s use the worker in L320 https://source.corp.google.com/android-internal/external/crosvm/devices/src/virtio/vhost/user/vmm/handler/worker.rs",
+      "range": {
+        "startLine": 294,
+        "startChar": 12,
+        "endLine": 296,
+        "endChar": 37
+      },
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "676d9a31_e905f36b",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 296,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-14T14:20:30Z",
+      "side": 1,
+      "message": "Okay, I understood how\u0027s going in worker.rs. I\u0027ll try it tomorrow.",
+      "parentUuid": "f270e876_fb1b9a62",
       "range": {
         "startLine": 294,
         "startChar": 12,
