@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1d6d3b27_cea07137",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 298,
+      "author": {
+        "id": 1981075
+      },
+      "writtenOn": "2022-12-14T10:41:25Z",
+      "side": 1,
+      "message": "Could you try if the following also solves the issue? I guess the result of `get_resample_evt()` is the right event to wait. `signal_used_queue(vector)` and `interrupt_resample()` will do the same thing for non-msi-x device, but `interrupt_resample()` would be the right one from the semantics\u0027 perspective. \n```\ninterrupt_clone.get_resample_evt().wait();\ninterrupt_clone.interrupt_resample();\n```\nBut I\u0027m not so sure, please correct me if I\u0027m wrong @dverkamp@chromium.org",
+      "range": {
+        "startLine": 297,
+        "startChar": 0,
+        "endLine": 298,
+        "endChar": 62
+      },
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
