@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "196572cd_5d56aaed",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 282,
+      "author": {
+        "id": 1981075
+      },
+      "writtenOn": "2022-12-14T11:48:14Z",
+      "side": 1,
+      "message": "This gives the `interrupt_clone.get_interrupt_evt()` directly to `activate_vring`, which passes it to the vhost-user backend. However, we\u0027re also reading it in the thread below. Do you know what happens if there are multiple readers of an eventfd? \n\nI\u0027m wondering if it might cause that the events are randomly read sometimes by the guest driver, and sometimes by the thread below. If so, I think we want to make a new `Event` to pass to `activate_vring`. Then the thread below can read that `Event`, and write to the original `interrupt` on behalf of it.",
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "1d6d3b27_cea07137",
         "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
         "patchSetId": 2
