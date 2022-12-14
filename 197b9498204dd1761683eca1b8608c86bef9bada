@@ -63,6 +63,30 @@
       },
       "revId": "197b9498204dd1761683eca1b8608c86bef9bada",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cebbf219_e1c3b6e7",
+        "filename": "src/crosvm.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-12-14T01:20:27Z",
+      "side": 1,
+      "message": "cmdline and config don\u0027t seem to need it from what I can tell, they add a new subcommand to the commandline and a config variable, and the rest of the code lives in crosvm/sys/unix*, which then I don\u0027t believe would break non-unix targets.\n\nThis does work, and would only make these arguments available on unix family only, where they\u0027re used, so I guess it doesn\u0027t hurt. The cmd would do nothing on non-unix systems, so it\u0027s effectively useless to have it right now.\nLGTM",
+      "parentUuid": "346cc0fa_8c93f072",
+      "range": {
+        "startLine": 16,
+        "startChar": 60,
+        "endLine": 16,
+        "endChar": 82
+      },
+      "revId": "197b9498204dd1761683eca1b8608c86bef9bada",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
