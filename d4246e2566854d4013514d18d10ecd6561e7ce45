@@ -46,6 +46,30 @@
       },
       "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0002c025_aa753b67",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 298,
+      "author": {
+        "id": 1981075
+      },
+      "writtenOn": "2022-12-14T11:21:07Z",
+      "side": 1,
+      "message": "Ah, right. I\u0027ve now got what Daniel said about `signal_used_queue()`. Just triggering the event does not update the `status_mask`, so explicitly calling `signal_used_queue()` solves it. https://chromium.googlesource.com/crosvm/crosvm/+/5ad8b5afc50ab14465fb3006bcc2081da4b483f4/devices/src/virtio/interrupt.rs#88\nSorry for confusing, the original two calls look right now",
+      "parentUuid": "feb93f4b_04257788",
+      "range": {
+        "startLine": 297,
+        "startChar": 0,
+        "endLine": 298,
+        "endChar": 62
+      },
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
