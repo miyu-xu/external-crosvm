@@ -39,6 +39,30 @@
       },
       "revId": "197b9498204dd1761683eca1b8608c86bef9bada",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "346cc0fa_8c93f072",
+        "filename": "src/crosvm.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 16,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2022-12-14T01:03:11Z",
+      "side": 1,
+      "message": "It would actually work with only this for Android.\nIt would break for all non unix targets though, since this would hide this declaration, but the other files would be trying to build with the missing info.",
+      "parentUuid": "52139ece_92fe7476",
+      "range": {
+        "startLine": 16,
+        "startChar": 60,
+        "endLine": 16,
+        "endChar": 82
+      },
+      "revId": "197b9498204dd1761683eca1b8608c86bef9bada",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
