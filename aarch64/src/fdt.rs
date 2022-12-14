@@ -17,6 +17,7 @@ use devices::pl030::PL030_AMBA_ID;
 use devices::PciAddress;
 use devices::PciInterruptPin;
 use hypervisor::PsciVersion;
+use hypervisor::VmAArch64;
 use hypervisor::PSCI_0_2;
 use hypervisor::PSCI_1_0;
 use rand::rngs::OsRng;
@@ -534,7 +535,8 @@ fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> 
 /// * `bat_mmio_base_and_irq` - The battery base address and irq number
 /// * `vmwdt_cfg` - The virtual watchdog configuration
 /// * `dump_device_tree_blob` - Option path to write DTB to
-pub fn create_fdt(
+/// * `vm` - The virtual machine
+pub fn create_fdt<V>(
     fdt_max_size: usize,
     guest_mem: &GuestMemory,
     pci_irqs: Vec<(PciAddress, u32, PciInterruptPin)>,
@@ -555,12 +557,18 @@ pub fn create_fdt(
     bat_mmio_base_and_irq: Option<(u64, u32)>,
     vmwdt_cfg: VmWdtConfig,
     dump_device_tree_blob: Option<PathBuf>,
-) -> Result<()> {
+    vm_generator: &impl Fn(&mut FdtWriter, &BTreeMap<&str, u32>) -> cros_fdt::Result<()>,
+) -> Result<()>
+where
+    V: VmAArch64,
+{
     let mut fdt = FdtWriter::new(&[]);
+    let mut phandles = BTreeMap::new();
 
     // The whole thing is put into one giant node with some top level properties
     let root_node = fdt.begin_node("")?;
     fdt.property_u32("interrupt-parent", PHANDLE_GIC)?;
+    phandles.insert("intc", PHANDLE_GIC);
     fdt.property_string("compatible", "linux,dummy-virt")?;
     fdt.property_u32("#address-cells", 0x2)?;
     fdt.property_u32("#size-cells", 0x2)?;
@@ -574,6 +582,9 @@ pub fn create_fdt(
         Some(x) => Some(create_resv_memory_node(&mut fdt, x)?),
         None => None,
     };
+    if let Some(phandle) = dma_pool_phandle {
+        phandles.insert("restricted_dma_reserved", phandle);
+    }
     create_cpu_nodes(&mut fdt, num_cpus, cpu_clusters, cpu_capacity)?;
     create_gic_node(&mut fdt, is_gicv3, num_cpus as u64)?;
     create_timer_node(&mut fdt, num_cpus)?;
@@ -588,6 +599,7 @@ pub fn create_fdt(
         create_battery_node(&mut fdt, bat_mmio_base, bat_irq)?;
     }
     create_vmwdt_node(&mut fdt, vmwdt_cfg)?;
+    vm_generator(&mut fdt, &phandles)?;
     // End giant node
     fdt.end_node(root_node)?;
 
