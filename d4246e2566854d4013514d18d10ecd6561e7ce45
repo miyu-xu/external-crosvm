@@ -22,6 +22,30 @@
       },
       "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "feb93f4b_04257788",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 298,
+      "author": {
+        "id": 1386891
+      },
+      "writtenOn": "2022-12-14T11:02:15Z",
+      "side": 1,
+      "message": "hmm, it looks like resample_event is handled in the worker in L320. (refer to https://source.corp.google.com/android-internal/external/crosvm/devices/src/virtio/vhost/user/vmm/handler/worker.rs)\n\nIt waits get_resample_evt(), and then call do_interrupt_resample().\nhttps://source.corp.google.com/android-internal/external/crosvm/devices/src/virtio/async_utils.rs;rcl\u003d4d968f4f6a0aab0e83323735d9090c269afce373;l\u003d26",
+      "parentUuid": "1d6d3b27_cea07137",
+      "range": {
+        "startLine": 297,
+        "startChar": 0,
+        "endLine": 298,
+        "endChar": 62
+      },
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
