@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "f552ce68_12cc177d",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 282,
+      "author": {
+        "id": 1386891
+      },
+      "writtenOn": "2022-12-14T12:36:09Z",
+      "side": 1,
+      "message": "I think we can refer vhost-net impl (https://source.corp.google.com/search?q\u003dvhost_interrupt\u0026sq\u003dpackage:%5Eandroid-internal$)\nSet up `Event` per a queue, and then wait for each `Event` in the worker, and then call `signal_used_queue(..)`\n@seungjaeyoo@google.com @jaeman@google.com WDYT?",
+      "parentUuid": "196572cd_5d56aaed",
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f270e876_fb1b9a62",
         "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
         "patchSetId": 2
