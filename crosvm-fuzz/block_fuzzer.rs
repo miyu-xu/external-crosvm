@@ -77,8 +77,9 @@ fuzz_target!(|bytes| {
     }
 
     let mut q = Queue::new(QUEUE_SIZE);
-    q.set_size(QUEUE_SIZE / 2);
     q.set_ready(true);
+    q.set_size(QUEUE_SIZE / 2);
+    q.max_size = QUEUE_SIZE;
 
     let queue_evts: Vec<Event> = vec![Event::new().unwrap()];
     let queue_evt = queue_evts[0].try_clone().unwrap();

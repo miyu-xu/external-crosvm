@@ -13,8 +13,6 @@ use std::io::Read;
 use std::io::Write;
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -607,14 +605,18 @@ where
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
         mut queue_evts: Vec<Event>,
-    ) -> anyhow::Result<()> {
+    ) {
         if queues.len() != 2 || queue_evts.len() != 2 {
-            return Err(anyhow!("expected 2 queues, got {}", queues.len()));
+            return;
         }
 
-        let (self_kill_evt, kill_evt) = Event::new()
-            .and_then(|e| Ok((e.try_clone()?, e)))
-            .context("failed to create kill Event pair")?;
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("failed to create kill Event pair: {}", e);
+                return;
+            }
+        };
         self.kill_evt = Some(self_kill_evt);
 
         // Status is queue 1, event is queue 0
@@ -624,28 +626,33 @@ where
         let event_queue = queues.remove(0);
         let event_queue_evt = queue_evts.remove(0);
 
-        let source = self
-            .source
-            .take()
-            .context("tried to activate device without a source for events")?;
-        let worker_thread = thread::Builder::new()
-            .name("v_input".to_string())
-            .spawn(move || {
-                let mut worker = Worker {
-                    interrupt,
-                    event_source: source,
-                    event_queue,
-                    status_queue,
-                    guest_memory: mem,
-                };
-                worker.run(event_queue_evt, status_queue_evt, kill_evt);
-                worker
-            })
-            .context("failed to spawn virtio_input worker")?;
+        if let Some(source) = self.source.take() {
+            let worker_result =
+                thread::Builder::new()
+                    .name("v_input".to_string())
+                    .spawn(move || {
+                        let mut worker = Worker {
+                            interrupt,
+                            event_source: source,
+                            event_queue,
+                            status_queue,
+                            guest_memory: mem,
+                        };
+                        worker.run(event_queue_evt, status_queue_evt, kill_evt);
+                        worker
+                    });
 
-        self.worker_thread = Some(worker_thread);
-
-        Ok(())
+            match worker_result {
+                Err(e) => {
+                    error!("failed to spawn virtio_input worker: {}", e);
+                }
+                Ok(join_handle) => {
+                    self.worker_thread = Some(join_handle);
+                }
+            }
+        } else {
+            error!("tried to activate device without a source for events");
+        }
     }
 
     fn reset(&mut self) -> bool {

@@ -4,11 +4,9 @@
 
 //! A VP8 boolean decoder based on the implementation in Chromium and GStreamer.
 
-use std::convert::TryFrom;
-use std::io::Cursor;
+use std::{convert::TryFrom, io::Cursor};
 
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Buf;
 
 const LOTS_OF_BITS: u32 = 0x40000000;

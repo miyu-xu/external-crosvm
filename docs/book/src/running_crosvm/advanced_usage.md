@@ -10,8 +10,8 @@ To run a very basic VM with just a kernel and default devices:
 crosvm run "${KERNEL_PATH}"
 ```
 
-The compressed kernel image, also known as bzImage, can be found in your kernel build directory in
-the case of x86 at `arch/x86/boot/bzImage`.
+The uncompressed kernel image, also known as vmlinux, can be found in your kernel build directory in
+the case of x86 at `arch/x86/boot/compressed/vmlinux`.
 
 ## Rootfs
 
@@ -37,7 +37,7 @@ Without the `root` flag, mounting a disk image as the root filesystem requires t
 corresponding kernel argument manually using the `-p` option:
 
 ```sh
-crosvm run --block "${ROOT_IMAGE}" -p "root=/dev/vda" bzImage
+crosvm run --block "${ROOT_IMAGE}" -p "root=/dev/vda" vmlinux
 ```
 
 > **NOTE:** If more disks arguments are added prior to the desired rootfs image, the `root=/dev/vda`
@@ -50,7 +50,7 @@ must be named "mtd\*" or "ubi\*".
 
 ```sh
 crosvm run --shared-dir "/:mtdfake:type=fs:cache=always" \
-    -p "rootfstype=virtiofs root=mtdfake" bzImage
+    -p "rootfstype=virtiofs root=mtdfake" vmlinux
 ```
 
 ## Device emulation

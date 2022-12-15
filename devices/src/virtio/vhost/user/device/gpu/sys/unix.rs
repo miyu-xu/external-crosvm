@@ -270,10 +270,5 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         platform_workers: Default::default(),
         backend_req_conn: VhostBackendReqConnectionState::NoConnection,
     });
-
-    // Run until the backend is finished.
-    let _ = ex.run_until(listener.run_backend(backend, &ex))?;
-
-    // Process any tasks from the backend's destructor.
-    Ok(ex.run_until(async {})?)
+    ex.run_until(listener.run_backend(backend, &ex))?
 }

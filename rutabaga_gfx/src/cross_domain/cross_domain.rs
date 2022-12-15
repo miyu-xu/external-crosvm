@@ -12,8 +12,6 @@ use std::fs::File;
 use std::mem::size_of;
 use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
-use std::sync::Condvar;
-use std::sync::Mutex;
 use std::thread;
 
 use base::error;
@@ -24,6 +22,8 @@ use base::SafeDescriptor;
 use base::WaitContext;
 use data_model::DataInit;
 use data_model::VolatileSlice;
+use sync::Condvar;
+use sync::Mutex;
 
 use super::sys::descriptor_analysis;
 use super::sys::SystemStream;
@@ -125,7 +125,7 @@ pub struct CrossDomain {
 // be stored in a Slab or vector.  Descriptors received from the Wayland socket *seem* to come one
 // at a time, and can be stored as options.  Need to confirm.
 pub(crate) fn add_item(item_state: &CrossDomainItemState, item: CrossDomainItem) -> u32 {
-    let mut items = item_state.lock().unwrap();
+    let mut items = item_state.lock();
 
     let item_id = match item {
         CrossDomainItem::ImageRequirements(_) => {
@@ -170,7 +170,7 @@ impl CrossDomainState {
     }
 
     pub(crate) fn add_job(&self, job: CrossDomainJob) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock();
         if let Some(queue) = jobs.as_mut() {
             queue.push_back(job);
             self.jobs_cvar.notify_one();
@@ -178,18 +178,18 @@ impl CrossDomainState {
     }
 
     fn end_jobs(&self) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock();
         *jobs = None;
         // Only one worker thread in the current implementation.
         self.jobs_cvar.notify_one();
     }
 
     fn wait_for_job(&self) -> Option<CrossDomainJob> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock();
         loop {
             match jobs.as_mut()?.pop_front() {
                 Some(job) => return Some(job),
-                None => jobs = self.jobs_cvar.wait(jobs).unwrap(),
+                None => jobs = self.jobs_cvar.wait(jobs),
             }
         }
     }
@@ -198,7 +198,7 @@ impl CrossDomainState {
     where
         T: DataInit,
     {
-        let mut context_resources = self.context_resources.lock().unwrap();
+        let mut context_resources = self.context_resources.lock();
         let mut bytes_read: usize = 0;
 
         let resource = context_resources
@@ -340,7 +340,7 @@ impl CrossDomainWorker {
                     self.state.add_job(CrossDomainJob::HandleFence(fence));
                 }
                 CrossDomainToken::WaylandReadPipe(pipe_id) => {
-                    let mut items = self.item_state.lock().unwrap();
+                    let mut items = self.item_state.lock();
                     let mut cmd_read: CrossDomainReadWrite = Default::default();
                     let bytes_read;
 
@@ -403,7 +403,7 @@ impl CrossDomainWorker {
                     }
                 }
                 CrossDomainJob::AddReadPipe(read_pipe_id) => {
-                    let items = self.item_state.lock().unwrap();
+                    let items = self.item_state.lock();
                     let item = items
                         .table
                         .get(&read_pipe_id)
@@ -442,7 +442,6 @@ impl CrossDomainContext {
         if !self
             .context_resources
             .lock()
-            .unwrap()
             .contains_key(&cmd_init.ring_id)
         {
             return Err(RutabagaError::InvalidResourceId);
@@ -514,11 +513,7 @@ impl CrossDomainContext {
             flags: RutabagaGrallocFlags::new(cmd_get_reqs.flags),
         };
 
-        let reqs = self
-            .gralloc
-            .lock()
-            .unwrap()
-            .get_image_memory_requirements(info)?;
+        let reqs = self.gralloc.lock().get_image_memory_requirements(info)?;
 
         let mut response = CrossDomainImageRequirements {
             strides: reqs.strides,
@@ -552,7 +547,7 @@ impl CrossDomainContext {
         cmd_write: &CrossDomainReadWrite,
         opaque_data: VolatileSlice,
     ) -> RutabagaResult<()> {
-        let mut items = self.item_state.lock().unwrap();
+        let mut items = self.item_state.lock();
 
         // Most of the time, hang-up and writing will be paired.  In lieu of this, remove the
         // item rather than getting a reference.  In case of an error, there's not much to do
@@ -620,7 +615,7 @@ impl RutabagaContext for CrossDomainContext {
         // allocations.  We do want to remove Wayland keymaps, since they are mapped the guest
         // and then never used again.  The current protocol encodes this as divisiblity by 2.
         if item_id % 2 == 0 {
-            let items = self.item_state.lock().unwrap();
+            let items = self.item_state.lock();
             let item = items
                 .table
                 .get(&item_id)
@@ -638,7 +633,7 @@ impl RutabagaContext for CrossDomainContext {
                     // cross-domain use case, so whatever.
                     let hnd = match handle_opt {
                         Some(handle) => handle,
-                        None => self.gralloc.lock().unwrap().allocate_memory(*reqs)?,
+                        None => self.gralloc.lock().allocate_memory(*reqs)?,
                     };
 
                     let info_3d = Resource3DInfo {
@@ -670,7 +665,6 @@ impl RutabagaContext for CrossDomainContext {
             let item = self
                 .item_state
                 .lock()
-                .unwrap()
                 .table
                 .remove(&item_id)
                 .ok_or(RutabagaError::InvalidCrossDomainItemId)?;
@@ -771,7 +765,7 @@ impl RutabagaContext for CrossDomainContext {
 
     fn attach(&mut self, resource: &mut RutabagaResource) {
         if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
-            self.context_resources.lock().unwrap().insert(
+            self.context_resources.lock().insert(
                 resource.resource_id,
                 CrossDomainResource {
                     handle: None,
@@ -779,7 +773,7 @@ impl RutabagaContext for CrossDomainContext {
                 },
             );
         } else if let Some(ref handle) = resource.handle {
-            self.context_resources.lock().unwrap().insert(
+            self.context_resources.lock().insert(
                 resource.resource_id,
                 CrossDomainResource {
                     handle: Some(handle.clone()),
@@ -790,10 +784,7 @@ impl RutabagaContext for CrossDomainContext {
     }
 
     fn detach(&mut self, resource: &RutabagaResource) {
-        self.context_resources
-            .lock()
-            .unwrap()
-            .remove(&resource.resource_id);
+        self.context_resources.lock().remove(&resource.resource_id);
     }
 
     fn context_create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
@@ -828,11 +819,11 @@ impl RutabagaComponent for CrossDomain {
             }
         }
 
-        if self.gralloc.lock().unwrap().supports_dmabuf() {
+        if self.gralloc.lock().supports_dmabuf() {
             caps.supports_dmabuf = 1;
         }
 
-        if self.gralloc.lock().unwrap().supports_external_gpu_memory() {
+        if self.gralloc.lock().supports_external_gpu_memory() {
             caps.supports_external_gpu_memory = 1;
         }
 

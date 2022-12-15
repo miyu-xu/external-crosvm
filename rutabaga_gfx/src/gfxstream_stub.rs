@@ -22,13 +22,18 @@ use crate::generated::virgl_renderer_bindings::virgl_renderer_resource_create_ar
 use crate::gfxstream::stream_renderer_create_blob;
 use crate::gfxstream::stream_renderer_handle;
 use crate::gfxstream::stream_renderer_vulkan_info;
-use crate::gfxstream::StreamRendererParam;
+use crate::gfxstream::VirglRendererCallbacks;
 
 #[no_mangle]
-extern "C" fn stream_renderer_init(
-    _stream_renderer_params: *mut StreamRendererParam,
-    _num_params: u64,
-) -> c_int {
+extern "C" fn gfxstream_backend_init(
+    _display_width: u32,
+    _display_height: u32,
+    _display_type: u32,
+    _renderer_cookie: *mut c_void,
+    _renderer_flags: i32,
+    _renderer_callbacks: *mut VirglRendererCallbacks,
+    _gfxstream_callbacks: *mut c_void,
+) {
     unimplemented!();
 }
 

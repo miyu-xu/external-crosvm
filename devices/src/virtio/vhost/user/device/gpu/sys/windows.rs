@@ -222,12 +222,9 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     // }
 
     info!("vhost-user gpu device ready, starting run loop...");
-
-    // Run until the backend is finished.
     if let Err(e) = ex.run_until(handler.run(vhost_user_tube, config.exit_event, &ex)) {
         bail!("error occurred: {}", e);
     }
 
-    // Process any tasks from the backend's destructor.
-    Ok(ex.run_until(async {})?)
+    Ok(())
 }
