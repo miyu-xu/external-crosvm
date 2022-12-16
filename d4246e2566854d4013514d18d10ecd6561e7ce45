@@ -56,6 +56,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "82395854_efd3ebac",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 282,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-16T06:14:31Z",
+      "side": 1,
+      "message": "\u003e I\u0027m wondering if it might cause that the events are randomly read sometimes by the guest driver, and sometimes by the thread below. If so, I think we want to make a new Event to pass to activate_vring. Then the thread below can read that Event, and write to the original interrupt on behalf of it.\n\nThough I haven\u0027t setup `Event` per queue because it looks calling same behavior after waiting `Event`, but I made new `Event` instead of using `interrupt_clone.get_interrupt_evt()`.\n\nDid I understand well, and does current code regarding `Event` look good?",
+      "parentUuid": "b58a51bf_79d3bcd6",
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f270e876_fb1b9a62",
         "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
         "patchSetId": 2
