@@ -694,7 +694,6 @@ dependencies = [
  "anyhow",
  "argh",
  "async-task",
- "async-trait",
  "audio_streams",
  "balloon_control",
  "base",
@@ -1866,6 +1865,7 @@ dependencies = [
  "pkg-config",
  "remain",
  "serde",
+ "sync",
  "thiserror",
 ]
 

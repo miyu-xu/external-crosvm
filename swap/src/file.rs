@@ -233,10 +233,9 @@ impl<'a> Iterator for PresentPagesIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::PathBuf;
     use std::slice;
-
-    use super::*;
 
     #[test]
     fn new_success() {

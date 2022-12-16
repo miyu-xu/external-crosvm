@@ -259,8 +259,9 @@ pub fn start_gpu_render_server(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::crosvm::config::from_key_values;
+
+    use super::*;
 
     #[test]
     fn parse_gpu_render_server_parameters() {

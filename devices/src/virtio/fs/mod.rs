@@ -7,8 +7,6 @@ use std::mem;
 use std::sync::Arc;
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -249,13 +247,9 @@ impl VirtioDevice for Fs {
         interrupt: Interrupt,
         queues: Vec<Queue>,
         queue_evts: Vec<Event>,
-    ) -> anyhow::Result<()> {
+    ) {
         if queues.len() != self.queue_sizes.len() || queue_evts.len() != self.queue_sizes.len() {
-            return Err(anyhow!(
-                "expected {} queues, got {}",
-                self.queue_sizes.len(),
-                queues.len()
-            ));
+            return;
         }
 
         let fs = self.fs.take().expect("missing file system implementation");
@@ -292,8 +286,9 @@ impl VirtioDevice for Fs {
             {
                 Ok(v) => v,
                 Err(e) => {
+                    error!("fs: failed creating kill Event pair: {}", e);
                     self.stop_workers();
-                    return Err(e).context("failed creating kill Event pair");
+                    return;
                 }
             };
 
@@ -316,12 +311,12 @@ impl VirtioDevice for Fs {
             match worker_result {
                 Ok(worker) => self.workers.push((self_kill_evt, worker)),
                 Err(e) => {
+                    error!("fs: failed to spawn virtio_fs worker: {}", e);
                     self.stop_workers();
-                    return Err(e).context("failed to spawn virtio_fs worker");
+                    return;
                 }
             }
         }
-        Ok(())
     }
 
     fn get_device_bars(&mut self, address: PciAddress) -> Vec<PciBarConfiguration> {

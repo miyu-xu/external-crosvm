@@ -9,8 +9,6 @@
 
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 #[cfg(feature = "video-encoder")]
 use base::info;
@@ -202,31 +200,38 @@ impl VirtioDevice for VideoDevice {
         copy_config(data, 0, cfg.as_mut_slice(), offset);
     }
 
+    // Allow error! and early return anywhere in function
+    #[allow(clippy::needless_return)]
     fn activate(
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
         mut queues: Vec<virtio::queue::Queue>,
         mut queue_evts: Vec<Event>,
-    ) -> anyhow::Result<()> {
+    ) {
         if queues.len() != QUEUE_SIZES.len() {
-            return Err(anyhow!(
+            error!(
                 "wrong number of queues are passed: expected {}, actual {}",
                 queues.len(),
                 QUEUE_SIZES.len()
-            ));
+            );
+            return;
         }
         if queue_evts.len() != QUEUE_SIZES.len() {
-            return Err(anyhow!(
+            error!(
                 "wrong number of events are passed: expected {}, actual {}",
                 queue_evts.len(),
                 QUEUE_SIZES.len()
-            ));
+            );
         }
 
-        let (self_kill_evt, kill_evt) = Event::new()
-            .and_then(|e| Ok((e.try_clone()?, e)))
-            .context("failed to create kill Event pair")?;
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("failed to create kill Event pair: {:?}", e);
+                return;
+            }
+        };
         self.kill_evt = Some(self_kill_evt);
 
         let cmd_queue = queues.remove(0);
@@ -234,10 +239,13 @@ impl VirtioDevice for VideoDevice {
         let event_queue = queues.remove(0);
         let event_evt = queue_evts.remove(0);
         let backend = self.backend;
-        let resource_bridge = self
-            .resource_bridge
-            .take()
-            .context("no resource bridge is passed")?;
+        let resource_bridge = match self.resource_bridge.take() {
+            Some(r) => r,
+            None => {
+                error!("no resource bridge is passed");
+                return;
+            }
+        };
         let mut worker = Worker::new(
             mem.clone(),
             cmd_queue,
@@ -320,13 +328,13 @@ impl VirtioDevice for VideoDevice {
             // A device will never be created for a device type not enabled
             device_type => unreachable!("Not compiled with {:?} enabled", device_type),
         };
-        worker_result.with_context(|| {
-            format!(
-                "failed to spawn virtio_video worker for {:?}",
-                &self.device_type
-            )
-        })?;
-        Ok(())
+        if let Err(e) = worker_result {
+            error!(
+                "failed to spawn virtio_video worker for {:?}: {}",
+                &self.device_type, e
+            );
+            return;
+        }
     }
 }
 

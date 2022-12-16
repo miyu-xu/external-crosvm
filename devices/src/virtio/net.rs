@@ -10,8 +10,6 @@ use std::os::raw::c_uint;
 use std::str::FromStr;
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 #[cfg(windows)]
 use base::named_pipes::OverlappedWrapper;
@@ -145,15 +143,9 @@ pub enum NetError {
 #[serde(untagged, deny_unknown_fields)]
 pub enum NetParametersMode {
     #[serde(rename_all = "kebab-case")]
-    TapName {
-        tap_name: String,
-        mac: Option<MacAddress>,
-    },
+    TapName { tap_name: String },
     #[serde(rename_all = "kebab-case")]
-    TapFd {
-        tap_fd: i32,
-        mac: Option<MacAddress>,
-    },
+    TapFd { tap_fd: i32 },
     #[serde(rename_all = "kebab-case")]
     RawConfig {
         #[serde(default)]
@@ -451,11 +443,10 @@ where
     }
 }
 
-pub fn build_config(vq_pairs: u16, mtu: u16, mac: Option<[u8; 6]>) -> VirtioNetConfig {
+pub fn build_config(vq_pairs: u16, mtu: u16) -> VirtioNetConfig {
     VirtioNetConfig {
         max_vq_pairs: Le16::from(vq_pairs),
         mtu: Le16::from(mtu),
-        mac: mac.unwrap_or_default(),
         // Other field has meaningful value when the corresponding feature
         // is enabled, but all these features aren't supported now.
         // So set them to default.
@@ -464,7 +455,6 @@ pub fn build_config(vq_pairs: u16, mtu: u16, mac: Option<[u8; 6]>) -> VirtioNetC
 }
 
 pub struct Net<T: TapT + ReadNotifier> {
-    pub(super) guest_mac: Option<[u8; 6]>,
     pub(super) queue_sizes: Box<[u16]>,
     pub(super) workers_kill_evt: Vec<Event>,
     pub(super) kill_evts: Vec<Event>,
@@ -499,7 +489,7 @@ where
 
         tap.enable().map_err(NetError::TapEnable)?;
 
-        Net::from(base_features, tap, vq_pairs, None)
+        Net::from(base_features, tap, vq_pairs)
     }
 
     /// Try to open the already-configured TAP interface `name` and to create a network device from
@@ -508,22 +498,16 @@ where
         base_features: u64,
         name: &[u8],
         vq_pairs: u16,
-        mac: Option<MacAddress>,
     ) -> Result<Net<T>, NetError> {
         let multi_queue = vq_pairs > 1;
         let tap: T = T::new_with_name(name, true, multi_queue).map_err(NetError::TapOpen)?;
 
-        Net::from(base_features, tap, vq_pairs, mac)
+        Net::from(base_features, tap, vq_pairs)
     }
 
     /// Creates a new virtio network device from a tap device that has already been
     /// configured.
-    pub fn from(
-        base_features: u64,
-        tap: T,
-        vq_pairs: u16,
-        mac_addr: Option<MacAddress>,
-    ) -> Result<Net<T>, NetError> {
+    pub fn from(base_features: u64, tap: T, vq_pairs: u16) -> Result<Net<T>, NetError> {
         let taps = tap.into_mq_taps(vq_pairs).map_err(NetError::TapOpen)?;
 
         let mut mtu = u16::MAX;
@@ -556,10 +540,6 @@ where
             avail_features |= 1 << virtio_net::VIRTIO_NET_F_MQ;
         }
 
-        if mac_addr.is_some() {
-            avail_features |= 1 << virtio_net::VIRTIO_NET_F_MAC;
-        }
-
         let mut kill_evts: Vec<Event> = Vec::new();
         let mut workers_kill_evt: Vec<Event> = Vec::new();
         for _ in 0..taps.len() {
@@ -570,7 +550,6 @@ where
         }
 
         Ok(Net {
-            guest_mac: mac_addr.map(|mac| mac.octets()),
             queue_sizes: vec![QUEUE_SIZE; (vq_pairs * 2 + 1) as usize].into_boxed_slice(),
             workers_kill_evt,
             kill_evts,
@@ -712,7 +691,7 @@ where
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         let vq_pairs = self.queue_sizes.len() / 2;
-        let config_space = build_config(vq_pairs as u16, self.mtu, self.guest_mac);
+        let config_space = build_config(vq_pairs as u16, self.mtu);
         copy_config(data, 0, config_space.as_slice(), offset);
     }
 
@@ -722,30 +701,29 @@ where
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
         mut queue_evts: Vec<Event>,
-    ) -> anyhow::Result<()> {
+    ) {
         if queues.len() != self.queue_sizes.len() || queue_evts.len() != self.queue_sizes.len() {
-            return Err(anyhow!(
+            error!(
                 "net: expected {} queues, got {} queues and {} evts",
                 self.queue_sizes.len(),
                 queues.len(),
                 queue_evts.len()
-            ));
+            );
+            return;
         }
 
         let vq_pairs = self.queue_sizes.len() / 2;
         if self.taps.len() != vq_pairs {
-            return Err(anyhow!(
-                "net: expected {} taps, got {}",
-                vq_pairs,
-                self.taps.len()
-            ));
+            error!("net: expected {} taps, got {}", vq_pairs, self.taps.len());
+            return;
         }
         if self.workers_kill_evt.len() != vq_pairs {
-            return Err(anyhow!(
+            error!(
                 "net: expected {} worker_kill_evt, got {}",
                 vq_pairs,
                 self.workers_kill_evt.len()
-            ));
+            );
+            return;
         }
         for i in 0..vq_pairs {
             let tap = self.taps.remove(0);
@@ -771,7 +749,7 @@ where
             };
             #[cfg(windows)]
             let overlapped_wrapper = OverlappedWrapper::new(true).unwrap();
-            self.worker_threads.push(
+            let worker_result =
                 thread::Builder::new()
                     .name(format!("v_net:{i}"))
                     .spawn(move || {
@@ -799,11 +777,16 @@ where
                             error!("net worker thread exited with error: {}", e);
                         }
                         worker
-                    })
-                    .context("failed to spawn virtio_net worker")?,
-            );
+                    });
+
+            match worker_result {
+                Err(e) => {
+                    error!("failed to spawn virtio_net worker: {}", e);
+                    return;
+                }
+                Ok(join_handle) => self.worker_threads.push(join_handle),
+            }
         }
-        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -860,19 +843,7 @@ mod tests {
             params,
             NetParameters {
                 mode: NetParametersMode::TapName {
-                    tap_name: "tap".to_string(),
-                    mac: None
-                }
-            }
-        );
-
-        let params = from_net_arg("tap-name=tap,mac=\"3d:70:eb:61:1a:91\"").unwrap();
-        assert_eq!(
-            params,
-            NetParameters {
-                mode: NetParametersMode::TapName {
-                    tap_name: "tap".to_string(),
-                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
+                    tap_name: "tap".to_string()
                 }
             }
         );
@@ -881,21 +852,7 @@ mod tests {
         assert_eq!(
             params,
             NetParameters {
-                mode: NetParametersMode::TapFd {
-                    tap_fd: 12,
-                    mac: None
-                }
-            }
-        );
-
-        let params = from_net_arg("tap-fd=12,mac=\"3d:70:eb:61:1a:91\"").unwrap();
-        assert_eq!(
-            params,
-            NetParameters {
-                mode: NetParametersMode::TapFd {
-                    tap_fd: 12,
-                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
-                }
+                mode: NetParametersMode::TapFd { tap_fd: 12 }
             }
         );
 

@@ -4,8 +4,7 @@
 
 use std::io::Cursor;
 
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Buf;
 
 /// A bit reader for h264 bitstreams. It properly handles emulation-prevention

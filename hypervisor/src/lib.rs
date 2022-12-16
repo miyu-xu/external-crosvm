@@ -63,11 +63,6 @@ pub trait Vm: Send {
     /// reflects the usable capabilities.
     fn check_capability(&self, c: VmCap) -> bool;
 
-    /// Enable the VM capabilities.
-    fn enable_capability(&self, _capability: VmCap, _flags: u32) -> Result<bool> {
-        Err(std::io::Error::from(std::io::ErrorKind::Unsupported).into())
-    }
-
     /// Get the guest physical address size in bits.
     fn get_guest_phys_addr_bits(&self) -> u8;
 
@@ -463,8 +458,6 @@ pub enum VcpuExit {
     ApicSmiTrap,
     /// vcpu stopped due to an apic trap
     ApicInitSipiTrap,
-    /// vcpu stoppted due to bus lock
-    BusLock,
 }
 
 /// A hypercall with parameters being made from the guest.

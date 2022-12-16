@@ -248,12 +248,3 @@ impl VhostUserBackend for GpuBackend {
         self.backend_req_conn = VhostBackendReqConnectionState::Connected(conn);
     }
 }
-
-impl Drop for GpuBackend {
-    fn drop(&mut self) {
-        // Workers are detached and will leak unless they are aborted. Aborting marks the
-        // Abortable task, then wakes it up. This means the executor should be asked to continue
-        // running for one more step after the backend is destroyed.
-        self.reset();
-    }
-}

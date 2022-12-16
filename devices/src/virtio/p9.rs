@@ -8,8 +8,6 @@ use std::mem;
 use std::result;
 use std::thread;
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Error as SysError;
@@ -220,33 +218,39 @@ impl VirtioDevice for P9 {
         interrupt: Interrupt,
         mut queues: Vec<Queue>,
         mut queue_evts: Vec<Event>,
-    ) -> anyhow::Result<()> {
+    ) {
         if queues.len() != 1 || queue_evts.len() != 1 {
-            return Err(anyhow!("expected 1 queue, got {}", queues.len()));
+            return;
         }
 
-        let (self_kill_evt, kill_evt) = Event::new()
-            .and_then(|e| Ok((e.try_clone()?, e)))
-            .context("failed creating kill Event pair")?;
+        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("failed creating kill Event pair: {}", e);
+                return;
+            }
+        };
         self.kill_evt = Some(self_kill_evt);
 
-        let server = self.server.take().context("missing server")?;
+        if let Some(server) = self.server.take() {
+            let worker_result = thread::Builder::new()
+                .name("v_9p".to_string())
+                .spawn(move || {
+                    let mut worker = Worker {
+                        interrupt,
+                        mem: guest_mem,
+                        queue: queues.remove(0),
+                        server,
+                    };
 
-        let worker_thread = thread::Builder::new()
-            .name("v_9p".to_string())
-            .spawn(move || {
-                let mut worker = Worker {
-                    interrupt,
-                    mem: guest_mem,
-                    queue: queues.remove(0),
-                    server,
-                };
+                    worker.run(queue_evts.remove(0), kill_evt)
+                });
 
-                worker.run(queue_evts.remove(0), kill_evt)
-            })
-            .context("failed to spawn virtio_9p worker")?;
-        self.worker = Some(worker_thread);
-        Ok(())
+            match worker_result {
+                Ok(worker) => self.worker = Some(worker),
+                Err(e) => error!("failed to spawn virtio_9p worker: {}", e),
+            }
+        }
     }
 }
 
