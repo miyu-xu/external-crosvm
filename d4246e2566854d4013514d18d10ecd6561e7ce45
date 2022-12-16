@@ -101,6 +101,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8ab5def8_f3915d31",
+        "filename": "devices/src/virtio/vhost/user/vmm/handler.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 296,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-16T05:34:25Z",
+      "side": 1,
+      "message": "I moved logic into Worker, and it uses async function instead spawning thread.",
+      "parentUuid": "676d9a31_e905f36b",
+      "range": {
+        "startLine": 294,
+        "startChar": 12,
+        "endLine": 296,
+        "endChar": 37
+      },
+      "revId": "d4246e2566854d4013514d18d10ecd6561e7ce45",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1d6d3b27_cea07137",

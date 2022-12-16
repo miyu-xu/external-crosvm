@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cd03c649_d27a9d8a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-16T05:34:25Z",
+      "side": 1,
+      "message": "I uploaded change in chromium gerrit, and let\u0027s discuss in here.\nhttps://chromium-review.googlesource.com/c/crosvm/crosvm/+/4112726\n\nAfter submitting change in chromium, I\u0027ll abandon this.",
+      "revId": "d37658689697b9f210eb546e638af9feaa201a16",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
