@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use std::convert::TryFrom;
+use std::collections::BTreeMap;
 
 use base::errno_result;
 use base::error;
@@ -41,11 +42,13 @@ use crate::ClockState;
 use crate::DeviceKind;
 use crate::Hypervisor;
 use crate::IrqSourceChip;
+use crate::PayloadType;
 use crate::ProtectionType;
 use crate::PsciVersion;
 use crate::VcpuAArch64;
 use crate::VcpuExit;
 use crate::VcpuFeature;
+use crate::VcpuInitAArch64;
 use crate::VcpuRegAArch64;
 use crate::VmAArch64;
 use crate::VmCap;
@@ -677,6 +680,54 @@ impl VcpuAArch64 for KvmVcpu {
         } else {
             Ok(version)
         }
+    }
+
+    /// Get initial register state for vcpu with index `vcpu_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `vcpu_id` - The VM's index for `vcpu`.
+    fn vcpu_init(
+        &self,
+        payload: &PayloadType,
+        fdt_address: GuestAddress,
+        protection_type: ProtectionType,
+        firmware_address: Option<u64>,
+    ) -> Result<VcpuInitAArch64> {
+        let mut regs: BTreeMap<VcpuRegAArch64, u64> = Default::default();
+
+        // All interrupts masked
+        let pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | (1 << PSR_MODE_EL1h);
+        regs.insert(VcpuRegAArch64::Pstate, pstate.into());
+
+        // Other cpus are powered off initially
+        if self.id == 0 {
+            let entry_addr = if protection_type.loads_firmware() {
+                Some(firmware_address.unwrap())
+            } else if protection_type.runs_firmware() {
+                None // Initial PC value is set by the hypervisor
+            } else {
+                Some(payload.entry().offset())
+            };
+
+            /* PC -- entry point */
+            if let Some(entry) = entry_addr {
+                regs.insert(VcpuRegAArch64::Pc, entry);
+            }
+
+            /* X0 -- fdt address */
+            regs.insert(VcpuRegAArch64::X(0), fdt_address.offset());
+
+            if protection_type.runs_firmware() {
+                /* X1 -- payload entry point */
+                regs.insert(VcpuRegAArch64::X(1), payload.entry().offset());
+
+                /* X2 -- image size */
+                regs.insert(VcpuRegAArch64::X(2), payload.size());
+            }
+        }
+
+        Ok(VcpuInitAArch64 { regs })
     }
 
     #[cfg(feature = "gdb")]
