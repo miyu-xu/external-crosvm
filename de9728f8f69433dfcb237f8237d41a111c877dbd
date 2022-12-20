@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fedb7875_dee20eea",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2022-12-20T03:53:36Z",
+      "side": 1,
+      "message": "Still hangs, issue suspected in async block. There seems to be a failure causing tubes to disconnect, which is then causing the VM to shut down.",
+      "revId": "de9728f8f69433dfcb237f8237d41a111c877dbd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
