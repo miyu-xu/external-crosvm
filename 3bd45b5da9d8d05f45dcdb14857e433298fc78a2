@@ -22,6 +22,30 @@
       },
       "revId": "3bd45b5da9d8d05f45dcdb14857e433298fc78a2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c4353285_c8becc39",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-20T22:41:28Z",
+      "side": 1,
+      "message": "I think bionic and glibc don\u0027t use those syscalls since they are only being added now just for musl.",
+      "parentUuid": "7326138e_1eba7ac2",
+      "range": {
+        "startLine": 9,
+        "startChar": 4,
+        "endLine": 9,
+        "endChar": 13
+      },
+      "revId": "3bd45b5da9d8d05f45dcdb14857e433298fc78a2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
