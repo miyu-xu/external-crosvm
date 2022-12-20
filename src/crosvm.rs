@@ -13,6 +13,10 @@ pub mod gdb;
 mod gpu_config;
 #[cfg(feature = "plugin")]
 pub mod plugin;
+<<<<<<< HEAD   (d6f73e Remove failing base_test_tests_process test)
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 pub mod ratelimit;
 pub mod sys;

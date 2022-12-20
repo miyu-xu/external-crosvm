@@ -93,6 +93,7 @@ members = [
     "swap",
     "system_api",
     "third_party/vmm_vhost",
+    "tools/impl/catapult_converter",
     "tpm2-sys",
     "tpm2",
     "usb_sys",
@@ -427,8 +428,11 @@ which = "4"
 
 [dev-dependencies]
 base = "*"
+<<<<<<< HEAD   (d6f73e Remove failing base_test_tests_process test)
 # ANDROID: Not needed, should delete upstream.
 # prebuilts = { path = "prebuilts" }
+=======
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 
 [patch.crates-io]
 audio_streams = { path = "common/audio_streams" }
