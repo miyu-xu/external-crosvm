@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3d529f85_d84a5d9e",
+        "filename": "Cargo.lock",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-20T01:33:08Z",
+      "side": 0,
+      "message": "revert\n\nrun_cargo_embargo.sh is suppose to revert this file at the end",
+      "revId": "09489ef2a46be58be56a95a0c089b5a0e6852692",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e30034dd_01e0e939",
+        "filename": "base/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 75,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2022-12-20T01:33:08Z",
+      "side": 0,
+      "message": "i think you probably raced with https://r.android.com/2362781. the changes in this file should be reverted",
+      "range": {
+        "startLine": 73,
+        "startChar": 0,
+        "endLine": 75,
+        "endChar": 26
+      },
+      "revId": "09489ef2a46be58be56a95a0c089b5a0e6852692",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
