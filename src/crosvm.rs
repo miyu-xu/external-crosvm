@@ -13,6 +13,10 @@ pub mod gdb;
 mod gpu_config;
 #[cfg(feature = "plugin")]
 pub mod plugin;
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 pub mod ratelimit;
 pub mod sys;

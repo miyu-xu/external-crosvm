@@ -1043,7 +1043,11 @@ pub struct Config {
     pub block_vhost_user_tube: Vec<Tube>,
     #[cfg(windows)]
     pub broker_shutdown_event: Option<Event>,
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
     pub bus_lock_ratelimit: u64,
     pub cid: Option<u64>,
     #[cfg(unix)]
@@ -1256,7 +1260,11 @@ impl Default for Config {
             block_vhost_user_tube: Vec::new(),
             #[cfg(windows)]
             broker_shutdown_event: None,
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
             #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
             bus_lock_ratelimit: 0,
             cid: None,
             #[cfg(unix)]

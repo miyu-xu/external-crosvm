@@ -65,7 +65,11 @@ use x86_64::msr::MsrHandlers;
 use x86_64::X8664arch as Arch;
 
 use super::ExitState;
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 use crate::crosvm::ratelimit::Ratelimit;
 
 pub fn setup_vcpu_signal_handler<T: Vcpu>(use_hypervisor_signals: bool) -> Result<()> {
@@ -396,8 +400,13 @@ fn vcpu_loop<V>(
     guest_mem: GuestMemory,
     msr_handlers: MsrHandlers,
     guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
     bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>,>,
+=======
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 ) -> ExitState
 where
     V: VcpuArch + 'static,
@@ -583,7 +592,11 @@ where
                         run_mode = VmRunMode::Breakpoint;
                     }
                 }
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
                 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+                #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
                 Ok(VcpuExit::BusLock) => {
                     let delay_ns: u64 = bus_lock_ratelimit_ctrl.lock().ratelimit_calculate_delay(1);
                     thread::sleep(Duration::from_nanos(delay_ns));
@@ -647,8 +660,13 @@ pub fn run_vcpu<V>(
     vcpu_cgroup_tasks_file: Option<File>,
     userspace_msr: BTreeMap<u32, MsrConfig>,
     guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
     bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>,>,
+=======
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
@@ -745,7 +763,11 @@ where
                     guest_mem,
                     msr_handlers,
                     guest_suspended_cvar,
+<<<<<<< HEAD   (ff33e5 ANDROID: re-enable base_test_tests_process, just for device)
                     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+=======
+                    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+>>>>>>> BRANCH (da9ba0 cmdline: let tap from fd and name support vhost)
                     bus_lock_ratelimit_ctrl,
                 )
             };
