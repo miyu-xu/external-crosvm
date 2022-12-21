@@ -21,6 +21,7 @@ use base::error;
 use base::info;
 use base::warn;
 use base::AsRawDescriptor;
+use base::AsRawDescriptors;
 use base::Error as SysError;
 use base::Event;
 use base::RawDescriptor;
@@ -478,17 +479,12 @@ pub async fn flush_disk(
 fn run_worker(
     ex: Executor,
     interrupt: Interrupt,
-    queues: Vec<Queue>,
+    queues: Vec<(Queue, Event)>,
     mem: GuestMemory,
     disk_state: &Rc<AsyncMutex<DiskState>>,
     control_tube: &Option<AsyncTube>,
-    queue_evts: Vec<Event>,
     kill_evt: Event,
 ) -> Result<(), String> {
-    if queues.len() != queue_evts.len() {
-        return Err("Number of queues and events must match.".to_string());
-    }
-
     // One flush timer per disk.
     let timer = Timer::new().expect("Failed to create a timer");
     let flush_timer_armed = Rc::new(RefCell::new(false));
@@ -517,19 +513,13 @@ fn run_worker(
 
     let queue_handlers = queues
         .into_iter()
-        .map(|q| Rc::new(RefCell::new(q)))
-        .zip(
-            queue_evts
-                .into_iter()
-                .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue")),
-        )
         .map(|(queue, event)| {
             handle_queue(
                 ex.clone(),
                 mem.clone(),
                 Rc::clone(disk_state),
-                Rc::clone(&queue),
-                event,
+                Rc::new(RefCell::new(queue)),
+                EventAsync::new(event, &ex).expect("Failed to create async event for queue"),
                 interrupt.clone(),
                 Rc::clone(&flush_timer),
                 Rc::clone(&flush_timer_armed),
@@ -580,6 +570,7 @@ pub struct BlockAsync {
     pub(crate) executor_kind: ExecutorKind,
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<(Box<dyn DiskFile>, Option<Tube>)>>,
+    executor: Option<Executor>,
 }
 
 impl BlockAsync {
@@ -630,6 +621,9 @@ impl BlockAsync {
         let seg_max = get_seg_max(q_size);
         let executor_kind = executor_kind.unwrap_or_default();
 
+        let executor =
+            Executor::with_executor_kind(executor_kind).map_err::<io::Error, _>(|e| e.into())?;
+
         Ok(BlockAsync {
             disk_image: Some(disk_image),
             disk_size: Arc::new(AtomicU64::new(disk_size)),
@@ -644,6 +638,7 @@ impl BlockAsync {
             worker_thread: None,
             control_tube,
             executor_kind,
+            executor: Some(executor),
         })
     }
 
@@ -887,6 +882,10 @@ impl VirtioDevice for BlockAsync {
             keep_rds.push(control_tube.as_raw_descriptor());
         }
 
+        if let Some(executor) = &self.executor {
+            keep_rds.extend(executor.as_raw_descriptors());
+        }
+
         keep_rds
     }
 
@@ -919,8 +918,7 @@ impl VirtioDevice for BlockAsync {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
+        queues: Vec<(Queue, Event)>,
     ) -> anyhow::Result<()> {
         let (self_kill_evt, kill_evt) = Event::new()
             .and_then(|e| Ok((e.try_clone()?, e)))
@@ -931,15 +929,12 @@ impl VirtioDevice for BlockAsync {
         let sparse = self.sparse;
         let disk_size = self.disk_size.clone();
         let id = self.id.take();
-        let executor_kind = self.executor_kind;
+        let ex = self.executor.take().context("missing executor")?;
         let disk_image = self.disk_image.take().context("missing disk image")?;
         let control_tube = self.control_tube.take();
         let worker_thread = thread::Builder::new()
             .name("virtio_blk".to_string())
             .spawn(move || {
-                let ex = Executor::with_executor_kind(executor_kind)
-                    .expect("Failed to create an executor");
-
                 let async_control = control_tube
                     .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
                 let async_image = match disk_image.to_async_disk(&ex) {
@@ -960,7 +955,6 @@ impl VirtioDevice for BlockAsync {
                     mem,
                     &disk_state,
                     &async_control,
-                    queue_evts,
                     kill_evt,
                 ) {
                     error!("{}", err_string);
