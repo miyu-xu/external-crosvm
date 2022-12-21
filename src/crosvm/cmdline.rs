@@ -717,8 +717,6 @@ fn overwrite<T>(left: &mut T, right: T) {
     let _ = std::mem::replace(left, right);
 }
 
-/// Start a new crosvm instance
-///
 /// Each field of this structure has a dual use:
 ///
 /// 1) As a command-line parameter, controlled by the `#[argh]` helper attribute.
@@ -754,7 +752,7 @@ fn overwrite<T>(left: &mut T, right: T) {
 #[remain::sorted]
 #[argh_helpers::pad_description_for_argh]
 #[derive(FromArgs, Deserialize, merge::Merge)]
-#[argh(subcommand, name = "run")]
+#[argh(subcommand, name = "run", description = "Start a new crosvm instance")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RunCommand {
     #[cfg(feature = "audio")]
@@ -859,7 +857,7 @@ pub struct RunCommand {
     /// ratelimit enforced on detected bus locks in guest.
     /// The default value of the bus_lock_ratelimit is 0 per second,
     /// which means no limitation on the guest's bus locks.
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
     #[argh(option)]
     pub bus_lock_ratelimit: Option<u64>,
 
@@ -1348,24 +1346,35 @@ pub struct RunCommand {
     #[cfg(unix)]
     #[argh(
         option,
-        arg_name = "tap_name=TAP_NAME,mac=MAC_ADDRESS|tap_fd=TAP_FD,mac=MAC_ADDRESS|host_ip=IP,netmask=NETMASK,mac=MAC_ADDRESS"
+        arg_name = "(tap-name=TAP_NAME,mac=MAC_ADDRESS|tap-fd=TAP_FD,mac=MAC_ADDRESS|host-ip=IP,netmask=NETMASK,mac=MAC_ADDRESS),vhost-net=VHOST_NET"
     )]
     #[serde(default)]
     #[merge(strategy = append)]
     /// comma separated key=value pairs for setting up a network
     /// device.
     /// Possible key values:
-    ///     tap-name=STRING - name of a configured persistent TAP
-    ///        interface to use for networking.
-    ///     mac=STRING - MAC address for VM. [Optional]
-    /// OR
-    ///     tap-fd=INT - File descriptor for configured tap device.
-    ///     mac=STRING - MAC address for VM. [Optional]
-    /// OR
-    ///     host-ip=STRING - IP address to assign to
-    ///         host tap interface.
-    ///     netmask=STRING - Netmask for VM subnet.
-    ///     mac=STRING - MAC address for VM.
+    ///   (
+    ///      tap-name=STRING - name of a configured persistent TAP
+    ///                          interface to use for networking.
+    ///      mac=STRING      - MAC address for VM. [Optional]
+    ///    OR
+    ///      tap-fd=INT      - File descriptor for configured tap
+    ///                          device.
+    ///      mac=STRING      - MAC address for VM. [Optional]
+    ///    OR
+    ///      (
+    ///         host-ip=STRING  - IP address to assign to host tap
+    ///                             interface.
+    ///       AND
+    ///         netmask=STRING  - Netmask for VM subnet.
+    ///       AND
+    ///         mac=STRING      - MAC address for VM.
+    ///      )
+    ///   )
+    /// AND
+    ///   vhost-net=BOOL  - whether enable vhost_net or not.
+    ///                       Default: false.  [Optional]
+    ///
     /// Either one tap_name, one tap_fd or a triplet of host_ip,
     /// netmask and mac must be specified.
     pub net: Vec<NetParameters>,
@@ -2200,7 +2209,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.async_executor = cmd.async_executor;
 
-        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
         if let Some(p) = cmd.bus_lock_ratelimit {
             cfg.bus_lock_ratelimit = p;
         }

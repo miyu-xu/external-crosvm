@@ -74,6 +74,7 @@ use devices::virtio::BalloonFeatures;
 use devices::virtio::BalloonMode;
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
+use devices::virtio::NetParameters;
 use devices::virtio::NetParametersMode;
 use devices::virtio::VirtioTransportType;
 #[cfg(feature = "audio")]
@@ -174,7 +175,7 @@ use crate::crosvm::config::SharedDirKind;
 use crate::crosvm::gdb::gdb_thread;
 #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use crate::crosvm::gdb::GdbStub;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
 use crate::crosvm::ratelimit::Ratelimit;
 use crate::crosvm::sys::cmdline::DevicesCommand;
 use crate::crosvm::sys::config::VfioType;
@@ -477,100 +478,65 @@ fn create_virtio_devices(
         )?);
     }
 
-    for opt in &cfg.net {
-        match &opt.mode {
-            NetParametersMode::TapName { tap_name, mac } => {
-                devs.push(create_tap_net_device_from_name(
-                    cfg.protection_type,
-                    &cfg.jail_config,
-                    cfg.net_vq_pairs.unwrap_or(1),
-                    cfg.vcpu_count.unwrap_or(1),
-                    tap_name.as_bytes(),
-                    *mac,
-                )?);
-            }
-            NetParametersMode::TapFd { tap_fd, mac } => {
-                devs.push(create_tap_net_device_from_fd(
-                    cfg.protection_type,
-                    &cfg.jail_config,
-                    cfg.net_vq_pairs.unwrap_or(1),
-                    cfg.vcpu_count.unwrap_or(1),
-                    *tap_fd,
-                    *mac,
-                )?);
-            }
-            NetParametersMode::RawConfig {
-                host_ip,
-                netmask,
-                mac,
-                vhost_net,
-            } => {
-                if !cfg.vhost_user_net.is_empty() {
-                    bail!(
-                        "vhost-user-net cannot be used with any of --host-ip, --netmask or --mac"
-                    );
-                }
-                devs.push(create_net_device_from_config(
-                    cfg.protection_type,
-                    &cfg.jail_config,
-                    cfg.net_vq_pairs.unwrap_or(1),
-                    cfg.vcpu_count.unwrap_or(1),
-                    if *vhost_net {
-                        Some(cfg.vhost_net_device_path.clone())
-                    } else {
-                        None
-                    },
-                    *host_ip,
-                    *netmask,
-                    *mac,
-                )?);
-            }
-        }
-    }
+    let mut net_cfg_extra: Vec<_> = cfg
+        .tap_fd
+        .iter()
+        .map(|fd| NetParameters {
+            vhost_net: cfg.vhost_net,
+            mode: NetParametersMode::TapFd {
+                tap_fd: *fd,
+                mac: None,
+            },
+        })
+        .collect();
 
-    // We checked above that if the IP is defined, then the netmask is, too.
-    for tap_fd in &cfg.tap_fd {
-        devs.push(create_tap_net_device_from_fd(
-            cfg.protection_type,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            *tap_fd,
-            None,
-        )?);
-    }
-
-    if let (Some(host_ip), Some(netmask), Some(mac_address)) =
-        (cfg.host_ip, cfg.netmask, cfg.mac_address)
-    {
+    if let (Some(host_ip), Some(netmask), Some(mac)) = (cfg.host_ip, cfg.netmask, cfg.mac_address) {
         if !cfg.vhost_user_net.is_empty() {
             bail!("vhost-user-net cannot be used with any of --host-ip, --netmask or --mac");
         }
-        devs.push(create_net_device_from_config(
-            cfg.protection_type,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            if cfg.vhost_net {
-                Some(cfg.vhost_net_device_path.clone())
-            } else {
-                None
+        net_cfg_extra.push(NetParameters {
+            vhost_net: cfg.vhost_net,
+            mode: NetParametersMode::RawConfig {
+                host_ip,
+                netmask,
+                mac,
             },
-            host_ip,
-            netmask,
-            mac_address,
-        )?);
+        });
     }
 
-    for tap_name in &cfg.tap_name {
-        devs.push(create_tap_net_device_from_name(
-            cfg.protection_type,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            tap_name.as_bytes(),
-            None,
-        )?);
+    net_cfg_extra.extend(cfg.tap_name.iter().map(|tap_name| NetParameters {
+        vhost_net: cfg.vhost_net,
+        mode: NetParametersMode::TapName {
+            mac: None,
+            tap_name: tap_name.to_owned(),
+        },
+    }));
+
+    for opt in [&cfg.net, &net_cfg_extra].into_iter().flatten() {
+        let vq_pairs = cfg.net_vq_pairs.unwrap_or(1);
+        let vcpu_count = cfg.vcpu_count.unwrap_or(1);
+        let multi_vq = vq_pairs > 1 && !opt.vhost_net;
+        let (tap, mac) = create_tap_for_net_device(&opt.mode, multi_vq)?;
+        let dev = if opt.vhost_net {
+            create_virtio_vhost_net_device_from_tap(
+                cfg.protection_type,
+                &cfg.jail_config,
+                vq_pairs,
+                vcpu_count,
+                cfg.vhost_net_device_path.clone(),
+                tap,
+            )
+        } else {
+            create_virtio_net_device_from_tap(
+                cfg.protection_type,
+                &cfg.jail_config,
+                vq_pairs,
+                vcpu_count,
+                tap,
+                mac,
+            )
+        }?;
+        devs.push(dev);
     }
 
     for net in &cfg.vhost_user_net {
@@ -804,14 +770,12 @@ fn create_devices(
             let res = unsafe { libc::getrlimit64(libc::RLIMIT_MEMLOCK, buf.as_mut_ptr()) };
             if res == 0 {
                 let limit = unsafe { buf.assume_init() };
-                let rlim_new = limit
-                    .rlim_cur
-                    .saturating_add(vm.get_memory().memory_size());
+                let rlim_new = limit.rlim_cur.saturating_add(vm.get_memory().memory_size());
                 let rlim_max = max(limit.rlim_max, rlim_new);
                 if limit.rlim_cur < rlim_new {
                     let limit_arg = libc::rlimit64 {
                         rlim_cur: rlim_new,
-                        rlim_max: rlim_max,
+                        rlim_max,
                     };
                     let res = unsafe { libc::setrlimit64(libc::RLIMIT_MEMLOCK, &limit_arg) };
                     if res != 0 {
@@ -2474,9 +2438,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             Some(f)
         }
     };
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
     let bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>> = Arc::new(Mutex::new(Ratelimit::new()));
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
     if cfg.bus_lock_ratelimit > 0 {
         let bus_lock_ratelimit = cfg.bus_lock_ratelimit;
         if linux.vm.check_capability(VmCap::BusLockDetect) {
@@ -2520,7 +2484,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cfg.no_smt,
             cfg.itmt,
         ));
-        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
         let bus_lock_ratelimit_ctrl = Arc::clone(&bus_lock_ratelimit_ctrl);
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -2564,7 +2528,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             },
             cfg.userspace_msr.clone(),
             guest_suspended_cvar.clone(),
-            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_family = "unix"))]
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
             bus_lock_ratelimit_ctrl,
         )?;
         vcpu_handles.push((handle, to_vcpu_channel));
@@ -2684,6 +2648,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         do_exit = true;
                     }
                     if do_exit {
+                        exit_state = ExitState::Crash;
                         break 'wait;
                     }
                 }
@@ -3081,7 +3046,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 /// Returns the pid of the jailed device process.
 fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
     jail_config: &Option<JailConfig>,
-    params: &T,
+    params: T,
     vhost: &str,
     name: &str,
 ) -> anyhow::Result<(libc::pid_t, Option<Box<dyn std::any::Any>>)> {
@@ -3089,19 +3054,7 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
 
     base::syslog::push_descriptors(&mut keep_rds);
 
-    // Create the device in the parent process, so the child does not need any privileges necessary
-    // to do it (only runtime capabilities are required).
-    let device = params
-        .create_vhost_user_device(&mut keep_rds)
-        .context("failed to create vhost-user backend")?;
-    let mut listener = VhostUserListener::new(vhost, device.max_queue_num(), Some(&mut keep_rds))
-        .context("failed to create the vhost listener")?;
-    let parent_resources = listener.take_parent_process_resources();
-
-    let jail_type = match &listener {
-        VhostUserListener::Socket(_) => VirtioDeviceType::VhostUser,
-        VhostUserListener::Vvu(_, _) => VirtioDeviceType::Vvu,
-    };
+    let jail_type = VhostUserListener::get_virtio_transport_type(vhost);
 
     // Create a jail from the configuration. If the configuration is `None`, `create_jail` will also
     // return `None` so fall back to an empty (i.e. non-constrained) Minijail.
@@ -3112,7 +3065,26 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
         .or_else(|_| Minijail::new())
         .with_context(|| format!("failed to create empty jail for {}", name))?;
 
+    // Create the device in the parent process, so the child does not need any privileges necessary
+    // to do it (only runtime capabilities are required).
+    let device = params
+        .create_vhost_user_device(&mut keep_rds)
+        .context("failed to create vhost-user device")?;
+    let mut listener = VhostUserListener::new(vhost, device.max_queue_num(), Some(&mut keep_rds))
+        .context("failed to create the vhost listener")?;
+    let parent_resources = listener.take_parent_process_resources();
+
     let tz = std::env::var("TZ").unwrap_or_default();
+
+    // Executor must be created before jail in order to prevent the jailed process from creating
+    // unrestricted io_urings.
+    let ex = Executor::with_executor_kind(device.executor_kind().unwrap_or_default())
+        .context("Failed to create an Executor")?;
+    keep_rds.extend(ex.as_raw_descriptors());
+
+    // Deduplicate the FDs since minijail expects them to be unique.
+    keep_rds.sort_unstable();
+    keep_rds.dedup();
 
     // Safe because we are keeping all the descriptors needed for the child to function.
     match unsafe { jail.fork(Some(&keep_rds)).context("error while forking")? } {
@@ -3140,7 +3112,7 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             std::env::set_var("TZ", tz);
 
             // Run the device loop and terminate the child process once it exits.
-            let res = match listener.run_device(device) {
+            let res = match listener.run_device(ex, device) {
                 Ok(()) => 0,
                 Err(e) => {
                     error!("error while running device {}: {:#}", name, e);
@@ -3220,7 +3192,7 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
 
     fn add_device<T: VirtioDeviceBuilder>(
         i: usize,
-        device_params: &T,
+        device_params: T,
         vhost: &str,
         jail_config: &Option<JailConfig>,
         devices_jails: &mut BTreeMap<libc::pid_t, DeviceJailInfo>,
@@ -3274,7 +3246,7 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
             None
         };
         let disk_config = DiskConfig::new(&params.device, tube);
-        add_device(i, &disk_config, &params.vhost, &jail, &mut devices_jails)?;
+        add_device(i, disk_config, &params.vhost, &jail, &mut devices_jails)?;
     }
 
     let ex = Executor::new()?;
