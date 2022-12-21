@@ -16,6 +16,24 @@
       "message": "I uploaded change in chromium gerrit, and let\u0027s discuss in here.\nhttps://chromium-review.googlesource.com/c/crosvm/crosvm/+/4112726\n\nAfter submitting change in chromium, I\u0027ll abandon this.",
       "revId": "d37658689697b9f210eb546e638af9feaa201a16",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1debaa9e_55afb63f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2022-12-21T05:49:38Z",
+      "side": 1,
+      "message": "Since it\u0027s merged in chromium gerrit and it\u0027ll be merged into AOSP soon, let\u0027s abandon this change.",
+      "parentUuid": "cd03c649_d27a9d8a",
+      "revId": "d37658689697b9f210eb546e638af9feaa201a16",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
