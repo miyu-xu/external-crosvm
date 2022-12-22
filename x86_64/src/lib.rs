@@ -542,7 +542,7 @@ impl arch::LinuxArch for X8664arch {
             VmImage::Kernel(_) => None,
         };
 
-        Ok(arch_memory_regions(components.memory_size, bios_size))
+        Ok(arch_memory_regions(components.memory_size, bios_size, true))
     }
 
     fn get_system_allocator_config<V: Vm>(vm: &V) -> SystemAllocatorConfig {

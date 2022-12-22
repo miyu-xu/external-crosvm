@@ -1276,14 +1276,14 @@ pub enum ExitState {
 // Remove ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
 // Returns the updated guest memory layout.
 fn punch_holes_in_guest_mem_layout_for_mappings(
-    guest_mem_layout: Vec<(GuestAddress, u64)>,
+    guest_mem_layout: Vec<(GuestAddress, u64, bool)>,
     file_backed_mappings: &[FileBackedMappingParameters],
-) -> Vec<(GuestAddress, u64)> {
+) -> Vec<(GuestAddress, u64, bool)> {
     // Create a set containing (start, end) pairs with exclusive end (end = start + size; the byte
     // at end is not included in the range).
     let mut layout_set = BTreeSet::new();
-    for (addr, size) in &guest_mem_layout {
-        layout_set.insert((addr.offset(), addr.offset() + size));
+    for (addr, size, host_access) in &guest_mem_layout {
+        layout_set.insert((addr.offset(), addr.offset() + size, host_access));
     }
 
     for mapping in file_backed_mappings {
@@ -1291,20 +1291,20 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         let mapping_end = mapping_start + mapping.size;
 
         // Repeatedly split overlapping guest memory regions until no overlaps remain.
-        while let Some((range_start, range_end)) = layout_set
+        while let Some((range_start, range_end, host_access)) = layout_set
             .iter()
-            .find(|&&(range_start, range_end)| {
+            .find(|&&(range_start, range_end, _)| {
                 mapping_start < range_end && mapping_end > range_start
             })
             .cloned()
         {
-            layout_set.remove(&(range_start, range_end));
+            layout_set.remove(&(range_start, range_end, host_access));
 
             if range_start < mapping_start {
-                layout_set.insert((range_start, mapping_start));
+                layout_set.insert((range_start, mapping_start, host_access));
             }
             if range_end > mapping_end {
-                layout_set.insert((mapping_end, range_end));
+                layout_set.insert((mapping_end, range_end, host_access));
             }
         }
     }
@@ -1312,7 +1312,7 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
     // Build the final guest memory layout from the modified layout_set.
     layout_set
         .iter()
-        .map(|(start, end)| (GuestAddress(*start), end - start))
+        .map(|(start, end, host_access)| (GuestAddress(*start), end - start, **host_access))
         .collect()
 }
 

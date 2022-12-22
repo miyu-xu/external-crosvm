@@ -143,6 +143,7 @@ impl VhostUserPlatformOps for VvuOps {
                 GuestAddress(region.guest_phys_addr),
                 file_offset + region.mmap_offset,
                 Arc::new(cloned_file),
+                true,
             )
             .map_err(|e| {
                 error!("failed to create a memory region: {}", e);

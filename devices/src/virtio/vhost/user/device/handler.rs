@@ -309,6 +309,7 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
                     )
                     .unwrap(),
                 ),
+                true,
             )
             .map_err(|e| {
                 error!("failed to create a memory region: {}", e);

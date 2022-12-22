@@ -176,7 +176,7 @@ impl VhostUserHandler {
     pub fn set_mem_table(&mut self, mem: &GuestMemory) -> Result<()> {
         let mut regions: Vec<VhostUserMemoryRegionInfo> = Vec::new();
         mem.with_regions::<_, ()>(
-            |_idx, guest_phys_addr, memory_size, userspace_addr, mmap, mmap_offset| {
+            |_idx, guest_phys_addr, memory_size, userspace_addr, mmap, mmap_offset, _| {
                 let region = VhostUserMemoryRegionInfo {
                     guest_phys_addr: guest_phys_addr.0,
                     memory_size: memory_size as u64,

@@ -38,7 +38,7 @@ impl GuestMemory {
     ///
     /// This feature is only available on Unix, where a MemoryMapping can remove a mapped range.
     pub fn remove_range(&self, addr: GuestAddress, count: u64) -> Result<()> {
-        let (mapping, offset, _) = self.find_region(addr)?;
+        let (mapping, offset, _, _) = self.find_region(addr)?;
         mapping
             .remove_range(offset, count as usize)
             .map_err(|e| Error::MemoryAccess(addr, e))

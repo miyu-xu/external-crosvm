@@ -56,6 +56,8 @@ pub enum Error {
     MemoryMappingFailed(#[source] MmapError),
     #[error("shm regions must be page aligned")]
     MemoryNotAligned,
+    #[error("guest protected memory at addr={0}")]
+    MemoryPermission(GuestAddress),
     #[error("memory regions overlap")]
     MemoryRegionOverlap,
     #[error("memory region size {0} is too large")]
@@ -107,6 +109,7 @@ pub struct MemoryRegion {
 
     shared_obj: BackingObject,
     obj_offset: u64,
+    host_access: bool,
 }
 
 impl MemoryRegion {
@@ -117,6 +120,7 @@ impl MemoryRegion {
         guest_base: GuestAddress,
         offset: u64,
         shm: Arc<SharedMemory>,
+        host_access: bool,
     ) -> Result<Self> {
         let mapping = MemoryMappingBuilder::new(size as usize)
             .from_shared_memory(shm.as_ref())
@@ -128,6 +132,7 @@ impl MemoryRegion {
             guest_base,
             shared_obj: BackingObject::Shm(shm),
             obj_offset: offset,
+            host_access,
         })
     }
 
@@ -138,6 +143,7 @@ impl MemoryRegion {
         guest_base: GuestAddress,
         offset: u64,
         file: Arc<File>,
+        host_access: bool,
     ) -> Result<Self> {
         let mapping = MemoryMappingBuilder::new(size as usize)
             .from_file(&file)
@@ -149,6 +155,7 @@ impl MemoryRegion {
             guest_base,
             shared_obj: BackingObject::File(file),
             obj_offset: offset,
+            host_access,
         })
     }
 
@@ -171,6 +178,7 @@ impl MemoryRegion {
 #[derive(Clone, Debug)]
 pub struct GuestMemory {
     regions: Arc<[MemoryRegion]>,
+    finalized: bool,
 }
 
 impl AsRawDescriptors for GuestMemory {
@@ -186,7 +194,7 @@ impl AsRawDescriptors for GuestMemory {
 
 impl GuestMemory {
     /// Creates backing shm for GuestMemory regions
-    fn create_shm(ranges: &[(GuestAddress, u64)]) -> Result<SharedMemory> {
+    fn create_shm(ranges: &[(GuestAddress, u64, bool)]) -> Result<SharedMemory> {
         let mut aligned_size = 0;
         let pg_size = pagesize();
         for range in ranges {
@@ -210,7 +218,7 @@ impl GuestMemory {
 
     /// Creates a container for guest memory regions.
     /// Valid memory regions are specified as a Vec of (Address, Size) tuples sorted by Address.
-    pub fn new(ranges: &[(GuestAddress, u64)]) -> Result<GuestMemory> {
+    pub fn new(ranges: &[(GuestAddress, u64, bool)]) -> Result<GuestMemory> {
         // Create shm
         let shm = Arc::new(GuestMemory::create_shm(ranges)?);
 
@@ -242,6 +250,7 @@ impl GuestMemory {
                 guest_base: range.0,
                 shared_obj: BackingObject::Shm(shm.clone()),
                 obj_offset: offset,
+                host_access: range.2,
             });
 
             offset += size as u64;
@@ -249,6 +258,7 @@ impl GuestMemory {
 
         Ok(GuestMemory {
             regions: Arc::from(regions),
+            finalized: false,
         })
     }
 
@@ -277,7 +287,13 @@ impl GuestMemory {
 
         Ok(GuestMemory {
             regions: Arc::from(regions),
+            finalized: false,
         })
+    }
+
+    pub fn finalize(&mut self) -> &mut GuestMemory {
+        self.finalized = true;
+        self
     }
 
     /// Returns the end address of memory.
@@ -378,7 +394,7 @@ impl GuestMemory {
     ///  * shm_offset: usize
     pub fn with_regions<F, E>(&self, mut cb: F) -> result::Result<(), E>
     where
-        F: FnMut(usize, GuestAddress, usize, usize, &BackingObject, u64) -> result::Result<(), E>,
+        F: FnMut(usize, GuestAddress, usize, usize, &BackingObject, u64, bool) -> result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(
@@ -388,6 +404,7 @@ impl GuestMemory {
                 region.mapping.as_ptr() as usize,
                 &region.shared_obj,
                 region.obj_offset,
+                region.host_access,
             )?;
         }
         Ok(())
@@ -413,10 +430,13 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_at_addr(&self, buf: &[u8], guest_addr: GuestAddress) -> Result<usize> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .write_slice(buf, offset)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                .write_slice(buf, offset)
+                .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr))
+        }
     }
 
     /// Writes the entire contents of a slice to guest memory at the specified
@@ -471,10 +491,13 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_at_addr(&self, buf: &mut [u8], guest_addr: GuestAddress) -> Result<usize> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .read_slice(buf, offset)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                    .read_slice(buf, offset)
+                    .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr))
+        }
     }
 
     /// Reads from guest memory at the specified address to fill the entire
@@ -530,10 +553,13 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_obj_from_addr<T: DataInit>(&self, guest_addr: GuestAddress) -> Result<T> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .read_obj(offset)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                        .read_obj(offset)
+                        .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr)),
+        }
     }
 
     /// Writes an object to the memory region at the specified guest address.
@@ -553,10 +579,13 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_obj_at_addr<T: DataInit>(&self, val: T, guest_addr: GuestAddress) -> Result<()> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .write_obj(val, offset)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                        .write_obj(val, offset)
+                        .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr)),
+        }
     }
 
     /// Returns a `VolatileSlice` of `len` bytes starting at `addr`. Returns an error if the slice
@@ -649,10 +678,13 @@ impl GuestMemory {
         src: &mut F,
         count: usize,
     ) -> Result<()> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .read_to_memory(offset, src, count)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                        .read_to_memory(offset, src, count)
+                        .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr)),
+        }
     }
 
     /// Writes data from memory to a file descriptor.
@@ -686,10 +718,13 @@ impl GuestMemory {
         dst: &mut F,
         count: usize,
     ) -> Result<()> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
-        mapping
-            .write_from_memory(offset, dst, count)
-            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+        match accessible {
+            true => mapping
+                        .write_from_memory(offset, dst, count)
+                        .map_err(|e| Error::MemoryAccess(guest_addr, e)),
+            false => Err(Error::MemoryPermission(guest_addr)),
+        }
     }
 
     /// Convert a GuestAddress into a pointer in the address space of this
@@ -713,7 +748,12 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn get_host_address(&self, guest_addr: GuestAddress) -> Result<*const u8> {
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
+
+        if !accessible {
+            return Err(Error::MemoryPermission(guest_addr))
+        }
+
         // This is safe; `find_region` already checks that offset is in
         // bounds.
         Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
@@ -750,7 +790,7 @@ impl GuestMemory {
         }
 
         // Assume no overlap among regions
-        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        let (mapping, offset, _, accessible) = self.find_region(guest_addr)?;
 
         if mapping
             .size()
@@ -758,6 +798,10 @@ impl GuestMemory {
             .map_or(true, |v| v < size)
         {
             return Err(Error::InvalidGuestAddress(guest_addr));
+        }
+
+        if !accessible {
+            return Err(Error::MemoryPermission(guest_addr))
         }
 
         // This is safe; `find_region` already checks that offset is in
@@ -792,9 +836,10 @@ impl GuestMemory {
     /// (i) the memory mapping associated with the target region.
     /// (ii) the relative offset from the start of the target region to `guest_addr`.
     /// (iii) the absolute offset from the start of the memory mapping to the target region.
+    /// (iv) whether the host will be able to access
     ///
     /// If no target region is found, an error is returned.
-    pub fn find_region(&self, guest_addr: GuestAddress) -> Result<(&MemoryMapping, usize, u64)> {
+    pub fn find_region(&self, guest_addr: GuestAddress) -> Result<(&MemoryMapping, usize, u64, bool)> {
         self.regions
             .iter()
             .find(|region| region.contains(guest_addr))
@@ -804,6 +849,7 @@ impl GuestMemory {
                     &region.mapping,
                     guest_addr.offset_from(region.start()) as usize,
                     region.obj_offset,
+                    !self.finalized || region.host_access,
                 )
             })
     }
@@ -1062,7 +1108,7 @@ mod tests {
         gm.write_obj_at_addr(0x0420u16, GuestAddress(0x10000))
             .unwrap();
 
-        let _ = gm.with_regions::<_, ()>(|index, _, size, _, obj, offset| {
+        let _ = gm.with_regions::<_, ()>(|index, _, size, _, obj, offset, _| {
             let shm = match obj {
                 BackingObject::Shm(s) => s,
                 _ => {
