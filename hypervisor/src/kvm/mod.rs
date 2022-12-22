@@ -224,7 +224,7 @@ impl KvmVm {
         }
         // Safe because we verify that ret is valid and we own the fd.
         let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-        guest_mem.with_regions(|index, guest_addr, size, host_addr, _, _| {
+        guest_mem.with_regions(|index, guest_addr, size, host_addr, _, _, _| {
             unsafe {
                 // Safe because the guest regions are guaranteed not to overlap.
                 set_user_memory_region(

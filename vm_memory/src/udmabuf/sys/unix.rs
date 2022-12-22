@@ -52,7 +52,7 @@ type UdmabufCreateList = FlexibleArrayWrapper<udmabuf_create_list, udmabuf_creat
 // #    assert_eq!(memory_offset(&mem, GuestAddress(0x1100), 0x1000).unwrap(),0x1000);
 // #}
 fn memory_offset(mem: &GuestMemory, guest_addr: GuestAddress, len: u64) -> UdmabufResult<u64> {
-    let (mapping, map_offset, memfd_offset) = mem
+    let (mapping, map_offset, memfd_offset, _) = mem
         .find_region(guest_addr)
         .map_err(UdmabufError::InvalidOffset)?;
     let map_offset = map_offset as u64;

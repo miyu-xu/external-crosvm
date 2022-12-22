@@ -311,20 +311,24 @@ impl arch::LinuxArch for AArch64 {
     /// These should be used to configure the GuestMemory structure for the platform.
     fn guest_memory_layout(
         components: &VmComponents,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
+    ) -> std::result::Result<Vec<(GuestAddress, u64, bool)>, Self::Error> {
+        // Host can access when not isolating memory
+        let host_access = !components.hv_cfg.protection_type.isolates_memory();
         let mut memory_regions =
-            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size)];
+            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size, host_access)];
 
         // Allocate memory for the pVM firmware.
         if components.hv_cfg.protection_type.runs_firmware() {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
+                host_access,
             ));
         }
 
         if let Some(size) = components.swiotlb {
-            memory_regions.push((GuestAddress(AARCH64_PHYS_MEM_START + components.memory_size), size));
+            // host should be configured to always access swiotlb
+            memory_regions.push((GuestAddress(AARCH64_PHYS_MEM_START + components.memory_size), size, true));
         }
 
         Ok(memory_regions)
