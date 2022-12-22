@@ -729,6 +729,10 @@ impl Vm for KvmVm {
         // No-op, when the guest attempts to access the pages again, Linux/KVM will provide them.
         Ok(())
     }
+
+    fn start(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl AsRawDescriptor for KvmVm {
