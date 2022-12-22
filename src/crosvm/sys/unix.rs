@@ -2506,6 +2506,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     assert_eq!(vcpus.len(), linux.vcpu_init.len());
 
     let (to_vm_control, state_from_vcpu_channel) = mpsc::channel();
+
+    linux.vm.start().context("failed to start vm")?;
+
     for ((cpu_id, vcpu), vcpu_init) in vcpus.into_iter().enumerate().zip(linux.vcpu_init.drain(..))
     {
         let (to_vcpu_channel, from_main_channel) = mpsc::channel();

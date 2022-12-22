@@ -195,6 +195,10 @@ pub trait Vm: Send {
     /// * `guest_address` - Address in the guest's "physical" memory to begin the mapping
     /// * `size` - The size of the region to map, in bytes
     fn handle_deflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()>;
+
+    /// Starts the Virtual Machine, for hypervisors that need to explicitly start the VM.
+    /// Should be called after the VM is built but before the first Vcpu::run().
+    fn start(&mut self) -> Result<()>;
 }
 
 /// A unique fingerprint for a particular `VcpuRunHandle`, used in `Vcpu` impls to ensure the
