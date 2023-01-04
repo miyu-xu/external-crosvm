@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ca9229d7_d4aeb5fe",
+        "filename": "power_monitor/out/generated.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-04T22:27:52Z",
+      "side": 1,
+      "message": "I\u0027m not sure why this file is empty, but it works like this, interestingly...",
+      "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
