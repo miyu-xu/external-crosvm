@@ -52,6 +52,24 @@
       "parentUuid": "35025ba1_7fdb0849",
       "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7d51f6f6_ff63483e",
+        "filename": "power_monitor/out/generated.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-04T22:39:15Z",
+      "side": 1,
+      "message": "if you look at the `build.rs`, it only needs to generate proto bindings when the `powerd` feature is present (which isn\u0027t for us for now). i\u0027d guess for simplicity they always generate this file even if there are no protos",
+      "parentUuid": "35025ba1_7fdb0849",
+      "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
