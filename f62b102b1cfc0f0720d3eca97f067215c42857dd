@@ -88,6 +88,24 @@
       "parentUuid": "7d51f6f6_ff63483e",
       "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d6144f81_9721b848",
+        "filename": "power_monitor/out/generated.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-04T22:44:43Z",
+      "side": 1,
+      "message": "Ack",
+      "parentUuid": "015d651c_c60752f1",
+      "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
