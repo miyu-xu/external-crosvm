@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "8a4ff32a_e1b2f40a",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 322,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "sure, will do.",
+      "parentUuid": "017f2626_12c68260",
+      "range": {
+        "startLine": 322,
+        "startChar": 46,
+        "endLine": 322,
+        "endChar": 64
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "b3098733_73b54241",
         "filename": "hypervisor/src/gunyah/vm.rs",
         "patchSetId": 3
@@ -37,6 +61,24 @@
       "writtenOn": "2022-12-12T23:46:38Z",
       "side": 1,
       "message": "`error!` supports formatting, so this simplifies to\n\n```\nerror!(\"failed to create mem region, addr:{}, size:{}. Err: {}\", guest_base, size, e)\n```\n\nalso, if you are just going to immediately `unwrap`, it is better to do\n\n```\nMemoryRegion::new_from_file()\n    .unwrap_or_else(|e| panic!(\"failed to create mem region, addr:{}, size:{}. Err: {}\", guest_base, size, e))\n```\n\nsame elsewhere in this function",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ea0d9849_d7aeb37b",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 335,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "sure, will do",
+      "parentUuid": "b3098733_73b54241",
       "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -66,6 +108,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "df5ee5df_d0c17f94",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 340,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "sure, will do",
+      "parentUuid": "c1cfa3b2_d6476e25",
+      "range": {
+        "startLine": 337,
+        "startChar": 0,
+        "endLine": 340,
+        "endChar": 54
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f06825c1_0f9b0540",
         "filename": "hypervisor/src/gunyah/vm.rs",
         "patchSetId": 3
@@ -77,6 +143,30 @@
       "writtenOn": "2022-12-12T23:46:38Z",
       "side": 1,
       "message": "Should be able to fold these two lines into\n\n```\nfw_name._name\n    .get_mut(..vm_name.len())\n    .ok_or_else(|| Error::new(EINVAL))?\n    .copy_from_slice(vm_name.as_bytes());\n```",
+      "range": {
+        "startLine": 427,
+        "startChar": 0,
+        "endLine": 428,
+        "endChar": 75
+      },
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "39551a77_928207f6",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 428,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "sure, will do",
+      "parentUuid": "f06825c1_0f9b0540",
       "range": {
         "startLine": 427,
         "startChar": 0,
@@ -124,6 +214,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d24f4b32_084d9c61",
+        "filename": "hypervisor/src/gunyah/vm.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 442,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "yes, i got the point now. I will correct it.",
+      "parentUuid": "c2b5b2da_5ec8fc83",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "358378a2_b2b34a62",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 3
@@ -135,6 +243,24 @@
       "writtenOn": "2022-12-12T23:46:38Z",
       "side": 1,
       "message": "can you mention this is only used by gunyah at the moment?\n\nalso, it seems to be ignored if use_fixed_memory isn\u0027t enabled. can you either fix that or document it\n\nalso, document the 16 byte max",
+      "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f66017dc_8703e695",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1272,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-01-04T11:24:29Z",
+      "side": 1,
+      "message": "sure, will do",
+      "parentUuid": "358378a2_b2b34a62",
       "revId": "921b0d2d8525928cf54fa6651bfc535bdc09690f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
