@@ -1,14 +1,13 @@
 [package]
 name = "libva"
 version = "0.1.0"
-authors = ["The Chromium OS Authors"]
+authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [dependencies]
 anyhow = "*"
 bitflags = "1"
 base = { path = "../../base" }
-libudev = "0.2.0"
 crc32fast = "1.2.1"
 
 [build-dependencies]

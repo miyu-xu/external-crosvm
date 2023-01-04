@@ -464,7 +464,6 @@ pub enum CrossPlatformDevicesCommands {
     Block(device::BlockOptions),
     #[cfg(feature = "gpu")]
     Gpu(device::GpuOptions),
-    #[cfg(unix)]
     Net(device::NetOptions),
 }
 
@@ -1739,7 +1738,7 @@ pub struct RunCommand {
     ///        port if not provided.
     pub serial: Vec<SerialParameters>,
 
-    #[cfg(feature = "kiwi")]
+    #[cfg(windows)]
     #[argh(option, arg_name = "PIPE_NAME")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -2421,7 +2420,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                 cfg.process_invariants_data_size = cmd.process_invariants_size;
             }
             cfg.pvclock = cmd.pvclock;
-            #[cfg(feature = "kiwi")]
+            #[cfg(windows)]
             {
                 cfg.service_pipe_name = cmd.service_pipe_name;
             }
