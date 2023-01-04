@@ -16,6 +16,24 @@
       "message": "I\u0027m not sure why this file is empty, but it works like this, interestingly...",
       "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "35025ba1_7fdb0849",
+        "filename": "power_monitor/out/generated.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-01-04T22:33:53Z",
+      "side": 1,
+      "message": "Should this file be going in the merge? It seems like it\u0027s a generated file (aside from the name, it\u0027s located in out/). Was there an error or warning that caused the file to remain?",
+      "parentUuid": "ca9229d7_d4aeb5fe",
+      "revId": "f62b102b1cfc0f0720d3eca97f067215c42857dd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
