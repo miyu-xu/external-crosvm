@@ -144,6 +144,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "bd0c7282_23a2994f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-01-05T20:29:13Z",
+      "side": 1,
+      "message": "Looking at https://crosvm.dev/book/testing.html, I understand that e2e_tests aren\u0027t run on aarch64.\n\nI believe the test would have to go in https://cs.android.com/android/platform/superproject/+/master:packages/modules/Virtualization/ and then it could be run in presubmit/postsubmit, if it\u0027s aarch64 specific and we want to test it on android, though I\u0027m not sure where specifically.\n@fmayle@google.com, do you know/can you confirm?",
+      "parentUuid": "819e550c_7eb90010",
+      "revId": "30d139763a0bf04487d898d9977eaf5b03589834",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6b852a63_2081bd7e",
         "filename": "x86_64/src/fdt.rs",
         "patchSetId": 2
