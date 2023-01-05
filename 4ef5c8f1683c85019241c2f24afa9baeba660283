@@ -68,6 +68,23 @@
       "parentUuid": "662a7c85_bab64b57",
       "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "90c3e224_25f557cd",
+        "filename": "virtio_sys/src/lib.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 78,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-05T02:46:22Z",
+      "side": 1,
+      "message": "discussing in the bug, but this ioctl number is already claimed by `VHOST_VDPA_GET_GROUP_NUM` IIUC",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
