@@ -108,6 +108,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "819e550c_7eb90010",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-01-05T19:39:42Z",
+      "side": 1,
+      "message": "Got it, thanks for the pointer!\n\nThe test is really only applicable to aarch64 since x86_64 doesn\u0027t use FDT. I\u0027ve tried running the test these ways:\n\n```\n./tools/dev_container ./tools/run_tests --platform\u003daarch64\n```\n\ndoesn\u0027t seem to run the test and even specifying the test as an argument (`e2e_tests:backcompat_test_dump_dtb`) also doesn\u0027t seem to make it run.\n\nand\n\n```\n./tools/test_target --build-target aarch64 set vm:aarch64 \u0026\u0026 source .envrc\nCARGO_BUILD_TARGET\u003daarch64-unknown-linux-gnu ./e2e_tests/run\n```\n\ngives permission error when trying to run the test",
+      "parentUuid": "5617a6d5_0fe83d53",
+      "revId": "30d139763a0bf04487d898d9977eaf5b03589834",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6b852a63_2081bd7e",
         "filename": "x86_64/src/fdt.rs",
         "patchSetId": 2
