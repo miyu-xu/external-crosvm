@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "14c84350_7766bc73",
+        "filename": "base/src/sys/unix/ioctl.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-06T23:30:09Z",
+      "side": 1,
+      "message": "i think this only works when `c_uint` (the type of the shift constants) and `IoctlNr` are aliases of the same concrete type. there isn\u0027t any implicit casting in rust\n\nmaybe do\n\n```\n        (($dir.into() \u003c\u003c $crate::platform::ioctl::_IOC_DIRSHIFT)\n            | ($ty.into() \u003c\u003c $crate::platform::ioctl::_IOC_TYPESHIFT)\n            | ($nr.into() \u003c\u003c $crate::platform::ioctl::_IOC_NRSHIFT)\n            | ($size.into() \u003c\u003c $crate::platform::ioctl::_IOC_SIZESHIFT)) as $crate::platform::IoctlNr\n```\n\nthat should cast from anything to `c_uint` but only if it is safe (i.e. to an equal or bigger type)",
+      "range": {
+        "startLine": 22,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 96
+      },
+      "revId": "b4b9f2533d7f677a46d87ec5118dd99bc57235ad",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
