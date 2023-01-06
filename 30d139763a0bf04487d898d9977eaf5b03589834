@@ -160,6 +160,42 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0379f01e_7218e8f2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-06T22:53:14Z",
+      "side": 1,
+      "message": "Thanks, I\u0027ll try to upstream it",
+      "parentUuid": "40af4491_67cf5a59",
+      "revId": "30d139763a0bf04487d898d9977eaf5b03589834",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fa6b3c5f_d5498031",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-06T22:53:14Z",
+      "side": 1,
+      "message": "I think you are right that they don\u0027t support aarch64 e2e tests yet.\n\nI guess you need to use `--android_fstab` to get x86 to generate an FDT. I think it is fine to wait. Thanks for trying.",
+      "parentUuid": "bd0c7282_23a2994f",
+      "revId": "30d139763a0bf04487d898d9977eaf5b03589834",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6b852a63_2081bd7e",
