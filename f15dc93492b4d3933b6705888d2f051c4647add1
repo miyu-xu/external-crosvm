@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bcf96f21_1954d60d",
+        "filename": "hypervisor/src/kvm/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 695,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-07T00:37:33Z",
+      "side": 1,
+      "message": "change to `u64` since it always has to be supplied",
+      "range": {
+        "startLine": 695,
+        "startChar": 26,
+        "endLine": 695,
+        "endChar": 37
+      },
+      "revId": "f15dc93492b4d3933b6705888d2f051c4647add1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
