@@ -1038,23 +1038,31 @@ mod tests {
     }
 
     fn get_irq_evt() -> IrqLevelEvent {
-        let evt = match crate::IrqLevelEvent::new() {
+        match crate::IrqLevelEvent::new() {
             Ok(evt) => evt,
             Err(e) => panic!(
                 "failed to create irqlevelevt: {} - panic. Can't test ACPI",
                 e
             ),
-        };
-        evt
+        }
     }
 
-    suspendable_tests! {
-        acpi: ACPIPMResource::new(
+    fn modify_device(acpi: &mut ACPIPMResource) {
+        {
+            let mut pm1 = acpi.pm1.lock();
+            pm1.enable += 1;
+        }
+    }
+
+    suspendable_tests!(
+        acpi,
+        ACPIPMResource::new(
             get_irq_evt(),
             #[cfg(feature = "direct")]
             None,
             Event::new().unwrap(),
             get_evt_tube(),
         ),
-    }
+        modify_device
+    );
 }

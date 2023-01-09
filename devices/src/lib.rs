@@ -159,7 +159,9 @@ cfg_if::cfg_if! {
         pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
         #[cfg(feature = "usb")]
         pub use self::usb::xhci::xhci_controller::XhciController;
-        pub use self::vfio::{VfioContainer, VfioDevice};
+        pub use self::vfio::VfioContainer;
+        pub use self::vfio::VfioDevice;
+        pub use self::vfio::VfioDeviceType;
         pub use self::virtio::vfio_wrapper;
 
     } else if #[cfg(windows)] {
@@ -190,29 +192,19 @@ pub enum UnpinResponse {
     Failed,
 }
 
-#[derive(Debug)]
-pub enum ParseIommuDevTypeResult {
-    NoSuchType,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum IommuDevType {
+    #[serde(rename = "off")]
     NoIommu,
+    #[serde(rename = "viommu")]
     VirtioIommu,
+    #[serde(rename = "coiommu")]
     CoIommu,
 }
 
-use std::str::FromStr;
-impl FromStr for IommuDevType {
-    type Err = ParseIommuDevTypeResult;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "off" => Ok(IommuDevType::NoIommu),
-            "viommu" => Ok(IommuDevType::VirtioIommu),
-            "coiommu" => Ok(IommuDevType::CoIommu),
-            _ => Err(ParseIommuDevTypeResult::NoSuchType),
-        }
+impl Default for IommuDevType {
+    fn default() -> Self {
+        IommuDevType::NoIommu
     }
 }
 
@@ -258,12 +250,10 @@ fn sleep_devices(bus: &Bus) -> anyhow::Result<()> {
             info!("Devices slept successfully");
             Ok(())
         }
-        Err(e) => {
-            return Err(anyhow!(
-                "Failed to sleep all devices: {}. Waking up sleeping devices.",
-                e
-            ));
-        }
+        Err(e) => Err(anyhow!(
+            "Failed to sleep all devices: {}. Waking up sleeping devices.",
+            e
+        )),
     }
 }
 
@@ -321,7 +311,7 @@ async fn snapshot_handler(path: &std::path::Path, buses: &[&Bus]) -> anyhow::Res
         .create(true)
         .write(true)
         .truncate(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
 
     for bus in buses {
@@ -357,7 +347,7 @@ async fn restore_handler(path: &std::path::Path, buses: &[&Bus]) -> anyhow::Resu
     let file = OpenOptions::new()
         .read(true)
         .write(false)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
 
     let mut devices_map: HashMap<u32, VecDeque<serde_json::Value>> = HashMap::new();
