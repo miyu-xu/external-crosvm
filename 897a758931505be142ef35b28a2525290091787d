@@ -50,6 +50,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "f4eba559_55a2f5c4",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 318,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-10T05:05:37Z",
+      "side": 1,
+      "message": "Sorry for being vague. My point is that this `host_access` bit makes sense for Gunyah, which is going to have a separate memory region for the shared memory, but it will be inaccurate for pKVM, which does not have a separate region for the shared memory.\n\nI need to add a config option to control whether it gets split out. In the case where it isn\u0027t split out (for pKVM), then even when `protection_type.isolates_memory() \u003d\u003d true`, will want `host_access \u003d true`.",
+      "parentUuid": "cfe8f195_21ef00eb",
+      "range": {
+        "startLine": 316,
+        "startChar": 0,
+        "endLine": 318,
+        "endChar": 94
+      },
+      "revId": "897a758931505be142ef35b28a2525290091787d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "714e3d15_7c7ad6e8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 2
