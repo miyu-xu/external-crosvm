@@ -22,6 +22,30 @@
       },
       "revId": "f15dc93492b4d3933b6705888d2f051c4647add1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b43b61bc_151e73dc",
+        "filename": "hypervisor/src/kvm/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 695,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-01-10T03:31:57Z",
+      "side": 1,
+      "message": "Ah, actually this should be removed. I accidentally snuck this in during a rebase.",
+      "parentUuid": "bcf96f21_1954d60d",
+      "range": {
+        "startLine": 695,
+        "startChar": 26,
+        "endLine": 695,
+        "endChar": 37
+      },
+      "revId": "f15dc93492b4d3933b6705888d2f051c4647add1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
