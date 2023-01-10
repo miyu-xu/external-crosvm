@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "cfe8f195_21ef00eb",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 318,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-01-10T04:40:06Z",
+      "side": 1,
+      "message": "Gunyah needs a separate memory region",
+      "parentUuid": "794ec73d_8d4a4f6e",
+      "range": {
+        "startLine": 316,
+        "startChar": 0,
+        "endLine": 318,
+        "endChar": 94
+      },
+      "revId": "897a758931505be142ef35b28a2525290091787d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "714e3d15_7c7ad6e8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 2
