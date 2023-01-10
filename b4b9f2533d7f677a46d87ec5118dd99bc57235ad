@@ -22,6 +22,30 @@
       },
       "revId": "b4b9f2533d7f677a46d87ec5118dd99bc57235ad",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bc1d6177_aff68498",
+        "filename": "base/src/sys/unix/ioctl.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-01-10T04:31:55Z",
+      "side": 1,
+      "message": "The literals are all i32. As far as my limited Rust experience goes, I don\u0027t think I can be convert those to `c_uint` using From/Into.",
+      "parentUuid": "14c84350_7766bc73",
+      "range": {
+        "startLine": 22,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 96
+      },
+      "revId": "b4b9f2533d7f677a46d87ec5118dd99bc57235ad",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
