@@ -1,0 +1,67 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6d78b352_c7e500bb",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-12T17:38:32Z",
+      "side": 1,
+      "message": "The current probing code (use kvm if /dev/kvm exists, else use gz if /dev/gzvm exists) seems reasonable. Do you plan on doing more?",
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3e01529c_93f50b93",
+        "filename": "Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 226,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-12T17:38:32Z",
+      "side": 1,
+      "message": "s/gz/genie_zone/",
+      "range": {
+        "startLine": 226,
+        "startChar": 0,
+        "endLine": 226,
+        "endChar": 2
+      },
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "915d0751_fbad60ff",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1211,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-12T17:38:32Z",
+      "side": 1,
+      "message": "\"gz\" is too cryptic for most of crosvm. Can you spell it out like \"genie_zone_device_path\" and similar throughout the codebase (except for in the genie zone specific, I think it is reasonable to be terse there)",
+      "range": {
+        "startLine": 1211,
+        "startChar": 8,
+        "endLine": 1211,
+        "endChar": 10
+      },
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
