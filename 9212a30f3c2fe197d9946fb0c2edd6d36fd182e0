@@ -62,6 +62,30 @@
       },
       "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5f04f95a_ede6ee6f",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1211,
+      "author": {
+        "id": 1983865
+      },
+      "writtenOn": "2023-01-16T09:51:31Z",
+      "side": 1,
+      "message": "\"geniezone\" is our hypervisor\u0027s fullname. Could we use \"geniezone\" rather than \"genie_zone\", like \"geniezone_device_path\"?",
+      "parentUuid": "915d0751_fbad60ff",
+      "range": {
+        "startLine": 1211,
+        "startChar": 8,
+        "endLine": 1211,
+        "endChar": 10
+      },
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
