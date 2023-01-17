@@ -37,7 +37,7 @@ pub type AsBackendHandle<Handle> = <Handle as DecodedHandle>::BackendHandle;
 /// where it will wait until the current decode finishes, or in non-blocking
 /// mode, where it should return immediately with any previously decoded frames
 /// that happen to be ready.
-pub trait StatelessDecoderBackend: VideoDecoderBackend + downcast_rs::Downcast {
+pub(crate) trait StatelessDecoderBackend: VideoDecoderBackend {
     /// The type that the backend returns as a result of a decode operation.
     /// This will usually be some backend-specific type with a resource and a
     /// resource pool so that said buffer can be reused for another decode
@@ -127,13 +127,8 @@ pub trait StatelessDecoderBackend: VideoDecoderBackend + downcast_rs::Downcast {
     /// Block on handle `handle`.
     fn block_on_handle(&mut self, handle: &Self::Handle) -> Result<()>;
 
-    /// Upcast to &mut dyn VideoDecoderBackend. This interface is the one
-    /// exposed to client code. StatelessDecoderBackend is the interface exposed
-    /// to the h264 decoder.
-    fn as_video_decoder_backend_mut(&mut self) -> &mut dyn VideoDecoderBackend;
-    /// Upcast to &dyn VideoDecoderBackend. This interface is the one
-    /// exposed to client code. StatelessDecoderBackend is the interface exposed
-    /// to the decoder.
-    fn as_video_decoder_backend(&self) -> &dyn VideoDecoderBackend;
+    /// Get the test parameters for the backend. The caller is reponsible for
+    /// downcasting them to the correct type, which is backend-dependent.
+    #[cfg(test)]
+    fn get_test_params(&self) -> &dyn std::any::Any;
 }
-downcast_rs::impl_downcast!(StatelessDecoderBackend assoc Handle where Handle: DecodedHandle);

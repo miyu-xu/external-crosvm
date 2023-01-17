@@ -2461,6 +2461,13 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         };
 
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let vcpu_hybrid_type = if !cfg.vcpu_hybrid_type.is_empty() {
+            Some(*cfg.vcpu_hybrid_type.get(&cpu_id).unwrap())
+        } else {
+            None
+        };
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let cpu_config = Some(CpuConfigX86_64::new(
             cfg.force_calibrated_tsc_leaf,
             cfg.host_cpu_topology,
@@ -2468,6 +2475,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cfg.enable_pnp_data,
             cfg.no_smt,
             cfg.itmt,
+            vcpu_hybrid_type,
         ));
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
         let bus_lock_ratelimit_ctrl = Arc::clone(&bus_lock_ratelimit_ctrl);
@@ -2721,7 +2729,13 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                                 #[cfg(not(feature = "usb"))]
                                                 None,
                                                 &mut linux.bat_control,
-                                                &vcpu_handles,
+                                                |msg| {
+                                                    vcpu::kick_all_vcpus(
+                                                        &vcpu_handles,
+                                                        linux.irq_chip.as_irq_chip(),
+                                                        msg,
+                                                    )
+                                                },
                                                 cfg.force_s2idle,
                                                 #[cfg(feature = "swap")]
                                                 swap_controller.as_ref(),
@@ -3011,6 +3025,17 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     // Stop pci root worker thread
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let _ = hp_control_tube.send(PciRootCommand::Kill);
+
+    if linux.devices_thread.is_some() {
+        if let Err(e) = device_ctrl_tube.send(&DeviceControlCommand::Exit) {
+            error!("failed to stop device control loop: {}", e);
+        };
+        if let Some(thread) = linux.devices_thread.take() {
+            if let Err(e) = thread.join() {
+                error!("failed to exit devices thread: {:?}", e);
+            }
+        }
+    }
 
     // Explicitly drop the VM structure here to allow the devices to clean up before the
     // control sockets are closed when this function exits.

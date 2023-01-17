@@ -9,10 +9,11 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::decoders::vp9::backends::stateless::StatelessDecoderBackend;
-use crate::decoders::vp9::backends::stateless::Vp9Picture;
+use crate::decoders::vp9::backends::StatelessDecoderBackend;
+use crate::decoders::vp9::backends::Vp9Picture;
+use crate::decoders::vp9::decoder::Decoder;
 use crate::decoders::vp9::parser::NUM_REF_FRAMES;
-use crate::decoders::VideoDecoderBackend;
+use crate::decoders::BlockingMode;
 use crate::utils::dummy::*;
 
 impl StatelessDecoderBackend for Backend {
@@ -47,11 +48,16 @@ impl StatelessDecoderBackend for Backend {
         Ok(())
     }
 
-    fn as_video_decoder_backend_mut(&mut self) -> &mut dyn VideoDecoderBackend {
-        self
+    #[cfg(test)]
+    fn get_test_params(&self) -> &dyn std::any::Any {
+        // There are no test parameters for the dummy backend.
+        unimplemented!()
     }
+}
 
-    fn as_video_decoder_backend(&self) -> &dyn VideoDecoderBackend {
-        self
+impl Decoder<Handle<Vp9Picture<BackendHandle>>> {
+    // Creates a new instance of the decoder using the dummy backend.
+    pub fn new_dummy(blocking_mode: BlockingMode) -> anyhow::Result<Self> {
+        Self::new(Box::new(Backend), blocking_mode)
     }
 }

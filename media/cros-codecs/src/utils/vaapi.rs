@@ -54,7 +54,7 @@ pub const FORMAT_MAP: [FormatMap; 2] = [
 ];
 
 /// Returns a set of supported decoded formats given `rt_format`
-pub fn supported_formats_for_rt_format(
+fn supported_formats_for_rt_format(
     display: Rc<Display>,
     rt_format: u32,
     profile: i32,
@@ -346,6 +346,28 @@ impl StreamMetadataState {
         let mut surface_pool = self.surface_pool()?;
         Ok(surface_pool.get_surface())
     }
+
+    /// Gets a set of supported formats for the particular stream being
+    /// processed. This requires that some buffers be processed before this call
+    /// is made. Only formats that are compatible with the current color space,
+    /// bit depth, and chroma format are returned such that no conversion is
+    /// needed.
+    pub(crate) fn supported_formats_for_stream(&self) -> Result<HashSet<DecodedFormat>> {
+        let rt_format = self.rt_format()?;
+        let display = self.display();
+        let image_formats = display.query_image_formats()?;
+        let profile = self.profile()?;
+
+        let formats = supported_formats_for_rt_format(
+            display,
+            rt_format,
+            profile,
+            libva::VAEntrypoint::VAEntrypointVLD,
+            &image_formats,
+        )?;
+
+        Ok(formats.into_iter().map(|f| f.decoded_format).collect())
+    }
 }
 
 /// The VA-API backend handle.
@@ -528,4 +550,43 @@ impl TryFrom<&libva::VAImageFormat> for DecodedFormat {
             _ => Err(anyhow!("Unsupported format")),
         }
     }
+}
+
+/// Keeps track of where the backend is in the negotiation process.
+///
+/// The generic parameter is the data that the decoder wishes to pass from the `Possible` to the
+/// `Negotiated` state - typically, the properties of the stream like its resolution as they have
+/// been parsed.
+#[derive(Clone, Debug)]
+pub(crate) enum NegotiationStatus<T> {
+    /// No property about the stream has been parsed yet.
+    NonNegotiated,
+    /// Properties of the stream have been parsed and the client may query and change them.
+    Possible(T),
+    /// Stream is actively decoding and its properties cannot be changed by the client.
+    Negotiated,
+}
+
+impl<T> Default for NegotiationStatus<T> {
+    fn default() -> Self {
+        NegotiationStatus::NonNegotiated
+    }
+}
+
+/// A type that keeps track of a pending decoding operation. The backend can
+/// complete the job by either querying its status with VA-API or by blocking on
+/// it at some point in the future.
+///
+/// Once the backend is sure that the operation went through, it can assign the
+/// handle to `codec_picture` and dequeue this object from the pending queue.
+///
+/// The generic parameter `P` should be a `Picture` backed by `GenericBackendHandle`.
+pub(crate) struct PendingJob<P> {
+    /// A picture that was already sent to VA-API. It is unclear whether it has
+    /// been decoded yet because we have been asked not to block on it.
+    pub va_picture: libva::Picture<libva::PictureEnd>,
+    /// A handle to the picture passed in by the decoder. It has no handle
+    /// backing it yet, as we cannot be sure that the decoding operation went
+    /// through.
+    pub codec_picture: Rc<RefCell<P>>,
 }

@@ -6,9 +6,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::decoders::vp8::parser::Header;
-use crate::decoders::vp8::parser::Parser;
-use crate::decoders::vp8::picture::Vp8Picture;
+use crate::decoders::vp9::parser::Header;
+use crate::decoders::vp9::parser::NUM_REF_FRAMES;
+use crate::decoders::vp9::picture::Vp9Picture;
 use crate::decoders::BlockingMode;
 use crate::decoders::DecodedHandle;
 use crate::decoders::VideoDecoderBackend;
@@ -24,7 +24,7 @@ pub type Result<T> = std::result::Result<T, crate::decoders::StatelessBackendErr
 /// as they may be shared.
 ///
 /// Pictures are contained as soon as they are submitted to the accelerator.
-pub type ContainedPicture<T> = Rc<RefCell<Vp8Picture<T>>>;
+pub type ContainedPicture<T> = Rc<RefCell<Vp9Picture<T>>>;
 
 /// A convenience type that casts using fully-qualified syntax.
 pub type AsBackendHandle<Handle> = <Handle as DecodedHandle>::BackendHandle;
@@ -34,7 +34,7 @@ pub type AsBackendHandle<Handle> = <Handle as DecodedHandle>::BackendHandle;
 /// where it will wait until the current decode finishes, or in non-blocking
 /// mode, where it should return immediately with any previously decoded frames
 /// that happen to be ready.
-pub trait StatelessDecoderBackend: VideoDecoderBackend + downcast_rs::Downcast {
+pub(crate) trait StatelessDecoderBackend: VideoDecoderBackend {
     /// The type that the backend returns as a result of a decode operation.
     /// This will usually be some backend-specific type with a resource and a
     /// resource pool so that said buffer can be reused for another decode
@@ -53,12 +53,9 @@ pub trait StatelessDecoderBackend: VideoDecoderBackend + downcast_rs::Downcast {
     /// and then assign the ownership of the Picture to the Handle.
     fn submit_picture(
         &mut self,
-        picture: Vp8Picture<AsBackendHandle<Self::Handle>>,
-        last_ref: Option<&Self::Handle>,
-        golden_ref: Option<&Self::Handle>,
-        alt_ref: Option<&Self::Handle>,
+        picture: Vp9Picture<AsBackendHandle<Self::Handle>>,
+        reference_frames: &[Option<Self::Handle>; NUM_REF_FRAMES],
         bitstream: &dyn AsRef<[u8]>,
-        parser: &Parser,
         timestamp: u64,
         block: bool,
     ) -> Result<Self::Handle>;
@@ -74,13 +71,8 @@ pub trait StatelessDecoderBackend: VideoDecoderBackend + downcast_rs::Downcast {
     /// Block on handle `handle`.
     fn block_on_handle(&mut self, handle: &Self::Handle) -> Result<()>;
 
-    /// Upcast to &mut dyn VideoDecoderBackend. This interface is the one
-    /// exposed to client code. StatelessDecoderBackend is the interface exposed
-    /// to the decoder.
-    fn as_video_decoder_backend_mut(&mut self) -> &mut dyn VideoDecoderBackend;
-    /// Upcast to &dyn VideoDecoderBackend. This interface is the one
-    /// exposed to client code. StatelessDecoderBackend is the interface exposed
-    /// to the decoder.
-    fn as_video_decoder_backend(&self) -> &dyn VideoDecoderBackend;
+    /// Get the test parameters for the backend. The caller is reponsible for
+    /// downcasting them to the correct type, which is backend-dependent.
+    #[cfg(test)]
+    fn get_test_params(&self) -> &dyn std::any::Any;
 }
-downcast_rs::impl_downcast!(StatelessDecoderBackend assoc Handle where Handle: DecodedHandle);

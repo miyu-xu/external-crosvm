@@ -51,6 +51,8 @@ use devices::PflashParameters;
 use devices::SerialHardware;
 use devices::SerialParameters;
 use devices::StubPciParameters;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::CpuHybridType;
 use hypervisor::ProtectionType;
 use merge::bool::overwrite_false;
 use merge::vec::append;
@@ -308,6 +310,15 @@ pub struct SwapEnableCommand {
 }
 
 #[derive(FromArgs)]
+#[argh(subcommand, name = "out")]
+/// Enable swap of a VM
+pub struct SwapOutCommand {
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[derive(FromArgs)]
 #[argh(subcommand, name = "disable")]
 /// Disable swap of a VM
 pub struct SwapDisableCommand {
@@ -346,6 +357,7 @@ pub struct SwapCommand {
 /// Swap related operations
 pub enum SwapSubcommands {
     Enable(SwapEnableCommand),
+    SwapOut(SwapOutCommand),
     Disable(SwapDisableCommand),
     Status(SwapStatusCommand),
     LogPageFault(SwapLogPageFaultCommand),
@@ -945,6 +957,13 @@ pub struct RunCommand {
     ///       clusters=[[0,2],[1,3],[4-7,12]] - creates one cluster
     ///         for cores 0 and 2, another one for cores 1 and 3,
     ///         and one last for cores 4, 5, 6, 7 and 12.
+    ///     core-types=[atom=[CPUSET],core=[CPUSET]] - Hybrid core types. (default: None)
+    ///       Set the type of virtual hybrid CPUs. Now it supports
+    ///       to set intel Atom or intel Core types.
+    ///       Examples:
+    ///       core-types=[atom=[0,1],core=[2,3]] - set vCPU 0 and
+    ///       vCPU 1 as intel Atom type, also set vCPU 2 and vCPU 3
+    ///       as intel Core type.
     pub cpus: Option<CpuOptions>,
 
     #[cfg(feature = "crash-report")]
@@ -1197,6 +1216,8 @@ pub struct RunCommand {
     ///     cache-path=PATH - The path to the render server shader
     ///         cache.
     ///     cache-size=SIZE - The maximum size of the shader cache
+    ///     foz-db-list-path=PATH - The path to GPU foz db list
+    ///         file for dynamically loading RO caches.
     pub gpu_render_server: Option<GpuRenderServerParameters>,
 
     #[argh(switch)]
@@ -2230,6 +2251,28 @@ impl TryFrom<RunCommand> for super::config::Config {
                     )
                 }
             };
+
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            if let Some(cpu_types) = cpus.core_types {
+                for cpu in cpu_types.atom {
+                    if cfg
+                        .vcpu_hybrid_type
+                        .insert(cpu, CpuHybridType::Atom)
+                        .is_some()
+                    {
+                        return Err(format!("vCPU index must be unique {}", cpu));
+                    }
+                }
+                for cpu in cpu_types.core {
+                    if cfg
+                        .vcpu_hybrid_type
+                        .insert(cpu, CpuHybridType::Core)
+                        .is_some()
+                    {
+                        return Err(format!("vCPU index must be unique {}", cpu));
+                    }
+                }
+            }
         }
 
         cfg.vcpu_affinity = cmd.cpu_affinity;

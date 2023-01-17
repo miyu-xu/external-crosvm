@@ -10,18 +10,19 @@ use anyhow::anyhow;
 use anyhow::Result;
 #[cfg(test)]
 use libva::BufferType;
+use libva::Display;
 use libva::Picture as VaPicture;
-use libva::PictureEnd;
 use libva::SegmentParameterVP9;
 use libva::UsageHint;
 
-use crate::decoders::vp9::backends::stateless::AsBackendHandle;
-use crate::decoders::vp9::backends::stateless::BlockingMode;
-use crate::decoders::vp9::backends::stateless::ContainedPicture;
-use crate::decoders::vp9::backends::stateless::DecodedHandle;
-use crate::decoders::vp9::backends::stateless::Result as StatelessBackendResult;
-use crate::decoders::vp9::backends::stateless::StatelessDecoderBackend;
-use crate::decoders::vp9::backends::stateless::Vp9Picture;
+use crate::decoders::vp9::backends::AsBackendHandle;
+use crate::decoders::vp9::backends::BlockingMode;
+use crate::decoders::vp9::backends::ContainedPicture;
+use crate::decoders::vp9::backends::DecodedHandle;
+use crate::decoders::vp9::backends::Result as StatelessBackendResult;
+use crate::decoders::vp9::backends::StatelessDecoderBackend;
+use crate::decoders::vp9::backends::Vp9Picture;
+use crate::decoders::vp9::decoder::Decoder;
 use crate::decoders::vp9::lookups::AC_QLOOKUP;
 use crate::decoders::vp9::lookups::AC_QLOOKUP_10;
 use crate::decoders::vp9::lookups::AC_QLOOKUP_12;
@@ -51,6 +52,8 @@ use crate::utils;
 use crate::utils::vaapi::DecodedHandle as VADecodedHandle;
 use crate::utils::vaapi::FormatMap;
 use crate::utils::vaapi::GenericBackendHandle;
+use crate::utils::vaapi::NegotiationStatus;
+use crate::utils::vaapi::PendingJob;
 use crate::utils::vaapi::StreamMetadataState;
 use crate::utils::vaapi::SurfacePoolHandle;
 use crate::DecodedFormat;
@@ -62,41 +65,11 @@ type AssociatedHandle = <Backend as StatelessDecoderBackend>::Handle;
 /// The number of surfaces to allocate for this codec.
 const NUM_SURFACES: usize = 12;
 
-/// Keeps track of where the backend is in the negotiation process.
-#[derive(Clone, Debug)]
-enum NegotiationStatus {
-    NonNegotiated,
-    Possible { header: Box<Header> },
-    Negotiated,
-}
-
-impl Default for NegotiationStatus {
-    fn default() -> Self {
-        NegotiationStatus::NonNegotiated
-    }
-}
-
 #[cfg(test)]
 struct TestParams {
     pic_param: BufferType,
     slice_param: BufferType,
     slice_data: BufferType,
-}
-
-/// A type that keeps track of a pending decoding operation. The backend can
-/// complete the job by either querying its status with VA-API or by blocking on
-/// it at some point in the future.
-///
-/// Once the backend is sure that the operation went through, it can assign the
-/// handle to `vp9_picture` and dequeue this object from the pending queue.
-struct PendingJob<BackendHandle> {
-    /// A picture that was already sent to VA-API. It is unclear whether it has
-    /// been decoded yet because we have been asked not to block on it.
-    va_picture: VaPicture<PictureEnd>,
-    /// A handle to the picture passed in by the H264 decoder. It has no handle
-    /// backing it yet, as we cannot be sure that the decoding operation went
-    /// through.
-    vp9_picture: ContainedPicture<BackendHandle>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -121,17 +94,15 @@ struct Segmentation {
     reference_skip_enabled: bool,
 }
 
-pub struct Backend {
+struct Backend {
     /// The metadata state. Updated whenever the decoder reads new data from the stream.
     metadata_state: StreamMetadataState,
     /// The FIFO for all pending pictures, in the order they were submitted.
-    pending_jobs: VecDeque<PendingJob<GenericBackendHandle>>,
-    /// The image formats we can decode into.
-    image_formats: Rc<Vec<libva::VAImageFormat>>,
+    pending_jobs: VecDeque<PendingJob<Vp9Picture<GenericBackendHandle>>>,
     /// The number of allocated surfaces.
     num_allocated_surfaces: usize,
     /// The negotiation status
-    negotiation_status: NegotiationStatus,
+    negotiation_status: NegotiationStatus<Box<Header>>,
     /// Per-segment data.
     segmentation: [Segmentation; MAX_SEGMENTS],
 
@@ -143,12 +114,9 @@ pub struct Backend {
 
 impl Backend {
     /// Create a new codec backend for VP8.
-    pub fn new(display: Rc<libva::Display>) -> Result<Self> {
-        let image_formats = Rc::new(display.query_image_formats()?);
-
+    fn new(display: Rc<libva::Display>) -> Result<Self> {
         Ok(Self {
             metadata_state: StreamMetadataState::Unparsed { display },
-            image_formats,
             pending_jobs: Default::default(),
             num_allocated_surfaces: Default::default(),
             negotiation_status: Default::default(),
@@ -279,8 +247,8 @@ impl Backend {
                 .ok_or(anyhow!("Unsupported format {}", rt_format))?
         };
 
-        let map_format = self
-            .image_formats
+        let map_format = display
+            .query_image_formats()?
             .iter()
             .find(|f| f.fourcc == format_map.va_fourcc)
             .cloned()
@@ -617,17 +585,10 @@ impl StatelessDecoderBackend for Backend {
     type Handle = VADecodedHandle<Vp9Picture<GenericBackendHandle>>;
 
     fn new_sequence(&mut self, header: &Header) -> StatelessBackendResult<()> {
-        let open = self
-            .open(header, None)
-            .map_err(|e| StatelessBackendError::Other(anyhow!(e)));
+        self.open(header, None)?;
+        self.negotiation_status = NegotiationStatus::Possible(Box::new(header.clone()));
 
-        if open.is_ok() {
-            self.negotiation_status = NegotiationStatus::Possible {
-                header: Box::new(header.clone()),
-            };
-        }
-
-        open
+        Ok(())
     }
 
     fn submit_picture(
@@ -638,9 +599,7 @@ impl StatelessDecoderBackend for Backend {
         timestamp: u64,
         block: bool,
     ) -> StatelessBackendResult<Self::Handle> {
-        if !matches!(self.negotiation_status, NegotiationStatus::Negotiated) {
-            self.negotiation_status = NegotiationStatus::Negotiated;
-        }
+        self.negotiation_status = NegotiationStatus::Negotiated;
 
         let context = self.metadata_state.context()?;
 
@@ -702,7 +661,7 @@ impl StatelessDecoderBackend for Backend {
             // Append to our queue of pending jobs
             let pending_job = PendingJob {
                 va_picture,
-                vp9_picture: Rc::clone(&picture),
+                codec_picture: Rc::clone(&picture),
             };
 
             self.pending_jobs.push_back(pending_job);
@@ -741,9 +700,9 @@ impl StatelessDecoderBackend for Backend {
                 self.metadata_state.display_resolution()?,
             );
 
-            job.vp9_picture.borrow_mut().backend_handle = Some(backend_handle);
+            job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
 
-            completed.push_back(job.vp9_picture);
+            completed.push_back(job.codec_picture);
         }
 
         let completed = completed.into_iter().map(|picture| {
@@ -766,7 +725,7 @@ impl StatelessDecoderBackend for Backend {
             // Remove from the queue in order.
             let job = &self.pending_jobs[i];
 
-            if Vp9Picture::same(&job.vp9_picture, handle.picture_container()) {
+            if Vp9Picture::same(&job.codec_picture, handle.picture_container()) {
                 let job = self.pending_jobs.remove(i).unwrap();
 
                 let current_picture = job.va_picture.sync()?;
@@ -779,7 +738,7 @@ impl StatelessDecoderBackend for Backend {
                     self.metadata_state.display_resolution()?,
                 );
 
-                job.vp9_picture.borrow_mut().backend_handle = Some(backend_handle);
+                job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
 
                 return Ok(());
             }
@@ -790,12 +749,9 @@ impl StatelessDecoderBackend for Backend {
         )))
     }
 
-    fn as_video_decoder_backend_mut(&mut self) -> &mut dyn crate::decoders::VideoDecoderBackend {
-        self
-    }
-
-    fn as_video_decoder_backend(&self) -> &dyn crate::decoders::VideoDecoderBackend {
-        self
+    #[cfg(test)]
+    fn get_test_params(&self) -> &dyn std::any::Any {
+        &self.test_params
     }
 }
 
@@ -824,28 +780,9 @@ impl VideoDecoderBackend for Backend {
         DecodedFormat::try_from(map_format.as_ref()).ok()
     }
 
-    fn supported_formats_for_stream(
-        &self,
-    ) -> DecoderResult<std::collections::HashSet<crate::DecodedFormat>> {
-        let rt_format = self.metadata_state.rt_format()?;
-        let image_formats = &self.image_formats;
-        let display = self.metadata_state.display();
-        let profile = self.metadata_state.profile()?;
-
-        let formats = utils::vaapi::supported_formats_for_rt_format(
-            display,
-            rt_format,
-            profile,
-            libva::VAEntrypoint::VAEntrypointVLD,
-            image_formats,
-        )?;
-
-        Ok(formats.into_iter().map(|f| f.decoded_format).collect())
-    }
-
     fn try_format(&mut self, format: crate::DecodedFormat) -> DecoderResult<()> {
         let header = match &self.negotiation_status {
-            NegotiationStatus::Possible { header } => header.clone(),
+            NegotiationStatus::Possible(header) => header.clone(),
             _ => {
                 return Err(DecoderError::StatelessBackendError(
                     StatelessBackendError::NegotiationFailed(anyhow!(
@@ -856,7 +793,7 @@ impl VideoDecoderBackend for Backend {
             }
         };
 
-        let supported_formats_for_stream = self.supported_formats_for_stream()?;
+        let supported_formats_for_stream = self.metadata_state.supported_formats_for_stream()?;
 
         if supported_formats_for_stream.contains(&format) {
             let map_format = utils::vaapi::FORMAT_MAP
@@ -878,33 +815,36 @@ impl VideoDecoderBackend for Backend {
     }
 }
 
+impl Decoder<VADecodedHandle<Vp9Picture<GenericBackendHandle>>> {
+    // Creates a new instance of the decoder using the VAAPI backend.
+    pub fn new_vaapi(display: Rc<Display>, blocking_mode: BlockingMode) -> Result<Self> {
+        Self::new(Box::new(Backend::new(display)?), blocking_mode)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
 
     use libva::BufferType;
     use libva::Display;
     use libva::PictureParameter;
     use libva::SliceParameter;
 
-    use crate::decoders::vp9::backends;
-    use crate::decoders::vp9::backends::stateless::vaapi::AssociatedHandle;
-    use crate::decoders::vp9::backends::stateless::vaapi::Backend;
-    use crate::decoders::vp9::backends::stateless::BlockingMode;
-    use crate::decoders::vp9::backends::stateless::DecodedHandle;
-    use crate::decoders::vp9::backends::stateless::StatelessDecoderBackend;
+    use crate::decoders::vp9::backends::vaapi::AssociatedHandle;
+    use crate::decoders::vp9::backends::vaapi::TestParams;
+    use crate::decoders::vp9::backends::BlockingMode;
+    use crate::decoders::vp9::backends::DecodedHandle;
+    use crate::decoders::vp9::backends::StatelessDecoderBackend;
     use crate::decoders::vp9::decoder::tests::process_ready_frames;
     use crate::decoders::vp9::decoder::tests::run_decoding_loop;
     use crate::decoders::vp9::decoder::Decoder;
     use crate::decoders::vp9::parser::NUM_REF_FRAMES;
     use crate::decoders::DynPicture;
 
-    fn as_vaapi_backend(
+    fn get_test_params(
         backend: &dyn StatelessDecoderBackend<Handle = AssociatedHandle>,
-    ) -> &backends::stateless::vaapi::Backend {
-        backend
-            .downcast_ref::<backends::stateless::vaapi::Backend>()
-            .unwrap()
+    ) -> &Vec<TestParams> {
+        backend.get_test_params().downcast_ref::<_>().unwrap()
     }
 
     fn process_handle(
@@ -940,33 +880,29 @@ mod tests {
     // Ignore this test by default as it requires libva-compatible hardware.
     #[ignore]
     fn test_25fps_vp9() {
-        const TEST_STREAM: &[u8] = include_bytes!("../../test_data/test-25fps.vp9");
-        const STREAM_CRCS: &str = include_str!("../../test_data/test-25fps.vp9.crc");
+        const TEST_STREAM: &[u8] = include_bytes!("../test_data/test-25fps.vp9");
+        const STREAM_CRCS: &str = include_str!("../test_data/test-25fps.vp9.crc");
 
         const TEST_25_FPS_VP9_STREAM_SLICE_DATA_0: &[u8] =
-            include_bytes!("../../test_data/test-25fps-vp9-slice-data-0.bin");
+            include_bytes!("../test_data/test-25fps-vp9-slice-data-0.bin");
         const TEST_25_FPS_VP9_STREAM_SLICE_DATA_1: &[u8] =
-            include_bytes!("../../test_data/test-25fps-vp9-slice-data-1.bin");
+            include_bytes!("../test_data/test-25fps-vp9-slice-data-1.bin");
         const TEST_25_FPS_VP9_STREAM_SLICE_DATA_2: &[u8] =
-            include_bytes!("../../test_data/test-25fps-vp9-slice-data-2.bin");
+            include_bytes!("../test_data/test-25fps-vp9-slice-data-2.bin");
 
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
             let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
-
             let mut frame_num = 0;
-            let display = Rc::new(Display::open().unwrap());
-            let backend = Box::new(Backend::new(Rc::clone(&display)).unwrap());
-
-            let mut decoder = Decoder::new(backend, blocking_mode).unwrap();
+            let display = Display::open().unwrap();
+            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
 
             run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
                 process_ready_frames(decoder, &mut |decoder, handle| {
                     // Contains the params used to decode the picture. Useful if we want to
                     // write assertions against any particular value used therein.
-                    let params =
-                        &as_vaapi_backend(decoder.backend()).test_params[frame_num as usize];
+                    let params = &get_test_params(decoder.backend())[frame_num as usize];
 
                     process_handle(handle, false, Some(&mut expected_crcs), frame_num);
 
@@ -1139,19 +1075,16 @@ mod tests {
     #[ignore]
     fn test_vp90_2_10_show_existing_frame2_vp9() {
         const TEST_STREAM: &[u8] =
-            include_bytes!("../../test_data/vp90_2_10_show_existing_frame2.vp9.ivf");
+            include_bytes!("../test_data/vp90_2_10_show_existing_frame2.vp9.ivf");
         const STREAM_CRCS: &str =
-            include_str!("../../test_data/vp90_2_10_show_existing_frame2.vp9.ivf.crc");
+            include_str!("../test_data/vp90_2_10_show_existing_frame2.vp9.ivf.crc");
 
-        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_0: &[u8] = include_bytes!(
-            "../../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-0.bin"
-        );
-        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_1: &[u8] = include_bytes!(
-            "../../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-1.bin"
-        );
-        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_2: &[u8] = include_bytes!(
-            "../../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-2.bin"
-        );
+        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_0: &[u8] =
+            include_bytes!("../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-0.bin");
+        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_1: &[u8] =
+            include_bytes!("../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-1.bin");
+        const TEST_VP90_2_10_SHOW_EXISTING_FRAME2_STREAM_SLICE_DATA_2: &[u8] =
+            include_bytes!("../test_data/vp90_2_10_show_existing_frame2-vp9-ivf-slice-data-2.bin");
 
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
@@ -1159,10 +1092,8 @@ mod tests {
             let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
 
             let mut frame_num = 0;
-            let display = Rc::new(Display::open().unwrap());
-            let backend = Box::new(Backend::new(Rc::clone(&display)).unwrap());
-
-            let mut decoder = Decoder::new(backend, blocking_mode).unwrap();
+            let display = Display::open().unwrap();
+            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
 
             run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
                 process_ready_frames(decoder, &mut |decoder, handle| {
@@ -1171,9 +1102,7 @@ mod tests {
                     // Notice that the VP9 codec can choose to redisplay frames,
                     // in which case, no test parameters are recorded, because
                     // no decode operation is made.
-                    let params = &as_vaapi_backend(decoder.backend())
-                        .test_params
-                        .get(frame_num as usize);
+                    let params = get_test_params(decoder.backend()).get(frame_num as usize);
 
                     process_handle(handle, false, Some(&mut expected_crcs), frame_num);
 
@@ -1366,9 +1295,9 @@ mod tests {
         // Remuxed from the original matroska source in libvpx using ffmpeg:
         // ffmpeg -i vp90-2-10-show-existing-frame.webm/vp90-2-10-show-existing-frame.webm -c:v copy /tmp/vp90-2-10-show-existing-frame.vp9.ivf
         const TEST_STREAM: &[u8] =
-            include_bytes!("../../test_data/vp90-2-10-show-existing-frame.vp9.ivf");
+            include_bytes!("../test_data/vp90-2-10-show-existing-frame.vp9.ivf");
         const STREAM_CRCS: &str =
-            include_str!("../../test_data/vp90-2-10-show-existing-frame.vp9.ivf.crc");
+            include_str!("../test_data/vp90-2-10-show-existing-frame.vp9.ivf.crc");
 
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
@@ -1376,10 +1305,8 @@ mod tests {
             let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
 
             let mut frame_num = 0;
-            let display = Rc::new(Display::open().unwrap());
-            let backend = Box::new(Backend::new(Rc::clone(&display)).unwrap());
-
-            let mut decoder = Decoder::new(backend, blocking_mode).unwrap();
+            let display = Display::open().unwrap();
+            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
 
             run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
                 process_ready_frames(decoder, &mut |decoder, handle| {
@@ -1388,9 +1315,7 @@ mod tests {
                     // Notice that the VP9 codec can choose to redisplay frames,
                     // in which case, no test parameters are recorded, because
                     // no decode operation is made.
-                    let _params = &as_vaapi_backend(decoder.backend())
-                        .test_params
-                        .get(frame_num as usize);
+                    let _params = get_test_params(decoder.backend()).get(frame_num as usize);
 
                     process_handle(handle, false, Some(&mut expected_crcs), frame_num);
 
@@ -1410,27 +1335,24 @@ mod tests {
         // resolutions that are not multiple of 4, so we're ignoring CRCs for
         // this one.
         const TEST_STREAM: &[u8] =
-            include_bytes!("../../test_data/resolution_change_500frames-vp9.ivf");
+            include_bytes!("../test_data/resolution_change_500frames-vp9.ivf");
         const STREAM_CRCS: &str =
-            include_str!("../../test_data/resolution_change_500frames-vp9.ivf.crc");
+            include_str!("../test_data/resolution_change_500frames-vp9.ivf.crc");
 
         const TEST_RESOLUTION_CHANGE_500FRAMES_STREAM_SLICE_DATA_0: &[u8] =
-            include_bytes!("../../test_data/resolution_change_500frames-vp9-ivf-slice-data-0.bin");
+            include_bytes!("../test_data/resolution_change_500frames-vp9-ivf-slice-data-0.bin");
         const TEST_RESOLUTION_CHANGE_500FRAMES_STREAM_SLICE_DATA_1: &[u8] =
-            include_bytes!("../../test_data/resolution_change_500frames-vp9-ivf-slice-data-1.bin");
+            include_bytes!("../test_data/resolution_change_500frames-vp9-ivf-slice-data-1.bin");
         const TEST_RESOLUTION_CHANGE_500FRAMES_STREAM_SLICE_DATA_54: &[u8] =
-            include_bytes!("../../test_data/resolution_change_500frames-vp9-ivf-slice-data-54.bin");
+            include_bytes!("../test_data/resolution_change_500frames-vp9-ivf-slice-data-54.bin");
 
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
-            let mut frame_num = 0;
-            let display = Rc::new(Display::open().unwrap());
-            let backend = Box::new(Backend::new(Rc::clone(&display)).unwrap());
-
             let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
-
-            let mut decoder = Decoder::new(backend, blocking_mode).unwrap();
+            let mut frame_num = 0;
+            let display = Display::open().unwrap();
+            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
 
             run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
                 process_ready_frames(decoder, &mut |decoder, handle| {
@@ -1439,9 +1361,7 @@ mod tests {
                     // Notice that the VP9 codec can choose to redisplay frames,
                     // in which case, no test parameters are recorded, because
                     // no decode operation is made.
-                    let params = &as_vaapi_backend(decoder.backend())
-                        .test_params
-                        .get(frame_num as usize);
+                    let params = get_test_params(decoder.backend()).get(frame_num as usize);
 
                     // GStreamer adds padding otherwise, so we introduce this
                     // check so as to not fail because of that, as some of the

@@ -6,7 +6,6 @@
 //! run so we can test it in isolation.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::decoders::DecodedHandle;
@@ -69,7 +68,7 @@ impl<T: FrameInfo> DecodedHandle for Handle<Picture<T, BackendHandle>> {
 }
 
 /// Dummy backend that can be used for any codec.
-pub struct Backend;
+pub(crate) struct Backend;
 
 impl VideoDecoderBackend for Backend {
     fn num_resources_total(&self) -> usize {
@@ -86,10 +85,6 @@ impl VideoDecoderBackend for Backend {
 
     fn try_format(&mut self, _: DecodedFormat) -> crate::decoders::Result<()> {
         Ok(())
-    }
-
-    fn supported_formats_for_stream(&self) -> crate::decoders::Result<HashSet<DecodedFormat>> {
-        Ok(HashSet::new())
     }
 
     fn coded_resolution(&self) -> Option<Resolution> {
