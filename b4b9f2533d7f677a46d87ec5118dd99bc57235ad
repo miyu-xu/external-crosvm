@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "a9bfd76d_ebb80986",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-18T04:14:16Z",
+      "side": 1,
+      "message": "sent upstream as https://crrev.com/c/4174621",
+      "revId": "b4b9f2533d7f677a46d87ec5118dd99bc57235ad",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "14c84350_7766bc73",
         "filename": "base/src/sys/unix/ioctl.rs",
         "patchSetId": 2
@@ -38,6 +55,30 @@
       "side": 1,
       "message": "The literals are all i32. As far as my limited Rust experience goes, I don\u0027t think I can be convert those to `c_uint` using From/Into.",
       "parentUuid": "14c84350_7766bc73",
+      "range": {
+        "startLine": 22,
+        "startChar": 0,
+        "endLine": 25,
+        "endChar": 96
+      },
+      "revId": "b4b9f2533d7f677a46d87ec5118dd99bc57235ad",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a2eb70fd_3a9a6b41",
+        "filename": "base/src/sys/unix/ioctl.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 25,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-18T04:14:16Z",
+      "side": 1,
+      "message": "You are right, also I didn\u0027t realize how relaxed the `\u003c\u003c` operator is, I assumed it required the same type for both operands.",
+      "parentUuid": "bc1d6177_aff68498",
       "range": {
         "startLine": 22,
         "startChar": 0,
