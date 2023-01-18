@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "9f179458_489b175e",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-01-18T02:58:41Z",
+      "side": 1,
+      "message": "Yes, this feature would be on our TODOs. For now, we still prefer to pass the geniezone device path explicitly just like what kvm did for upstream review. The probing logic, which node should be default preference on which device, is still being discussed in our team.",
+      "parentUuid": "6d78b352_c7e500bb",
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3e01529c_93f50b93",
         "filename": "Cargo.toml",
         "patchSetId": 2
