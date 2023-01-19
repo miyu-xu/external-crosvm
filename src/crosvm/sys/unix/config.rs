@@ -18,6 +18,9 @@ use crate::crosvm::config::Config;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HypervisorKind {
     Kvm,
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(feature = "geniezone")]
+    Gz,
 }
 
 impl FromStr for HypervisorKind {
@@ -26,6 +29,9 @@ impl FromStr for HypervisorKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "kvm" => Ok(HypervisorKind::Kvm),
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            #[cfg(feature = "geniezone")]
+            "geniezone" => Ok(HypervisorKind::Gz),
             _ => Err("invalid hypervisor backend"),
         }
     }
