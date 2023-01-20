@@ -1,0 +1,13 @@
+diff --git a/base/src/lib.rs b/base/src/lib.rs
+index 71538b4e8..387c5d746 100644
+--- a/base/src/lib.rs
++++ b/base/src/lib.rs
+@@ -178,7 +178,7 @@ pub trait EnabledHighResTimer {}
+ pub fn generate_uuid() -> String {
+     let mut buf = Uuid::encode_buffer();
+     Uuid::new_v4()
+-        .to_hyphenated()
++        .hyphenated()
+         .encode_lower(&mut buf)
+         .to_owned()
+ }
