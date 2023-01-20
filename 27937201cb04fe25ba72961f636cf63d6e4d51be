@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aed7a469_62a23291",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-01-20T22:12:02Z",
+      "side": 1,
+      "message": "Added @srhines@google.com to make sure we\u0027re handling the cross-project update correctly.",
+      "revId": "27937201cb04fe25ba72961f636cf63d6e4d51be",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

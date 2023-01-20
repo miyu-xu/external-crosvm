@@ -16,6 +16,24 @@
       "message": "The change itself seems fine, but I\u0027m not sure how Android manages crosvm merges; this should probably go through upstream crosvm (including the corresponding Cargo.toml/Cargo.lock changes for the uuid crate version bump)",
       "revId": "874cc531a9ccaaf7df7d27613388b4016860c3f4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "171faf35_eee18b30",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-01-20T22:12:02Z",
+      "side": 1,
+      "message": "Thanks for catching that.  I\u0027ve added a patch file for our local commit and uploaded this CL to upstream: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4184260",
+      "parentUuid": "8c6e53ea_456b2af7",
+      "revId": "874cc531a9ccaaf7df7d27613388b4016860c3f4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
