@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c2fd2d64_769ea2e6",
+        "filename": "patches/uuid-update-1.2.2.pach",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1010056
+      },
+      "writtenOn": "2023-01-21T00:50:37Z",
+      "side": 0,
+      "message": "Typo: change file extension to `.patch`.",
+      "revId": "0eb6d60c7e93c31da1c6f800c565939eaf21dbef",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
