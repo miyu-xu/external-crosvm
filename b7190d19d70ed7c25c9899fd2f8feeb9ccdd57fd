@@ -52,6 +52,24 @@
       "parentUuid": "2d7f3c00_f9112b95",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c320d43c_d0310a9a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-23T21:53:56Z",
+      "side": 1,
+      "message": "i just remember there was a chat thread about the mdbook issue. discussing there instead",
+      "parentUuid": "93883a73_c17e98e8",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
