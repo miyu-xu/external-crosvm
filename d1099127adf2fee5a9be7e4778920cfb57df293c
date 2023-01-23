@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9782778b_3fad3d59",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-23T22:07:36Z",
+      "side": 1,
+      "message": "do you mind waiting for https://r.android.com/2399158? sometimes it is painful to rebase merges. that one is very light, so it is unlikely to get held up\n\nCC @devinmoore@google.com",
+      "revId": "d1099127adf2fee5a9be7e4778920cfb57df293c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
