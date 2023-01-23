@@ -70,6 +70,24 @@
       "parentUuid": "93883a73_c17e98e8",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "59ec32d8_74dd83d0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2023-01-23T21:55:25Z",
+      "side": 1,
+      "message": "We got a patch to fix the install-deps script: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4179290\n\nUnfortunately it\u0027s blocked by two issues with new debian packages, which hopefully will get fixed today.",
+      "parentUuid": "93883a73_c17e98e8",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
