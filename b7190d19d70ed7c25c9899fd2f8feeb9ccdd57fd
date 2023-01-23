@@ -16,6 +16,24 @@
       "message": "this is set by upstream, we shouldn\u0027t change it IMO. neither crosvm nor android are using rust 1.66 yet\n\nwe should probably change the `rustup update` step to specify the version to match this instead",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2d7f3c00_f9112b95",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-01-23T21:40:43Z",
+      "side": 1,
+      "message": "Ah good to know. \nUnfortunately the `install_deps` step fails to update/install `mdbook` (I\u0027m pretty sure that was the package...) because it requires 1.64+ rustc version. So `merge-setup.sh` failed without a change.\n\nIs this something everyone upstream should see with install-deps too?\n\nWhere do I see which version of rust crosvm and android are using now?\n\nI can run `merge-setup.sh ok now that my cloudtop doesn\u0027t need to reinstall `mdbook`, so I could just drop this CL now if we don\u0027t want to change anything here.",
+      "parentUuid": "6547b158_6215636b",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
