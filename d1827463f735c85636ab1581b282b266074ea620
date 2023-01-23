@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a22f48e3_3d5066bb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-01-23T22:23:40Z",
+      "side": 1,
+      "message": "Sorry I should have re-used the commit ID from the existing merge CL!",
+      "revId": "d1827463f735c85636ab1581b282b266074ea620",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
