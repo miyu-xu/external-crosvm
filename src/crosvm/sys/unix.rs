@@ -965,6 +965,7 @@ fn create_pcie_root_port(
     // TODO(b/228627457): clippy is incorrectly warning about this Vec, which needs to be a Vec so
     // we can push into it
     #[allow(clippy::ptr_arg)] gpe_notify_devs: &mut Vec<(u32, Arc<Mutex<dyn GpeNotify>>)>,
+    #[allow(clippy::ptr_arg)] pme_notify_devs: &mut Vec<(u8, Arc<Mutex<dyn PmeNotify>>)>,
 ) -> Result<()> {
     if host_pcie_rp.is_empty() {
         // user doesn't specify host pcie root port which link to this virtual pcie rp,
@@ -980,6 +981,7 @@ fn create_pcie_root_port(
                 continue;
             }
             let pcie_root_port = Arc::new(Mutex::new(PcieRootPort::new(i, false)));
+            pme_notify_devs.push((i, pcie_root_port.clone() as Arc<Mutex<dyn PmeNotify>>));
             let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
             control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
             let pci_bridge = Box::new(PciBridge::new(pcie_root_port.clone(), msi_device_tube));
@@ -992,6 +994,10 @@ fn create_pcie_root_port(
             return Err(anyhow!("no more addresses are available"));
         }
         let pcie_root_port = Arc::new(Mutex::new(PcieRootPort::new(hp_sec_bus, true)));
+        pme_notify_devs.push((
+            hp_sec_bus,
+            pcie_root_port.clone() as Arc<Mutex<dyn PmeNotify>>,
+        ));
         let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
         control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
         let pci_bridge = Box::new(PciBridge::new(pcie_root_port.clone(), msi_device_tube));
@@ -1707,6 +1713,8 @@ where
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let mut gpe_notify_devs: Vec<(u32, Arc<Mutex<dyn GpeNotify>>)> = Vec::new();
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let mut pme_notify_devs: Vec<(u8, Arc<Mutex<dyn PmeNotify>>)> = Vec::new();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         #[cfg(feature = "direct")]
         let rp_host = cfg.pcie_rp.clone();
@@ -1722,6 +1730,7 @@ where
             &mut hotplug_buses,
             &mut hp_endpoints_ranges,
             &mut gpe_notify_devs,
+            &mut pme_notify_devs,
         )?;
     }
 
@@ -1799,6 +1808,7 @@ where
         devices,
         irq_chip,
         &mut vcpu_ids,
+        cfg.dump_device_tree_blob.clone(),
         simple_jail(&cfg.jail_config, "serial_device")?,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         simple_jail(&cfg.jail_config, "block_device")?,
@@ -1817,6 +1827,9 @@ where
         if let Some(pm) = &linux.pm {
             while let Some((gpe, notify_dev)) = gpe_notify_devs.pop() {
                 pm.lock().register_gpe_notify_dev(gpe, notify_dev);
+            }
+            while let Some((bus, notify_dev)) = pme_notify_devs.pop() {
+                pm.lock().register_pme_notify_dev(bus, notify_dev);
             }
         }
 
@@ -2451,6 +2464,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     // Architecture-specific code must supply a vcpu_init element for each VCPU.
     assert_eq!(vcpus.len(), linux.vcpu_init.len());
 
+    let (to_vm_control, state_from_vcpu_channel) = mpsc::channel();
     for ((cpu_id, vcpu), vcpu_init) in vcpus.into_iter().enumerate().zip(linux.vcpu_init.drain(..))
     {
         let (to_vcpu_channel, from_main_channel) = mpsc::channel();
@@ -2523,6 +2537,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             guest_suspended_cvar.clone(),
             #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
             bus_lock_ratelimit_ctrl,
+            to_vm_control.clone(),
         )?;
         vcpu_handles.push((handle, to_vcpu_channel));
     }
@@ -2740,6 +2755,8 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                                 #[cfg(feature = "swap")]
                                                 swap_controller.as_ref(),
                                                 &device_ctrl_tube,
+                                                &state_from_vcpu_channel,
+                                                vcpu_handles.len(),
                                             );
 
                                             // For non s2idle guest suspension we are done
