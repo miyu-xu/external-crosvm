@@ -69,6 +69,30 @@
       },
       "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9b08d599_66faf29e",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-23T23:42:04Z",
+      "side": 1,
+      "message": "That\u0027s the exact usecase - to get to the same point we got to previously, if you need to restart a merge. I\u0027ve had to do this a few times, because I was rabbit-holing on an issue or because I learned of an easier way to do things. I also know Elie ran into this at one point because his CL got squashed or something like this, we might ask him, but I recall the way he found the exact point again was because of FETCH_HEAD there.\n\nOf course - if we got to a point somewhere, we should be able to restore our old CL. However, we can\u0027t always rely on having a working CL uploaded/backed up, so being able to restore to the same point, without introducing potential new issues from a sync is useful.\n\nIf you feel strongly about it, it\u0027s fine.",
+      "parentUuid": "45554246_e7ec982b",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 28
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
