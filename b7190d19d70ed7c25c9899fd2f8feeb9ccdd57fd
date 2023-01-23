@@ -34,6 +34,24 @@
       "parentUuid": "6547b158_6215636b",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "93883a73_c17e98e8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-23T21:51:08Z",
+      "side": 1,
+      "message": "\u003e Is this something everyone upstream should see with install-deps too?\n\ni would think so\n\n@denniskempin@google.com have you seen the mdbook issue before?\n\n\u003e Where do I see which version of rust crosvm and android are using now?\n\nfor crosvm, this is the file to check\n\nfor android, it is trickier. c2a has this logic for it https://cs.android.com/android/platform/superproject/+/master:development/scripts/cargo2android.py;l\u003d1195-1220;drc\u003dbe3f0d9d1116443698c2e8352b37f510a7718934. seems like you have to look at https://cs.android.com/android/platform/superproject/+/master:build/soong/rust/config/global.go;l\u003d27;drc\u003d60e7bbfd01578907170648b66e460b764052d1af. currently 1.65",
+      "parentUuid": "2d7f3c00_f9112b95",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
