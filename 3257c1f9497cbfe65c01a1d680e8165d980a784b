@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "45427c9e_004f78f7",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-23T23:12:13Z",
+      "side": 1,
+      "message": "of",
+      "range": {
+        "startLine": 7,
+        "startChar": 40,
+        "endLine": 7,
+        "endChar": 43
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e9514843_908f5584",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-23T23:12:13Z",
+      "side": 1,
+      "message": "The reason this is like it is is because if you start a merge, and then you want to restart it again, then we would like to be able to continue from this point, rather than syncing again. So, this flag is supposed to represent whether you want all new code OR to use the existing code.\n\nWe could split this into two flags (separate Android and upstream crosvm sync), but I do thing the \"touch nothing at all\" option is important. WDYT?",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 28
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
