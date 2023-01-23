@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6547b158_6215636b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-23T21:27:00Z",
+      "side": 1,
+      "message": "this is set by upstream, we shouldn\u0027t change it IMO. neither crosvm nor android are using rust 1.66 yet\n\nwe should probably change the `rustup update` step to specify the version to match this instead",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
