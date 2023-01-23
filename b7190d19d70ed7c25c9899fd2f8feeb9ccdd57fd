@@ -88,6 +88,24 @@
       "parentUuid": "93883a73_c17e98e8",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "774dff97_2c3bef64",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-01-23T21:57:15Z",
+      "side": 1,
+      "message": "nice :) Thanks!\n@fmayle@google.com Do we run install_deps in Android any other time outside of the merge?\n\nMaybe I can just drop this for this merge and we can pick up the upstream patch during next weeks merge.",
+      "parentUuid": "c320d43c_d0310a9a",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
