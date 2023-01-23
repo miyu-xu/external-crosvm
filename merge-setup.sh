@@ -47,9 +47,9 @@ rustup update
 if [ "$sync" = "sync" ]
 then
   repo sync -c -j96
-  git fetch --all --prune
 fi
 
+git fetch --all --prune
 source $ANDROID_BUILD_TOP/build/envsetup.sh
 m blueprint_tools cargo_embargo crosvm
 
