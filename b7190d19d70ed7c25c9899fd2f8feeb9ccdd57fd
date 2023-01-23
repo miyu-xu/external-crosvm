@@ -141,6 +141,24 @@
       "message": "We should use the upstream version right? I think someone raised this issue, but not sure how it got resolved.",
       "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "85a41784_0001b53d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-23T23:13:12Z",
+      "side": 1,
+      "message": "oops - needed to refresh, thanks.",
+      "parentUuid": "b6b71308_9800bcdd",
+      "revId": "b7190d19d70ed7c25c9899fd2f8feeb9ccdd57fd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
