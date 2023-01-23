@@ -45,6 +45,30 @@
       },
       "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "45554246_e7ec982b",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-01-23T23:32:42Z",
+      "side": 1,
+      "message": "Do you have a concrete use case for \"touch nothing at all\" in merge-setup.sh? I\u0027m having a hard time thinking of a case that I would want to do that.\n\n`merge-setup.sh -s`\n\u003csomething bad happens\u003e\n`repo abandon merge`\n`merge-setup.sh` # to get to the same point previously and avoid any new upstream CLs from Android OR crosvm?\n\nWhy wouldn\u0027t we want new upstream commits from crosvm?",
+      "parentUuid": "e9514843_908f5584",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 28
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
