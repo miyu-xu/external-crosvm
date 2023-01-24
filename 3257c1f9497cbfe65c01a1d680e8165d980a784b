@@ -93,6 +93,30 @@
       },
       "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cb5ff5c5_e3a4866a",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-01-24T00:00:18Z",
+      "side": 1,
+      "message": "I understand restarting the merge, but I don\u0027t know why it needs to be at the same commit of upstream crosvm. We aren\u0027t choosing specific commits when we start the merge, so it seems like it would be fine to take new commits when we restart.\n\nBut, I don\u0027t feel strongly about it. I can just sync every time I want to start a merge. It\u0027s probably better that way anyways.",
+      "parentUuid": "9b08d599_66faf29e",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 28
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
