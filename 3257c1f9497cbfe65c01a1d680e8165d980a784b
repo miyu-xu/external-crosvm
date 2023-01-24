@@ -117,6 +117,30 @@
       },
       "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "01759f28_534651ee",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-01-24T01:17:37Z",
+      "side": 1,
+      "message": "The reason is, imagine you are running into issue A, and in restarting the merge, you resync the codebase, and now you have to deal with issue A and issue B (recently introduced). So, we were experiencing a problem we weren\u0027t able to resolve the first try, and then now we have an even larger problem.\n\nWe could also be saying the opposite: we want to update crosvm all the time, so we might as well sync more. However, we already have a process for that.\n\nAnd yeah - it doesn\u0027t matter that much, but we did hit the issue B case before, and this would have saved some time. It may be the case we\u0027ll never hit it again, especially if we can increase the frequency and decrease the number of manual steps in this process.",
+      "parentUuid": "cb5ff5c5_e3a4866a",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 28
+      },
+      "revId": "3257c1f9497cbfe65c01a1d680e8165d980a784b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
