@@ -155,6 +155,7 @@ pub struct SerialParameters {
         default = "serial_parameters_default_debugcon_port"
     )]
     pub debugcon_port: u16,
+    pub queue_sz: Option<u16>,
 }
 
 impl SerialParameters {
@@ -223,6 +224,7 @@ impl SerialParameters {
                     evt,
                     input,
                     keep_rds,
+                    self.queue_sz,
                 );
             }
         };
@@ -234,6 +236,7 @@ impl SerialParameters {
             sync,
             self.out_timestamp,
             keep_rds.to_vec(),
+            self.queue_sz,
         ))
     }
 }

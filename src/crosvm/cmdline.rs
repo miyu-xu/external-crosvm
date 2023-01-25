@@ -1758,6 +1758,7 @@ pub struct RunCommand {
     ///        type=file
     ///     input=PATH - The path to the file to read from when not
     ///        stdin
+    ///     queue_sz=SZ - Queue size for virtio-console hardware
     ///     console - Use this serial device as the guest console.
     ///        Can only be given once. Will default to first
     ///        serial port if not provided.

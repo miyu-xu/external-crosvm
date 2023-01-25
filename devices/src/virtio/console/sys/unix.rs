@@ -24,12 +24,14 @@ impl SerialDevice for Console {
         _sync: Option<Box<dyn FileSync + Send>>,
         _out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
+        queue_sz: Option<u16>,
     ) -> Console {
         Console::new(
             protection_type,
             input.map(ConsoleInput::FromRead),
             out,
             keep_rds,
+            queue_sz,
         )
     }
 }

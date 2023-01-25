@@ -85,6 +85,7 @@ impl SerialDevice for Serial {
         sync: Option<Box<dyn FileSync + Send>>,
         out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
+        _queue_sz: Option<u16>,
     ) -> Serial {
         let system_params = SystemSerialParams {
             in_stream: None,

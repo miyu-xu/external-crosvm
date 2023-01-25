@@ -53,7 +53,7 @@ pub(crate) const QUEUE_SIZE: u16 = 256;
 
 // For now, just implement port 0 (receiveq and transmitq).
 // If VIRTIO_CONSOLE_F_MULTIPORT is implemented, more queues will be needed.
-const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
+pub(crate) const NUM_QUEUES: u16 = 2;
 
 #[sorted]
 #[derive(ThisError, Debug)]
@@ -367,6 +367,7 @@ pub struct Console {
     input: Option<ConsoleInput>,
     output: Option<Box<dyn io::Write + Send>>,
     keep_descriptors: Vec<Descriptor>,
+    queue_sz: Vec<u16>,
 }
 
 impl Console {
@@ -375,7 +376,11 @@ impl Console {
         input: Option<ConsoleInput>,
         output: Option<Box<dyn io::Write + Send>>,
         keep_rds: Vec<RawDescriptor>,
+        queue_sz: Option<u16>,
     ) -> Console {
+        let queue_sz = queue_sz.unwrap_or(QUEUE_SIZE);
+        let queue_sz_list = vec![queue_sz; NUM_QUEUES as usize];
+
         Console {
             base_features: base_features(protection_type),
             in_avail_evt: None,
@@ -383,6 +388,7 @@ impl Console {
             input,
             output,
             keep_descriptors: keep_rds.iter().map(|rd| Descriptor(*rd)).collect(),
+            queue_sz: queue_sz_list,
         }
     }
 }
@@ -405,7 +411,7 @@ impl VirtioDevice for Console {
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
-        QUEUE_SIZES
+        &self.queue_sz
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {

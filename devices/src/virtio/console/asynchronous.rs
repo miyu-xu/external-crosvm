@@ -29,7 +29,8 @@ use zerocopy::AsBytes;
 
 use super::handle_input;
 use super::process_transmit_queue;
-use super::QUEUE_SIZES;
+use super::NUM_QUEUES;
+use super::QUEUE_SIZE;
 use crate::serial_device::SerialInput;
 use crate::virtio;
 use crate::virtio::async_device::AsyncQueueState;
@@ -210,6 +211,7 @@ impl SerialDevice for ConsoleDevice {
         _sync: Option<Box<dyn FileSync + Send>>,
         _out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
+        _queue_sz: Option<u16>,
     ) -> ConsoleDevice {
         let avail_features = virtio::base_features(protection_type)
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
@@ -232,6 +234,7 @@ pub struct AsyncConsole {
     state: VirtioConsoleState,
     base_features: u64,
     keep_rds: Vec<RawDescriptor>,
+    queue_sz: Vec<u16>,
 }
 
 impl SerialDevice for AsyncConsole {
@@ -243,7 +246,11 @@ impl SerialDevice for AsyncConsole {
         sync: Option<Box<dyn FileSync + Send>>,
         out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
+        queue_sz: Option<u16>,
     ) -> AsyncConsole {
+        let queue_size = queue_sz.unwrap_or(QUEUE_SIZE);
+        let queue_sz_list = vec![queue_size; NUM_QUEUES as usize];
+
         AsyncConsole {
             state: VirtioConsoleState::Stopped(ConsoleDevice::new(
                 protection_type,
@@ -253,9 +260,11 @@ impl SerialDevice for AsyncConsole {
                 sync,
                 out_timestamp,
                 Default::default(),
+                queue_sz,
             )),
             base_features: base_features(protection_type),
             keep_rds,
+            queue_sz: queue_sz_list,
         }
     }
 }
@@ -274,7 +283,7 @@ impl VirtioDevice for AsyncConsole {
     }
 
     fn queue_max_sizes(&self) -> &[u16] {
-        QUEUE_SIZES
+        &self.queue_sz
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {

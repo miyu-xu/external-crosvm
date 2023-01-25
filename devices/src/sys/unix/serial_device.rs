@@ -64,6 +64,7 @@ pub trait SerialDevice {
         sync: Option<Box<dyn FileSync + Send>>,
         out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
+        queue_sz: Option<u16>,
     ) -> Self;
 }
 
@@ -144,6 +145,7 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
     evt: Event,
     input: Option<Box<dyn SerialInput>>,
     keep_rds: &mut Vec<RawDescriptor>,
+    queue_sz: Option<u16>,
 ) -> std::result::Result<T, Error> {
     match &param.path {
         Some(path) => {
@@ -222,6 +224,7 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
                 None,
                 false,
                 keep_rds.to_vec(),
+                queue_sz,
             ))
         }
         None => Err(Error::PathRequired),

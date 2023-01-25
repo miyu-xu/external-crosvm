@@ -37,6 +37,7 @@ impl SerialDevice for Debugcon {
         _sync: Option<Box<dyn FileSync + Send>>,
         _out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
+        _queue_sz: Option<u16>,
     ) -> Debugcon {
         Debugcon { out }
     }

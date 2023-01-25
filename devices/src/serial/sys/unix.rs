@@ -29,6 +29,7 @@ impl SerialDevice for Serial {
         _sync: Option<Box<dyn FileSync + Send>>,
         out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
+        _queue_sz: Option<u16>,
     ) -> Serial {
         Serial::new_common(interrupt_evt, input, out, out_timestamp)
     }

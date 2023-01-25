@@ -27,6 +27,7 @@ impl SerialDevice for Console {
         _sync: Option<Box<dyn FileSync + Send>>,
         _out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
+        _queue_sz: Option<u16>,
     ) -> Console {
         Console::new(protection_type, None, out, keep_rds)
     }
