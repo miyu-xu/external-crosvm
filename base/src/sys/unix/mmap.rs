@@ -304,6 +304,12 @@ impl MemoryMapping {
         // This is safe because we call madvise with a valid address and size.
         let _ = libc::madvise(addr, size, libc::MADV_DONTDUMP);
 
+        // Set MADV_DONTFORK so that crash_dump, which forks off of crosvm, will not see the guest
+        // memory mmap and try to access it.
+        // TODO: Not compatible with sandboxing. Need to put behind a flag or only do when
+        // sandboxing is disabled.
+        let _ = libc::madvise(addr, size, libc::MADV_DONTFORK);
+
         // This is safe because KSM's only userspace visible effects are timing
         // and memory consumption; it doesn't affect rust safety semantics.
         // KSM is also disabled by default, and this flag is only a hint.
