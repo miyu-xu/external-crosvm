@@ -22,6 +22,30 @@
       },
       "revId": "f038a462a2edbbbbdebf00031a2ddd716b04906c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "84872401_51c27b55",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-25T19:05:15Z",
+      "side": 1,
+      "message": "Are you still thinking of dropping this or should we review it?",
+      "parentUuid": "de92675b_c4003d7c",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 11,
+        "endChar": 23
+      },
+      "revId": "f038a462a2edbbbbdebf00031a2ddd716b04906c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
