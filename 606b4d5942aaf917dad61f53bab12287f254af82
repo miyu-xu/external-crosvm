@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a381e962_53f0accc",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 80,
+      "author": {
+        "id": 1988005
+      },
+      "writtenOn": "2023-01-26T19:15:06Z",
+      "side": 1,
+      "message": "Unnamed tuple is not very readable. Make this a struct?",
+      "range": {
+        "startLine": 80,
+        "startChar": 75,
+        "endLine": 80,
+        "endChar": 93
+      },
+      "revId": "606b4d5942aaf917dad61f53bab12287f254af82",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
