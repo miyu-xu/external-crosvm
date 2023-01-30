@@ -59,6 +59,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "96e1b4c1_5607c126",
+        "filename": "Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 226,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-01-30T09:01:15Z",
+      "side": 1,
+      "message": "s/gz/geniezone/g",
+      "parentUuid": "3e01529c_93f50b93",
+      "range": {
+        "startLine": 226,
+        "startChar": 0,
+        "endLine": 226,
+        "endChar": 2
+      },
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "915d0751_fbad60ff",
@@ -120,6 +144,30 @@
       "side": 1,
       "message": "Yeah, that is good",
       "parentUuid": "5f04f95a_ede6ee6f",
+      "range": {
+        "startLine": 1211,
+        "startChar": 8,
+        "endLine": 1211,
+        "endChar": 10
+      },
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f8e2dc3_af0ed5f8",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1211,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-01-30T09:01:15Z",
+      "side": 1,
+      "message": "s/gz_device_path/geniezone_device_path/",
+      "parentUuid": "6eff1489_4324f15e",
       "range": {
         "startLine": 1211,
         "startChar": 8,

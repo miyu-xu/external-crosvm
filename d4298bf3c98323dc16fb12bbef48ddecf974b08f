@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "98a752bd_aca928d0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-01-30T09:01:15Z",
+      "side": 1,
+      "message": "We replace most of the usage of gz with geniezone, not just here but the entire patch related, in variables naming convention in order to deliver clear semantics on the operations of MTK GenieZone hypervisor from Crosvm aspect of view.",
+      "revId": "d4298bf3c98323dc16fb12bbef48ddecf974b08f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
