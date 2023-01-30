@@ -46,6 +46,30 @@
       },
       "revId": "f15dc93492b4d3933b6705888d2f051c4647add1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ef7fc5f2_6a3674d1",
+        "filename": "hypervisor/src/kvm/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 695,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-30T23:40:59Z",
+      "side": 1,
+      "message": "do you mean this whole CL should be removed or just this argument?",
+      "parentUuid": "b43b61bc_151e73dc",
+      "range": {
+        "startLine": 695,
+        "startChar": 26,
+        "endLine": 695,
+        "endChar": 37
+      },
+      "revId": "f15dc93492b4d3933b6705888d2f051c4647add1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
