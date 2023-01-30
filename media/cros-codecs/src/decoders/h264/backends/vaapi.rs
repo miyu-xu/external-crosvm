@@ -18,40 +18,39 @@ use libva::PictureNew;
 use libva::PictureParameter;
 use libva::PictureParameterBufferH264;
 use libva::SliceParameter;
-use libva::UsageHint;
 use log::debug;
 
-use crate::decoders::h264::backends::BlockingMode;
 use crate::decoders::h264::backends::ContainedPicture;
-use crate::decoders::h264::backends::DecodedHandle;
 use crate::decoders::h264::backends::Result as StatelessBackendResult;
 use crate::decoders::h264::backends::StatelessDecoderBackend;
 use crate::decoders::h264::decoder::Decoder;
-use crate::decoders::h264::decoder::Profile;
 use crate::decoders::h264::dpb::Dpb;
+use crate::decoders::h264::parser::Level;
 use crate::decoders::h264::parser::Pps;
+use crate::decoders::h264::parser::Profile;
 use crate::decoders::h264::parser::Slice;
 use crate::decoders::h264::parser::Sps;
 use crate::decoders::h264::picture::Field;
 use crate::decoders::h264::picture::H264Picture;
 use crate::decoders::h264::picture::Reference;
+use crate::decoders::BlockingMode;
+use crate::decoders::DecodedHandle;
 use crate::decoders::Error as DecoderError;
 use crate::decoders::Result as DecoderResult;
 use crate::decoders::StatelessBackendError;
 use crate::decoders::VideoDecoderBackend;
 use crate::utils;
 use crate::utils::vaapi::DecodedHandle as VADecodedHandle;
-use crate::utils::vaapi::FormatMap;
 use crate::utils::vaapi::GenericBackendHandle;
 use crate::utils::vaapi::NegotiationStatus;
 use crate::utils::vaapi::PendingJob;
+use crate::utils::vaapi::StreamInfo;
 use crate::utils::vaapi::StreamMetadataState;
-use crate::utils::vaapi::SurfacePoolHandle;
 use crate::DecodedFormat;
 use crate::Resolution;
 
 /// Resolves to the type used as Handle by the backend.
-type AssociatedHandle = <Backend as StatelessDecoderBackend>::Handle;
+type AssociatedHandle = <Backend as VideoDecoderBackend>::Handle;
 
 #[cfg(test)]
 #[derive(Default)]
@@ -78,6 +77,58 @@ impl TestParams {
     }
 }
 
+impl StreamInfo for &Sps {
+    fn va_profile(&self) -> anyhow::Result<i32> {
+        let profile_idc = self.profile_idc();
+        let profile = Profile::n(profile_idc)
+            .with_context(|| format!("Invalid profile_idc {:?}", profile_idc))?;
+
+        match profile {
+            Profile::Baseline => {
+                if self.constraint_set0_flag() {
+                    Ok(libva::VAProfile::VAProfileH264ConstrainedBaseline)
+                } else {
+                    Err(anyhow!(
+                        "Unsupported stream: profile_idc=66, but constraint_set0_flag is unset"
+                    ))
+                }
+            }
+            Profile::Main => Ok(libva::VAProfile::VAProfileH264Main),
+            Profile::High => Ok(libva::VAProfile::VAProfileH264High),
+        }
+    }
+
+    fn rt_format(&self) -> anyhow::Result<u32> {
+        let bit_depth_luma = self.bit_depth_chroma_minus8() + 8;
+        let chroma_format_idc = self.chroma_format_idc();
+
+        match bit_depth_luma {
+            8 => match chroma_format_idc {
+                0 | 1 => Ok(libva::constants::VA_RT_FORMAT_YUV420),
+                _ => Err(anyhow!(
+                    "Unsupported chroma_format_idc: {}",
+                    chroma_format_idc
+                )),
+            },
+            _ => Err(anyhow!("Unsupported bit depth: {}", bit_depth_luma)),
+        }
+    }
+
+    fn min_num_surfaces(&self) -> usize {
+        self.max_dpb_frames().unwrap() + 4
+    }
+
+    fn coded_size(&self) -> (u32, u32) {
+        (self.width(), self.height())
+    }
+
+    fn visible_rect(&self) -> ((u32, u32), (u32, u32)) {
+        let rect = self.visible_rectangle();
+
+        ((rect.min.x, rect.min.y), (rect.max.x, rect.max.y))
+    }
+}
+
 /// H.264 stateless decoder backend for VA-API.
 struct Backend {
     /// The metadata state. Updated whenever the decoder reads new data from the stream.
@@ -86,10 +137,8 @@ struct Backend {
     current_picture: Option<VaPicture<PictureNew>>,
     /// The FIFO for all pending pictures, in the order they were submitted.
     pending_jobs: VecDeque<PendingJob<H264Picture<GenericBackendHandle>>>,
-    /// The number of allocated surfaces.
-    num_allocated_surfaces: usize,
-    /// The negotiation status. First member is the Sps, second is the size of the DPB.
-    negotiation_status: NegotiationStatus<Box<(Sps, usize)>>,
+    /// The negotiation status.
+    negotiation_status: NegotiationStatus<Box<Sps>>,
 
     #[cfg(test)]
     /// Test params. Saves the metadata sent to VA-API for the purposes of
@@ -104,135 +153,11 @@ impl Backend {
             metadata_state: StreamMetadataState::Unparsed { display },
             current_picture: Default::default(),
             pending_jobs: Default::default(),
-            num_allocated_surfaces: Default::default(),
             negotiation_status: Default::default(),
 
             #[cfg(test)]
             test_params: Default::default(),
         })
-    }
-
-    /// Initializes or reinitializes the codec state.
-    fn open(
-        &mut self,
-        sps: &Sps,
-        max_dpb_frames: usize,
-        format_map: Option<&FormatMap>,
-    ) -> Result<()> {
-        let display = self.metadata_state.display();
-
-        let profile_idc = sps.profile_idc();
-        let profile = Profile::n(profile_idc)
-            .with_context(|| format!("Invalid profile_idc {:?}", profile_idc))?;
-        let va_profile = Backend::get_profile(profile, sps.constraint_set0_flag())?;
-
-        let rt_format =
-            Backend::get_rt_fmt(sps.bit_depth_chroma_minus8() + 8, sps.chroma_format_idc())?;
-
-        let frame_w = sps.width();
-        let frame_h = sps.height();
-
-        let attrs = vec![libva::VAConfigAttrib {
-            type_: libva::VAConfigAttribType::VAConfigAttribRTFormat,
-            value: rt_format,
-        }];
-
-        let config =
-            display.create_config(attrs, va_profile, libva::VAEntrypoint::VAEntrypointVLD)?;
-
-        let format_map = if let Some(format_map) = format_map {
-            format_map
-        } else {
-            // Pick the first one that fits
-            utils::vaapi::FORMAT_MAP
-                .iter()
-                .find(|&map| map.rt_format == rt_format)
-                .ok_or(anyhow!("Unsupported format {}", rt_format))?
-        };
-
-        let map_format = display
-            .query_image_formats()?
-            .iter()
-            .find(|f| f.fourcc == format_map.va_fourcc)
-            .cloned()
-            .unwrap();
-
-        let num_surfaces = max_dpb_frames + 4;
-
-        let surfaces = display.create_surfaces(
-            rt_format,
-            Some(map_format.fourcc),
-            frame_w,
-            frame_h,
-            Some(UsageHint::USAGE_HINT_DECODER),
-            num_surfaces as u32,
-        )?;
-        self.num_allocated_surfaces = num_surfaces;
-
-        let context = display.create_context(
-            &config,
-            i32::try_from(frame_w)?,
-            i32::try_from(frame_h)?,
-            Some(&surfaces),
-            true,
-        )?;
-
-        let coded_resolution = Resolution {
-            width: frame_w,
-            height: frame_h,
-        };
-
-        let visible_rect = sps.visible_rectangle();
-
-        let display_resolution = Resolution {
-            width: visible_rect.max.x - visible_rect.min.x,
-            height: visible_rect.max.y - visible_rect.min.y,
-        };
-
-        let surface_pool = SurfacePoolHandle::new(surfaces, coded_resolution);
-
-        self.metadata_state = StreamMetadataState::Parsed {
-            context,
-            config,
-            surface_pool,
-            coded_resolution,
-            display_resolution,
-            map_format: Rc::new(map_format),
-            rt_format,
-            profile: va_profile,
-        };
-
-        Ok(())
-    }
-
-    fn get_profile(profile: Profile, constraint_set0_flag: bool) -> Result<libva::VAProfile::Type> {
-        match profile {
-            Profile::Baseline => {
-                if constraint_set0_flag {
-                    Ok(libva::VAProfile::VAProfileH264ConstrainedBaseline)
-                } else {
-                    Err(anyhow!(
-                        "Unsupported stream: profile_idc=66, but constraint_set0_flag is unset"
-                    ))
-                }
-            }
-            Profile::Main => Ok(libva::VAProfile::VAProfileH264Main),
-            Profile::High => Ok(libva::VAProfile::VAProfileH264High),
-        }
-    }
-
-    fn get_rt_fmt(bit_depth_luma: u8, chroma_format_idc: u8) -> Result<u32> {
-        match bit_depth_luma {
-            8 => match chroma_format_idc {
-                0 | 1 => Ok(libva::constants::VA_RT_FORMAT_YUV420),
-                _ => Err(anyhow!(
-                    "Unsupported chroma_format_idc: {}",
-                    chroma_format_idc
-                )),
-            },
-
-            _ => Err(anyhow!("Unsupported bit depth: {}", bit_depth_luma)),
-        }
     }
 
     /// Gets the VASurfaceID for the given `picture`.
@@ -397,7 +322,7 @@ impl Backend {
             sps.frame_mbs_only_flag() as u32,
             sps.mb_adaptive_frame_field_flag() as u32,
             sps.direct_8x8_inference_flag() as u32,
-            (sps.level_idc() > 31) as u32, /* see A.3.3.2 */
+            (sps.level_idc() > Level::L3_1) as u32, /* see A.3.3.2 */
             sps.log2_max_frame_num_minus4() as u32,
             sps.pic_order_cnt_type() as u32,
             sps.log2_max_pic_order_cnt_lsb_minus4() as u32,
@@ -609,8 +534,10 @@ impl Backend {
 }
 
 impl VideoDecoderBackend for Backend {
+    type Handle = VADecodedHandle<H264Picture<GenericBackendHandle>>;
+
     fn num_resources_total(&self) -> usize {
-        self.num_allocated_surfaces
+        self.metadata_state.min_num_surfaces().unwrap_or(0)
     }
 
     fn num_resources_left(&self) -> usize {
@@ -626,8 +553,8 @@ impl VideoDecoderBackend for Backend {
     }
 
     fn try_format(&mut self, format: DecodedFormat) -> DecoderResult<()> {
-        let (sps, dpb_size) = match &self.negotiation_status {
-            NegotiationStatus::Possible(b) => (&b.0, b.1),
+        let sps = match &self.negotiation_status {
+            NegotiationStatus::Possible(b) => b,
             _ => {
                 return Err(DecoderError::StatelessBackendError(
                     StatelessBackendError::NegotiationFailed(anyhow!(
@@ -647,7 +574,7 @@ impl VideoDecoderBackend for Backend {
                 .unwrap();
 
             let sps = sps.clone();
-            self.open(&sps, dpb_size, Some(map_format))?;
+            self.metadata_state.open(sps.as_ref(), Some(map_format))?;
 
             Ok(())
         } else {
@@ -667,14 +594,84 @@ impl VideoDecoderBackend for Backend {
     fn display_resolution(&self) -> Option<Resolution> {
         self.metadata_state.display_resolution().ok()
     }
+
+    fn poll(&mut self, blocking_mode: BlockingMode) -> DecoderResult<VecDeque<Self::Handle>> {
+        let mut completed = VecDeque::new();
+        let candidates = self.pending_jobs.drain(..).collect::<VecDeque<_>>();
+
+        for job in candidates {
+            if matches!(blocking_mode, BlockingMode::NonBlocking) {
+                let status = job.va_picture.query_status()?;
+                if status != libva::VASurfaceStatus::VASurfaceReady {
+                    self.pending_jobs.push_back(job);
+                    continue;
+                }
+            }
+
+            let current_picture = job.va_picture.sync()?;
+
+            let map_format = self.metadata_state.map_format()?;
+
+            let backend_handle = GenericBackendHandle::new_ready(
+                current_picture,
+                Rc::clone(map_format),
+                self.metadata_state.display_resolution()?,
+            );
+
+            job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
+
+            completed.push_back(job.codec_picture);
+        }
+
+        let completed = completed.into_iter().map(|picture| {
+            self.build_va_decoded_handle(&picture)
+                .map_err(|e| DecoderError::from(StatelessBackendError::Other(anyhow!(e))))
+        });
+
+        completed.collect::<Result<VecDeque<_>, _>>()
+    }
+
+    fn handle_is_ready(&self, handle: &Self::Handle) -> bool {
+        match &handle.picture().backend_handle {
+            Some(backend_handle) => backend_handle.is_ready(),
+            None => true,
+        }
+    }
+
+    fn block_on_handle(&mut self, handle: &Self::Handle) -> StatelessBackendResult<()> {
+        for i in 0..self.pending_jobs.len() {
+            // Remove from the queue in order.
+            let job = &self.pending_jobs[i];
+
+            if H264Picture::same(&job.codec_picture, handle.picture_container()) {
+                let job = self.pending_jobs.remove(i).unwrap();
+
+                let current_picture = job.va_picture.sync()?;
+
+                let map_format = self.metadata_state.map_format()?;
+
+                let backend_handle = GenericBackendHandle::new_ready(
+                    current_picture,
+                    Rc::clone(map_format),
+                    self.metadata_state.display_resolution()?,
+                );
+
+                job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
+
+                return Ok(());
+            }
+        }
+
+        Err(StatelessBackendError::Other(anyhow!(
+            "Asked to block on a pending job that doesn't exist"
+        )))
+    }
 }
 
 impl StatelessDecoderBackend for Backend {
-    type Handle = VADecodedHandle<H264Picture<GenericBackendHandle>>;
-
-    fn new_sequence(&mut self, sps: &Sps, dpb_size: usize) -> StatelessBackendResult<()> {
-        self.open(sps, dpb_size, None)?;
-        self.negotiation_status = NegotiationStatus::Possible(Box::new((sps.clone(), dpb_size)));
+    fn new_sequence(&mut self, sps: &Sps) -> StatelessBackendResult<()> {
+        self.metadata_state.open(sps, None)?;
+        self.negotiation_status = NegotiationStatus::Possible(Box::new(sps.clone()));
 
         Ok(())
     }
@@ -802,45 +799,6 @@ impl StatelessDecoderBackend for Backend {
             .map_err(|e| StatelessBackendError::Other(anyhow!(e)))
     }
 
-    fn poll(
-        &mut self,
-        blocking_mode: BlockingMode,
-    ) -> StatelessBackendResult<VecDeque<Self::Handle>> {
-        let mut completed = VecDeque::new();
-        let candidates = self.pending_jobs.drain(..).collect::<VecDeque<_>>();
-
-        for job in candidates {
-            if matches!(blocking_mode, BlockingMode::NonBlocking) {
-                let status = job.va_picture.query_status()?;
-                if status != libva::VASurfaceStatus::VASurfaceReady {
-                    self.pending_jobs.push_back(job);
-                    continue;
-                }
-            }
-
-            let current_picture = job.va_picture.sync()?;
-
-            let map_format = self.metadata_state.map_format()?;
-
-            let backend_handle = GenericBackendHandle::new_ready(
-                current_picture,
-                Rc::clone(map_format),
-                self.metadata_state.display_resolution()?,
-            );
-
-            job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
-
-            completed.push_back(job.codec_picture);
-        }
-
-        let completed = completed.into_iter().map(|picture| {
-            self.build_va_decoded_handle(&picture)
-                .map_err(|e| StatelessBackendError::Other(anyhow!(e)))
-        });
-
-        completed.collect::<Result<VecDeque<_>, StatelessBackendError>>()
-    }
-
     fn new_handle(
         &mut self,
         picture: ContainedPicture<GenericBackendHandle>,
@@ -906,42 +864,6 @@ impl StatelessDecoderBackend for Backend {
         Ok(())
     }
 
-    fn handle_is_ready(&self, handle: &Self::Handle) -> bool {
-        match &handle.picture().backend_handle {
-            Some(backend_handle) => backend_handle.is_ready(),
-            None => true,
-        }
-    }
-
-    fn block_on_handle(&mut self, handle: &Self::Handle) -> StatelessBackendResult<()> {
-        for i in 0..self.pending_jobs.len() {
-            // Remove from the queue in order.
-            let job = &self.pending_jobs[i];
-
-            if H264Picture::same(&job.codec_picture, handle.picture_container()) {
-                let job = self.pending_jobs.remove(i).unwrap();
-
-                let current_picture = job.va_picture.sync()?;
-
-                let map_format = self.metadata_state.map_format()?;
-
-                let backend_handle = GenericBackendHandle::new_ready(
-                    current_picture,
-                    Rc::clone(map_format),
-                    self.metadata_state.display_resolution()?,
-                );
-
-                job.codec_picture.borrow_mut().backend_handle = Some(backend_handle);
-
-                return Ok(());
-            }
-        }
-
-        Err(StatelessBackendError::Other(anyhow!(
-            "Asked to block on a pending job that doesn't exist"
-        )))
-    }
-
     #[cfg(test)]
     fn get_test_params(&self) -> &dyn std::any::Any {
         &self.test_params
@@ -963,12 +885,12 @@ mod tests {
 
     use crate::decoders::h264::backends::vaapi::AssociatedHandle;
     use crate::decoders::h264::backends::vaapi::TestParams;
-    use crate::decoders::h264::backends::BlockingMode;
-    use crate::decoders::h264::backends::DecodedHandle;
     use crate::decoders::h264::backends::StatelessDecoderBackend;
     use crate::decoders::h264::decoder::tests::process_ready_frames;
     use crate::decoders::h264::decoder::tests::run_decoding_loop;
     use crate::decoders::h264::decoder::Decoder;
+    use crate::decoders::BlockingMode;
+    use crate::decoders::DecodedHandle;
     use crate::decoders::DynPicture;
 
     fn get_test_params(
@@ -1137,84 +1059,6 @@ mod tests {
         /// and the produced CRCs match their expected values.
         const TEST_STREAM: &[u8] = include_bytes!("../test_data/16x16-I-P-B-P-high.h264");
         const STREAM_CRCS: &str = include_str!("../test_data/16x16-I-P-B-P-high.h264.crc");
-        let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
-
-        for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<HashSet<_>>();
-            let mut frame_num = 0;
-            let display = Display::open().unwrap();
-            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
-
-            run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
-                process_ready_frames(decoder, &mut |decoder, handle| {
-                    // Contains the VA-API params used to decode the picture.
-                    // Useful if we want to write assertions against any
-                    // particular value used therein.
-                    let _params = get_test_params(decoder.backend());
-
-                    process_handle(handle, false, Some(&mut expected_crcs), frame_num);
-
-                    frame_num += 1;
-                });
-            });
-
-            assert!(
-                expected_crcs.is_empty(),
-                "Some CRCs were not produced by the decoder: {:?}",
-                expected_crcs
-            );
-        }
-    }
-
-    #[test]
-    // Ignore this test by default as it requires libva-compatible hardware.
-    #[ignore]
-    fn test_interlaced_kodi_1080i() {
-        /// This test is the same as
-        /// h264::decoders::tests::test_interlaced_kodi_1080i, but with an
-        /// actual backend to test whether the backend specific logic works and
-        /// the produced CRCs match their expected values.
-        const TEST_STREAM: &[u8] = include_bytes!("../test_data/test-kodi-1080i-25-H264.h264");
-        const STREAM_CRCS: &str = include_str!("../test_data/test-kodi-1080i-25-H264.h264.crc");
-        let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
-
-        for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<HashSet<_>>();
-            let mut frame_num = 0;
-            let display = Display::open().unwrap();
-            let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
-
-            run_decoding_loop(&mut decoder, TEST_STREAM, |decoder| {
-                process_ready_frames(decoder, &mut |decoder, handle| {
-                    // Contains the VA-API params used to decode the picture.
-                    // Useful if we want to write assertions against any
-                    // particular value used therein.
-                    let _params = get_test_params(decoder.backend());
-
-                    process_handle(handle, false, Some(&mut expected_crcs), frame_num);
-
-                    frame_num += 1;
-                });
-            });
-
-            assert!(
-                expected_crcs.is_empty(),
-                "Some CRCs were not produced by the decoder: {:?}",
-                expected_crcs
-            );
-        }
-    }
-
-    #[test]
-    // Ignore this test by default as it requires libva-compatible hardware.
-    #[ignore]
-    fn test_kodi_1080p() {
-        /// This test is the same as
-        /// h264::decoders::tests::test_interlaced_kodi_1080p, but with an
-        /// actual backend to test whether the backend specific logic works and
-        /// the produced CRCs match their expected values.
-        const TEST_STREAM: &[u8] = include_bytes!("../test_data/FPS_test_1080p24_l4_1.h264");
-        const STREAM_CRCS: &str = include_str!("../test_data/FPS_test_1080p24_l4_1.h264.crc");
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {

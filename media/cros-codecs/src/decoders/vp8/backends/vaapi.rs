@@ -17,13 +17,10 @@ use libva::IQMatrix;
 use libva::IQMatrixBufferVP8;
 use libva::Picture as VaPicture;
 use libva::ProbabilityDataBufferVP8;
-use libva::UsageHint;
 
 use crate::decoders::h264::backends::Result as StatelessBackendResult;
 use crate::decoders::vp8::backends::AsBackendHandle;
-use crate::decoders::vp8::backends::BlockingMode;
 use crate::decoders::vp8::backends::ContainedPicture;
-use crate::decoders::vp8::backends::DecodedHandle;
 use crate::decoders::vp8::backends::StatelessDecoderBackend;
 use crate::decoders::vp8::backends::Vp8Picture;
 use crate::decoders::vp8::decoder::Decoder;
@@ -31,23 +28,24 @@ use crate::decoders::vp8::parser::Header;
 use crate::decoders::vp8::parser::MbLfAdjustments;
 use crate::decoders::vp8::parser::Parser;
 use crate::decoders::vp8::parser::Segmentation;
+use crate::decoders::BlockingMode;
+use crate::decoders::DecodedHandle;
 use crate::decoders::Error as DecoderError;
 use crate::decoders::Result as DecoderResult;
 use crate::decoders::StatelessBackendError;
 use crate::decoders::VideoDecoderBackend;
 use crate::utils;
 use crate::utils::vaapi::DecodedHandle as VADecodedHandle;
-use crate::utils::vaapi::FormatMap;
 use crate::utils::vaapi::GenericBackendHandle;
 use crate::utils::vaapi::NegotiationStatus;
 use crate::utils::vaapi::PendingJob;
+use crate::utils::vaapi::StreamInfo;
 use crate::utils::vaapi::StreamMetadataState;
-use crate::utils::vaapi::SurfacePoolHandle;
 use crate::DecodedFormat;
 use crate::Resolution;
 
 /// Resolves to the type used as Handle by the backend.
-type AssociatedHandle = <Backend as StatelessDecoderBackend>::Handle;
+type AssociatedHandle = <Backend as VideoDecoderBackend>::Handle;
 
 /// The number of surfaces to allocate for this codec. Same as GStreamer's vavp8dec.
 const NUM_SURFACES: usize = 7;
@@ -61,13 +59,33 @@ struct TestParams {
     probability_table: BufferType,
 }
 
+impl StreamInfo for &Header {
+    fn va_profile(&self) -> anyhow::Result<i32> {
+        Ok(libva::VAProfile::VAProfileVP8Version0_3)
+    }
+
+    fn rt_format(&self) -> anyhow::Result<u32> {
+        Ok(libva::constants::VA_RT_FORMAT_YUV420)
+    }
+
+    fn min_num_surfaces(&self) -> usize {
+        NUM_SURFACES
+    }
+
+    fn coded_size(&self) -> (u32, u32) {
+        (self.width() as u32, self.height() as u32)
+    }
+
+    fn visible_rect(&self) -> ((u32, u32), (u32, u32)) {
+        ((0, 0), self.coded_size())
+    }
+}
+
 struct Backend {
     /// The metadata state. Updated whenever the decoder reads new data from the stream.
     metadata_state: StreamMetadataState,
     /// The FIFO for all pending pictures, in the order they were submitted.
     pending_jobs: VecDeque<PendingJob<Vp8Picture<GenericBackendHandle>>>,
-    /// The number of allocated surfaces.
-    num_allocated_surfaces: usize,
     /// The negotiation status
     negotiation_status: NegotiationStatus<Box<Header>>,
 
@@ -83,7 +101,6 @@ impl Backend {
         Ok(Self {
             metadata_state: StreamMetadataState::Unparsed { display },
             pending_jobs: Default::default(),
-            num_allocated_surfaces: Default::default(),
             negotiation_status: Default::default(),
 
             #[cfg(test)]
@@ -100,82 +117,6 @@ impl Backend {
         } else {
             x
         }
-    }
-
-    /// Initialize the codec state by reading some metadata from the current
-    /// frame.
-    fn open(&mut self, frame_hdr: &Header, format_map: Option<&FormatMap>) -> Result<()> {
-        let display = self.metadata_state.display();
-
-        let va_profile = libva::VAProfile::VAProfileVP8Version0_3;
-        let rt_format = libva::constants::VA_RT_FORMAT_YUV420;
-
-        let frame_w = u32::from(frame_hdr.width());
-        let frame_h = u32::from(frame_hdr.height());
-
-        let attrs = vec![libva::VAConfigAttrib {
-            type_: libva::VAConfigAttribType::VAConfigAttribRTFormat,
-            value: rt_format,
-        }];
-
-        let config =
-            display.create_config(attrs, va_profile, libva::VAEntrypoint::VAEntrypointVLD)?;
-
-        let format_map = if let Some(format_map) = format_map {
-            format_map
-        } else {
-            // Pick the first one that fits
-            utils::vaapi::FORMAT_MAP
-                .iter()
-                .find(|&map| map.rt_format == rt_format)
-                .ok_or(anyhow!("Unsupported format {}", rt_format))?
-        };
-
-        let map_format = display
-            .query_image_formats()?
-            .iter()
-            .find(|f| f.fourcc == format_map.va_fourcc)
-            .cloned()
-            .unwrap();
-
-        let surfaces = display.create_surfaces(
-            rt_format,
-            Some(map_format.fourcc),
-            frame_w,
-            frame_h,
-            Some(UsageHint::USAGE_HINT_DECODER),
-            NUM_SURFACES as u32,
-        )?;
-
-        self.num_allocated_surfaces = NUM_SURFACES;
-
-        let context = display.create_context(
-            &config,
-            i32::try_from(frame_w)?,
-            i32::try_from(frame_h)?,
-            Some(&surfaces),
-            true,
-        )?;
-
-        let coded_resolution = Resolution {
-            width: frame_w,
-            height: frame_h,
-        };
-
-        let surface_pool = SurfacePoolHandle::new(surfaces, coded_resolution);
-
-        self.metadata_state = StreamMetadataState::Parsed {
-            context,
-            config,
-            surface_pool,
-            coded_resolution,
-            display_resolution: coded_resolution, // TODO(dwlsalmeida)
-            map_format: Rc::new(map_format),
-            rt_format,
-            profile: va_profile,
-        };
-
-        Ok(())
     }
 
     /// Gets the VASurfaceID for the given `picture`.
@@ -371,10 +312,8 @@ impl Backend {
 }
 
 impl StatelessDecoderBackend for Backend {
-    type Handle = VADecodedHandle<Vp8Picture<GenericBackendHandle>>;
-
     fn new_sequence(&mut self, header: &Header) -> StatelessBackendResult<()> {
-        self.open(header, None)?;
+        self.metadata_state.open(header, None)?;
         self.negotiation_status = NegotiationStatus::Possible(Box::new(header.clone()));
 
         Ok(())
@@ -487,10 +426,75 @@ impl StatelessDecoderBackend for Backend {
             .map_err(|e| StatelessBackendError::Other(anyhow!(e)))
     }
 
-    fn poll(
-        &mut self,
-        blocking_mode: super::BlockingMode,
-    ) -> StatelessBackendResult<VecDeque<Self::Handle>> {
+    #[cfg(test)]
+    fn get_test_params(&self) -> &dyn Any {
+        &self.test_params
+    }
+}
+
+impl VideoDecoderBackend for Backend {
+    type Handle = VADecodedHandle<Vp8Picture<GenericBackendHandle>>;
+
+    fn coded_resolution(&self) -> Option<Resolution> {
+        self.metadata_state.coded_resolution().ok()
+    }
+
+    fn display_resolution(&self) -> Option<Resolution> {
+        self.metadata_state.display_resolution().ok()
+    }
+
+    fn num_resources_total(&self) -> usize {
+        self.metadata_state.min_num_surfaces().unwrap_or(0)
+    }
+
+    fn num_resources_left(&self) -> usize {
+        match self.metadata_state.surface_pool() {
+            Ok(pool) => pool.num_surfaces_left(),
+            Err(_) => 0,
+        }
+    }
+
+    fn format(&self) -> Option<crate::DecodedFormat> {
+        let map_format = self.metadata_state.map_format().ok()?;
+        DecodedFormat::try_from(map_format.as_ref()).ok()
+    }
+
+    fn try_format(&mut self, format: crate::DecodedFormat) -> DecoderResult<()> {
+        let header = match &self.negotiation_status {
+            NegotiationStatus::Possible(header) => header.clone(),
+            _ => {
+                return Err(DecoderError::StatelessBackendError(
+                    StatelessBackendError::NegotiationFailed(anyhow!(
+                        "Negotiation is not possible at this stage {:?}",
+                        self.negotiation_status
+                    )),
+                ))
+            }
+        };
+
+        let supported_formats_for_stream = self.metadata_state.supported_formats_for_stream()?;
+
+        if supported_formats_for_stream.contains(&format) {
+            let map_format = utils::vaapi::FORMAT_MAP
+                .iter()
+                .find(|&map| map.decoded_format == format)
+                .unwrap();
+
+            self.metadata_state
+                .open(header.as_ref(), Some(map_format))?;
+
+            Ok(())
+        } else {
+            Err(DecoderError::StatelessBackendError(
+                StatelessBackendError::NegotiationFailed(anyhow!(
+                    "Format {:?} is unsupported.",
+                    format
+                )),
+            ))
+        }
+    }
+
+    fn poll(&mut self, blocking_mode: BlockingMode) -> DecoderResult<VecDeque<Self::Handle>> {
         let mut completed = VecDeque::new();
         let candidates = self.pending_jobs.drain(..).collect::<VecDeque<_>>();
 
@@ -520,10 +524,10 @@ impl StatelessDecoderBackend for Backend {
 
         let completed = completed.into_iter().map(|picture| {
             self.build_va_decoded_handle(&picture)
-                .map_err(|e| StatelessBackendError::Other(anyhow!(e)))
+                .map_err(|e| DecoderError::from(StatelessBackendError::Other(anyhow!(e))))
         });
 
-        completed.collect::<Result<VecDeque<_>, StatelessBackendError>>()
+        completed.collect::<Result<VecDeque<_>, _>>()
     }
 
     fn handle_is_ready(&self, handle: &Self::Handle) -> bool {
@@ -561,71 +565,6 @@ impl StatelessDecoderBackend for Backend {
             "Asked to block on a pending job that doesn't exist"
         )))
     }
-
-    #[cfg(test)]
-    fn get_test_params(&self) -> &dyn Any {
-        &self.test_params
-    }
-}
-
-impl VideoDecoderBackend for Backend {
-    fn coded_resolution(&self) -> Option<Resolution> {
-        self.metadata_state.coded_resolution().ok()
-    }
-
-    fn display_resolution(&self) -> Option<Resolution> {
-        self.metadata_state.display_resolution().ok()
-    }
-
-    fn num_resources_total(&self) -> usize {
-        self.num_allocated_surfaces
-    }
-
-    fn num_resources_left(&self) -> usize {
-        match self.metadata_state.surface_pool() {
-            Ok(pool) => pool.num_surfaces_left(),
-            Err(_) => 0,
-        }
-    }
-
-    fn format(&self) -> Option<crate::DecodedFormat> {
-        let map_format = self.metadata_state.map_format().ok()?;
-        DecodedFormat::try_from(map_format.as_ref()).ok()
-    }
-
-    fn try_format(&mut self, format: crate::DecodedFormat) -> DecoderResult<()> {
-        let header = match &self.negotiation_status {
-            NegotiationStatus::Possible(header) => header.clone(),
-            _ => {
-                return Err(DecoderError::StatelessBackendError(
-                    StatelessBackendError::NegotiationFailed(anyhow!(
-                        "Negotiation is not possible at this stage {:?}",
-                        self.negotiation_status
-                    )),
-                ))
-            }
-        };
-
-        let supported_formats_for_stream = self.metadata_state.supported_formats_for_stream()?;
-
-        if supported_formats_for_stream.contains(&format) {
-            let map_format = utils::vaapi::FORMAT_MAP
-                .iter()
-                .find(|&map| map.decoded_format == format)
-                .unwrap();
-
-            self.open(&header, Some(map_format))?;
-
-            Ok(())
-        } else {
-            Err(DecoderError::StatelessBackendError(
-                StatelessBackendError::NegotiationFailed(anyhow!(
-                    "Format {:?} is unsupported.",
-                    format
-                )),
-            ))
-        }
-    }
 }
 
 impl Decoder<VADecodedHandle<Vp8Picture<GenericBackendHandle>>> {
@@ -647,12 +586,12 @@ mod tests {
 
     use crate::decoders::vp8::backends::vaapi::AssociatedHandle;
     use crate::decoders::vp8::backends::vaapi::TestParams;
-    use crate::decoders::vp8::backends::BlockingMode;
-    use crate::decoders::vp8::backends::DecodedHandle;
     use crate::decoders::vp8::backends::StatelessDecoderBackend;
     use crate::decoders::vp8::decoder::tests::process_ready_frames;
     use crate::decoders::vp8::decoder::tests::run_decoding_loop;
     use crate::decoders::vp8::decoder::Decoder;
+    use crate::decoders::BlockingMode;
+    use crate::decoders::DecodedHandle;
     use crate::decoders::DynPicture;
 
     fn get_test_params(
