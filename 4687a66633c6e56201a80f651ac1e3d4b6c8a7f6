@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "52ff81ab_2238cb40",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1392,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T01:55:36Z",
+      "side": 1,
+      "message": "this check needs to be updated to match `run_kvm`\n\n```\nif cfg.protection_type.isolates_memory() \u0026\u0026 !vm.check_capability(VmCap::Protected) {\n```",
+      "range": {
+        "startLine": 1389,
+        "startChar": 0,
+        "endLine": 1392,
+        "endChar": 47
+      },
+      "revId": "4687a66633c6e56201a80f651ac1e3d4b6c8a7f6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
