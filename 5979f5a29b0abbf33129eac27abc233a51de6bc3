@@ -90,6 +90,46 @@
       "message": "you shouldn\u0027t be issuing VM configuration ioctls as part of the FDT creation\n\nmaybe we can add another method to the VM trait for setting this and then call it in `build_vm` after the `fdt::create_fdt` call?",
       "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "561bbdf0_bc62b8ce",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 249,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T01:04:37Z",
+      "side": 1,
+      "message": "maybe can get rid of the unsafe block if we set this above\n\n```\n        let mut function_desc \u003d gh_vm_function {\n            name: Default::default(),\n            __bindgen_anon_1: gh_vm_function__bindgen_ty_1 {\n                irqfd: gh_fn_irqfd_arg {\n                    fd: evt.as_raw_descriptor() as u32,\n                    label,\n                    flags: if level { GH_IRQFD_LEVEL } else { 0 },\n                    ..Default::default()\n                },\n            },\n        };\n```",
+      "range": {
+        "startLine": 246,
+        "startChar": 0,
+        "endLine": 249,
+        "endChar": 9
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c843896b_65bfb89e",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 280,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T01:04:37Z",
+      "side": 1,
+      "message": "this unwrap is probably fine to be honest",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
