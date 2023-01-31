@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "98c1e8ad_50f72c43",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:03:01Z",
+      "side": 1,
+      "message": "needing the address and size here seems odd. can we remove these args?\n\n(i also commented on the CL where they get used with related thoughts)",
+      "range": {
+        "startLine": 80,
+        "startChar": 8,
+        "endLine": 81,
+        "endChar": 23
+      },
+      "revId": "bfaf5a7c7fff50ef5d8c0ab1dd5daed92d7448f7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
