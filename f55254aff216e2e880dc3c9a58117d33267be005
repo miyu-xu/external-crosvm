@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cbc245e5_4bd6ca20",
+        "filename": "devices/src/irqchip/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 93,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T01:52:11Z",
+      "side": 1,
+      "message": "are these all unexpected? if so, should we log an error or something?\n\ni see that KvmKernelIrqChip also silently does nothing for some of these. i\u0027m not too familiar but maybe we should log an error for at least the same cases.",
+      "range": {
+        "startLine": 67,
+        "startChar": 0,
+        "endLine": 93,
+        "endChar": 5
+      },
+      "revId": "f55254aff216e2e880dc3c9a58117d33267be005",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
