@@ -1,0 +1,95 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a395e099_390d83c7",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:05:48Z",
+      "side": 1,
+      "message": "this is a pretty important todo",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b5042f22_7266d8fd",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 40,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:05:48Z",
+      "side": 1,
+      "message": "there is a lot stuff in here. how stable is this interface with the hypervisor? are you going to be OK maintaining forward and backwards compatibility for it? or maybe there is some hypervisor API version we can query to allow evolving it later?\n\nbasically, this is part of the user space to kernel space API and so we should be careful",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2d5b48b4_f38fc33e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 48,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:05:48Z",
+      "side": 1,
+      "message": "does gunyah only support linux guests?",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3429a1b6_be27d108",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:05:48Z",
+      "side": 1,
+      "message": "there are TODOs throughout this function. do you need any help resolving them?",
+      "range": {
+        "startLine": 67,
+        "startChar": 40,
+        "endLine": 67,
+        "endChar": 75
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e40d7710_26763dbd",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T00:05:48Z",
+      "side": 1,
+      "message": "you shouldn\u0027t be issuing VM configuration ioctls as part of the FDT creation\n\nmaybe we can add another method to the VM trait for setting this and then call it in `build_vm` after the `fdt::create_fdt` call?",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
