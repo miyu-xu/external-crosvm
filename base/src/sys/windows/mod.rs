@@ -93,3 +93,13 @@ pub fn round_up_to_page_size(v: usize) -> usize {
 pub fn number_of_logical_cores() -> Result<usize> {
     Ok(win_util::number_of_processors())
 }
+
+/// Foobar
+pub fn logical_core_capacity(_cpu_id: usize) -> Result<u32> {
+    Err(Error::new(libc::ENOTSUP))
+}
+
+/// Foobar
+pub fn logical_core_siblings(_cpu_id: usize) -> Result<u32> {
+    Err(Error::new(libc::ENOTSUP))
+}

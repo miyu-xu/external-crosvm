@@ -135,6 +135,16 @@ impl CpuSet {
         CpuSet(cpus.into_iter().collect())
     }
 
+    pub fn from_mask(mut mask: u32) -> Self {
+        let mut list = Vec::new();
+        while mask != 0 {
+            let bit = mask.trailing_zeros();
+            list.push(bit as usize);
+            mask ^= 1u32.wrapping_shl(bit);
+        }
+        CpuSet(list)
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, usize> {
         self.0.iter()
     }
@@ -483,6 +493,15 @@ pub trait LinuxArch {
         resources: &mut SystemAllocator,
         hp_control_tube: &mpsc::Sender<PciRootCommand>,
     ) -> Result<PciAddress, Self::Error>;
+
+    /// Generates vCPU capacity map that matches host CPU topology.
+    fn get_host_cpu_capacity() -> Result<BTreeMap<usize, u32>, Self::Error>;
+    fn get_host_cpu_clusters() -> Result<Vec<CpuSet>, Self::Error>;
+
+    /// Generates vCPU affinity map that matches host CPU topology.
+    fn get_host_cpu_affinity(
+        capacity_map: &BTreeMap<usize, u32>,
+    ) -> Result<VcpuAffinity, Self::Error>;
 }
 
 #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]

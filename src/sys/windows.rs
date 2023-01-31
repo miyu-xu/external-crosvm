@@ -1350,6 +1350,19 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         (None, 0)
     };
 
+    let (cpu_clusters, cpu_capacity, vcpu_affinity) = if cfg.host_cpu_topology {
+        let cluster_map = Arch::get_host_cpu_clusters()?;
+        let capacity_map = Arch::get_host_cpu_capacity()?;
+        let affinity_map = Arch::get_host_cpu_affinity(&capacity_map)?;
+        (cluster_map, capacity_map, Some(affinity_map))
+    } else {
+        (
+            cfg.cpu_clusters.clone(),
+            cfg.cpu_capacity.clone(),
+            cfg.vcpu_affinity.clone(),
+        )
+    };
+
     Ok(VmComponents {
         memory_size: cfg
             .memory
@@ -1358,9 +1371,9 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .ok_or_else(|| anyhow!("requested memory size too large"))?,
         swiotlb,
         vcpu_count: cfg.vcpu_count.unwrap_or(1),
-        vcpu_affinity: cfg.vcpu_affinity.clone(),
-        cpu_clusters: cfg.cpu_clusters.clone(),
-        cpu_capacity: cfg.cpu_capacity.clone(),
+        vcpu_affinity,
+        cpu_clusters,
+        cpu_capacity,
         no_smt: cfg.no_smt,
         hugepages: cfg.hugepages,
         hv_cfg: hypervisor::Config {
