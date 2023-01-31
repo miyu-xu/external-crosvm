@@ -170,6 +170,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "17aa994e_2d1fd981",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 318,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-01-31T23:20:26Z",
+      "side": 1,
+      "message": "Perhaps renaming `StaticSwiotlbAllocationRequired` to `StaticallyIsolatesMemory`?",
+      "parentUuid": "55f0c500_1b2c4287",
+      "range": {
+        "startLine": 316,
+        "startChar": 0,
+        "endLine": 318,
+        "endChar": 94
+      },
+      "revId": "897a758931505be142ef35b28a2525290091787d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "714e3d15_7c7ad6e8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 2
