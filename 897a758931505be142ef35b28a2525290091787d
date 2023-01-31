@@ -146,6 +146,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "55f0c500_1b2c4287",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 318,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T23:00:54Z",
+      "side": 1,
+      "message": "`StaticSwiotlbAllocationRequired` seems like a bad fit, but I wonder if we can reformulate that capability so that it covers both. Something like \"requires statically isolated memory\". Do you have any ideas?\n\nAdding another capability is fine too IMO and maybe requires less thought. This is all internal APIs we can change freely over time I think.",
+      "parentUuid": "70535959_ab1210c6",
+      "range": {
+        "startLine": 316,
+        "startChar": 0,
+        "endLine": 318,
+        "endChar": 94
+      },
+      "revId": "897a758931505be142ef35b28a2525290091787d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "714e3d15_7c7ad6e8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 2
