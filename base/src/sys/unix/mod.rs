@@ -52,6 +52,7 @@ use std::ffi::CStr;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::Read;
 use std::mem;
 use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
@@ -628,6 +629,23 @@ pub fn get_max_open_files() -> Result<u64> {
 pub fn number_of_logical_cores() -> Result<usize> {
     // Safe because we pass a flag for this call and the host supports this system call
     Ok(unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) } as usize)
+}
+
+fn parse_sysfs_cpu_info(cpu_id: usize, property: &str) -> Result<u32> {
+    let path = format!("/sys/devices/system/cpu/cpu{cpu_id}/{property}");
+    let mut buffer = String::new();
+    open_file(path, OpenOptions::new().read(true))?.read_to_string(&mut buffer)?;
+    buffer.trim().parse().map_err(|_| Error::new(libc::EINVAL))
+}
+
+/// Returns the capacity (measure of performance) of a given logical core.
+pub fn logical_core_capacity(cpu_id: usize) -> Result<u32> {
+    parse_sysfs_cpu_info(cpu_id, "cpu_capacity")
+}
+
+/// Returns a bitmask of cores that belong to the same cluster as the given logical core.
+pub fn logical_core_cluster_id(cpu_id: usize) -> Result<u32> {
+    parse_sysfs_cpu_info(cpu_id, "topology/physical_package_id")
 }
 
 #[cfg(test)]

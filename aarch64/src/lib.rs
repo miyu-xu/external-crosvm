@@ -13,10 +13,12 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use arch::get_serial_cmdline;
+use arch::CpuSet;
 use arch::GetSerialCmdlineError;
 use arch::MsrConfig;
 use arch::MsrExitHandlerError;
 use arch::RunnableLinuxVm;
+use arch::VcpuAffinity;
 use arch::VmComponents;
 use arch::VmImage;
 use base::Event;
@@ -217,6 +219,8 @@ pub enum Error {
     CloneIrqChip(base::Error),
     #[error("the given kernel command line was invalid: {0}")]
     Cmdline(kernel_cmdline::Error),
+    #[error("failed to configure CPU topology: {0}")]
+    CpuTopology(base::Error),
     #[error("unable to create battery devices: {0}")]
     CreateBatDevices(arch::DeviceRegistrationError),
     #[error("unable to make an Event: {0}")]
@@ -737,6 +741,58 @@ impl arch::LinuxArch for AArch64 {
     ) -> std::result::Result<PciAddress, Self::Error> {
         // hotplug function isn't verified on AArch64, so set it unsupported here.
         Err(Error::Unsupported)
+    }
+
+    // Returns a (cpu_id -> value) map of the capacities of logical cores in the host system.
+    fn get_host_cpu_capacity() -> std::result::Result<BTreeMap<usize, u32>, Self::Error> {
+        let cpu_count = base::number_of_logical_cores().map_err(Error::CpuTopology)?;
+        let mut capacity_map = BTreeMap::new();
+        for cpu_id in 0..cpu_count {
+            let capacity = base::logical_core_capacity(cpu_id).map_err(Error::CpuTopology)?;
+            capacity_map.insert(cpu_id, capacity);
+        }
+        Ok(capacity_map)
+    }
+
+    // Creates CPU cluster mask for each CPU in the host system.
+    fn get_host_cpu_clusters() -> std::result::Result<Vec<CpuSet>, Self::Error> {
+        let cpu_count = base::number_of_logical_cores().map_err(Error::CpuTopology)?;
+        let cluster_ids = (0..cpu_count)
+            .map(base::logical_core_cluster_id)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::CpuTopology)?;
+        Ok(cluster_ids
+            .iter()
+            .map(|&vcpu_cluster_id| {
+                cluster_ids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &cpu_cluster_id)| vcpu_cluster_id == cpu_cluster_id)
+                    .map(|(cpu_id, _)| cpu_id)
+                    .collect()
+            })
+            .collect())
+    }
+
+    // Genereates VcpuAffinity such that each vCPU has an affinity mask to
+    // logical cores in the host system with greater than or equal CPU capacity.
+    fn get_host_cpu_affinity(
+        cpu_capacity_map: &BTreeMap<usize, u32>,
+        vcpu_capacity_map: &BTreeMap<usize, u32>,
+    ) -> std::result::Result<VcpuAffinity, Self::Error> {
+        Ok(VcpuAffinity::PerVcpu(
+            vcpu_capacity_map
+                .iter()
+                .map(|(&vcpu_id, &vcpu_capacity)| {
+                    let cpu_set = cpu_capacity_map
+                        .iter()
+                        .filter(|(_, &cpu_capacity)| cpu_capacity >= vcpu_capacity)
+                        .map(|(&cpu_id, _)| cpu_id)
+                        .collect();
+                    (vcpu_id, cpu_set)
+                })
+                .collect(),
+        ))
     }
 }
 

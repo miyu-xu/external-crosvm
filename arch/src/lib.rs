@@ -186,6 +186,15 @@ impl FromStr for CpuSet {
     }
 }
 
+impl FromIterator<usize> for CpuSet {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = usize>,
+    {
+        CpuSet::new(iter)
+    }
+}
+
 impl Deref for CpuSet {
     type Target = Vec<usize>;
 
@@ -486,6 +495,18 @@ pub trait LinuxArch {
         hp_control_tube: &mpsc::Sender<PciRootCommand>,
         #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
     ) -> Result<PciAddress, Self::Error>;
+
+    /// Returns capacity map of the host's logical cores.
+    fn get_host_cpu_capacity() -> Result<BTreeMap<usize, u32>, Self::Error>;
+
+    /// Returns cluster masks for each of the host's logical cores.
+    fn get_host_cpu_clusters() -> Result<Vec<CpuSet>, Self::Error>;
+
+    /// Generates vCPU affinity map that matches host CPU topology.
+    fn get_host_cpu_affinity(
+        cpu_capacity_map: &BTreeMap<usize, u32>,
+        vcpu_capacity_map: &BTreeMap<usize, u32>,
+    ) -> Result<VcpuAffinity, Self::Error>;
 }
 
 #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]

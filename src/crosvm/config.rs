@@ -1511,20 +1511,25 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
             cfg.vcpu_count = Some(pcpu_count);
         }
 
-        match &cfg.vcpu_affinity {
-            None => {
-                let mut affinity_map = BTreeMap::new();
-                for cpu_id in 0..cfg.vcpu_count.unwrap() {
-                    affinity_map.insert(cpu_id, CpuSet::new([cpu_id]));
-                }
-                cfg.vcpu_affinity = Some(VcpuAffinity::PerVcpu(affinity_map));
-            }
-            _ => {
-                return Err(
-                    "`host-cpu-topology` requires not to set `cpu-affinity` at the same time"
-                        .to_string(),
-                );
-            }
+        if !cfg.cpu_capacity.is_empty() {
+            return Err(
+                "`host-cpu-topology` requires not to set `cpu-capacity` at the same time"
+                    .to_string(),
+            );
+        }
+
+        if !cfg.cpu_clusters.is_empty() {
+            return Err(
+                "`host-cpu-topology` requires not to set `cpu clusters` at the same time"
+                    .to_string(),
+            );
+        }
+
+        if cfg.vcpu_affinity.is_some() {
+            return Err(
+                "`host-cpu-topology` requires not to set `cpu-affinity` at the same time"
+                    .to_string(),
+            );
         }
     } else {
         // TODO(b/215297064): Support generic cpuaffinity if there's a need.

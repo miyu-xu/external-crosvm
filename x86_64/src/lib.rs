@@ -67,6 +67,7 @@ use acpi_tables::aml;
 use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
 use arch::get_serial_cmdline;
+use arch::CpuSet;
 use arch::GetSerialCmdlineError;
 use arch::MsrAction;
 use arch::MsrConfig;
@@ -74,6 +75,7 @@ use arch::MsrFilter;
 use arch::MsrRWType;
 use arch::MsrValueFrom;
 use arch::RunnableLinuxVm;
+use arch::VcpuAffinity;
 use arch::VmComponents;
 use arch::VmImage;
 use base::warn;
@@ -173,6 +175,8 @@ pub enum Error {
     ConfigureSegments(regs::Error),
     #[error("error configuring the system")]
     ConfigureSystem,
+    #[error("failed to configure CPU topology: {0}")]
+    CpuTopology(base::Error),
     #[error("unable to create ACPI tables")]
     CreateAcpi,
     #[error("unable to create battery devices: {0}")]
@@ -1096,6 +1100,27 @@ impl arch::LinuxArch for X8664arch {
             swap_controller,
         )
         .map_err(Error::ConfigurePciDevice)
+    }
+
+    fn get_host_cpu_capacity() -> Result<BTreeMap<usize, u32>> {
+        Ok(BTreeMap::new())
+    }
+
+    fn get_host_cpu_clusters() -> Result<Vec<CpuSet>> {
+        Ok(Vec::new())
+    }
+
+    // Generates a 1:1 affinity mapping between CPUs and vCPUs.
+    fn get_host_cpu_affinity(
+        _cpu_capacity_map: &BTreeMap<usize, u32>,
+        _vcpu_capacity_map: &BTreeMap<usize, u32>,
+    ) -> Result<VcpuAffinity> {
+        let cpu_count = base::number_of_logical_cores().map_err(Error::CpuTopology)?;
+        let mut affinity_map = BTreeMap::new();
+        for cpu_id in 0..cpu_count {
+            affinity_map.insert(cpu_id, CpuSet::new([cpu_id]));
+        }
+        Ok(VcpuAffinity::PerVcpu(affinity_map))
     }
 }
 
