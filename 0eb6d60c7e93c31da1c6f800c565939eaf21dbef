@@ -16,6 +16,24 @@
       "message": "Typo: change file extension to `.patch`.",
       "revId": "0eb6d60c7e93c31da1c6f800c565939eaf21dbef",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "251fb42d_b91d557a",
+        "filename": "patches/uuid-update-1.2.2.pach",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-01-31T21:06:06Z",
+      "side": 0,
+      "message": "Done",
+      "parentUuid": "c2fd2d64_769ea2e6",
+      "revId": "0eb6d60c7e93c31da1c6f800c565939eaf21dbef",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
