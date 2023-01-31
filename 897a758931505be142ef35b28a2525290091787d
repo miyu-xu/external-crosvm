@@ -98,6 +98,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d37fe403_f315ef3a",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 318,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-01-31T22:24:04Z",
+      "side": 1,
+      "message": "Yeah, after https://crrev.com/c/4197000 it will be possible to access the `Hypervisor` here and then you can add a hypervisor capability to control this, like https://crrev.com/c/4197001 does",
+      "parentUuid": "0e5af304_b7420d9f",
+      "range": {
+        "startLine": 316,
+        "startChar": 0,
+        "endLine": 318,
+        "endChar": 94
+      },
+      "revId": "897a758931505be142ef35b28a2525290091787d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "714e3d15_7c7ad6e8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 2
