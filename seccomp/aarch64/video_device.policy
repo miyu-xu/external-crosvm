@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Copyright 2022 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -19,3 +19,5 @@ openat: 1
 setpriority: 1
 socket: arg0 == AF_UNIX
 prctl: arg0 == PR_SET_NAME
+# for libmojo used by libvda
+process_vm_readv: 1

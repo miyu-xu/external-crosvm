@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::Arc;
 use std::thread;
 
+use anyhow::anyhow;
 use anyhow::Context;
 use base::error;
-use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
 use base::FileSync;
@@ -25,7 +24,6 @@ use cros_async::IoSourceExt;
 use data_model::DataInit;
 use futures::FutureExt;
 use hypervisor::ProtectionType;
-use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
@@ -46,6 +44,7 @@ use crate::virtio::Queue;
 use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::SerialDevice;
+use crate::Suspendable;
 
 /// Wrapper that makes any `SerialInput` usable as an async source by providing an implementation of
 /// `IntoAsync`.
@@ -84,15 +83,13 @@ async fn run_rx_queue<I: SignalableInterrupt>(
     // the regular virtio device is switched to async.
     let mut in_buffer = VecDeque::<u8>::new();
     let mut rx_buf = vec![0u8; 4096];
-    let mut input_offset = 0u64;
 
     loop {
-        match input.read_to_vec(Some(input_offset), rx_buf).await {
+        match input.read_to_vec(None, rx_buf).await {
             // Input source has closed.
             Ok((0, _)) => break,
             Ok((size, v)) => {
                 in_buffer.extend(&v[0..size]);
-                input_offset += size as u64;
                 rx_buf = v;
             }
             Err(e) => {
@@ -206,7 +203,7 @@ impl ConsoleDevice {
 
 impl SerialDevice for ConsoleDevice {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         _evt: Event,
         input: Option<Box<dyn SerialInput>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -214,8 +211,8 @@ impl SerialDevice for ConsoleDevice {
         _out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
     ) -> ConsoleDevice {
-        let avail_features =
-            virtio::base_features(protected_vm) | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+        let avail_features = virtio::base_features(protection_type)
+            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         ConsoleDevice {
             input: input.map(AsyncSerialInput).map(AsyncQueueState::Stopped),
             output: AsyncQueueState::Stopped(output.unwrap_or_else(|| Box::new(io::sink()))),
@@ -242,7 +239,7 @@ pub struct AsyncConsole {
 
 impl SerialDevice for AsyncConsole {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         evt: Event,
         input: Option<Box<dyn SerialInput>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -252,7 +249,7 @@ impl SerialDevice for AsyncConsole {
     ) -> AsyncConsole {
         AsyncConsole {
             state: VirtioConsoleState::Stopped(ConsoleDevice::new(
-                protected_vm,
+                protection_type,
                 evt,
                 input,
                 output,
@@ -260,7 +257,7 @@ impl SerialDevice for AsyncConsole {
                 out_timestamp,
                 Default::default(),
             )),
-            base_features: base_features(protected_vm),
+            base_features: base_features(protection_type),
             keep_rds,
         }
     }
@@ -301,11 +298,10 @@ impl VirtioDevice for AsyncConsole {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() < 2 || queue_evts.len() < 2 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() < 2 {
+            return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
         // Reset the device if it was already running.
@@ -316,35 +312,26 @@ impl VirtioDevice for AsyncConsole {
         let state = std::mem::replace(&mut self.state, VirtioConsoleState::Broken);
         let console = match state {
             VirtioConsoleState::Running { .. } => {
-                error!("device should not be running here. This is a bug.");
-                return;
+                return Err(anyhow!("device should not be running here. This is a bug."));
             }
             VirtioConsoleState::Stopped(console) => console,
             VirtioConsoleState::Broken => {
-                warn!("device is broken and cannot be activated");
-                return;
+                return Err(anyhow!("device is broken and cannot be activated"));
             }
         };
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed creating kill Event pair")?;
 
         let ex = Executor::new().expect("failed to create an executor");
-        let receive_queue = queues.remove(0);
-        let receive_evt = queue_evts.remove(0);
-        let transmit_queue = queues.remove(0);
-        let transmit_evt = queue_evts.remove(0);
+        let (receive_queue, receive_evt) = queues.remove(0);
+        let (transmit_queue, transmit_evt) = queues.remove(0);
 
-        let worker_result = thread::Builder::new()
-            .name("virtio_console".to_string())
+        let worker_thread = thread::Builder::new()
+            .name("v_console".to_string())
             .spawn(move || {
                 let mut console = console;
-                let interrupt = Arc::new(Mutex::new(interrupt));
 
                 console.start_receive_queue(
                     &ex,
@@ -366,17 +353,15 @@ impl VirtioDevice for AsyncConsole {
 
                     Ok(console)
                 })?
-            });
+            })
+            .context("failed to spawn virtio_console worker")?;
 
-        match worker_result {
-            Err(e) => error!("failed to spawn virtio_console worker: {}", e),
-            Ok(join_handle) => {
-                self.state = VirtioConsoleState::Running {
-                    kill_evt: self_kill_evt,
-                    worker_thread: join_handle,
-                };
-            }
-        }
+        self.state = VirtioConsoleState::Running {
+            kill_evt: self_kill_evt,
+            worker_thread,
+        };
+
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -390,7 +375,7 @@ impl VirtioDevice for AsyncConsole {
             VirtioConsoleState::Running {
                 kill_evt,
                 worker_thread,
-            } => match kill_evt.write(1) {
+            } => match kill_evt.signal() {
                 Ok(_) => {
                     let thread_res = match worker_thread.join() {
                         Ok(thread_res) => thread_res,
@@ -422,3 +407,5 @@ impl VirtioDevice for AsyncConsole {
         }
     }
 }
+
+impl Suspendable for AsyncConsole {}

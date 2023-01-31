@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,8 +17,10 @@ mod metrics_cleanup;
 mod metrics_requests;
 mod noop;
 mod sys;
-// Exports a <name>_proto module for each proto file
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+pub mod protos {
+    // ANDROID: b/259142784 - we remove metrics_out subdir b/c cargo2android
+    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+}
 
 pub use controller::MetricsController;
 pub use event_types::MetricEventType;

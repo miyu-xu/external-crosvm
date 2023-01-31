@@ -1,9 +1,8 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -16,7 +15,6 @@ use base::Terminal;
 use cros_async::Executor;
 use data_model::DataInit;
 use hypervisor::ProtectionType;
-use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
@@ -35,7 +33,6 @@ use crate::SerialParameters;
 use crate::SerialType;
 
 const MAX_QUEUE_NUM: usize = 2 /* transmit and receive queues */;
-const MAX_VRING_LEN: u16 = 256;
 
 /// Console device for use with vhost-user. Will set stdin back to canon mode if we are getting
 /// input from it.
@@ -59,7 +56,7 @@ impl Drop for VhostUserConsoleDevice {
 
 impl VhostUserDevice for VhostUserConsoleDevice {
     fn max_queue_num(&self) -> usize {
-        return MAX_QUEUE_NUM;
+        MAX_QUEUE_NUM
     }
 
     fn into_backend(self: Box<Self>, ex: &Executor) -> anyhow::Result<Box<dyn VhostUserBackend>> {
@@ -89,10 +86,6 @@ struct ConsoleBackend {
 impl VhostUserBackend for ConsoleBackend {
     fn max_queue_num(&self) -> usize {
         self.device.max_queue_num()
-    }
-
-    fn max_vring_len(&self) -> u16 {
-        MAX_VRING_LEN
     }
 
     fn features(&self) -> u64 {
@@ -147,14 +140,11 @@ impl VhostUserBackend for ConsoleBackend {
     fn start_queue(
         &mut self,
         idx: usize,
-        mut queue: virtio::Queue,
+        queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Arc<Mutex<Doorbell>>,
+        doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
-        // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-        queue.ack_features(self.acked_features);
-
         match idx {
             // ReceiveQueue
             0 => self
@@ -203,6 +193,9 @@ pub struct Options {
     #[argh(option, arg_name = "INFILE")]
     /// path to a file
     input_file: Option<PathBuf>,
+    /// whether we are logging to syslog or not
+    #[argh(switch)]
+    syslog: bool,
 }
 
 /// Return a new vhost-user console device. `params` are the device's configuration, and `keep_rds`
@@ -229,8 +222,19 @@ pub fn create_vu_console_device(
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
     let type_ = match opts.output_file {
-        Some(_) => SerialType::File,
-        None => SerialType::Stdout,
+        Some(_) => {
+            if opts.syslog {
+                bail!("--output-file and --syslog options cannot be used together.");
+            }
+            SerialType::File
+        }
+        None => {
+            if opts.syslog {
+                SerialType::Syslog
+            } else {
+                SerialType::Stdout
+            }
+        }
     };
 
     let params = SerialParameters {
@@ -242,8 +246,8 @@ pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
         num: 1,
         console: true,
         earlycon: false,
-        // We do not support stdin-less mode
-        stdin: true,
+        // We don't use stdin if syslog mode is enabled
+        stdin: !opts.syslog,
         out_timestamp: false,
         ..Default::default()
     };

@@ -1,7 +1,7 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Software implementation of an Intel 8259A Programmable Interrupt Controller
 // This is a legacy device used by older OSs and briefly during start-up by
 // modern OSs that use a legacy BIOS.
@@ -23,6 +23,7 @@ use crate::bus::BusAccessInfo;
 use crate::pci::CrosvmDeviceId;
 use crate::BusDevice;
 use crate::DeviceId;
+use crate::Suspendable;
 
 pub struct Pic {
     // Indicates a pending INTR signal to LINT0 of vCPU, checked by vCPU thread.
@@ -378,7 +379,7 @@ impl Pic {
         };
         if let Some(resample_events) = self.resample_events.get(irq as usize) {
             for resample_evt in resample_events {
-                resample_evt.write(1).unwrap();
+                resample_evt.signal().unwrap();
             }
         }
     }
@@ -535,6 +536,16 @@ impl Pic {
         if value & OCW3_SPECIAL_MASK != 0 {
             pic.special_mask = value & OCW3_SPECIAL_MASK_VALUE != 0;
         }
+    }
+}
+
+impl Suspendable for Pic {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

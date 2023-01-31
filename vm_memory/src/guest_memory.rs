@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -301,6 +301,14 @@ impl GuestMemory {
             .map_or(GuestAddress(0), MemoryRegion::end)
     }
 
+    /// Returns the guest addresses and sizes of the memory regions.
+    pub fn guest_memory_regions(&self) -> Vec<(GuestAddress, usize)> {
+        self.regions
+            .iter()
+            .map(|region| (region.guest_base, region.mapping.size()))
+            .collect()
+    }
+
     /// Returns the total size of memory in bytes.
     pub fn memory_size(&self) -> u64 {
         self.regions
@@ -322,7 +330,10 @@ impl GuestMemory {
             .any(|region| region.start() < end && start < region.end())
     }
 
-    /// Returns the address plus the offset if it is in range.
+    /// Returns an address `addr + offset` if it's in range.
+    ///
+    /// This function doesn't care whether a region `[addr, addr + offset)` is in range or not. To
+    /// guarantee it's a valid range, use `is_valid_range()` instead.
     pub fn checked_offset(&self, addr: GuestAddress, offset: u64) -> Option<GuestAddress> {
         addr.checked_add(offset).and_then(|a| {
             if self.address_in_range(a) {
@@ -331,6 +342,24 @@ impl GuestMemory {
                 None
             }
         })
+    }
+
+    /// Returns true if the given range `[start, start + length)` is a valid contiguous memory
+    /// range available to the guest and it's backed by a single underlying memory region.
+    pub fn is_valid_range(&self, start: GuestAddress, length: u64) -> bool {
+        if length == 0 {
+            return false;
+        }
+
+        let end = if let Some(end) = start.checked_add(length - 1) {
+            end
+        } else {
+            return false;
+        };
+
+        self.regions
+            .iter()
+            .any(|region| region.start() <= start && end < region.end())
     }
 
     /// Returns the size of the memory region in bytes.
@@ -384,11 +413,10 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_at_addr(&self, buf: &[u8], guest_addr: GuestAddress) -> Result<usize> {
-        self.do_in_region(guest_addr, move |mapping, offset, _| {
-            mapping
-                .write_slice(buf, offset)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .write_slice(buf, offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Writes the entire contents of a slice to guest memory at the specified
@@ -443,11 +471,10 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_at_addr(&self, buf: &mut [u8], guest_addr: GuestAddress) -> Result<usize> {
-        self.do_in_region(guest_addr, move |mapping, offset, _| {
-            mapping
-                .read_slice(buf, offset)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .read_slice(buf, offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Reads from guest memory at the specified address to fill the entire
@@ -482,15 +509,11 @@ impl GuestMemory {
     }
 
     /// Reads an object from guest memory at the given guest address.
-    /// Reading from a volatile area isn't strictly safe as it could change
-    /// mid-read.  However, as long as the type T is plain old data and can
-    /// handle random initialization, everything will be OK.
     ///
     /// # Examples
     /// * Read a u64 from two areas of guest memory backed by separate mappings.
     ///
     /// ```
-    /// # use base::MemoryMapping;
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_read_u64() -> Result<u64, ()> {
     /// #     let start_addr1 = GuestAddress(0x0);
@@ -503,11 +526,41 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn read_obj_from_addr<T: DataInit>(&self, guest_addr: GuestAddress) -> Result<T> {
-        self.do_in_region(guest_addr, |mapping, offset, _| {
-            mapping
-                .read_obj(offset)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .read_obj(offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+    }
+
+    /// Reads an object from guest memory at the given guest address.
+    /// Reading from a volatile area isn't strictly safe as it could change
+    /// mid-read.  However, as long as the type T is plain old data and can
+    /// handle random initialization, everything will be OK.
+    ///
+    /// The read operation will be volatile, i.e. it will not be reordered by
+    /// the compiler and is suitable for I/O, but must be aligned. When reading
+    /// from regular memory, prefer [`GuestMemory::read_obj_from_addr`].
+    ///
+    /// # Examples
+    /// * Read a u64 from two areas of guest memory backed by separate mappings.
+    ///
+    /// ```
+    /// # use vm_memory::{GuestAddress, GuestMemory};
+    /// # fn test_read_u64() -> Result<u64, ()> {
+    /// #     let start_addr1 = GuestAddress(0x0);
+    /// #     let start_addr2 = GuestAddress(0x400);
+    /// #     let mut gm = GuestMemory::new(&vec![(start_addr1, 0x400), (start_addr2, 0x400)])
+    /// #         .map_err(|_| ())?;
+    ///       let num1: u64 = gm.read_obj_from_addr_volatile(GuestAddress(32)).map_err(|_| ())?;
+    ///       let num2: u64 = gm.read_obj_from_addr_volatile(GuestAddress(0x400+32)).map_err(|_| ())?;
+    /// #     Ok(num1 + num2)
+    /// # }
+    /// ```
+    pub fn read_obj_from_addr_volatile<T: DataInit>(&self, guest_addr: GuestAddress) -> Result<T> {
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .read_obj_volatile(offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Writes an object to the memory region at the specified guest address.
@@ -517,7 +570,6 @@ impl GuestMemory {
     /// * Write a u64 at guest address 0x1100.
     ///
     /// ```
-    /// # use base::MemoryMapping;
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_write_u64() -> Result<(), ()> {
     /// #   let start_addr = GuestAddress(0x1000);
@@ -527,11 +579,39 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn write_obj_at_addr<T: DataInit>(&self, val: T, guest_addr: GuestAddress) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset, _| {
-            mapping
-                .write_obj(val, offset)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .write_obj(val, offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+    }
+
+    /// Writes an object to the memory region at the specified guest address.
+    /// Returns Ok(()) if the object fits, or Err if it extends past the end.
+    ///
+    /// The write operation will be volatile, i.e. it will not be reordered by
+    /// the compiler and is suitable for I/O, but must be aligned. When writing
+    /// to regular memory, prefer [`GuestMemory::write_obj_at_addr`].
+    /// # Examples
+    /// * Write a u64 at guest address 0x1100.
+    ///
+    /// ```
+    /// # use vm_memory::{GuestAddress, GuestMemory};
+    /// # fn test_write_u64() -> Result<(), ()> {
+    /// #   let start_addr = GuestAddress(0x1000);
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    ///     gm.write_obj_at_addr_volatile(55u64, GuestAddress(0x1100))
+    ///         .map_err(|_| ())
+    /// # }
+    /// ```
+    pub fn write_obj_at_addr_volatile<T: DataInit>(
+        &self,
+        val: T,
+        guest_addr: GuestAddress,
+    ) -> Result<()> {
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .write_obj_volatile(val, offset)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Returns a `VolatileSlice` of `len` bytes starting at `addr`. Returns an error if the slice
@@ -624,11 +704,10 @@ impl GuestMemory {
         src: &mut F,
         count: usize,
     ) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset, _| {
-            mapping
-                .read_to_memory(offset, src, count)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .read_to_memory(offset, src, count)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Writes data from memory to a file descriptor.
@@ -662,11 +741,10 @@ impl GuestMemory {
         dst: &mut F,
         count: usize,
     ) -> Result<()> {
-        self.do_in_region(guest_addr, move |mapping, offset, _| {
-            mapping
-                .write_from_memory(offset, dst, count)
-                .map_err(|e| Error::MemoryAccess(guest_addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        mapping
+            .write_from_memory(offset, dst, count)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
     }
 
     /// Convert a GuestAddress into a pointer in the address space of this
@@ -690,11 +768,10 @@ impl GuestMemory {
     /// # }
     /// ```
     pub fn get_host_address(&self, guest_addr: GuestAddress) -> Result<*const u8> {
-        self.do_in_region(guest_addr, |mapping, offset, _| {
-            // This is safe; `do_in_region` already checks that offset is in
-            // bounds.
-            Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
-        })
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
+        // This is safe; `find_region` already checks that offset is in
+        // bounds.
+        Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
     }
 
     /// Convert a GuestAddress into a pointer in the address space of this
@@ -728,19 +805,19 @@ impl GuestMemory {
         }
 
         // Assume no overlap among regions
-        self.do_in_region(guest_addr, |mapping, offset, _| {
-            if mapping
-                .size()
-                .checked_sub(offset)
-                .map_or(true, |v| v < size)
-            {
-                return Err(Error::InvalidGuestAddress(guest_addr));
-            }
+        let (mapping, offset, _) = self.find_region(guest_addr)?;
 
-            // This is safe; `do_in_region` already checks that offset is in
-            // bounds.
-            Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
-        })
+        if mapping
+            .size()
+            .checked_sub(offset)
+            .map_or(true, |v| v < size)
+        {
+            return Err(Error::InvalidGuestAddress(guest_addr));
+        }
+
+        // This is safe; `find_region` already checks that offset is in
+        // bounds.
+        Ok(unsafe { mapping.as_ptr().add(offset) } as *const u8)
     }
 
     /// Returns a reference to the region that backs the given address.
@@ -763,25 +840,22 @@ impl GuestMemory {
         )
     }
 
-    /// Loops over all guest memory regions of `self`, and performs the callback function `F` in
-    /// the target region that contains `guest_addr`.  The callback function `F` takes in:
+    /// Loops over all guest memory regions of `self`, and returns the
+    /// target region that contains `guest_addr`. On success, this
+    /// function returns a tuple with the following fields:
     ///
     /// (i) the memory mapping associated with the target region.
     /// (ii) the relative offset from the start of the target region to `guest_addr`.
     /// (iii) the absolute offset from the start of the memory mapping to the target region.
     ///
-    /// If no target region is found, an error is returned.  The callback function `F` may return
-    /// an Ok(`T`) on success or a `GuestMemoryError` on failure.
-    pub fn do_in_region<F, T>(&self, guest_addr: GuestAddress, cb: F) -> Result<T>
-    where
-        F: FnOnce(&MemoryMapping, usize, u64) -> Result<T>,
-    {
+    /// If no target region is found, an error is returned.
+    pub fn find_region(&self, guest_addr: GuestAddress) -> Result<(&MemoryMapping, usize, u64)> {
         self.regions
             .iter()
             .find(|region| region.contains(guest_addr))
             .ok_or(Error::InvalidGuestAddress(guest_addr))
-            .and_then(|region| {
-                cb(
+            .map(|region| {
+                (
                     &region.mapping,
                     guest_addr.offset_from(region.start()) as usize,
                     region.obj_offset,
@@ -834,9 +908,6 @@ unsafe impl BackingMemory for GuestMemory {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use base::kernel_has_memfd;
-
     use super::*;
 
     #[test]
@@ -852,7 +923,14 @@ mod tests {
     fn two_regions() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
-        assert!(GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x10000)]).is_ok());
+        // The memory regions are `[0x0, 0x10000)`, `[0x10000, 0x20000)`.
+        let gm = GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x10000)]).unwrap();
+
+        // Although each address in `[0x0, 0x20000)` is valid, `is_valid_range()` returns false for
+        // a range that is across multiple underlying regions.
+        assert!(gm.is_valid_range(GuestAddress(0x5000), 0x5000));
+        assert!(gm.is_valid_range(GuestAddress(0x10000), 0x5000));
+        assert!(!gm.is_valid_range(GuestAddress(0x5000), 0x10000));
     }
 
     #[test]
@@ -866,7 +944,9 @@ mod tests {
     fn region_hole() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x40000);
+        // The memory regions are `[0x0, 0x20000)`, `[0x40000, 0x60000)`.
         let gm = GuestMemory::new(&[(start_addr1, 0x20000), (start_addr2, 0x20000)]).unwrap();
+
         assert!(gm.address_in_range(GuestAddress(0x10000)));
         assert!(!gm.address_in_range(GuestAddress(0x30000)));
         assert!(gm.address_in_range(GuestAddress(0x50000)));
@@ -875,9 +955,24 @@ mod tests {
         assert!(gm.range_overlap(GuestAddress(0x10000), GuestAddress(0x30000)),);
         assert!(!gm.range_overlap(GuestAddress(0x30000), GuestAddress(0x40000)),);
         assert!(gm.range_overlap(GuestAddress(0x30000), GuestAddress(0x70000)),);
-        assert!(gm.checked_offset(GuestAddress(0x10000), 0x10000).is_none());
-        assert!(gm.checked_offset(GuestAddress(0x50000), 0x8000).is_some());
-        assert!(gm.checked_offset(GuestAddress(0x50000), 0x10000).is_none());
+        assert_eq!(gm.checked_offset(GuestAddress(0x10000), 0x10000), None);
+        assert_eq!(
+            gm.checked_offset(GuestAddress(0x50000), 0x8000),
+            Some(GuestAddress(0x58000))
+        );
+        assert_eq!(gm.checked_offset(GuestAddress(0x50000), 0x10000), None);
+        assert!(gm.is_valid_range(GuestAddress(0x0), 0x10000));
+        assert!(gm.is_valid_range(GuestAddress(0x0), 0x20000));
+        assert!(!gm.is_valid_range(GuestAddress(0x0), 0x20000 + 1));
+
+        // While `checked_offset(GuestAddress(0x10000), 0x40000)` succeeds because 0x50000 is a
+        // valid address, `is_valid_range(GuestAddress(0x10000), 0x40000)` returns `false`
+        // because there is a hole inside of [0x10000, 0x50000).
+        assert_eq!(
+            gm.checked_offset(GuestAddress(0x10000), 0x40000),
+            Some(GuestAddress(0x50000))
+        );
+        assert!(!gm.is_valid_range(GuestAddress(0x10000), 0x40000));
     }
 
     #[test]
@@ -950,7 +1045,7 @@ mod tests {
 
     // Get the base address of the mapping for a GuestAddress.
     fn get_mapping(mem: &GuestMemory, addr: GuestAddress) -> Result<*const u8> {
-        mem.do_in_region(addr, |mapping, _, _| Ok(mapping.as_ptr() as *const u8))
+        Ok(mem.find_region(addr)?.0.as_ptr() as *const u8)
     }
 
     #[test]
@@ -999,15 +1094,6 @@ mod tests {
 
     #[test]
     fn shm_offset() {
-        #[cfg(unix)]
-        {
-            // This is simply a sanity check on linux platforms to ensure the tests
-            // won't run on old kernels that don't support memfd_create.
-            if !kernel_has_memfd() {
-                return;
-            }
-        }
-
         let start_region1 = GuestAddress(0x0);
         let size_region1 = 0x10000;
         let start_region2 = GuestAddress(0x10000);

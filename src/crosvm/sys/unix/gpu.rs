@@ -1,15 +1,18 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! GPU related things
 //! depends on "gpu" feature
-use std::collections::HashSet;
+
+#[cfg(feature = "virgl_renderer_next")]
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_keyvalue::FromKeyValues;
 
 use super::*;
 use crate::crosvm::config::Config;
@@ -22,25 +25,49 @@ pub struct GpuCacheInfo<'a> {
 pub fn get_gpu_cache_info<'a>(
     cache_dir: Option<&'a String>,
     cache_size: Option<&'a String>,
+    foz_db_list_path: Option<&'a String>,
     sandbox: bool,
 ) -> GpuCacheInfo<'a> {
     let mut dir = None;
     let mut env = Vec::new();
 
+    // TODO (renatopereyra): Remove deprecated env vars once all src/third_party/mesa* are updated.
     if let Some(cache_dir) = cache_dir {
         if !Path::new(cache_dir).exists() {
             warn!("shader caching dir {} does not exist", cache_dir);
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else if cfg!(any(target_arch = "arm", target_arch = "aarch64")) && sandbox {
             warn!("shader caching not yet supported on ARM with sandbox enabled");
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "true"));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "true"));
         } else {
             dir = Some(cache_dir.as_str());
 
+            // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
             env.push(("MESA_GLSL_CACHE_DISABLE", "false"));
             env.push(("MESA_GLSL_CACHE_DIR", cache_dir.as_str()));
+
+            env.push(("MESA_SHADER_CACHE_DISABLE", "false"));
+            env.push(("MESA_SHADER_CACHE_DIR", cache_dir.as_str()));
+
+            env.push(("MESA_DISK_CACHE_DATABASE", "1"));
+
+            if let Some(_foz_db_list_path) = foz_db_list_path {
+                // TODO(b/260664734): Use foz_db_list_path to set an environment
+                // variable once mesa changes get cherry-picked.
+                warn!("foz-db-list-path not utilized yet");
+            }
+
             if let Some(cache_size) = cache_size {
+                // Deprecated in https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15390
                 env.push(("MESA_GLSL_CACHE_MAX_SIZE", cache_size.as_str()));
+
+                env.push(("MESA_SHADER_CACHE_MAX_SIZE", cache_size.as_str()));
             }
         }
     }
@@ -54,12 +81,12 @@ pub fn get_gpu_cache_info<'a>(
 pub fn create_gpu_device(
     cfg: &Config,
     exit_evt_wrtube: &SendTube,
+    gpu_control_tube: Tube,
     resource_bridges: Vec<Tube>,
     wayland_socket_path: Option<&PathBuf>,
     x_display: Option<String>,
-    render_server_fd: Option<SafeDescriptor>,
+    #[cfg(feature = "virgl_renderer_next")] render_server_fd: Option<SafeDescriptor>,
     event_devices: Vec<EventDevice>,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
 ) -> DeviceResult {
     let mut display_backends = vec![
         virtio::DisplayBackend::X(x_display),
@@ -84,29 +111,38 @@ pub fn create_gpu_device(
         exit_evt_wrtube
             .try_clone()
             .context("failed to clone tube")?,
+        gpu_control_tube,
         resource_bridges,
         display_backends,
         cfg.gpu_parameters.as_ref().unwrap(),
+        #[cfg(feature = "virgl_renderer_next")]
         render_server_fd,
         event_devices,
-        map_request,
-        cfg.jail_config.is_some(),
-        virtio::base_features(cfg.protected_vm),
+        /*external_blob=*/ cfg.jail_config.is_some(),
+        /*system_blob=*/ false,
+        virtio::base_features(cfg.protection_type),
         cfg.wayland_socket_paths.clone(),
     );
 
     let jail = match gpu_jail(&cfg.jail_config, "gpu_device")? {
         Some(mut jail) => {
+            // Allow changes made externally take effect immediately to allow
+            // shaders to be dynamically added by external processes.
+            jail.set_remount_mode(libc::MS_SLAVE);
+
             // Prepare GPU shader disk cache directory.
             let (cache_dir, cache_size) = cfg
                 .gpu_parameters
                 .as_ref()
                 .map(|params| (params.cache_path.as_ref(), params.cache_size.as_ref()))
                 .unwrap();
-            let cache_info = get_gpu_cache_info(cache_dir, cache_size, cfg.jail_config.is_some());
+            let cache_info =
+                get_gpu_cache_info(cache_dir, cache_size, None, cfg.jail_config.is_some());
 
             if let Some(dir) = cache_info.directory {
-                jail.mount_bind(dir, dir, true)?;
+                // Manually bind mount recursively to allow DLC shader caches
+                // to be propagated to the GPU process.
+                jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
             }
             for (key, val) in cache_info.environment {
                 env::set_var(key, val);
@@ -133,27 +169,27 @@ pub fn create_gpu_device(
     })
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Deserialize, Serialize, FromKeyValues, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct GpuRenderServerParameters {
     pub path: PathBuf,
     pub cache_path: Option<String>,
     pub cache_size: Option<String>,
+    pub foz_db_list_path: Option<String>,
 }
 
+#[cfg(feature = "virgl_renderer_next")]
 fn get_gpu_render_server_environment(cache_info: Option<&GpuCacheInfo>) -> Result<Vec<String>> {
-    let mut env = Vec::new();
-    let mut env_keys = HashSet::new();
+    let mut env = HashMap::<String, String>::new();
     let os_env_len = env::vars_os().count();
 
     if let Some(cache_info) = cache_info {
-        env_keys.reserve(cache_info.environment.len() + os_env_len);
+        env.reserve(os_env_len + cache_info.environment.len());
         for (key, val) in cache_info.environment.iter() {
-            env.push(format!("{}={}", key, val));
-            env_keys.insert(key.to_string());
+            env.insert(key.to_string(), val.to_string());
         }
     } else {
-        env_keys.reserve(os_env_len);
+        env.reserve(os_env_len);
     }
 
     for (key_os, val_os) in env::vars_os() {
@@ -161,21 +197,18 @@ fn get_gpu_render_server_environment(cache_info: Option<&GpuCacheInfo>) -> Resul
         let into_string_err = |_| anyhow!("invalid environment key/val");
         let key = key_os.into_string().map_err(into_string_err)?;
         let val = val_os.into_string().map_err(into_string_err)?;
-
-        if !env_keys.contains(&key) {
-            env.push(format!("{}={}", key, val));
-            env_keys.insert(key);
-        }
+        env.entry(key).or_insert(val);
     }
 
     // TODO(b/237493180): workaround to enable ETC2 format emulation in RADV for ARCVM
-    if !env_keys.contains("radv_require_etc2") {
-        env.push("radv_require_etc2=true".to_string());
+    if !env.contains_key("radv_require_etc2") {
+        env.insert("radv_require_etc2".to_string(), "true".to_string());
     }
 
-    Ok(env)
+    Ok(env.iter().map(|(k, v)| format!("{}={}", k, v)).collect())
 }
 
+#[cfg(feature = "virgl_renderer_next")]
 pub fn start_gpu_render_server(
     cfg: &Config,
     render_server_parameters: &GpuRenderServerParameters,
@@ -185,14 +218,21 @@ pub fn start_gpu_render_server(
 
     let (jail, cache_info) = match gpu_jail(&cfg.jail_config, "gpu_render_server")? {
         Some(mut jail) => {
+            // Allow changes made externally take effect immediately to allow
+            // shaders to be dynamically added by external processes.
+            jail.set_remount_mode(libc::MS_SLAVE);
+
             let cache_info = get_gpu_cache_info(
                 render_server_parameters.cache_path.as_ref(),
                 render_server_parameters.cache_size.as_ref(),
+                render_server_parameters.foz_db_list_path.as_ref(),
                 true,
             );
 
             if let Some(dir) = cache_info.directory {
-                jail.mount_bind(dir, dir, true)?;
+                // Manually bind mount recursively to allow DLC shader caches
+                // to be propagated to the GPU process.
+                jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
             }
 
             // bind mount /dev/log for syslog
@@ -238,4 +278,68 @@ pub fn start_gpu_render_server(
     .context("failed to start gpu render server")?;
 
     Ok((jail, SafeDescriptor::from(client_socket)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crosvm::config::from_key_values;
+
+    #[test]
+    fn parse_gpu_render_server_parameters() {
+        let res: GpuRenderServerParameters = from_key_values("path=/some/path").unwrap();
+        assert_eq!(
+            res,
+            GpuRenderServerParameters {
+                path: "/some/path".into(),
+                cache_path: None,
+                cache_size: None,
+                foz_db_list_path: None,
+            }
+        );
+
+        let res: GpuRenderServerParameters = from_key_values("/some/path").unwrap();
+        assert_eq!(
+            res,
+            GpuRenderServerParameters {
+                path: "/some/path".into(),
+                cache_path: None,
+                cache_size: None,
+                foz_db_list_path: None,
+            }
+        );
+
+        let res: GpuRenderServerParameters =
+            from_key_values("path=/some/path,cache-path=/cache/path,cache-size=16M").unwrap();
+        assert_eq!(
+            res,
+            GpuRenderServerParameters {
+                path: "/some/path".into(),
+                cache_path: Some("/cache/path".into()),
+                cache_size: Some("16M".into()),
+                foz_db_list_path: None,
+            }
+        );
+
+        let res: GpuRenderServerParameters = from_key_values(
+            "path=/some/path,cache-path=/cache/path,cache-size=16M,foz-db-list-path=/db/list/path",
+        )
+        .unwrap();
+        assert_eq!(
+            res,
+            GpuRenderServerParameters {
+                path: "/some/path".into(),
+                cache_path: Some("/cache/path".into()),
+                cache_size: Some("16M".into()),
+                foz_db_list_path: Some("/db/list/path".into()),
+            }
+        );
+
+        let res =
+            from_key_values::<GpuRenderServerParameters>("cache-path=/cache/path,cache-size=16M");
+        assert!(res.is_err());
+
+        let res = from_key_values::<GpuRenderServerParameters>("");
+        assert!(res.is_err());
+    }
 }

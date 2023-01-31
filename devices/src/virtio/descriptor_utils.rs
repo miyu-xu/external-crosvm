@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -337,6 +337,19 @@ impl Reader {
         }
         self.regions.consume(read);
         read
+    }
+
+    /// Reads data from the descriptor chain buffer and passes the `VolatileSlice`s to the callback
+    /// `cb`.
+    pub fn read_to_cb<C: FnOnce(&[VolatileSlice]) -> usize>(
+        &mut self,
+        cb: C,
+        count: usize,
+    ) -> usize {
+        let iovs = self.regions.get_remaining_with_count(&self.mem, count);
+        let written = cb(&iovs[..]);
+        self.regions.consume(written);
+        written
     }
 
     /// Reads data from the descriptor chain buffer into a writable object.

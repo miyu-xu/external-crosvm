@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,7 +40,7 @@ pub const INVALID_DESCRIPTOR: RawDescriptor = INVALID_HANDLE_VALUE;
 
 impl PartialEq for SafeDescriptor {
     fn eq(&self, other: &Self) -> bool {
-        return compare_object_handles(self.descriptor, other.as_raw_descriptor());
+        compare_object_handles(self.descriptor, other.as_raw_descriptor())
     }
 }
 
@@ -167,8 +167,8 @@ AsRawDescriptor!(Stderr);
 #[test]
 #[allow(clippy::eq_op)]
 fn clone_equality() {
-    use super::Event;
     use crate::descriptor::IntoRawDescriptor;
+    use crate::Event;
 
     let evt = Event::new().unwrap();
     let descriptor = unsafe { SafeDescriptor::from_raw_descriptor(evt.into_raw_descriptor()) };

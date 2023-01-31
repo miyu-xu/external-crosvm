@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::str;
-use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use anyhow::bail;
@@ -27,7 +26,6 @@ use cros_async::Executor;
 use data_model::DataInit;
 use data_model::Le64;
 use hypervisor::ProtectionType;
-use sync::Mutex;
 use vhost::Vhost;
 use vhost::Vsock;
 use vm_memory::GuestMemory;
@@ -51,7 +49,9 @@ use vmm_vhost::SlaveReqHandler;
 use vmm_vhost::VhostUserSlaveReqHandlerMut;
 
 use crate::virtio::base_features;
-use crate::virtio::vhost::user::device::handler::run_handler;
+use crate::virtio::device_constants::vsock::NUM_QUEUES;
+use crate::virtio::device_constants::vsock::QUEUE_SIZE;
+use crate::virtio::vhost::user::device::handler::sys::unix::run_handler;
 // TODO(acourbot) try to remove the system dependencies and make the device usable on all platforms.
 use crate::virtio::vhost::user::device::handler::sys::unix::Doorbell;
 use crate::virtio::vhost::user::device::handler::sys::unix::VvuOps;
@@ -62,12 +62,10 @@ use crate::virtio::vhost::user::device::handler::VhostUserRegularOps;
 use crate::virtio::vhost::user::device::vvu::doorbell::DoorbellRegion;
 use crate::virtio::vhost::user::device::vvu::pci::VvuPciDevice;
 use crate::virtio::vhost::user::device::vvu::VvuDevice;
-use crate::virtio::vhost::vsock;
 use crate::virtio::Queue;
 use crate::virtio::SignalableInterrupt;
 
-const MAX_VRING_LEN: u16 = vsock::QUEUE_SIZE;
-const NUM_QUEUES: usize = vsock::QUEUE_SIZES.len();
+const MAX_VRING_LEN: u16 = QUEUE_SIZE;
 const EVENT_QUEUE: usize = NUM_QUEUES - 1;
 
 struct VsockBackend<H: VhostUserPlatformOps> {
@@ -81,7 +79,7 @@ struct VsockBackend<H: VhostUserPlatformOps> {
     vmm_maps: Option<Vec<MappingInfo>>,
     queues: [Queue; NUM_QUEUES],
     // Only used for vvu device mode.
-    call_evts: [Option<Arc<Mutex<DoorbellRegion>>>; NUM_QUEUES],
+    call_evts: [Option<DoorbellRegion>; NUM_QUEUES],
 }
 
 impl<H: VhostUserPlatformOps> VsockBackend<H> {
@@ -190,7 +188,7 @@ impl<H: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for VsockBackend<H> {
     }
 
     fn set_vring_num(&mut self, index: u32, num: u32) -> Result<()> {
-        if index >= NUM_QUEUES as u32 || num == 0 || num > vsock::QUEUE_SIZE.into() {
+        if index >= NUM_QUEUES as u32 || num == 0 || num > QUEUE_SIZE.into() {
             return Err(Error::InvalidParam);
         }
 
@@ -244,8 +242,8 @@ impl<H: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for VsockBackend<H> {
         self.handle
             .set_vring_addr(
                 mem,
-                queue.max_size,
-                queue.actual_size(),
+                queue.max_size(),
+                queue.size(),
                 index,
                 flags.bits(),
                 queue.desc_table(),
@@ -257,7 +255,7 @@ impl<H: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for VsockBackend<H> {
     }
 
     fn set_vring_base(&mut self, index: u32, base: u32) -> Result<()> {
-        if index >= NUM_QUEUES as u32 || base >= vsock::QUEUE_SIZE.into() {
+        if index >= NUM_QUEUES as u32 || base >= QUEUE_SIZE.into() {
             return Err(Error::InvalidParam);
         }
 
@@ -320,17 +318,7 @@ impl<H: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for VsockBackend<H> {
         let event = match doorbell {
             Doorbell::Call(call_event) => call_event.into_inner(),
             Doorbell::Vfio(doorbell_region) => {
-                let call_evt = match self.call_evts[index].as_ref() {
-                    None => {
-                        let evt = Arc::new(Mutex::new(doorbell_region));
-                        self.call_evts[index] = Some(evt.clone());
-                        evt
-                    }
-                    Some(evt) => {
-                        *evt.lock() = doorbell_region;
-                        evt.clone()
-                    }
-                };
+                self.call_evts[index] = Some(doorbell_region.clone());
 
                 let kernel_evt = Event::new().map_err(|_| Error::SlaveInternalError)?;
                 let task_evt = EventAsync::new(
@@ -345,7 +333,7 @@ impl<H: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for VsockBackend<H> {
                                 .next_val()
                                 .await
                                 .expect("failed to wait for event fd");
-                            call_evt.signal_used_queue(index as u16);
+                            doorbell_region.signal_used_queue(index as u16);
                         }
                     })
                     .detach();

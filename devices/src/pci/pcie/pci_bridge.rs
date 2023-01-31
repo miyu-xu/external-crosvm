@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::cmp::max;
 use std::cmp::min;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use crate::pci::PciHeaderType;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::IrqLevelEvent;
 use crate::PciInterruptPin;
+use crate::Suspendable;
 
 pub const BR_BUS_NUMBER_REG: usize = 0x6;
 pub const BR_BUS_SUBORDINATE_OFFSET: usize = 0x2;
@@ -208,13 +210,11 @@ fn finalize_window(
                 .prefetchable(prefetchable)
                 .align(BR_WINDOW_ALIGNMENT),
         ) {
-            Ok(addr) => return Ok((addr, size)),
-            Err(e) => {
-                return Err(PciDeviceError::PciBusWindowAllocationFailure(format!(
-                    "failed to allocate bridge window: {}",
-                    e
-                )))
-            }
+            Ok(addr) => Ok((addr, size)),
+            Err(e) => Err(PciDeviceError::PciBusWindowAllocationFailure(format!(
+                "failed to allocate bridge window: {}",
+                e
+            ))),
         }
     } else {
         // align base to 1MB
@@ -226,7 +226,7 @@ fn finalize_window(
             }
             base &= BR_WINDOW_MASK;
         }
-        return Ok((base, size));
+        Ok((base, size))
     }
 }
 
@@ -258,23 +258,11 @@ impl PciDevice for PciBridge {
         rds
     }
 
-    fn assign_irq(
-        &mut self,
-        irq_evt: &IrqLevelEvent,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        self.interrupt_evt = Some(irq_evt.try_clone().ok()?);
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
+        self.interrupt_evt = Some(irq_evt);
         let msi_config_clone = self.msi_config.clone();
         self.device.lock().clone_interrupt(msi_config_clone);
-
-        let gsi = irq_num?;
-        let pin = self.pci_address.map_or(
-            PciInterruptPin::IntA,
-            PciConfiguration::suggested_interrupt_pin,
-        );
-        self.config.set_irq(gsi as u8, pin);
-
-        Some((gsi, pin))
+        self.config.set_irq(irq_num as u8, pin);
     }
 
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
@@ -359,7 +347,7 @@ impl PciDevice for PciBridge {
 
         self.device.lock().write_config(reg_idx, offset, data);
 
-        (&mut self.config).write_reg(reg_idx, offset, data)
+        self.config.write_reg(reg_idx, offset, data)
     }
 
     fn read_bar(&mut self, _addr: u64, _data: &mut [u8]) {}
@@ -367,13 +355,11 @@ impl PciDevice for PciBridge {
     fn write_bar(&mut self, _addr: u64, _data: &[u8]) {}
 
     fn get_removed_children_devices(&self) -> Vec<PciAddress> {
-        let mut removed_devices = Vec::new();
-        let devices = self.device.lock().get_removed_devices();
-        for device in devices.iter() {
-            removed_devices.push(*device);
-            removed_devices.extend(&self.pci_bus.lock().get_downstream_devices());
+        if !self.device.lock().get_removed_devices().is_empty() {
+            self.pci_bus.lock().get_downstream_devices()
+        } else {
+            Vec::new()
         }
-        removed_devices
     }
 
     fn get_new_pci_bus(&self) -> Option<Arc<Mutex<PciBus>>> {
@@ -517,3 +503,5 @@ impl PciDevice for PciBridge {
         self.msi_config.lock().destroy()
     }
 }
+
+impl Suspendable for PciBridge {}

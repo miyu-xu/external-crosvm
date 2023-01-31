@@ -1,11 +1,8 @@
 [package]
 name = "metrics"
 version = "0.1.0"
-authors = ["The Chromium OS Authors"]
+authors = ["The ChromiumOS Authors"]
 edition = "2021"
-
-[features]
-kiwi = ["libc", "serde_json", "sync"]
 
 [dependencies]
 anyhow = "*"
@@ -20,8 +17,9 @@ sync = { path = "../common/sync", optional = true }
 [target.'cfg(windows)'.dependencies]
 chrono = { version = "*" }
 winapi = { version = "*" }
+win_util = { path = "../win_util" }
 wmi = { version = "^0.9" }
 
 
 [build-dependencies]
-protoc-rust = "2.24"
+proto_build_tools = { path = "../proto_build_tools" }

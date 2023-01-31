@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@ use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
 use base::error;
+use base::info;
 use base::named_pipes::OverlappedWrapper;
 use base::named_pipes::PipeConnection;
 use base::warn;
@@ -81,7 +82,7 @@ async fn run_rx_queue<T: TapT>(
     mut queue: virtio::Queue,
     mem: GuestMemory,
     mut tap: Box<dyn IoSourceExt<T>>,
-    call_evt: Arc<Mutex<Doorbell>>,
+    call_evt: Doorbell,
     kick_evt: EventAsync,
     read_notifier: EventAsync,
     mut overlapped_wrapper: OverlappedWrapper,
@@ -112,7 +113,7 @@ async fn run_rx_queue<T: TapT>(
             &mut overlapped_wrapper,
         );
         if needs_interrupt {
-            call_evt.lock().signal_used_queue(queue.vector());
+            call_evt.signal_used_queue(queue.vector());
         }
 
         // There aren't any RX descriptors available for us to write packets to. Wait for the guest
@@ -130,18 +131,15 @@ async fn run_rx_queue<T: TapT>(
 pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + IntoAsync + TapT>(
     backend: &mut NetBackend<T>,
     idx: usize,
-    mut queue: virtio::Queue,
+    queue: virtio::Queue,
     mem: GuestMemory,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: Event,
 ) -> anyhow::Result<()> {
     if let Some(handle) = backend.workers.get_mut(idx).and_then(Option::take) {
         warn!("Starting new queue handler without stopping old handler");
         handle.abort();
     }
-
-    // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-    queue.ack_features(backend.acked_features);
 
     let overlapped_wrapper =
         OverlappedWrapper::new(true).expect("Failed to create overlapped wrapper");
@@ -162,13 +160,11 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
                 let tap = ex
                     .async_from(tap)
                     .context("failed to create async tap device")?;
-                let read_notifier = base::Event(
-                    overlapped_wrapper
-                        .get_h_event_ref()
-                        .unwrap()
-                        .try_clone()
-                        .unwrap(),
-                );
+                let read_notifier = overlapped_wrapper
+                    .get_h_event_ref()
+                    .unwrap()
+                    .try_clone()
+                    .unwrap();
                 let read_notifier = EventAsync::new_without_reset(read_notifier, ex)
                     .context("failed to create async read notifier")?;
 
@@ -222,7 +218,7 @@ where
     T: TapT + IntoAsync,
 {
     fn drop(&mut self) {
-        let _ = self.slirp_kill_event.write(1);
+        let _ = self.slirp_kill_event.signal();
     }
 }
 
@@ -293,6 +289,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
     //         .lower_token();
     // }
 
+    info!("vhost-user net device ready, starting run loop...");
     if let Err(e) = ex.run_until(handler.run(vhost_user_tube, exit_event, &ex)) {
         bail!("error occurred: {}", e);
     }

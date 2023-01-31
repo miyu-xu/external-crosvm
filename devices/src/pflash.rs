@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,6 +34,7 @@ use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
+use crate::Suspendable;
 
 const COMMAND_WRITE_BYTE: u8 = 0x10;
 const COMMAND_BLOCK_ERASE: u8 = 0x20;
@@ -49,7 +50,7 @@ fn pflash_parameters_default_block_size() -> u32 {
     4 * (1 << 10)
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PflashParameters {
     pub path: PathBuf,
     #[serde(default = "pflash_parameters_default_block_size")]
@@ -110,8 +111,6 @@ impl BusDevice for Pflash {
         let offset = info.offset;
         match &self.state {
             State::ReadArray => {
-                self.status = STATUS_READY;
-
                 if offset + data.len() as u64 >= self.image_size {
                     error!("pflash read request beyond disk");
                     return;
@@ -211,7 +210,10 @@ impl BusDevice for Pflash {
                 let command = data;
 
                 match command {
-                    COMMAND_READ_ARRAY => self.state = State::ReadArray,
+                    COMMAND_READ_ARRAY => {
+                        self.state = State::ReadArray;
+                        self.status = STATUS_READY;
+                    }
                     COMMAND_READ_STATUS => self.state = State::ReadStatus,
                     COMMAND_CLEAR_STATUS => {
                         self.state = State::ReadArray;
@@ -226,6 +228,16 @@ impl BusDevice for Pflash {
                 }
             }
         }
+    }
+}
+
+impl Suspendable for Pflash {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -358,6 +370,15 @@ mod tests {
 
         // Make sure we can clear the status properly.
         pflash.write(off(offset), &[COMMAND_CLEAR_STATUS]);
+        pflash.write(off(offset), &[COMMAND_READ_STATUS]);
+        pflash.read(off(offset), &mut got);
+        let want = [0; 4];
+        assert_eq!(want, got);
+
+        // We implicitly jump back into READ_ARRAY mode after reading the,
+        // status but for OVMF's probe we require that this doesn't actually
+        // affect the cleared status.
+        pflash.read(off(offset), &mut got);
         pflash.write(off(offset), &[COMMAND_READ_STATUS]);
         pflash.read(off(offset), &mut got);
         let want = [0; 4];

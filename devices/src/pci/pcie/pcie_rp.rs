@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -9,17 +10,18 @@ use anyhow::Result;
 use resources::SystemAllocator;
 use sync::Mutex;
 use vm_control::GpeNotify;
+use vm_control::PmeNotify;
 
 use crate::bus::HostHotPlugKey;
 use crate::bus::HotPlugBus;
 use crate::pci::pci_configuration::PciCapabilityID;
 use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
-use crate::pci::pcie::pcie_device::PciPmcCap;
 use crate::pci::pcie::pcie_device::PcieCap;
 use crate::pci::pcie::pcie_device::PcieDevice;
 use crate::pci::pcie::pcie_host::PcieHostPort;
 use crate::pci::pcie::pcie_port::PciePort;
 use crate::pci::pcie::*;
+use crate::pci::pm::PciPmCap;
 use crate::pci::MsiConfig;
 use crate::pci::PciAddress;
 use crate::pci::PciCapability;
@@ -43,6 +45,7 @@ impl PcieRootPort {
                 0,
                 secondary_bus_num,
                 slot_implemented,
+                true,
             ),
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
@@ -53,7 +56,7 @@ impl PcieRootPort {
     /// Constructs a new PCIE root port which associated with the host physical pcie RP
     pub fn new_from_host(pcie_host: PcieHostPort, slot_implemented: bool) -> Result<Self> {
         Ok(PcieRootPort {
-            pcie_port: PciePort::new_from_host(pcie_host, slot_implemented)
+            pcie_port: PciePort::new_from_host(pcie_host, slot_implemented, true)
                 .context("PciePort::new_from_host failed")?,
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
@@ -93,7 +96,7 @@ impl PcieDevice for PcieRootPort {
                 self.pcie_port.hotplug_implemented(),
                 0,
             )),
-            Box::new(PciPmcCap::new()),
+            Box::new(PciPmCap::new()),
         ]
     }
 
@@ -141,7 +144,7 @@ impl HotPlugBus for PcieRootPort {
         }
 
         self.pcie_port
-            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
         self.pcie_port.trigger_hp_or_pme_interrupt();
     }
 
@@ -158,8 +161,7 @@ impl HotPlugBus for PcieRootPort {
                 self.removed_downstream.push(*guest_pci_addr);
             }
 
-            self.pcie_port
-                .set_slot_status(PCIE_SLTSTA_PDC | PCIE_SLTSTA_ABP);
+            self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
             self.pcie_port.trigger_hp_or_pme_interrupt();
 
             if self.pcie_port.is_host() {
@@ -218,7 +220,14 @@ impl GpeNotify for PcieRootPort {
         }
 
         if self.pcie_port.should_trigger_pme() {
-            self.pcie_port.inject_pme();
+            self.pcie_port
+                .inject_pme(self.pcie_port.get_address().unwrap().pme_requester_id());
         }
+    }
+}
+
+impl PmeNotify for PcieRootPort {
+    fn notify(&mut self, requester_id: u16) {
+        self.pcie_port.inject_pme(requester_id);
     }
 }

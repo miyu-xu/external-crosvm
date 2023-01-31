@@ -1,8 +1,8 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-mod sys;
+pub(crate) mod sys;
 
 use std::default::Default;
 use std::str::FromStr;
@@ -46,6 +46,7 @@ use crate::pci::PciDeviceError;
 use crate::pci::PciInterruptPin;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::IrqLevelEvent;
+use crate::Suspendable;
 
 // Use 82801AA because it's what qemu does.
 const PCI_DEVICE_ID_INTEL_82801AA_5: u16 = 0x2415;
@@ -75,6 +76,7 @@ pub enum Ac97Error {
     #[error("Must be cras or null")]
     InvalidBackend,
     #[cfg(windows)]
+    #[error("Must be win_audio or null")]
     InvalidBackend,
 }
 
@@ -132,6 +134,7 @@ pub struct Ac97Dev {
     irq_evt: Option<IrqLevelEvent>,
     bus_master: Ac97BusMaster,
     mixer: Ac97Mixer,
+    #[cfg_attr(windows, allow(dead_code))]
     backend: Ac97Backend,
 }
 
@@ -160,7 +163,12 @@ impl Ac97Dev {
             config_regs,
             pci_address: None,
             irq_evt: None,
-            bus_master: Ac97BusMaster::new(mem, audio_server),
+            bus_master: Ac97BusMaster::new(
+                mem,
+                audio_server,
+                #[cfg(windows)]
+                ac97_device_tube,
+            ),
             mixer: Ac97Mixer::new(),
             backend,
         }
@@ -278,19 +286,9 @@ impl PciDevice for Ac97Dev {
         self.pci_address.ok_or(PciDeviceError::PciAllocationFailed)
     }
 
-    fn assign_irq(
-        &mut self,
-        irq_evt: &IrqLevelEvent,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        self.irq_evt = Some(irq_evt.try_clone().ok()?);
-        let gsi = irq_num?;
-        let pin = self.pci_address.map_or(
-            PciInterruptPin::IntA,
-            PciConfiguration::suggested_interrupt_pin,
-        );
-        self.config_regs.set_irq(gsi as u8, pin);
-        Some((gsi, pin))
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
+        self.irq_evt = Some(irq_evt);
+        self.config_regs.set_irq(irq_num as u8, pin);
     }
 
     fn allocate_io_bars(&mut self, resources: &mut SystemAllocator) -> Result<Vec<BarRange>> {
@@ -371,7 +369,7 @@ impl PciDevice for Ac97Dev {
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        (&mut self.config_regs).write_reg(reg_idx, offset, data)
+        self.config_regs.write_reg(reg_idx, offset, data)
     }
 
     fn keep_rds(&self) -> Vec<RawDescriptor> {
@@ -414,6 +412,8 @@ impl PciDevice for Ac97Dev {
         }
     }
 }
+
+impl Suspendable for Ac97Dev {}
 
 #[cfg(test)]
 mod tests {
