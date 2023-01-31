@@ -101,6 +101,7 @@ use libc::_SC_PAGESIZE;
 pub use mmap::Error as MmapError;
 pub use mmap::*;
 pub use netlink::*;
+use once_cell::sync::OnceCell;
 pub use poll::EventContext;
 pub use priority::*;
 pub use sched::*;
@@ -718,6 +719,50 @@ pub fn sched_setattr(pid: Pid, attr: &mut sched_attr, flags: u32) -> Result<()> 
         return Err(Error::last());
     }
     Ok(())
+}
+
+fn parse_sysfs_cpu_info(cpu_id: usize, property: &str) -> Result<u32> {
+    let path = format!("/sys/devices/system/cpu/cpu{cpu_id}/{property}");
+    std::fs::read_to_string(path)?
+        .trim()
+        .parse()
+        .map_err(|_| Error::new(libc::EINVAL))
+}
+
+/// Returns the capacity (measure of performance) of a given logical core.
+pub fn logical_core_capacity(cpu_id: usize) -> Result<u32> {
+    static CPU_MAX_FREQS: OnceCell<Vec<u32>> = OnceCell::new();
+
+    let cpu_capacity = parse_sysfs_cpu_info(cpu_id, "cpu_capacity")?;
+
+    // Collect and cache the maximum frequencies of all cores. We need to know
+    // the largest maximum frequency between all cores to reverse normalization,
+    // so collect all the values once on the first call to this function.
+    let cpu_max_freqs = CPU_MAX_FREQS.get_or_try_init(|| {
+        (0..number_of_logical_cores()?)
+            .into_iter()
+            .map(logical_core_max_freq_khz)
+            .collect()
+    });
+
+    if let Ok(cpu_max_freqs) = cpu_max_freqs {
+        let largest_max_freq = cpu_max_freqs.iter().max().unwrap();
+        let cpu_max_freq = cpu_max_freqs[cpu_id];
+        Ok(cpu_capacity * largest_max_freq / cpu_max_freq)
+    } else {
+        // cpu-freq is not enabled. Fall back to using the normalized capacity.
+        Ok(cpu_capacity)
+    }
+}
+
+/// Returns the cluster ID of a given logical core.
+pub fn logical_core_cluster_id(cpu_id: usize) -> Result<u32> {
+    parse_sysfs_cpu_info(cpu_id, "topology/physical_package_id")
+}
+
+/// Returns the maximum frequency (in kHz) of a given logical core.
+fn logical_core_max_freq_khz(cpu_id: usize) -> Result<u32> {
+    parse_sysfs_cpu_info(cpu_id, "cpufreq/cpuinfo_max_freq")
 }
 
 #[cfg(test)]

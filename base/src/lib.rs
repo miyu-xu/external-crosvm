@@ -151,6 +151,8 @@ pub use platform::get_cpu_affinity;
 pub use platform::get_filesystem_type;
 pub use platform::getpid;
 pub use platform::logical_core_frequencies_khz;
+pub use platform::logical_core_capacity;
+pub use platform::logical_core_cluster_id;
 pub use platform::number_of_logical_cores;
 pub use platform::open_file_or_duplicate;
 pub use platform::pagesize;

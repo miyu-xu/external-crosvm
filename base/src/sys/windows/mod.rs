@@ -126,3 +126,15 @@ impl sched_attr {
 pub fn sched_setattr(_pid: Pid, _attr: &mut sched_attr, _flags: u32) -> Result<()> {
     Err(Error::new(libc::ENOTSUP))
 }
+
+/// Returns the capacity (measure of performance) of a given logical core.
+/// This is currently not supported on Windows.
+pub fn logical_core_capacity(_cpu_id: usize) -> Result<u32> {
+    Err(Error::new(libc::ENOTSUP))
+}
+
+/// Returns a bitmask of cores that belong to the same cluster as the given logical core.
+/// This is currently not supported on Windows.
+pub fn logical_core_cluster_id(_cpu_id: usize) -> Result<u32> {
+    Err(Error::new(libc::ENOTSUP))
+}
