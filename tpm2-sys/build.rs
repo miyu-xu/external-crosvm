@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,7 +26,7 @@ fn get_cross_compile_prefix() -> String {
     } else {
         env::var("CARGO_CFG_TARGET_ENV").unwrap()
     };
-    return format!("{}-{}-{}-", arch, os, env);
+    format!("{}-{}-{}-", arch, os, env)
 }
 
 fn build_libtpm2(out_dir: &Path) -> Result<()> {
@@ -62,6 +62,11 @@ fn build_libtpm2(out_dir: &Path) -> Result<()> {
 fn main() -> Result<()> {
     // Skip installing dependencies when generating documents.
     if std::env::var("CARGO_DOC").is_ok() {
+        return Ok(());
+    }
+
+    // libtpm2 is unix only
+    if std::env::var("CARGO_CFG_UNIX").is_err() {
         return Ok(());
     }
 

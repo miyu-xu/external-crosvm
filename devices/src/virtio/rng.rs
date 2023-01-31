@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@ use std::io;
 use std::io::Write;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Event;
@@ -24,6 +26,7 @@ use super::Queue;
 use super::SignalableInterrupt;
 use super::VirtioDevice;
 use crate::virtio::Writer;
+use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
@@ -36,6 +39,7 @@ pub type Result<T> = std::result::Result<T, RngError>;
 struct Worker {
     interrupt: Interrupt,
     queue: Queue,
+    queue_evt: Event,
     mem: GuestMemory,
 }
 
@@ -76,7 +80,7 @@ impl Worker {
         needs_interrupt
     }
 
-    fn run(&mut self, queue_evt: Event, kill_evt: Event) {
+    fn run(&mut self, kill_evt: Event) {
         #[derive(EventToken)]
         enum Token {
             QueueAvailable,
@@ -85,7 +89,7 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
-            (&queue_evt, Token::QueueAvailable),
+            (&self.queue_evt, Token::QueueAvailable),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
@@ -117,7 +121,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        if let Err(e) = queue_evt.read() {
+                        if let Err(e) = self.queue_evt.wait() {
                             error!("failed reading queue Event: {}", e);
                             break 'wait;
                         }
@@ -158,7 +162,7 @@ impl Drop for Rng {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -188,50 +192,39 @@ impl VirtioDevice for Rng {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != 1 || queue_evts.len() != 1 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != 1 {
+            return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to create kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
-        let queue = queues.remove(0);
+        let (queue, queue_evt) = queues.remove(0);
 
-        let worker_result =
-            thread::Builder::new()
-                .name("virtio_rng".to_string())
-                .spawn(move || {
-                    let mut worker = Worker {
-                        interrupt,
-                        queue,
-                        mem,
-                    };
-                    worker.run(queue_evts.remove(0), kill_evt);
-                    worker
-                });
-
-        match worker_result {
-            Err(e) => {
-                error!("failed to spawn virtio_rng worker: {}", e);
-            }
-            Ok(join_handle) => {
-                self.worker_thread = Some(join_handle);
-            }
-        }
+        let worker_thread = thread::Builder::new()
+            .name("v_rng".to_string())
+            .spawn(move || {
+                let mut worker = Worker {
+                    interrupt,
+                    queue,
+                    queue_evt,
+                    mem,
+                };
+                worker.run(kill_evt);
+                worker
+            })
+            .context("failed to spawn virtio_rng worker")?;
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
         if let Some(kill_evt) = self.kill_evt.take() {
-            if kill_evt.write(1).is_err() {
+            if kill_evt.signal().is_err() {
                 error!("{}: failed to notify the kill event", self.debug_label());
                 return false;
             }
@@ -249,3 +242,5 @@ impl VirtioDevice for Rng {
         false
     }
 }
+
+impl Suspendable for Rng {}

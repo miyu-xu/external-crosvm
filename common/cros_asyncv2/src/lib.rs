@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -85,6 +85,8 @@
 //! A cancelable version of the inner future can be implemented using
 //! [`abortable`](futures::future::abortable). However keep in mind that on backends like io_uring,
 //! cancelling the future may not cancel the underlying IO operation.
+
+#![cfg(unix)]
 
 mod blocking;
 mod enter;

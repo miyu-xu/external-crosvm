@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
@@ -19,21 +19,27 @@ export DOCKER_BUILDKIT=1
 
 TAG_BASE=gcr.io/crosvm-infra
 VERSION=$(shell cat version)
-RUST_VERSION=$(shell cat ../../../rust-toolchain | grep channel | grep -E -o "[0-9\.]+")
 BUILD_CONTEXT=$(shell realpath ../../../)
 
 DOCKER ?= docker
 
-all: crosvm_dev
+all: crosvm_dev crosvm_dev_user
 
 upload: all
 	$(DOCKER) push $(TAG_BASE)/crosvm_dev:$(VERSION)
+	$(DOCKER) push $(TAG_BASE)/crosvm_dev_user:$(VERSION)
 
 crosvm_dev:
 	$(DOCKER) build \
-		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		-t $(TAG_BASE)/$@:$(VERSION) \
 		-f Dockerfile \
+		$(BUILD_CONTEXT)
+
+crosvm_dev_user:
+	$(DOCKER) build \
+		-t $(TAG_BASE)/$@:$(VERSION) \
+		-f Dockerfile.user \
+		--build-arg=VERSION=$(VERSION) \
 		$(BUILD_CONTEXT)
 
 .PHONY: all crosvm_dev upload

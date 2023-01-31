@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@ use std::io::Write;
 use std::mem;
 use std::net::Ipv4Addr;
 use std::os::raw::c_uint;
-use std::sync::Arc;
+use std::str::FromStr;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 #[cfg(windows)]
 use base::named_pipes::OverlappedWrapper;
@@ -28,6 +30,8 @@ use net_util::Error as TapError;
 use net_util::MacAddress;
 use net_util::TapT;
 use remain::sorted;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error as ThisError;
 use virtio_sys::virtio_net;
 use virtio_sys::virtio_net::virtio_net_hdr_v1;
@@ -48,6 +52,7 @@ use super::Reader;
 use super::SignalableInterrupt;
 use super::VirtioDevice;
 use super::Writer;
+use crate::Suspendable;
 
 /// The maximum buffer size when segmentation offload is enabled. This
 /// includes the 12-byte virtio net header.
@@ -134,6 +139,43 @@ pub enum NetError {
     #[cfg(unix)]
     #[error("failed to write to guest buffer: {0}")]
     WriteBuffer(io::Error),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum NetParametersMode {
+    #[serde(rename_all = "kebab-case")]
+    TapName {
+        tap_name: String,
+        mac: Option<MacAddress>,
+    },
+    #[serde(rename_all = "kebab-case")]
+    TapFd {
+        tap_fd: i32,
+        mac: Option<MacAddress>,
+    },
+    #[serde(rename_all = "kebab-case")]
+    RawConfig {
+        host_ip: Ipv4Addr,
+        netmask: Ipv4Addr,
+        mac: MacAddress,
+    },
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub struct NetParameters {
+    #[serde(flatten)]
+    pub mode: NetParametersMode,
+    #[serde(default)]
+    pub vhost_net: bool,
+}
+
+impl FromStr for NetParameters {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_keyvalue::from_key_values(s).map_err(|e| e.to_string())
+    }
 }
 
 #[repr(C, packed)]
@@ -271,7 +313,7 @@ pub enum Token {
 }
 
 pub(super) struct Worker<T: TapT> {
-    pub(super) interrupt: Arc<Interrupt>,
+    pub(super) interrupt: Interrupt,
     pub(super) mem: GuestMemory,
     pub(super) rx_queue: Queue,
     pub(super) tx_queue: Queue,
@@ -297,7 +339,7 @@ where
 {
     fn process_tx(&mut self) {
         process_tx(
-            self.interrupt.as_ref(),
+            &self.interrupt,
             &mut self.tx_queue,
             &self.mem,
             &mut self.tap,
@@ -311,7 +353,7 @@ where
         };
 
         process_ctrl(
-            self.interrupt.as_ref(),
+            &self.interrupt,
             ctrl_queue,
             &self.mem,
             &mut self.tap,
@@ -366,7 +408,7 @@ where
                         tap_polling_enabled = false;
                     }
                     Token::RxQueue => {
-                        if let Err(e) = rx_queue_evt.read() {
+                        if let Err(e) = rx_queue_evt.wait() {
                             error!("net: error reading rx queue Event: {}", e);
                             break 'wait;
                         }
@@ -374,7 +416,7 @@ where
                         tap_polling_enabled = true;
                     }
                     Token::TxQueue => {
-                        if let Err(e) = tx_queue_evt.read() {
+                        if let Err(e) = tx_queue_evt.wait() {
                             error!("net: error reading tx queue Event: {}", e);
                             break 'wait;
                         }
@@ -382,7 +424,7 @@ where
                     }
                     Token::CtrlQueue => {
                         if let Some(ctrl_evt) = &ctrl_queue_evt {
-                            if let Err(e) = ctrl_evt.read() {
+                            if let Err(e) = ctrl_evt.wait() {
                                 error!("net: error reading ctrl queue Event: {}", e);
                                 break 'wait;
                             }
@@ -396,11 +438,11 @@ where
                     }
                     Token::InterruptResample => {
                         // We can unwrap safely because interrupt must have the event.
-                        let _ = self.interrupt.get_resample_evt().unwrap().read();
+                        let _ = self.interrupt.get_resample_evt().unwrap().wait();
                         self.interrupt.do_interrupt_resample();
                     }
                     Token::Kill => {
-                        let _ = self.kill_evt.read();
+                        let _ = self.kill_evt.wait();
                         break 'wait;
                     }
                 }
@@ -410,10 +452,11 @@ where
     }
 }
 
-pub fn build_config(vq_pairs: u16, mtu: u16) -> VirtioNetConfig {
+pub fn build_config(vq_pairs: u16, mtu: u16, mac: Option<[u8; 6]>) -> VirtioNetConfig {
     VirtioNetConfig {
         max_vq_pairs: Le16::from(vq_pairs),
         mtu: Le16::from(mtu),
+        mac: mac.unwrap_or_default(),
         // Other field has meaningful value when the corresponding feature
         // is enabled, but all these features aren't supported now.
         // So set them to default.
@@ -422,59 +465,31 @@ pub fn build_config(vq_pairs: u16, mtu: u16) -> VirtioNetConfig {
 }
 
 pub struct Net<T: TapT + ReadNotifier> {
-    pub(super) queue_sizes: Box<[u16]>,
-    pub(super) workers_kill_evt: Vec<Event>,
-    pub(super) kill_evts: Vec<Event>,
-    pub(super) worker_threads: Vec<thread::JoinHandle<Worker<T>>>,
-    pub(super) taps: Vec<T>,
-    pub(super) avail_features: u64,
-    pub(super) acked_features: u64,
-    pub(super) mtu: u16,
+    guest_mac: Option<[u8; 6]>,
+    queue_sizes: Box<[u16]>,
+    workers_kill_evt: Vec<Event>,
+    kill_evts: Vec<Event>,
+    worker_threads: Vec<thread::JoinHandle<Worker<T>>>,
+    taps: Vec<T>,
+    avail_features: u64,
+    acked_features: u64,
+    mtu: u16,
     #[cfg(windows)]
-    pub(super) slirp_kill_evt: Option<Event>,
+    slirp_kill_evt: Option<Event>,
 }
 
 impl<T> Net<T>
 where
     T: TapT + ReadNotifier,
 {
-    /// Create a new virtio network device with the given IP address and
-    /// netmask.
-    pub fn new(
-        base_features: u64,
-        ip_addr: Ipv4Addr,
-        netmask: Ipv4Addr,
-        mac_addr: MacAddress,
-        vq_pairs: u16,
-    ) -> Result<Net<T>, NetError> {
-        let multi_queue = vq_pairs > 1;
-        let tap: T = T::new(true, multi_queue).map_err(NetError::TapOpen)?;
-        tap.set_ip_addr(ip_addr).map_err(NetError::TapSetIp)?;
-        tap.set_netmask(netmask).map_err(NetError::TapSetNetmask)?;
-        tap.set_mac_address(mac_addr)
-            .map_err(NetError::TapSetMacAddress)?;
-
-        tap.enable().map_err(NetError::TapEnable)?;
-
-        Net::from(base_features, tap, vq_pairs)
-    }
-
-    /// Try to open the already-configured TAP interface `name` and to create a network device from
-    /// it.
-    pub fn new_from_name(
-        base_features: u64,
-        name: &[u8],
-        vq_pairs: u16,
-    ) -> Result<Net<T>, NetError> {
-        let multi_queue = vq_pairs > 1;
-        let tap: T = T::new_with_name(name, true, multi_queue).map_err(NetError::TapOpen)?;
-
-        Net::from(base_features, tap, vq_pairs)
-    }
-
     /// Creates a new virtio network device from a tap device that has already been
     /// configured.
-    pub fn from(base_features: u64, tap: T, vq_pairs: u16) -> Result<Net<T>, NetError> {
+    pub fn new(
+        base_features: u64,
+        tap: T,
+        vq_pairs: u16,
+        mac_addr: Option<MacAddress>,
+    ) -> Result<Net<T>, NetError> {
         let taps = tap.into_mq_taps(vq_pairs).map_err(NetError::TapOpen)?;
 
         let mut mtu = u16::MAX;
@@ -507,6 +522,27 @@ where
             avail_features |= 1 << virtio_net::VIRTIO_NET_F_MQ;
         }
 
+        if mac_addr.is_some() {
+            avail_features |= 1 << virtio_net::VIRTIO_NET_F_MAC;
+        }
+
+        Self::new_internal(
+            taps,
+            avail_features,
+            mtu,
+            mac_addr,
+            #[cfg(windows)]
+            None,
+        )
+    }
+
+    pub(crate) fn new_internal(
+        taps: Vec<T>,
+        avail_features: u64,
+        mtu: u16,
+        mac_addr: Option<MacAddress>,
+        #[cfg(windows)] slirp_kill_evt: Option<Event>,
+    ) -> Result<Self, NetError> {
         let mut kill_evts: Vec<Event> = Vec::new();
         let mut workers_kill_evt: Vec<Event> = Vec::new();
         for _ in 0..taps.len() {
@@ -516,8 +552,9 @@ where
             workers_kill_evt.push(worker_kill_evt);
         }
 
-        Ok(Net {
-            queue_sizes: vec![QUEUE_SIZE; (vq_pairs * 2 + 1) as usize].into_boxed_slice(),
+        Ok(Self {
+            guest_mac: mac_addr.map(|mac| mac.octets()),
+            queue_sizes: vec![QUEUE_SIZE; (taps.len() * 2 + 1) as usize].into_boxed_slice(),
             workers_kill_evt,
             kill_evts,
             worker_threads: Vec::new(),
@@ -581,14 +618,14 @@ where
             if self.workers_kill_evt.get(i).is_none() {
                 if let Some(kill_evt) = self.kill_evts.get(i) {
                     // Ignore the result because there is nothing we can do about it.
-                    let _ = kill_evt.write(1);
+                    let _ = kill_evt.signal();
                 }
             }
         }
         #[cfg(windows)]
         {
             if let Some(slirp_kill_evt) = self.slirp_kill_evt.take() {
-                let _ = slirp_kill_evt.write(1);
+                let _ = slirp_kill_evt.signal();
             }
         }
 
@@ -658,7 +695,7 @@ where
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         let vq_pairs = self.queue_sizes.len() / 2;
-        let config_space = build_config(vq_pairs as u16, self.mtu);
+        let config_space = build_config(vq_pairs as u16, self.mtu, self.guest_mac);
         copy_config(data, 0, config_space.as_slice(), offset);
     }
 
@@ -666,94 +703,82 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != self.queue_sizes.len() || queue_evts.len() != self.queue_sizes.len() {
-            error!(
-                "net: expected {} queues, got {} queues and {} evts",
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != self.queue_sizes.len() {
+            return Err(anyhow!(
+                "net: expected {} queues, got {} queues",
                 self.queue_sizes.len(),
                 queues.len(),
-                queue_evts.len()
-            );
-            return;
+            ));
         }
 
         let vq_pairs = self.queue_sizes.len() / 2;
         if self.taps.len() != vq_pairs {
-            error!("net: expected {} taps, got {}", vq_pairs, self.taps.len());
-            return;
+            return Err(anyhow!(
+                "net: expected {} taps, got {}",
+                vq_pairs,
+                self.taps.len()
+            ));
         }
         if self.workers_kill_evt.len() != vq_pairs {
-            error!(
+            return Err(anyhow!(
                 "net: expected {} worker_kill_evt, got {}",
                 vq_pairs,
                 self.workers_kill_evt.len()
-            );
-            return;
+            ));
         }
-        let interrupt_arc = Arc::new(interrupt);
         for i in 0..vq_pairs {
             let tap = self.taps.remove(0);
             let acked_features = self.acked_features;
-            let interrupt = interrupt_arc.clone();
+            let interrupt = interrupt.clone();
             let memory = mem.clone();
             let kill_evt = self.workers_kill_evt.remove(0);
             // Queues alternate between rx0, tx0, rx1, tx1, ..., rxN, txN, ctrl.
-            let rx_queue = queues.remove(0);
-            let tx_queue = queues.remove(0);
-            let ctrl_queue = if i == 0 {
-                Some(queues.remove(queues.len() - 1))
+            let (rx_queue, rx_queue_evt) = queues.remove(0);
+            let (tx_queue, tx_queue_evt) = queues.remove(0);
+            let (ctrl_queue, ctrl_queue_evt) = if i == 0 {
+                let (queue, evt) = queues.remove(queues.len() - 1);
+                (Some(queue), Some(evt))
             } else {
-                None
+                (None, None)
             };
             let pairs = vq_pairs as u16;
-            let rx_queue_evt = queue_evts.remove(0);
-            let tx_queue_evt = queue_evts.remove(0);
-            let ctrl_queue_evt = if i == 0 {
-                Some(queue_evts.remove(queue_evts.len() - 1))
-            } else {
-                None
-            };
             #[cfg(windows)]
             let overlapped_wrapper = OverlappedWrapper::new(true).unwrap();
-            let worker_result = thread::Builder::new()
-                .name(format!("virtio_net worker {}", i))
-                .spawn(move || {
-                    let mut worker = Worker {
-                        interrupt,
-                        mem: memory,
-                        rx_queue,
-                        tx_queue,
-                        ctrl_queue,
-                        tap,
-                        #[cfg(windows)]
-                        overlapped_wrapper,
-                        acked_features,
-                        vq_pairs: pairs,
-                        #[cfg(windows)]
-                        rx_buf: [0u8; MAX_BUFFER_SIZE],
-                        #[cfg(windows)]
-                        rx_count: 0,
-                        #[cfg(windows)]
-                        deferred_rx: false,
-                        kill_evt,
-                    };
-                    let result = worker.run(rx_queue_evt, tx_queue_evt, ctrl_queue_evt);
-                    if let Err(e) = result {
-                        error!("net worker thread exited with error: {}", e);
-                    }
-                    worker
-                });
-
-            match worker_result {
-                Err(e) => {
-                    error!("failed to spawn virtio_net worker: {}", e);
-                    return;
-                }
-                Ok(join_handle) => self.worker_threads.push(join_handle),
-            }
+            self.worker_threads.push(
+                thread::Builder::new()
+                    .name(format!("v_net:{i}"))
+                    .spawn(move || {
+                        let mut worker = Worker {
+                            interrupt,
+                            mem: memory,
+                            rx_queue,
+                            tx_queue,
+                            ctrl_queue,
+                            tap,
+                            #[cfg(windows)]
+                            overlapped_wrapper,
+                            acked_features,
+                            vq_pairs: pairs,
+                            #[cfg(windows)]
+                            rx_buf: [0u8; MAX_BUFFER_SIZE],
+                            #[cfg(windows)]
+                            rx_count: 0,
+                            #[cfg(windows)]
+                            deferred_rx: false,
+                            kill_evt,
+                        };
+                        let result = worker.run(rx_queue_evt, tx_queue_evt, ctrl_queue_evt);
+                        if let Err(e) = result {
+                            error!("net worker thread exited with error: {}", e);
+                        }
+                        worker
+                    })
+                    .context("failed to spawn virtio_net worker")?,
+            );
         }
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -762,7 +787,7 @@ where
             // Only kill the child if it claimed its event.
             if self.workers_kill_evt.get(i).is_none() {
                 if let Some(kill_evt) = self.kill_evts.get(i) {
-                    if kill_evt.write(1).is_err() {
+                    if kill_evt.signal().is_err() {
                         error!("{}: failed to notify the kill event", self.debug_label());
                         return false;
                     }
@@ -785,5 +810,172 @@ where
         }
 
         true
+    }
+}
+
+impl<T> Suspendable for Net<T> where T: 'static + TapT + ReadNotifier {}
+
+#[cfg(test)]
+mod tests {
+    use serde_keyvalue::*;
+
+    use super::*;
+
+    fn from_net_arg(options: &str) -> Result<NetParameters, ParseError> {
+        from_key_values(options)
+    }
+
+    #[test]
+    fn params_from_key_values() {
+        let params = from_net_arg("");
+        assert!(params.is_err());
+
+        let params = from_net_arg("tap-name=tap").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::TapName {
+                    tap_name: "tap".to_string(),
+                    mac: None
+                }
+            }
+        );
+
+        let params = from_net_arg("tap-name=tap,mac=\"3d:70:eb:61:1a:91\"").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::TapName {
+                    tap_name: "tap".to_string(),
+                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
+                }
+            }
+        );
+
+        let params = from_net_arg("tap-fd=12").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::TapFd {
+                    tap_fd: 12,
+                    mac: None
+                }
+            }
+        );
+
+        let params = from_net_arg("tap-fd=12,mac=\"3d:70:eb:61:1a:91\"").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::TapFd {
+                    tap_fd: 12,
+                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
+                }
+            }
+        );
+
+        let params = from_net_arg(
+            "host-ip=\"192.168.10.1\",netmask=\"255.255.255.0\",mac=\"3d:70:eb:61:1a:91\"",
+        )
+        .unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::RawConfig {
+                    host_ip: Ipv4Addr::from_str("192.168.10.1").unwrap(),
+                    netmask: Ipv4Addr::from_str("255.255.255.0").unwrap(),
+                    mac: MacAddress::from_str("3d:70:eb:61:1a:91").unwrap(),
+                }
+            }
+        );
+
+        let params = from_net_arg(
+            "vhost-net=true,\
+                host-ip=\"192.168.10.1\",\
+                netmask=\"255.255.255.0\",\
+                mac=\"3d:70:eb:61:1a:91\"",
+        )
+        .unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: true,
+                mode: NetParametersMode::RawConfig {
+                    host_ip: Ipv4Addr::from_str("192.168.10.1").unwrap(),
+                    netmask: Ipv4Addr::from_str("255.255.255.0").unwrap(),
+                    mac: MacAddress::from_str("3d:70:eb:61:1a:91").unwrap(),
+                }
+            }
+        );
+
+        let params = from_net_arg("tap-fd=3,vhost-net=true").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: true,
+                mode: NetParametersMode::TapFd {
+                    tap_fd: 3,
+                    mac: None
+                }
+            }
+        );
+
+        let params = from_net_arg("tap-fd=4,vhost-net=false,mac=\"3d:70:eb:61:1a:91\"").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: false,
+                mode: NetParametersMode::TapFd {
+                    tap_fd: 4,
+                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
+                }
+            }
+        );
+
+        let params = from_net_arg("vhost-net=true,tap-name=crosvm_tap").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: true,
+                mode: NetParametersMode::TapName {
+                    tap_name: "crosvm_tap".to_owned(),
+                    mac: None
+                }
+            }
+        );
+
+        let params =
+            from_net_arg("vhost-net=true,mac=\"3d:70:eb:61:1a:91\",tap-name=crosvm_tap").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                vhost_net: true,
+                mode: NetParametersMode::TapName {
+                    tap_name: "crosvm_tap".to_owned(),
+                    mac: Some(MacAddress::from_str("3d:70:eb:61:1a:91").unwrap())
+                }
+            }
+        );
+
+        // mixed configs
+        assert!(from_net_arg(
+            "tap-name=tap,\
+            vhost-net=true,\
+            host-ip=\"192.168.10.1\",\
+            netmask=\"255.255.255.0\",\
+            mac=\"3d:70:eb:61:1a:91\"",
+        )
+        .is_err());
+
+        // missing netmask
+        assert!(from_net_arg("host-ip=\"192.168.10.1\",mac=\"3d:70:eb:61:1a:91\"").is_err());
+
+        // invalid parameter
+        assert!(from_net_arg("tap-name=tap,foomatic=true").is_err());
     }
 }

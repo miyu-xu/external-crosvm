@@ -1,25 +1,36 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::arch::x86_64::__cpuid;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::arch::x86_64::__cpuid_count;
 use std::collections::BTreeMap;
 use std::net;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 use arch::set_default_serial_parameters;
+use arch::CpuSet;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrAction;
 use arch::MsrConfig;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrFilter;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use arch::MsrRWType;
 use arch::MsrValueFrom;
 use arch::Pstore;
 use arch::VcpuAffinity;
 use base::debug;
 use base::pagesize;
+#[cfg(windows)]
+use base::RecvTube;
+#[cfg(windows)]
+use base::SendTube;
+use cros_async::ExecutorKind;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
 use devices::virtio::block::block::DiskOption;
@@ -29,6 +40,11 @@ use devices::virtio::device_constants::video::VideoDeviceConfig;
 use devices::virtio::gpu::GpuParameters;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
+#[cfg(all(windows, feature = "gpu"))]
+use devices::virtio::vhost::user::device::gpu::sys::windows::GpuBackendConfig;
+#[cfg(all(windows, feature = "gpu"))]
+use devices::virtio::vhost::user::device::gpu::sys::windows::GpuVmmConfig;
+use devices::virtio::NetParameters;
 #[cfg(feature = "audio")]
 use devices::Ac97Backend;
 #[cfg(feature = "audio")]
@@ -36,9 +52,10 @@ use devices::Ac97Parameters;
 #[cfg(feature = "direct")]
 use devices::BusRange;
 use devices::PciAddress;
-use devices::PciClassCode;
 use devices::PflashParameters;
 use devices::StubPciParameters;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::CpuHybridType;
 use hypervisor::ProtectionType;
 use resources::AddressRange;
 use serde::Deserialize;
@@ -47,10 +64,12 @@ use serde_keyvalue::FromKeyValues;
 use uuid::Uuid;
 use vm_control::BatteryType;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use x86_64::check_host_hybrid_support;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use x86_64::set_enable_pnp_data_msr_config;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use x86_64::CpuIdCall;
 
-use super::argument::parse_hex_or_decimal;
-use super::check_opt_path;
 pub(crate) use super::sys::HypervisorKind;
 
 cfg_if::cfg_if! {
@@ -64,7 +83,6 @@ cfg_if::cfg_if! {
 
         static KVM_PATH: &str = "/dev/kvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
-        static SECCOMP_POLICY_DIR: &str = "/usr/share/policy/crosvm";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
 
@@ -72,9 +90,12 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const ONE_MB: u64 = 1 << 20;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -87,6 +108,39 @@ pub enum Executable {
     Kernel(PathBuf),
     /// Path to a plugin executable that is forked by crosvm.
     Plugin(PathBuf),
+}
+
+/// The core types in hybrid architecture.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct CpuCoreType {
+    /// Intel Atom.
+    pub atom: CpuSet,
+    /// Intel Core.
+    pub core: CpuSet,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct CpuOptions {
+    /// Number of CPU cores.
+    #[serde(default)]
+    pub num_cores: Option<usize>,
+    /// Vector of CPU ids to be grouped into the same cluster.
+    #[serde(default)]
+    pub clusters: Vec<CpuSet>,
+    /// Core Type of CPUs.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub core_types: Option<CpuCoreType>,
+}
+
+#[derive(Debug, Default, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct MemOptions {
+    /// Amount of guest memory in MiB.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,21 +182,8 @@ impl FromStr for VhostUserFsOption {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct VhostUserWlOption {
-    pub socket: PathBuf,
-}
-
-impl FromStr for VhostUserWlOption {
-    type Err = <PathBuf as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self { socket: s.parse()? })
-    }
-}
-
 /// Options for virtio-vhost-user proxy device.
-#[derive(Serialize, Deserialize, Debug, PartialEq, serde_keyvalue::FromKeyValues)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, serde_keyvalue::FromKeyValues)]
 pub struct VvuOption {
     pub socket: PathBuf,
     pub addr: Option<PciAddress>,
@@ -453,7 +494,7 @@ impl FromStr for SharedDir {
                 }
                 "uidmap" => shared_dir.uid_map = value.into(),
                 "gidmap" => shared_dir.gid_map = value.into(),
-                #[cfg(feature = "chromeos")]
+                #[cfg(feature = "arc_quota")]
                 "privileged_quota_uids" => {
                     shared_dir.fs_cfg.privileged_quota_uids =
                         value.split(' ').map(|s| s.parse().unwrap()).collect();
@@ -531,18 +572,13 @@ fn jail_config_default_pivot_root() -> PathBuf {
     PathBuf::from(option_env!("DEFAULT_PIVOT_ROOT").unwrap_or("/var/empty"))
 }
 
-#[cfg(unix)]
-fn jail_config_default_seccomp_policy_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(SECCOMP_POLICY_DIR))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, serde_keyvalue::FromKeyValues)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, serde_keyvalue::FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct JailConfig {
     #[serde(default = "jail_config_default_pivot_root")]
     pub pivot_root: PathBuf,
     #[cfg(unix)]
-    #[serde(default = "jail_config_default_seccomp_policy_dir")]
+    #[serde(default)]
     pub seccomp_policy_dir: Option<PathBuf>,
     #[serde(default)]
     pub seccomp_log_failures: bool,
@@ -553,10 +589,22 @@ impl Default for JailConfig {
         JailConfig {
             pivot_root: jail_config_default_pivot_root(),
             #[cfg(unix)]
-            seccomp_policy_dir: jail_config_default_seccomp_policy_dir(),
+            seccomp_policy_dir: None,
             seccomp_log_failures: false,
         }
     }
+}
+
+fn parse_hex_or_decimal(maybe_hex_string: &str) -> Result<u64, String> {
+    // Parse string starting with 0x as hex and others as numbers.
+    if let Some(hex_string) = maybe_hex_string.strip_prefix("0x") {
+        u64::from_str_radix(hex_string, 16)
+    } else if let Some(hex_string) = maybe_hex_string.strip_prefix("0X") {
+        u64::from_str_radix(hex_string, 16)
+    } else {
+        u64::from_str(maybe_hex_string)
+    }
+    .map_err(|e| format!("invalid numeric value {}: {}", maybe_hex_string, e))
 }
 
 pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
@@ -569,9 +617,7 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
             let parse = |s: &str| -> Result<u64, String> {
                 match parse_hex_or_decimal(s) {
                     Ok(v) => Ok(v),
-                    Err(_) => {
-                        return Err(invalid_value_err(s, "expected u64 value"));
-                    }
+                    Err(_) => Err(invalid_value_err(s, "expected u64 value")),
                 }
             };
             Ok(AddressRange {
@@ -582,116 +628,72 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
         .collect()
 }
 
-pub fn parse_pstore(value: &str) -> Result<Pstore, String> {
-    let components: Vec<&str> = value.split(',').collect();
-    if components.len() != 2 {
-        return Err(invalid_value_err(
-            value,
-            "pstore must have exactly 2 components: path=<path>,size=<size>",
-        ));
-    }
-    Ok(Pstore {
-        path: {
-            if components[0].len() <= 5 || !components[0].starts_with("path=") {
-                return Err(invalid_value_err(
-                    components[0],
-                    "pstore path must follow with `path=`",
-                ));
-            };
-            PathBuf::from(&components[0][5..])
-        },
-        size: {
-            if components[1].len() <= 5 || !components[1].starts_with("size=") {
-                return Err(invalid_value_err(
-                    components[1],
-                    "pstore size must follow with `size=`",
-                ));
-            };
-            components[1][5..]
-                .parse()
-                .map_err(|_| invalid_value_err(value, "pstore size must be an integer"))?
-        },
-    })
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[derive(Deserialize, Serialize, serde_keyvalue::FromKeyValues)]
+#[serde(deny_unknown_fields)]
+struct UserspaceMsrOptions {
+    pub index: u32,
+    #[serde(rename = "type")]
+    pub rw_type: MsrRWType,
+    pub action: MsrAction,
+    #[serde(default = "default_msr_value_from")]
+    pub from: MsrValueFrom,
+    #[serde(default = "default_msr_filter")]
+    pub filter: MsrFilter,
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn default_msr_value_from() -> MsrValueFrom {
+    MsrValueFrom::RWFromRunningCPU
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn default_msr_filter() -> MsrFilter {
+    MsrFilter::Default
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
-    let mut rw_type: Option<MsrRWType> = None;
-    let mut action: Option<MsrAction> = None;
-    let mut from = MsrValueFrom::RWFromRunningCPU;
-    let mut filter = MsrFilter::Default;
-
-    let mut options = super::argument::parse_key_value_options("userspace-msr", value, ',');
-    let index: u32 = options
-        .next()
-        .ok_or(String::from("userspace-msr: expected index"))?
-        .key_numeric()
-        .map_err(|e| e.to_string())?;
-
-    for opt in options {
-        match opt.key() {
-            "type" => match opt.value().map_err(|e| e.to_string())? {
-                "r" => rw_type = Some(MsrRWType::ReadOnly),
-                "w" => rw_type = Some(MsrRWType::WriteOnly),
-                "rw" | "wr" => rw_type = Some(MsrRWType::ReadWrite),
-                _ => {
-                    return Err(String::from("bad type"));
-                }
-            },
-            "action" => match opt.value().map_err(|e| e.to_string())? {
-                "pass" => action = Some(MsrAction::MsrPassthrough),
-                "emu" => action = Some(MsrAction::MsrEmulate),
-                _ => return Err(String::from("bad action")),
-            },
-            "from" => match opt.value().map_err(|e| e.to_string())? {
-                "cpu0" => from = MsrValueFrom::RWFromCPU0,
-                _ => return Err(String::from("bad from")),
-            },
-            "filter" => match opt.value().map_err(|e| e.to_string())? {
-                "yes" => filter = MsrFilter::Override,
-                "no" => filter = MsrFilter::Default,
-                _ => return Err(String::from("bad filter")),
-            },
-
-            _ => return Err(opt.invalid_key_err().to_string()),
-        }
-    }
-
-    let rw_type = rw_type.ok_or(String::from("userspace-msr: type is required"))?;
-
-    let action = action.ok_or(String::from("userspace-msr: action is required"))?;
+    let options: UserspaceMsrOptions = from_key_values(value)?;
 
     Ok((
-        index,
+        options.index,
         MsrConfig {
-            rw_type,
-            action,
-            from,
-            filter,
+            rw_type: options.rw_type,
+            action: options.action,
+            from: options.from,
+            filter: options.filter,
         },
     ))
 }
 
-pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
-    let serial_setting: SerialParameters = from_key_values(s)?;
-
-    if serial_setting.stdin && serial_setting.input.is_some() {
+pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
+    if params.stdin && params.input.is_some() {
         return Err("Cannot specify both stdin and input options".to_string());
     }
-    if serial_setting.num < 1 {
+    if params.num < 1 {
         return Err(invalid_value_err(
-            serial_setting.num.to_string(),
+            params.num.to_string(),
             "Serial port num must be at least 1",
         ));
     }
 
-    if serial_setting.hardware == SerialHardware::Serial && serial_setting.num > 4 {
+    if params.hardware == SerialHardware::Serial && params.num > 4 {
         return Err(invalid_value_err(
-            format!("{}", serial_setting.num),
+            format!("{}", params.num),
             "Serial port num must be 4 or less",
         ));
     }
 
-    Ok(serial_setting)
+    Ok(())
+}
+
+pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
+    let params: SerialParameters = from_key_values(s)?;
+
+    validate_serial_parameters(&params)?;
+
+    Ok(params)
 }
 
 #[cfg(feature = "plugin")]
@@ -884,7 +886,6 @@ pub fn parse_ac97_options(s: &str) -> Result<Ac97Parameters, String> {
                     .map_err(|e| format!("invalid capture option: {}", e))?;
             }
             _ => {
-                #[cfg(feature = "audio_cras")]
                 super::sys::config::parse_ac97_options(&mut ac97_params, k, v)?;
             }
         }
@@ -924,53 +925,14 @@ pub fn parse_cpu_capacity(s: &str) -> Result<BTreeMap<usize, u32>, String> {
     Ok(cpu_capacity)
 }
 
-/// Parse a comma-separated list of CPU numbers and ranges and convert it to a Vec of CPU numbers.
-pub fn parse_cpu_set(s: &str) -> Result<Vec<usize>, String> {
-    let mut cpuset = Vec::new();
-    for part in s.split(',') {
-        let range: Vec<&str> = part.split('-').collect();
-        if range.is_empty() || range.len() > 2 {
-            return Err(invalid_value_err(part, "invalid list syntax"));
-        }
-        let first_cpu: usize = range[0]
-            .parse()
-            .map_err(|_| invalid_value_err(part, "CPU index must be a non-negative integer"))?;
-        let last_cpu: usize = if range.len() == 2 {
-            range[1]
-                .parse()
-                .map_err(|_| invalid_value_err(part, "CPU index must be a non-negative integer"))?
-        } else {
-            first_cpu
-        };
-
-        if last_cpu < first_cpu {
-            return Err(invalid_value_err(
-                part,
-                "CPU ranges must be from low to high",
-            ));
-        }
-
-        for cpu in first_cpu..=last_cpu {
-            cpuset.push(cpu);
-        }
-    }
-    Ok(cpuset)
-}
-
 pub fn from_key_values<'a, T: Deserialize<'a>>(value: &'a str) -> Result<T, String> {
     serde_keyvalue::from_key_values(value).map_err(|e| e.to_string())
-}
-
-pub fn numbered_disk_option(value: &str) -> Result<(usize, DiskOption), String> {
-    static DISK_COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let disk = from_key_values(value)?;
-    Ok((DISK_COUNTER.fetch_add(1, Ordering::Relaxed), disk))
 }
 
 /// Parse a list of guest to host CPU mappings.
 ///
 /// Each mapping consists of a single guest CPU index mapped to one or more host CPUs in the form
-/// accepted by `parse_cpu_set`:
+/// accepted by `CpuSet::from_str`:
 ///
 ///  `<GUEST-CPU>=<HOST-CPU-SET>[:<GUEST-CPU>=<HOST-CPU-SET>[:...]]`
 pub fn parse_cpu_affinity(s: &str) -> Result<VcpuAffinity, String> {
@@ -987,14 +949,14 @@ pub fn parse_cpu_affinity(s: &str) -> Result<VcpuAffinity, String> {
             let guest_cpu = assignment[0].parse().map_err(|_| {
                 invalid_value_err(assignment[0], "CPU index must be a non-negative integer")
             })?;
-            let host_cpu_set = parse_cpu_set(assignment[1])?;
+            let host_cpu_set = CpuSet::from_str(assignment[1])?;
             if affinity_map.insert(guest_cpu, host_cpu_set).is_some() {
                 return Err(invalid_value_err(cpu_pair, "VCPU index must be unique"));
             }
         }
         Ok(VcpuAffinity::PerVcpu(affinity_map))
     } else {
-        Ok(VcpuAffinity::Global(parse_cpu_set(s)?))
+        Ok(VcpuAffinity::Global(CpuSet::from_str(s)?))
     }
 }
 
@@ -1017,11 +979,11 @@ pub fn parse_direct_io_options(s: &str) -> Result<DirectIoOption, String> {
         .map(|mut range| {
             let base = range
                 .next()
-                .map(|v| parse_hex_or_decimal(v))
+                .map(parse_hex_or_decimal)
                 .map_or(Ok(None), |r| r.map(Some));
             let last = range
                 .next()
-                .map(|v| parse_hex_or_decimal(v))
+                .map(parse_hex_or_decimal)
                 .map_or(Ok(None), |r| r.map(Some));
             (base, last)
         })
@@ -1044,58 +1006,6 @@ pub fn parse_direct_io_options(s: &str) -> Result<DirectIoOption, String> {
 
 pub fn executable_is_plugin(executable: &Option<Executable>) -> bool {
     matches!(executable, Some(Executable::Plugin(_)))
-}
-
-pub fn parse_stub_pci_parameters(s: &str) -> Result<StubPciParameters, String> {
-    let mut options = super::argument::parse_key_value_options("stub-pci-device", s, ',');
-    let addr = options
-        .next()
-        .ok_or(String::from("stub-pci-device: expected device address"))?
-        .key();
-    let mut params = StubPciParameters {
-        address: PciAddress::from_str(addr).map_err(|e| {
-            invalid_value_err(
-                addr,
-                format!("stub-pci-device: expected PCI address: {}", e),
-            )
-        })?,
-        vendor_id: 0,
-        device_id: 0,
-        class: PciClassCode::Other,
-        subclass: 0,
-        programming_interface: 0,
-        subsystem_device_id: 0,
-        subsystem_vendor_id: 0,
-        revision_id: 0,
-    };
-    for opt in options {
-        match opt.key() {
-            "vendor" => params.vendor_id = opt.parse_numeric::<u16>().map_err(|e| e.to_string())?,
-            "device" => params.device_id = opt.parse_numeric::<u16>().map_err(|e| e.to_string())?,
-            "class" => {
-                let class = opt.parse_numeric::<u32>().map_err(|e| e.to_string())?;
-                params.class = PciClassCode::try_from((class >> 16) as u8)
-                    .map_err(|_| String::from("Unknown class code"))?;
-                params.subclass = (class >> 8) as u8;
-                params.programming_interface = class as u8;
-            }
-            "multifunction" => {} // Ignore but allow the multifunction option for compatibility.
-            "subsystem_vendor" => {
-                params.subsystem_vendor_id =
-                    opt.parse_numeric::<u16>().map_err(|e| e.to_string())?
-            }
-            "subsystem_device" => {
-                params.subsystem_device_id =
-                    opt.parse_numeric::<u16>().map_err(|e| e.to_string())?
-            }
-            "revision" => {
-                params.revision_id = opt.parse_numeric::<u8>().map_err(|e| e.to_string())?
-            }
-            _ => return Err(opt.invalid_key_err().to_string()),
-        }
-    }
-
-    Ok(params)
 }
 
 pub fn parse_pflash_parameters(s: &str) -> Result<PflashParameters, String> {
@@ -1145,6 +1055,7 @@ pub struct Config {
     pub ac97_parameters: Vec<Ac97Parameters>,
     pub acpi_tables: Vec<PathBuf>,
     pub android_fstab: Option<PathBuf>,
+    pub async_executor: Option<ExecutorKind>,
     pub balloon: bool,
     pub balloon_bias: i64,
     pub balloon_control: Option<PathBuf>,
@@ -1156,11 +1067,13 @@ pub struct Config {
     pub block_vhost_user_tube: Vec<Tube>,
     #[cfg(windows)]
     pub broker_shutdown_event: Option<Event>,
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    pub bus_lock_ratelimit: u64,
     pub cid: Option<u64>,
     #[cfg(unix)]
     pub coiommu_param: Option<devices::CoIommuParameters>,
     pub cpu_capacity: BTreeMap<usize, u32>, // CPU index -> capacity
-    pub cpu_clusters: Vec<Vec<usize>>,
+    pub cpu_clusters: Vec<CpuSet>,
     #[cfg(feature = "crash-report")]
     pub crash_pipe_name: Option<String>,
     #[cfg(feature = "crash-report")]
@@ -1168,6 +1081,8 @@ pub struct Config {
     pub delay_rt: bool,
     #[cfg(feature = "direct")]
     pub direct_edge_irq: Vec<u32>,
+    #[cfg(feature = "direct")]
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
     #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
     #[cfg(feature = "direct")]
@@ -1181,6 +1096,7 @@ pub struct Config {
     pub display_window_keyboard: bool,
     pub display_window_mouse: bool,
     pub dmi_path: Option<PathBuf>,
+    pub dump_device_tree_blob: Option<PathBuf>,
     pub enable_hwp: bool,
     pub enable_pnp_data: bool,
     pub executable_path: Option<Executable>,
@@ -1189,12 +1105,16 @@ pub struct Config {
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub force_calibrated_tsc_leaf: bool,
     pub force_s2idle: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     pub gdb: Option<u32>,
+    #[cfg(all(windows, feature = "gpu"))]
+    pub gpu_backend_config: Option<GpuBackendConfig>,
     #[cfg(feature = "gpu")]
     pub gpu_parameters: Option<GpuParameters>,
     #[cfg(all(unix, feature = "gpu"))]
     pub gpu_render_server_parameters: Option<GpuRenderServerParameters>,
+    #[cfg(all(windows, feature = "gpu"))]
+    pub gpu_vmm_config: Option<GpuVmmConfig>,
     pub host_cpu_topology: bool,
     #[cfg(windows)]
     pub host_guid: Option<String>,
@@ -1221,6 +1141,9 @@ pub struct Config {
     pub memory: Option<u64>,
     pub memory_file: Option<PathBuf>,
     pub mmio_address_ranges: Vec<AddressRange>,
+    #[cfg(target_arch = "aarch64")]
+    pub mte: bool,
+    pub net: Vec<NetParameters>,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
     pub net_vq_pairs: Option<u16>,
@@ -1228,6 +1151,8 @@ pub struct Config {
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub oem_strings: Vec<String>,
     pub params: Vec<String>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pci_low_start: Option<u64>,
@@ -1253,17 +1178,18 @@ pub struct Config {
     pub product_name: Option<String>,
     #[cfg(windows)]
     pub product_version: Option<String>,
-    pub protected_vm: ProtectionType,
+    pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
     #[cfg(windows)]
     pub pvclock: bool,
-    /// Must be `Some` iff `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
+    pub restore_path: Option<PathBuf>,
     pub rng: bool,
-    pub rt_cpus: Vec<usize>,
+    pub rt_cpus: CpuSet,
     #[serde(with = "serde_serial_params")]
     pub serial_parameters: BTreeMap<(SerialHardware, u8), SerialParameters>,
-    #[cfg(feature = "kiwi")]
+    #[cfg(windows)]
     pub service_pipe_name: Option<String>,
     #[cfg(unix)]
     #[serde(skip)]
@@ -1278,6 +1204,7 @@ pub struct Config {
     pub split_irqchip: bool,
     pub strict_balloon: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
+    pub swap_dir: Option<PathBuf>,
     pub swiotlb: Option<u64>,
     #[cfg(windows)]
     pub syslog_tag: Option<String>,
@@ -1291,8 +1218,10 @@ pub struct Config {
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
     pub vcpu_count: Option<usize>,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub vcpu_hybrid_type: BTreeMap<usize, CpuHybridType>, // CPU index -> hybrid type
     #[cfg(unix)]
-    pub vfio: Vec<super::sys::config::VfioCommand>,
+    pub vfio: Vec<super::sys::config::VfioOption>,
     #[cfg(unix)]
     pub vfio_isolate_hotplug: bool,
     pub vhost_net: bool,
@@ -1305,17 +1234,16 @@ pub struct Config {
     pub vhost_user_mac80211_hwsim: Option<VhostUserOption>,
     pub vhost_user_net: Vec<VhostUserOption>,
     pub vhost_user_snd: Vec<VhostUserOption>,
-    pub vhost_user_video_dec: Option<VhostUserOption>,
+    pub vhost_user_video_dec: Vec<VhostUserOption>,
     pub vhost_user_vsock: Vec<VhostUserOption>,
-    pub vhost_user_wl: Option<VhostUserWlOption>,
+    pub vhost_user_wl: Option<VhostUserOption>,
     #[cfg(unix)]
     pub vhost_vsock_device: Option<PathBuf>,
     #[cfg(feature = "video-decoder")]
-    pub video_dec: Option<VideoDeviceConfig>,
+    pub video_dec: Vec<VideoDeviceConfig>,
     #[cfg(feature = "video-encoder")]
-    pub video_enc: Option<VideoDeviceConfig>,
+    pub video_enc: Vec<VideoDeviceConfig>,
     pub virtio_input_evdevs: Vec<PathBuf>,
-    pub virtio_iommu: bool,
     pub virtio_keyboard: Vec<PathBuf>,
     pub virtio_mice: Vec<PathBuf>,
     pub virtio_multi_touch: Vec<TouchDeviceOption>,
@@ -1325,7 +1253,11 @@ pub struct Config {
     pub virtio_snds: Vec<SndParameters>,
     pub virtio_switches: Vec<PathBuf>,
     pub virtio_trackpad: Vec<TouchDeviceOption>,
-    #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+    #[cfg(windows)]
+    pub vm_evt_rdtube: Option<RecvTube>,
+    #[cfg(windows)]
+    pub vm_evt_wrtube: Option<SendTube>,
+    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
     pub vtpm_proxy: bool,
     pub vvu_proxy: Vec<VvuOption>,
     pub wayland_socket_paths: BTreeMap<String, PathBuf>,
@@ -1339,6 +1271,7 @@ impl Default for Config {
             ac97_parameters: Vec::new(),
             acpi_tables: Vec::new(),
             android_fstab: None,
+            async_executor: None,
             balloon: true,
             balloon_bias: 0,
             balloon_control: None,
@@ -1350,6 +1283,8 @@ impl Default for Config {
             block_vhost_user_tube: Vec::new(),
             #[cfg(windows)]
             broker_shutdown_event: None,
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            bus_lock_ratelimit: 0,
             cid: None,
             #[cfg(unix)]
             coiommu_param: None,
@@ -1363,6 +1298,8 @@ impl Default for Config {
             #[cfg(feature = "direct")]
             direct_edge_irq: Vec::new(),
             #[cfg(feature = "direct")]
+            direct_fixed_evts: Vec::new(),
+            #[cfg(feature = "direct")]
             direct_gpe: Vec::new(),
             #[cfg(feature = "direct")]
             direct_level_irq: Vec::new(),
@@ -1375,6 +1312,7 @@ impl Default for Config {
             display_window_keyboard: false,
             display_window_mouse: false,
             dmi_path: None,
+            dump_device_tree_blob: None,
             enable_hwp: false,
             enable_pnp_data: false,
             executable_path: None,
@@ -1383,12 +1321,16 @@ impl Default for Config {
             file_backed_mappings: Vec::new(),
             force_calibrated_tsc_leaf: false,
             force_s2idle: false,
-            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            #[cfg(feature = "gdb")]
             gdb: None,
+            #[cfg(all(windows, feature = "gpu"))]
+            gpu_backend_config: None,
             #[cfg(feature = "gpu")]
             gpu_parameters: None,
             #[cfg(all(unix, feature = "gpu"))]
             gpu_render_server_parameters: None,
+            #[cfg(all(windows, feature = "gpu"))]
+            gpu_vmm_config: None,
             host_cpu_topology: false,
             #[cfg(windows)]
             host_guid: None,
@@ -1423,6 +1365,9 @@ impl Default for Config {
             memory: None,
             memory_file: None,
             mmio_address_ranges: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            mte: false,
+            net: Vec::new(),
             #[cfg(windows)]
             net_vhost_user_tube: None,
             net_vq_pairs: None,
@@ -1430,6 +1375,8 @@ impl Default for Config {
             no_i8042: false,
             no_rtc: false,
             no_smt: false,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            oem_strings: Vec::new(),
             params: Vec::new(),
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             pci_low_start: None,
@@ -1451,20 +1398,22 @@ impl Default for Config {
             process_invariants_data_size: None,
             #[cfg(windows)]
             product_name: None,
-            protected_vm: ProtectionType::Unprotected,
+            protection_type: ProtectionType::Unprotected,
             pstore: None,
             #[cfg(windows)]
             pvclock: false,
             pvm_fw: None,
+            restore_path: None,
             rng: true,
-            rt_cpus: Vec::new(),
+            rt_cpus: Default::default(),
             serial_parameters: BTreeMap::new(),
-            #[cfg(feature = "kiwi")]
+            #[cfg(windows)]
             service_pipe_name: None,
             #[cfg(unix)]
             shared_dirs: Vec::new(),
             #[cfg(feature = "slirp-ring-capture")]
             slirp_capture_file: None,
+            swap_dir: None,
             socket_path: None,
             #[cfg(feature = "tpm")]
             software_tpm: false,
@@ -1486,6 +1435,8 @@ impl Default for Config {
             vcpu_affinity: None,
             vcpu_cgroup_path: None,
             vcpu_count: None,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            vcpu_hybrid_type: BTreeMap::new(),
             #[cfg(unix)]
             vfio: Vec::new(),
             #[cfg(unix)]
@@ -1495,7 +1446,7 @@ impl Default for Config {
             vhost_net_device_path: PathBuf::from(VHOST_NET_PATH),
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),
-            vhost_user_video_dec: None,
+            vhost_user_video_dec: Vec::new(),
             vhost_user_fs: Vec::new(),
             vhost_user_gpu: Vec::new(),
             vhost_user_mac80211_hwsim: None,
@@ -1506,11 +1457,10 @@ impl Default for Config {
             #[cfg(unix)]
             vhost_vsock_device: None,
             #[cfg(feature = "video-decoder")]
-            video_dec: None,
+            video_dec: Vec::new(),
             #[cfg(feature = "video-encoder")]
-            video_enc: None,
+            video_enc: Vec::new(),
             virtio_input_evdevs: Vec::new(),
-            virtio_iommu: false,
             virtio_keyboard: Vec::new(),
             virtio_mice: Vec::new(),
             virtio_multi_touch: Vec::new(),
@@ -1519,7 +1469,11 @@ impl Default for Config {
             virtio_snds: Vec::new(),
             virtio_switches: Vec::new(),
             virtio_trackpad: Vec::new(),
-            #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+            #[cfg(windows)]
+            vm_evt_rdtube: None,
+            #[cfg(windows)]
+            vm_evt_wrtube: None,
+            #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
             vtpm_proxy: false,
             vvu_proxy: Vec::new(),
             wayland_socket_paths: BTreeMap::new(),
@@ -1529,57 +1483,8 @@ impl Default for Config {
 }
 
 pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
-    if !match &cfg.executable_path {
-        Some(Executable::Bios(p)) => p,
-        Some(Executable::Kernel(p)) => p,
-        Some(Executable::Plugin(p)) => p,
-        None => {
-            return Err("Executable is not specified".to_string());
-        }
-    }
-    .exists()
-    {
-        return Err("Executable does not exist".to_string());
-    }
-
-    check_opt_path!(cfg.android_fstab);
-
-    check_opt_path!(cfg.vcpu_cgroup_path);
-
-    check_opt_path!(cfg.balloon_control);
-
-    check_opt_path!(cfg.dmi_path);
-
-    for disk in cfg.disks.iter() {
-        if !disk.path.exists() {
-            return Err(format!("Disk path {:?} does not exist", disk.path));
-        }
-    }
-
-    for disk in cfg.pmem_devices.iter() {
-        if !disk.path.exists() {
-            return Err(format!("PMEM device path {:?} does not exist", disk.path));
-        }
-    }
-
-    for dev in cfg.virtio_input_evdevs.iter() {
-        if !dev.exists() {
-            return Err(format!("Virtio evdev device path {:?} does not exist", dev));
-        }
-    }
-
-    for p in cfg.acpi_tables.iter() {
-        if !p.exists() {
-            return Err(format!("ACPI table path {:?} does not exist", p));
-        }
-        if !p.is_file() {
-            return Err(String::from("the acpi-table path should be a file"));
-        }
-    }
-
-    #[cfg(feature = "audio")]
-    {
-        check_opt_path!(cfg.sound);
+    if cfg.executable_path.is_none() {
+        return Err("Executable is not specified".to_string());
     }
 
     if cfg.plugin_root.is_some() && !executable_is_plugin(&cfg.executable_path) {
@@ -1588,9 +1493,9 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
 
     #[cfg(feature = "gpu")]
     {
-        crate::crosvm::sys::validate_gpu_config(cfg)?;
+        crate::crosvm::gpu_config::validate_gpu_config(cfg)?;
     }
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     if cfg.gdb.is_some() && cfg.vcpu_count.unwrap_or(1) != 1 {
         return Err("`gdb` requires the number of vCPU to be 1".to_string());
     }
@@ -1622,7 +1527,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
             None => {
                 let mut affinity_map = BTreeMap::new();
                 for cpu_id in 0..cfg.vcpu_count.unwrap() {
-                    affinity_map.insert(cpu_id, vec![cpu_id]);
+                    affinity_map.insert(cpu_id, CpuSet::new([cpu_id]));
                 }
                 cfg.vcpu_affinity = Some(VcpuAffinity::PerVcpu(affinity_map));
             }
@@ -1643,6 +1548,22 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
                             .to_string(),
                     );
                 }
+            }
+        }
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if !cfg.vcpu_hybrid_type.is_empty() {
+        if cfg.host_cpu_topology {
+            return Err("`core-types` cannot be set with `host-cpu-topology`.".to_string());
+        }
+        check_host_hybrid_support(&CpuIdCall::new(__cpuid_count, __cpuid))
+            .map_err(|e| format!("the cpu doesn't support `core-types`: {}", e))?;
+        if cfg.vcpu_hybrid_type.len() != cfg.vcpu_count.unwrap_or(1) {
+            return Err("`core-types` must be set for all virtual CPUs".to_string());
+        }
+        for cpu_id in 0..cfg.vcpu_count.unwrap_or(1) {
+            if !cfg.vcpu_hybrid_type.contains_key(&cpu_id) {
+                return Err("`core-types` must be set for all virtual CPUs".to_string());
             }
         }
     }
@@ -1749,81 +1670,187 @@ fn validate_file_backed_mapping(mapping: &mut FileBackedMappingParameters) -> Re
 #[cfg(test)]
 mod tests {
     use argh::FromArgs;
+    use devices::PciClassCode;
+    use devices::StubPciParameters;
 
     use super::*;
 
     #[test]
+    fn parse_cpu_opts() {
+        let res: CpuOptions = from_key_values("").unwrap();
+        assert_eq!(res, CpuOptions::default());
+
+        // num_cores
+        let res: CpuOptions = from_key_values("12").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                num_cores: Some(12),
+                ..Default::default()
+            }
+        );
+
+        let res: CpuOptions = from_key_values("num-cores=16").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                num_cores: Some(16),
+                ..Default::default()
+            }
+        );
+
+        // clusters
+        let res: CpuOptions = from_key_values("clusters=[[0],[1],[2],[3]]").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                clusters: vec![
+                    CpuSet::new([0]),
+                    CpuSet::new([1]),
+                    CpuSet::new([2]),
+                    CpuSet::new([3])
+                ],
+                ..Default::default()
+            }
+        );
+
+        let res: CpuOptions = from_key_values("clusters=[[0-3]]").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                clusters: vec![CpuSet::new([0, 1, 2, 3])],
+                ..Default::default()
+            }
+        );
+
+        let res: CpuOptions = from_key_values("clusters=[[0,2],[1,3],[4-7,12]]").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                clusters: vec![
+                    CpuSet::new([0, 2]),
+                    CpuSet::new([1, 3]),
+                    CpuSet::new([4, 5, 6, 7, 12])
+                ],
+                ..Default::default()
+            }
+        );
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            let res: CpuOptions = from_key_values("core-types=[atom=[1,3-7],core=[0,2]]").unwrap();
+            assert_eq!(
+                res,
+                CpuOptions {
+                    core_types: Some(CpuCoreType {
+                        atom: CpuSet::new([1, 3, 4, 5, 6, 7]),
+                        core: CpuSet::new([0, 2])
+                    }),
+                    ..Default::default()
+                }
+            );
+        }
+
+        // All together
+        let res: CpuOptions = from_key_values("16,clusters=[[0],[4-6],[7]]").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                num_cores: Some(16),
+                clusters: vec![CpuSet::new([0]), CpuSet::new([4, 5, 6]), CpuSet::new([7])],
+                ..Default::default()
+            }
+        );
+
+        let res: CpuOptions = from_key_values("clusters=[[0-7],[30-31]],num-cores=32").unwrap();
+        assert_eq!(
+            res,
+            CpuOptions {
+                num_cores: Some(32),
+                clusters: vec![CpuSet::new([0, 1, 2, 3, 4, 5, 6, 7]), CpuSet::new([30, 31])],
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn parse_cpu_set_single() {
-        assert_eq!(parse_cpu_set("123").expect("parse failed"), vec![123]);
+        assert_eq!(
+            CpuSet::from_str("123").expect("parse failed"),
+            CpuSet::new([123])
+        );
     }
 
     #[test]
     fn parse_cpu_set_list() {
         assert_eq!(
-            parse_cpu_set("0,1,2,3").expect("parse failed"),
-            vec![0, 1, 2, 3]
+            CpuSet::from_str("0,1,2,3").expect("parse failed"),
+            CpuSet::new([0, 1, 2, 3])
         );
     }
 
     #[test]
     fn parse_cpu_set_range() {
         assert_eq!(
-            parse_cpu_set("0-3").expect("parse failed"),
-            vec![0, 1, 2, 3]
+            CpuSet::from_str("0-3").expect("parse failed"),
+            CpuSet::new([0, 1, 2, 3])
         );
     }
 
     #[test]
     fn parse_cpu_set_list_of_ranges() {
         assert_eq!(
-            parse_cpu_set("3-4,7-9,18").expect("parse failed"),
-            vec![3, 4, 7, 8, 9, 18]
+            CpuSet::from_str("3-4,7-9,18").expect("parse failed"),
+            CpuSet::new([3, 4, 7, 8, 9, 18])
         );
     }
 
     #[test]
     fn parse_cpu_set_repeated() {
         // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t conversion.
-        assert_eq!(parse_cpu_set("1,1,1").expect("parse failed"), vec![1, 1, 1]);
+        assert_eq!(
+            CpuSet::from_str("1,1,1").expect("parse failed"),
+            CpuSet::new([1, 1, 1])
+        );
     }
 
     #[test]
     fn parse_cpu_set_negative() {
         // Negative CPU numbers are not allowed.
-        parse_cpu_set("-3").expect_err("parse should have failed");
+        CpuSet::from_str("-3").expect_err("parse should have failed");
     }
 
     #[test]
     fn parse_cpu_set_reverse_range() {
         // Ranges must be from low to high.
-        parse_cpu_set("5-2").expect_err("parse should have failed");
+        CpuSet::from_str("5-2").expect_err("parse should have failed");
     }
 
     #[test]
     fn parse_cpu_set_open_range() {
-        parse_cpu_set("3-").expect_err("parse should have failed");
+        CpuSet::from_str("3-").expect_err("parse should have failed");
     }
 
     #[test]
     fn parse_cpu_set_extra_comma() {
-        parse_cpu_set("0,1,2,").expect_err("parse should have failed");
+        CpuSet::from_str("0,1,2,").expect_err("parse should have failed");
     }
 
     #[test]
     fn parse_cpu_affinity_global() {
         assert_eq!(
             parse_cpu_affinity("0,5-7,9").expect("parse failed"),
-            VcpuAffinity::Global(vec![0, 5, 6, 7, 9]),
+            VcpuAffinity::Global(CpuSet::new([0, 5, 6, 7, 9])),
         );
     }
 
     #[test]
     fn parse_cpu_affinity_per_vcpu_one_to_one() {
         let mut expected_map = BTreeMap::new();
-        expected_map.insert(0, vec![0]);
-        expected_map.insert(1, vec![1]);
-        expected_map.insert(2, vec![2]);
-        expected_map.insert(3, vec![3]);
+        expected_map.insert(0, CpuSet::new([0]));
+        expected_map.insert(1, CpuSet::new([1]));
+        expected_map.insert(2, CpuSet::new([2]));
+        expected_map.insert(3, CpuSet::new([3]));
         assert_eq!(
             parse_cpu_affinity("0=0:1=1:2=2:3=3").expect("parse failed"),
             VcpuAffinity::PerVcpu(expected_map),
@@ -1833,13 +1860,25 @@ mod tests {
     #[test]
     fn parse_cpu_affinity_per_vcpu_sets() {
         let mut expected_map = BTreeMap::new();
-        expected_map.insert(0, vec![0, 1, 2]);
-        expected_map.insert(1, vec![3, 4, 5]);
-        expected_map.insert(2, vec![6, 7, 8]);
+        expected_map.insert(0, CpuSet::new([0, 1, 2]));
+        expected_map.insert(1, CpuSet::new([3, 4, 5]));
+        expected_map.insert(2, CpuSet::new([6, 7, 8]));
         assert_eq!(
             parse_cpu_affinity("0=0,1,2:1=3-5:2=6,7-8").expect("parse failed"),
             VcpuAffinity::PerVcpu(expected_map),
         );
+    }
+
+    #[test]
+    fn parse_mem_opts() {
+        let res: MemOptions = from_key_values("").unwrap();
+        assert_eq!(res.size, None);
+
+        let res: MemOptions = from_key_values("1024").unwrap();
+        assert_eq!(res.size, Some(1024));
+
+        let res: MemOptions = from_key_values("size=0x4000").unwrap();
+        assert_eq!(res.size, Some(16384));
     }
 
     #[cfg(feature = "audio_cras")]
@@ -2031,18 +2070,18 @@ mod tests {
 
     #[test]
     fn parse_stub_pci() {
-        let params = parse_stub_pci_parameters("0000:01:02.3,vendor=0xfffe,device=0xfffd,class=0xffc1c2,subsystem_vendor=0xfffc,subsystem_device=0xfffb,revision=0xa").unwrap();
+        let params = from_key_values::<StubPciParameters>("0000:01:02.3,vendor=0xfffe,device=0xfffd,class=0xffc1c2,subsystem_vendor=0xfffc,subsystem_device=0xfffb,revision=0xa").unwrap();
         assert_eq!(params.address.bus, 1);
         assert_eq!(params.address.dev, 2);
         assert_eq!(params.address.func, 3);
-        assert_eq!(params.vendor_id, 0xfffe);
-        assert_eq!(params.device_id, 0xfffd);
-        assert_eq!(params.class as u8, PciClassCode::Other as u8);
-        assert_eq!(params.subclass, 0xc1);
-        assert_eq!(params.programming_interface, 0xc2);
-        assert_eq!(params.subsystem_vendor_id, 0xfffc);
-        assert_eq!(params.subsystem_device_id, 0xfffb);
-        assert_eq!(params.revision_id, 0xa);
+        assert_eq!(params.vendor, 0xfffe);
+        assert_eq!(params.device, 0xfffd);
+        assert_eq!(params.class.class as u8, PciClassCode::Other as u8);
+        assert_eq!(params.class.subclass, 0xc1);
+        assert_eq!(params.class.programming_interface, 0xc2);
+        assert_eq!(params.subsystem_vendor, 0xfffc);
+        assert_eq!(params.subsystem_device, 0xfffb);
+        assert_eq!(params.revision, 0xa);
     }
 
     #[cfg(feature = "direct")]
@@ -2156,6 +2195,7 @@ mod tests {
         assert_eq!(params.size, 0x2000);
     }
 
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn parse_userspace_msr_options_test() {
         let (pass_cpu0_index, pass_cpu0_cfg) =
@@ -2203,7 +2243,7 @@ mod tests {
             JailConfig {
                 pivot_root: jail_config_default_pivot_root(),
                 #[cfg(unix)]
-                seccomp_policy_dir: jail_config_default_seccomp_policy_dir(),
+                seccomp_policy_dir: None,
                 seccomp_log_failures: false,
             }
         );
@@ -2271,22 +2311,22 @@ mod tests {
         #[cfg(feature = "libvda")]
         {
             let params: VideoDeviceConfig = from_key_values("libvda").unwrap();
-            assert_eq!(params.backend_type, VideoBackendType::Libvda);
+            assert_eq!(params.backend, VideoBackendType::Libvda);
 
             let params: VideoDeviceConfig = from_key_values("libvda-vd").unwrap();
-            assert_eq!(params.backend_type, VideoBackendType::LibvdaVd);
+            assert_eq!(params.backend, VideoBackendType::LibvdaVd);
         }
 
         #[cfg(feature = "ffmpeg")]
         {
             let params: VideoDeviceConfig = from_key_values("ffmpeg").unwrap();
-            assert_eq!(params.backend_type, VideoBackendType::Ffmpeg);
+            assert_eq!(params.backend, VideoBackendType::Ffmpeg);
         }
 
         #[cfg(feature = "vaapi")]
         {
             let params: VideoDeviceConfig = from_key_values("vaapi").unwrap();
-            assert_eq!(params.backend_type, VideoBackendType::Vaapi);
+            assert_eq!(params.backend, VideoBackendType::Vaapi);
         }
     }
 

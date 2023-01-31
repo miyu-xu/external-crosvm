@@ -1,7 +1,7 @@
 [package]
 name = "base"
 version = "0.1.0"
-authors = ["The Chromium OS Authors"]
+authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [features]
@@ -27,10 +27,14 @@ tempfile = "3"
 thiserror = "1.0.20"
 uuid = { version = "0.8.2", features = ["v4"] }
 
+[target.'cfg(unix)'.dependencies]
+minijail = "*"
+
 [target.'cfg(windows)'.dependencies]
 rand = "0.8"
 winapi = "*"
 win_util = { path = "../win_util"}
+protobuf = { version = "*", features = [ "with-serde" ] }
 
 [target.'cfg(windows)'.dev-dependencies]
 regex = "*"

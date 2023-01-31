@@ -1,8 +1,6 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-use std::mem::ManuallyDrop;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -12,7 +10,6 @@ use base::named_pipes::FramingMode;
 use base::named_pipes::PipeConnection;
 use base::CloseNotifier;
 use base::Event;
-use base::FromRawDescriptor;
 use base::RawDescriptor;
 use base::ReadNotifier;
 use base::Tube;
@@ -23,6 +20,8 @@ use futures::select;
 use futures::FutureExt;
 use tube_transporter::TubeTransferDataList;
 use tube_transporter::TubeTransporterReader;
+use vmm_vhost::message::MasterReq;
+use vmm_vhost::message::VhostUserMsgHeader;
 use vmm_vhost::SlaveReqHandler;
 
 use crate::virtio::vhost::user::device::handler::CallEvent;
@@ -52,36 +51,10 @@ impl DeviceRequestHandler<VhostUserRegularOps> {
         let read_notifier = vhost_user_tube.get_read_notifier();
         let close_notifier = vhost_user_tube.get_close_notifier();
 
-        // Safe because:
-        // a) the underlying Event is guaranteed valid by the Tube.
-        // b) we do NOT take ownership of the underlying Event. If we did that would cause an early
-        //    free (and later a double free @ the end of this scope). This is why we have to wrap
-        //    it in ManuallyDrop.
-        // c) we own the clone that is produced exclusively, so it is safe to take ownership of it.
-        let read_event = EventAsync::new(
-            // Safe, see block comment.
-            unsafe {
-                ManuallyDrop::new(Event::from_raw_descriptor(
-                    read_notifier.as_raw_descriptor(),
-                ))
-            }
-            .try_clone()
-            .context("failed to clone event")?,
-            ex,
-        )
-        .context("failed to create an async event")?;
-        let close_event = EventAsync::new(
-            // Safe, see block comment.
-            unsafe {
-                ManuallyDrop::new(Event::from_raw_descriptor(
-                    close_notifier.as_raw_descriptor(),
-                ))
-            }
-            .try_clone()
-            .context("failed to clone event")?,
-            ex,
-        )
-        .context("failed to create an async event")?;
+        let read_event = EventAsync::clone_raw_without_reset(read_notifier, ex)
+            .context("failed to create an async event")?;
+        let close_event = EventAsync::clone_raw_without_reset(close_notifier, ex)
+            .context("failed to create an async event")?;
         let exit_event =
             EventAsync::new(exit_event, ex).context("failed to create an async event")?;
 
@@ -95,12 +68,33 @@ impl DeviceRequestHandler<VhostUserRegularOps> {
         pin_mut!(close_event_fut);
         pin_mut!(exit_event_fut);
 
+        let mut pending_header: Option<(
+            VhostUserMsgHeader<MasterReq>,
+            Option<Vec<std::fs::File>>,
+        )> = None;
         loop {
             select! {
                 _read_res = read_event_fut => {
-                    req_handler
-                        .handle_request()
-                        .context("failed to handle a vhost-user request")?;
+                    match pending_header.take() {
+                        None => {
+                            let (hdr, files) = req_handler
+                                .recv_header()
+                                .context("failed to handle a vhost-user request")?;
+                            if req_handler.needs_wait_for_payload(&hdr) {
+                                // Wait for the message body being notified.
+                                pending_header = Some((hdr, files));
+                            } else {
+                                req_handler
+                                    .process_message(hdr, files)
+                                    .context("failed to handle a vhost-user request")?;
+                            }
+                        }
+                        Some((hdr, files)) => {
+                            req_handler
+                                .process_message(hdr, files)
+                                .context("failed to handle a vhost-user request")?;
+                        }
+                    }
                     read_event_fut.set(read_event.next_val().fuse());
                 }
                 // Tube closed event.
@@ -141,7 +135,7 @@ mod tests {
             let init_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
             let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
 
-            let mut vmm_handler = VhostUserHandler::new_from_tube(
+            let mut vmm_handler = VhostUserHandler::new_from_connection(
                 main_tube,
                 QUEUES_NUM as u64,
                 allow_features,

@@ -1,11 +1,9 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::panic;
 use std::process::abort;
-
-use crate::metrics;
 
 /// The intent of our panic hook is to get panic info and a stacktrace into the syslog, even for
 /// jailed subprocesses. It will always abort on panic to ensure a minidump is generated.

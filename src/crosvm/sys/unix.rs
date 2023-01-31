@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,17 +25,13 @@ use std::io::stdin;
 use std::iter;
 use std::mem;
 use std::ops::RangeInclusive;
-#[cfg(feature = "gpu")]
-use std::os::unix::net::UnixStream;
 use std::os::unix::prelude::OpenOptionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process;
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
-#[cfg(all(target_arch = "x86_64"))]
-use std::thread;
 #[cfg(feature = "balloon")]
 use std::time::Duration;
 
@@ -52,19 +48,21 @@ use arch::VcpuAffinity;
 use arch::VirtioDeviceStub;
 use arch::VmComponents;
 use arch::VmImage;
-use base::sys::WaitStatus;
 #[cfg(feature = "balloon")]
 use base::UnixSeqpacket;
 use base::UnixSeqpacketListener;
 use base::UnlinkUnixSeqpacketListener;
 use base::*;
+use cros_async::Executor;
 use device_helpers::*;
+use devices::create_devices_worker_thread;
 use devices::serial_device::SerialHardware;
 use devices::vfio::VfioCommonSetup;
 use devices::vfio::VfioCommonTrait;
 #[cfg(feature = "gpu")]
 use devices::virtio;
 use devices::virtio::device_constants::video::VideoDeviceType;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::virtio::memory_mapper::MemoryMapper;
 use devices::virtio::memory_mapper::MemoryMapperTrait;
 use devices::virtio::vhost::user::VhostUserListener;
@@ -76,13 +74,19 @@ use devices::virtio::BalloonFeatures;
 use devices::virtio::BalloonMode;
 #[cfg(feature = "gpu")]
 use devices::virtio::EventDevice;
+use devices::virtio::NetParameters;
+use devices::virtio::NetParametersMode;
+use devices::virtio::VirtioTransportType;
 #[cfg(feature = "audio")]
 use devices::Ac97Dev;
+use devices::Bus;
 use devices::BusDeviceObj;
 use devices::CoIommuDev;
 #[cfg(feature = "usb")]
 use devices::HostBackendDeviceProvider;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::HostHotPlugKey;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::HotPlugBus;
 use devices::IommuDevType;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -94,25 +98,30 @@ use devices::IrqEventSource;
 use devices::KvmKernelIrqChip;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::KvmSplitIrqChip;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PciAddress;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PciBridge;
 use devices::PciDevice;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PciRoot;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PciRootCommand;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use devices::PcieDownstreamPort;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PcieHostPort;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::PcieRootPort;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use devices::PcieUpstreamPort;
 use devices::PvPanicCode;
 use devices::PvPanicPciDevice;
 use devices::StubPciDevice;
+use devices::VirtioMmioDevice;
 use devices::VirtioPciDevice;
 #[cfg(feature = "usb")]
 use devices::XhciController;
-#[cfg(feature = "gpu")]
-pub use gpu::GpuRenderServerParameters;
 #[cfg(feature = "gpu")]
 use gpu::*;
 use hypervisor::kvm::Kvm;
@@ -141,6 +150,8 @@ use resources::Alloc;
 use resources::Error as ResourceError;
 use resources::SystemAllocator;
 use rutabaga_gfx::RutabagaGralloc;
+#[cfg(feature = "swap")]
+use swap::SwapController;
 use sync::Condvar;
 use sync::Mutex;
 use vm_control::*;
@@ -161,12 +172,13 @@ use crate::crosvm::config::HypervisorKind;
 use crate::crosvm::config::JailConfig;
 use crate::crosvm::config::SharedDir;
 use crate::crosvm::config::SharedDirKind;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use crate::crosvm::gdb::gdb_thread;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use crate::crosvm::gdb::GdbStub;
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+use crate::crosvm::ratelimit::Ratelimit;
 use crate::crosvm::sys::cmdline::DevicesCommand;
-use crate::crosvm::sys::config::VfioType;
 
 fn create_virtio_devices(
     cfg: &Config,
@@ -178,23 +190,23 @@ fn create_virtio_devices(
     #[cfg(feature = "balloon")] init_balloon_size: u64,
     disk_device_tubes: &mut Vec<Tube>,
     pmem_device_tubes: &mut Vec<Tube>,
-    #[cfg_attr(not(feature = "gpu"), allow(unused_variables))] map_request: Arc<
-        Mutex<Option<ExternalMapping>>,
-    >,
     fs_device_tubes: &mut Vec<Tube>,
-    #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
+    #[cfg(feature = "gpu")] gpu_control_tube: Tube,
+    #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))] render_server_fd: Option<
+        SafeDescriptor,
+    >,
     vvu_proxy_device_tubes: &mut Vec<Tube>,
     vvu_proxy_max_sibling_mem_size: u64,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
 
     for opt in &cfg.vhost_user_gpu {
-        devs.push(create_vhost_user_gpu_device(cfg.protected_vm, opt)?);
+        devs.push(create_vhost_user_gpu_device(cfg.protection_type, opt)?);
     }
 
     for opt in &cfg.vvu_proxy {
         devs.push(create_vvu_proxy_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             opt,
             vvu_proxy_device_tubes.remove(0),
@@ -219,7 +231,7 @@ fn create_virtio_devices(
         }
 
         devs.push(create_wayland_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             &cfg.wayland_socket_paths,
             wl_resource_bridge,
@@ -227,22 +239,28 @@ fn create_virtio_devices(
     }
 
     #[cfg(feature = "video-decoder")]
-    let video_dec_cfg = if let Some(config) = &cfg.video_dec {
-        let (video_tube, gpu_tube) = Tube::pair().context("failed to create tube")?;
-        resource_bridges.push(gpu_tube);
-        Some((video_tube, config.backend_type))
-    } else {
-        None
-    };
+    let video_dec_cfg = cfg
+        .video_dec
+        .iter()
+        .map(|config| {
+            let (video_tube, gpu_tube) =
+                Tube::pair().expect("failed to create tube for video decoder");
+            resource_bridges.push(gpu_tube);
+            (video_tube, config.backend)
+        })
+        .collect::<Vec<_>>();
 
     #[cfg(feature = "video-encoder")]
-    let video_enc_cfg = if let Some(config) = &cfg.video_enc {
-        let (video_tube, gpu_tube) = Tube::pair().context("failed to create tube")?;
-        resource_bridges.push(gpu_tube);
-        Some((video_tube, config.backend_type))
-    } else {
-        None
-    };
+    let video_enc_cfg = cfg
+        .video_enc
+        .iter()
+        .map(|config| {
+            let (video_tube, gpu_tube) =
+                Tube::pair().expect("failed to create tube for video encoder");
+            resource_bridges.push(gpu_tube);
+            (video_tube, config.backend)
+        })
+        .collect::<Vec<_>>();
 
     #[cfg(feature = "gpu")]
     {
@@ -250,15 +268,15 @@ fn create_virtio_devices(
             let display_param = if gpu_parameters.display_params.is_empty() {
                 Default::default()
             } else {
-                gpu_parameters.display_params[0]
+                gpu_parameters.display_params[0].clone()
             };
-            let gpu_display_w = display_param.width;
-            let gpu_display_h = display_param.height;
+            let (gpu_display_w, gpu_display_h) = display_param.get_virtual_display_size();
 
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
                 let (event_device_socket, virtio_dev_socket) =
-                    UnixStream::pair().context("failed to create socket")?;
+                    StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                        .context("failed to create socket")?;
                 let (multi_touch_width, multi_touch_height) = cfg
                     .virtio_multi_touch
                     .first()
@@ -272,7 +290,7 @@ fn create_virtio_devices(
                     virtio_dev_socket,
                     multi_touch_width,
                     multi_touch_height,
-                    virtio::base_features(cfg.protected_vm),
+                    virtio::base_features(cfg.protection_type),
                 )
                 .context("failed to set up mouse device")?;
                 devs.push(VirtioDeviceStub {
@@ -283,13 +301,14 @@ fn create_virtio_devices(
             }
             if cfg.display_window_keyboard {
                 let (event_device_socket, virtio_dev_socket) =
-                    UnixStream::pair().context("failed to create socket")?;
+                    StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                        .context("failed to create socket")?;
                 let dev = virtio::new_keyboard(
                     // u32::MAX is the least likely to collide with the indices generated above for
                     // the multi_touch options, which begin at 0.
                     u32::MAX,
                     virtio_dev_socket,
-                    virtio::base_features(cfg.protected_vm),
+                    virtio::base_features(cfg.protection_type),
                 )
                 .context("failed to set up keyboard device")?;
                 devs.push(VirtioDeviceStub {
@@ -302,13 +321,14 @@ fn create_virtio_devices(
             devs.push(create_gpu_device(
                 cfg,
                 vm_evt_wrtube,
+                gpu_control_tube,
                 resource_bridges,
                 // Use the unnamed socket for GPU display screens.
                 cfg.wayland_socket_paths.get(""),
                 cfg.x_display.clone(),
+                #[cfg(feature = "virgl_renderer_next")]
                 render_server_fd,
                 event_devices,
-                map_request,
             )?);
         }
     }
@@ -318,27 +338,32 @@ fn create_virtio_devices(
         .iter()
         .filter(|(_k, v)| v.hardware == SerialHardware::VirtioConsole)
     {
-        let dev = param.create_virtio_device_and_jail(cfg.protected_vm, &cfg.jail_config)?;
+        let dev = param.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?;
         devs.push(dev);
     }
 
     for disk in &cfg.disks {
         let disk_config = DiskConfig::new(disk, Some(disk_device_tubes.remove(0)));
-        devs.push(disk_config.create_virtio_device_and_jail(cfg.protected_vm, &cfg.jail_config)?);
+        devs.push(
+            disk_config.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?,
+        );
     }
 
     for blk in &cfg.vhost_user_blk {
-        devs.push(create_vhost_user_block_device(cfg.protected_vm, blk)?);
+        devs.push(create_vhost_user_block_device(cfg.protection_type, blk)?);
     }
 
     for console in &cfg.vhost_user_console {
-        devs.push(create_vhost_user_console_device(cfg.protected_vm, console)?);
+        devs.push(create_vhost_user_console_device(
+            cfg.protection_type,
+            console,
+        )?);
     }
 
     for (index, pmem_disk) in cfg.pmem_devices.iter().enumerate() {
         let pmem_device_tube = pmem_device_tubes.remove(0);
         devs.push(create_pmem_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             vm,
             resources,
@@ -349,24 +374,24 @@ fn create_virtio_devices(
     }
 
     if cfg.rng {
-        devs.push(create_rng_device(cfg.protected_vm, &cfg.jail_config)?);
+        devs.push(create_rng_device(cfg.protection_type, &cfg.jail_config)?);
     }
 
     #[cfg(feature = "tpm")]
     {
         if cfg.software_tpm {
             devs.push(create_software_tpm_device(
-                cfg.protected_vm,
+                cfg.protection_type,
                 &cfg.jail_config,
             )?);
         }
     }
 
-    #[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
     {
         if cfg.vtpm_proxy {
             devs.push(create_vtpm_proxy_device(
-                cfg.protected_vm,
+                cfg.protection_type,
                 &cfg.jail_config,
             )?);
         }
@@ -374,7 +399,7 @@ fn create_virtio_devices(
 
     for (idx, single_touch_spec) in cfg.virtio_single_touch.iter().enumerate() {
         devs.push(create_single_touch_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             single_touch_spec,
             idx as u32,
@@ -383,7 +408,7 @@ fn create_virtio_devices(
 
     for (idx, multi_touch_spec) in cfg.virtio_multi_touch.iter().enumerate() {
         devs.push(create_multi_touch_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             multi_touch_spec,
             idx as u32,
@@ -392,7 +417,7 @@ fn create_virtio_devices(
 
     for (idx, trackpad_spec) in cfg.virtio_trackpad.iter().enumerate() {
         devs.push(create_trackpad_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             trackpad_spec,
             idx as u32,
@@ -401,7 +426,7 @@ fn create_virtio_devices(
 
     for (idx, mouse_socket) in cfg.virtio_mice.iter().enumerate() {
         devs.push(create_mouse_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             mouse_socket,
             idx as u32,
@@ -410,7 +435,7 @@ fn create_virtio_devices(
 
     for (idx, keyboard_socket) in cfg.virtio_keyboard.iter().enumerate() {
         devs.push(create_keyboard_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             keyboard_socket,
             idx as u32,
@@ -419,7 +444,7 @@ fn create_virtio_devices(
 
     for (idx, switches_socket) in cfg.virtio_switches.iter().enumerate() {
         devs.push(create_switches_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             switches_socket,
             idx as u32,
@@ -428,7 +453,7 @@ fn create_virtio_devices(
 
     for dev_path in &cfg.virtio_input_evdevs {
         devs.push(create_vinput_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             dev_path,
         )?);
@@ -439,7 +464,7 @@ fn create_virtio_devices(
         let balloon_features =
             (cfg.balloon_page_reporting as u64) << BalloonFeatures::PageReporting as u64;
         devs.push(create_balloon_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             if cfg.strict_balloon {
                 BalloonMode::Strict
@@ -453,66 +478,84 @@ fn create_virtio_devices(
         )?);
     }
 
-    // We checked above that if the IP is defined, then the netmask is, too.
-    for tap_fd in &cfg.tap_fd {
-        devs.push(create_tap_net_device_from_fd(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            *tap_fd,
-        )?);
-    }
+    let mut net_cfg_extra: Vec<_> = cfg
+        .tap_fd
+        .iter()
+        .map(|fd| NetParameters {
+            vhost_net: cfg.vhost_net,
+            mode: NetParametersMode::TapFd {
+                tap_fd: *fd,
+                mac: None,
+            },
+        })
+        .collect();
 
-    if let (Some(host_ip), Some(netmask), Some(mac_address)) =
-        (cfg.host_ip, cfg.netmask, cfg.mac_address)
-    {
+    if let (Some(host_ip), Some(netmask), Some(mac)) = (cfg.host_ip, cfg.netmask, cfg.mac_address) {
         if !cfg.vhost_user_net.is_empty() {
             bail!("vhost-user-net cannot be used with any of --host-ip, --netmask or --mac");
         }
-        devs.push(create_net_device_from_config(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            if cfg.vhost_net {
-                Some(cfg.vhost_net_device_path.clone())
-            } else {
-                None
+        net_cfg_extra.push(NetParameters {
+            vhost_net: cfg.vhost_net,
+            mode: NetParametersMode::RawConfig {
+                host_ip,
+                netmask,
+                mac,
             },
-            host_ip,
-            netmask,
-            mac_address,
-        )?);
+        });
     }
 
-    for tap_name in &cfg.tap_name {
-        devs.push(create_tap_net_device_from_name(
-            cfg.protected_vm,
-            &cfg.jail_config,
-            cfg.net_vq_pairs.unwrap_or(1),
-            cfg.vcpu_count.unwrap_or(1),
-            tap_name.as_bytes(),
-        )?);
+    net_cfg_extra.extend(cfg.tap_name.iter().map(|tap_name| NetParameters {
+        vhost_net: cfg.vhost_net,
+        mode: NetParametersMode::TapName {
+            mac: None,
+            tap_name: tap_name.to_owned(),
+        },
+    }));
+
+    for opt in [&cfg.net, &net_cfg_extra].into_iter().flatten() {
+        let vq_pairs = cfg.net_vq_pairs.unwrap_or(1);
+        let vcpu_count = cfg.vcpu_count.unwrap_or(1);
+        let multi_vq = vq_pairs > 1 && !opt.vhost_net;
+        let (tap, mac) = create_tap_for_net_device(&opt.mode, multi_vq)?;
+        let dev = if opt.vhost_net {
+            create_virtio_vhost_net_device_from_tap(
+                cfg.protection_type,
+                &cfg.jail_config,
+                vq_pairs,
+                vcpu_count,
+                cfg.vhost_net_device_path.clone(),
+                tap,
+            )
+        } else {
+            create_virtio_net_device_from_tap(
+                cfg.protection_type,
+                &cfg.jail_config,
+                vq_pairs,
+                vcpu_count,
+                tap,
+                mac,
+            )
+        }?;
+        devs.push(dev);
     }
 
     for net in &cfg.vhost_user_net {
-        devs.push(create_vhost_user_net_device(cfg.protected_vm, net)?);
+        devs.push(create_vhost_user_net_device(cfg.protection_type, net)?);
     }
 
     for vsock in &cfg.vhost_user_vsock {
-        devs.push(create_vhost_user_vsock_device(cfg.protected_vm, vsock)?);
+        devs.push(create_vhost_user_vsock_device(cfg.protection_type, vsock)?);
     }
 
     for opt in &cfg.vhost_user_wl {
-        devs.push(create_vhost_user_wl_device(cfg.protected_vm, opt)?);
+        devs.push(create_vhost_user_wl_device(cfg.protection_type, opt)?);
     }
 
     #[cfg(feature = "audio")]
     {
         for virtio_snd in &cfg.virtio_snds {
             devs.push(create_virtio_snd_device(
-                cfg.protected_vm,
+                cfg.protection_type,
                 &cfg.jail_config,
                 virtio_snd.clone(),
             )?);
@@ -521,20 +564,20 @@ fn create_virtio_devices(
 
     #[cfg(feature = "video-decoder")]
     {
-        if let Some((video_dec_tube, video_dec_backend)) = video_dec_cfg {
+        for (tube, backend) in video_dec_cfg {
             register_video_device(
-                video_dec_backend,
+                backend,
                 &mut devs,
-                video_dec_tube,
-                cfg.protected_vm,
+                tube,
+                cfg.protection_type,
                 &cfg.jail_config,
                 VideoDeviceType::Decoder,
             )?;
         }
     }
-    if let Some(socket_path) = &cfg.vhost_user_video_dec {
+    for socket_path in &cfg.vhost_user_video_dec {
         devs.push(create_vhost_user_video_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             socket_path,
             VideoDeviceType::Decoder,
         )?);
@@ -542,12 +585,12 @@ fn create_virtio_devices(
 
     #[cfg(feature = "video-encoder")]
     {
-        if let Some((video_enc_tube, video_enc_backend)) = video_enc_cfg {
+        for (tube, backend) in video_enc_cfg {
             register_video_device(
-                video_enc_backend,
+                backend,
                 &mut devs,
-                video_enc_tube,
-                cfg.protected_vm,
+                tube,
+                cfg.protection_type,
                 &cfg.jail_config,
                 VideoDeviceType::Encoder,
             )?;
@@ -560,7 +603,7 @@ fn create_virtio_devices(
             cid,
         };
         devs.push(create_vhost_vsock_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             &vhost_config,
         )?);
@@ -568,14 +611,14 @@ fn create_virtio_devices(
 
     for vhost_user_fs in &cfg.vhost_user_fs {
         devs.push(create_vhost_user_fs_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             vhost_user_fs,
         )?);
     }
 
     for vhost_user_snd in &cfg.vhost_user_snd {
         devs.push(create_vhost_user_snd_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             vhost_user_snd,
         )?);
     }
@@ -595,7 +638,7 @@ fn create_virtio_devices(
             SharedDirKind::FS => {
                 let device_tube = fs_device_tubes.remove(0);
                 create_fs_device(
-                    cfg.protected_vm,
+                    cfg.protection_type,
                     &cfg.jail_config,
                     uid_map,
                     gid_map,
@@ -606,7 +649,7 @@ fn create_virtio_devices(
                 )?
             }
             SharedDirKind::P9 => create_9p_device(
-                cfg.protected_vm,
+                cfg.protection_type,
                 &cfg.jail_config,
                 uid_map,
                 gid_map,
@@ -620,7 +663,7 @@ fn create_virtio_devices(
 
     if let Some(vhost_user_mac80211_hwsim) = &cfg.vhost_user_mac80211_hwsim {
         devs.push(create_vhost_user_mac80211_hwsim_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             vhost_user_mac80211_hwsim,
         )?);
     }
@@ -629,7 +672,7 @@ fn create_virtio_devices(
     if let Some(path) = &cfg.sound {
         devs.push(create_sound_device(
             path,
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
         )?);
     }
@@ -650,8 +693,10 @@ fn create_devices(
     pmem_device_tubes: &mut Vec<Tube>,
     fs_device_tubes: &mut Vec<Tube>,
     #[cfg(feature = "usb")] usb_provider: HostBackendDeviceProvider,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
-    #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
+    #[cfg(feature = "gpu")] gpu_control_tube: Tube,
+    #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))] render_server_fd: Option<
+        SafeDescriptor,
+    >,
     vvu_proxy_device_tubes: &mut Vec<Tube>,
     vvu_proxy_max_sibling_mem_size: u64,
     iova_max_addr: &mut Option<u64>,
@@ -662,76 +707,59 @@ fn create_devices(
     if !cfg.vfio.is_empty() {
         let mut coiommu_attached_endpoints = Vec::new();
 
-        for vfio_dev in cfg
-            .vfio
-            .iter()
-            .filter(|dev| dev.get_type() == VfioType::Pci)
-        {
-            let vfio_path = &vfio_dev.vfio_path;
-            let (vfio_pci_device, jail, viommu_mapper) = create_vfio_device(
+        for vfio_dev in &cfg.vfio {
+            let (dev, jail, viommu_mapper) = create_vfio_device(
                 &cfg.jail_config,
                 vm,
                 resources,
                 control_tubes,
-                vfio_path.as_path(),
+                &vfio_dev.path,
+                false,
                 None,
-                vfio_dev.guest_address(),
+                vfio_dev.guest_address,
                 Some(&mut coiommu_attached_endpoints),
-                vfio_dev.iommu_dev_type(),
+                vfio_dev.iommu,
+                #[cfg(feature = "direct")]
+                vfio_dev.intel_lpss,
             )?;
+            match dev {
+                VfioDeviceVariant::Pci(vfio_pci_device) => {
+                    *iova_max_addr = Some(max(
+                        vfio_pci_device.get_max_iova(),
+                        iova_max_addr.unwrap_or(0),
+                    ));
 
-            *iova_max_addr = Some(max(
-                vfio_pci_device.get_max_iova(),
-                iova_max_addr.unwrap_or(0),
-            ));
+                    if let Some(viommu_mapper) = viommu_mapper {
+                        iommu_attached_endpoints.insert(
+                            vfio_pci_device
+                                .pci_address()
+                                .context("not initialized")?
+                                .to_u32(),
+                            Arc::new(Mutex::new(Box::new(viommu_mapper))),
+                        );
+                    }
 
-            if let Some(viommu_mapper) = viommu_mapper {
-                iommu_attached_endpoints.insert(
-                    vfio_pci_device
-                        .pci_address()
-                        .context("not initialized")?
-                        .to_u32(),
-                    Arc::new(Mutex::new(Box::new(viommu_mapper))),
-                );
+                    devices.push((Box::new(vfio_pci_device), jail));
+                }
+                VfioDeviceVariant::Platform(vfio_plat_dev) => {
+                    devices.push((Box::new(vfio_plat_dev), jail));
+                }
             }
-
-            devices.push((vfio_pci_device, jail));
-        }
-
-        for vfio_dev in cfg
-            .vfio
-            .iter()
-            .filter(|dev| dev.get_type() == VfioType::Platform)
-        {
-            let vfio_path = &vfio_dev.vfio_path;
-            let (vfio_plat_dev, jail) = create_vfio_platform_device(
-                &cfg.jail_config,
-                vm,
-                resources,
-                control_tubes,
-                vfio_path.as_path(),
-                iommu_attached_endpoints,
-                IommuDevType::NoIommu, // Virtio IOMMU is not supported yet
-            )?;
-
-            devices.push((Box::new(vfio_plat_dev), jail));
         }
 
         if !coiommu_attached_endpoints.is_empty() || !iommu_attached_endpoints.is_empty() {
-            let mut buf = mem::MaybeUninit::<libc::rlimit>::zeroed();
-            let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, buf.as_mut_ptr()) };
+            let mut buf = mem::MaybeUninit::<libc::rlimit64>::zeroed();
+            let res = unsafe { libc::getrlimit64(libc::RLIMIT_MEMLOCK, buf.as_mut_ptr()) };
             if res == 0 {
                 let limit = unsafe { buf.assume_init() };
-                let rlim_new = limit
-                    .rlim_cur
-                    .saturating_add(vm.get_memory().memory_size() as libc::rlim_t);
+                let rlim_new = limit.rlim_cur.saturating_add(vm.get_memory().memory_size());
                 let rlim_max = max(limit.rlim_max, rlim_new);
                 if limit.rlim_cur < rlim_new {
-                    let limit_arg = libc::rlimit {
-                        rlim_cur: rlim_new as libc::rlim_t,
-                        rlim_max: rlim_max as libc::rlim_t,
+                    let limit_arg = libc::rlimit64 {
+                        rlim_cur: rlim_new,
+                        rlim_max,
                     };
-                    let res = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &limit_arg) };
+                    let res = unsafe { libc::setrlimit64(libc::RLIMIT_MEMLOCK, &limit_arg) };
                     if res != 0 {
                         bail!("Set rlimit failed");
                     }
@@ -750,7 +778,10 @@ fn create_devices(
                     .context("failed to get vfio container")?;
             let (coiommu_host_tube, coiommu_device_tube) =
                 Tube::pair().context("failed to create coiommu tube")?;
-            control_tubes.push(TaggedControlTube::VmMemory(coiommu_host_tube));
+            control_tubes.push(TaggedControlTube::VmMemory {
+                tube: coiommu_host_tube,
+                expose_with_viommu: false,
+            });
             let vcpu_count = cfg.vcpu_count.unwrap_or(1) as u64;
             #[cfg(feature = "balloon")]
             match Tube::pair() {
@@ -791,37 +822,51 @@ fn create_devices(
         init_balloon_size,
         disk_device_tubes,
         pmem_device_tubes,
-        map_request,
         fs_device_tubes,
         #[cfg(feature = "gpu")]
+        gpu_control_tube,
+        #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
         render_server_fd,
         vvu_proxy_device_tubes,
         vvu_proxy_max_sibling_mem_size,
     )?;
 
     for stub in stubs {
-        let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
-        control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
+        match stub.dev.transport_type() {
+            VirtioTransportType::Pci => {
+                let (msi_host_tube, msi_device_tube) =
+                    Tube::pair().context("failed to create tube")?;
+                control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
 
-        let shared_memory_tube = if stub.dev.get_shared_memory_region().is_some() {
-            let (host_tube, device_tube) =
-                Tube::pair().context("failed to create VVU proxy tube")?;
-            control_tubes.push(TaggedControlTube::VmMemory(host_tube));
-            Some(device_tube)
-        } else {
-            None
-        };
+                let shared_memory_tube = if stub.dev.get_shared_memory_region().is_some() {
+                    let (host_tube, device_tube) =
+                        Tube::pair().context("failed to create VVU proxy tube")?;
+                    control_tubes.push(TaggedControlTube::VmMemory {
+                        tube: host_tube,
+                        expose_with_viommu: stub.dev.expose_shmem_descriptors_with_viommu(),
+                    });
+                    Some(device_tube)
+                } else {
+                    None
+                };
 
-        let dev = VirtioPciDevice::new(
-            vm.get_memory().clone(),
-            stub.dev,
-            msi_device_tube,
-            cfg.disable_virtio_intx,
-            shared_memory_tube,
-        )
-        .context("failed to create virtio pci dev")?;
+                let dev = VirtioPciDevice::new(
+                    vm.get_memory().clone(),
+                    stub.dev,
+                    msi_device_tube,
+                    cfg.disable_virtio_intx,
+                    shared_memory_tube,
+                )
+                .context("failed to create virtio pci dev")?;
 
-        devices.push((Box::new(dev) as Box<dyn BusDeviceObj>, stub.jail));
+                devices.push((Box::new(dev) as Box<dyn BusDeviceObj>, stub.jail));
+            }
+            VirtioTransportType::Mmio => {
+                let dev = VirtioMmioDevice::new(vm.get_memory().clone(), stub.dev, false)
+                    .context("failed to create virtio mmio dev")?;
+                devices.push((Box::new(dev) as Box<dyn BusDeviceObj>, stub.jail));
+            }
+        }
     }
 
     #[cfg(feature = "audio")]
@@ -916,11 +961,12 @@ fn create_pcie_root_port(
     sys_allocator: &mut SystemAllocator,
     control_tubes: &mut Vec<TaggedControlTube>,
     devices: &mut Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
-    hp_vec: &mut Vec<Arc<Mutex<dyn HotPlugBus>>>,
+    hp_vec: &mut Vec<(u8, Arc<Mutex<dyn HotPlugBus>>)>,
     hp_endpoints_ranges: &mut Vec<RangeInclusive<u32>>,
     // TODO(b/228627457): clippy is incorrectly warning about this Vec, which needs to be a Vec so
     // we can push into it
     #[allow(clippy::ptr_arg)] gpe_notify_devs: &mut Vec<(u32, Arc<Mutex<dyn GpeNotify>>)>,
+    #[allow(clippy::ptr_arg)] pme_notify_devs: &mut Vec<(u8, Arc<Mutex<dyn PmeNotify>>)>,
 ) -> Result<()> {
     if host_pcie_rp.is_empty() {
         // user doesn't specify host pcie root port which link to this virtual pcie rp,
@@ -936,6 +982,7 @@ fn create_pcie_root_port(
                 continue;
             }
             let pcie_root_port = Arc::new(Mutex::new(PcieRootPort::new(i, false)));
+            pme_notify_devs.push((i, pcie_root_port.clone() as Arc<Mutex<dyn PmeNotify>>));
             let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
             control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
             let pci_bridge = Box::new(PciBridge::new(pcie_root_port.clone(), msi_device_tube));
@@ -948,6 +995,10 @@ fn create_pcie_root_port(
             return Err(anyhow!("no more addresses are available"));
         }
         let pcie_root_port = Arc::new(Mutex::new(PcieRootPort::new(hp_sec_bus, true)));
+        pme_notify_devs.push((
+            hp_sec_bus,
+            pcie_root_port.clone() as Arc<Mutex<dyn PmeNotify>>,
+        ));
         let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
         control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
         let pci_bridge = Box::new(PciBridge::new(pcie_root_port.clone(), msi_device_tube));
@@ -968,7 +1019,7 @@ fn create_pcie_root_port(
         ));
 
         devices.push((pci_bridge, None));
-        hp_vec.push(pcie_root_port as Arc<Mutex<dyn HotPlugBus>>);
+        hp_vec.push((hp_sec_bus, pcie_root_port as Arc<Mutex<dyn HotPlugBus>>));
     } else {
         // user specify host pcie root port which link to this virtual pcie rp,
         // reserve the host pci BDF and create a virtual pcie RP with some attrs same as host
@@ -1030,7 +1081,10 @@ fn create_pcie_root_port(
                     gpe_notify_devs
                         .push((gpe, pcie_root_port.clone() as Arc<Mutex<dyn GpeNotify>>));
                 }
-                hp_vec.push(pcie_root_port as Arc<Mutex<dyn HotPlugBus>>);
+                hp_vec.push((
+                    bus_range.secondary,
+                    pcie_root_port as Arc<Mutex<dyn HotPlugBus>>,
+                ));
             }
         }
     }
@@ -1074,13 +1128,10 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             size.checked_mul(1024 * 1024)
                 .ok_or_else(|| anyhow!("requested swiotlb size too large"))?,
         )
+    } else if matches!(cfg.protection_type, ProtectionType::Unprotected) {
+        None
     } else {
-        match cfg.protected_vm {
-            ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware => {
-                Some(64 * 1024 * 1024)
-            }
-            ProtectionType::Unprotected | ProtectionType::UnprotectedWithFirmware => None,
-        }
+        Some(64 * 1024 * 1024)
     };
 
     let (pflash_image, pflash_block_size) = if let Some(pflash_parameters) = &cfg.pflash_parameters
@@ -1114,8 +1165,15 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         cpu_capacity: cfg.cpu_capacity.clone(),
         #[cfg(feature = "direct")]
         direct_gpe: cfg.direct_gpe.clone(),
+        #[cfg(feature = "direct")]
+        direct_fixed_evts: cfg.direct_fixed_evts.clone(),
         no_smt: cfg.no_smt,
         hugepages: cfg.hugepages,
+        hv_cfg: hypervisor::Config {
+            #[cfg(target_arch = "aarch64")]
+            mte: cfg.mte,
+            protection_type: cfg.protection_type,
+        },
         vm_image,
         android_fstab: cfg
             .android_fstab
@@ -1140,12 +1198,13 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .collect::<Result<Vec<SDT>>>()?,
         rt_cpus: cfg.rt_cpus.clone(),
         delay_rt: cfg.delay_rt,
-        protected_vm: cfg.protected_vm,
-        #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+        #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
         gdb: None,
         dmi_path: cfg.dmi_path.clone(),
         no_i8042: cfg.no_i8042,
         no_rtc: cfg.no_rtc,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        oem_strings: cfg.oem_strings.clone(),
         host_cpu_topology: cfg.host_cpu_topology,
         itmt: cfg.itmt,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -1164,6 +1223,7 @@ pub enum ExitState {
     Stop,
     Crash,
     GuestPanic,
+    WatchdogReset,
 }
 // Remove ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
 // Returns the updated guest memory layout.
@@ -1208,14 +1268,19 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         .collect()
 }
 
-fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Result<ExitState> {
+fn run_kvm(
+    cfg: Config,
+    components: VmComponents,
+    guest_mem: GuestMemory,
+    #[cfg(feature = "swap")] swap_controller: Option<SwapController>,
+) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).with_context(|| {
         format!(
             "failed to open KVM device {}",
             cfg.kvm_device_path.display(),
         )
     })?;
-    let vm = KvmVm::new(&kvm, guest_mem, components.protected_vm).context("failed to create vm")?;
+    let vm = KvmVm::new(&kvm, guest_mem, components.hv_cfg).context("failed to create vm")?;
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if cfg.itmt {
@@ -1235,11 +1300,7 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
     }
 
     // Check that the VM was actually created in protected mode as expected.
-    if matches!(
-        cfg.protected_vm,
-        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
-    ) && !vm.check_capability(VmCap::Protected)
-    {
+    if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
         bail!("Failed to create protected VM");
     }
     let vm_clone = vm.try_clone().context("failed to clone vm")?;
@@ -1286,7 +1347,15 @@ fn run_kvm(cfg: Config, components: VmComponents, guest_mem: GuestMemory) -> Res
         )
     };
 
-    run_vm::<KvmVcpu, KvmVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+    run_vm::<KvmVcpu, KvmVm>(
+        cfg,
+        components,
+        vm,
+        irq_chip.as_mut(),
+        ioapic_host_tube,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    )
 }
 
 fn get_default_hypervisor() -> Result<HypervisorKind> {
@@ -1294,6 +1363,11 @@ fn get_default_hypervisor() -> Result<HypervisorKind> {
 }
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
+    if let Some(async_executor) = cfg.async_executor {
+        Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
+
     let components = setup_vm_components(&cfg)?;
 
     let guest_mem_layout =
@@ -1313,13 +1387,28 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
     }
     guest_mem.set_memory_policy(mem_policy);
 
+    // Setup page fault handlers for vmm-swap.
+    // This should be called before device processes are forked.
+    #[cfg(feature = "swap")]
+    let swap_controller = cfg
+        .swap_dir
+        .as_ref()
+        .map(|swap_dir| SwapController::launch(guest_mem.clone(), swap_dir.clone()))
+        .transpose()?;
+
     let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
-        HypervisorKind::Kvm => run_kvm(cfg, components, guest_mem),
+        HypervisorKind::Kvm => run_kvm(
+            cfg,
+            components,
+            guest_mem,
+            #[cfg(feature = "swap")]
+            swap_controller,
+        ),
     }
 }
 
@@ -1329,6 +1418,7 @@ fn run_vm<Vcpu, V>(
     mut vm: V,
     irq_chip: &mut dyn IrqChipArch,
     ioapic_host_tube: Option<Tube>,
+    #[cfg(feature = "swap")] swap_controller: Option<SwapController>,
 ) -> Result<ExitState>
 where
     Vcpu: VcpuArch + 'static,
@@ -1340,6 +1430,10 @@ where
         // access to those files will not be possible.
         info!("crosvm entering multiprocess mode");
     }
+
+    #[cfg(feature = "gpu")]
+    let (gpu_control_host_tube, gpu_control_device_tube) =
+        Tube::pair().context("failed to create gpu tube")?;
 
     #[cfg(feature = "usb")]
     let (usb_control_tube, usb_provider) =
@@ -1359,7 +1453,7 @@ where
 
     let mut control_tubes = Vec::new();
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     if let Some(port) = cfg.gdb {
         // GDB needs a control socket to interrupt vcpus.
         let (gdb_host_tube, gdb_control_tube) = Tube::pair().context("failed to create tube")?;
@@ -1372,8 +1466,13 @@ where
         if let Some(ref path) = cfg.balloon_control {
             (
                 None,
-                Some(Tube::new(
-                    UnixSeqpacket::connect(path).context("failed to create balloon control")?,
+                Some(Tube::new_from_unix_seqpacket(
+                    UnixSeqpacket::connect(path).with_context(|| {
+                        format!(
+                            "failed to connect to balloon control socket {}",
+                            path.display(),
+                        )
+                    })?,
                 )),
             )
         } else {
@@ -1413,7 +1512,10 @@ where
     }
 
     let battery = if cfg.battery_config.is_some() {
-        #[cfg_attr(not(feature = "power-monitor-powerd"), allow(clippy::manual_map))]
+        #[cfg_attr(
+            not(feature = "power-monitor-powerd"),
+            allow(clippy::manual_map, clippy::needless_match)
+        )]
         let jail = match simple_jail(&cfg.jail_config, "battery")? {
             #[cfg_attr(not(feature = "power-monitor-powerd"), allow(unused_mut))]
             Some(mut jail) => {
@@ -1443,8 +1545,6 @@ where
         (cfg.battery_config.as_ref().map(|c| c.type_), None)
     };
 
-    let map_request: Arc<Mutex<Option<ExternalMapping>>> = Arc::new(Mutex::new(None));
-
     let fs_count = cfg
         .shared_dirs
         .iter()
@@ -1461,7 +1561,10 @@ where
     for _ in 0..cfg.vvu_proxy.len() {
         let (vvu_proxy_host_tube, vvu_proxy_device_tube) =
             Tube::pair().context("failed to create VVU proxy tube")?;
-        control_tubes.push(TaggedControlTube::VmMemory(vvu_proxy_host_tube));
+        control_tubes.push(TaggedControlTube::VmMemory {
+            tube: vvu_proxy_host_tube,
+            expose_with_viommu: false,
+        });
         vvu_proxy_device_tubes.push(vvu_proxy_device_tube);
     }
 
@@ -1490,7 +1593,7 @@ where
 
     create_file_backed_mappings(&cfg, &mut vm, &mut sys_allocator)?;
 
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
     // Hold on to the render server jail so it keeps running until we exit run_vm()
     let (_render_server_jail, render_server_fd) =
         if let Some(parameters) = &cfg.gpu_render_server_parameters {
@@ -1593,8 +1696,9 @@ where
         &mut fs_device_tubes,
         #[cfg(feature = "usb")]
         usb_provider,
-        Arc::clone(&map_request),
         #[cfg(feature = "gpu")]
+        gpu_control_device_tube,
+        #[cfg(all(feature = "gpu", feature = "virgl_renderer_next"))]
         render_server_fd,
         &mut vvu_proxy_device_tubes,
         components.memory_size,
@@ -1606,9 +1710,11 @@ where
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let mut hp_endpoints_ranges: Vec<RangeInclusive<u32>> = Vec::new();
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    let mut hotplug_buses: Vec<Arc<Mutex<dyn HotPlugBus>>> = Vec::new();
+    let mut hotplug_buses: Vec<(u8, Arc<Mutex<dyn HotPlugBus>>)> = Vec::new();
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let mut gpe_notify_devs: Vec<(u32, Arc<Mutex<dyn GpeNotify>>)> = Vec::new();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let mut pme_notify_devs: Vec<(u8, Arc<Mutex<dyn PmeNotify>>)> = Vec::new();
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         #[cfg(feature = "direct")]
@@ -1625,6 +1731,7 @@ where
             &mut hotplug_buses,
             &mut hp_endpoints_ranges,
             &mut gpe_notify_devs,
+            &mut pme_notify_devs,
         )?;
     }
 
@@ -1636,12 +1743,12 @@ where
         &mut devices,
     )?;
 
-    let iommu_host_tube = if !iommu_attached_endpoints.is_empty() || cfg.virtio_iommu
+    let iommu_host_tube = if !iommu_attached_endpoints.is_empty()
         || (cfg.vfio_isolate_hotplug && !hp_endpoints_ranges.is_empty())
     {
         let (iommu_host_tube, iommu_device_tube) = Tube::pair().context("failed to create tube")?;
         let iommu_dev = create_iommu_device(
-            cfg.protected_vm,
+            cfg.protection_type,
             &cfg.jail_config,
             iova_max_addr.unwrap_or(u64::MAX),
             iommu_attached_endpoints,
@@ -1702,6 +1809,7 @@ where
         devices,
         irq_chip,
         &mut vcpu_ids,
+        cfg.dump_device_tree_blob.clone(),
         simple_jail(&cfg.jail_config, "serial_device")?,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         simple_jail(&cfg.jail_config, "block_device")?,
@@ -1710,25 +1818,27 @@ where
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let (hp_control_tube, hp_worker_tube) = mpsc::channel();
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    let (hp_control_tube, _) = mpsc::channel();
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        for hotplug_bus in hotplug_buses.iter() {
-            linux.hotplug_bus.push(hotplug_bus.clone());
+    let hp_thread = {
+        for (bus_num, hp_bus) in hotplug_buses {
+            linux.hotplug_bus.insert(bus_num, hp_bus);
         }
 
         if let Some(pm) = &linux.pm {
             while let Some((gpe, notify_dev)) = gpe_notify_devs.pop() {
                 pm.lock().register_gpe_notify_dev(gpe, notify_dev);
             }
+            while let Some((bus, notify_dev)) = pme_notify_devs.pop() {
+                pm.lock().register_pme_notify_dev(bus, notify_dev);
+            }
         }
 
         let pci_root = linux.root_config.clone();
-        thread::Builder::new()
+        std::thread::Builder::new()
             .name("pci_root".to_string())
-            .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube))?;
-    }
+            .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube))?
+    };
 
     #[cfg(feature = "direct")]
     if let Some(pmio) = &cfg.direct_pmio {
@@ -1759,6 +1869,7 @@ where
     };
 
     let gralloc = RutabagaGralloc::new().context("failed to create gralloc")?;
+
     run_control(
         linux,
         sys_allocator,
@@ -1768,16 +1879,22 @@ where
         #[cfg(feature = "balloon")]
         balloon_host_tube,
         &disk_host_tubes,
+        #[cfg(feature = "gpu")]
+        gpu_control_host_tube,
         #[cfg(feature = "usb")]
         usb_control_tube,
         vm_evt_rdtube,
         vm_evt_wrtube,
         sigchld_fd,
-        Arc::clone(&map_request),
         gralloc,
         vcpu_ids,
         iommu_host_tube,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         hp_control_tube,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        hp_thread,
+        #[cfg(feature = "swap")]
+        swap_controller,
     )
 }
 
@@ -1800,6 +1917,7 @@ fn start_pci_root_worker(
                 PciRootCommand::Add(addr, device) => {
                     pci_root.lock().add_device(addr, device);
                 }
+                PciRootCommand::AddBridge(pci_bus) => pci_root.lock().add_bridge(pci_bus),
                 PciRootCommand::Remove(addr) => {
                     pci_root.lock().remove_device(addr);
                 }
@@ -1813,19 +1931,21 @@ fn start_pci_root_worker(
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn get_hp_bus<V: VmArch, Vcpu: VcpuArch>(
     linux: &RunnableLinuxVm<V, Vcpu>,
     host_addr: PciAddress,
-) -> Result<(Arc<Mutex<dyn HotPlugBus>>, u8)> {
-    for hp_bus in linux.hotplug_bus.iter() {
-        if let Some(number) = hp_bus.lock().is_match(host_addr) {
-            return Ok((hp_bus.clone(), number));
+) -> Result<Arc<Mutex<dyn HotPlugBus>>> {
+    for (_, hp_bus) in linux.hotplug_bus.iter() {
+        if hp_bus.lock().is_match(host_addr).is_some() {
+            return Ok(hp_bus.clone());
         }
     }
     Err(anyhow!("Failed to find a suitable hotplug bus"))
 }
 
-fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn add_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
     sys_allocator: &mut SystemAllocator,
     cfg: &Config,
@@ -1834,83 +1954,176 @@ fn add_vfio_device<V: VmArch, Vcpu: VcpuArch>(
     iommu_host_tube: &Option<Tube>,
     device: &HotPlugDeviceInfo,
 ) -> Result<()> {
-    let host_os_str = device
-        .path
-        .file_name()
-        .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
-    let host_str = host_os_str
-        .to_str()
-        .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
-    let host_addr = PciAddress::from_str(host_str).context("failed to parse vfio pci address")?;
+    let host_addr = PciAddress::from_path(&device.path)
+        .context("failed to parse hotplug device's PCI address")?;
+    let hp_bus = get_hp_bus(linux, host_addr)?;
 
-    let (hp_bus, bus_num) = get_hp_bus(linux, host_addr)?;
+    let (host_key, pci_address) = match device.device_type {
+        HotPlugDeviceType::UpstreamPort | HotPlugDeviceType::DownstreamPort => {
+            let (vm_host_tube, vm_device_tube) = Tube::pair().context("failed to create tube")?;
+            control_tubes.push(TaggedControlTube::Vm(vm_host_tube));
+            let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
+            control_tubes.push(TaggedControlTube::VmIrq(msi_host_tube));
+            let pcie_host = PcieHostPort::new(device.path.as_path(), vm_device_tube)?;
+            let (host_key, pci_bridge) = match device.device_type {
+                HotPlugDeviceType::UpstreamPort => {
+                    let host_key = HostHotPlugKey::UpstreamPort { host_addr };
+                    let pcie_upstream_port = Arc::new(Mutex::new(PcieUpstreamPort::new_from_host(
+                        pcie_host, true,
+                    )?));
+                    let pci_bridge =
+                        Box::new(PciBridge::new(pcie_upstream_port.clone(), msi_device_tube));
+                    linux
+                        .hotplug_bus
+                        .insert(pci_bridge.get_secondary_num(), pcie_upstream_port);
+                    (host_key, pci_bridge)
+                }
+                HotPlugDeviceType::DownstreamPort => {
+                    let host_key = HostHotPlugKey::DownstreamPort { host_addr };
+                    let pcie_downstream_port = Arc::new(Mutex::new(
+                        PcieDownstreamPort::new_from_host(pcie_host, true)?,
+                    ));
+                    let pci_bridge = Box::new(PciBridge::new(
+                        pcie_downstream_port.clone(),
+                        msi_device_tube,
+                    ));
+                    linux
+                        .hotplug_bus
+                        .insert(pci_bridge.get_secondary_num(), pcie_downstream_port);
+                    (host_key, pci_bridge)
+                }
+                _ => {
+                    bail!("Impossible to reach here")
+                }
+            };
+            let pci_address =
+                Arch::register_pci_device(linux, pci_bridge, None, sys_allocator, hp_control_tube)?;
 
-    let (vfio_pci_device, jail, viommu_mapper) = create_vfio_device(
-        &cfg.jail_config,
-        &linux.vm,
-        sys_allocator,
-        control_tubes,
-        &device.path,
-        Some(bus_num),
-        None,
-        None,
-        if iommu_host_tube.is_some() {
-            IommuDevType::VirtioIommu
-        } else {
-            IommuDevType::NoIommu
-        },
-    )?;
-
-    let pci_address =
-        Arch::register_pci_device(linux, vfio_pci_device, jail, sys_allocator, hp_control_tube)
-            .context("Failed to configure pci hotplug device")?;
-
-    if let Some(iommu_host_tube) = iommu_host_tube {
-        let endpoint_addr = pci_address.to_u32();
-        let vfio_wrapper = viommu_mapper.context("expected mapper")?;
-        let descriptor = vfio_wrapper.clone_as_raw_descriptor()?;
-        let request = VirtioIOMMURequest::VfioCommand(VirtioIOMMUVfioCommand::VfioDeviceAdd {
-            endpoint_addr,
-            wrapper_id: vfio_wrapper.id(),
-            container: {
-                // Safe because the descriptor is uniquely owned by `descriptor`.
-                unsafe { File::from_raw_descriptor(descriptor) }
-            },
-        });
-        match virtio_iommu_request(iommu_host_tube, &request)
-            .map_err(|_| VirtioIOMMUVfioError::SocketFailed)?
-        {
-            VirtioIOMMUResponse::VfioResponse(VirtioIOMMUVfioResult::Ok) => (),
-            resp => bail!("Unexpected message response: {:?}", resp),
+            (host_key, pci_address)
         }
-    }
+        HotPlugDeviceType::EndPoint => {
+            let host_key = HostHotPlugKey::Vfio { host_addr };
+            let (vfio_device, jail, viommu_mapper) = create_vfio_device(
+                &cfg.jail_config,
+                &linux.vm,
+                sys_allocator,
+                control_tubes,
+                &device.path,
+                true,
+                None,
+                None,
+                None,
+                if iommu_host_tube.is_some() {
+                    IommuDevType::VirtioIommu
+                } else {
+                    IommuDevType::NoIommu
+                },
+                #[cfg(feature = "direct")]
+                false,
+            )?;
+            let vfio_pci_device = match vfio_device {
+                VfioDeviceVariant::Pci(pci) => Box::new(pci),
+                VfioDeviceVariant::Platform(_) => bail!("vfio platform hotplug not supported"),
+            };
+            let pci_address = Arch::register_pci_device(
+                linux,
+                vfio_pci_device,
+                jail,
+                sys_allocator,
+                hp_control_tube,
+            )?;
+            if let Some(iommu_host_tube) = iommu_host_tube {
+                let endpoint_addr = pci_address.to_u32();
+                let vfio_wrapper = viommu_mapper.context("expected mapper")?;
+                let descriptor = vfio_wrapper.clone_as_raw_descriptor()?;
+                let request =
+                    VirtioIOMMURequest::VfioCommand(VirtioIOMMUVfioCommand::VfioDeviceAdd {
+                        endpoint_addr,
+                        wrapper_id: vfio_wrapper.id(),
+                        container: {
+                            // Safe because the descriptor is uniquely owned by `descriptor`.
+                            unsafe { File::from_raw_descriptor(descriptor) }
+                        },
+                    });
+                match virtio_iommu_request(iommu_host_tube, &request)
+                    .map_err(|_| VirtioIOMMUVfioError::SocketFailed)?
+                {
+                    VirtioIOMMUResponse::VfioResponse(VirtioIOMMUVfioResult::Ok) => (),
+                    resp => bail!("Unexpected message response: {:?}", resp),
+                }
+            }
 
-    let host_key = HostHotPlugKey::Vfio { host_addr };
-    let mut hp_bus = hp_bus.lock();
-    hp_bus.add_hotplug_device(host_key, pci_address);
+            (host_key, pci_address)
+        }
+    };
+    hp_bus.lock().add_hotplug_device(host_key, pci_address);
     if device.hp_interrupt {
-        hp_bus.hot_plug(pci_address);
+        hp_bus.lock().hot_plug(pci_address);
     }
     Ok(())
 }
 
-fn remove_vfio_device<V: VmArch, Vcpu: VcpuArch>(
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn remove_hotplug_bridge<V: VmArch, Vcpu: VcpuArch>(
     linux: &RunnableLinuxVm<V, Vcpu>,
     sys_allocator: &mut SystemAllocator,
-    _hp_control_tube: &mpsc::Sender<PciRootCommand>,
+    buses_to_remove: &mut Vec<u8>,
+    host_key: HostHotPlugKey,
+    child_bus: u8,
+) -> Result<()> {
+    for (bus_num, hp_bus) in linux.hotplug_bus.iter() {
+        let mut hp_bus_lock = hp_bus.lock();
+        if let Some(pci_addr) = hp_bus_lock.get_hotplug_device(host_key) {
+            sys_allocator.release_pci(pci_addr.bus, pci_addr.dev, pci_addr.func);
+            hp_bus_lock.hot_unplug(pci_addr);
+            buses_to_remove.push(child_bus);
+            if hp_bus_lock.is_empty() {
+                if let Some(hotplug_key) = hp_bus_lock.get_hotplug_key() {
+                    remove_hotplug_bridge(
+                        linux,
+                        sys_allocator,
+                        buses_to_remove,
+                        hotplug_key,
+                        *bus_num,
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    Err(anyhow!(
+        "Can not find device {:?} on hotplug buses",
+        host_key
+    ))
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn remove_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
+    linux: &mut RunnableLinuxVm<V, Vcpu>,
+    sys_allocator: &mut SystemAllocator,
     iommu_host_tube: &Option<Tube>,
     device: &HotPlugDeviceInfo,
 ) -> Result<()> {
-    let host_os_str = device
-        .path
-        .file_name()
-        .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
-    let host_str = host_os_str
-        .to_str()
-        .ok_or_else(|| anyhow!("failed to parse or find vfio path"))?;
-    let host_addr = PciAddress::from_str(host_str).context("failed to parse vfio pci address")?;
-    let host_key = HostHotPlugKey::Vfio { host_addr };
-    for hp_bus in linux.hotplug_bus.iter() {
+    let host_addr = PciAddress::from_path(&device.path)?;
+    let host_key = match device.device_type {
+        HotPlugDeviceType::UpstreamPort => HostHotPlugKey::UpstreamPort { host_addr },
+        HotPlugDeviceType::DownstreamPort => HostHotPlugKey::DownstreamPort { host_addr },
+        HotPlugDeviceType::EndPoint => HostHotPlugKey::Vfio { host_addr },
+    };
+
+    let hp_bus = linux
+        .hotplug_bus
+        .iter()
+        .find(|(_, hp_bus)| {
+            let hp_bus = hp_bus.lock();
+            hp_bus.get_hotplug_device(host_key).is_some()
+        })
+        .map(|(bus_num, hp_bus)| (*bus_num, hp_bus.clone()));
+
+    if let Some((bus_num, hp_bus)) = hp_bus {
+        let mut buses_to_remove = Vec::new();
+        let mut removed_key = None;
         let mut hp_bus_lock = hp_bus.lock();
         if let Some(pci_addr) = hp_bus_lock.get_hotplug_device(host_key) {
             if let Some(iommu_host_tube) = iommu_host_tube {
@@ -1925,16 +2138,124 @@ fn remove_vfio_device<V: VmArch, Vcpu: VcpuArch>(
                     resp => bail!("Unexpected message response: {:?}", resp),
                 }
             }
+            let mut empty_simbling = true;
+            if let Some(HostHotPlugKey::DownstreamPort { host_addr }) =
+                hp_bus_lock.get_hotplug_key()
+            {
+                let addr_alias = host_addr;
+                for (simbling_bus_num, hp_bus) in linux.hotplug_bus.iter() {
+                    if *simbling_bus_num != bus_num {
+                        let hp_bus_lock = hp_bus.lock();
+                        let hotplug_key = hp_bus_lock.get_hotplug_key();
+                        if let Some(HostHotPlugKey::DownstreamPort { host_addr }) = hotplug_key {
+                            if addr_alias.bus == host_addr.bus && !hp_bus_lock.is_empty() {
+                                empty_simbling = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
-            hp_bus_lock.hot_unplug(pci_addr);
+            // If all simbling downstream ports are empty, do not send hot unplug event for this
+            // downstream port. Root port will send one plug out interrupt and remove all
+            // the remaining devices
+            if !empty_simbling {
+                hp_bus_lock.hot_unplug(pci_addr);
+            }
+
             sys_allocator.release_pci(pci_addr.bus, pci_addr.dev, pci_addr.func);
-            return Ok(());
+            if empty_simbling || hp_bus_lock.is_empty() {
+                if let Some(hotplug_key) = hp_bus_lock.get_hotplug_key() {
+                    removed_key = Some(hotplug_key);
+                    remove_hotplug_bridge(
+                        linux,
+                        sys_allocator,
+                        &mut buses_to_remove,
+                        hotplug_key,
+                        bus_num,
+                    )?;
+                }
+            }
         }
+
+        // Some types of TBT device has a few empty downstream ports. The emulated bridges
+        // of these ports won't be removed since no vfio device is connected to our emulated
+        // bridges. So we explicitly check all simbling bridges of the removed bridge here,
+        // and remove them if bridge has no child device connected.
+        if let Some(HostHotPlugKey::DownstreamPort { host_addr }) = removed_key {
+            let addr_alias = host_addr;
+            for (simbling_bus_num, hp_bus) in linux.hotplug_bus.iter() {
+                if *simbling_bus_num != bus_num {
+                    let hp_bus_lock = hp_bus.lock();
+                    let hotplug_key = hp_bus_lock.get_hotplug_key();
+                    if let Some(HostHotPlugKey::DownstreamPort { host_addr }) = hotplug_key {
+                        if addr_alias.bus == host_addr.bus && hp_bus_lock.is_empty() {
+                            remove_hotplug_bridge(
+                                linux,
+                                sys_allocator,
+                                &mut buses_to_remove,
+                                hotplug_key.unwrap(),
+                                *simbling_bus_num,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+        for bus in buses_to_remove.iter() {
+            linux.hotplug_bus.remove(bus);
+        }
+        return Ok(());
     }
 
-    Err(anyhow!("HotPlugBus hasn't been implemented"))
+    Err(anyhow!(
+        "Can not find device {:?} on hotplug buses",
+        host_key
+    ))
 }
 
+pub fn trigger_vm_suspend_and_wait_for_entry(
+    guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+    tube: &SendTube,
+    response: vm_control::VmResponse,
+    suspend_evt: Event,
+    pm: Option<Arc<Mutex<dyn PmResource + Send>>>,
+) {
+    let (lock, cvar) = &*guest_suspended_cvar;
+    let mut guest_suspended = lock.lock();
+
+    *guest_suspended = false;
+
+    // During suspend also emulate sleepbtn, which allows to suspend VM (if running e.g. acpid and
+    // reacts on sleep button events)
+    if let Some(pm) = pm {
+        pm.lock().slpbtn_evt();
+    } else {
+        error!("generating sleepbtn during suspend not supported");
+    }
+
+    // Wait for notification about guest suspension, if not received after 15sec,
+    // proceed anyway.
+    let result = cvar.wait_timeout(guest_suspended, std::time::Duration::from_secs(15));
+    guest_suspended = result.0;
+
+    if result.1.timed_out() {
+        warn!("Guest suspension timeout - proceeding anyway");
+    } else if *guest_suspended {
+        info!("Guest suspended");
+    }
+
+    if let Err(e) = suspend_evt.signal() {
+        error!("failed to trigger suspend event: {}", e);
+    }
+    // Now we ready to send response over the tube and communicate that VM suspend has finished
+    if let Err(e) = tube.send(&response) {
+        error!("failed to send VmResponse: {}", e);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
     sys_allocator: &mut SystemAllocator,
@@ -1950,12 +2271,8 @@ fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
     } else {
         &None
     };
-    if !matches!(device.device_type, HotPlugDeviceType::EndPoint) {
-        // Not supported yet
-        return VmResponse::Ok;
-    }
     let ret = if add {
-        add_vfio_device(
+        add_hotplug_device(
             linux,
             sys_allocator,
             cfg,
@@ -1965,13 +2282,7 @@ fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
             device,
         )
     } else {
-        remove_vfio_device(
-            linux,
-            sys_allocator,
-            hp_control_tube,
-            iommu_host_tube,
-            device,
-        )
+        remove_hotplug_device(linux, sys_allocator, iommu_host_tube, device)
     };
 
     match ret {
@@ -1992,15 +2303,19 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut control_tubes: Vec<TaggedControlTube>,
     #[cfg(feature = "balloon")] balloon_host_tube: Option<Tube>,
     disk_host_tubes: &[Tube],
+    #[cfg(feature = "gpu")] gpu_control_tube: Tube,
     #[cfg(feature = "usb")] usb_control_tube: Tube,
     vm_evt_rdtube: RecvTube,
     vm_evt_wrtube: SendTube,
     sigchld_fd: SignalFd,
-    map_request: Arc<Mutex<Option<ExternalMapping>>>,
     mut gralloc: RutabagaGralloc,
     vcpu_ids: Vec<usize>,
     iommu_host_tube: Option<Tube>,
-    hp_control_tube: mpsc::Sender<PciRootCommand>,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] hp_control_tube: mpsc::Sender<
+        PciRootCommand,
+    >,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] hp_thread: std::thread::JoinHandle<()>,
+    #[cfg(feature = "swap")] swap_controller: Option<SwapController>,
 ) -> Result<ExitState> {
     #[derive(EventToken)]
     enum Token {
@@ -2012,6 +2327,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         VmControl { index: usize },
         DelayedIrqFd,
     }
+
+    let mut iommu_client = iommu_host_tube
+        .as_ref()
+        .map(VmMemoryRequestIommuClient::new);
 
     stdin()
         .set_raw_mode()
@@ -2057,7 +2376,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         drop_capabilities().context("failed to drop process capabilities")?;
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     // Create a channel for GDB thread.
     let (to_gdb_channel, from_vcpu_channel) = if linux.gdb.is_some() {
         let (s, r) = mpsc::channel();
@@ -2065,6 +2384,26 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     } else {
         (None, None)
     };
+
+    let (device_ctrl_tube, device_ctrl_resp) = Tube::pair().context("failed to create tube")?;
+    // Create devices thread, and restore if a restore file exists.
+    linux.devices_thread = match create_devices_worker_thread(
+        linux.io_bus.clone(),
+        linux.mmio_bus.clone(),
+        device_ctrl_resp,
+    ) {
+        Ok(join_handle) => Some(join_handle),
+        Err(e) => {
+            return Err(anyhow!("Failed to start devices thread: {}", e));
+        }
+    };
+    if let Some(path) = cfg.restore_path.clone() {
+        if let Err(e) =
+            device_ctrl_tube.send(&DeviceControlCommand::RestoreDevices { restore_path: path })
+        {
+            error!("fail to send command to devices control socket: {}", e);
+        };
+    }
 
     let mut vcpu_handles = Vec::with_capacity(linux.vcpu_count);
     let vcpu_thread_barrier = Arc::new(Barrier::new(linux.vcpu_count + 1));
@@ -2091,11 +2430,35 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         None => None,
         Some(cgroup_path) => {
             // Move main process to cgroup_path
-            let mut f = File::create(&cgroup_path.join("tasks"))?;
+            let mut f = File::create(&cgroup_path.join("tasks")).with_context(|| {
+                format!(
+                    "failed to create vcpu-cgroup-path {}",
+                    cgroup_path.display(),
+                )
+            })?;
             f.write_all(process::id().to_string().as_bytes())?;
             Some(f)
         }
     };
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    let bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>> = Arc::new(Mutex::new(Ratelimit::new()));
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    if cfg.bus_lock_ratelimit > 0 {
+        let bus_lock_ratelimit = cfg.bus_lock_ratelimit;
+        if linux.vm.check_capability(VmCap::BusLockDetect) {
+            info!("Hypervisor support bus lock detect");
+            linux
+                .vm
+                .enable_capability(VmCap::BusLockDetect, 0)
+                .expect("kvm: Failed to enable bus lock detection cap");
+            info!("Hypervisor enabled bus lock detect");
+            bus_lock_ratelimit_ctrl
+                .lock()
+                .ratelimit_set_speed(bus_lock_ratelimit);
+        } else {
+            bail!("Kvm: bus lock detection unsuported");
+        }
+    }
 
     #[cfg(target_os = "android")]
     android::set_process_profiles(&cfg.task_profiles)?;
@@ -2105,6 +2468,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     // Architecture-specific code must supply a vcpu_init element for each VCPU.
     assert_eq!(vcpus.len(), linux.vcpu_init.len());
 
+    let (to_vm_control, state_from_vcpu_channel) = mpsc::channel();
     for ((cpu_id, vcpu), vcpu_init) in vcpus.into_iter().enumerate().zip(linux.vcpu_init.drain(..))
     {
         let (to_vcpu_channel, from_main_channel) = mpsc::channel();
@@ -2115,6 +2479,13 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         };
 
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let vcpu_hybrid_type = if !cfg.vcpu_hybrid_type.is_empty() {
+            Some(*cfg.vcpu_hybrid_type.get(&cpu_id).unwrap())
+        } else {
+            None
+        };
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let cpu_config = Some(CpuConfigX86_64::new(
             cfg.force_calibrated_tsc_leaf,
             cfg.host_cpu_topology,
@@ -2122,7 +2493,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cfg.enable_pnp_data,
             cfg.no_smt,
             cfg.itmt,
+            vcpu_hybrid_type,
         ));
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+        let bus_lock_ratelimit_ctrl = Arc::clone(&bus_lock_ratelimit_ctrl);
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
         let cpu_config = None;
@@ -2151,7 +2525,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             linux.vm.check_capability(VmCap::PvClockSuspend),
             from_main_channel,
             use_hypervisor_signals,
-            #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+            #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
             to_gdb_channel.clone(),
             cfg.per_vm_core_scheduling,
             cpu_config,
@@ -2165,11 +2539,14 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             },
             cfg.userspace_msr.clone(),
             guest_suspended_cvar.clone(),
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            bus_lock_ratelimit_ctrl,
+            to_vm_control.clone(),
         )?;
         vcpu_handles.push((handle, to_vcpu_channel));
     }
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     // Spawn GDB thread.
     if let Some((gdb_port_num, gdb_control_tube)) = linux.gdb.take() {
         let to_vcpu_channels = vcpu_handles
@@ -2181,7 +2558,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             to_vcpu_channels,
             from_vcpu_channel.unwrap(), // Must succeed to unwrap()
         );
-        thread::Builder::new()
+        std::thread::Builder::new()
             .name("gdb".to_owned())
             .spawn(move || gdb_thread(target, gdb_port_num))
             .context("failed to spawn GDB thread")?;
@@ -2229,6 +2606,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                 info!("Guest reported panic [Code: {}]", pvpanic_code);
                                 break_to_wait = false;
                             }
+                            VmEventType::WatchdogReset => {
+                                info!("vcpu stall detected");
+                                exit_state = ExitState::WatchdogReset;
+                            }
                         },
                         Err(e) => {
                             warn!("failed to recv VmEvent: {}", e);
@@ -2243,7 +2624,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                 }
                 Token::Suspend => {
                     info!("VM requested suspend");
-                    linux.suspend_evt.read().unwrap();
+                    linux.suspend_evt.wait().unwrap();
                     vcpu::kick_all_vcpus(
                         &vcpu_handles,
                         linux.irq_chip.as_irq_chip(),
@@ -2251,7 +2632,10 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     );
                 }
                 Token::ChildSignal => {
-                    // Print all available siginfo structs, then exit the loop.
+                    // Print all available siginfo structs, then exit the loop if child process has
+                    // been exited except CLD_STOPPED and CLD_CONTINUED. the two should be ignored
+                    // here since they are used by the vmm-swap feature.
+                    let mut do_exit = false;
                     while let Some(siginfo) =
                         sigchld_fd.read().context("failed to create signalfd")?
                     {
@@ -2260,12 +2644,25 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                             Some(label) => format!("{} (pid {})", label, pid),
                             None => format!("pid {}", pid),
                         };
+
+                        // TODO(kawasin): this is a temporary exception until device suspension.
+                        #[cfg(feature = "swap")]
+                        if siginfo.ssi_code == libc::CLD_STOPPED
+                            || siginfo.ssi_code == libc::CLD_CONTINUED
+                        {
+                            continue;
+                        }
+
                         error!(
-                            "child {} died: signo {}, status {}, code {}",
+                            "child {} exited: signo {}, status {}, code {}",
                             pid_label, siginfo.ssi_signo, siginfo.ssi_status, siginfo.ssi_code
                         );
+                        do_exit = true;
                     }
-                    break 'wait;
+                    if do_exit {
+                        exit_state = ExitState::Crash;
+                        break 'wait;
+                    }
                 }
                 Token::IrqFd { index } => {
                     if let Err(e) = linux.irq_chip.service_irq_event(index) {
@@ -2289,54 +2686,127 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                         },
                                     )
                                     .context("failed to add descriptor to wait context")?;
-                                control_tubes.push(TaggedControlTube::Vm(Tube::new(socket)));
+                                control_tubes.push(TaggedControlTube::Vm(
+                                    Tube::new_from_unix_seqpacket(socket),
+                                ));
                             }
                             Err(e) => error!("failed to accept socket: {}", e),
                         }
                     }
                 }
                 Token::VmControl { index } => {
+                    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                     let mut add_tubes = Vec::new();
                     if let Some(socket) = control_tubes.get(index) {
                         match socket {
                             TaggedControlTube::Vm(tube) => match tube.recv::<VmRequest>() {
                                 Ok(request) => {
+                                    let mut suspend_requested = false;
                                     let mut run_mode_opt = None;
                                     let response = match request {
                                         VmRequest::HotPlugCommand { device, add } => {
-                                            handle_hotplug_command(
-                                                &mut linux,
-                                                &mut sys_allocator,
-                                                &cfg,
-                                                &mut add_tubes,
-                                                &hp_control_tube,
-                                                &iommu_host_tube,
-                                                &device,
-                                                add,
-                                            )
+                                            #[cfg(any(
+                                                target_arch = "x86",
+                                                target_arch = "x86_64"
+                                            ))]
+                                            {
+                                                handle_hotplug_command(
+                                                    &mut linux,
+                                                    &mut sys_allocator,
+                                                    &cfg,
+                                                    &mut add_tubes,
+                                                    &hp_control_tube,
+                                                    &iommu_host_tube,
+                                                    &device,
+                                                    add,
+                                                )
+                                            }
+
+                                            #[cfg(not(any(
+                                                target_arch = "x86",
+                                                target_arch = "x86_64"
+                                            )))]
+                                            {
+                                                // Suppress warnings.
+                                                let _ = (device, add);
+                                                VmResponse::Ok
+                                            }
                                         }
-                                        _ => request.execute(
-                                            &mut run_mode_opt,
-                                            #[cfg(feature = "balloon")]
-                                            balloon_host_tube.as_ref(),
-                                            #[cfg(feature = "balloon")]
-                                            &mut balloon_stats_id,
-                                            disk_host_tubes,
-                                            &mut linux.pm,
-                                            #[cfg(feature = "usb")]
-                                            Some(&usb_control_tube),
-                                            #[cfg(not(feature = "usb"))]
-                                            None,
-                                            &mut linux.bat_control,
-                                            &vcpu_handles,
-                                            cfg.force_s2idle,
-                                            guest_suspended_cvar.clone(),
-                                        ),
+                                        _ => {
+                                            let response = request.execute(
+                                                &mut run_mode_opt,
+                                                #[cfg(feature = "balloon")]
+                                                balloon_host_tube.as_ref(),
+                                                #[cfg(feature = "balloon")]
+                                                &mut balloon_stats_id,
+                                                disk_host_tubes,
+                                                &mut linux.pm,
+                                                #[cfg(feature = "gpu")]
+                                                &gpu_control_tube,
+                                                #[cfg(feature = "usb")]
+                                                Some(&usb_control_tube),
+                                                #[cfg(not(feature = "usb"))]
+                                                None,
+                                                &mut linux.bat_control,
+                                                |msg| {
+                                                    vcpu::kick_all_vcpus(
+                                                        &vcpu_handles,
+                                                        linux.irq_chip.as_irq_chip(),
+                                                        msg,
+                                                    )
+                                                },
+                                                cfg.force_s2idle,
+                                                #[cfg(feature = "swap")]
+                                                swap_controller.as_ref(),
+                                                &device_ctrl_tube,
+                                                &state_from_vcpu_channel,
+                                                vcpu_handles.len(),
+                                            );
+
+                                            // For non s2idle guest suspension we are done
+                                            if let VmRequest::Suspend = request {
+                                                if cfg.force_s2idle {
+                                                    suspend_requested = true;
+
+                                                    // Spawn s2idle wait thread.
+                                                    let send_tube =
+                                                        tube.try_clone_send_tube().unwrap();
+                                                    let suspend_evt =
+                                                        linux.suspend_evt.try_clone().unwrap();
+                                                    let guest_suspended_cvar =
+                                                        guest_suspended_cvar.clone();
+                                                    let delayed_response = response.clone();
+                                                    let pm = linux.pm.clone();
+
+                                                    std::thread::Builder::new()
+                                                        .name("s2idle_wait".to_owned())
+                                                        .spawn(move || {
+                                                            trigger_vm_suspend_and_wait_for_entry(
+                                                                guest_suspended_cvar,
+                                                                &send_tube,
+                                                                delayed_response,
+                                                                suspend_evt,
+                                                                pm,
+                                                            )
+                                                        })
+                                                        .context(
+                                                            "failed to spawn s2idle_wait thread",
+                                                        )?;
+                                                }
+                                            }
+                                            response
+                                        }
                                     };
 
-                                    if let Err(e) = tube.send(&response) {
-                                        error!("failed to send VmResponse: {}", e);
+                                    // If suspend requested skip that step since it will be
+                                    // performed by s2idle_wait thread when suspension actually
+                                    // happens.
+                                    if !suspend_requested {
+                                        if let Err(e) = tube.send(&response) {
+                                            error!("failed to send VmResponse: {}", e);
+                                        }
                                     }
+
                                     if let Some(run_mode) = run_mode_opt {
                                         info!("control socket changed run mode to {}", run_mode);
                                         match run_mode {
@@ -2349,11 +2819,16 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                                         dev.lock().resume_imminent();
                                                     }
                                                 }
-                                                vcpu::kick_all_vcpus(
-                                                    &vcpu_handles,
-                                                    linux.irq_chip.as_irq_chip(),
-                                                    VcpuControl::RunState(other),
-                                                );
+                                                // If suspend requested skip that step since it
+                                                // will be performed by s2idle_wait thread when
+                                                // needed.
+                                                if !suspend_requested {
+                                                    vcpu::kick_all_vcpus(
+                                                        &vcpu_handles,
+                                                        linux.irq_chip.as_irq_chip(),
+                                                        VcpuControl::RunState(other),
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -2366,28 +2841,33 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                     }
                                 }
                             },
-                            TaggedControlTube::VmMemory(tube) => {
-                                match tube.recv::<VmMemoryRequest>() {
-                                    Ok(request) => {
-                                        let response = request.execute(
-                                            &mut linux.vm,
-                                            &mut sys_allocator,
-                                            Arc::clone(&map_request),
-                                            &mut gralloc,
-                                        );
-                                        if let Err(e) = tube.send(&response) {
-                                            error!("failed to send VmMemoryControlResponse: {}", e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if let TubeError::Disconnected = e {
-                                            vm_control_indices_to_remove.push(index);
+                            TaggedControlTube::VmMemory {
+                                tube,
+                                expose_with_viommu,
+                            } => match tube.recv::<VmMemoryRequest>() {
+                                Ok(request) => {
+                                    let response = request.execute(
+                                        &mut linux.vm,
+                                        &mut sys_allocator,
+                                        &mut gralloc,
+                                        if *expose_with_viommu {
+                                            iommu_client.as_mut()
                                         } else {
-                                            error!("failed to recv VmMemoryControlRequest: {}", e);
-                                        }
+                                            None
+                                        },
+                                    );
+                                    if let Err(e) = tube.send(&response) {
+                                        error!("failed to send VmMemoryControlResponse: {}", e);
                                     }
                                 }
-                            }
+                                Err(e) => {
+                                    if let TubeError::Disconnected = e {
+                                        vm_control_indices_to_remove.push(index);
+                                    } else {
+                                        error!("failed to recv VmMemoryControlRequest: {}", e);
+                                    }
+                                }
+                            },
                             TaggedControlTube::VmIrq(tube) => match tube.recv::<VmIrqRequest>() {
                                 Ok(request) => {
                                     let response = {
@@ -2478,6 +2958,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                             },
                         }
                     }
+                    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                     if !add_tubes.is_empty() {
                         for (idx, socket) in add_tubes.iter().enumerate() {
                             wait_ctx
@@ -2554,8 +3035,46 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         }
     }
 
+    #[cfg(feature = "swap")]
+    // Stop the snapshot monitor process
+    if let Some(swap_controller) = swap_controller {
+        if let Err(e) = swap_controller.exit() {
+            error!("failed to exit snapshot monitor process: {:?}", e);
+        }
+    }
+
     // Stop pci root worker thread
-    let _ = hp_control_tube.send(PciRootCommand::Kill);
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let _ = hp_control_tube.send(PciRootCommand::Kill);
+        if let Err(e) = hp_thread.join() {
+            error!("failed to join hotplug thread: {:?}", e);
+        }
+    }
+
+    if linux.devices_thread.is_some() {
+        if let Err(e) = device_ctrl_tube.send(&DeviceControlCommand::Exit) {
+            error!("failed to stop device control loop: {}", e);
+        };
+        if let Some(thread) = linux.devices_thread.take() {
+            if let Err(e) = thread.join() {
+                error!("failed to exit devices thread: {:?}", e);
+            }
+        }
+    }
+
+    // At this point, the only remaining `Arc` references to the `Bus` objects should be the ones
+    // inside `linux`. If the checks below fail, then some other thread is probably still running
+    // and needs to be explicitly stopped before dropping `linux` to ensure devices actually get
+    // cleaned up.
+    match Arc::try_unwrap(std::mem::replace(&mut linux.mmio_bus, Arc::new(Bus::new()))) {
+        Ok(_) => {}
+        Err(_) => panic!("internal error: mmio_bus had more than one reference at shutdown"),
+    }
+    match Arc::try_unwrap(std::mem::replace(&mut linux.io_bus, Arc::new(Bus::new()))) {
+        Ok(_) => {}
+        Err(_) => panic!("internal error: io_bus had more than one reference at shutdown"),
+    }
 
     // Explicitly drop the VM structure here to allow the devices to clean up before the
     // control sockets are closed when this function exits.
@@ -2573,30 +3092,19 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 /// The jailing business is nasty and potentially unsafe if done from the wrong context - do not
 /// call outside of `start_devices`!
 ///
-/// Returns the jail the device process is running in, as well as its pid.
+/// Returns the pid of the jailed device process.
 fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
     jail_config: &Option<JailConfig>,
-    params: &T,
+    params: T,
     vhost: &str,
     name: &str,
-) -> anyhow::Result<(Minijail, libc::pid_t, Option<Box<dyn std::any::Any>>)> {
+) -> anyhow::Result<(libc::pid_t, Option<Box<dyn std::any::Any>>)> {
     let mut keep_rds = Vec::new();
 
     base::syslog::push_descriptors(&mut keep_rds);
+    cros_tracing::push_descriptors!(&mut keep_rds);
 
-    // Create the device in the parent process, so the child does not need any privileges necessary
-    // to do it (only runtime capabilities are required).
-    let device = params
-        .create_vhost_user_device(&mut keep_rds)
-        .context("failed to create vhost-user backend")?;
-    let mut listener = VhostUserListener::new(vhost, device.max_queue_num(), Some(&mut keep_rds))
-        .context("failed to create the vhost listener")?;
-    let parent_resources = listener.take_parent_process_resources();
-
-    let jail_type = match &listener {
-        VhostUserListener::Socket(_) => VirtioDeviceType::VhostUser,
-        VhostUserListener::Vvu(_, _) => VirtioDeviceType::Vvu,
-    };
+    let jail_type = VhostUserListener::get_virtio_transport_type(vhost);
 
     // Create a jail from the configuration. If the configuration is `None`, `create_jail` will also
     // return `None` so fall back to an empty (i.e. non-constrained) Minijail.
@@ -2606,6 +3114,27 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
         .ok_or(())
         .or_else(|_| Minijail::new())
         .with_context(|| format!("failed to create empty jail for {}", name))?;
+
+    // Create the device in the parent process, so the child does not need any privileges necessary
+    // to do it (only runtime capabilities are required).
+    let device = params
+        .create_vhost_user_device(&mut keep_rds)
+        .context("failed to create vhost-user device")?;
+    let mut listener = VhostUserListener::new(vhost, device.max_queue_num(), Some(&mut keep_rds))
+        .context("failed to create the vhost listener")?;
+    let parent_resources = listener.take_parent_process_resources();
+
+    let tz = std::env::var("TZ").unwrap_or_default();
+
+    // Executor must be created before jail in order to prevent the jailed process from creating
+    // unrestricted io_urings.
+    let ex = Executor::with_executor_kind(device.executor_kind().unwrap_or_default())
+        .context("Failed to create an Executor")?;
+    keep_rds.extend(ex.as_raw_descriptors());
+
+    // Deduplicate the FDs since minijail expects them to be unique.
+    keep_rds.sort_unstable();
+    keep_rds.dedup();
 
     // Safe because we are keeping all the descriptors needed for the child to function.
     match unsafe { jail.fork(Some(&keep_rds)).context("error while forking")? } {
@@ -2629,8 +3158,11 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             // an error if we don't anyway).
             let _ = unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
 
+            // Preserve TZ for `chrono::Local` (b/257987535).
+            std::env::set_var("TZ", tz);
+
             // Run the device loop and terminate the child process once it exits.
-            let res = match listener.run_device(device) {
+            let res = match listener.run_device(ex, device) {
                 Ok(()) => 0,
                 Err(e) => {
                     error!("error while running device {}: {:#}", name, e);
@@ -2646,41 +3178,85 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             // to clean up ourselves.
 
             info!("process for device {} (PID {}) started", &name, pid);
-            Ok((jail, pid, parent_resources))
+            Ok((pid, parent_resources))
+        }
+    }
+}
+
+fn process_vhost_user_control_request(tube: Tube, disk_host_tubes: &[Tube]) -> Result<()> {
+    let command = tube
+        .recv::<VmRequest>()
+        .context("failed to receive VmRequest")?;
+    let resp = match command {
+        VmRequest::DiskCommand {
+            disk_index,
+            ref command,
+        } => match &disk_host_tubes.get(disk_index) {
+            Some(tube) => handle_disk_command(command, tube),
+            None => VmResponse::Err(base::Error::new(libc::ENODEV)),
+        },
+        request => {
+            error!(
+                "Request {:?} currently not supported in vhost user backend",
+                request
+            );
+            VmResponse::Err(base::Error::new(libc::EPERM))
+        }
+    };
+
+    tube.send(&resp).context("failed to send VmResponse")?;
+    Ok(())
+}
+
+fn start_vhost_user_control_server(
+    control_server_socket: UnlinkUnixSeqpacketListener,
+    disk_host_tubes: Vec<Tube>,
+) {
+    info!("Start vhost-user control server");
+    loop {
+        match control_server_socket.accept() {
+            Ok(socket) => {
+                let tube = Tube::new_from_unix_seqpacket(socket);
+                if let Err(e) = process_vhost_user_control_request(tube, &disk_host_tubes) {
+                    error!("failed to process control request: {:#}", e);
+                }
+            }
+            Err(e) => {
+                error!("failed to establish connection: {}", e);
+            }
         }
     }
 }
 
 pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
+    if let Some(async_executor) = opts.async_executor {
+        Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
+
     struct DeviceJailInfo {
         // Unique name for the device, in the form `foomatic-0`.
         name: String,
-        // Jail the device process is running in.
-        // We are just keeping it alive for as long as the device process needs to run.
-        #[allow(dead_code)]
-        jail: Minijail,
-        #[allow(dead_code)]
-        drop_resources: Option<Box<dyn std::any::Any>>,
+        _drop_resources: Option<Box<dyn std::any::Any>>,
     }
 
     fn add_device<T: VirtioDeviceBuilder>(
         i: usize,
-        device_params: &T,
+        device_params: T,
         vhost: &str,
         jail_config: &Option<JailConfig>,
         devices_jails: &mut BTreeMap<libc::pid_t, DeviceJailInfo>,
     ) -> anyhow::Result<()> {
         let name = format!("{}-{}", T::NAME, i);
 
-        let (jail, pid, drop_resources) =
+        let (pid, _drop_resources) =
             jail_and_start_vu_device::<T>(jail_config, device_params, vhost, &name)?;
 
         devices_jails.insert(
             pid,
             DeviceJailInfo {
                 name,
-                jail,
-                drop_resources,
+                _drop_resources,
             },
         );
 
@@ -2695,16 +3271,41 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
         Some(opts.jail)
     };
 
+    // Create control server socket
+    let control_server_socket = opts.control_socket.map(|path| {
+        UnlinkUnixSeqpacketListener(
+            UnixSeqpacketListener::bind(path).expect("Could not bind socket"),
+        )
+    });
+
     // Create serial devices.
     for (i, params) in opts.serial.iter().enumerate() {
-        let serial_config = &params.device_params;
+        let serial_config = &params.device;
         add_device(i, serial_config, &params.vhost, &jail, &mut devices_jails)?;
     }
 
+    let mut disk_host_tubes = Vec::new();
+    let control_socket_exists = control_server_socket.is_some();
     // Create block devices.
     for (i, params) in opts.block.iter().enumerate() {
-        let disk_config = DiskConfig::new(&params.device_params, None);
-        add_device(i, &disk_config, &params.vhost, &jail, &mut devices_jails)?;
+        let tube = if control_socket_exists {
+            let (host_tube, device_tube) = Tube::pair().context("failed to create tube")?;
+            disk_host_tubes.push(host_tube);
+            Some(device_tube)
+        } else {
+            None
+        };
+        let disk_config = DiskConfig::new(&params.device, tube);
+        add_device(i, disk_config, &params.vhost, &jail, &mut devices_jails)?;
+    }
+
+    let ex = Executor::new()?;
+    if let Some(control_server_socket) = control_server_socket {
+        // Start the control server in the parent process.
+        ex.spawn_blocking(move || {
+            start_vhost_user_control_server(control_server_socket, disk_host_tubes)
+        })
+        .detach();
     }
 
     // Now wait for all device processes to return.
@@ -2713,18 +3314,17 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
             Err(e) => panic!("error waiting for child process to complete: {:#}", e),
             Ok((Some(pid), wait_status)) => match devices_jails.remove_entry(&pid) {
                 Some((_, info)) => {
-                    match wait_status {
-                        WaitStatus::Exited(status) => info!(
+                    if let Some(status) = wait_status.code() {
+                        info!(
                             "process for device {} (PID {}) exited with code {}",
                             &info.name, pid, status
-                        ),
-                        WaitStatus::Signaled(signal) => warn!(
+                        );
+                    } else if let Some(signal) = wait_status.signal() {
+                        warn!(
                             "process for device {} (PID {}) has been killed by signal {:?}",
                             &info.name, pid, signal,
-                        ),
-                        // We are only interested in processes that actually terminate.
-                        WaitStatus::Stopped(_) | WaitStatus::Continued | WaitStatus::Running => (),
-                    };
+                        );
+                    }
                 }
                 None => error!("pid {} is not one of our device processes", pid),
             },
@@ -2737,6 +3337,19 @@ pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
     info!("all device processes have exited");
 
     Ok(())
+}
+
+/// Setup crash reporting for a process. Each process MUST provide a unique `product_type` to avoid
+/// making crash reports incomprehensible.
+#[cfg(feature = "crash-report")]
+pub fn setup_emulator_crash_reporting(_cfg: &Config) -> anyhow::Result<String> {
+    crash_report::setup_crash_reporting(crash_report::CrashReportAttributes {
+        product_type: "emulator".to_owned(),
+        pipe_name: None,
+        report_uuid: None,
+        product_name: None,
+        product_version: None,
+    })
 }
 
 #[cfg(test)]

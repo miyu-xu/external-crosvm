@@ -1,10 +1,9 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::thread;
 
 use anyhow::anyhow;
@@ -12,6 +11,7 @@ use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
 use base::error;
+use base::info;
 use base::validate_raw_descriptor;
 use base::warn;
 use base::Event;
@@ -26,7 +26,6 @@ use hypervisor::ProtectionType;
 use net_util::sys::unix::Tap;
 use net_util::MacAddress;
 use net_util::TapT;
-use sync::Mutex;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
@@ -139,7 +138,7 @@ async fn run_rx_queue<T: TapT>(
     mut queue: virtio::Queue,
     mem: GuestMemory,
     mut tap: Box<dyn IoSourceExt<T>>,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: EventAsync,
 ) {
     loop {
@@ -167,18 +166,15 @@ async fn run_rx_queue<T: TapT>(
 pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + IntoAsync + TapT>(
     backend: &mut NetBackend<T>,
     idx: usize,
-    mut queue: virtio::Queue,
+    queue: virtio::Queue,
     mem: GuestMemory,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: Event,
 ) -> anyhow::Result<()> {
     if let Some(handle) = backend.workers.get_mut(idx).and_then(Option::take) {
         warn!("Starting new queue handler without stopping old handler");
         handle.abort();
     }
-
-    // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-    queue.ack_features(backend.acked_features);
 
     NET_EXECUTOR.with(|ex| {
         // Safe because the executor is initialized in main() below.
@@ -361,6 +357,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         };
     }
 
+    info!("vhost-user net device ready, loop threads started.");
     for t in threads {
         match t.join() {
             Ok(r) => r?,

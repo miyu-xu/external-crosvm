@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@ use std::thread;
 
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -15,7 +17,7 @@ use base::EventToken;
 use base::RawDescriptor;
 use base::Tube;
 use base::WaitContext;
-#[cfg(unix)]
+use power_monitor::BatteryStatus;
 use power_monitor::CreatePowerMonitorFn;
 use remain::sorted;
 use sync::Mutex;
@@ -28,6 +30,7 @@ use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
 use crate::IrqLevelEvent;
+use crate::Suspendable;
 
 /// Errors for battery devices.
 #[sorted]
@@ -42,7 +45,7 @@ type Result<T> = std::result::Result<T, BatteryError>;
 /// the GoldFish Battery MMIO length.
 pub const GOLDFISHBAT_MMIO_LEN: u64 = 0x1000;
 
-pub(crate) struct GoldfishBatteryState {
+struct GoldfishBatteryState {
     // interrupt state
     int_status: u32,
     int_enable: u32,
@@ -93,16 +96,12 @@ impl GoldfishBatteryState {
 
     create_battery_func!(set_capacity, capacity, BATTERY_STATUS_CHANGED);
 
-    #[cfg(unix)]
     create_battery_func!(set_voltage, voltage, BATTERY_STATUS_CHANGED);
 
-    #[cfg(unix)]
     create_battery_func!(set_current, current, BATTERY_STATUS_CHANGED);
 
-    #[cfg(unix)]
     create_battery_func!(set_charge_counter, charge_counter, BATTERY_STATUS_CHANGED);
 
-    #[cfg(unix)]
     create_battery_func!(set_charge_full, charge_full, BATTERY_STATUS_CHANGED);
 }
 
@@ -116,7 +115,6 @@ pub struct GoldfishBattery {
     monitor_thread: Option<thread::JoinHandle<()>>,
     kill_evt: Option<Event>,
     tube: Option<Tube>,
-    #[cfg(unix)]
     create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
 }
 
@@ -144,7 +142,10 @@ const AC_STATUS_CHANGED: u32 = 1 << 1;
 const BATTERY_INT_MASK: u32 = BATTERY_STATUS_CHANGED | AC_STATUS_CHANGED;
 
 /// Goldfish Battery status
-pub(crate) const BATTERY_STATUS_VAL_UNKNOWN: u32 = 0;
+const BATTERY_STATUS_VAL_UNKNOWN: u32 = 0;
+const BATTERY_STATUS_VAL_CHARGING: u32 = 1;
+const BATTERY_STATUS_VAL_DISCHARGING: u32 = 2;
+const BATTERY_STATUS_VAL_NOT_CHARGING: u32 = 3;
 
 /// Goldfish Battery health
 const BATTERY_HEALTH_VAL_UNKNOWN: u32 = 0;
@@ -154,7 +155,6 @@ pub(crate) enum Token {
     Commands,
     Resample,
     Kill,
-    #[cfg(unix)]
     Monitor,
 }
 
@@ -163,7 +163,7 @@ fn command_monitor(
     irq_evt: IrqLevelEvent,
     kill_evt: Event,
     state: Arc<Mutex<GoldfishBatteryState>>,
-    #[cfg(unix)] create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
+    create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
 ) {
     let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
         (&tube, Token::Commands),
@@ -177,9 +177,22 @@ fn command_monitor(
         }
     };
 
-    #[cfg(unix)]
-    let mut power_monitor =
-        crate::sys::unix::bat::create_power_monitor(create_power_monitor, &wait_ctx);
+    let mut power_monitor = match create_power_monitor {
+        Some(f) => match f() {
+            Ok(p) => match wait_ctx.add(p.get_read_notifier(), Token::Monitor) {
+                Ok(()) => Some(p),
+                Err(e) => {
+                    error!("failed to add power monitor to poll context: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                error!("failed to create power monitor: {}", e);
+                None
+            }
+        },
+        None => None,
+    };
 
     'poll: loop {
         let events = match wait_ctx.wait() {
@@ -206,16 +219,16 @@ fn command_monitor(
                         BatControlCommand::SetStatus(status) => bat_state.set_status(status.into()),
                         BatControlCommand::SetHealth(health) => bat_state.set_health(health.into()),
                         BatControlCommand::SetPresent(present) => {
-                            let v = if present != 0 { 1 } else { 0 };
-                            bat_state.set_present(v)
+                            let v = present != 0;
+                            bat_state.set_present(v.into())
                         }
                         BatControlCommand::SetCapacity(capacity) => {
                             let v = std::cmp::min(capacity, 100);
                             bat_state.set_capacity(v)
                         }
                         BatControlCommand::SetACOnline(ac_online) => {
-                            let v = if ac_online != 0 { 1 } else { 0 };
-                            bat_state.set_ac_online(v)
+                            let v = ac_online != 0;
+                            bat_state.set_ac_online(v.into())
                         }
                     };
 
@@ -228,13 +241,49 @@ fn command_monitor(
                     }
                 }
 
-                #[cfg(unix)]
                 Token::Monitor => {
-                    crate::sys::bat::handle_token_monitor(
-                        power_monitor.as_mut().unwrap(),
-                        state.clone(),
-                        &irq_evt,
-                    );
+                    // Safe because power_monitor must be populated if Token::Monitor is triggered.
+                    let power_monitor = power_monitor.as_mut().unwrap();
+
+                    let data = match power_monitor.read_message() {
+                        Ok(Some(d)) => d,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            error!("failed to read new power data: {}", e);
+                            continue;
+                        }
+                    };
+
+                    let mut bat_state = state.lock();
+
+                    // Each set_* function called below returns true when interrupt bits
+                    // (*_STATUS_CHANGED) changed. If `inject_irq` is true after we attempt to
+                    // update each field, inject an interrupt.
+                    let mut inject_irq = bat_state.set_ac_online(data.ac_online.into());
+
+                    match data.battery {
+                        Some(battery_data) => {
+                            inject_irq |= bat_state.set_capacity(battery_data.percent);
+                            let battery_status = match battery_data.status {
+                                BatteryStatus::Unknown => BATTERY_STATUS_VAL_UNKNOWN,
+                                BatteryStatus::Charging => BATTERY_STATUS_VAL_CHARGING,
+                                BatteryStatus::Discharging => BATTERY_STATUS_VAL_DISCHARGING,
+                                BatteryStatus::NotCharging => BATTERY_STATUS_VAL_NOT_CHARGING,
+                            };
+                            inject_irq |= bat_state.set_status(battery_status);
+                            inject_irq |= bat_state.set_voltage(battery_data.voltage);
+                            inject_irq |= bat_state.set_current(battery_data.current);
+                            inject_irq |= bat_state.set_charge_counter(battery_data.charge_counter);
+                            inject_irq |= bat_state.set_charge_full(battery_data.charge_full);
+                        }
+                        None => {
+                            inject_irq |= bat_state.set_present(0);
+                        }
+                    }
+
+                    if inject_irq {
+                        let _ = irq_evt.trigger();
+                    }
                 }
 
                 Token::Resample => {
@@ -264,7 +313,7 @@ impl GoldfishBattery {
         irq_num: u32,
         irq_evt: IrqLevelEvent,
         tube: Tube,
-        #[cfg(unix)] create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
+        create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
     ) -> Result<Self> {
         if mmio_base + GOLDFISHBAT_MMIO_LEN - 1 > u32::MAX as u64 {
             return Err(BatteryError::Non32BitMmioAddress);
@@ -292,7 +341,6 @@ impl GoldfishBattery {
             monitor_thread: None,
             kill_evt: None,
             tube: Some(tube),
-            #[cfg(unix)]
             create_power_monitor,
         })
     }
@@ -332,20 +380,11 @@ impl GoldfishBattery {
         if let Some(tube) = self.tube.take() {
             let irq_evt = self.irq_evt.try_clone().unwrap();
             let bat_state = self.state.clone();
-
-            #[cfg(unix)]
             let create_monitor_fn = self.create_power_monitor.take();
             let monitor_result = thread::Builder::new()
                 .name(self.debug_label())
                 .spawn(move || {
-                    command_monitor(
-                        tube,
-                        irq_evt,
-                        kill_evt,
-                        bat_state,
-                        #[cfg(unix)]
-                        create_monitor_fn,
-                    );
+                    command_monitor(tube, irq_evt, kill_evt, bat_state, create_monitor_fn);
                 });
 
             self.monitor_thread = match monitor_result {
@@ -367,13 +406,9 @@ impl GoldfishBattery {
 
 impl Drop for GoldfishBattery {
     fn drop(&mut self) {
-        if let Some(kill_evt) = self.kill_evt.take() {
-            // Ignore the result because there is nothing we can do with a failure.
-            let _ = kill_evt.write(1);
-        }
-        if let Some(thread) = self.monitor_thread.take() {
-            let _ = thread.join();
-        }
+        if let Err(e) = self.sleep() {
+            error!("{}", e);
+        };
     }
 }
 
@@ -470,5 +505,30 @@ impl Aml for GoldfishBattery {
             ],
         )
         .to_aml_bytes(bytes);
+    }
+}
+
+impl Suspendable for GoldfishBattery {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        if let Some(kill_evt) = self.kill_evt.take() {
+            kill_evt
+                .signal()
+                .context("failed to kill GoldfishBattery thread")?;
+        }
+        if let Some(thread) = self.monitor_thread.take() {
+            if let Err(e) = thread.join() {
+                return Err(anyhow!("GoldfishBattery thread panicked: {:?}", e));
+            }
+        }
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        if self.activated {
+            // Set activated to false for start_monitor to start monitoring again.
+            self.activated = false;
+            self.start_monitor();
+        }
+        Ok(())
     }
 }

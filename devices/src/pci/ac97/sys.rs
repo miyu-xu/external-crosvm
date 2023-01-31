@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,4 +17,4 @@ pub(in crate::pci::ac97) use platform::create_null_server;
 #[cfg(test)]
 pub(in crate::pci::ac97) use platform::tests;
 pub use platform::Ac97Backend;
-pub(in crate::pci::ac97) use platform::AudioStreamSource;
+pub(crate) use platform::AudioStreamSource;

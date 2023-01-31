@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,7 @@ pub const SYSTEM_SERIAL_TYPE_NAME: &str = "NamedPipe";
 /// output streams.
 pub trait SerialDevice {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         interrupt_evt: Event,
         input: Option<Box<dyn SerialInput>>,
         output: Option<Box<dyn io::Write + Send>>,
@@ -33,7 +33,7 @@ pub trait SerialDevice {
         keep_rds: Vec<RawDescriptor>,
     ) -> Self;
     fn new_with_pipe(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         interrupt_evt: Event,
         pipe_in: named_pipes::PipeConnection,
         pipe_out: named_pipes::PipeConnection,
@@ -43,13 +43,13 @@ pub trait SerialDevice {
 
 pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
     param: &SerialParameters,
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     evt: Event,
     _input: Option<Box<dyn SerialInput>>,
     keep_rds: &mut Vec<RawDescriptor>,
 ) -> std::result::Result<T, Error> {
     match &param.path {
-        None => return Err(Error::PathRequired),
+        None => Err(Error::PathRequired),
         Some(path) => {
             // We must create this pipe in non-blocking mode because a blocking
             // read in one thread will block a write in another thread having a
@@ -73,13 +73,13 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
             keep_rds.push(pipe_in.as_raw_descriptor());
             keep_rds.push(pipe_out.as_raw_descriptor());
 
-            return Ok(T::new_with_pipe(
-                protected_vm,
+            Ok(T::new_with_pipe(
+                protection_type,
                 evt,
                 pipe_in,
                 pipe_out,
                 keep_rds.to_vec(),
-            ));
+            ))
         }
     }
 }

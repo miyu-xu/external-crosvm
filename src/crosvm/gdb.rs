@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,9 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::Duration;
 
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+use aarch64::AArch64 as CrosvmArch;
+use anyhow::Context;
 use base::error;
 use base::info;
 use base::Tube;
@@ -17,6 +20,9 @@ use gdbstub::conn::ConnectionExt;
 use gdbstub::stub::run_blocking;
 use gdbstub::stub::run_blocking::BlockingEventLoop;
 use gdbstub::stub::SingleThreadStopReason;
+use gdbstub::target::ext::base::single_register_access::SingleRegisterAccess;
+#[cfg(target_arch = "aarch64")]
+use gdbstub::target::ext::base::single_register_access::SingleRegisterAccessOps;
 use gdbstub::target::ext::base::singlethread::SingleThreadBase;
 use gdbstub::target::ext::base::singlethread::SingleThreadResume;
 use gdbstub::target::ext::base::singlethread::SingleThreadResumeOps;
@@ -30,8 +36,14 @@ use gdbstub::target::ext::breakpoints::HwBreakpointOps;
 use gdbstub::target::Target;
 use gdbstub::target::TargetError::NonFatal;
 use gdbstub::target::TargetResult;
+#[cfg(target_arch = "aarch64")]
+use gdbstub_arch::aarch64::AArch64 as GdbArch;
 #[cfg(target_arch = "x86_64")]
 use gdbstub_arch::x86::X86_64_SSE as GdbArch;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+use hypervisor::VcpuAArch64 as VcpuArch;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use hypervisor::VcpuX86_64 as VcpuArch;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error as ThisError;
@@ -42,9 +54,9 @@ use vm_control::VcpuDebugStatusMessage;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
 use vm_memory::GuestAddress;
-
-#[cfg(target_arch = "x86_64")]
-type ArchUsize = u64;
+use vm_memory::GuestMemory;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use x86_64::X8664arch as CrosvmArch;
 
 pub fn gdb_thread(mut gdbstub: GdbStub, port: u32) {
     let addr = format!("0.0.0.0:{}", port);
@@ -111,6 +123,7 @@ pub struct GdbStub {
     from_vcpu: mpsc::Receiver<VcpuDebugStatusMessage>,
 
     single_step: bool,
+    max_hw_breakpoints: Option<usize>,
     hw_breakpoints: Vec<GuestAddress>,
 }
 
@@ -125,6 +138,7 @@ impl GdbStub {
             vcpu_com,
             from_vcpu,
             single_step: false,
+            max_hw_breakpoints: None,
             hw_breakpoints: Default::default(),
         }
     }
@@ -146,6 +160,20 @@ impl GdbStub {
             Ok(VmResponse::Ok) => Ok(()),
             Ok(r) => Err(Error::UnexpectedVmResponse(r)),
             Err(e) => Err(Error::VmResponse(e)),
+        }
+    }
+
+    fn max_hw_breakpoints_request(&self) -> TargetResult<usize, Self> {
+        match self.vcpu_request(VcpuControl::Debug(VcpuDebug::GetHwBreakPointCount)) {
+            Ok(VcpuDebugStatus::HwBreakPointCount(n)) => Ok(n),
+            Ok(s) => {
+                error!("Unexpected vCPU response for GetHwBreakPointCount: {:?}", s);
+                Err(NonFatal)
+            }
+            Err(e) => {
+                error!("Failed to request GetHwBreakPointCount: {}", e);
+                Err(NonFatal)
+            }
         }
     }
 }
@@ -267,6 +295,12 @@ impl SingleThreadBase for GdbStub {
     fn support_resume(&mut self) -> Option<SingleThreadResumeOps<Self>> {
         Some(self)
     }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<(), Self>> {
+        Some(self)
+    }
 }
 
 impl SingleThreadResume for GdbStub {
@@ -326,9 +360,14 @@ impl HwBreakpoint for GdbStub {
         addr: <Self::Arch as Arch>::Usize,
         _kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        // If we already have 4 breakpoints, we cannot set a new one.
-        if self.hw_breakpoints.len() >= 4 {
-            error!("Not allowed to set more than 4 HW breakpoints");
+        let max_count = *(match &mut self.max_hw_breakpoints {
+            None => self
+                .max_hw_breakpoints
+                .insert(self.max_hw_breakpoints_request()?),
+            Some(c) => c,
+        });
+        if self.hw_breakpoints.len() >= max_count {
+            error!("Not allowed to set more than {} HW breakpoints", max_count);
             return Err(NonFatal);
         }
         self.hw_breakpoints.push(GuestAddress(addr));
@@ -373,12 +412,68 @@ impl HwBreakpoint for GdbStub {
     }
 }
 
+impl SingleRegisterAccess<()> for GdbStub {
+    fn read_register(
+        &mut self,
+        _tid: (),
+        reg_id: <Self::Arch as Arch>::RegId,
+        buf: &mut [u8],
+    ) -> TargetResult<usize, Self> {
+        match self.vcpu_request(VcpuControl::Debug(VcpuDebug::ReadReg(reg_id))) {
+            Ok(VcpuDebugStatus::RegValue(r)) => {
+                if buf.len() != r.len() {
+                    error!(
+                        "Register size mismatch in RegValue: {} != {}",
+                        buf.len(),
+                        r.len()
+                    );
+                    return Err(NonFatal);
+                }
+                for (dst, v) in buf.iter_mut().zip(r.iter()) {
+                    *dst = *v;
+                }
+                Ok(r.len())
+            }
+            Ok(s) => {
+                error!("Unexpected vCPU response for ReadReg: {:?}", s);
+                Err(NonFatal)
+            }
+            Err(e) => {
+                error!("Failed to request ReadReg: {}", e);
+                Err(NonFatal)
+            }
+        }
+    }
+
+    fn write_register(
+        &mut self,
+        _tid: (),
+        reg_id: <Self::Arch as Arch>::RegId,
+        val: &[u8],
+    ) -> TargetResult<(), Self> {
+        match self.vcpu_request(VcpuControl::Debug(VcpuDebug::WriteReg(
+            reg_id,
+            val.to_owned(),
+        ))) {
+            Ok(VcpuDebugStatus::CommandComplete) => Ok(()),
+            Ok(s) => {
+                error!("Unexpected vCPU response for WriteReg: {:?}", s);
+                Err(NonFatal)
+            }
+            Err(e) => {
+                error!("Failed to request WriteReg: {}", e);
+                Err(NonFatal)
+            }
+        }
+    }
+}
+
 struct GdbStubEventLoop;
 
 impl BlockingEventLoop for GdbStubEventLoop {
     type Target = GdbStub;
     type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
-    type StopReason = SingleThreadStopReason<ArchUsize>;
+    type StopReason = SingleThreadStopReason<<GdbArch as Arch>::Usize>;
 
     fn wait_for_stop_reason(
         target: &mut Self::Target,
@@ -440,4 +535,86 @@ impl BlockingEventLoop for GdbStubEventLoop {
 
         Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
     }
+}
+
+/// Notify the GDB thread that a VCPU has stopped because of a breakpoint.
+pub fn vcpu_exit_debug(
+    cpu: usize,
+    to_gdb_tube: Option<&mpsc::Sender<VcpuDebugStatusMessage>>,
+) -> anyhow::Result<()> {
+    if let Some(ch) = to_gdb_tube.as_ref() {
+        ch.send(VcpuDebugStatusMessage {
+            cpu,
+            msg: VcpuDebugStatus::HitBreakPoint,
+        })
+        .context("failed to send breakpoint status to gdb thread")?;
+    }
+    Ok(())
+}
+
+/// Handle a `VcpuDebug` request for a given `vcpu`.
+pub fn vcpu_control_debug<V>(
+    cpu_id: usize,
+    vcpu: &V,
+    guest_mem: &GuestMemory,
+    d: VcpuDebug,
+    reply_tube: Option<&mpsc::Sender<VcpuDebugStatusMessage>>,
+) -> anyhow::Result<()>
+where
+    V: VcpuArch + 'static,
+{
+    let reply_tube = reply_tube
+        .as_ref()
+        .context("VcpuControl::Debug received while debugger not connected")?;
+
+    let debug_status = match d {
+        VcpuDebug::ReadRegs => VcpuDebugStatus::RegValues(
+            <CrosvmArch as arch::GdbOps<V>>::read_registers(vcpu as &V)
+                .context("failed to handle a gdb ReadRegs command")?,
+        ),
+        VcpuDebug::WriteRegs(regs) => {
+            <CrosvmArch as arch::GdbOps<V>>::write_registers(vcpu as &V, &regs)
+                .context("failed to handle a gdb WriteRegs command")?;
+            VcpuDebugStatus::CommandComplete
+        }
+        VcpuDebug::ReadReg(reg) => VcpuDebugStatus::RegValue(
+            <CrosvmArch as arch::GdbOps<V>>::read_register(vcpu as &V, reg)
+                .context("failed to handle a gdb ReadReg command")?,
+        ),
+        VcpuDebug::WriteReg(reg, buf) => {
+            <CrosvmArch as arch::GdbOps<V>>::write_register(vcpu as &V, reg, &buf)
+                .context("failed to handle a gdb WriteReg command")?;
+            VcpuDebugStatus::CommandComplete
+        }
+        VcpuDebug::ReadMem(vaddr, len) => VcpuDebugStatus::MemoryRegion(
+            <CrosvmArch as arch::GdbOps<V>>::read_memory(vcpu as &V, guest_mem, vaddr, len)
+                .unwrap_or(Vec::new()),
+        ),
+        VcpuDebug::WriteMem(vaddr, buf) => {
+            <CrosvmArch as arch::GdbOps<V>>::write_memory(vcpu as &V, guest_mem, vaddr, &buf)
+                .context("failed to handle a gdb WriteMem command")?;
+            VcpuDebugStatus::CommandComplete
+        }
+        VcpuDebug::EnableSinglestep => {
+            <CrosvmArch as arch::GdbOps<V>>::enable_singlestep(vcpu as &V)
+                .context("failed to handle a gdb EnableSingleStep command")?;
+            VcpuDebugStatus::CommandComplete
+        }
+        VcpuDebug::GetHwBreakPointCount => VcpuDebugStatus::HwBreakPointCount(
+            <CrosvmArch as arch::GdbOps<V>>::get_max_hw_breakpoints(vcpu as &V)
+                .context("failed to get max number of HW breakpoints")?,
+        ),
+        VcpuDebug::SetHwBreakPoint(addrs) => {
+            <CrosvmArch as arch::GdbOps<V>>::set_hw_breakpoints(vcpu as &V, &addrs)
+                .context("failed to handle a gdb SetHwBreakPoint command")?;
+            VcpuDebugStatus::CommandComplete
+        }
+    };
+
+    reply_tube
+        .send(VcpuDebugStatusMessage {
+            cpu: cpu_id,
+            msg: debug_status,
+        })
+        .context("failed to send a debug status to GDB thread")
 }

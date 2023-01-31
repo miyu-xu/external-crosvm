@@ -1,30 +1,37 @@
 [package]
 name = "rutabaga_gfx"
-version = "0.1.0"
+version = "0.1.0-alpha.0"
 authors = ["The Chromium OS Authors"]
 edition = "2021"
+description = "[highly unstable] Handling virtio-gpu protocols"
+license-file = "LICENSE"
 
 [features]
 gfxstream = []
+gfxstream_stub = []
 virgl_renderer = []
 virgl_renderer_next = []
 minigbm = []
-# To try out Vulkano, delete the following line and uncomment the line in "dependencies".  vulkano
+# To try out Vulkano, delete the following line and uncomment the line in "dependencies". Vulkano
 # features are just a prototype and not integrated yet into the ChromeOS build system.
 vulkano = []
 x = []
 
 [dependencies]
-cfg-if = "*"
+cfg-if = "1.0.0"
 data_model = { path = "../common/data_model" }
-libc = "*"
-base = { path = "../base" }
-remain = "*"
-sync = { path = "../common/sync" }
-thiserror = "*"
+libc = "0.2.116"
+remain = "0.2"
+thiserror = "1.0.23"
 serde = { version = "1", features = [ "derive" ] }
-#vulkano = {git = "https:/github.com/vulkano-rs/vulkano.git", optional = true}
+
+[target.'cfg(not(target_os = "fuchsia"))'.dependencies]
+base = { path = "../base" }
+
+
+# To build latest Vulkano, change version to git = "https:/github.com/vulkano-rs/vulkano.git"
+# vulkano = { version = "0.31.0", optional = true }
 
 [build-dependencies]
-pkg-config = "*"
-anyhow = "*"
+pkg-config = "0.3"
+anyhow = "1.0.57"

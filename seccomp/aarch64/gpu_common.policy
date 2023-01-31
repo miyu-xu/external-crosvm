@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 # for gpu.
 brk: 1
 clock_gettime: 1
+clone3: 1
 close: 1
 dup3: 1
 dup: 1
@@ -21,9 +22,11 @@ getpid: 1
 gettid: 1
 gettimeofday: 1
 io_uring_setup: 1
+io_uring_register: 1
 io_uring_enter: 1
 kill: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE
+madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
+membarrier: 1
 mremap: 1
 munmap: 1
 nanosleep: 1
@@ -88,6 +91,9 @@ tgkill: 1
 sched_setscheduler: 1
 sched_setaffinity: 1
 kcmp: 1
+
+# Rules for Mesa's u_trace thread
+setpriority: 1
 
 # Rules for Vulkan loader / layers
 faccessat: 1

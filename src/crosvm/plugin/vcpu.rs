@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,6 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use assertions::const_assert;
 use base::error;
 use base::LayoutAllocation;
 use data_model::DataInit;
@@ -44,12 +43,13 @@ use libc::EPROTO;
 use protobuf::CodedOutputStream;
 use protobuf::Message;
 use protos::plugin::*;
+use static_assertions::const_assert;
 use sync::Mutex;
 
 use super::*;
 
 /// Identifier for an address space in the VM.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum IoSpace {
     Ioport,
     Mmio,
@@ -691,8 +691,7 @@ impl PluginVcpu {
                 const SIZE_OF_MSRS: usize = mem::size_of::<kvm_msrs>();
                 const SIZE_OF_ENTRY: usize = mem::size_of::<kvm_msr_entry>();
                 const ALIGN_OF_MSRS: usize = mem::align_of::<kvm_msrs>();
-                const ALIGN_OF_ENTRY: usize = mem::align_of::<kvm_msr_entry>();
-                const_assert!(ALIGN_OF_MSRS >= ALIGN_OF_ENTRY);
+                const_assert!(ALIGN_OF_MSRS >= mem::align_of::<kvm_msr_entry>());
 
                 response.mut_set_msrs();
                 let request_entries = &request.get_set_msrs().entries;

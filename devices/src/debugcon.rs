@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@ use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
 use crate::SerialDevice;
+use crate::Suspendable;
 
 const BOCHS_DEBUGCON_READBACK: u8 = 0xe9;
 
@@ -29,7 +30,7 @@ pub struct Debugcon {
 
 impl SerialDevice for Debugcon {
     fn new(
-        _protected_vm: ProtectionType,
+        _protection_type: ProtectionType,
         _interrupt_evt: Event,
         _input: Option<Box<dyn SerialInput>>,
         out: Option<Box<dyn io::Write + Send>>,
@@ -42,7 +43,7 @@ impl SerialDevice for Debugcon {
 
     #[cfg(windows)]
     fn new_with_pipe(
-        _protected_vm: ProtectionType,
+        _protection_type: ProtectionType,
         _interrupt_evt: Event,
         _pipe_in: named_pipes::PipeConnection,
         _pipe_out: named_pipes::PipeConnection,
@@ -84,6 +85,16 @@ impl Debugcon {
             out.write_all(data)?;
             out.flush()?;
         }
+        Ok(())
+    }
+}
+
+impl Suspendable for Debugcon {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }

@@ -1,11 +1,11 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! Utility file for allocating exportable system memory.  On Linux systems,
 //! this is is often done with memfd.
 
-use base::SharedMemory;
+use crate::base_internal::SharedMemory;
 
 use crate::rutabaga_gralloc::formats::canonical_image_requirements;
 use crate::rutabaga_gralloc::gralloc::Gralloc;

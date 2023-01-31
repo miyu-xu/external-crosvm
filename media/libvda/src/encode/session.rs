@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -115,7 +115,7 @@ impl Session {
                 planes.len(),
                 planes.as_mut_ptr(),
                 timestamp,
-                if force_keyframe { 1 } else { 0 },
+                force_keyframe.into(),
             )
         };
         convert_error_code(r)
