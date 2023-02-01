@@ -1,11 +1,10 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::fs::File;
 use std::sync::Arc;
 
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use base::error;
@@ -40,6 +39,7 @@ use crate::virtio::vhost::user::device::vvu::pci::VvuPciDevice;
 use crate::virtio::SignalableInterrupt;
 
 /// A Doorbell that supports both regular call events and signaling through a VVU device.
+#[derive(Clone)]
 pub enum Doorbell {
     Call(CallEvent),
     Vfio(DoorbellRegion),
@@ -100,7 +100,7 @@ impl VvuOps {
 
 impl VhostUserPlatformOps for VvuOps {
     fn protocol(&self) -> Protocol {
-        return Protocol::Virtio;
+        Protocol::Virtio
     }
 
     fn set_mem_table(
@@ -198,17 +198,25 @@ where
             .wait_readable()
             .await
             .context("failed to wait for the handler to become readable")?;
-        match req_handler.handle_request() {
-            Ok(()) => (),
+        let (hdr, files) = match req_handler.recv_header() {
+            Ok((hdr, files)) => (hdr, files),
             Err(VhostError::ClientExit) => {
                 info!("vhost-user connection closed");
                 // Exit as the client closed the connection.
                 return Ok(());
             }
             Err(e) => {
-                bail!("failed to handle a vhost-user request: {}", e);
+                return Err(e.into());
             }
         };
+
+        if req_handler.needs_wait_for_payload(&hdr) {
+            handler_source
+                .wait_readable()
+                .await
+                .context("failed to wait for the handler to become readable")?;
+        }
+        req_handler.process_message(hdr, files)?;
     }
 }
 
@@ -266,6 +274,8 @@ mod tests {
 
     #[test]
     fn test_vhost_user_activate() {
+        use std::os::unix::net::UnixStream;
+
         use vmm_vhost::connection::socket::Listener as SocketListener;
         use vmm_vhost::SlaveListener;
 
@@ -288,8 +298,9 @@ mod tests {
             let allow_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
             let init_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
             let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
-            let mut vmm_handler = VhostUserHandler::new_from_path(
-                &path,
+            let connection = UnixStream::connect(&path).unwrap();
+            let mut vmm_handler = VhostUserHandler::new_from_connection(
+                connection,
                 QUEUES_NUM as u64,
                 allow_features,
                 init_features,
@@ -321,7 +332,7 @@ mod tests {
 
         dev_bar.wait();
 
-        match listener.handle_request() {
+        match listener.recv_header() {
             Err(VhostError::ClientExit) => (),
             r => panic!("Err(ClientExit) was expected but {:?}", r),
         }

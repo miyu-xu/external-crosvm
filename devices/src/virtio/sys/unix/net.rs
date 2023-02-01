@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -136,7 +136,7 @@ where
                     .map_err(NetError::WaitContextDisableTap)?;
                 Ok(())
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
         }
     }
     pub(in crate::virtio) fn handle_rx_queue(
@@ -152,11 +152,11 @@ where
         Ok(())
     }
     pub(super) fn process_rx(&mut self) -> result::Result<(), NetError> {
-        return process_rx(
-            self.interrupt.as_ref(),
+        process_rx(
+            &self.interrupt,
             &mut self.rx_queue,
             &self.mem,
             &mut self.tap,
-        );
+        )
     }
 }

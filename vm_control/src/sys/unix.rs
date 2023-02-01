@@ -1,22 +1,22 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(feature = "gpu")]
+pub(crate) mod gpu;
+
 use std::path::Path;
-use std::thread::JoinHandle;
 
 use base::error;
 use base::AsRawDescriptor;
 use base::Descriptor;
 use base::Error as SysError;
-use base::Killable;
 use base::MemoryMappingArena;
 use base::MmapError;
 use base::Protection;
 use base::SafeDescriptor;
 use base::Tube;
 use base::UnixSeqpacket;
-use base::SIGRTMIN;
 use hypervisor::MemSlot;
 use hypervisor::Vm;
 use libc::EINVAL;
@@ -37,7 +37,7 @@ pub fn handle_request<T: AsRef<Path> + std::fmt::Debug>(
 ) -> HandleRequestResult {
     match UnixSeqpacket::connect(&socket_path) {
         Ok(s) => {
-            let socket = Tube::new(s);
+            let socket = Tube::new_from_unix_seqpacket(s);
             if let Err(e) = socket.send(request) {
                 error!(
                     "failed to send request to socket at '{:?}': {}",
@@ -201,8 +201,4 @@ impl FsMappingRequest {
             _ => VmResponse::Err(SysError::new(EINVAL)),
         }
     }
-}
-
-pub(crate) fn kill_handle(handle: &JoinHandle<()>) {
-    let _ = handle.kill(SIGRTMIN() + 0);
 }

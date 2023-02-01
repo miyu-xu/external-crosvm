@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,6 +38,7 @@ use crate::GpuDisplayImport;
 use crate::GpuDisplayResult;
 use crate::GpuDisplaySurface;
 use crate::SurfaceType;
+use crate::SysDisplayT;
 
 const BUFFER_COUNT: usize = 3;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -415,9 +416,11 @@ impl DisplayT for DisplayWl {
     }
 }
 
+impl SysDisplayT for DisplayWl {}
+
 impl AsRawDescriptor for DisplayWl {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         // Safe given that the context pointer is valid.
-        unsafe { dwl_context_fd(self.ctx.0) }
+        self.ctx.as_raw_descriptor()
     }
 }

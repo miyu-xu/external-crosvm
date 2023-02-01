@@ -1,10 +1,11 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
+use base::info;
 use cros_async::Executor;
 use hypervisor::ProtectionType;
 
@@ -45,17 +46,23 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
     let disk = DiskOption {
         path: filename.into(),
         read_only: fileopts.contains(&"read-only"),
+        root: false,
         sparse: false,
+        direct: false,
         block_size: 512,
-        ..Default::default()
+        id: None,
+        async_executor: None,
     };
 
     let block = Box::new(BlockAsync::new(
         base_features(ProtectionType::Unprotected),
-        disk.open_as_async_file()?,
+        disk.open()?,
         disk.read_only,
         disk.sparse,
         disk.block_size,
+        None,
+        None,
+        None,
         None,
         None,
     )?)
@@ -67,6 +74,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         block.max_queue_num(),
         None,
     )?;
+    info!("vhost-user disk device ready, starting run loop...");
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
     ex.run_until(listener.run_backend(block, &ex))?
 }

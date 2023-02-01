@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium OS Authors. All rights reserved.
+# Copyright 2022 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -76,6 +76,40 @@ class CrosvmApi(recipe_api.RecipeApi):
         }
         return self.m.context(cwd=self.source_dir, env=env)
 
+    def cros_container_build_context(self):
+        """
+        Prepares source and system to build crosvm via cros container.
+
+        Usage:
+            with api.crosvm.cros_container_build_context():
+                api.crosvm.step_in_container("build crosvm", ["cargo build"], cros=True)
+        """
+        with self.m.step.nest("Prepare Cros Container Build"):
+            with self.m.context(infra_steps=True):
+                self.__prepare_source()
+            with self.m.context(cwd=self.source_dir):
+                self.m.step(
+                    "Stop existing cros containers",
+                    [
+                        "vpython3",
+                        self.source_dir.join("tools/dev_container"),
+                        "--verbose",
+                        "--stop",
+                        "--cros",
+                    ],
+                )
+                self.m.step(
+                    "Force pull cros_container",
+                    [
+                        "vpython3",
+                        self.source_dir.join("tools/dev_container"),
+                        "--pull",
+                        "--cros",
+                    ],
+                )
+                self.m.crosvm.step_in_container("Ensure cros container exists", ["true"], cros=True)
+        return self.m.context(cwd=self.source_dir)
+
     def host_build_context(self):
         """
         Prepares source and system to build crosvm directly on the host.
@@ -107,18 +141,20 @@ class CrosvmApi(recipe_api.RecipeApi):
 
                 return self.m.context(env=env, env_prefixes=env_prefixes, cwd=self.source_dir)
 
-    def step_in_container(self, step_name, command):
+    def step_in_container(self, step_name, command, cros=False, **kwargs):
         """
         Runs a luci step inside the crosvm dev container.
         """
-        self.m.step(
+        return self.m.step(
             step_name,
             [
                 "vpython3",
                 self.source_dir.join("tools/dev_container"),
                 "--verbose",
             ]
+            + (["--cros"] if cros else [])
             + command,
+            **kwargs
         )
 
     def prepare_git(self):
@@ -143,6 +179,26 @@ class CrosvmApi(recipe_api.RecipeApi):
         value = result.stdout.strip().decode("utf-8")
         result.presentation.step_text = value
         return value
+
+    def upload_coverage(self, filename):
+        with self.m.step.nest("Uploading coverage"):
+            codecov = self.m.cipd.ensure_tool("crosvm/codecov/${platform}", "latest")
+            sha = self.get_git_sha()
+            self.m.step(
+                "Uploading to covecov.io",
+                [
+                    "bash",
+                    self.resource("codecov_wrapper.sh"),
+                    codecov,
+                    "--nonZero",  # Enables error codes
+                    "--slug=google/crosvm",
+                    "--sha=" + sha,
+                    "--branch=main",
+                    "-X=search",  # Don't search for coverage files, just upload the file below.
+                    "-f",
+                    filename,
+                ],
+            )
 
     def __prepare_rust(self):
         """
@@ -221,12 +277,7 @@ class CrosvmApi(recipe_api.RecipeApi):
                 s.url = CROSVM_REPO_URL
                 s.name = "crosvm"
                 gclient_config.got_revision_mapping[s.name] = "got_revision"
-                # By default bot_update will soft reset to 'main' after patching in gerrit revisions
-                # for try jobs. We do not want to do that as it will prevent us from testing infra
-                # jobs like the merge bot, which does not work with a dirty working directory.
-                self.m.bot_update.ensure_checkout(
-                    gclient_config=gclient_config, gerrit_no_reset=True
-                )
+                self.m.bot_update.ensure_checkout(gclient_config=gclient_config)
 
                 self.__sync_submodules()
 
@@ -246,6 +297,14 @@ class CrosvmApi(recipe_api.RecipeApi):
                         self.source_dir.join("tools/dev_container"),
                         "--verbose",
                         "--stop",
+                    ],
+                )
+                self.m.step(
+                    "Force pull dev_container",
+                    [
+                        "vpython3",
+                        self.source_dir.join("tools/dev_container"),
+                        "--pull",
                     ],
                 )
                 self.m.crosvm.step_in_container("Ensure dev container exists", ["true"])

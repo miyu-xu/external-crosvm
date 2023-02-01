@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,6 +46,16 @@ pub unsafe trait DataInit: Copy + Send + Sync {
             ([], [mid], []) => Some(mid),
             _ => None,
         }
+    }
+
+    /// Copies the value of `Self` from the beginning of a slice of raw data.
+    ///
+    /// This will return `None` if the length of data is less than the size of `Self`, or if the
+    /// data is not aligned for the type of `Self`.
+    fn read_from_prefix(data: &[u8]) -> Option<Self> {
+        data.get(0..size_of::<Self>())
+            .and_then(|slice| Self::from_slice(slice))
+            .copied()
     }
 
     /// Converts a mutable slice of raw data into a mutable reference of `Self`.

@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 # for gpu.
 brk: 1
 clock_gettime: 1
+clone3: 1
 close: 1
 dup2: 1
 dup: 1
 epoll_create1: 1
 epoll_ctl: 1
+epoll_pwait: 1
 epoll_wait: 1
 eventfd2: 1
 exit: 1
@@ -21,9 +23,11 @@ getpid: 1
 gettid: 1
 gettimeofday: 1
 io_uring_setup: 1
+io_uring_register: 1
 io_uring_enter: 1
 kill: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE
+madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
+membarrier: 1
 mremap: 1
 munmap: 1
 nanosleep: 1
@@ -55,8 +59,8 @@ uname: 1
 # Rules specific to gpu
 connect: 1
 # 1033 is F_ADD_SEALS, 1034 is F_GET_SEALS
-fcntl: arg1 == F_DUPFD_CLOEXEC || arg1 == F_SETFD || arg1 == F_GETFL || \
-       arg1 == F_SETFL || arg1 == 1033 || arg1 == 1034
+fcntl: arg1 == F_DUPFD_CLOEXEC || arg1 == F_GETFD || arg1 == F_SETFD || \
+       arg1 == F_GETFL || arg1 == F_SETFL || arg1 == 1033 || arg1 == 1034
 fstat: 1
 # Used to set of size new memfd.
 ftruncate: 1
@@ -90,6 +94,9 @@ shutdown: 1
 
 # Rules for Mesa's shader binary cache.
 flock: 1
+inotify_add_watch: 1
+inotify_init1: 1
+inotify_rm_watch: 1
 mkdir: 1
 newfstatat: 1
 rename: 1

@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! Virtual machine architecture support code.
 
 pub mod android;
-pub mod fdt;
 pub mod pstore;
 pub mod serial;
 
@@ -18,7 +17,9 @@ use std::io;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::ops::Deref;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::mpsc::SendError;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::Event;
 use base::SendTube;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use base::Tube;
 use devices::virtio::VirtioDevice;
 use devices::BarRange;
@@ -54,12 +55,18 @@ use devices::PciDeviceError;
 use devices::PciInterruptPin;
 use devices::PciRoot;
 use devices::PciRootCommand;
+use devices::PreferredIrq;
 #[cfg(unix)]
 use devices::ProxyDevice;
 use devices::SerialHardware;
 use devices::SerialParameters;
+use devices::VirtioMmioDevice;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+use gdbstub::arch::Arch;
+#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
+use gdbstub_arch::aarch64::AArch64 as GdbArch;
 #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-use gdbstub_arch::x86::reg::X86_64CoreRegs as GdbStubRegs;
+use gdbstub_arch::x86::X86_64_SSE as GdbArch;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use hypervisor::CpuConfigAArch64 as CpuConfigArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -69,7 +76,6 @@ use hypervisor::Hypervisor as HypervisorArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use hypervisor::HypervisorX86_64 as HypervisorArch;
 use hypervisor::IoEventAddress;
-use hypervisor::ProtectionType;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use hypervisor::VcpuAArch64 as VcpuArch;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -90,8 +96,10 @@ use remain::sorted;
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
+use serde::de::Visitor;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_keyvalue::FromKeyValues;
 pub use serial::add_serial_devices;
 pub use serial::get_serial_cmdline;
 pub use serial::set_default_serial_parameters;
@@ -111,22 +119,186 @@ pub enum VmImage {
     Bios(File),
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, FromKeyValues, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Pstore {
     pub path: PathBuf,
     pub size: u32,
 }
 
+/// Set of CPU cores.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CpuSet(Vec<usize>);
+
+impl CpuSet {
+    pub fn new<I: IntoIterator<Item = usize>>(cpus: I) -> Self {
+        CpuSet(cpus.into_iter().collect())
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, usize> {
+        self.0.iter()
+    }
+}
+
+fn parse_cpu_range(s: &str, cpuset: &mut Vec<usize>) -> Result<(), String> {
+    fn parse_cpu(s: &str) -> Result<usize, String> {
+        s.parse().map_err(|_| {
+            format!(
+                "invalid CPU index {} - index must be a non-negative integer",
+                s
+            )
+        })
+    }
+
+    let (first_cpu, last_cpu) = match s.split_once('-') {
+        Some((first_cpu, last_cpu)) => {
+            let first_cpu = parse_cpu(first_cpu)?;
+            let last_cpu = parse_cpu(last_cpu)?;
+
+            if last_cpu < first_cpu {
+                return Err(format!(
+                    "invalid CPU range {} - ranges must be from low to high",
+                    s
+                ));
+            }
+            (first_cpu, last_cpu)
+        }
+        None => {
+            let cpu = parse_cpu(s)?;
+            (cpu, cpu)
+        }
+    };
+
+    cpuset.extend(first_cpu..=last_cpu);
+
+    Ok(())
+}
+
+impl FromStr for CpuSet {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut cpuset = Vec::new();
+        for part in s.split(',') {
+            parse_cpu_range(part, &mut cpuset)?;
+        }
+        Ok(CpuSet::new(cpuset))
+    }
+}
+
+impl Deref for CpuSet {
+    type Target = Vec<usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl IntoIterator for CpuSet {
+    type Item = usize;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+/// Deserializes a `CpuSet` from a sequence which elements can either be integers, or strings
+/// representing CPU ranges (e.g. `5-8`).
+impl<'de> Deserialize<'de> for CpuSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct CpuSetVisitor;
+        impl<'de> Visitor<'de> for CpuSetVisitor {
+            type Value = CpuSet;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("CpuSet")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                #[derive(Deserialize)]
+                #[serde(untagged)]
+                enum CpuSetValue<'a> {
+                    Single(usize),
+                    Range(&'a str),
+                }
+
+                let mut cpus = Vec::new();
+                while let Some(cpuset) = seq.next_element::<CpuSetValue>()? {
+                    match cpuset {
+                        CpuSetValue::Single(cpu) => cpus.push(cpu),
+                        CpuSetValue::Range(range) => {
+                            parse_cpu_range(range, &mut cpus).map_err(serde::de::Error::custom)?;
+                        }
+                    }
+                }
+
+                Ok(CpuSet::new(cpus))
+            }
+        }
+
+        deserializer.deserialize_seq(CpuSetVisitor)
+    }
+}
+
+/// Serializes a `CpuSet` into a sequence of integers and strings representing CPU ranges.
+impl Serialize for CpuSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut seq = serializer.serialize_seq(None)?;
+
+        // Factorize ranges into "a-b" strings.
+        let mut serialize_range = |start: usize, end: usize| -> Result<(), S::Error> {
+            if start == end {
+                seq.serialize_element(&start)?;
+            } else {
+                seq.serialize_element(&format!("{}-{}", start, end))?;
+            }
+
+            Ok(())
+        };
+
+        // Current range.
+        let mut range = None;
+        for core in &self.0 {
+            range = match range {
+                None => Some((core, core)),
+                Some((start, end)) if *end == *core - 1 => Some((start, core)),
+                Some((start, end)) => {
+                    serialize_range(*start, *end)?;
+                    Some((core, core))
+                }
+            };
+        }
+
+        if let Some((start, end)) = range {
+            serialize_range(*start, *end)?;
+        }
+
+        seq.end()
+    }
+}
+
 /// Mapping of guest VCPU threads to host CPU cores.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum VcpuAffinity {
     /// All VCPU threads will be pinned to the same set of host CPU cores.
-    Global(Vec<usize>),
+    Global(CpuSet),
     /// Each VCPU may be pinned to a set of host CPU cores.
     /// The map key is a guest VCPU index, and the corresponding value is the set of
     /// host CPU indices that the VCPU thread will be allowed to run on.
     /// If a VCPU index is not present in the map, its affinity will not be set.
-    PerVcpu(BTreeMap<usize, Vec<usize>>),
+    PerVcpu(BTreeMap<usize, CpuSet>),
 }
 
 /// Holds the pieces needed to build a VM. Passed to `build_vm` in the `LinuxArch` trait below to
@@ -136,18 +308,21 @@ pub struct VmComponents {
     pub acpi_sdts: Vec<SDT>,
     pub android_fstab: Option<File>,
     pub cpu_capacity: BTreeMap<usize, u32>,
-    pub cpu_clusters: Vec<Vec<usize>>,
+    pub cpu_clusters: Vec<CpuSet>,
     pub delay_rt: bool,
+    #[cfg(feature = "direct")]
+    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
     #[cfg(feature = "direct")]
     pub direct_gpe: Vec<u32>,
     pub dmi_path: Option<PathBuf>,
     pub extra_kernel_params: Vec<String>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub force_s2idle: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub host_cpu_topology: bool,
     pub hugepages: bool,
+    pub hv_cfg: hypervisor::Config,
     pub initrd_image: Option<File>,
     pub itmt: bool,
     pub memory_size: u64,
@@ -155,17 +330,18 @@ pub struct VmComponents {
     pub no_rtc: bool,
     pub no_smt: bool,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    pub oem_strings: Vec<String>,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pci_low_start: Option<u64>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub pcie_ecam: Option<AddressRange>,
     pub pflash_block_size: u32,
     pub pflash_image: Option<File>,
-    pub protected_vm: ProtectionType,
     pub pstore: Option<Pstore>,
     /// A file to load as pVM firmware. Must be `Some` iff
-    /// `protected_vm == ProtectionType::UnprotectedWithFirmware`.
+    /// `hv_cfg.protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<File>,
-    pub rt_cpus: Vec<usize>,
+    pub rt_cpus: CpuSet,
     pub swiotlb: Option<u64>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
@@ -177,20 +353,23 @@ pub struct VmComponents {
 pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub bat_control: Option<BatControl>,
     pub delay_rt: bool,
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    pub devices_thread: Option<std::thread::JoinHandle<()>>,
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     pub gdb: Option<(u32, Tube)>,
     pub has_bios: bool,
-    pub hotplug_bus: Vec<Arc<Mutex<dyn HotPlugBus>>>,
+    pub hotplug_bus: BTreeMap<u8, Arc<Mutex<dyn HotPlugBus>>>,
     pub io_bus: Arc<Bus>,
     pub irq_chip: Box<dyn IrqChipArch>,
     pub mmio_bus: Arc<Bus>,
     pub no_smt: bool,
     pub pid_debug_label_map: BTreeMap<u32, String>,
-    pub pm: Option<Arc<Mutex<dyn PmResource>>>,
+    #[cfg(unix)]
+    pub platform_devices: Vec<Arc<Mutex<dyn BusDevice>>>,
+    pub pm: Option<Arc<Mutex<dyn PmResource + Send>>>,
     /// Devices to be notified before the system resumes from the S3 suspended state.
     pub resume_notify_devices: Vec<Arc<Mutex<dyn BusResumeDevice>>>,
     pub root_config: Arc<Mutex<PciRoot>>,
-    pub rt_cpus: Vec<usize>,
+    pub rt_cpus: CpuSet,
     pub suspend_evt: Event,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
@@ -263,6 +442,7 @@ pub trait LinuxArch {
         devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipArch,
         vcpu_ids: &mut Vec<usize>,
+        dump_device_tree_blob: Option<PathBuf>,
         debugcon_jail: Option<Minijail>,
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] pflash_jail: Option<Minijail>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
@@ -303,43 +483,52 @@ pub trait LinuxArch {
         resources: &mut SystemAllocator,
         hp_control_tube: &mpsc::Sender<PciRootCommand>,
     ) -> Result<PciAddress, Self::Error>;
+}
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub trait GdbOps<T: VcpuArch> {
+    type Error: StdError;
+
     /// Reads vCPU's registers.
-    fn debug_read_registers<T: VcpuArch>(vcpu: &T) -> Result<GdbStubRegs, Self::Error>;
+    fn read_registers(vcpu: &T) -> Result<<GdbArch as Arch>::Registers, Self::Error>;
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     /// Writes vCPU's registers.
-    fn debug_write_registers<T: VcpuArch>(vcpu: &T, regs: &GdbStubRegs) -> Result<(), Self::Error>;
+    fn write_registers(vcpu: &T, regs: &<GdbArch as Arch>::Registers) -> Result<(), Self::Error>;
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     /// Reads bytes from the guest memory.
-    fn debug_read_memory<T: VcpuArch>(
+    fn read_memory(
         vcpu: &T,
         guest_mem: &GuestMemory,
         vaddr: GuestAddress,
         len: usize,
     ) -> Result<Vec<u8>, Self::Error>;
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
     /// Writes bytes to the specified guest memory.
-    fn debug_write_memory<T: VcpuArch>(
+    fn write_memory(
         vcpu: &T,
         guest_mem: &GuestMemory,
         vaddr: GuestAddress,
         buf: &[u8],
     ) -> Result<(), Self::Error>;
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    /// Make the next vCPU's run single-step.
-    fn debug_enable_singlestep<T: VcpuArch>(vcpu: &T) -> Result<(), Self::Error>;
+    /// Reads bytes from the guest register.
+    fn read_register(vcpu: &T, reg_id: <GdbArch as Arch>::RegId) -> Result<Vec<u8>, Self::Error>;
 
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-    /// Set hardware breakpoints at the given addresses.
-    fn debug_set_hw_breakpoints<T: VcpuArch>(
+    /// Writes bytes to the specified guest register.
+    fn write_register(
         vcpu: &T,
-        breakpoints: &[GuestAddress],
+        reg_id: <GdbArch as Arch>::RegId,
+        data: &[u8],
     ) -> Result<(), Self::Error>;
+
+    /// Make the next vCPU's run single-step.
+    fn enable_singlestep(vcpu: &T) -> Result<(), Self::Error>;
+
+    /// Get maximum number of hardware breakpoints.
+    fn get_max_hw_breakpoints(vcpu: &T) -> Result<usize, Self::Error>;
+
+    /// Set hardware breakpoints at the given addresses.
+    fn set_hw_breakpoints(vcpu: &T, breakpoints: &[GuestAddress]) -> Result<(), Self::Error>;
 }
 
 /// Errors for device manager.
@@ -393,6 +582,9 @@ pub enum DeviceRegistrationError {
     /// Could not create an event.
     #[error("failed to create event: {0}")]
     EventCreate(base::Error),
+    /// Failed to generate ACPI content.
+    #[error("failed to generate ACPI content")]
+    GenerateAcpi,
     /// No more IRQs are available.
     #[error("no more IRQs are available")]
     IrqsExhausted,
@@ -450,11 +642,30 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
         .allocate_device_bars(resources)
         .map_err(DeviceRegistrationError::AllocateDeviceAddrs)?;
 
+    // If device is a pcie bridge, add its pci bus to pci root
+    if let Some(pci_bus) = device.get_new_pci_bus() {
+        hp_control_tube
+            .send(PciRootCommand::AddBridge(pci_bus))
+            .map_err(DeviceRegistrationError::RegisterDevice)?;
+        let bar_ranges = Vec::new();
+        device
+            .configure_bridge_window(resources, &bar_ranges)
+            .map_err(DeviceRegistrationError::ConfigureWindowSize)?;
+    }
+
     // Do not suggest INTx for hot-plug devices.
     let intx_event = devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-    if let Some((gsi, _pin)) = device.assign_irq(&intx_event, None) {
+    if let PreferredIrq::Fixed { pin, gsi } = device.preferred_irq() {
         resources.reserve_irq(gsi);
+
+        device.assign_irq(
+            intx_event
+                .try_clone()
+                .map_err(DeviceRegistrationError::EventClone)?,
+            pin,
+            gsi,
+        );
 
         linux
             .irq_chip
@@ -465,6 +676,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
 
     let mut keep_rds = device.keep_rds();
     syslog::push_descriptors(&mut keep_rds);
+    cros_tracing::push_descriptors!(&mut keep_rds);
 
     device
         .register_device_capabilities()
@@ -517,6 +729,85 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     }
 
     Ok(pci_address)
+}
+
+/// Creates Virtio MMIO devices for use by this Vm.
+pub fn generate_virtio_mmio_bus(
+    devices: Vec<(VirtioMmioDevice, Option<Minijail>)>,
+    irq_chip: &mut dyn IrqChip,
+    mmio_bus: &Bus,
+    resources: &mut SystemAllocator,
+    vm: &mut impl Vm,
+    sdts: Vec<SDT>,
+) -> Result<(BTreeMap<u32, String>, Vec<SDT>), DeviceRegistrationError> {
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut pid_labels = BTreeMap::new();
+
+    // sdts can be updated only on x86 platforms.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let mut sdts = sdts;
+    for dev_value in devices.into_iter() {
+        #[cfg(unix)]
+        let (mut device, jail) = dev_value;
+        #[cfg(windows)]
+        let (mut device, _) = dev_value;
+
+        let ranges = device
+            .allocate_regions(resources)
+            .map_err(DeviceRegistrationError::AllocateIoResource)?;
+
+        let mut keep_rds = device.keep_rds();
+        syslog::push_descriptors(&mut keep_rds);
+        cros_tracing::push_descriptors!(&mut keep_rds);
+
+        let irq_num = resources
+            .allocate_irq()
+            .ok_or(DeviceRegistrationError::AllocateIrq)?;
+        let irq_evt = devices::IrqEdgeEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
+        irq_chip
+            .register_edge_irq_event(irq_num, &irq_evt, IrqEventSource::from_device(&device))
+            .map_err(DeviceRegistrationError::RegisterIrqfd)?;
+        device.assign_irq(&irq_evt, irq_num);
+        keep_rds.extend(irq_evt.as_raw_descriptors());
+
+        for (event, addr, datamatch) in device.ioevents() {
+            let io_addr = IoEventAddress::Mmio(addr);
+            vm.register_ioevent(event, io_addr, datamatch)
+                .map_err(DeviceRegistrationError::RegisterIoevent)?;
+            keep_rds.push(event.as_raw_descriptor());
+        }
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            sdts = device
+                .generate_acpi(sdts)
+                .ok_or(DeviceRegistrationError::GenerateAcpi)?;
+        }
+
+        #[cfg(unix)]
+        let arced_dev: Arc<Mutex<dyn BusDevice>> = if let Some(jail) = jail {
+            let proxy = ProxyDevice::new(device, jail, keep_rds)
+                .map_err(DeviceRegistrationError::ProxyDeviceCreation)?;
+            pid_labels.insert(proxy.pid() as u32, proxy.debug_label());
+            Arc::new(Mutex::new(proxy))
+        } else {
+            device.on_sandboxed();
+            Arc::new(Mutex::new(device))
+        };
+
+        #[cfg(windows)]
+        let arced_dev = {
+            device.on_sandboxed();
+            Arc::new(Mutex::new(device))
+        };
+
+        for range in &ranges {
+            mmio_bus
+                .insert(arced_dev.clone(), range.0, range.1)
+                .map_err(DeviceRegistrationError::MmioInsert)?;
+        }
+    }
+    Ok((pid_labels, sdts))
 }
 
 // Generate pci topology starting from parent bus
@@ -635,11 +926,13 @@ pub fn generate_pci_root(
     resources: &mut SystemAllocator,
     vm: &mut impl Vm,
     max_irqs: usize,
+    vcfg_base: Option<u64>,
 ) -> Result<
     (
         PciRoot,
         Vec<(PciAddress, u32, PciInterruptPin)>,
         BTreeMap<u32, String>,
+        BTreeMap<PciAddress, Vec<u8>>,
     ),
     DeviceRegistrationError,
 > {
@@ -671,33 +964,83 @@ pub fn generate_pci_root(
 
     // Allocate legacy INTx
     let mut pci_irqs = Vec::new();
-    let mut irqs: Vec<Option<u32>> = vec![None; max_irqs];
+    let mut irqs: Vec<u32> = Vec::new();
+
+    // Mapping of (bus, dev, pin) -> IRQ number.
+    let mut dev_pin_irq = BTreeMap::new();
 
     for (dev_idx, (device, _jail)) in devices.iter_mut().enumerate() {
-        // For default interrupt routing use next preallocated interrupt from the pool.
-        let irq_num = if let Some(irq) = irqs[dev_idx % max_irqs] {
-            irq
-        } else {
-            let irq = resources
-                .allocate_irq()
-                .ok_or(DeviceRegistrationError::AllocateIrq)?;
-            irqs[dev_idx % max_irqs] = Some(irq);
-            irq
+        let pci_address = device_addrs[dev_idx];
+
+        let irq = match device.preferred_irq() {
+            PreferredIrq::Fixed { pin, gsi } => {
+                // The device reported a preferred IRQ, so use that rather than allocating one.
+                resources.reserve_irq(gsi);
+                Some((pin, gsi))
+            }
+            PreferredIrq::Any => {
+                // The device did not provide a preferred IRQ but requested one, so allocate one.
+
+                // Choose a pin based on the slot's function number. Function 0 must always use
+                // INTA# for single-function devices per the PCI spec, and we choose to use INTA#
+                // for function 0 on multifunction devices and distribute the remaining functions
+                // evenly across the other pins.
+                let pin = match pci_address.func % 4 {
+                    0 => PciInterruptPin::IntA,
+                    1 => PciInterruptPin::IntB,
+                    2 => PciInterruptPin::IntC,
+                    _ => PciInterruptPin::IntD,
+                };
+
+                // If an IRQ number has already been assigned for a different function with this
+                // (bus, device, pin) combination, use it. Otherwise allocate a new one and insert
+                // it into the map.
+                let pin_key = (pci_address.bus, pci_address.dev, pin);
+                let irq_num = if let Some(irq_num) = dev_pin_irq.get(&pin_key) {
+                    *irq_num
+                } else {
+                    // If we have allocated fewer than `max_irqs` total, add a new irq to the `irqs`
+                    // pool. Otherwise, share one of the existing `irqs`.
+                    let irq_num = if irqs.len() < max_irqs {
+                        let irq_num = resources
+                            .allocate_irq()
+                            .ok_or(DeviceRegistrationError::AllocateIrq)?;
+                        irqs.push(irq_num);
+                        irq_num
+                    } else {
+                        // Pick one of the existing IRQs to share, using `dev_idx` to distribute IRQ
+                        // sharing evenly across devices.
+                        irqs[dev_idx % max_irqs]
+                    };
+
+                    dev_pin_irq.insert(pin_key, irq_num);
+                    irq_num
+                };
+                Some((pin, irq_num))
+            }
+            PreferredIrq::None => {
+                // The device does not want an INTx# IRQ.
+                None
+            }
         };
 
-        let intx_event =
-            devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
+        if let Some((pin, gsi)) = irq {
+            let intx_event =
+                devices::IrqLevelEvent::new().map_err(DeviceRegistrationError::EventCreate)?;
 
-        if let Some((gsi, pin)) = device.assign_irq(&intx_event, Some(irq_num)) {
-            // reserve INTx if needed and non-default.
-            if gsi != irq_num {
-                resources.reserve_irq(gsi);
-            };
+            device.assign_irq(
+                intx_event
+                    .try_clone()
+                    .map_err(DeviceRegistrationError::EventClone)?,
+                pin,
+                gsi,
+            );
+
             irq_chip
                 .register_level_irq_event(gsi, &intx_event, IrqEventSource::from_device(device))
                 .map_err(DeviceRegistrationError::RegisterIrqfd)?;
 
-            pci_irqs.push((device_addrs[dev_idx], gsi, pin));
+            pci_irqs.push((pci_address, gsi, pin));
         }
     }
 
@@ -712,6 +1055,8 @@ pub fn generate_pci_root(
             .partition(|(_, (_, jail))| jail.is_some());
         sandboxed.into_iter().chain(non_sandboxed.into_iter())
     };
+
+    let mut amls = BTreeMap::new();
     for (dev_idx, dev_value) in devices {
         #[cfg(unix)]
         let (mut device, jail) = dev_value;
@@ -721,6 +1066,7 @@ pub fn generate_pci_root(
 
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
+        cros_tracing::push_descriptors!(&mut keep_rds);
         keep_rds.append(&mut vm.get_memory().as_raw_descriptors());
 
         let ranges = io_ranges.remove(&dev_idx).unwrap_or_default();
@@ -733,6 +1079,21 @@ pub fn generate_pci_root(
             vm.register_ioevent(event, io_addr, datamatch)
                 .map_err(DeviceRegistrationError::RegisterIoevent)?;
             keep_rds.push(event.as_raw_descriptor());
+        }
+
+        if let Some(vcfg_base) = vcfg_base {
+            let (methods, shm) = device.generate_acpi_methods();
+            if !methods.is_empty() {
+                amls.insert(address, methods);
+            }
+            if let Some((offset, mmap)) = shm {
+                let _ = vm.add_memory_region(
+                    GuestAddress(vcfg_base + offset as u64),
+                    Box::new(mmap),
+                    false,
+                    false,
+                );
+            }
         }
 
         #[cfg(unix)]
@@ -764,7 +1125,7 @@ pub fn generate_pci_root(
         }
     }
 
-    Ok((root, pci_irqs, pid_labels))
+    Ok((root, pci_irqs, pid_labels, amls))
 }
 
 /// Errors for image loading.
@@ -874,44 +1235,53 @@ where
 /// Read and write permissions setting
 ///
 /// Wrap read_allow and write_allow to store them in MsrHandlers level.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum MsrRWType {
+    #[serde(rename = "r")]
     ReadOnly,
+    #[serde(rename = "w")]
     WriteOnly,
+    #[serde(rename = "rw", alias = "wr")]
     ReadWrite,
 }
 
 /// Handler types for userspace-msr
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum MsrAction {
     /// Read and write from host directly, and the control of MSR will
     /// take effect on host.
+    #[serde(rename = "pass")]
     MsrPassthrough,
     /// Store the dummy value for msr (copy from host or custom values),
     /// and the control(WRMSR) of MSR won't take effect on host.
+    #[serde(rename = "emu")]
     MsrEmulate,
 }
 
 /// Source CPU of MSR value
 ///
 /// Indicate which CPU that user get/set MSRs from/to.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum MsrValueFrom {
     /// Read/write MSR value from/into CPU 0.
     /// The MSR source CPU always be CPU 0.
+    #[serde(rename = "cpu0")]
     RWFromCPU0,
     /// Read/write MSR value from/into the running CPU.
     /// If vCPU migrates to another pcpu, the MSR source CPU will also change.
+    #[serde(skip)]
     RWFromRunningCPU,
 }
 
 /// Whether to force KVM-filtered MSRs.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum MsrFilter {
     /// Leave it to hypervisor (KVM) default.
+    #[serde(rename = "no")]
     Default,
     /// Don't let KVM do the default thing and use our userspace MSR
     /// implementation.
+    #[serde(rename = "yes")]
     Override,
 }
 
@@ -936,4 +1306,65 @@ pub struct MsrConfig {
 pub enum MsrExitHandlerError {
     #[error("Fail to create MSR handler")]
     HandlerCreateFailed,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_keyvalue::from_key_values;
+
+    use super::*;
+
+    #[test]
+    fn parse_pstore() {
+        let res: Pstore = from_key_values("path=/some/path,size=16384").unwrap();
+        assert_eq!(
+            res,
+            Pstore {
+                path: "/some/path".into(),
+                size: 16384,
+            }
+        );
+
+        let res = from_key_values::<Pstore>("path=/some/path");
+        assert!(res.is_err());
+
+        let res = from_key_values::<Pstore>("size=16384");
+        assert!(res.is_err());
+
+        let res = from_key_values::<Pstore>("");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn deserialize_cpuset_serde_kv() {
+        let res: CpuSet = from_key_values("[0,4,7]").unwrap();
+        assert_eq!(res, CpuSet::new(vec![0, 4, 7]));
+
+        let res: CpuSet = from_key_values("[9-12]").unwrap();
+        assert_eq!(res, CpuSet::new(vec![9, 10, 11, 12]));
+
+        let res: CpuSet = from_key_values("[0,4,7,9-12,15]").unwrap();
+        assert_eq!(res, CpuSet::new(vec![0, 4, 7, 9, 10, 11, 12, 15]));
+    }
+
+    #[test]
+    fn deserialize_serialize_cpuset_json() {
+        let json_str = "[0,4,7]";
+        let cpuset = CpuSet::new(vec![0, 4, 7]);
+        let res: CpuSet = serde_json::from_str(json_str).unwrap();
+        assert_eq!(res, cpuset);
+        assert_eq!(serde_json::to_string(&cpuset).unwrap(), json_str);
+
+        let json_str = r#"["9-12"]"#;
+        let cpuset = CpuSet::new(vec![9, 10, 11, 12]);
+        let res: CpuSet = serde_json::from_str(json_str).unwrap();
+        assert_eq!(res, cpuset);
+        assert_eq!(serde_json::to_string(&cpuset).unwrap(), json_str);
+
+        let json_str = r#"[0,4,7,"9-12",15]"#;
+        let cpuset = CpuSet::new(vec![0, 4, 7, 9, 10, 11, 12, 15]);
+        let res: CpuSet = serde_json::from_str(json_str).unwrap();
+        assert_eq!(res, cpuset);
+        assert_eq!(serde_json::to_string(&cpuset).unwrap(), json_str);
+    }
 }

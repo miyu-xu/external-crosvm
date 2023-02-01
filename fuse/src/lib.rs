@@ -1,8 +1,10 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! FUSE (Filesystem in Userspace) server and filesystem mounting support.
+
+#![cfg(unix)]
 
 use std::ffi::FromBytesWithNulError;
 use std::fs::File;
@@ -12,7 +14,6 @@ use remain::sorted;
 use thiserror::Error as ThisError;
 
 pub mod filesystem;
-#[cfg(fuzzing)]
 pub mod fuzzing;
 pub mod mount;
 mod server;

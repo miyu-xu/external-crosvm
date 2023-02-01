@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -23,6 +21,7 @@ use base::ioctl;
 use base::AsRawDescriptor;
 use net_util::TapTCommon;
 use once_cell::sync::Lazy;
+use rand::random;
 use tempfile::tempfile;
 
 static TAP_AVAILABLE: Lazy<bool> = Lazy::new(|| net_util::sys::unix::Tap::new(true, false).is_ok());
@@ -60,22 +59,18 @@ fn get_crosvm_path() -> PathBuf {
 }
 
 fn build_plugin(src: &str) -> RemovePath {
-    static PLUGIN_NUM: AtomicUsize = AtomicUsize::new(0);
     let libcrosvm_plugin_dir = get_target_path();
     let mut out_bin = libcrosvm_plugin_dir.clone();
-    out_bin.push(format!(
-        "plugin-test{}",
-        PLUGIN_NUM.fetch_add(1, Ordering::Relaxed)
-    ));
+    out_bin.push(format!("plugin-test-{:08X}", random::<u32>()));
     let mut child = Command::new(var_os("CC").unwrap_or(OsString::from("cc")))
-        .args(&["-Icrosvm_plugin", "-pthread", "-o"]) // crosvm.h location and set output path.
+        .args(["-Icrosvm_plugin", "-pthread", "-o"]) // crosvm.h location and set output path.
         .arg(&out_bin)
         .arg("-L") // Path of shared object to link to.
         .arg(&libcrosvm_plugin_dir)
         .arg("-Wl,-rpath") // Search for shared object in the same path when exec'd.
         .arg(&libcrosvm_plugin_dir)
-        .args(&["-Wl,-rpath", "."]) // Also check current directory in case of sandboxing.
-        .args(&["-xc", "-"]) // Read source code from piped stdin.
+        .args(["-Wl,-rpath", "."]) // Also check current directory in case of sandboxing.
+        .args(["-xc", "-"]) // Read source code from piped stdin.
         .arg("-lcrosvm_plugin")
         .stdin(Stdio::piped())
         .spawn()
@@ -95,7 +90,7 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
     let mut crosvm_path = get_crosvm_path();
     crosvm_path.push("crosvm");
     let mut cmd = Command::new(crosvm_path);
-    cmd.args(&[
+    cmd.args([
         "run",
         "-c",
         "1",
@@ -110,7 +105,7 @@ fn run_plugin(bin_path: &Path, with_sandbox: bool) {
     );
 
     if *TAP_AVAILABLE {
-        cmd.args(&[
+        cmd.args([
             "--host-ip",
             "100.115.92.5",
             "--netmask",
@@ -165,7 +160,7 @@ fn build_assembly(src: &str) -> Vec<u8> {
     // which we have preserved accross exec.
     let status = Command::new("nasm")
         .arg(format!("/proc/self/fd/{}", in_file.as_raw_descriptor()))
-        .args(&["-f", "bin", "-o"])
+        .args(["-f", "bin", "-o"])
         .arg(format!("/proc/self/fd/{}", out_file.as_raw_descriptor()))
         .status()
         .expect("failed to spawn assembler");
@@ -180,6 +175,7 @@ fn build_assembly(src: &str) -> Vec<u8> {
 fn format_as_hex(data: &[u8]) -> String {
     let mut out = String::new();
     for (i, d) in data.iter().enumerate() {
+        #[allow(clippy::format_push_string)]
         out.push_str(&format!("0x{:02x}", d));
         if i < data.len() - 1 {
             out.push(',')

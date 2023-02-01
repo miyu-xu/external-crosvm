@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,8 @@ use std::result;
 use std::sync::Arc;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::AsRawDescriptor;
 use base::Descriptor;
@@ -43,6 +45,7 @@ use crate::virtio::Reader;
 use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
+use crate::Suspendable;
 
 pub(crate) const QUEUE_SIZE: u16 = 256;
 
@@ -221,7 +224,7 @@ fn spawn_input_thread(
                     Ok(0) => break, // Assume the stream of input has ended.
                     Ok(size) => {
                         buffer.lock().extend(&rx_buf[0..size]);
-                        thread_in_avail_evt.write(1).unwrap();
+                        thread_in_avail_evt.signal().unwrap();
                     }
                     Err(e) => {
                         // Being interrupted is not an error, but everything else is.
@@ -291,7 +294,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::TransmitQueueAvailable => {
-                        if let Err(e) = self.transmit_evt.read() {
+                        if let Err(e) = self.transmit_evt.wait() {
                             error!("failed reading transmit queue Event: {}", e);
                             break 'wait;
                         }
@@ -303,7 +306,7 @@ impl Worker {
                         );
                     }
                     Token::ReceiveQueueAvailable => {
-                        if let Err(e) = self.receive_evt.read() {
+                        if let Err(e) = self.receive_evt.wait() {
                             error!("failed reading receive queue Event: {}", e);
                             break 'wait;
                         }
@@ -323,7 +326,7 @@ impl Worker {
                         }
                     }
                     Token::InputAvailable => {
-                        if let Err(e) = self.in_avail_evt.read() {
+                        if let Err(e) = self.in_avail_evt.wait() {
                             error!("failed reading in_avail_evt: {}", e);
                             break 'wait;
                         }
@@ -370,13 +373,13 @@ pub struct Console {
 
 impl Console {
     fn new(
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         input: Option<ConsoleInput>,
         output: Option<Box<dyn io::Write + Send>>,
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
         Console {
-            base_features: base_features(protected_vm),
+            base_features: base_features(protection_type),
             in_avail_evt: None,
             kill_evt: None,
             worker_thread: None,
@@ -391,7 +394,7 @@ impl Drop for Console {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -433,38 +436,29 @@ impl VirtioDevice for Console {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() < 2 || queue_evts.len() < 2 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() < 2 {
+            return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (receive_queue, receive_evt) = queues.remove(0);
+        let (transmit_queue, transmit_evt) = queues.remove(0);
+
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed creating kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
         if self.in_avail_evt.is_none() {
-            self.in_avail_evt = match Event::new() {
-                Ok(evt) => Some(evt),
-                Err(e) => {
-                    error!("failed creating Event: {}", e);
-                    return;
-                }
-            };
+            self.in_avail_evt = Some(Event::new().context("failed creating Event")?);
         }
-        let in_avail_evt = match self.in_avail_evt.as_ref().unwrap().try_clone() {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating input available Event pair: {}", e);
-                return;
-            }
-        };
+        let in_avail_evt = self
+            .in_avail_evt
+            .as_ref()
+            .unwrap()
+            .try_clone()
+            .context("failed creating input available Event pair")?;
 
         // Spawn a separate thread to poll self.input.
         // A thread is used because io::Read only provides a blocking interface, and there is no
@@ -475,7 +469,7 @@ impl VirtioDevice for Console {
             Some(ConsoleInput::FromRead(read)) => {
                 let buffer = spawn_input_thread(read, self.in_avail_evt.as_ref().unwrap());
                 if buffer.is_none() {
-                    error!("failed creating input thread");
+                    return Err(anyhow!("failed creating input thread"));
                 };
                 buffer
             }
@@ -484,8 +478,8 @@ impl VirtioDevice for Console {
         };
         let output = self.output.take().unwrap_or_else(|| Box::new(io::sink()));
 
-        let worker_result = thread::Builder::new()
-            .name("virtio_console".to_string())
+        let worker_thread = thread::Builder::new()
+            .name("v_console".to_string())
             .spawn(move || {
                 let mut worker = Worker {
                     mem,
@@ -495,29 +489,23 @@ impl VirtioDevice for Console {
                     in_avail_evt,
                     kill_evt,
                     // Device -> driver
-                    receive_queue: queues.remove(0),
-                    receive_evt: queue_evts.remove(0),
+                    receive_queue,
+                    receive_evt,
                     // Driver -> device
-                    transmit_queue: queues.remove(0),
-                    transmit_evt: queue_evts.remove(0),
+                    transmit_queue,
+                    transmit_evt,
                 };
                 worker.run();
                 worker
-            });
-
-        match worker_result {
-            Err(e) => {
-                error!("failed to spawn virtio_console worker: {}", e);
-            }
-            Ok(join_handle) => {
-                self.worker_thread = Some(join_handle);
-            }
-        }
+            })
+            .context("failed to spawn virtio_console worker")?;
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
         if let Some(kill_evt) = self.kill_evt.take() {
-            if kill_evt.write(1).is_err() {
+            if kill_evt.signal().is_err() {
                 error!("{}: failed to notify the kill event", self.debug_label());
                 return false;
             }
@@ -539,3 +527,5 @@ impl VirtioDevice for Console {
         false
     }
 }
+
+impl Suspendable for Console {}

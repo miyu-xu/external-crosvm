@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@ use std::io::Cursor;
 use std::mem;
 use std::ops::Deref;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::symlink;
 use std::os::unix::fs::MetadataExt;
 use std::path::Component;
 use std::path::Path;
@@ -113,6 +114,10 @@ enum DirEntry<'a> {
         name: &'a str,
         entries: &'a [DirEntry<'a>],
     },
+    Symlink {
+        name: &'a str,
+        target: &'a str,
+    },
 }
 
 impl<'a> DirEntry<'a> {
@@ -135,6 +140,9 @@ impl<'a> DirEntry<'a> {
 
                 assert!(dir.to_mut().pop());
             }
+            DirEntry::Symlink { name, target } => {
+                symlink(target, dir.join(name)).expect("failed to create symlink");
+            }
         }
     }
 }
@@ -154,6 +162,12 @@ fn create_local_file<P: AsRef<Path>>(dir: P, name: &str) -> Vec<u8> {
     f.create(&mut Cow::from(dir.as_ref()));
 
     content
+}
+
+// Create a symlink named `name` that links to `target`.
+fn create_local_symlink<P: AsRef<Path>>(dir: P, name: &str, target: &str) {
+    let f = DirEntry::Symlink { name, target };
+    f.create(&mut Cow::from(dir.as_ref()));
 }
 
 fn check_qid(qid: &Qid, md: &fs::Metadata) {
@@ -1276,3 +1290,62 @@ create_test!(
 );
 create_test!(append_read_write_file_create, P9_APPEND | P9_RDWR, 0o600u32);
 create_test!(append_wronly_file_create, P9_APPEND | P9_WRONLY, 0o600u32);
+
+#[test]
+fn lcreate_set_len() {
+    let (test_dir, mut server) = setup("lcreate_set_len");
+
+    let name = "foo.txt";
+    let fid = ROOT_FID + 1;
+    create(
+        &mut server,
+        &*test_dir,
+        ROOT_FID,
+        fid,
+        name,
+        P9_RDWR,
+        0o600u32,
+    )
+    .expect("failed to create file");
+
+    let tsetattr = Tsetattr {
+        fid,
+        valid: 0x8, // P9_SETATTR_SIZE
+        size: 100,
+        // The other fields are not used because the relevant flags aren't set in `valid`.
+        mode: 0,
+        uid: 0,
+        gid: 0,
+        atime_sec: 0,
+        atime_nsec: 0,
+        mtime_sec: 0,
+        mtime_nsec: 0,
+    };
+    server
+        .set_attr(&tsetattr)
+        .expect("failed to set file length after lcreate");
+
+    let tclunk = Tclunk { fid };
+    server.clunk(&tclunk).expect("Unable to clunk file");
+}
+
+#[test]
+fn readlink() {
+    let (test_dir, mut server) = setup("readlink");
+    create_local_symlink(&test_dir, "symlink", "target/of/symlink");
+
+    let fid = ROOT_FID + 1;
+    walk(
+        &mut server,
+        &*test_dir,
+        ROOT_FID,
+        fid,
+        vec!["symlink".into()],
+    );
+
+    let treadlink = Treadlink { fid };
+
+    let rreadlink = server.readlink(&treadlink).expect("failed to readlink");
+
+    assert_eq!(rreadlink.target, "target/of/symlink");
+}

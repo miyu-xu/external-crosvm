@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,7 @@ use crate::virtio::vhost::user::device::handler::VhostUserBackend;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::vvu::pci::VvuPciDevice;
 use crate::virtio::vhost::user::device::vvu::VvuDevice;
+use crate::virtio::VirtioDeviceType;
 use crate::PciAddress;
 
 //// On Unix we can listen to either a socket or a vhost-user device.
@@ -105,6 +106,14 @@ impl VhostUserListener {
                 keep_rds,
             )?),
             _ => bail!("exactly one of `--socket` or `--vfio` is required"),
+        }
+    }
+
+    /// Returns the virtio transport type that will be used for the vhost string `path`.
+    pub fn get_virtio_transport_type(path: &str) -> VirtioDeviceType {
+        match PciAddress::from_str(path) {
+            Ok(_) => VirtioDeviceType::Vvu,
+            Err(_) => VirtioDeviceType::VhostUser,
         }
     }
 }

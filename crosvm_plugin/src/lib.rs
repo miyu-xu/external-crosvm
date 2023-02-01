@@ -1,7 +1,8 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(unix)]
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #![allow(non_camel_case_types)]
 
@@ -308,7 +309,7 @@ impl crosvm {
     }
 
     fn get_id_allocator(&self) -> &IdAllocator {
-        &*self.id_allocator
+        &self.id_allocator
     }
 
     fn main_transaction(
@@ -1389,19 +1390,6 @@ fn to_crosvm_rc<T>(r: result::Result<T, c_int>) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn crosvm_get_render_server_fd() -> c_int {
-    let fd = match env::var(CROSVM_GPU_SERVER_FD_ENV) {
-        Ok(v) => v,
-        _ => return -EINVAL,
-    };
-
-    match fd.parse() {
-        Ok(v) if v >= 0 => v,
-        _ => -EINVAL,
-    }
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn crosvm_connect(out: *mut *mut crosvm) -> c_int {
     let _u = record(Stat::Connect);
     let socket_name = match env::var(CROSVM_SOCKET_ENV) {
@@ -1440,7 +1428,7 @@ pub unsafe extern "C" fn crosvm_new_connection(self_: *mut crosvm, out: *mut *mu
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_destroy_connection(self_: *mut *mut crosvm) -> c_int {
     let _u = record(Stat::DestroyConnection);
-    Box::from_raw(*self_);
+    drop(Box::from_raw(*self_));
     *self_ = null_mut();
     0
 }

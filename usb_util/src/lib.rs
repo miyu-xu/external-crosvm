@@ -1,10 +1,11 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! USB device access and descriptor manipulation.
 
 mod descriptor;
+#[cfg(unix)]
 mod device;
 mod error;
 mod types;
@@ -13,8 +14,11 @@ pub use self::descriptor::parse_usbfs_descriptors;
 pub use self::descriptor::ConfigDescriptorTree;
 pub use self::descriptor::DeviceDescriptorTree;
 pub use self::descriptor::InterfaceDescriptorTree;
+#[cfg(unix)]
 pub use self::device::Device;
+#[cfg(unix)]
 pub use self::device::Transfer;
+#[cfg(unix)]
 pub use self::device::TransferStatus;
 pub use self::error::Error;
 pub use self::error::Result;

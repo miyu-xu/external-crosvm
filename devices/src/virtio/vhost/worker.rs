@@ -1,8 +1,6 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-use std::os::raw::c_ulonglong;
 
 use base::error;
 use base::Error as SysError;
@@ -21,27 +19,30 @@ use super::Result;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::SignalableInterrupt;
+use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
 
 /// Worker that takes care of running the vhost device.
 pub struct Worker<T: Vhost> {
     interrupt: Interrupt,
-    queues: Vec<Queue>,
+    queues: Vec<(Queue, Event)>,
     pub vhost_handle: T,
     pub vhost_interrupt: Vec<Event>,
     acked_features: u64,
     pub kill_evt: Event,
     pub response_tube: Option<Tube>,
+    uses_viommu: bool,
 }
 
 impl<T: Vhost> Worker<T> {
     pub fn new(
-        queues: Vec<Queue>,
+        queues: Vec<(Queue, Event)>,
         vhost_handle: T,
         vhost_interrupt: Vec<Event>,
         interrupt: Interrupt,
         acked_features: u64,
         kill_evt: Event,
         response_tube: Option<Tube>,
+        uses_viommu: bool,
     ) -> Worker<T> {
         Worker {
             interrupt,
@@ -51,13 +52,13 @@ impl<T: Vhost> Worker<T> {
             acked_features,
             kill_evt,
             response_tube,
+            uses_viommu,
         }
     }
 
     pub fn init<F1>(
         &mut self,
         mem: GuestMemory,
-        queue_evts: Vec<Event>,
         queue_sizes: &[u16],
         activate_vqs: F1,
     ) -> Result<()>
@@ -69,7 +70,19 @@ impl<T: Vhost> Worker<T> {
             .get_features()
             .map_err(Error::VhostGetFeatures)?;
 
-        let features: c_ulonglong = self.acked_features & avail_features;
+        let mut features = self.acked_features & avail_features;
+        if self.acked_features & (1u64 << VIRTIO_F_ACCESS_PLATFORM) != 0 {
+            // Crosvm doesn't implement the vhost IOTLB APIs.
+            if self.uses_viommu {
+                return Err(Error::VhostIotlbUnsupported);
+            }
+            // The vhost API is a bit poorly named, this flag in the context of vhost
+            // means that it will do address translation via its IOTLB APIs. If the
+            // underlying virtio device doesn't use viommu, it doesn't need vhost
+            // translation.
+            features &= !(1u64 << VIRTIO_F_ACCESS_PLATFORM);
+        }
+
         self.vhost_handle
             .set_features(features)
             .map_err(Error::VhostSetFeatures)?;
@@ -78,16 +91,16 @@ impl<T: Vhost> Worker<T> {
             .set_mem_table(&mem)
             .map_err(Error::VhostSetMemTable)?;
 
-        for (queue_index, queue) in self.queues.iter().enumerate() {
+        for (queue_index, (queue, queue_evt)) in self.queues.iter().enumerate() {
             self.vhost_handle
-                .set_vring_num(queue_index, queue.max_size)
+                .set_vring_num(queue_index, queue.size())
                 .map_err(Error::VhostSetVringNum)?;
 
             self.vhost_handle
                 .set_vring_addr(
                     &mem,
                     queue_sizes[queue_index],
-                    queue.actual_size(),
+                    queue.size(),
                     queue_index,
                     0,
                     queue.desc_table(),
@@ -101,7 +114,7 @@ impl<T: Vhost> Worker<T> {
                 .map_err(Error::VhostSetVringBase)?;
             self.set_vring_call_for_entry(queue_index, queue.vector() as usize)?;
             self.vhost_handle
-                .set_vring_kick(queue_index, &queue_evts[queue_index])
+                .set_vring_kick(queue_index, queue_evt)
                 .map_err(Error::VhostSetVringKick)?;
         }
 
@@ -148,16 +161,16 @@ impl<T: Vhost> Worker<T> {
                 match event.token {
                     Token::VhostIrqi { index } => {
                         self.vhost_interrupt[index]
-                            .read()
+                            .wait()
                             .map_err(Error::VhostIrqRead)?;
                         self.interrupt
-                            .signal_used_queue(self.queues[index].vector());
+                            .signal_used_queue(self.queues[index].0.vector());
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
                     Token::Kill => {
-                        let _ = self.kill_evt.read();
+                        let _ = self.kill_evt.wait();
                         break 'wait;
                     }
                     Token::ControlNotify => {
@@ -165,7 +178,9 @@ impl<T: Vhost> Worker<T> {
                             match socket.recv() {
                                 Ok(VhostDevRequest::MsixEntryChanged(index)) => {
                                     let mut qindex = 0;
-                                    for (queue_index, queue) in self.queues.iter().enumerate() {
+                                    for (queue_index, (queue, _evt)) in
+                                        self.queues.iter().enumerate()
+                                    {
                                         if queue.vector() == index as u16 {
                                             qindex = queue_index;
                                             break;
@@ -256,7 +271,7 @@ impl<T: Vhost> Worker<T> {
                         .map_err(Error::VhostSetVringCall)?;
                 }
             } else {
-                for (queue_index, queue) in self.queues.iter().enumerate() {
+                for (queue_index, (queue, _evt)) in self.queues.iter().enumerate() {
                     let vector = queue.vector() as usize;
                     if !msix_config.table_masked(vector) {
                         if let Some(irqfd) = msix_config.get_irqfd(vector) {

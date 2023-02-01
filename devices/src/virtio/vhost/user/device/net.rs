@@ -1,10 +1,8 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 pub mod sys;
-
-use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -18,7 +16,6 @@ use data_model::DataInit;
 use futures::future::AbortHandle;
 use net_util::TapT;
 use once_cell::sync::OnceCell;
-use sync::Mutex;
 pub use sys::start_device as run_net_device;
 pub use sys::Options;
 use vm_memory::GuestMemory;
@@ -39,13 +36,12 @@ thread_local! {
 // TODO(b/188947559): Come up with better way to include these constants. Compiler errors happen
 // if they are kept in the trait.
 const MAX_QUEUE_NUM: usize = 3; /* rx, tx, ctrl */
-const MAX_VRING_LEN: u16 = 1024;
 
 async fn run_tx_queue<T: TapT>(
     mut queue: virtio::Queue,
     mem: GuestMemory,
     mut tap: T,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: EventAsync,
 ) {
     loop {
@@ -62,7 +58,7 @@ async fn run_ctrl_queue<T: TapT>(
     mut queue: virtio::Queue,
     mem: GuestMemory,
     mut tap: T,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: EventAsync,
     acked_features: u64,
     vq_pairs: u16,
@@ -112,11 +108,7 @@ where
     T: TapT + IntoAsync,
 {
     fn max_queue_num(&self) -> usize {
-        return MAX_QUEUE_NUM;
-    }
-
-    fn max_vring_len(&self) -> u16 {
-        return MAX_VRING_LEN;
+        MAX_QUEUE_NUM
     }
 
     fn features(&self) -> u64 {
@@ -159,7 +151,7 @@ where
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu);
+        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu, None);
         virtio::copy_config(data, 0, config_space.as_slice(), offset);
     }
 
@@ -170,7 +162,7 @@ where
         idx: usize,
         queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Arc<Mutex<Doorbell>>,
+        doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
         sys::start_queue(self, idx, queue, mem, doorbell, kick_evt)

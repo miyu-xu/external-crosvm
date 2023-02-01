@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@ use std::time::Instant;
 use sync::Mutex;
 
 use super::Event;
-use super::EventReadResult;
+use super::EventWaitResult;
 use super::FakeClock;
 use super::RawDescriptor;
 use super::Result;
@@ -41,8 +41,8 @@ impl Timer {
 // timer will "expire", meaning it has reached it's duration, or the caller will time out
 // waiting for the timer to expire. If no timeout option is provieded to the wait call
 // then it can only return WaitResult::Expired or an error.
-#[derive(PartialEq, Debug)]
-pub enum WaitResult {
+#[derive(PartialEq, Eq, Debug)]
+enum WaitResult {
     Expired,
     Timeout,
 }
@@ -88,8 +88,8 @@ impl FakeTimer {
         }
     }
 
-    /// Sets the timer to expire after `dur`.  If `interval` is not `None` it represents
-    /// the period for repeated expirations after the initial expiration.  Otherwise
+    /// Sets the timer to expire after `dur`.  If `interval` is not `None` and non-zero it
+    /// represents the period for repeated expirations after the initial expiration.  Otherwise
     /// the timer will expire just once.  Cancels any existing duration and repeating interval.
     pub fn reset(&mut self, dur: Duration, interval: Option<Duration>) -> Result<()> {
         let mut guard = self.clock.lock();
@@ -107,20 +107,20 @@ impl FakeTimer {
     /// - `WaitResult::Expired` if the timer expired.
     /// - `WaitResult::Timeout` if `timeout` was not `None` and the timer did not expire within the
     ///   specified timeout period.
-    pub fn wait_for(&mut self, timeout: Option<Duration>) -> Result<WaitResult> {
+    fn wait_for(&mut self, timeout: Option<Duration>) -> Result<WaitResult> {
         let wait_start = Instant::now();
         loop {
             if let Some(timeout) = timeout {
                 let elapsed = Instant::now() - wait_start;
                 if let Some(remaining) = elapsed.checked_sub(timeout) {
-                    if let EventReadResult::Timeout = self.event.read_timeout(remaining)? {
+                    if let EventWaitResult::TimedOut = self.event.wait_timeout(remaining)? {
                         return Ok(WaitResult::Timeout);
                     }
                 } else {
                     return Ok(WaitResult::Timeout);
                 }
             } else {
-                self.event.read()?;
+                self.event.wait()?;
             }
 
             if let Some(deadline_ns) = &mut self.deadline_ns {
@@ -143,8 +143,8 @@ impl FakeTimer {
     }
 
     /// Waits until the timer expires.
-    pub fn wait(&mut self) -> Result<WaitResult> {
-        self.wait_for(None)
+    pub fn wait(&mut self) -> Result<()> {
+        self.wait_for(None).map(|_| ())
     }
 
     /// After a timer is triggered from an EventContext, mark the timer as having been waited for.
@@ -291,9 +291,7 @@ mod tests {
 
         clock.lock().add_ns(200);
 
-        let result = tfd.wait().expect("unable to wait for timer");
-
-        assert_eq!(result, WaitResult::Expired);
+        assert_eq!(tfd.wait().is_ok(), true);
     }
 
     #[test]
@@ -332,38 +330,10 @@ mod tests {
 
         clock.lock().add_ns(300);
 
-        let mut result = tfd.wait().expect("unable to wait for timer");
         // An expiration from the initial expiry and from 1 repeat.
-        assert_eq!(result, WaitResult::Expired);
+        assert_eq!(tfd.wait().is_ok(), true);
 
         clock.lock().add_ns(300);
-        result = tfd.wait().expect("unable to wait for timer");
-        assert_eq!(result, WaitResult::Expired);
-    }
-
-    #[test]
-    #[ignore]
-    fn zero_interval() {
-        // This test relies on the host having a reliable clock and not being
-        // overloaded, so it's marked as "ignore".  You can run by running
-        // cargo test -p base timer -- --ignored
-
-        let mut tfd = Timer::new().expect("failed to create timer");
-
-        let dur = Duration::from_nanos(200);
-        // interval is 0, so should not repeat
-        let interval = Duration::from_nanos(0);
-
-        tfd.reset(dur, Some(interval)).expect("failed to arm timer");
-
-        // should wait successfully the first time
-        tfd.wait().expect("unable to wait for timer");
-
-        // now this wait should timeout
-        let wr = tfd
-            .wait_for(Some(Duration::from_secs(1)))
-            .expect("unable to wait on timer");
-
-        assert_eq!(wr, WaitResult::Timeout);
+        assert_eq!(tfd.wait().is_ok(), true);
     }
 }
