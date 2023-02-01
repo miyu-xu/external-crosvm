@@ -1,6 +1,7 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 use std::sync::Arc;
 
 use data_model::DataInit;
@@ -158,120 +159,6 @@ impl PcieCap {
             slot_cap_2: 0,
             slot_control_2: 0,
             slot_status_2: 0,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct PciPmcCap {
-    _cap_vndr: u8,
-    _cap_next: u8,
-    pmc_cap: u16,
-    pmc_control_status: u16,
-    padding: u16,
-}
-
-// It is safe to implement DataInit; all members are simple numbers and any value is valid.
-unsafe impl DataInit for PciPmcCap {}
-
-impl PciCapability for PciPmcCap {
-    fn bytes(&self) -> &[u8] {
-        self.as_slice()
-    }
-
-    fn id(&self) -> PciCapabilityID {
-        PciCapabilityID::PowerManagement
-    }
-
-    fn writable_bits(&self) -> Vec<u32> {
-        vec![0u32, 0x8103]
-    }
-}
-
-impl PciPmcCap {
-    pub fn new() -> Self {
-        let pmc_cap: u16 = PMC_CAP_PME_SUPPORT_D0
-            | PMC_CAP_PME_SUPPORT_D3_HOT
-            | PMC_CAP_PME_SUPPORT_D3_COLD
-            | PMC_CAP_VERSION;
-        PciPmcCap {
-            _cap_vndr: 0,
-            _cap_next: 0,
-            pmc_cap,
-            pmc_control_status: 0,
-            padding: 0,
-        }
-    }
-}
-
-pub struct PmcConfig {
-    power_control_status: u16,
-}
-
-impl PmcConfig {
-    pub fn new() -> Self {
-        PmcConfig {
-            power_control_status: 0,
-        }
-    }
-
-    pub fn read(&self, data: &mut u32) {
-        *data = self.power_control_status as u32;
-    }
-
-    pub fn write(&mut self, offset: u64, data: &[u8]) {
-        if offset > 1 {
-            return;
-        }
-
-        if offset == 0 {
-            self.power_control_status &= !PMC_POWER_STATE_MASK;
-            self.power_control_status |= data[0] as u16 & PMC_POWER_STATE_MASK;
-        }
-
-        let write_data = if offset == 0 && (data.len() == 2 || data.len() == 4) {
-            Some((data[1] as u16) << 8)
-        } else if offset == 1 && data.len() == 1 {
-            Some((data[0] as u16) << 8)
-        } else {
-            None
-        };
-
-        if let Some(write_data) = write_data {
-            if write_data & PMC_PME_STATUS != 0 {
-                // clear PME_STATUS
-                self.power_control_status &= !PMC_PME_STATUS;
-            }
-
-            if write_data & PMC_PME_ENABLE != 0 {
-                self.power_control_status |= PMC_PME_ENABLE;
-            } else {
-                self.power_control_status &= !PMC_PME_ENABLE;
-            }
-        }
-    }
-
-    /// If device is in D3 and PME is enabled, set PME status, then device could
-    /// inject a pme interrupt into guest
-    pub fn should_trigger_pme(&mut self) -> bool {
-        if self.power_control_status & PMC_POWER_STATE_MASK == PMC_POWER_STATE_D3
-            && self.power_control_status & PMC_PME_ENABLE != 0
-        {
-            self.power_control_status |= PMC_PME_STATUS;
-
-            return true;
-        }
-
-        false
-    }
-
-    /// Get device power status
-    pub fn get_power_status(&self) -> PciDevicePower {
-        match self.power_control_status & PMC_POWER_STATE_MASK {
-            PMC_POWER_STATE_D0 => PciDevicePower::D0,
-            PMC_POWER_STATE_D3 => PciDevicePower::D3,
-            _ => PciDevicePower::Unsupported,
         }
     }
 }

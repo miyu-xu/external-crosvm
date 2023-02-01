@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -144,7 +144,7 @@ pub struct Worker<F: FileSystem + Sync> {
     mem: GuestMemory,
     queue: Queue,
     server: Arc<fuse::Server<F>>,
-    irq: Arc<Interrupt>,
+    irq: Interrupt,
     tube: Arc<Mutex<Tube>>,
     slot: u32,
 }
@@ -167,7 +167,7 @@ pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
         let total = server.handle_message(reader, writer, &mapper)?;
 
         queue.add_used(mem, avail_desc.index, total as u32);
-        queue.trigger_interrupt(mem, &*interrupt);
+        queue.trigger_interrupt(mem, interrupt);
     }
 
     Ok(())
@@ -178,7 +178,7 @@ impl<F: FileSystem + Sync> Worker<F> {
         mem: GuestMemory,
         queue: Queue,
         server: Arc<fuse::Server<F>>,
-        irq: Arc<Interrupt>,
+        irq: Interrupt,
         tube: Arc<Mutex<Tube>>,
         slot: u32,
     ) -> Worker<F> {
@@ -245,10 +245,10 @@ impl<F: FileSystem + Sync> Worker<F> {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueReady => {
-                        queue_evt.read().map_err(Error::ReadQueueEvent)?;
+                        queue_evt.wait().map_err(Error::ReadQueueEvent)?;
                         if let Err(e) = process_fs_queue(
                             &self.mem,
-                            &*self.irq,
+                            &self.irq,
                             &mut self.queue,
                             &self.server,
                             &self.tube,

@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,7 @@ use base::Protection;
 use base::RawDescriptor;
 use base::Result;
 use base::SafeDescriptor;
+use base::SendTube;
 use fnv::FnvHashMap;
 use libc::EEXIST;
 use libc::EFAULT;
@@ -76,6 +77,8 @@ pub struct WhpxVm {
     //      will make this faster.
     //   3. We only ever register one eventfd to each address. This simplifies our data structure.
     ioevents: FnvHashMap<IoEventAddress, Event>,
+    // Tube to send events to control.
+    vm_evt_wrtube: Option<SendTube>,
 }
 
 impl WhpxVm {
@@ -85,6 +88,7 @@ impl WhpxVm {
         guest_mem: GuestMemory,
         cpuid: CpuId,
         apic_emulation: bool,
+        vm_evt_wrtube: Option<SendTube>,
     ) -> WhpxResult<WhpxVm> {
         let partition = SafePartition::new()?;
         // setup partition defaults.
@@ -236,6 +240,7 @@ impl WhpxVm {
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             ioevents: FnvHashMap::default(),
+            vm_evt_wrtube,
         })
     }
 
@@ -387,6 +392,10 @@ impl Vm for WhpxVm {
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             ioevents,
+            vm_evt_wrtube: self
+                .vm_evt_wrtube
+                .as_ref()
+                .map(|t| t.try_clone().expect("could not clone vm_evt_wrtube")),
         })
     }
 
@@ -408,6 +417,8 @@ impl Vm for WhpxVm {
             VmCap::Protected => false,
             // whpx initializes cpuid early during VM creation.
             VmCap::EarlyInitCpuid => true,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            VmCap::BusLockDetect => false,
         }
     }
 
@@ -582,7 +593,7 @@ impl Vm for WhpxVm {
         match self.ioevents.get(&addr) {
             None => {}
             Some(evt) => {
-                evt.write(1)?;
+                evt.signal()?;
             }
         };
         Ok(())
@@ -627,10 +638,10 @@ impl Vm for WhpxVm {
     }
 
     /// In order to fully unmap a memory range such that the host can reclaim the memory,
-    /// we unmap it from the hypervisor partition, and then mark CrosVm's process as uninterested
+    /// we unmap it from the hypervisor partition, and then mark crosvm's process as uninterested
     /// in the memory.
     ///
-    /// This will make CrosVm unable to access the memory, and allow Windows to reclaim it for other
+    /// This will make crosvm unable to access the memory, and allow Windows to reclaim it for other
     /// uses when memory is in demand.
     fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
         info!(
@@ -761,7 +772,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use base::EventReadResult;
+    use base::EventWaitResult;
     use base::MemoryMappingBuilder;
     use base::SharedMemory;
 
@@ -924,41 +935,41 @@ mod tests {
         vm.handle_io_events(IoEventAddress::Pio(0x1000), &[])
             .expect("failed to handle_io_events");
         assert_ne!(
-            evt.read_timeout(Duration::from_millis(10))
+            evt.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
         assert_eq!(
-            evt2.read_timeout(Duration::from_millis(10))
+            evt2.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
         // Check an mmio address
         vm.handle_io_events(IoEventAddress::Mmio(0x1000), &[])
             .expect("failed to handle_io_events");
         assert_eq!(
-            evt.read_timeout(Duration::from_millis(10))
+            evt.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
         assert_ne!(
-            evt2.read_timeout(Duration::from_millis(10))
+            evt2.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
 
         // Check an address that does not match any registered ioevents
         vm.handle_io_events(IoEventAddress::Pio(0x1001), &[])
             .expect("failed to handle_io_events");
         assert_eq!(
-            evt.read_timeout(Duration::from_millis(10))
+            evt.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
         assert_eq!(
-            evt2.read_timeout(Duration::from_millis(10))
+            evt2.wait_timeout(Duration::from_millis(10))
                 .expect("failed to read event"),
-            EventReadResult::Timeout
+            EventWaitResult::TimedOut
         );
     }
 

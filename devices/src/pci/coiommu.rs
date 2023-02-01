@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,6 @@ use std::default::Default;
 use std::fmt;
 use std::mem;
 use std::panic;
-use std::str::FromStr;
 use std::sync::atomic::fence;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -54,7 +53,9 @@ use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde_keyvalue::FromKeyValues;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 use vm_control::VmMemoryDestination;
@@ -79,6 +80,7 @@ use crate::pci::pci_device::Result as PciResult;
 use crate::pci::PciAddress;
 use crate::pci::PciDeviceError;
 use crate::vfio::VfioContainer;
+use crate::Suspendable;
 use crate::UnpinRequest;
 use crate::UnpinResponse;
 
@@ -118,24 +120,16 @@ enum Error {
 const UNPIN_DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 const UNPIN_GEN_DEFAULT_THRES: u64 = 10;
 /// Holds the coiommu unpin policy
-#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CoIommuUnpinPolicy {
     Off,
     Lru,
 }
 
-impl FromStr for CoIommuUnpinPolicy {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "off" => Ok(CoIommuUnpinPolicy::Off),
-            "lru" => Ok(CoIommuUnpinPolicy::Lru),
-            _ => Err(anyhow!(
-                "CoIommu doesn't have such unpin policy: {}",
-                s.to_string()
-            )),
-        }
+impl Default for CoIommuUnpinPolicy {
+    fn default() -> Self {
+        CoIommuUnpinPolicy::Off
     }
 }
 
@@ -150,14 +144,51 @@ impl fmt::Display for CoIommuUnpinPolicy {
     }
 }
 
+fn deserialize_unpin_interval<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Duration, D::Error> {
+    let secs = u64::deserialize(deserializer)?;
+
+    Ok(Duration::from_secs(secs))
+}
+
+fn deserialize_unpin_limit<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    let limit = u64::deserialize(deserializer)?;
+
+    match limit {
+        0 => Err(serde::de::Error::custom(
+            "Please use non-zero unpin_limit value",
+        )),
+        limit => Ok(Some(limit)),
+    }
+}
+
+fn unpin_interval_default() -> Duration {
+    UNPIN_DEFAULT_INTERVAL
+}
+
+fn unpin_gen_threshold_default() -> u64 {
+    UNPIN_GEN_DEFAULT_THRES
+}
+
 /// Holds the parameters for a coiommu device
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields)]
 pub struct CoIommuParameters {
+    #[serde(default)]
     pub unpin_policy: CoIommuUnpinPolicy,
+    #[serde(
+        deserialize_with = "deserialize_unpin_interval",
+        default = "unpin_interval_default"
+    )]
     pub unpin_interval: Duration,
+    #[serde(deserialize_with = "deserialize_unpin_limit", default)]
     pub unpin_limit: Option<u64>,
     // Number of unpin intervals a pinned page must be busy for to be aged into the
     // older, less frequently checked generation.
+    #[serde(default = "unpin_gen_threshold_default")]
     pub unpin_gen_threshold: u64,
 }
 
@@ -573,7 +604,7 @@ impl PinWorker {
                     Token::Pin { index } => {
                         let offset = index * mem::size_of::<u64>() as usize;
                         if let Some(event) = self.ioevents.get(index) {
-                            if let Err(e) = event.read() {
+                            if let Err(e) = event.wait() {
                                 error!(
                                     "{}: failed reading event {}: {}",
                                     self.debug_label(),
@@ -1551,7 +1582,7 @@ impl PciDevice for CoIommuDev {
             self.mmap();
         }
 
-        (&mut self.config_regs).write_reg(reg_idx, offset, data);
+        self.config_regs.write_reg(reg_idx, offset, data);
     }
 
     fn keep_rds(&self) -> Vec<RawDescriptor> {
@@ -1624,7 +1655,7 @@ impl Drop for CoIommuDev {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.pin_kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            if kill_evt.write(1).is_ok() {
+            if kill_evt.signal().is_ok() {
                 if let Some(worker_thread) = self.pin_thread.take() {
                     let _ = worker_thread.join();
                 }
@@ -1635,7 +1666,7 @@ impl Drop for CoIommuDev {
 
         if let Some(kill_evt) = self.unpin_kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            if kill_evt.write(1).is_ok() {
+            if kill_evt.signal().is_ok() {
                 if let Some(worker_thread) = self.unpin_thread.take() {
                     let _ = worker_thread.join();
                 }
@@ -1645,3 +1676,5 @@ impl Drop for CoIommuDev {
         }
     }
 }
+
+impl Suspendable for CoIommuDev {}

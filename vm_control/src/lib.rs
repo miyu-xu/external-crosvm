@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,10 @@
 //! The wire message format is a little-endian C-struct of fixed size, along with a file descriptor
 //! if the request type expects one.
 
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 pub mod gdb;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 
 #[cfg(unix)]
 use base::MemoryMappingBuilderUnix;
@@ -22,6 +24,7 @@ pub mod client;
 pub mod display;
 pub mod sys;
 
+use std::collections::BTreeSet;
 use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Display;
@@ -31,7 +34,6 @@ use std::result::Result as StdResult;
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 pub use balloon_control::BalloonStats;
 #[cfg(feature = "balloon")]
@@ -39,8 +41,6 @@ use balloon_control::BalloonTubeCommand;
 #[cfg(feature = "balloon")]
 use balloon_control::BalloonTubeResult;
 use base::error;
-use base::info;
-use base::warn;
 use base::with_as_descriptor;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -54,6 +54,9 @@ use base::Result;
 use base::SafeDescriptor;
 use base::SharedMemory;
 use base::Tube;
+use base::TubeError;
+use hypervisor::Datamatch;
+use hypervisor::IoEventAddress;
 use hypervisor::IrqRoute;
 use hypervisor::IrqSource;
 pub use hypervisor::MemSlot;
@@ -66,14 +69,13 @@ use libc::ERANGE;
 use remain::sorted;
 use resources::Alloc;
 use resources::SystemAllocator;
+use rutabaga_gfx::DeviceId;
 use rutabaga_gfx::RutabagaGralloc;
 use rutabaga_gfx::RutabagaHandle;
 use rutabaga_gfx::VulkanInfo;
 use serde::Deserialize;
 use serde::Serialize;
-use sync::Condvar;
 use sync::Mutex;
-use sys::kill_handle;
 #[cfg(unix)]
 pub use sys::FsMappingRequest;
 #[cfg(unix)]
@@ -90,20 +92,29 @@ use crate::display::MouseMode;
 use crate::display::WindowEvent;
 use crate::display::WindowMode;
 use crate::display::WindowVisibility;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-pub use crate::gdb::*;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebug;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebugStatus;
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use crate::gdb::VcpuDebugStatusMessage;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuControlCommand;
+#[cfg(feature = "gpu")]
+use crate::gpu::GpuControlResult;
 
 /// Control the state of a particular VM CPU.
 #[derive(Clone, Debug)]
 pub enum VcpuControl {
-    #[cfg(all(target_arch = "x86_64", feature = "gdb"))]
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
     Debug(VcpuDebug),
     RunState(VmRunMode),
     MakeRT,
+    GetStates,
 }
 
 /// Mode of execution for the VM.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum VmRunMode {
     /// The default run mode indicating the VCPUs are running.
     Running,
@@ -139,11 +150,18 @@ pub trait GpeNotify: Send {
     fn notify(&mut self) {}
 }
 
+// Trait for devices that get notification on specific PCI PME
+pub trait PmeNotify: Send {
+    fn notify(&mut self, _requester_id: u16) {}
+}
+
 pub trait PmResource {
     fn pwrbtn_evt(&mut self) {}
     fn slpbtn_evt(&mut self) {}
     fn gpe_evt(&mut self, _gpe: u32) {}
+    fn pme_evt(&mut self, _requester_id: u16) {}
     fn register_gpe_notify_dev(&mut self, _gpe: u32, _notify_dev: Arc<Mutex<dyn GpeNotify>>) {}
+    fn register_pme_notify_dev(&mut self, _bus: u8, _notify_dev: Arc<Mutex<dyn PmeNotify>>) {}
 }
 
 /// The maximum number of devices that can be listed in one `UsbControlCommand`.
@@ -221,7 +239,7 @@ impl UsbControlAttachedDevice {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum UsbControlResult {
     Ok { port: u8 },
     NoAvailablePort,
@@ -254,6 +272,45 @@ impl Display for UsbControlResult {
     }
 }
 
+/// Commands for snapshot feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SnapshotCommand {
+    Take { snapshot_path: PathBuf },
+}
+
+/// Response for [SnapshotCommand]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SnapshotControlResult {
+    /// The request is accepted successfully.
+    Ok,
+    /// The command fails.
+    Failed(String),
+    /// Request VM shut down in case of major failures.
+    Shutdown,
+}
+/// Commands for restore feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RestoreCommand {
+    Apply { restore_path: PathBuf },
+}
+
+/// Response for [RestoreCommand]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RestoreControlResult {
+    /// The request is accepted successfully.
+    Ok,
+    /// The command fails.
+    Failed(String),
+}
+
+/// Commands for actions on devices and the devices control thread.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DeviceControlCommand {
+    SnapshotDevices { snapshot_path: PathBuf },
+    RestoreDevices { restore_path: PathBuf },
+    Exit,
+}
+
 /// Source of a `VmMemoryRequest::RegisterMemory` mapping.
 #[derive(Serialize, Deserialize)]
 pub enum VmMemorySource {
@@ -274,35 +331,39 @@ pub enum VmMemorySource {
         descriptor: SafeDescriptor,
         handle_type: u32,
         memory_idx: u32,
-        physical_device_idx: u32,
+        device_id: DeviceId,
         size: u64,
     },
     /// Register the current rutabaga external mapping.
-    ExternalMapping { size: u64 },
+    ExternalMapping { ptr: u64, size: u64 },
 }
 
 impl VmMemorySource {
     /// Map the resource and return its mapping and size in bytes.
     pub fn map(
         self,
-        map_request: Arc<Mutex<Option<ExternalMapping>>>,
         gralloc: &mut RutabagaGralloc,
         prot: Protection,
-    ) -> Result<(Box<dyn MappedRegion>, u64)> {
-        Ok(match self {
+    ) -> Result<(Box<dyn MappedRegion>, u64, Option<SafeDescriptor>)> {
+        let (mem_region, size, descriptor) = match self {
             VmMemorySource::Descriptor {
                 descriptor,
                 offset,
                 size,
-            } => (map_descriptor(&descriptor, offset, size, prot)?, size),
+            } => (
+                map_descriptor(&descriptor, offset, size, prot)?,
+                size,
+                Some(descriptor),
+            ),
+
             VmMemorySource::SharedMemory(shm) => {
-                (map_descriptor(&shm, 0, shm.size(), prot)?, shm.size())
+                (map_descriptor(&shm, 0, shm.size(), prot)?, shm.size(), None)
             }
             VmMemorySource::Vulkan {
                 descriptor,
                 handle_type,
                 memory_idx,
-                physical_device_idx,
+                device_id,
                 size,
             } => {
                 let mapped_region = match gralloc.import_and_map(
@@ -312,7 +373,7 @@ impl VmMemorySource {
                     },
                     VulkanInfo {
                         memory_idx,
-                        physical_device_idx,
+                        device_id,
                     },
                     size,
                 ) {
@@ -322,18 +383,17 @@ impl VmMemorySource {
                         return Err(SysError::new(EINVAL));
                     }
                 };
-                (mapped_region, size)
+                (mapped_region, size, None)
             }
-            VmMemorySource::ExternalMapping { size } => {
-                let mem = map_request
-                    .lock()
-                    .take()
-                    .ok_or_else(|| VmMemoryResponse::Err(SysError::new(EINVAL)))
-                    .unwrap();
-                let mapped_region: Box<dyn MappedRegion> = Box::new(mem);
-                (mapped_region, size)
+            VmMemorySource::ExternalMapping { ptr, size } => {
+                let mapped_region: Box<dyn MappedRegion> = Box::new(ExternalMapping {
+                    ptr,
+                    size: size as usize,
+                });
+                (mapped_region, size, None)
             }
-        })
+        };
+        Ok((mem_region, size, descriptor))
     }
 }
 
@@ -382,6 +442,30 @@ pub enum VmMemoryRequest {
     },
     /// Unregister the given memory slot that was previously registered with `RegisterMemory`.
     UnregisterMemory(MemSlot),
+    /// Register an ioeventfd
+    IoEvent {
+        evt: Event,
+        allocation: Alloc,
+        offset: u64,
+        datamatch: Datamatch,
+        register: bool,
+    },
+}
+
+/// Struct for managing `VmMemoryRequest`s IOMMU related state.
+pub struct VmMemoryRequestIommuClient<'a> {
+    tube: &'a Tube,
+    gpu_memory: BTreeSet<MemSlot>,
+}
+
+impl<'a> VmMemoryRequestIommuClient<'a> {
+    /// Constructs `VmMemoryRequestIommuClient` from a tube for communication with the viommu.
+    pub fn new(tube: &'a Tube) -> Self {
+        Self {
+            tube,
+            gpu_memory: BTreeSet::new(),
+        }
+    }
 }
 
 impl VmMemoryRequest {
@@ -398,16 +482,16 @@ impl VmMemoryRequest {
         self,
         vm: &mut impl Vm,
         sys_allocator: &mut SystemAllocator,
-        map_request: Arc<Mutex<Option<ExternalMapping>>>,
         gralloc: &mut RutabagaGralloc,
+        iommu_client: Option<&mut VmMemoryRequestIommuClient>,
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match self {
             RegisterMemory { source, dest, prot } => {
                 // Correct on Windows because callers of this IPC guarantee descriptor is a mapping
                 // handle.
-                let (mapped_region, size) = match source.map(map_request, gralloc, prot) {
-                    Ok(res) => res,
+                let (mapped_region, size, descriptor) = match source.map(gralloc, prot) {
+                    Ok((region, size, descriptor)) => (region, size, descriptor),
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
 
@@ -426,11 +510,55 @@ impl VmMemoryRequest {
                     Err(e) => return VmMemoryResponse::Err(e),
                 };
 
+                if let (Some(descriptor), Some(iommu_client)) = (descriptor, iommu_client) {
+                    let request =
+                        VirtioIOMMURequest::VfioCommand(VirtioIOMMUVfioCommand::VfioDmabufMap {
+                            mem_slot: slot,
+                            gfn: guest_addr.0 >> 12,
+                            size,
+                            dma_buf: descriptor,
+                        });
+
+                    match virtio_iommu_request(iommu_client.tube, &request) {
+                        Ok(VirtioIOMMUResponse::VfioResponse(VirtioIOMMUVfioResult::Ok)) => (),
+                        resp => {
+                            error!("Unexpected message response: {:?}", resp);
+                            // Ignore the result because there is nothing we can do with a failure.
+                            let _ = vm.remove_memory_region(slot);
+                            return VmMemoryResponse::Err(SysError::new(EINVAL));
+                        }
+                    };
+
+                    iommu_client.gpu_memory.insert(slot);
+                }
+
                 let pfn = guest_addr.0 >> 12;
                 VmMemoryResponse::RegisterMemory { pfn, slot }
             }
             UnregisterMemory(slot) => match vm.remove_memory_region(slot) {
-                Ok(_) => VmMemoryResponse::Ok,
+                Ok(_) => {
+                    if let Some(iommu_client) = iommu_client {
+                        if iommu_client.gpu_memory.remove(&slot) {
+                            let request = VirtioIOMMURequest::VfioCommand(
+                                VirtioIOMMUVfioCommand::VfioDmabufUnmap(slot),
+                            );
+
+                            match virtio_iommu_request(iommu_client.tube, &request) {
+                                Ok(VirtioIOMMUResponse::VfioResponse(
+                                    VirtioIOMMUVfioResult::Ok,
+                                )) => VmMemoryResponse::Ok,
+                                resp => {
+                                    error!("Unexpected message response: {:?}", resp);
+                                    VmMemoryResponse::Err(SysError::new(EINVAL))
+                                }
+                            }
+                        } else {
+                            VmMemoryResponse::Ok
+                        }
+                    } else {
+                        VmMemoryResponse::Ok
+                    }
+                }
                 Err(e) => VmMemoryResponse::Err(e),
             },
             DynamicallyFreeMemoryRange {
@@ -447,6 +575,40 @@ impl VmMemoryRequest {
                 Ok(_) => VmMemoryResponse::Ok,
                 Err(e) => VmMemoryResponse::Err(e),
             },
+            IoEvent {
+                evt,
+                allocation,
+                offset,
+                datamatch,
+                register,
+            } => {
+                let len = match datamatch {
+                    Datamatch::AnyLength => 1,
+                    Datamatch::U8(_) => 1,
+                    Datamatch::U16(_) => 2,
+                    Datamatch::U32(_) => 4,
+                    Datamatch::U64(_) => 8,
+                };
+                let addr = match sys_allocator
+                    .mmio_allocator_any()
+                    .address_from_pci_offset(allocation, offset, len)
+                {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        error!("error getting target address: {:#}", e);
+                        return VmMemoryResponse::Err(SysError::new(EINVAL));
+                    }
+                };
+                let res = if register {
+                    vm.register_ioevent(&evt, IoEventAddress::Mmio(addr), datamatch)
+                } else {
+                    vm.unregister_ioevent(&evt, IoEventAddress::Mmio(addr), datamatch)
+                };
+                match res {
+                    Ok(_) => VmMemoryResponse::Ok,
+                    Err(e) => VmMemoryResponse::Err(e),
+                }
+            }
         }
     }
 }
@@ -563,7 +725,7 @@ pub enum VmIrqResponse {
     Err(SysError),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum BatControlResult {
     Ok,
     NoBatDevice,
@@ -590,7 +752,7 @@ impl Display for BatControlResult {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum BatteryType {
     Goldfish,
@@ -790,6 +952,25 @@ pub enum PvClockCommandResponse {
     Err(SysError),
 }
 
+/// Commands for vmm-swap feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SwapCommand {
+    Enable,
+    SwapOut,
+    Disable,
+    Status,
+    StartPageFaultLogging,
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "swap")] {
+        use swap::Status as SwapStatus;
+    } else {
+        #[derive(Serialize, Deserialize, Debug, Clone)]
+        pub enum SwapStatus {}
+    }
+}
+
 ///
 /// A request to the main process to perform some operation on the VM.
 ///
@@ -804,10 +985,14 @@ pub enum VmRequest {
     Sleepbtn,
     /// Suspend the VM's VCPUs until resume.
     Suspend,
+    /// Swap the memory content into files on a disk
+    Swap(SwapCommand),
     /// Resume the VM's VCPUs that were previously suspended.
     Resume,
     /// Inject a general-purpose event.
     Gpe(u32),
+    /// Inject a PCI PME
+    PciPme(u16),
     /// Make the VM's RT VCPU real-time.
     MakeRT,
     /// Command for balloon driver.
@@ -820,6 +1005,9 @@ pub enum VmRequest {
     },
     /// Command to use controller.
     UsbCommand(UsbControlCommand),
+    #[cfg(feature = "gpu")]
+    /// Command to modify the gpu.
+    GpuCommand(GpuControlCommand),
     /// Command to set battery.
     BatCommand(BatteryType, BatControlCommand),
     /// Command to add/remove multiple pci devices
@@ -827,6 +1015,28 @@ pub enum VmRequest {
         device: HotPlugDeviceInfo,
         add: bool,
     },
+    /// Command to Snapshot devices
+    Snapshot(SnapshotCommand),
+    /// Command to Restore devices
+    Restore(RestoreCommand),
+}
+
+pub fn handle_disk_command(command: &DiskControlCommand, disk_host_tube: &Tube) -> VmResponse {
+    // Forward the request to the block device process via its control socket.
+    if let Err(e) = disk_host_tube.send(command) {
+        error!("disk socket send failed: {}", e);
+        return VmResponse::Err(SysError::new(EINVAL));
+    }
+
+    // Wait for the disk control command to be processed
+    match disk_host_tube.recv() {
+        Ok(DiskControlResult::Ok) => VmResponse::Ok,
+        Ok(DiskControlResult::Err(e)) => VmResponse::Err(e),
+        Err(e) => {
+            error!("disk socket recv failed: {}", e);
+            VmResponse::Err(SysError::new(EINVAL))
+        }
+    }
 }
 
 /// WARNING: descriptor must be a mapping handle on Windows.
@@ -849,33 +1059,75 @@ fn map_descriptor(
     }
 }
 
-fn generate_sleep_button_event(
-    pm: &mut Option<Arc<Mutex<dyn PmResource>>>,
-    guest_suspended_cvar: &Arc<(Mutex<bool>, Condvar)>,
-) {
-    // During suspend also emulate sleepbtn, which allows to suspend VM (if running e.g. acpid and
-    // reacts on sleep button events)
-    if let Some(pm) = pm {
-        pm.lock().slpbtn_evt();
-    } else {
-        error!("generating sleepbtn during suspend not supported");
+// Get vCPU state. vCPUs are expected to all hold the same state.
+// In this function, there may be a time where vCPUs are not
+fn get_vcpu_state(
+    kick_vcpus: impl Fn(VcpuControl),
+    state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+    vcpu_num: usize,
+) -> std::result::Result<VmRunMode, SysError> {
+    kick_vcpus(VcpuControl::GetStates);
+    let mut current_mode_vec: Vec<VmRunMode> = Vec::new();
+    for _ in 0..vcpu_num {
+        match state_from_vcpu_channel.recv() {
+            Ok(state) => current_mode_vec.push(state),
+            Err(e) => {
+                error!("Failed to get vCPU state: {}", e);
+                return Err(SysError::new(EIO));
+            }
+        };
     }
-
-    let (lock, cvar) = &**guest_suspended_cvar;
-    let mut guest_suspended = lock.lock();
-
-    *guest_suspended = false;
-
-    // Wait for notification about guest suspension, if not received after 15sec,
-    // proceed anyway.
-    let result = cvar.wait_timeout(guest_suspended, std::time::Duration::from_secs(15));
-    guest_suspended = result.0;
-
-    if result.1.timed_out() {
-        warn!("Guest suspension timeout - proceeding anyway");
-    } else if *guest_suspended {
-        info!("Guest suspended");
+    if current_mode_vec.is_empty() {
+        return Err(SysError::new(EIO));
     }
+    let first_state = current_mode_vec[0];
+    if first_state == VmRunMode::Exiting {
+        panic!("Attempt to snapshot while exiting.");
+    }
+    if current_mode_vec.iter().any(|x| *x != first_state) {
+        // We do not panic here. It could be that vCPUs are transitioning from one mode to another.
+        error!("Unknown VM state: vCPUs hold different states.");
+        return Err(SysError::new(EIO));
+    }
+    Ok(first_state)
+}
+
+fn do_while_vcpus_suspended<T: for<'de> serde::Deserialize<'de>>(
+    kick_vcpus: impl Fn(VcpuControl),
+    state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+    vcpu_num: usize,
+    run_action: impl Fn() -> std::result::Result<(), TubeError>,
+    device_control_tube: &Tube,
+) -> std::result::Result<T, SysError> {
+    // get initial vcpu state
+    let current_mode = get_vcpu_state(&kick_vcpus, state_from_vcpu_channel, vcpu_num)?;
+    let saved_run_mode = current_mode;
+    if current_mode != VmRunMode::Suspending {
+        kick_vcpus(VcpuControl::RunState(VmRunMode::Suspending));
+    }
+    // Blocking call, waiting for response to ensure vCPU state was updated.
+    // In case of failure, where a vCPU still has the state running, start up vcpus and abort
+    // operation.
+    let current_mode = get_vcpu_state(&kick_vcpus, state_from_vcpu_channel, vcpu_num)?;
+    if current_mode != VmRunMode::Suspending {
+        error!("vCPUs failed to all suspend. Kicking back all vCPUs to their previous state: {saved_run_mode}");
+        kick_vcpus(VcpuControl::RunState(saved_run_mode));
+        return Err(SysError::new(EIO));
+    }
+    if let Err(e) = run_action() {
+        error!("fail to send command to devices control socket: {}", e);
+        kick_vcpus(VcpuControl::RunState(saved_run_mode));
+        return Err(SysError::new(EIO));
+    };
+    let response: T = match device_control_tube.recv() {
+        Ok(response) => response,
+        Err(e) => {
+            error!("fail to recv command from device control socket: {}", e);
+            return Err(SysError::new(EIO));
+        }
+    };
+    kick_vcpus(VcpuControl::RunState(saved_run_mode));
+    Ok(response)
 }
 
 impl VmRequest {
@@ -890,12 +1142,16 @@ impl VmRequest {
         #[cfg(feature = "balloon")] balloon_host_tube: Option<&Tube>,
         #[cfg(feature = "balloon")] balloon_stats_id: &mut u64,
         disk_host_tubes: &[Tube],
-        pm: &mut Option<Arc<Mutex<dyn PmResource>>>,
+        pm: &mut Option<Arc<Mutex<dyn PmResource + Send>>>,
+        #[cfg(feature = "gpu")] gpu_control_tube: &Tube,
         usb_control_tube: Option<&Tube>,
         bat_control: &mut Option<BatControl>,
-        vcpu_handles: &[(JoinHandle<()>, mpsc::Sender<VcpuControl>)],
+        kick_vcpus: impl Fn(VcpuControl),
         force_s2idle: bool,
-        guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        device_control_tube: &Tube,
+        state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+        vcpu_size: usize,
     ) -> VmResponse {
         match *self {
             VmRequest::Exit => {
@@ -921,12 +1177,73 @@ impl VmRequest {
                 }
             }
             VmRequest::Suspend => {
-                if force_s2idle {
-                    generate_sleep_button_event(pm, &guest_suspended_cvar);
-                }
-
                 *run_mode = Some(VmRunMode::Suspending);
                 VmResponse::Ok
+            }
+            VmRequest::Swap(SwapCommand::Enable) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.enable() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap enable failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::SwapOut) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.swap_out() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap out failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::Disable) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.disable() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap disable failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::Status) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.status() {
+                        Ok(status) => VmResponse::SwapStatus(status),
+                        Err(e) => {
+                            error!("swap status failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::StartPageFaultLogging) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.start_page_fault_logging() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap log_page_fault failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
             }
             VmRequest::Resume => {
                 *run_mode = Some(VmRunMode::Running);
@@ -945,8 +1262,17 @@ impl VmRequest {
                 VmResponse::Ok
             }
             VmRequest::Gpe(gpe) => {
-                if pm.is_some() {
-                    pm.as_ref().unwrap().lock().gpe_evt(gpe);
+                if let Some(pm) = pm.as_ref() {
+                    pm.lock().gpe_evt(gpe);
+                    VmResponse::Ok
+                } else {
+                    error!("{:#?} not supported", *self);
+                    VmResponse::Err(SysError::new(ENOTSUP))
+                }
+            }
+            VmRequest::PciPme(requester_id) => {
+                if let Some(pm) = pm.as_ref() {
+                    pm.lock().pme_evt(requester_id);
                     VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
@@ -954,13 +1280,7 @@ impl VmRequest {
                 }
             }
             VmRequest::MakeRT => {
-                #[allow(unused_variables)] // `handle` is unused on Windows.
-                for (handle, channel) in vcpu_handles {
-                    if let Err(e) = channel.send(VcpuControl::MakeRT) {
-                        error!("failed to send MakeRT: {}", e);
-                    }
-                    kill_handle(handle);
-                }
+                kick_vcpus(VcpuControl::MakeRT);
                 VmResponse::Ok
             }
             #[cfg(feature = "balloon")]
@@ -1032,24 +1352,23 @@ impl VmRequest {
             VmRequest::DiskCommand {
                 disk_index,
                 ref command,
-            } => {
-                // Forward the request to the block device process via its control socket.
-                if let Some(sock) = disk_host_tubes.get(disk_index) {
-                    if let Err(e) = sock.send(command) {
-                        error!("disk socket send failed: {}", e);
-                        VmResponse::Err(SysError::new(EINVAL))
-                    } else {
-                        match sock.recv() {
-                            Ok(DiskControlResult::Ok) => VmResponse::Ok,
-                            Ok(DiskControlResult::Err(e)) => VmResponse::Err(e),
-                            Err(e) => {
-                                error!("disk socket recv failed: {}", e);
-                                VmResponse::Err(SysError::new(EINVAL))
-                            }
-                        }
+            } => match &disk_host_tubes.get(disk_index) {
+                Some(tube) => handle_disk_command(command, tube),
+                None => VmResponse::Err(SysError::new(ENODEV)),
+            },
+            #[cfg(feature = "gpu")]
+            VmRequest::GpuCommand(ref cmd) => {
+                let res = gpu_control_tube.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to gpu control socket: {}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match gpu_control_tube.recv() {
+                    Ok(response) => VmResponse::GpuResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from gpu control socket: {}", e);
+                        VmResponse::Err(SysError::new(EIO))
                     }
-                } else {
-                    VmResponse::Err(SysError::new(ENODEV))
                 }
             }
             VmRequest::UsbCommand(ref cmd) => {
@@ -1099,6 +1418,40 @@ impl VmRequest {
                 }
             }
             VmRequest::HotPlugCommand { device: _, add: _ } => VmResponse::Ok,
+            VmRequest::Snapshot(SnapshotCommand::Take { ref snapshot_path }) => {
+                let response: SnapshotControlResult = match do_while_vcpus_suspended(
+                    &kick_vcpus,
+                    state_from_vcpu_channel,
+                    vcpu_size,
+                    || {
+                        device_control_tube.send(&DeviceControlCommand::SnapshotDevices {
+                            snapshot_path: snapshot_path.clone(),
+                        })
+                    },
+                    device_control_tube,
+                ) {
+                    Ok(res) => res,
+                    Err(e) => return VmResponse::Err(e),
+                };
+                VmResponse::SnapshotResponse(response)
+            }
+            VmRequest::Restore(RestoreCommand::Apply { ref restore_path }) => {
+                let response: RestoreControlResult = match do_while_vcpus_suspended(
+                    &kick_vcpus,
+                    state_from_vcpu_channel,
+                    vcpu_size,
+                    || {
+                        device_control_tube.send(&DeviceControlCommand::RestoreDevices {
+                            restore_path: restore_path.clone(),
+                        })
+                    },
+                    device_control_tube,
+                ) {
+                    Ok(res) => res,
+                    Err(e) => return VmResponse::Err(e),
+                };
+                VmResponse::RestoreResponse(response)
+            }
         }
     }
 }
@@ -1106,7 +1459,7 @@ impl VmRequest {
 /// Indication of success or failure of a `VmRequest`.
 ///
 /// Success is usually indicated `VmResponse::Ok` unless there is data associated with the response.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VmResponse {
     /// Indicates the request was executed successfully.
     Ok,
@@ -1122,8 +1475,17 @@ pub enum VmResponse {
     },
     /// Results of usb control commands.
     UsbResponse(UsbControlResult),
+    #[cfg(feature = "gpu")]
+    /// Results of gpu control commands.
+    GpuResponse(GpuControlResult),
     /// Results of battery control commands.
     BatResponse(BatControlResult),
+    /// Results of swap status command.
+    SwapStatus(SwapStatus),
+    /// Results of snapshot commands.
+    SnapshotResponse(SnapshotControlResult),
+    /// Results of restore commands.
+    RestoreResponse(RestoreControlResult),
 }
 
 impl Display for VmResponse {
@@ -1151,7 +1513,19 @@ impl Display for VmResponse {
                 )
             }
             UsbResponse(result) => write!(f, "usb control request get result {:?}", result),
+            #[cfg(feature = "gpu")]
+            GpuResponse(result) => write!(f, "gpu control request result {:?}", result),
             BatResponse(result) => write!(f, "{}", result),
+            SwapStatus(status) => {
+                write!(
+                    f,
+                    "{}",
+                    serde_json::to_string(&status)
+                        .unwrap_or_else(|_| "invalid_response".to_string()),
+                )
+            }
+            SnapshotResponse(result) => write!(f, "snapshot control request result {:?}", result),
+            RestoreResponse(result) => write!(f, "restore control request result {:?}", result),
         }
     }
 }
@@ -1221,8 +1595,8 @@ mod tests {
         res.send(&e1).unwrap();
 
         let recv_event: Event = req.recv().unwrap();
-        recv_event.write(1).unwrap();
-        assert_eq!(e1.read().unwrap(), 1);
+        recv_event.signal().unwrap();
+        e1.wait().unwrap();
     }
 }
 
@@ -1252,6 +1626,15 @@ pub enum VirtioIOMMUVfioCommand {
     VfioDeviceDel {
         endpoint_addr: u32,
     },
+    // Map a dma-buf into vfio iommu table
+    VfioDmabufMap {
+        mem_slot: MemSlot,
+        gfn: u64,
+        size: u64,
+        dma_buf: SafeDescriptor,
+    },
+    // Unmap a dma-buf from vfio iommu table
+    VfioDmabufUnmap(MemSlot),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1260,6 +1643,8 @@ pub enum VirtioIOMMUVfioResult {
     NotInPCIRanges,
     NoAvailableContainer,
     NoSuchDevice,
+    NoSuchMappedDmabuf,
+    InvalidParam,
 }
 
 impl Display for VirtioIOMMUVfioResult {
@@ -1271,6 +1656,8 @@ impl Display for VirtioIOMMUVfioResult {
             NotInPCIRanges => write!(f, "not in the pci ranges of virtio-iommu"),
             NoAvailableContainer => write!(f, "no available vfio container"),
             NoSuchDevice => write!(f, "no such a vfio device"),
+            NoSuchMappedDmabuf => write!(f, "no such a mapped dmabuf"),
+            InvalidParam => write!(f, "invalid parameters"),
         }
     }
 }

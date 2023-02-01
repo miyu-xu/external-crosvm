@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,21 +14,21 @@ use anyhow::Result as AnyResult;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum WindowVisibility {
     Hidden,
     Minimized,
     Normal,
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum WindowMode {
     Unknown,
     Fullscreen,
     Windowed,
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum MouseMode {
     Unknown,
     Touchscreen,
@@ -52,7 +52,7 @@ impl WindowMode {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum AspectRatio {
     Unknown,
     W16H9,
@@ -104,7 +104,7 @@ impl TryFrom<f32> for AspectRatio {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct DisplaySize {
     pub width: i32,
     pub height: i32,
@@ -120,20 +120,20 @@ impl DisplaySize {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct GuestDisplayDensity {
     pub static_landscape_dpi: i32,
     pub static_portrait_dpi: i32,
     pub dynamic_dpi: Option<i32>,
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub enum WindowEventCode {
     Unspecified,
     DisplaySettingsChange,
 }
 
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct WindowEvent {
     pub event_code: WindowEventCode,
     pub report_timestamp_ms: i64,

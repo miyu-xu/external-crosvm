@@ -7,9 +7,10 @@ reviewers, developers, and integrators who each share an interest in guiding cro
 
 ## Bug Reports
 
-We use the Chromium issue tracker. Please use
-[`OS>Systems>Containers`](https://bugs.chromium.org/p/chromium/issues/list?q=component:OS%3ESystems%3EContainers)
-component.
+We use Google issue tracker. Please use
+[the public crosvm component](https://issuetracker.google.com/issues?q=status:open%20componentid:1161302).
+
+**For Googlers**: See [go/crosvm#filing-bugs](https://goto.google.com/crosvm#filing-bugs).
 
 ## Philosophy
 
@@ -18,24 +19,59 @@ The following is high level guidance for producing contributions to crosvm.
 - Prefer mechanism to policy.
 - Use existing protocols when they are adequate, such as virtio.
 - Prefer security over code re-use and speed of development.
-- Only the version of Rust in use by the Chrome OS toolchain is supported. This is ordinarily the
+- Only the version of Rust in use by the ChromeOS toolchain is supported. This is ordinarily the
   stable version of Rust, but can be behind a version for a few weeks.
 - Avoid distribution specific code.
 
 ## Style guidelines
 
-To format all code, crosvm defers to rustfmt. In addition, the code adheres to the following rules:
+### Formatting
 
-The `use` statements for each module should be grouped in this order
+To format all code, crosvm defers to `rustfmt`. In addition, the code adheres to the following
+rules:
+
+Each `use` statement should import a single item, as produced by `rustfmt` with
+[`imports_granularity=item`]. Do not use braces to import multiple items.
+
+The `use` statements for each module should be grouped into blocks separated by whitespace in the
+order produced by `rustfmt` with [`group_imports=StdExternalCrate`] and sorted alphabetically:
 
 1. `std`
-1. third-party crates
-1. chrome os crates
-1. crosvm crates
-1. `crate`
+1. third-party + crosvm crates
+1. `crate` + `super`
+
+The import formatting options of `rustfmt` are currently unstable, so these are not enforced
+automatically. If a nightly Rust toolchain is present, it is possible to automatically reformat the
+code to match these guidelines by running `tools/fmt --nightly`.
 
 crosvm uses the [remain](https://github.com/dtolnay/remain) crate to keep error enums sorted, along
 with the `#[sorted]` attribute to keep their corresponding match statements in the same order.
+
+### Unit test code
+
+Unit tests and other highly-specific tests (which may include some small, but not all, integration
+tests) should be written differently than how non-test code is written. Tests prevent regressions
+from being committed, show how APIs can be used, and help with understanding bugs in code. That
+means tests must be clear both now and in the future to a developer with low familiarity of the code
+under test. They should be understandable by reading from top to bottom without referencing any
+other code. Towards these goals, tests should:
+
+- To a reasonable extent, be structured as Arrange-Act-Assert.
+- Test the minimum number of behaviors in a single test. Make separate tests for separate behavior.
+- Avoid helper methods that send critical inputs or assert outputs within the helper itself. It
+  should be easy to read a test and determine the critical inputs/outputs without digging through
+  helper methods. Setup common to many tests is fine to factor out, but lean toward duplicating code
+  if it aids readability.
+- Avoid branching statements like conditionals and loops (which can make debugging more difficult).
+- Document the reason constants were chosen in the test, including if they were picked arbitrarily
+  such that in the future, changing the value is okay. (This can be done with constant variable
+  names, which is ideal if the value is used more than once, or in a comment.)
+- Name tests to describe what is being tested and the expected outcome, for example
+  `test_foo_invalid_bar_returns_baz`.
+
+Less-specific tests, such as most integration tests and system tests, are more likely to require
+obfuscating work behind helper methods. It is still good to strive for clarity and ease of debugging
+in those tests, but they do not need to follow these guidelines.
 
 ## Contributing Code
 
@@ -58,6 +94,45 @@ redistribute your contributions as part of the project. Head over to
 
 You generally only need to submit a CLA once, so if you've already submitted one (even if it was for
 a different project), you probably don't need to do it again.
+
+### Commit Messages
+
+As for commit messages, we follow
+[ChromeOS's guideline](https://chromium.googlesource.com/chromiumos/docs/+/HEAD/contributing.md#commit-messages)
+in general.
+
+Here is an example of a good commit message:
+
+```
+devices: vhost: user: vmm: Add Connection type
+
+This abstracts away the cross-platform differences: cfg(unix) uses a
+Unix domain stream socket to connect to the vhost-user backend, and
+cfg(windows) uses a Tube.
+
+BUG=b:249361790
+TEST=tools/presubmit --all
+
+Change-Id: I47651060c2ce3a7e9f850b7ed9af8bd035f82de6
+```
+
+- The first line is a subject that starts with a tag that represents which components your commit
+  relates to. Tags are usually the name of the crate you modified such as `devices:` or `base:`. If
+  you only modified a specific component in a crate, you can specify the path to the component as a
+  tag like `devices: vhost: user:`. If your commit modified multiple crates, specify the crate where
+  your main change exists. The subject should be no more than 50 characters, including any tags.
+- The body should consist of a motivation followed by an impact/action. The body text should be
+  wrapped to 72 characters.
+- `BUG` lines are used to specify an associated issue number. If the issue is filed at
+  [Google's issue tracker](https://issuetracker.google.com/), write `BUG=b:<bug number>`. If no
+  issue is associated, write `BUG=None`. You can have multiple `BUG` lines.
+- `TEST` lines are used to describe how you tested your commit in a free form. You can have multiple
+  `TEST` lines.
+- `Change-Id` is used to identify your change on Gerrit. It's inserted by the gerrit commit message
+  hook as explained in
+  [the previous section](https://crosvm.dev/book/contributing/index.html#prerequisites). If a new
+  commit is uploaded with the same `Change-Id` as an existing CL's `Change-Id`, gerrit will
+  recognize the new commit as a new patchset of the existing CL.
 
 ### Uploading changes
 
@@ -110,11 +185,11 @@ When all tests pass, your change is merged into `origin/main`.
 
 ## Contributing to the documentation
 
-[The book of crosvm] is build with [mdBook]. Each markdown files must follow
+[The book of crosvm] is built with [mdBook]. Each markdown file must follow
 [Google Markdown style guide].
 
 To render the book locally, you need to install mdbook and [mdbook-mermaid], which should be
-installed when you run `./tools/install-deps`script. Or you can use the `tools/dev_container`
+installed when you run `./tools/install-deps` script. Or you can use the `tools/dev_container`
 environment.
 
 ```sh
@@ -135,3 +210,5 @@ Output is found at `docs/book/book/html/`.
 [mdbook]: https://rust-lang.github.io/mdBook/
 [mdbook-mermaid]: https://github.com/badboy/mdbook-mermaid
 [the book of crosvm]: https://crosvm.dev/book/
+[`group_imports=stdexternalcrate`]: https://rust-lang.github.io/rustfmt/?version=v1.5.1&search=#group_imports
+[`imports_granularity=item`]: https://rust-lang.github.io/rustfmt/?version=v1.5.1&search=#imports_granularity

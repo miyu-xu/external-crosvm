@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@ pub mod descriptor;
 pub mod descriptor_reflection;
 mod errno;
 mod event;
-pub mod external_mapping;
+mod file_traits;
 mod mmap;
 mod notifiers;
 mod shm;
@@ -29,10 +29,14 @@ pub use errno::errno_result;
 pub use errno::Error;
 pub use errno::Result;
 pub use event::Event;
-pub use event::EventReadResult;
-pub use external_mapping::Error as ExternalMappingError;
-pub use external_mapping::ExternalMapping;
-pub use external_mapping::Result as ExternalMappingResult;
+pub use event::EventWaitResult;
+pub use file_traits::FileAllocate;
+pub use file_traits::FileGetLen;
+pub use file_traits::FileReadWriteAtVolatile;
+pub use file_traits::FileReadWriteVolatile;
+pub use file_traits::FileSetLen;
+pub use file_traits::FileSync;
+pub use mmap::ExternalMapping;
 pub use mmap::MappedRegion;
 pub use mmap::MemoryMapping;
 pub use mmap::MemoryMappingBuilder;
@@ -88,11 +92,11 @@ cfg_if::cfg_if! {
         pub use platform::{
             block_signal, clear_signal, get_blocked_signals, new_pipe_full,
             register_rt_signal_handler, signal, unblock_signal, Killable, SIGRTMIN,
-            AcpiNotifyEvent, NetlinkGenericSocket, SignalFd, Terminal, EventFd,
+            AcpiNotifyEvent, NetlinkGenericSocket, SignalFd, Terminal,
         };
 
         pub use platform::{
-            chown, drop_capabilities, iov_max, kernel_has_memfd, pipe, read_raw_stdin
+            chown, drop_capabilities, iov_max, pipe, read_raw_stdin
         };
         pub use platform::{enable_core_scheduling, set_rt_prio_limit, set_rt_round_robin};
         pub use platform::{flock, FlockOperation};
@@ -102,6 +106,7 @@ cfg_if::cfg_if! {
             net::{UnixSeqpacket, UnixSeqpacketListener, UnlinkUnixSeqpacketListener},
             ScmSocket, UnlinkUnixListener, SCM_SOCKET_MAX_FD_COUNT,
         };
+        pub use platform::EventExt;
     } else if #[cfg(windows)] {
         pub use platform::{EventTrigger, EventExt, WaitContextExt};
         pub use platform::MemoryMappingBuilderWindows;
@@ -117,8 +122,9 @@ cfg_if::cfg_if! {
 
         pub use tube::{
             deserialize_and_recv, serialize_and_send, set_alias_pid, set_duplicate_handle_tube,
-            DuplicateHandleRequest, DuplicateHandleResponse, DuplicateHandleTube,
+            DuplicateHandleRequest, DuplicateHandleResponse, DuplicateHandleTube
         };
+        pub use tube::ProtoTube;
         pub use platform::{set_audio_thread_priorities, thread};
     } else {
         compile_error!("Unsupported platform");
@@ -147,20 +153,13 @@ pub use platform::with_as_descriptor;
 pub use platform::with_raw_descriptor;
 pub use platform::BlockingMode;
 pub use platform::EventContext;
-pub use platform::FileAllocate;
-pub use platform::FileGetLen;
-pub use platform::FileReadWriteAtVolatile;
-pub use platform::FileReadWriteVolatile;
 pub use platform::FileSerdeWrapper;
-pub use platform::FileSetLen;
-pub use platform::FileSync;
 pub use platform::FramingMode;
 pub use platform::MemoryMappingArena;
 pub use platform::MmapError;
 pub use platform::RawDescriptor;
 pub use platform::SerializeDescriptors;
 pub use platform::StreamChannel;
-pub use platform::UnsyncMarker;
 pub use platform::INVALID_DESCRIPTOR;
 use uuid::Uuid;
 
@@ -186,10 +185,11 @@ pub fn generate_uuid() -> String {
 
 use serde::Deserialize;
 use serde::Serialize;
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum VmEventType {
     Exit,
     Reset,
     Crash,
     Panic(u8),
+    WatchdogReset,
 }

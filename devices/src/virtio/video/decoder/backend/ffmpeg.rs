@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,10 +32,10 @@ use base::MappedRegion;
 use base::MemoryMappingArena;
 use thiserror::Error as ThisError;
 
-use crate::virtio::video::decoder::backend::utils::EventQueue;
-use crate::virtio::video::decoder::backend::utils::OutputQueue;
-use crate::virtio::video::decoder::backend::utils::SyncEventQueue;
 use crate::virtio::video::decoder::backend::*;
+use crate::virtio::video::ffmpeg::GuestResourceToAvFrameError;
+use crate::virtio::video::ffmpeg::MemoryMappingAvBufferSource;
+use crate::virtio::video::ffmpeg::TryAsAvFrameExt;
 use crate::virtio::video::format::FormatDesc;
 use crate::virtio::video::format::FormatRange;
 use crate::virtio::video::format::FrameFormat;
@@ -44,14 +44,17 @@ use crate::virtio::video::format::Profile;
 use crate::virtio::video::resource::BufferHandle;
 use crate::virtio::video::resource::GuestResource;
 use crate::virtio::video::resource::GuestResourceHandle;
+use crate::virtio::video::utils::EventQueue;
+use crate::virtio::video::utils::OutputQueue;
+use crate::virtio::video::utils::SyncEventQueue;
 
 /// Structure maintaining a mapping for an encoded input buffer that can be used as a libavcodec
 /// buffer source. It also sends a `NotifyEndOfBitstreamBuffer` event when dropped.
 struct InputBuffer {
     /// Memory mapping to the encoded input data.
     mapping: MemoryMappingArena,
-    /// Bistream ID that will be sent as part of the `NotifyEndOfBitstreamBuffer` event.
-    bitstream_id: i32,
+    /// Resource ID that we will signal using `NotifyEndOfBitstreamBuffer` upon destruction.
+    resource_id: u32,
     /// Pointer to the event queue to send the `NotifyEndOfBitstreamBuffer` event to. The event will
     /// not be sent if the pointer becomes invalid.
     event_queue: Weak<SyncEventQueue<DecoderEvent>>,
@@ -63,7 +66,7 @@ impl Drop for InputBuffer {
             None => (),
             // If the event queue is still valid, send the event signaling we can be reused.
             Some(event_queue) => event_queue
-                .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(self.bitstream_id))
+                .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(self.resource_id))
                 .unwrap_or_else(|e| {
                     error!("cannot send end of input buffer notification: {:#}", e)
                 }),
@@ -131,6 +134,8 @@ pub struct FfmpegDecoderSession {
 enum TrySendFrameError {
     #[error("error while converting frame: {0}")]
     CannotConvertFrame(#[from] ConversionError),
+    #[error("error while constructing AvFrame: {0}")]
+    IntoAvFrame(#[from] GuestResourceToAvFrameError),
     #[error("error while sending picture ready event: {0}")]
     BrokenPipe(#[from] base::Error),
 }
@@ -287,7 +292,7 @@ impl FfmpegDecoderSession {
         };
 
         match self.context.try_receive_frame(&mut avframe) {
-            Ok(TryReceiveFrameResult::Received) => {
+            Ok(TryReceiveResult::Received) => {
                 // Now check whether the resolution of the stream has changed.
                 let new_visible_res = (avframe.width as usize, avframe.height as usize);
                 if new_visible_res != self.current_visible_res {
@@ -298,12 +303,12 @@ impl FfmpegDecoderSession {
 
                 Ok(true)
             }
-            Ok(TryReceiveFrameResult::TryAgain) => {
+            Ok(TryReceiveResult::TryAgain) => {
                 if self.is_flushing {
                     // Start flushing. `try_receive_frame` will return `FlushCompleted` when the
                     // flush is completed. `TryAgain` will not be returned again until the flush is
                     // completed.
-                    match self.context.flush() {
+                    match self.context.flush_decoder() {
                         // Call ourselves again so we can process the flush.
                         Ok(()) => self.try_receive_frame(),
                         Err(err) => {
@@ -319,10 +324,15 @@ impl FfmpegDecoderSession {
                     Ok(false)
                 }
             }
-            Ok(TryReceiveFrameResult::FlushCompleted) => {
+            Ok(TryReceiveResult::FlushCompleted) => {
                 self.is_flushing = false;
                 self.queue_event(DecoderEvent::FlushCompleted(Ok(())))?;
                 self.context.reset();
+                Ok(false)
+            }
+            // If we got invalid data, keep going in hope that we will catch a valid state later.
+            Err(AvError(AVERROR_INVALIDDATA)) => {
+                warn!("Invalid data in stream, ignoring...");
                 Ok(false)
             }
             Err(av_err) => {
@@ -376,7 +386,7 @@ impl FfmpegDecoderSession {
         let avframe_ref = avframe.as_ref();
         let picture_ready_event = DecoderEvent::PictureReady {
             picture_buffer_id: picture_buffer_id as i32,
-            bitstream_id: avframe_ref.pts as i32,
+            timestamp: avframe_ref.pts as u64,
             visible_rect: Rect {
                 left: 0,
                 top: 0,
@@ -386,7 +396,10 @@ impl FfmpegDecoderSession {
         };
 
         // Convert the frame into the target buffer and emit the picture ready event.
-        format_converter.convert(&avframe, target_buffer)?;
+        format_converter.convert(
+            &avframe,
+            &mut target_buffer.try_as_av_frame(MemoryMappingAvBufferSource::from)?,
+        )?;
         self.event_queue.queue_event(picture_ready_event)?;
 
         Ok(true)
@@ -408,13 +421,14 @@ impl FfmpegDecoderSession {
 impl DecoderSession for FfmpegDecoderSession {
     fn set_output_parameters(&mut self, buffer_count: usize, format: Format) -> VideoResult<()> {
         match self.state {
+            // It is valid to set an output format before the the initial DRC, but we won't do
+            // anything with it.
+            SessionState::AwaitingInitialResolution => Ok(()),
             SessionState::AwaitingBufferCount | SessionState::Drc => {
                 let avcontext = self.context.as_ref();
 
-                let dst_pix_format = match format {
-                    Format::NV12 => AVPixelFormat_AV_PIX_FMT_NV12,
-                    _ => return Err(VideoError::InvalidFormat),
-                };
+                let dst_pix_format: AvPixelFormat =
+                    format.try_into().map_err(|_| VideoError::InvalidFormat)?;
 
                 self.state = SessionState::Decoding {
                     output_queue: OutputQueue::new(buffer_count),
@@ -422,7 +436,7 @@ impl DecoderSession for FfmpegDecoderSession {
                         avcontext.width as usize,
                         avcontext.height as usize,
                         avcontext.pix_fmt as i32,
-                        dst_pix_format,
+                        dst_pix_format.pix_fmt(),
                     )
                     .context("while setting output parameters")
                     .map_err(VideoError::BackendFailure)?,
@@ -437,7 +451,8 @@ impl DecoderSession for FfmpegDecoderSession {
 
     fn decode(
         &mut self,
-        bitstream_id: i32,
+        resource_id: u32,
+        timestamp: u64,
         resource: GuestResourceHandle,
         offset: u32,
         bytes_used: u32,
@@ -447,13 +462,15 @@ impl DecoderSession for FfmpegDecoderSession {
                 .get_mapping(offset as usize, bytes_used as usize)
                 .context("while mapping input buffer")
                 .map_err(VideoError::BackendFailure)?,
-            bitstream_id,
+            resource_id,
             event_queue: Arc::downgrade(&self.event_queue),
         };
 
-        let avpacket = AvPacket::new_owned(bitstream_id as i64, input_buffer)
+        let avbuffer = AvBuffer::new(input_buffer)
             .context("while creating AvPacket")
             .map_err(VideoError::BackendFailure)?;
+
+        let avpacket = AvPacket::new_owned(timestamp as i64, avbuffer);
 
         self.codec_jobs.push_back(CodecJob::Packet(avpacket));
 
@@ -523,6 +540,9 @@ impl DecoderSession for FfmpegDecoderSession {
         resource: GuestResource,
     ) -> VideoResult<()> {
         let output_queue = match &mut self.state {
+            // It is valid to receive buffers before the the initial DRC, but we won't decode
+            // anything into them.
+            SessionState::AwaitingInitialResolution => return Ok(()),
             SessionState::Decoding { output_queue, .. } => output_queue,
             // Receiving buffers during DRC is valid, but we won't use them and can just drop them.
             SessionState::Drc => return Ok(()),
@@ -543,6 +563,9 @@ impl DecoderSession for FfmpegDecoderSession {
 
     fn reuse_output_buffer(&mut self, picture_buffer_id: i32) -> VideoResult<()> {
         let output_queue = match &mut self.state {
+            // It is valid to receive buffers before the the initial DRC, but we won't decode
+            // anything into them.
+            SessionState::AwaitingInitialResolution => return Ok(()),
             SessionState::Decoding { output_queue, .. } => output_queue,
             // Reusing buffers during DRC is valid, but we won't use them and can just drop them.
             SessionState::Drc => return Ok(()),
@@ -705,6 +728,7 @@ impl DecoderBackend for FfmpegDecoder {
                     },
                     bitrates: Default::default(),
                 }],
+                plane_align: max_buffer_alignment() as u32,
             });
         }
 
@@ -730,6 +754,7 @@ impl DecoderBackend for FfmpegDecoder {
                     },
                     bitrates: Default::default(),
                 }],
+                plane_align: max_buffer_alignment() as u32,
             })
             .collect::<Vec<_>>();
 
@@ -742,7 +767,8 @@ impl DecoderBackend for FfmpegDecoder {
             // TODO we should use a custom `get_buffer` function that renders directly into the
             // target buffer if the output format is directly supported by libavcodec. Right now
             // libavcodec is allocating its own frame buffers, which forces us to perform a copy.
-            .open(None)
+            .build_decoder()
+            .and_then(|b| b.build())
             .context("while creating new session")
             .map_err(VideoError::BackendFailure)?;
         Ok(FfmpegDecoderSession {
@@ -764,79 +790,8 @@ impl DecoderBackend for FfmpegDecoder {
 
 #[cfg(test)]
 mod tests {
-    use base::FromRawDescriptor;
-    use base::MappedRegion;
-    use base::MemoryMappingBuilder;
-    use base::SafeDescriptor;
-    use base::SharedMemory;
-
+    use super::super::tests::*;
     use super::*;
-    use crate::virtio::video::format::FramePlane;
-    use crate::virtio::video::resource::GuestMemArea;
-    use crate::virtio::video::resource::GuestMemHandle;
-    use crate::virtio::video::resource::VirtioObjectHandle;
-
-    // Test video stream and its properties.
-    const H264_STREAM: &[u8] = include_bytes!("test-25fps.h264");
-    const H264_STREAM_WIDTH: i32 = 320;
-    const H264_STREAM_HEIGHT: i32 = 240;
-    const H264_STREAM_NUM_FRAMES: usize = 250;
-    const H264_STREAM_CRCS: &str = include_str!("test-25fps.crc");
-
-    /// Splits a H.264 annex B stream into chunks that are all guaranteed to contain a full frame
-    /// worth of data.
-    ///
-    /// This is a pretty naive implementation that is only guaranteed to work with our test stream.
-    /// We are not using `AVCodecParser` because it seems to modify the decoding context, which
-    /// would result in testing conditions that diverge more from our real use case where parsing
-    /// has already been done.
-    struct H264NalIterator<'a> {
-        stream: &'a [u8],
-        pos: usize,
-    }
-
-    impl<'a> H264NalIterator<'a> {
-        fn new(stream: &'a [u8]) -> Self {
-            Self { stream, pos: 0 }
-        }
-
-        /// Returns the position of the start of the next frame in the stream.
-        fn next_frame_pos(&self) -> Option<usize> {
-            const H264_START_CODE: [u8; 4] = [0x0, 0x0, 0x0, 0x1];
-            self.stream[self.pos + 1..]
-                .windows(H264_START_CODE.len())
-                .position(|window| window == H264_START_CODE)
-                .map(|pos| self.pos + pos + 1)
-        }
-
-        /// Returns whether `slice` contains frame data, i.e. a header where the NAL unit type is
-        /// 0x1 or 0x5.
-        fn contains_frame(slice: &[u8]) -> bool {
-            slice[4..].windows(4).any(|window| {
-                window[0..3] == [0x0, 0x0, 0x1]
-                    && (window[3] & 0x1f == 0x5 || window[3] & 0x1f == 0x1)
-            })
-        }
-    }
-
-    impl<'a> Iterator for H264NalIterator<'a> {
-        type Item = &'a [u8];
-
-        fn next(&mut self) -> Option<Self::Item> {
-            match self.pos {
-                cur_pos if cur_pos == self.stream.len() => None,
-                cur_pos => loop {
-                    self.pos = self.next_frame_pos().unwrap_or(self.stream.len());
-                    let slice = &self.stream[cur_pos..self.pos];
-
-                    // Keep advancing as long as we don't have frame data in our slice.
-                    if Self::contains_frame(slice) || self.pos == self.stream.len() {
-                        return Some(slice);
-                    }
-                },
-            }
-        }
-    }
 
     #[test]
     fn test_get_capabilities() {
@@ -846,232 +801,42 @@ mod tests {
         assert!(!caps.output_formats().is_empty());
     }
 
-    // Build a virtio object handle from a linear memory area. This is useful to emulate the
-    // scenario where we are decoding from or into virtio objects.
-    fn build_object_handle(mem: &SharedMemory) -> GuestResourceHandle {
-        GuestResourceHandle::VirtioObject(VirtioObjectHandle {
-            // Safe because we are taking ownership of a just-duplicated FD.
-            desc: unsafe {
-                SafeDescriptor::from_raw_descriptor(base::clone_descriptor(mem).unwrap())
-            },
-            modifier: 0,
-        })
-    }
-
-    // Build a guest memory handle from a linear memory area. This is useful to emulate the
-    // scenario where we are decoding from or into guest memory.
-    fn build_guest_mem_handle(mem: &SharedMemory) -> GuestResourceHandle {
-        GuestResourceHandle::GuestPages(GuestMemHandle {
-            // Safe because we are taking ownership of a just-duplicated FD.
-            desc: unsafe {
-                SafeDescriptor::from_raw_descriptor(base::clone_descriptor(mem).unwrap())
-            },
-            mem_areas: vec![GuestMemArea {
-                offset: 0,
-                length: mem.size() as usize,
-            }],
-        })
-    }
-
-    // Full decoding test of a H.264 video, checking that the flow of events is happening as
-    // expected. Input and output buffers are both backed by shared memory mimicking a virtio
-    // object.
-    fn decode_generic<I, O>(input_resource_builder: I, output_resource_builder: O)
-    where
-        I: Fn(&SharedMemory) -> GuestResourceHandle,
-        O: Fn(&SharedMemory) -> GuestResourceHandle,
-    {
-        const NUM_OUTPUT_BUFFERS: usize = 4;
-        const INPUT_BUF_SIZE: usize = 0x4000;
-        const OUTPUT_BUFFER_SIZE: usize =
-            (H264_STREAM_WIDTH * (H264_STREAM_HEIGHT + H264_STREAM_HEIGHT / 2)) as usize;
-        let mut decoder = FfmpegDecoder::new();
-        let mut session = decoder
-            .new_session(Format::H264)
-            .expect("failed to create H264 decoding session.");
-        // Output buffers suitable for receiving NV12 frames for our stream.
-        let output_buffers = (0..NUM_OUTPUT_BUFFERS)
-            .into_iter()
-            .map(|i| {
-                SharedMemory::new(
-                    format!("video-output-buffer-{}", i),
-                    OUTPUT_BUFFER_SIZE as u64,
-                )
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let input_shm = SharedMemory::new("video-input-buffer", INPUT_BUF_SIZE as u64).unwrap();
-        let input_mapping = MemoryMappingBuilder::new(input_shm.size() as usize)
-            .from_shared_memory(&input_shm)
-            .build()
-            .unwrap();
-
-        let mut decoded_frames_count = 0usize;
-        let mut expected_frames_crcs = H264_STREAM_CRCS.lines();
-
-        let mut on_frame_decoded =
-            |session: &mut FfmpegDecoderSession, picture_buffer_id: i32, visible_rect: Rect| {
-                assert_eq!(
-                    visible_rect,
-                    Rect {
-                        left: 0,
-                        top: 0,
-                        right: H264_STREAM_WIDTH,
-                        bottom: H264_STREAM_HEIGHT,
-                    }
-                );
-
-                // Verify that the CRC of the decoded frame matches the expected one.
-                let mapping = MemoryMappingBuilder::new(OUTPUT_BUFFER_SIZE)
-                    .from_shared_memory(&output_buffers[picture_buffer_id as usize])
-                    .build()
-                    .unwrap();
-                let mut frame_data = vec![0u8; mapping.size()];
-                assert_eq!(
-                    mapping.read_slice(&mut frame_data, 0).unwrap(),
-                    mapping.size()
-                );
-
-                let mut hasher = crc32fast::Hasher::new();
-                hasher.update(&frame_data);
-                let frame_crc = hasher.finalize();
-                assert_eq!(
-                    format!("{:08x}", frame_crc),
-                    expected_frames_crcs
-                        .next()
-                        .expect("No CRC for decoded frame")
-                );
-
-                // We can recycle the frame now.
-                session.reuse_output_buffer(picture_buffer_id).unwrap();
-                decoded_frames_count += 1;
-            };
-
-        for (input_id, slice) in H264NalIterator::new(H264_STREAM).enumerate() {
-            let buffer_handle = input_resource_builder(&input_shm);
-            input_mapping
-                .write_slice(slice, 0)
-                .expect("Failed to write stream data into input buffer.");
-            session
-                .decode(input_id as i32, buffer_handle, 0, slice.len() as u32)
-                .expect("Call to decode() failed.");
-
-            assert!(
-                matches!(session.read_event().unwrap(), DecoderEvent::NotifyEndOfBitstreamBuffer(index) if index == input_id as i32)
-            );
-
-            // After sending the first buffer we should get the initial resolution change event and
-            // can provide the frames to decode into.
-            if input_id == 0 {
-                assert!(matches!(
-                    session.read_event().unwrap(),
-                    DecoderEvent::ProvidePictureBuffers {
-                        min_num_buffers: 3,
-                        width: H264_STREAM_WIDTH,
-                        height: H264_STREAM_HEIGHT,
-                        visible_rect: Rect {
-                            left: 0,
-                            top: 0,
-                            right: H264_STREAM_WIDTH,
-                            bottom: H264_STREAM_HEIGHT,
-                        },
-                    }
-                ));
-
-                session
-                    .set_output_parameters(NUM_OUTPUT_BUFFERS, Format::NV12)
-                    .unwrap();
-
-                // Pass the buffers we will decode into.
-                for (picture_buffer_id, buffer) in output_buffers.iter().enumerate() {
-                    session
-                        .use_output_buffer(
-                            picture_buffer_id as i32,
-                            GuestResource {
-                                handle: output_resource_builder(buffer),
-                                planes: vec![
-                                    FramePlane {
-                                        offset: 0,
-                                        stride: H264_STREAM_WIDTH as usize,
-                                    },
-                                    FramePlane {
-                                        offset: (H264_STREAM_WIDTH * H264_STREAM_HEIGHT) as usize,
-                                        stride: H264_STREAM_WIDTH as usize,
-                                    },
-                                ],
-                            },
-                        )
-                        .unwrap();
-                }
-            }
-
-            // If we have remaining events, they must be decoded frames. Get them and recycle them.
-            while session.event_queue.len() > 0 {
-                match session.read_event().unwrap() {
-                    DecoderEvent::PictureReady {
-                        picture_buffer_id,
-                        visible_rect,
-                        ..
-                    } => on_frame_decoded(&mut session, picture_buffer_id, visible_rect),
-                    e => panic!("Unexpected event: {:?}", e),
-                }
-            }
-
-            // We should have read all the pending events for that frame.
-            assert_eq!(session.event_queue.len(), 0);
-        }
-
-        session.flush().unwrap();
-
-        // Keep getting frames until the final event, which should be `FlushCompleted`.
-        while session.event_queue.len() > 1 {
-            match session.read_event().unwrap() {
-                DecoderEvent::PictureReady {
-                    picture_buffer_id,
-                    visible_rect,
-                    ..
-                } => on_frame_decoded(&mut session, picture_buffer_id, visible_rect),
-                e => panic!("Unexpected event: {:?}", e),
-            }
-        }
-
-        // Get the FlushCompleted event.
-        assert!(matches!(
-            session.read_event().unwrap(),
-            DecoderEvent::FlushCompleted(Ok(()))
-        ));
-
-        // We should not be expecting any more frame
-        assert_eq!(expected_frames_crcs.next(), None);
-
-        // We should have read all the events for that session.
-        assert_eq!(session.event_queue.len(), 0);
-
-        // Check that we decoded the expected number of frames.
-        assert_eq!(decoded_frames_count, H264_STREAM_NUM_FRAMES);
-    }
-
-    // Decode using guest memory input and output buffers.
     #[test]
-    fn test_decode_guestmem_to_guestmem() {
-        decode_generic(build_guest_mem_handle, build_guest_mem_handle);
+    fn test_decode_h264_guestmem_to_guestmem() {
+        decode_h264_generic(
+            &mut FfmpegDecoder::new(),
+            build_guest_mem_handle,
+            build_guest_mem_handle,
+        );
     }
 
     // Decode using guest memory input and virtio object output buffers.
     #[test]
-    fn test_decode_guestmem_to_object() {
-        decode_generic(build_guest_mem_handle, build_object_handle);
+    fn test_decode_h264_guestmem_to_object() {
+        decode_h264_generic(
+            &mut FfmpegDecoder::new(),
+            build_guest_mem_handle,
+            build_object_handle,
+        );
     }
 
     // Decode using virtio object input and guest memory output buffers.
     #[test]
-    fn test_decode_object_to_guestmem() {
-        decode_generic(build_object_handle, build_guest_mem_handle);
+    fn test_decode_h264_object_to_guestmem() {
+        decode_h264_generic(
+            &mut FfmpegDecoder::new(),
+            build_object_handle,
+            build_guest_mem_handle,
+        );
     }
 
     // Decode using virtio object input and output buffers.
     #[test]
-    fn test_decode_object_to_object() {
-        decode_generic(build_object_handle, build_object_handle);
+    fn test_decode_h264_object_to_object() {
+        decode_h264_generic(
+            &mut FfmpegDecoder::new(),
+            build_object_handle,
+            build_object_handle,
+        );
     }
 }

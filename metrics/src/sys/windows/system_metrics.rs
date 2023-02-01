@@ -1,8 +1,9 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::mem;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -344,30 +345,33 @@ impl Worker {
     }
 
     fn mem_metrics_string(&self) -> String {
-        let mut buf: String;
         let guard = self.memory.lock().unwrap();
         let memory: ProcessMemory = *guard;
-        buf = format!(
+        let mut buf = format!(
             "Physical memory used: {} mb.\n",
             memory.physical / BYTES_PER_MB
         );
-        buf.push_str(&format!(
-            "Total working memory: {} mb.\n",
+        let _ = writeln!(
+            buf,
+            "Total working memory: {} mb.",
             memory.working_set_size / BYTES_PER_MB
-        ));
-        buf.push_str(&format!(
-            "Peak working memory: {} mb.\n",
+        );
+        let _ = writeln!(
+            buf,
+            "Peak working memory: {} mb.",
             memory.working_set_peak / BYTES_PER_MB
-        ));
-        buf.push_str(&format!("Page fault count: {}.\n", memory.page_fault_count));
-        buf.push_str(&format!(
-            "Page file used: {} mb.\n",
+        );
+        let _ = writeln!(buf, "Page fault count: {}.", memory.page_fault_count);
+        let _ = writeln!(
+            buf,
+            "Page file used: {} mb.",
             memory.page_file_usage / BYTES_PER_MB
-        ));
-        buf.push_str(&format!(
-            "Peak page file used: {} mb.\n",
+        );
+        let _ = writeln!(
+            buf,
+            "Peak page file used: {} mb.",
             memory.page_file_peak / BYTES_PER_MB
-        ));
+        );
         buf
     }
 
@@ -399,44 +403,51 @@ impl Worker {
             if total_systime > 0 {
                 process_cpu = format!("{}%", (100 * total_processtime / total_systime));
             }
-            buf.push_str(&format!("Process cpu usage is: {}\n", process_cpu));
+            let _ = writeln!(buf, "Process cpu usage is: {}", process_cpu);
 
             #[cfg(debug_assertions)]
             {
                 // Show data supporting our cpu usage calculation.
                 // Output system cpu time.
-                buf.push_str(&format!(
-                    "Systime Idle: low {} / high {}\n",
+                let _ = writeln!(
+                    buf,
+                    "Systime Idle: low {} / high {}",
                     sys_time.idle.dwLowDateTime, sys_time.idle.dwHighDateTime
-                ));
-                buf.push_str(&format!(
-                    "Systime User: low {} / high {}\n",
+                );
+                let _ = writeln!(
+                    buf,
+                    "Systime User: low {} / high {}",
                     sys_time.user.dwLowDateTime, sys_time.user.dwHighDateTime
-                ));
-                buf.push_str(&format!(
-                    "Systime kernel: low {} / high {}\n",
+                );
+                let _ = writeln!(
+                    buf,
+                    "Systime kernel: low {} / high {}",
                     sys_time.kernel.dwLowDateTime, sys_time.kernel.dwHighDateTime
-                ));
+                );
                 // Output process cpu time.
-                buf.push_str(&format!(
-                    "Process Create: low {} / high {}\n",
+                let _ = writeln!(
+                    buf,
+                    "Process Create: low {} / high {}",
                     process_time.create.dwLowDateTime, process_time.create.dwHighDateTime
-                ));
-                buf.push_str(&format!(
-                    "Process Exit: low {} / high {}\n",
+                );
+                let _ = writeln!(
+                    buf,
+                    "Process Exit: low {} / high {}",
                     process_time.exit.dwLowDateTime, process_time.exit.dwHighDateTime
-                ));
-                buf.push_str(&format!(
-                    "Process kernel: low {} / high {}\n",
+                );
+                let _ = writeln!(
+                    buf,
+                    "Process kernel: low {} / high {}",
                     process_time.kernel.dwLowDateTime, process_time.kernel.dwHighDateTime
-                ));
-                buf.push_str(&format!(
-                    "Process user: low {} / high {}\n",
+                );
+                let _ = writeln!(
+                    buf,
+                    "Process user: low {} / high {}",
                     process_time.user.dwLowDateTime, process_time.user.dwHighDateTime
-                ));
+                );
             }
         } else {
-            buf.push_str("Calculating cpu usage...");
+            let _ = write!(buf, "Calculating cpu usage...");
         }
         buf
     }
@@ -592,7 +603,7 @@ impl CoreWinMetrics {
 impl Drop for CoreWinMetrics {
     fn drop(&mut self) {
         if let Some(join_handle) = self.worker_thread.take() {
-            let _ = self.exit_evt.write(1);
+            let _ = self.exit_evt.signal();
             join_handle
                 .join()
                 .expect("fail to join the worker thread of a win core metrics collector.");

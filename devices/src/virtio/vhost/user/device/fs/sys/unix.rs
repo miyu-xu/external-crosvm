@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -63,13 +63,21 @@ fn jail_and_fork(
     j.set_rlimit(libc::RLIMIT_MEMLOCK as i32, 1 << 20, 1 << 20)?;
 
     // Make sure there are no duplicates in keep_rds
+    keep_rds.sort_unstable();
     keep_rds.dedup();
+
+    let tz = std::env::var("TZ").unwrap_or_default();
 
     // fork on the jail here
     let pid = unsafe { j.fork(Some(&keep_rds))? };
 
     if pid > 0 {
         unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+    }
+
+    if pid == 0 {
+        // Preserve TZ for `chrono::Local` (b/257987535).
+        std::env::set_var("TZ", tz);
     }
 
     if pid < 0 {
@@ -94,6 +102,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
     )?;
 
     base::syslog::push_descriptors(&mut keep_rds);
+    cros_tracing::push_descriptors!(&mut keep_rds);
 
     let pid = jail_and_fork(keep_rds, opts.shared_dir, opts.uid_map, opts.gid_map)?;
 

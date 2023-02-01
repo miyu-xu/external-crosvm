@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,18 +36,24 @@ use crate::sys::serial_device::*;
 pub enum Error {
     #[error("Unable to clone an Event: {0}")]
     CloneEvent(base::Error),
-    #[error("Unable to open/create file: {0}")]
-    FileError(std::io::Error),
-    #[error("Serial device path is invalid")]
-    InvalidPath,
+    #[error("Unable to clone file: {0}")]
+    FileClone(std::io::Error),
+    #[error("Unable to create file '{1}': {0}")]
+    FileCreate(std::io::Error, PathBuf),
+    #[error("Unable to open file '{1}': {0}")]
+    FileOpen(std::io::Error, PathBuf),
+    #[error("Serial device path '{0} is invalid")]
+    InvalidPath(PathBuf),
     #[error("Invalid serial hardware: {0}")]
     InvalidSerialHardware(String),
     #[error("Invalid serial type: {0}")]
     InvalidSerialType(String),
     #[error("Serial device type file requires a path")]
     PathRequired,
-    #[error("Failed to create unbound socket")]
-    SocketCreateFailed,
+    #[error("Failed to connect to socket: {0}")]
+    SocketConnect(std::io::Error),
+    #[error("Failed to create unbound socket: {0}")]
+    SocketCreate(std::io::Error),
     #[error("Unable to open system type serial: {0}")]
     SystemTypeError(std::io::Error),
     #[error("Serial device type {0} not implemented")]
@@ -61,7 +67,7 @@ impl SerialInput for File {}
 impl SerialInput for WinConsole {}
 
 /// Enum for possible type of serial devices
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SerialType {
     File,
@@ -125,12 +131,12 @@ fn serial_parameters_default_num() -> u8 {
 }
 
 fn serial_parameters_default_debugcon_port() -> u16 {
-    // Default to the port bochs uses.
-    0xe9
+    // Default to the port OVMF expects.
+    0x402
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, FromKeyValues)]
-#[serde(deny_unknown_fields, default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case", default)]
 pub struct SerialParameters {
     #[serde(rename = "type")]
     pub type_: SerialType,
@@ -142,8 +148,12 @@ pub struct SerialParameters {
     pub console: bool,
     pub earlycon: bool,
     pub stdin: bool,
+    #[serde(alias = "out_timestamp")]
     pub out_timestamp: bool,
-    #[serde(default = "serial_parameters_default_debugcon_port")]
+    #[serde(
+        alias = "debugcon_port",
+        default = "serial_parameters_default_debugcon_port"
+    )]
     pub debugcon_port: u16,
 }
 
@@ -156,17 +166,18 @@ impl SerialParameters {
     ///                process. `evt` will always be added to this vector by this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
-        protected_vm: ProtectionType,
+        protection_type: ProtectionType,
         evt: &Event,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> std::result::Result<T, Error> {
         let evt = evt.try_clone().map_err(Error::CloneEvent)?;
         keep_rds.push(evt.as_raw_descriptor());
+        cros_tracing::push_descriptors!(keep_rds);
         let input: Option<Box<dyn SerialInput>> = if let Some(input_path) = &self.input {
             let input_path = input_path.as_path();
 
             let input_file = open_file(input_path, OpenOptions::new().read(true))
-                .map_err(|e| Error::FileError(e.into()))?;
+                .map_err(|e| Error::FileOpen(e.into(), input_path.into()))?;
 
             keep_rds.push(input_file.as_raw_descriptor());
             Some(Box::new(input_file))
@@ -195,8 +206,8 @@ impl SerialParameters {
             SerialType::File => match &self.path {
                 Some(path) => {
                     let file = open_file(path, OpenOptions::new().append(true).create(true))
-                        .map_err(|e| Error::FileError(e.into()))?;
-                    let sync = file.try_clone().map_err(Error::FileError)?;
+                        .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
+                    let sync = file.try_clone().map_err(Error::FileClone)?;
 
                     keep_rds.push(file.as_raw_descriptor());
                     keep_rds.push(sync.as_raw_descriptor());
@@ -206,11 +217,17 @@ impl SerialParameters {
                 None => return Err(Error::PathRequired),
             },
             SerialType::SystemSerialType => {
-                return create_system_type_serial_device(self, protected_vm, evt, input, keep_rds);
+                return create_system_type_serial_device(
+                    self,
+                    protection_type,
+                    evt,
+                    input,
+                    keep_rds,
+                );
             }
         };
         Ok(T::new(
-            protected_vm,
+            protection_type,
             evt,
             input,
             output,
@@ -247,7 +264,7 @@ mod tests {
                 earlycon: false,
                 stdin: false,
                 out_timestamp: false,
-                debugcon_port: 0xe9,
+                debugcon_port: 0x402,
             }
         );
 
@@ -321,17 +338,23 @@ mod tests {
         let params = from_serial_arg("stdin=foobar");
         assert!(params.is_err());
 
-        // out_timestamp parameter
-        let params = from_serial_arg("out_timestamp").unwrap();
+        // out-timestamp parameter
+        let params = from_serial_arg("out-timestamp").unwrap();
         assert!(params.out_timestamp);
+        let params = from_serial_arg("out-timestamp=true").unwrap();
+        assert!(params.out_timestamp);
+        let params = from_serial_arg("out-timestamp=false").unwrap();
+        assert!(!params.out_timestamp);
+        let params = from_serial_arg("out-timestamp=foobar");
+        assert!(params.is_err());
+        // backward compatibility
         let params = from_serial_arg("out_timestamp=true").unwrap();
         assert!(params.out_timestamp);
-        let params = from_serial_arg("out_timestamp=false").unwrap();
-        assert!(!params.out_timestamp);
-        let params = from_serial_arg("out_timestamp=foobar");
-        assert!(params.is_err());
 
-        // debugcon port parameter
+        // debugcon-port parameter
+        let params = from_serial_arg("debugcon-port=1026").unwrap();
+        assert_eq!(params.debugcon_port, 1026);
+        // backward compatibility
         let params = from_serial_arg("debugcon_port=1026").unwrap();
         assert_eq!(params.debugcon_port, 1026);
 

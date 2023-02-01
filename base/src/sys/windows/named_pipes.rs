@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -52,12 +52,12 @@ use winapi::um::winbase::PIPE_TYPE_MESSAGE;
 use winapi::um::winbase::PIPE_WAIT;
 use winapi::um::winbase::SECURITY_IDENTIFICATION;
 
-use super::Event;
 use super::RawDescriptor;
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::IntoRawDescriptor;
 use crate::descriptor::SafeDescriptor;
+use crate::Event;
 
 /// The default buffer size for all named pipes in the system. If this size is too small, writers
 /// on named pipes that expect not to block *can* block until the reading side empties the buffer.
@@ -599,9 +599,7 @@ impl PipeConnection {
                 // ERROR_IO_PENDING, according the to docs, isn't really an error. This just means
                 // that the ReadFile operation hasn't completed. In this case,
                 // `get_overlapped_result` will wait until the operation is completed.
-                Some(error_code) if error_code == ERROR_IO_PENDING as i32 && is_overlapped => {
-                    return Ok(0);
-                }
+                Some(error_code) if error_code == ERROR_IO_PENDING as i32 && is_overlapped => Ok(0),
                 _ => Err(e),
             }
         } else {

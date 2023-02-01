@@ -1,16 +1,13 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::Context;
 use base::error;
 use base::AsRawDescriptor;
@@ -33,6 +30,7 @@ use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER_OK;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FAILED;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FEATURES_OK;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_NEEDS_RESET;
 use vm_control::MemSlot;
 use vm_control::VmMemoryDestination;
 use vm_control::VmMemoryRequest;
@@ -64,6 +62,7 @@ use crate::pci::PciInterruptPin;
 use crate::pci::PciSubclass;
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
 use crate::IrqLevelEvent;
+use crate::Suspendable;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, enumn::N)]
@@ -281,7 +280,7 @@ pub struct VirtioPciDevice {
     device_activated: bool,
     disable_intx: bool,
 
-    interrupt_status: Arc<AtomicUsize>,
+    interrupt: Option<Interrupt>,
     interrupt_evt: Option<IrqLevelEvent>,
     queues: Vec<Queue>,
     queue_evts: Vec<Event>,
@@ -366,7 +365,7 @@ impl VirtioPciDevice {
             device,
             device_activated: false,
             disable_intx,
-            interrupt_status: Arc::new(AtomicUsize::new(0)),
+            interrupt: None,
             interrupt_evt: None,
             queues,
             queue_evts,
@@ -399,14 +398,6 @@ impl VirtioPciDevice {
     /// Determines if the driver has requested the device reset itself
     fn is_reset_requested(&self) -> bool {
         self.common_config.driver_status == DEVICE_RESET as u8
-    }
-
-    fn are_queues_valid(&mut self) -> bool {
-        // All queues marked as ready must be valid.
-        self.queues
-            .iter_mut()
-            .filter(|q| q.ready())
-            .all(|q| q.is_valid(&self.mem))
     }
 
     fn add_settings_pci_capabilities(
@@ -479,10 +470,6 @@ impl VirtioPciDevice {
         Ok(())
     }
 
-    fn clone_queue_evts(&self) -> Result<Vec<Event>> {
-        self.queue_evts.iter().map(|e| e.try_clone()).collect()
-    }
-
     /// Activates the underlying `VirtioDevice`. `assign_irq` has to be called first.
     fn activate(&mut self) -> anyhow::Result<()> {
         let interrupt_evt = if let Some(ref evt) = self.interrupt_evt {
@@ -495,38 +482,37 @@ impl VirtioPciDevice {
         let mem = self.mem.clone();
 
         let interrupt = Interrupt::new(
-            self.interrupt_status.clone(),
             interrupt_evt,
             Some(self.msix_config.clone()),
             self.common_config.msix_config,
         );
+        self.interrupt = Some(interrupt.clone());
 
-        match self.clone_queue_evts() {
-            Ok(queue_evts) => {
-                // Use ready queues and their events.
-                let (queues, queue_evts) = self
-                    .queues
-                    .clone()
-                    .into_iter()
-                    .zip(queue_evts.into_iter())
-                    .filter(|(q, _)| q.ready())
-                    .unzip();
+        // Use ready queues and their events.
+        let queues = self
+            .queues
+            .iter_mut()
+            .zip(self.queue_evts.iter())
+            .filter(|(q, _)| q.ready())
+            .map(|(queue, evt)| {
+                Ok((
+                    queue.activate().context("failed to activate queue")?,
+                    evt.try_clone().context("failed to clone queue_evt")?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<(Queue, Event)>>>()?;
 
-                if let Some(iommu) = &self.iommu {
-                    self.device.set_iommu(iommu);
-                }
-
-                self.device.activate(mem, interrupt, queues, queue_evts);
-                self.device_activated = true;
-            }
-            Err(e) => {
-                bail!(
-                    "{} not activate due to failed to clone queue_evts: {}",
-                    self.debug_label(),
-                    e
-                );
-            }
+        if let Some(iommu) = &self.iommu {
+            self.device.set_iommu(iommu);
         }
+
+        if let Err(e) = self.device.activate(mem, interrupt, queues) {
+            error!("{} activate failed: {:#}", self.debug_label(), e);
+            self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
+        } else {
+            self.device_activated = true;
+        }
+
         Ok(())
     }
 }
@@ -590,21 +576,11 @@ impl PciDevice for VirtioPciDevice {
         rds
     }
 
-    fn assign_irq(
-        &mut self,
-        irq_evt: &IrqLevelEvent,
-        irq_num: Option<u32>,
-    ) -> Option<(u32, PciInterruptPin)> {
-        self.interrupt_evt = Some(irq_evt.try_clone().ok()?);
-        let gsi = irq_num?;
-        let pin = self.pci_address.map_or(
-            PciInterruptPin::IntA,
-            PciConfiguration::suggested_interrupt_pin,
-        );
+    fn assign_irq(&mut self, irq_evt: IrqLevelEvent, pin: PciInterruptPin, irq_num: u32) {
+        self.interrupt_evt = Some(irq_evt);
         if !self.disable_intx {
-            self.config_regs.set_irq(gsi as u8, pin);
+            self.config_regs.set_irq(irq_num as u8, pin);
         }
-        Some((gsi, pin))
     }
 
     fn allocate_io_bars(
@@ -796,7 +772,7 @@ impl PciDevice for VirtioPciDevice {
             }
         }
 
-        (&mut self.config_regs).write_reg(reg_idx, offset, data)
+        self.config_regs.write_reg(reg_idx, offset, data)
     }
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
@@ -821,7 +797,11 @@ impl PciDevice for VirtioPciDevice {
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.get_mut(0) {
                         // Reading this register resets it to 0.
-                        *v = self.interrupt_status.swap(0, Ordering::SeqCst) as u8;
+                        *v = if let Some(interrupt) = &self.interrupt {
+                            interrupt.read_and_reset_interrupt_status()
+                        } else {
+                            0
+                        };
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {
@@ -869,9 +849,10 @@ impl PciDevice for VirtioPciDevice {
                     self.device.as_mut(),
                 ),
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
-                    if let Some(v) = data.get(0) {
-                        self.interrupt_status
-                            .fetch_and(!(*v as usize), Ordering::SeqCst);
+                    if let Some(v) = data.first() {
+                        if let Some(interrupt) = &self.interrupt {
+                            interrupt.clear_interrupt_status_bits(*v);
+                        }
                     }
                 }
                 DEVICE_CONFIG_BAR_OFFSET..=DEVICE_CONFIG_LAST => {
@@ -907,10 +888,8 @@ impl PciDevice for VirtioPciDevice {
                 }
             }
 
-            if self.are_queues_valid() {
-                if let Err(e) = self.activate() {
-                    error!("failed to activate device: {:#}", e);
-                }
+            if let Err(e) = self.activate() {
+                error!("failed to activate device: {:#}", e);
             }
         }
 
@@ -937,6 +916,24 @@ impl PciDevice for VirtioPciDevice {
         assert!(self.supports_iommu());
         self.iommu = Some(Arc::new(Mutex::new(iommu)));
         Ok(())
+    }
+}
+
+impl Suspendable for VirtioPciDevice {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        self.device.sleep()
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        self.device.wake()
+    }
+
+    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        self.device.snapshot()
+    }
+
+    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        self.device.restore(data)
     }
 }
 

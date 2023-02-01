@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@ use std::os::unix::prelude::OpenOptionsExt;
 use std::path::PathBuf;
 use std::thread;
 
+use anyhow::anyhow;
 use anyhow::Context;
 use base::error;
 use base::open_file;
@@ -25,17 +26,17 @@ use super::worker::Worker;
 use super::Error;
 use super::Result;
 use crate::virtio::copy_config;
+use crate::virtio::device_constants::vsock::NUM_QUEUES;
+use crate::virtio::device_constants::vsock::QUEUE_SIZES;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
+use crate::Suspendable;
 
-pub const QUEUE_SIZE: u16 = 256;
-const NUM_QUEUES: usize = 3;
-pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 static VHOST_VSOCK_DEFAULT_PATH: &str = "/dev/vhost-vsock";
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct VhostVsockConfig {
     pub device: Option<PathBuf>,
@@ -55,17 +56,24 @@ pub struct Vsock {
 impl Vsock {
     /// Create a new virtio-vsock device with the given VM cid.
     pub fn new(base_features: u64, vhost_config: &VhostVsockConfig) -> anyhow::Result<Vsock> {
+        let vhost_vsock_device_default = PathBuf::from(VHOST_VSOCK_DEFAULT_PATH);
+        let vhost_vsock_device = vhost_config
+            .device
+            .as_ref()
+            .unwrap_or(&vhost_vsock_device_default);
         let device_file = open_file(
-            vhost_config
-                .device
-                .as_ref()
-                .unwrap_or(&PathBuf::from(VHOST_VSOCK_DEFAULT_PATH)),
+            vhost_vsock_device,
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK),
         )
-        .context("failed to open virtual socket device")?;
+        .with_context(|| {
+            format!(
+                "failed to open virtual socket device {}",
+                vhost_vsock_device.display(),
+            )
+        })?;
 
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
         let handle = VhostVsockHandle::new(device_file);
@@ -111,7 +119,7 @@ impl Drop for Vsock {
         if self.worker_kill_evt.is_none() {
             if let Some(kill_evt) = &self.kill_evt {
                 // Ignore the result because there is nothing we can do about it.
-                let _ = kill_evt.write(1);
+                let _ = kill_evt.signal();
             }
         }
     }
@@ -173,57 +181,53 @@ impl VirtioDevice for Vsock {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != NUM_QUEUES || queue_evts.len() != NUM_QUEUES {
-            error!("net: expected {} queues, got {}", NUM_QUEUES, queues.len());
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != NUM_QUEUES {
+            return Err(anyhow!(
+                "net: expected {} queues, got {}",
+                NUM_QUEUES,
+                queues.len()
+            ));
         }
 
-        if let Some(vhost_handle) = self.vhost_handle.take() {
-            if let Some(interrupts) = self.interrupts.take() {
-                if let Some(kill_evt) = self.worker_kill_evt.take() {
-                    let acked_features = self.acked_features;
-                    let cid = self.cid;
-                    // The third vq is an event-only vq that is not handled by the vhost
-                    // subsystem (but still needs to exist).  Split it off here.
-                    let vhost_queues = queues[..2].to_vec();
-                    let mut worker = Worker::new(
-                        vhost_queues,
-                        vhost_handle,
-                        interrupts,
-                        interrupt,
-                        acked_features,
-                        kill_evt,
-                        None,
-                    );
-                    let activate_vqs = |handle: &VhostVsockHandle| -> Result<()> {
-                        handle.set_cid(cid).map_err(Error::VhostVsockSetCid)?;
-                        handle.start().map_err(Error::VhostVsockStart)?;
-                        Ok(())
-                    };
-                    let result = worker.init(mem, queue_evts, QUEUE_SIZES, activate_vqs);
-                    if let Err(e) = result {
-                        error!("vpipe worker thread exited with error: {:?}", e);
-                    }
-                    let worker_result = thread::Builder::new()
-                        .name("vhost_vsock".to_string())
-                        .spawn(move || {
-                            let cleanup_vqs = |_handle: &VhostVsockHandle| -> Result<()> { Ok(()) };
-                            let result = worker.run(cleanup_vqs);
-                            if let Err(e) = result {
-                                error!("vsock worker thread exited with error: {:?}", e);
-                            }
-                        });
-
-                    if let Err(e) = worker_result {
-                        error!("failed to spawn vhost_vsock worker: {}", e);
-                        return;
-                    }
+        let vhost_handle = self.vhost_handle.take().context("missing vhost_handle")?;
+        let interrupts = self.interrupts.take().context("missing interrupts")?;
+        let kill_evt = self.worker_kill_evt.take().context("missing kill_evt")?;
+        let acked_features = self.acked_features;
+        let cid = self.cid;
+        // The third vq is an event-only vq that is not handled by the vhost
+        // subsystem (but still needs to exist).  Split it off here.
+        let _event_queue = queues.remove(2);
+        let mut worker = Worker::new(
+            queues,
+            vhost_handle,
+            interrupts,
+            interrupt,
+            acked_features,
+            kill_evt,
+            None,
+            self.supports_iommu(),
+        );
+        let activate_vqs = |handle: &VhostVsockHandle| -> Result<()> {
+            handle.set_cid(cid).map_err(Error::VhostVsockSetCid)?;
+            handle.start().map_err(Error::VhostVsockStart)?;
+            Ok(())
+        };
+        worker
+            .init(mem, QUEUE_SIZES, activate_vqs)
+            .context("vsock worker init exited with error")?;
+        thread::Builder::new()
+            .name("vhost_vsock".to_string())
+            .spawn(move || {
+                let cleanup_vqs = |_handle: &VhostVsockHandle| -> Result<()> { Ok(()) };
+                let result = worker.run(cleanup_vqs);
+                if let Err(e) = result {
+                    error!("vsock worker thread exited with error: {:?}", e);
                 }
-            }
-        }
+            })
+            .context("failed to spawn vhost_vsock worker")?;
+        Ok(())
     }
 
     fn on_device_sandboxed(&mut self) {
@@ -238,6 +242,8 @@ impl VirtioDevice for Vsock {
         }
     }
 }
+
+impl Suspendable for Vsock {}
 
 #[cfg(test)]
 mod tests {

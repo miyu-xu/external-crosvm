@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,10 +19,10 @@ use crate::descriptor::AsRawDescriptor;
 #[macro_export]
 macro_rules! ioctl_expr {
     ($dir:expr, $ty:expr, $nr:expr, $size:expr) => {
-        (($dir << $crate::platform::ioctl::_IOC_DIRSHIFT)
-            | ($ty << $crate::platform::ioctl::_IOC_TYPESHIFT)
-            | ($nr << $crate::platform::ioctl::_IOC_NRSHIFT)
-            | ($size << $crate::platform::ioctl::_IOC_SIZESHIFT)) as $crate::platform::IoctlNr
+        ((($dir as $crate::platform::IoctlNr) << $crate::platform::ioctl::_IOC_DIRSHIFT)
+            | (($ty as $crate::platform::IoctlNr) << $crate::platform::ioctl::_IOC_TYPESHIFT)
+            | (($nr as $crate::platform::IoctlNr) << $crate::platform::ioctl::_IOC_NRSHIFT)
+            | (($size as $crate::platform::IoctlNr) << $crate::platform::ioctl::_IOC_SIZESHIFT))
     };
 }
 

@@ -1,8 +1,7 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cmp::min;
 use std::num::Wrapping;
 use std::sync::atomic::fence;
 use std::sync::atomic::Ordering;
@@ -40,6 +39,7 @@ const VIRTQ_DESC_F_WRITE: u16 = 0x2;
 #[allow(dead_code)]
 const VIRTQ_DESC_F_INDIRECT: u16 = 0x4;
 
+#[allow(dead_code)]
 const VIRTQ_USED_F_NO_NOTIFY: u16 = 0x1;
 #[allow(dead_code)]
 const VIRTQ_AVAIL_F_NO_INTERRUPT: u16 = 0x1;
@@ -210,11 +210,12 @@ impl DescriptorChain {
 
     fn is_valid(&self) -> bool {
         if self.len > 0 {
-            if self.regions.iter().any(|r| {
-                self.mem
-                    .checked_offset(r.gpa, r.len as u64 - 1u64)
-                    .is_none()
-            }) {
+            // Each region in `self.regions` must be a contiguous range in `self.mem`.
+            if !self
+                .regions
+                .iter()
+                .all(|r| self.mem.is_valid_range(r.gpa, r.len as u64))
+            {
                 return false;
             }
         }
@@ -295,25 +296,21 @@ impl<'a, 'b> Iterator for AvailIter<'a, 'b> {
     }
 }
 
-#[derive(Clone)]
 /// A virtio queue's parameters.
-///
-/// WARNING: it is NOT safe to clone and then use n>1 Queue(s) to interact with the same virtqueue.
-/// That will prevent descriptor index tracking from being accurate, which can cause incorrect
-/// interrupt masking.
-/// TODO(b/201119859) drop Clone from this struct.
 pub struct Queue {
-    /// The maximal size in elements offered by the device
-    pub max_size: u16,
+    /// Whether this queue has already been activated.
+    activated: bool,
 
-    /// The queue size in elements the driver selected
+    /// The maximal size in elements offered by the device
+    max_size: u16,
+
+    /// The queue size in elements the driver selected. This is always guaranteed to be a power of
+    /// two less than or equal to `max_size`, as required for split virtqueues. These invariants are
+    /// enforced by `set_size()`.
     size: u16,
 
     /// Inidcates if the queue is finished with configuration
     ready: bool,
-
-    /// Indicates that a ready queue's configuration has been validated successfully.
-    validated: bool,
 
     /// MSI-X vector for the queue. Don't care for INTx
     vector: u16,
@@ -333,11 +330,6 @@ pub struct Queue {
     // Device feature bits accepted by the driver
     features: u64,
     last_used: Wrapping<u16>,
-
-    // Count of notification disables. Users of the queue can disable guest notification while
-    // processing requests. This is the count of how many are in flight(could be several contexts
-    // handling requests in parallel). When this count is zero, notifications are re-enabled.
-    notification_disable_count: usize,
 
     iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
 
@@ -368,11 +360,12 @@ macro_rules! accessors {
 impl Queue {
     /// Constructs an empty virtio queue with the given `max_size`.
     pub fn new(max_size: u16) -> Queue {
+        assert!(max_size.is_power_of_two());
         Queue {
+            activated: false,
             max_size,
             size: max_size,
             ready: false,
-            validated: false,
             vector: VIRTIO_MSI_NO_VECTOR,
             desc_table: GuestAddress(0),
             avail_ring: GuestAddress(0),
@@ -381,7 +374,6 @@ impl Queue {
             next_used: Wrapping(0),
             features: 0,
             last_used: Wrapping(0),
-            notification_disable_count: 0,
             iommu: None,
             exported_desc_table: None,
             exported_avail_ring: None,
@@ -390,22 +382,120 @@ impl Queue {
     }
 
     accessors!(vector, u16, set_vector);
-    accessors!(size, u16, set_size);
-    accessors!(ready, bool, set_ready);
     accessors!(desc_table, GuestAddress, set_desc_table);
     accessors!(avail_ring, GuestAddress, set_avail_ring);
     accessors!(used_ring, GuestAddress, set_used_ring);
 
+    /// Return the maximum size of this queue.
+    pub fn max_size(&self) -> u16 {
+        self.max_size
+    }
+
     /// Return the actual size of the queue, as the driver may not set up a
     /// queue as big as the device allows.
-    pub fn actual_size(&self) -> u16 {
-        min(self.size, self.max_size)
+    pub fn size(&self) -> u16 {
+        self.size
+    }
+
+    /// Set the queue size requested by the driver, which may be smaller than the maximum size.
+    pub fn set_size(&mut self, val: u16) {
+        if self.ready {
+            warn!("ignoring write to queue_size on ready queue");
+            return;
+        }
+
+        if val > self.max_size || !val.is_power_of_two() {
+            warn!(
+                "ignoring invalid queue_size {} (max_size {})",
+                val, self.max_size,
+            );
+            return;
+        }
+
+        self.size = val;
+    }
+
+    /// Return whether the driver has enabled this queue.
+    pub fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// Signal that the driver has completed queue configuration.
+    pub fn set_ready(&mut self, enable: bool) {
+        // If the queue is already in the desired state, return early.
+        if enable == self.ready {
+            return;
+        }
+
+        if enable {
+            // Validate addresses and queue size to ensure that address calculation won't overflow.
+            let ring_sizes = self.ring_sizes();
+            let rings =
+                ring_sizes
+                    .iter()
+                    .zip(vec!["descriptor table", "available ring", "used ring"]);
+
+            for ((addr, size), name) in rings {
+                if addr.checked_add(*size as u64).is_none() {
+                    error!(
+                        "virtio queue {} goes out of bounds: start:0x{:08x} size:0x{:08x}",
+                        name,
+                        addr.offset(),
+                        size,
+                    );
+                    return;
+                }
+            }
+        }
+
+        self.ready = enable;
+    }
+
+    /// Convert the queue configuration into an active queue.
+    pub fn activate(&mut self) -> Result<Queue> {
+        if !self.ready {
+            bail!("attempted to activate a non-ready queue");
+        }
+
+        if self.activated {
+            bail!("queue is already activated");
+        }
+
+        self.activated = true;
+
+        let queue = Queue {
+            activated: self.activated,
+            max_size: self.max_size,
+            size: self.size,
+            ready: self.ready,
+            vector: self.vector,
+            desc_table: self.desc_table,
+            avail_ring: self.avail_ring,
+            used_ring: self.used_ring,
+            next_avail: self.next_avail,
+            next_used: self.next_used,
+            features: self.features,
+            last_used: self.last_used,
+            iommu: self.iommu.as_ref().map(Arc::clone),
+            exported_desc_table: self.exported_desc_table.clone(),
+            exported_avail_ring: self.exported_avail_ring.clone(),
+            exported_used_ring: self.exported_used_ring.clone(),
+        };
+        Ok(queue)
+    }
+
+    // Return `index` modulo the currently configured queue size.
+    fn wrap_queue_index(&self, index: Wrapping<u16>) -> u16 {
+        // We know that `self.size` is a power of two (enforced by `set_size()`), so the modulus can
+        // be calculated with a bitmask rather than actual division.
+        debug_assert!(self.size.is_power_of_two());
+        index.0 & (self.size - 1)
     }
 
     /// Reset queue to a clean state
     pub fn reset(&mut self) {
+        self.activated = false;
         self.ready = false;
-        self.validated = false;
         self.size = self.max_size;
         self.vector = VIRTIO_MSI_NO_VECTOR;
         self.desc_table = GuestAddress(0);
@@ -429,20 +519,8 @@ impl Queue {
         self.last_used = Wrapping(0);
     }
 
-    pub fn is_valid(&mut self, mem: &GuestMemory) -> bool {
-        if !self.ready {
-            error!("attempt to use virtio queue that is not marked ready");
-            return false;
-        }
-
-        if !self.validated {
-            self.validate(mem);
-        }
-        self.validated
-    }
-
     fn ring_sizes(&self) -> Vec<(GuestAddress, usize)> {
-        let queue_size = self.actual_size() as usize;
+        let queue_size = self.size as usize;
         vec![
             (self.desc_table, 16 * queue_size),
             (self.avail_ring, 6 + 2 * queue_size),
@@ -479,41 +557,11 @@ impl Queue {
         Ok(())
     }
 
-    /// Releases memory exported by a previous call to [export_memory].
+    /// Releases memory exported by a previous call to [`Queue::export_memory()`].
     pub fn release_exported_memory(&mut self) {
         self.exported_desc_table = None;
         self.exported_avail_ring = None;
         self.exported_used_ring = None;
-    }
-
-    fn validate(&mut self, mem: &GuestMemory) {
-        if self.size > self.max_size || self.size == 0 || (self.size & (self.size - 1)) != 0 {
-            error!("virtio queue with invalid size: {}", self.size);
-            return;
-        }
-
-        if self.iommu.is_none() {
-            let ring_sizes = self.ring_sizes();
-            let rings =
-                ring_sizes
-                    .iter()
-                    .zip(vec!["descriptor table", "available ring", "used ring"]);
-            for ((addr, size), name) in rings {
-                if !addr
-                    .checked_add(*size as u64)
-                    .map_or(false, |v| mem.address_in_range(v))
-                {
-                    error!(
-                        "virtio queue {} goes out of bounds: start:0x{:08x} size:0x{:08x}",
-                        name,
-                        addr.offset(),
-                        size,
-                    );
-                    return;
-                }
-            }
-        }
-        self.validated = true;
     }
 
     // Get the index of the first available descriptor chain in the available ring
@@ -540,9 +588,7 @@ impl Queue {
     fn set_avail_event(&mut self, mem: &GuestMemory, avail_index: Wrapping<u16>) {
         fence(Ordering::SeqCst);
 
-        let avail_event_addr = self
-            .used_ring
-            .unchecked_add(4 + 8 * u64::from(self.actual_size()));
+        let avail_event_addr = self.used_ring.unchecked_add(4 + 8 * u64::from(self.size));
         write_obj_at_addr_wrapper(
             mem,
             &self.exported_used_ring,
@@ -574,9 +620,7 @@ impl Queue {
     fn get_used_event(&self, mem: &GuestMemory) -> Wrapping<u16> {
         fence(Ordering::SeqCst);
 
-        let used_event_addr = self
-            .avail_ring
-            .unchecked_add(4 + 2 * u64::from(self.actual_size()));
+        let used_event_addr = self.avail_ring.unchecked_add(4 + 2 * u64::from(self.size));
         let used_event: u16 =
             read_obj_from_addr_wrapper(mem, &self.exported_avail_ring, used_event_addr).unwrap();
 
@@ -595,39 +639,25 @@ impl Queue {
             .unwrap();
     }
 
-    // Set a single-bit flag in the used ring.
-    //
-    // Changes the bit specified by the mask in `flag` to `value`.
-    fn set_used_flag(&mut self, mem: &GuestMemory, flag: u16, value: bool) {
-        fence(Ordering::SeqCst);
-
-        let mut used_flags: u16 =
-            read_obj_from_addr_wrapper(mem, &self.exported_used_ring, self.used_ring).unwrap();
-        if value {
-            used_flags |= flag;
-        } else {
-            used_flags &= !flag;
-        }
-        write_obj_at_addr_wrapper(mem, &self.exported_used_ring, used_flags, self.used_ring)
-            .unwrap();
-    }
-
     /// Get the first available descriptor chain without removing it from the queue.
     /// Call `pop_peeked` to remove the returned descriptor chain from the queue.
     pub fn peek(&mut self, mem: &GuestMemory) -> Option<DescriptorChain> {
-        if !self.is_valid(mem) {
+        if !self.ready {
+            error!("attempt to use virtio queue that is not marked ready");
             return None;
         }
 
-        let queue_size = self.actual_size();
         let avail_index = self.get_avail_index(mem);
-        let avail_len = avail_index - self.next_avail;
-
-        if avail_len.0 > queue_size || self.next_avail == avail_index {
+        if self.next_avail == avail_index {
             return None;
         }
 
-        let desc_idx_addr_offset = 4 + (u64::from(self.next_avail.0 % queue_size) * 2);
+        // This fence ensures that subsequent reads from the descriptor do not
+        // get reordered and happen only after fetching the available_index and
+        // checking that there is a slot available.
+        fence(Ordering::SeqCst);
+
+        let desc_idx_addr_offset = 4 + (u64::from(self.wrap_queue_index(self.next_avail)) * 2);
         let desc_idx_addr = self.avail_ring.checked_add(desc_idx_addr_offset)?;
 
         // This index is checked below in checked_new.
@@ -638,7 +668,7 @@ impl Queue {
         DescriptorChain::checked_new(
             mem,
             self.desc_table,
-            queue_size,
+            self.size,
             descriptor_index,
             0,
             iommu,
@@ -692,7 +722,7 @@ impl Queue {
 
     /// Puts an available descriptor head into the used ring for use by the guest.
     pub fn add_used(&mut self, mem: &GuestMemory, desc_index: u16, len: u32) {
-        if desc_index >= self.actual_size() {
+        if desc_index >= self.size {
             error!(
                 "attempted to add out of bounds descriptor to used ring: {}",
                 desc_index
@@ -701,7 +731,7 @@ impl Queue {
         }
 
         let used_ring = self.used_ring;
-        let next_used = (self.next_used.0 % self.actual_size()) as usize;
+        let next_used = self.wrap_queue_index(self.next_used) as usize;
         let used_elem = used_ring.unchecked_add((4 + next_used * 8) as u64);
 
         // These writes can't fail as we are guaranteed to be within the descriptor ring.
@@ -717,26 +747,6 @@ impl Queue {
 
         self.next_used += Wrapping(1);
         self.set_used_index(mem, self.next_used);
-    }
-
-    /// Enable / Disable guest notify device that requests are available on
-    /// the descriptor chain.
-    pub fn set_notify(&mut self, mem: &GuestMemory, enable: bool) {
-        if enable {
-            self.notification_disable_count -= 1;
-        } else {
-            self.notification_disable_count += 1;
-        }
-
-        // We should only set VIRTQ_USED_F_NO_NOTIFY when the VIRTIO_RING_F_EVENT_IDX feature has
-        // not been negotiated.
-        if self.features & ((1u64) << VIRTIO_RING_F_EVENT_IDX) == 0 {
-            self.set_used_flag(
-                mem,
-                VIRTQ_USED_F_NO_NOTIFY,
-                self.notification_disable_count > 0,
-            );
-        }
     }
 
     /// Returns if the queue should have an interrupt sent based on its state.
@@ -872,10 +882,10 @@ impl Queue {
     /// inject interrupt into guest on this queue
     /// return true: interrupt is injected into guest for this queue
     ///        false: interrupt isn't injected
-    pub fn trigger_interrupt(
+    pub fn trigger_interrupt<I: SignalableInterrupt>(
         &mut self,
         mem: &GuestMemory,
-        interrupt: &dyn SignalableInterrupt,
+        interrupt: &I,
     ) -> bool {
         if self.queue_wants_interrupt(mem) {
             self.last_used = self.next_used;
@@ -899,8 +909,6 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
 
     use memoffset::offset_of;
 
@@ -1003,12 +1011,7 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(
-            Arc::new(AtomicUsize::new(0)),
-            IrqLevelEvent::new().unwrap(),
-            None,
-            10,
-        );
+        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;
@@ -1077,12 +1080,7 @@ mod tests {
         let mem = GuestMemory::new(&[(memory_start_addr, GUEST_MEMORY_SIZE)]).unwrap();
         setup_vq(&mut queue, &mem);
 
-        let interrupt = Interrupt::new(
-            Arc::new(AtomicUsize::new(0)),
-            IrqLevelEvent::new().unwrap(),
-            None,
-            10,
-        );
+        let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, 10);
 
         // Offset of used_event within Avail structure
         let used_event_offset = offset_of!(Avail, used_event) as u64;

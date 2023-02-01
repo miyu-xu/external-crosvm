@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,7 @@ use crate::usb::xhci::xhci_transfer::XhciTransferType;
 use crate::utils::AsyncJobQueue;
 use crate::utils::FailHandle;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum ControlEndpointState {
     /// Control endpoint should receive setup stage next.
     SetupStage,

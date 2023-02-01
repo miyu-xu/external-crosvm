@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,8 @@ use std::io::Read;
 use std::io::Write;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -43,6 +45,7 @@ use super::Reader;
 use super::SignalableInterrupt;
 use super::VirtioDevice;
 use super::Writer;
+use crate::Suspendable;
 
 const EVENT_QUEUE_SIZE: u16 = 64;
 const STATUS_QUEUE_SIZE: u16 = 64;
@@ -451,6 +454,8 @@ impl<T: EventSource> Worker<T> {
         Ok(needs_interrupt)
     }
 
+    // Allow error! and early return anywhere in function
+    #[allow(clippy::needless_return)]
     fn run(&mut self, event_queue_evt: Event, status_queue_evt: Event, kill_evt: Event) {
         if let Err(e) = self.event_source.init() {
             error!("failed initializing event source: {}", e);
@@ -500,14 +505,14 @@ impl<T: EventSource> Worker<T> {
             for wait_event in wait_events.iter().filter(|e| e.is_readable) {
                 match wait_event.token {
                     Token::EventQAvailable => {
-                        if let Err(e) = event_queue_evt.read() {
+                        if let Err(e) = event_queue_evt.wait() {
                             error!("failed reading event queue Event: {}", e);
                             break 'wait;
                         }
                         needs_interrupt |= self.send_events();
                     }
                     Token::StatusQAvailable => {
-                        if let Err(e) = status_queue_evt.read() {
+                        if let Err(e) = status_queue_evt.wait() {
                             error!("failed reading status queue Event: {}", e);
                             break 'wait;
                         }
@@ -524,7 +529,7 @@ impl<T: EventSource> Worker<T> {
                         self.interrupt.interrupt_resample();
                     }
                     Token::Kill => {
-                        let _ = kill_evt.read();
+                        let _ = kill_evt.wait();
                         break 'wait;
                     }
                 }
@@ -556,7 +561,7 @@ impl<T: EventSource> Drop for Input<T> {
     fn drop(&mut self) {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.write(1);
+            let _ = kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -600,60 +605,48 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != 2 || queue_evts.len() != 2 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != 2 {
+            return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to create kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
         // Status is queue 1, event is queue 0
-        let status_queue = queues.remove(1);
-        let status_queue_evt = queue_evts.remove(1);
+        let (status_queue, status_queue_evt) = queues.remove(1);
+        let (event_queue, event_queue_evt) = queues.remove(0);
 
-        let event_queue = queues.remove(0);
-        let event_queue_evt = queue_evts.remove(0);
+        let source = self
+            .source
+            .take()
+            .context("tried to activate device without a source for events")?;
+        let worker_thread = thread::Builder::new()
+            .name("v_input".to_string())
+            .spawn(move || {
+                let mut worker = Worker {
+                    interrupt,
+                    event_source: source,
+                    event_queue,
+                    status_queue,
+                    guest_memory: mem,
+                };
+                worker.run(event_queue_evt, status_queue_evt, kill_evt);
+                worker
+            })
+            .context("failed to spawn virtio_input worker")?;
 
-        if let Some(source) = self.source.take() {
-            let worker_result = thread::Builder::new()
-                .name(String::from("virtio_input"))
-                .spawn(move || {
-                    let mut worker = Worker {
-                        interrupt,
-                        event_source: source,
-                        event_queue,
-                        status_queue,
-                        guest_memory: mem,
-                    };
-                    worker.run(event_queue_evt, status_queue_evt, kill_evt);
-                    worker
-                });
+        self.worker_thread = Some(worker_thread);
 
-            match worker_result {
-                Err(e) => {
-                    error!("failed to spawn virtio_input worker: {}", e);
-                }
-                Ok(join_handle) => {
-                    self.worker_thread = Some(join_handle);
-                }
-            }
-        } else {
-            error!("tried to activate device without a source for events");
-        }
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
         if let Some(kill_evt) = self.kill_evt.take() {
-            if kill_evt.write(1).is_err() {
+            if kill_evt.signal().is_err() {
                 error!("{}: failed to notify the kill event", self.debug_label());
                 return false;
             }
@@ -674,6 +667,8 @@ where
         false
     }
 }
+
+impl<T> Suspendable for Input<T> where T: 'static + EventSource + Send {}
 
 /// Creates a new virtio input device from an event device node
 pub fn new_evdev<T>(source: T, virtio_features: u64) -> Result<Input<EvdevEventSource<T>>>

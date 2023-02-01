@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,7 +17,7 @@ USAGE = """Choose to run tests locally, in a vm or on a remote machine.
 
 To set the default test target to run on one of the build-in VMs:
 
-    ./tools/set_test_target vm:aarch64 && source .envrc
+    ./tools/test_target set vm:aarch64 && source .envrc
 
 Then as usual run cargo or run_tests:
 
@@ -30,7 +30,7 @@ to build for the test target and execute tests on it.
 
 Arbitrary SSH remotes can be used for running tests as well. e.g.
 
-    ./tools/set_test_target ssh:remotehost
+    ./tools/test_target set ssh:remotehost
 
 The `remotehost` needs to be properly configured for passwordless
 authentication.
@@ -100,9 +100,7 @@ class Ssh:
 
     def upload_files(self, files: List[Path], remote_dir: str = "", quiet: bool = False):
         """Wrapper around SCP."""
-        flags: List[str] = []
-        if quiet:
-            flags.append("-q")
+        flags = ["-q"] if quiet else []
         scp_cmd = [
             "scp",
             *flags,
@@ -110,7 +108,35 @@ class Ssh:
             *(str(f) for f in files),
             f"{self.hostname}:{remote_dir}",
         ]
-        subprocess.run(scp_cmd, check=True)
+        return subprocess.run(scp_cmd, check=True)
+
+    def download_files(
+        self, remote_file: str, target_dir: Path, quiet: bool = False, check: bool = True
+    ):
+        """Wrapper around SCP."""
+        flags = ["-q"] if quiet else []
+        scp_cmd = ["scp", *flags, *self.opts, f"{self.hostname}:{remote_file}", str(target_dir)]
+        return subprocess.run(scp_cmd, check=check)
+
+
+SHORTHANDS = {
+    "mingw64": "x86_64-pc-windows-gnu",
+    "msvc64": "x86_64-pc-windows-msvc",
+    "armhf": "armv7-unknown-linux-gnueabihf",
+    "aarch64": "aarch64-unknown-linux-gnu",
+    "x86_64": "x86_64-unknown-linux-gnu",
+}
+
+
+def crosvm_target_dir():
+    crosvm_target = os.environ.get("CROSVM_TARGET_DIR")
+    cargo_target = os.environ.get("CARGO_TARGET_DIR")
+    if crosvm_target:
+        return Path(crosvm_target)
+    elif cargo_target:
+        return Path(cargo_target) / "crosvm"
+    else:
+        return CROSVM_ROOT / "target/crosvm"
 
 
 class Triple(NamedTuple):
@@ -131,16 +157,8 @@ class Triple(NamedTuple):
         "These shorthands make it easier to specify triples on the command line."
         if "-" in shorthand:
             triple = shorthand
-        elif shorthand == "mingw64":
-            triple = "x86_64-pc-windows-gnu"
-        elif shorthand == "msvc64":
-            triple = "x86_64-pc-windows-msvc"
-        elif shorthand == "armhf":
-            triple = "armv7-unknown-linux-gnueabihf"
-        elif shorthand == "aarch64":
-            triple = "aarch64-unknown-linux-gnu"
-        elif shorthand == "x86_64":
-            triple = "x86_64-unknown-linux-gnu"
+        elif shorthand in SHORTHANDS:
+            triple = SHORTHANDS[shorthand]
         else:
             raise Exception(f"Not a valid build triple shorthand: {shorthand}")
         return cls.from_str(triple)
@@ -174,6 +192,27 @@ class Triple(NamedTuple):
             raise Exception(f"Cannot parse rustc info: {rustc_info}")
         return cls.from_str(match.group(1))
 
+    @property
+    def feature_flag(self):
+        triple_to_shorthand = {v: k for k, v in SHORTHANDS.items()}
+        shorthand = triple_to_shorthand.get(str(self))
+        if not shorthand:
+            raise Exception(f"No feature set for triple {self}")
+        return f"all-{shorthand}"
+
+    @property
+    def target_dir(self):
+        return crosvm_target_dir() / str(self)
+
+    def get_cargo_env(self):
+        """Environment variables to make cargo use the test target."""
+        env: Dict[str, str] = BUILD_ENV.copy()
+        cargo_target = str(self)
+        env["CARGO_BUILD_TARGET"] = cargo_target
+        env["CARGO_TARGET_DIR"] = str(self.target_dir)
+        env["CROSVM_TARGET_DIR"] = str(crosvm_target_dir())
+        return env
+
     def __str__(self):
         return f"{self.arch}-{self.vendor}-{self.sys}-{self.abi}"
 
@@ -187,7 +226,7 @@ def guess_emulator(native_triple: Triple, build_triple: Triple) -> Optional[List
         return None
     # Use wine64 to run windows binaries on linux
     if build_triple.sys == "windows" and str(native_triple) == "x86_64-unknown-linux-gnu":
-        return ["wine64"]
+        return ["wine64-stable"]
     # Use qemu to run aarch64 on x86
     if build_triple.arch == "aarch64" and native_triple.arch == "x86_64":
         return ["qemu-aarch64-static"]
@@ -215,7 +254,11 @@ class TestTarget(object):
 
     @classmethod
     def default(cls):
-        return cls(os.environ.get("CROSVM_TEST_TARGET", "host"))
+        build_target = os.environ.get("CARGO_BUILD_TARGET", None)
+        return cls(
+            os.environ.get("CROSVM_TEST_TARGET", "host"),
+            Triple.from_str(build_target) if build_target else None,
+        )
 
     def __init__(
         self,
@@ -315,10 +358,10 @@ def prepare_target(target: TestTarget, extra_files: List[Path] = []):
 def get_cargo_env(target: TestTarget):
     """Environment variables to make cargo use the test target."""
     env: Dict[str, str] = BUILD_ENV.copy()
+    env.update(target.build_triple.get_cargo_env())
     cargo_target = str(target.build_triple)
     upper_target = cargo_target.upper().replace("-", "_")
-    env["CARGO_BUILD_TARGET"] = cargo_target
-    if not target.is_host:
+    if not target.is_host or target.emulator_cmd:
         script_path = CROSVM_ROOT / "tools/test_target"
         env[f"CARGO_TARGET_{upper_target}_RUNNER"] = f"{script_path} exec-file"
     env["CROSVM_TEST_TARGET"] = target.target_str
@@ -338,13 +381,18 @@ def set_target(target: TestTarget):
     print(f"Target Architecture: {target.build_triple}")
 
 
+def list_profile_files(binary_path: Path):
+    return binary_path.parent.glob(f"{binary_path.name}.profraw.*")
+
+
 def exec_file_on_target(
     target: TestTarget,
     filepath: Path,
     timeout: int,
     args: List[str] = [],
     extra_files: List[Path] = [],
-    profile_file: Optional[Path] = None,
+    generate_profile: bool = False,
+    execute_as_root: bool = False,
     **kwargs: Any,
 ):
     """Executes a file on the test target.
@@ -357,9 +405,19 @@ def exec_file_on_target(
 
     Timeouts will trigger a subprocess.TimeoutExpired exception, which contanins
     any output produced by the subprocess until the timeout.
+
+    Coverage profiles can be generated by setting `generate_profile` and will be written to
+    "$filepath.profraw.$PID". Existing profiles are deleted.
     """
     env = os.environ.copy()
     prefix = target.emulator_cmd if target.emulator_cmd else []
+
+    # Delete existing profile files
+    profile_prefix = filepath.with_suffix(".profraw")
+    if generate_profile:
+        for path in list_profile_files(filepath):
+            path.unlink()
+
     if not target.ssh:
         # Allow test binaries to find rust's test libs.
         if os.name == "posix":
@@ -371,23 +429,30 @@ def exec_file_on_target(
                 env["PATH"] += ";" + str(find_rust_lib_dir())
         else:
             raise Exception(f"Unsupported build target: {os.name}")
-        if profile_file:
-            env["LLVM_PROFILE_FILE"] = str(profile_file)
+        if generate_profile:
+            env["LLVM_PROFILE_FILE"] = f"{profile_prefix}.%p"
 
         cmd_line = [*prefix, str(filepath), *args]
+        if execute_as_root:
+            cmd_line = ["sudo", "--preserve-env", *cmd_line]
         return subprocess.run(
             cmd_line,
             env=env,
             timeout=timeout,
             text=True,
+            shell=False,
             **kwargs,
         )
     else:
         filename = Path(filepath).name
         target.ssh.upload_files([filepath] + extra_files, quiet=True)
         cmd_line = [*prefix, f"./{filename}", *args]
-        if profile_file:
-            raise Exception("Coverage collection on remote hosts is not supported.")
+
+        remote_profile_prefix = f"/tmp/{filename}.profraw"
+        if generate_profile:
+            target.ssh.check_output(f"sudo rm -f {remote_profile_prefix}*")
+            cmd_line = [f"LLVM_PROFILE_FILE={remote_profile_prefix}.%p", *cmd_line]
+
         try:
             result = target.ssh.run(
                 f"chmod +x {filename} && sudo LD_LIBRARY_PATH=. {' '.join(cmd_line)}",
@@ -399,6 +464,13 @@ def exec_file_on_target(
             # Remove uploaded files regardless of test result
             all_filenames = [filename] + [f.name for f in extra_files]
             target.ssh.check_output(f"sudo rm {' '.join(all_filenames)}")
+            if generate_profile:
+                # Fail silently. Some tests don't write a profile file.
+                target.ssh.download_files(
+                    f"{remote_profile_prefix}*", profile_prefix.parent, check=False, quiet=True
+                )
+                target.ssh.check_output(f"sudo rm -f {remote_profile_prefix}*")
+
         return result
 
 
@@ -456,7 +528,7 @@ def main():
     if args.command == "set":
         if len(args.remainder) != 1:
             parser.error("Need to specify a target.")
-        set_target(TestTarget(args.remainder[0], args.build_target))
+        set_target(TestTarget(args.remainder[0], Triple.from_shorthand(args.build_target)))
         return
 
     if args.target:

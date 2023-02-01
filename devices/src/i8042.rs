@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@ use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
+use crate::Suspendable;
 
 /// A i8042 PS/2 controller that emulates just enough to shutdown the machine.
 pub struct I8042Device {
@@ -53,5 +54,23 @@ impl BusDevice for I8042Device {
                 error!("failed to trigger i8042 reset event: {}", e);
             }
         }
+    }
+}
+
+impl Suspendable for I8042Device {
+    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Object(serde_json::Map::new()))
+    }
+
+    fn restore(&mut self, _data: serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        Ok(())
     }
 }

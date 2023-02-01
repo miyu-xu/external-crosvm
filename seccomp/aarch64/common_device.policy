@@ -1,10 +1,11 @@
-# Copyright 2019 The Chromium OS Authors. All rights reserved.
+# Copyright 2019 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 brk: 1
 clock_gettime: 1
 clone: arg0 & CLONE_THREAD
+clone3: 1
 close: 1
 dup3: 1
 dup: 1
@@ -20,9 +21,12 @@ getpid: 1
 gettid: 1
 gettimeofday: 1
 io_uring_setup: 1
+io_uring_register: 1
 io_uring_enter: 1
 kill: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE
+lseek: 1
+madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
+membarrier: 1
 mmap: arg2 in ~PROT_EXEC
 mprotect: arg2 in ~PROT_EXEC
 mremap: 1

@@ -1,15 +1,17 @@
-# Copyright 2021 The Chromium OS Authors. All rights reserved.
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Rules from common_device.policy with some rules removed because they block certain flags needed
 # for gpu.
 brk: 1
+clone3: 1
 close: 1
 dup2: 1
 dup: 1
 epoll_create1: 1
 epoll_ctl: 1
+epoll_pwait: 1
 epoll_wait: 1
 eventfd2: 1
 exit: 1
@@ -21,9 +23,11 @@ getpid: 1
 gettid: 1
 gettimeofday: 1
 io_uring_setup: 1
+io_uring_register: 1
 io_uring_enter: 1
 kill: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE
+madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
+membarrier: 1
 mremap: 1
 munmap: 1
 nanosleep: 1
@@ -101,6 +105,9 @@ clock_gettime64: 1
 sched_setscheduler: 1
 sched_setaffinity: 1
 kcmp: 1
+
+# Rules for Mesa's u_trace thread
+setpriority: 1
 
 # Rules for Vulkan loader / layers
 access: 1

@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,35 +13,26 @@ use base::syslog;
 use base::syslog::LogConfig;
 use base::warn;
 use devices::virtio::vhost::user::device::run_console_device;
-#[cfg(feature = "audio_cras")]
-use devices::virtio::vhost::user::device::run_cras_snd_device;
 use devices::virtio::vhost::user::device::run_fs_device;
-#[cfg(feature = "gpu")]
-use devices::virtio::vhost::user::device::run_gpu_device;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::device::run_snd_device;
 use devices::virtio::vhost::user::device::run_vsock_device;
 use devices::virtio::vhost::user::device::run_wl_device;
 
 use crate::crosvm::sys::cmdline::Commands;
-use crate::crosvm::sys::cmdline::DevicesSubcommand;
+use crate::crosvm::sys::cmdline::DeviceSubcommand;
 use crate::crosvm::sys::unix::start_devices;
 use crate::CommandStatus;
 use crate::Config;
 
-pub(crate) fn start_device(command: DevicesSubcommand) -> anyhow::Result<()> {
+pub(crate) fn start_device(command: DeviceSubcommand) -> anyhow::Result<()> {
     match command {
-        DevicesSubcommand::Console(cfg) => run_console_device(cfg),
-        // TODO(b/241489181): Remove once cras-snd calls are changed to snd.
-        #[cfg(feature = "audio_cras")]
-        DevicesSubcommand::CrasSnd(cfg) => run_cras_snd_device(cfg),
+        DeviceSubcommand::Console(cfg) => run_console_device(cfg),
         #[cfg(feature = "audio")]
-        DevicesSubcommand::Snd(cfg) => run_snd_device(cfg),
-        DevicesSubcommand::Fs(cfg) => run_fs_device(cfg),
-        #[cfg(feature = "gpu")]
-        DevicesSubcommand::Gpu(cfg) => run_gpu_device(cfg),
-        DevicesSubcommand::Vsock(cfg) => run_vsock_device(cfg),
-        DevicesSubcommand::Wl(cfg) => run_wl_device(cfg),
+        DeviceSubcommand::Snd(cfg) => run_snd_device(cfg),
+        DeviceSubcommand::Fs(cfg) => run_fs_device(cfg),
+        DeviceSubcommand::Vsock(cfg) => run_vsock_device(cfg),
+        DeviceSubcommand::Wl(cfg) => run_wl_device(cfg),
     }
 }
 
