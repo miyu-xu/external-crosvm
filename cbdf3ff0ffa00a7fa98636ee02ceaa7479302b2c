@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f4c8d841_7ff45195",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-01T22:07:04Z",
+      "side": 1,
+      "message": "please mark \"ANDROID: ...\"",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 6
+      },
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0d735a64_e4149bfb",
+        "filename": "patches/uuid-update-1.2.2.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-01T22:07:04Z",
+      "side": 1,
+      "message": "khei/fmayle - we don\u0027t do this, but it seems like a good practice. Our scripts should handle these or track them.\n\nThough - anyway, Chris, since it\u0027s a small change and you have already put the upstream commit there, do we need this patch file?",
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
