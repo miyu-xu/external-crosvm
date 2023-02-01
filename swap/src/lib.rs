@@ -34,7 +34,6 @@ use anyhow::Context;
 use base::debug;
 use base::error;
 use base::info;
-use base::pagesize;
 use base::syslog;
 use base::unix::process::fork_process;
 use base::unix::process::Child;
@@ -42,11 +41,10 @@ use base::warn;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::EventToken;
-use base::MemoryMapping;
-use base::MemoryMappingBuilder;
+use base::FromRawDescriptor;
+use base::RawDescriptor;
 use base::Tube;
 use base::WaitContext;
-use data_model::VolatileMemory;
 use minijail::Minijail;
 use serde::Deserialize;
 use serde::Serialize;
@@ -56,7 +54,8 @@ use crate::logger::PageFaultEventLogger;
 use crate::page_handler::MoveToStaging;
 use crate::page_handler::PageHandler;
 use crate::processes::freeze_all_processes;
-use crate::userfaultfd::UffdError;
+use crate::userfaultfd::register_regions;
+use crate::userfaultfd::unregister_regions;
 use crate::userfaultfd::UffdEvent;
 use crate::userfaultfd::Userfaultfd;
 use crate::worker::Channel;
@@ -192,6 +191,8 @@ enum Command {
     Disable,
     Exit,
     Status,
+    #[serde(with = "base::platform::with_raw_descriptor")]
+    ProcessForked(RawDescriptor),
     StartPageFaultLogging,
 }
 
@@ -199,7 +200,6 @@ enum Command {
 pub struct SwapController {
     child_process: Child,
     tube: Tube,
-    _dummy_page: MemoryMapping,
 }
 
 impl SwapController {
@@ -214,14 +214,6 @@ impl SwapController {
     /// * `swap_dir` - directory to store swap files.
     pub fn launch(guest_memory: GuestMemory, swap_dir: PathBuf) -> anyhow::Result<Self> {
         info!("vmm-swap is enabled. launch monitor process.");
-
-        let dummy_page = MemoryMappingBuilder::new(pagesize())
-            .build()
-            .context("allocate dummy page")?;
-        let dummy_page_addr = dummy_page
-            .get_ref::<u8>(0)
-            .context("get base address of dummy page")?
-            .as_mut_ptr() as usize;
 
         let mut keep_rds = vec![stdout().as_raw_descriptor(), stderr().as_raw_descriptor()];
 
@@ -242,15 +234,6 @@ impl SwapController {
         // current process)
         let child_process =
             fork_process(jail, keep_rds, Some(String::from("swap monitor")), || {
-                // userfaultfd triggeres UFFD_EVENT_FORK event only while at least 1 page is
-                // registered to it. This is a workaround for it to register dummy page which is
-                // never touched. We have to register the dummy page after the monitor process forks
-                // not to be blocked and before device processes fork to catch the fork event with
-                // userfaultfd.
-                // safe because no one access dummy_page.
-                if let Err(e) = unsafe { userfaultfd.register(dummy_page_addr, pagesize()) } {
-                    panic!("failed to register dummy page to userfaultfd: {:?}", e);
-                }
                 if let Err(e) =
                     monitor_process(tube_monitor_process, guest_memory, userfaultfd, swap_dir)
                 {
@@ -275,7 +258,6 @@ impl SwapController {
         Ok(Self {
             child_process,
             tube: tube_main_process,
-            _dummy_page: dummy_page,
         })
     }
 
@@ -359,6 +341,28 @@ impl SwapController {
             .context("wait monitor process shutdown")?;
         Ok(())
     }
+
+    /// Create a new userfaultfd and send it to the monitor process.
+    ///
+    /// This must be called as soon as a child process which may touch the guest memory is forked.
+    ///
+    /// Userfaultfd(2) originally has `UFFD_FEATURE_EVENT_FORK`. But it is not applicable to crosvm
+    /// since it does not support non-root user namespace.
+    pub fn on_process_forked(&self) -> anyhow::Result<()> {
+        let uffd = Userfaultfd::new().context("create userfaultfd")?;
+        self.tube
+            .send(&Command::ProcessForked(uffd.as_raw_descriptor()))
+            .context("send forked event")?;
+        // The fd for Userfaultfd in this process is droped when this method exits, but the
+        // userfaultfd keeps alive in the monitor process which it is sent to.
+        Ok(())
+    }
+}
+
+impl AsRawDescriptors for SwapController {
+    fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
+        self.tube.as_raw_descriptors()
+    }
 }
 
 #[derive(EventToken)]
@@ -408,75 +412,6 @@ impl<'a> UffdList<'a> {
     fn get_list(&self) -> &[Userfaultfd] {
         &self.list
     }
-}
-
-/// Register all the regions to all the userfaultfd
-///
-/// This is public only for integration tests.
-///
-/// # Arguments
-///
-/// * `regions` - the list of address range of regions.
-/// * `uffds` - the reference to the list of [Userfaultfd] for all the processes which may touch
-///   the `address_range` to be registered.
-///
-/// # Safety
-///
-/// Each address range in `regions` must be from guest memory.
-///
-/// The `uffds` must cover all the processes which may touch the `address_range`. otherwise some
-/// pages are zeroed by kernel on the unregistered process instead of swapping in from the swap
-/// file.
-#[deny(unsafe_op_in_unsafe_fn)]
-pub unsafe fn register_regions(
-    regions: &[Range<usize>],
-    uffds: &[Userfaultfd],
-) -> anyhow::Result<()> {
-    for address_range in regions {
-        for uffd in uffds {
-            // safe because the range is from the guest memory region. Even after the memory
-            // is removed by `MADV_REMOVE` at [PageHandler::swap_out()], the content will be
-            // swapped in from the swap file safely on a page fault.
-            let result = unsafe {
-                uffd.register(address_range.start, address_range.end - address_range.start)
-            };
-            match result {
-                Ok(_) => Ok(()),
-                // Userfaultfd returns `ENOMEM` if the corresponding process dies or run as
-                // another program by `exec` system call. crosvm just skip the userfaultfd.
-                Err(UffdError::SystemError(errno)) if errno as i32 == libc::ENOMEM => Ok(()),
-                Err(e) => Err(e),
-            }?;
-        }
-    }
-    Ok(())
-}
-
-/// Unregister all the regions from all the userfaultfd.
-///
-/// This is public only for integration tests.
-///
-/// # Arguments
-///
-/// * `regions` - the list of address range of regions.
-/// * `uffds` - the reference to the list of registered [Userfaultfd].
-pub fn unregister_regions(regions: &[Range<usize>], uffds: &[Userfaultfd]) -> anyhow::Result<()> {
-    for address_range in regions {
-        for uffd in uffds {
-            // `UFFDIO_UNREGISTER` unblocks any threads currently waiting on the region and
-            // remove page fault events on the region from the userfaultfd event queue.
-            let result =
-                uffd.unregister(address_range.start, address_range.end - address_range.start);
-            match result {
-                Ok(_) => Ok(()),
-                // Userfaultfd returns `ENOMEM` if the corresponding process dies or run as
-                // another program by `exec` system call. crosvm just skip the userfaultfd.
-                Err(UffdError::SystemError(errno)) if errno as i32 == libc::ENOMEM => Ok(()),
-                Err(e) => Err(e),
-            }?;
-        }
-    }
-    Ok(())
 }
 
 fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<Range<usize>> {
@@ -639,23 +574,6 @@ fn monitor_process(
                                     bail!("page fault event while handler is none");
                                 }
                             }
-                            UffdEvent::Fork { uffd } => {
-                                debug!("new fork uffd: {:?} from id_uffd: {:?}", uffd, id_uffd);
-                                if page_handler_opt.is_none() {
-                                    uffd_list
-                                        .register(uffd.into())
-                                        .context("register forked uffd")?;
-                                } else {
-                                    // TODO(b/259009757): Crosvm does not support forking child
-                                    // processes while vmm-swap is enabled. There are
-                                    // synchronization issues here around registering userfaultfd
-                                    // regions with the child process as well as ensuring the child
-                                    // is properly paused that haven't been worked out. However,
-                                    // there is currently no use case for swap + hotplug, so this
-                                    // can be solved later.
-                                    bail!("child process is forked while swap is enabled");
-                                }
-                            }
                             UffdEvent::Remove { start, end } => {
                                 if let Some(ref mut page_handler) = page_handler_opt {
                                     page_handler
@@ -672,6 +590,21 @@ fn monitor_process(
                     }
                 }
                 Token::Command => match tube.recv::<Command>().context("recv swap command")? {
+                    Command::ProcessForked(raw_descriptor) => {
+                        debug!("new fork uffd: {:?}", raw_descriptor);
+                        // Safe because the raw_descriptor is sent from another process via Tube and
+                        // no one in this process owns it.
+                        let uffd = unsafe { Userfaultfd::from_raw_descriptor(raw_descriptor) };
+                        if page_handler_opt.is_none() {
+                            uffd_list.register(uffd).context("register forked uffd")?;
+                        } else {
+                            // TODO(b/266898615): The forked processes must wait running until the
+                            // regions are registered to the new uffd if vmm-swap is already
+                            // enabled. There are currently no use cases for swap + hotplug, so this
+                            // is currently not implemented.
+                            bail!("child process is forked while swap is enabled");
+                        }
+                    }
                     Command::Enable => {
                         if page_handler_opt.is_none() {
                             info!("enable monitoring page faults");
