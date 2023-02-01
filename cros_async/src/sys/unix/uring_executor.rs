@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -78,7 +78,9 @@ use base::AsRawDescriptor;
 use base::EventType;
 use base::RawDescriptor;
 use futures::task::noop_waker;
+use io_uring::URingAllowlist;
 use io_uring::URingContext;
+use io_uring::URingOperation;
 use once_cell::sync::Lazy;
 use pin_utils::pin_mut;
 use remain::sorted;
@@ -103,6 +105,9 @@ pub enum Error {
     /// Failed to copy the FD for the polling context.
     #[error("Failed to copy the FD for the polling context: {0}")]
     DuplicatingFd(base::Error),
+    /// Enabling a context faild.
+    #[error("Error enabling the URing context: {0}")]
+    EnablingContext(io_uring::Error),
     /// The Executor is gone.
     #[error("The URingExecutor is gone")]
     ExecutorGone,
@@ -115,6 +120,9 @@ pub enum Error {
     /// Error doing the IO.
     #[error("Error during IO: {0}")]
     Io(io::Error),
+    /// Registering operation restrictions to a uring failed.
+    #[error("Error registering restrictions to the URing context: {0}")]
+    RegisteringURingRestriction(io_uring::Error),
     /// Failed to remove the waker remove the polling context.
     #[error("Error removing from the URing context: {0}")]
     RemovingWaker(io_uring::Error),
@@ -144,11 +152,13 @@ impl From<Error> for io::Error {
             SubmittingOp(e) => e.into(),
             URingContextError(e) => e.into(),
             URingEnter(e) => e.into(),
+            EnablingContext(e) => e.into(),
+            RegisteringURingRestriction(e) => e.into(),
         }
     }
 }
 
-static USE_URING: Lazy<bool> = Lazy::new(|| {
+static IS_URING_STABLE: Lazy<bool> = Lazy::new(|| {
     let mut utsname = MaybeUninit::zeroed();
 
     // Safe because this will only modify `utsname` and we check the return value.
@@ -172,17 +182,26 @@ static USE_URING: Lazy<bool> = Lazy::new(|| {
     match (components.next(), components.next()) {
         (Some(Ok(major)), Some(Ok(minor))) if (major, minor) >= (5, 10) => {
             // The kernel version is new enough so check if we can actually make a uring context.
-            URingContext::new(8).is_ok()
+            URingContext::new(8, None).is_ok()
         }
         _ => false,
     }
 });
 
-// Checks if the uring executor is available.
+// Checks if the uring executor is stable.
 // Caches the result so that the check is only run once.
 // Useful for falling back to the FD executor on pre-uring kernels.
-pub(crate) fn use_uring() -> bool {
-    *USE_URING
+pub(crate) fn is_uring_stable() -> bool {
+    *IS_URING_STABLE
+}
+
+// Checks the uring availability by checking if the uring creation succeeds.
+// If uring creation succeeds, it returns `Ok(())`. It returns an `URingContextError` otherwise.
+// It fails if the kernel does not support io_uring, but note that the cause is not limited to it.
+pub(crate) fn check_uring_availability() -> Result<()> {
+    URingContext::new(8, None)
+        .map(drop)
+        .map_err(Error::URingContextError)
 }
 
 pub struct RegisteredSource {
@@ -193,7 +212,7 @@ pub struct RegisteredSource {
 impl RegisteredSource {
     pub fn start_read_to_mem(
         &self,
-        file_offset: u64,
+        file_offset: Option<u64>,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         addrs: &[MemRegion],
     ) -> Result<PendingOperation> {
@@ -209,7 +228,7 @@ impl RegisteredSource {
 
     pub fn start_write_from_mem(
         &self,
-        file_offset: u64,
+        file_offset: Option<u64>,
         mem: Arc<dyn BackingMemory + Send + Sync>,
         addrs: &[MemRegion],
     ) -> Result<PendingOperation> {
@@ -262,7 +281,7 @@ impl RegisteredSource {
 impl Drop for RegisteredSource {
     fn drop(&mut self) {
         if let Some(ex) = self.ex.upgrade() {
-            let _ = ex.deregister_source(self);
+            ex.deregister_source(self);
         }
     }
 }
@@ -314,8 +333,27 @@ struct RawExecutor {
 
 impl RawExecutor {
     fn new() -> Result<RawExecutor> {
+        // Allow operations only that the RawExecutor really submits to enhance the security.
+        let mut restrictions = URingAllowlist::new();
+        let ops = [
+            URingOperation::Writev,
+            URingOperation::Readv,
+            URingOperation::Nop,
+            URingOperation::Fsync,
+            URingOperation::Fallocate,
+            URingOperation::PollAdd,
+            URingOperation::PollRemove,
+            URingOperation::AsyncCancel,
+        ];
+        for op in ops {
+            restrictions.allow_submit_operation(op);
+        }
+
+        let ctx =
+            URingContext::new(NUM_ENTRIES, Some(&restrictions)).map_err(Error::CreatingContext)?;
+
         Ok(RawExecutor {
-            ctx: URingContext::new(NUM_ENTRIES).map_err(Error::CreatingContext)?,
+            ctx,
             queue: RunnableQueue::new(),
             ring: Mutex::new(Ring {
                 ops: Slab::with_capacity(NUM_ENTRIES),
@@ -645,7 +683,7 @@ impl RawExecutor {
         &self,
         source: &RegisteredSource,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        offset: u64,
+        offset: Option<u64>,
         addrs: &[MemRegion],
     ) -> Result<WakerToken> {
         if addrs
@@ -703,7 +741,7 @@ impl RawExecutor {
         &self,
         source: &RegisteredSource,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        offset: u64,
+        offset: Option<u64>,
         addrs: &[MemRegion],
     ) -> Result<WakerToken> {
         if addrs
@@ -992,7 +1030,7 @@ mod tests {
 
     #[test]
     fn dont_drop_backing_mem_read() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -1013,7 +1051,7 @@ mod tests {
         // Submit the op to the kernel. Next, test that the source keeps its Arc open for the duration
         // of the op.
         let pending_op = registered_source
-            .start_read_to_mem(0, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
+            .start_read_to_mem(None, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
             .expect("failed to start read to mem");
 
         // Here the Arc count must be two, one for `bm` and one to signify that the kernel has a
@@ -1036,7 +1074,7 @@ mod tests {
 
     #[test]
     fn dont_drop_backing_mem_write() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -1057,7 +1095,7 @@ mod tests {
         // Submit the op to the kernel. Next, test that the source keeps its Arc open for the duration
         // of the op.
         let pending_op = registered_source
-            .start_write_from_mem(0, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
+            .start_write_from_mem(None, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
             .expect("failed to start write to mem");
 
         // Here the Arc count must be two, one for `bm` and one to signify that the kernel has a
@@ -1081,7 +1119,7 @@ mod tests {
 
     #[test]
     fn canceled_before_completion() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -1105,7 +1143,7 @@ mod tests {
         let tx_source = ex.register_source(&tx).expect("register source failed");
 
         let read_task = rx_source
-            .start_read_to_mem(0, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
+            .start_read_to_mem(None, Arc::clone(&bm), &[MemRegion { offset: 0, len: 8 }])
             .expect("failed to start read to mem");
 
         ex.spawn_local(cancel_io(read_task)).detach();
@@ -1114,7 +1152,7 @@ mod tests {
         let buf =
             Arc::new(VecIoWrapper::from(vec![0xc2u8; 16])) as Arc<dyn BackingMemory + Send + Sync>;
         let write_task = tx_source
-            .start_write_from_mem(0, Arc::clone(&buf), &[MemRegion { offset: 0, len: 8 }])
+            .start_write_from_mem(None, Arc::clone(&buf), &[MemRegion { offset: 0, len: 8 }])
             .expect("failed to start write from mem");
 
         ex.run_until(check_result(write_task, 8))
@@ -1125,7 +1163,7 @@ mod tests {
     #[ignore]
     #[test]
     fn drop_before_completion() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -1147,7 +1185,7 @@ mod tests {
         let bm = Arc::new(VecIoWrapper::from(VALUE.to_ne_bytes().to_vec()));
         let op = tx_source
             .start_write_from_mem(
-                0,
+                None,
                 bm,
                 &[MemRegion {
                     offset: 0,
@@ -1174,7 +1212,7 @@ mod tests {
 
     #[test]
     fn drop_on_different_thread() {
-        if !use_uring() {
+        if !is_uring_stable() {
             return;
         }
 
@@ -1192,7 +1230,7 @@ mod tests {
         let bm = Arc::new(VecIoWrapper::from(0xf2e96u64.to_ne_bytes().to_vec()));
         let op = tx
             .start_write_from_mem(
-                0,
+                None,
                 bm,
                 &[MemRegion {
                     offset: 0,

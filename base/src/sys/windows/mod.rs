@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,6 @@ mod sched;
 mod shm;
 mod shm_platform;
 mod stream_channel;
-mod stream_channel_platform;
 mod timer;
 mod wait;
 
@@ -38,19 +37,10 @@ pub mod thread;
 
 mod write_zeroes;
 
-use std::cell::Cell;
-
 pub use console::*;
 pub use descriptor::*;
 pub use event::*;
 pub use events::*;
-pub use file_traits::AsRawDescriptors;
-pub use file_traits::FileAllocate;
-pub use file_traits::FileGetLen;
-pub use file_traits::FileReadWriteAtVolatile;
-pub use file_traits::FileReadWriteVolatile;
-pub use file_traits::FileSetLen;
-pub use file_traits::FileSync;
 pub use get_filesystem_type::*;
 pub use ioctl::*;
 pub use mmap::Error as MmapError;
@@ -91,9 +81,6 @@ pub type Pid = pid_t;
 pub type Uid = uid_t;
 pub type Gid = gid_t;
 pub type Mode = mode_t;
-
-/// Used to mark types as !Sync.
-pub type UnsyncMarker = std::marker::PhantomData<Cell<usize>>;
 
 /// Uses the system's page size in bytes to round the given value up to the nearest page boundary.
 #[inline(always)]

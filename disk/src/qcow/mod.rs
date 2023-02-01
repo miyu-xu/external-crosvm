@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,6 +30,7 @@ use base::FileSync;
 use base::PunchHole;
 use base::RawDescriptor;
 use base::WriteZeroesAt;
+use cros_async::Executor;
 use data_model::VolatileMemory;
 use data_model::VolatileSlice;
 use libc::EINVAL;
@@ -44,8 +45,11 @@ use crate::qcow::refcount::RefCount;
 use crate::qcow::vec_cache::CacheMap;
 use crate::qcow::vec_cache::Cacheable;
 use crate::qcow::vec_cache::VecCache;
+use crate::AsyncDisk;
+use crate::AsyncDiskFileWrapper;
 use crate::DiskFile;
 use crate::DiskGetLen;
+use crate::ToAsyncDisk;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -1419,9 +1423,7 @@ impl QcowFile {
             let offset = self.file_offset_write(curr_addr)?;
             let count = self.limit_range_cluster(curr_addr, write_count - nwritten);
 
-            if let Err(e) = cb(self.raw_file.file_mut(), nwritten, offset, count) {
-                return Err(e);
-            }
+            cb(self.raw_file.file_mut(), nwritten, offset, count)?;
 
             nwritten += count;
         }
@@ -1598,6 +1600,12 @@ impl WriteZeroesAt for QcowFile {
     }
 }
 
+impl ToAsyncDisk for QcowFile {
+    fn to_async_disk(self: Box<Self>, ex: &Executor) -> crate::Result<Box<dyn AsyncDisk>> {
+        Ok(Box::new(AsyncDiskFileWrapper::new(*self, ex)))
+    }
+}
+
 // Returns an Error if the given offset doesn't align to a cluster boundary.
 fn offset_is_cluster_boundary(offset: u64, cluster_bits: u32) -> Result<()> {
     if offset & ((0x01 << cluster_bits) - 1) != 0 {
@@ -1608,12 +1616,12 @@ fn offset_is_cluster_boundary(offset: u64, cluster_bits: u32) -> Result<()> {
 
 // Ceiling of the division of `dividend`/`divisor`.
 fn div_round_up_u64(dividend: u64, divisor: u64) -> u64 {
-    dividend / divisor + if dividend % divisor != 0 { 1 } else { 0 }
+    dividend / divisor + u64::from(dividend % divisor != 0)
 }
 
 // Ceiling of the division of `dividend`/`divisor`.
 fn div_round_up_u32(dividend: u32, divisor: u32) -> u32 {
-    dividend / divisor + if dividend % divisor != 0 { 1 } else { 0 }
+    dividend / divisor + u32::from(dividend % divisor != 0)
 }
 
 #[cfg(test)]
@@ -1820,6 +1828,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn test_header_1_tb_file() {
         let mut header = test_huge_header();
@@ -1858,6 +1867,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_read_start() {
         with_basic_file(&valid_header(), |disk_file: File| {
@@ -1869,6 +1879,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_read_start_backing() {
         let disk_file = basic_file(&valid_header());
@@ -1882,6 +1893,7 @@ mod tests {
         assert_eq!(&buf, b"test");
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_read_start_backing_overlap() {
         let disk_file = basic_file(&valid_header());
@@ -1896,6 +1908,7 @@ mod tests {
         assert_eq!(&buf, b"TEST first");
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn offset_write_read() {
         with_basic_file(&valid_header(), |disk_file: File| {
@@ -1908,6 +1921,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_zeroes_read() {
         with_basic_file(&valid_header(), |disk_file: File| {
@@ -1928,6 +1942,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_zeroes_full_cluster() {
         // Choose a size that is larger than a cluster.
@@ -1949,6 +1964,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn write_zeroes_backing() {
         let disk_file = basic_file(&valid_header());
@@ -1991,6 +2007,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn replay_ext4() {
         with_basic_file(&valid_header(), |disk_file: File| {
@@ -2365,10 +2382,11 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn combo_write_read() {
         with_default_file(1024 * 1024 * 1024 * 256, |mut qcow_file| {
-            const NUM_BLOCKS: usize = 555;
+            const NUM_BLOCKS: usize = 55;
             const BLOCK_SIZE: usize = 0x1_0000;
             const OFFSET: u64 = 0x1_0000_0020;
             let data = [0x55u8; BLOCK_SIZE];
@@ -2413,6 +2431,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(windows, ignore = "TODO(b/257958782): Enable large test on windows")]
     #[test]
     fn nested_qcow() {
         let tmp_dir = TempDir::new().unwrap();

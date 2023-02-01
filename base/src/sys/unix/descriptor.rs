@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -214,28 +214,3 @@ IntoRawDescriptor!(UnixDatagram);
 AsRawDescriptor!(Stdin);
 AsRawDescriptor!(Stdout);
 AsRawDescriptor!(Stderr);
-
-#[test]
-#[allow(clippy::eq_op)]
-fn clone_equality() {
-    let ret = unsafe { libc::eventfd(0, 0) };
-    if ret < 0 {
-        panic!("failed to create eventfd");
-    }
-    let descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-
-    assert_eq!(descriptor, descriptor);
-
-    assert_eq!(
-        descriptor,
-        descriptor.try_clone().expect("failed to clone eventfd")
-    );
-
-    let ret = unsafe { libc::eventfd(0, 0) };
-    if ret < 0 {
-        panic!("failed to create eventfd");
-    }
-    let another = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-
-    assert_ne!(descriptor, another);
-}

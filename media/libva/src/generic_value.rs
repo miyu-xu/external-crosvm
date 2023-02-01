@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@ use anyhow::Result;
 
 use crate::bindings;
 
-/// A wrapper over VAGenericValue so we can safely access the underlying union
-/// members
+/// A wrapper over `VAGenericValue` giving us safe access to the underlying union members.
 #[derive(Debug)]
 pub enum GenericValue {
     /// A wrapper over VAGenericValueTypeInteger
@@ -40,12 +39,10 @@ impl TryFrom<bindings::VAGenericValue> for GenericValue {
             bindings::VAGenericValueType::VAGenericValueTypeFunc => {
                 Ok(Self::Func(unsafe { value.value.fn_ }))
             }
-            other => {
-                return Err(anyhow!(
-                    "Conversion failed for unexpected VAGenericValueType: {}",
-                    other
-                ))
-            }
+            other => Err(anyhow!(
+                "Conversion failed for unexpected VAGenericValueType: {}",
+                other
+            )),
         }
     }
 }

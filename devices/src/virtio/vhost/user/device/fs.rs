@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,26 +27,25 @@ use futures::future::Abortable;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 pub use sys::start_device as run_fs_device;
+use virtio_sys::virtio_fs::virtio_fs_config;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
 use crate::virtio;
 use crate::virtio::copy_config;
+use crate::virtio::device_constants::fs::FS_MAX_TAG_LEN;
 use crate::virtio::fs::passthrough::PassthroughFs;
 use crate::virtio::fs::process_fs_queue;
-use crate::virtio::fs::virtio_fs_config;
-use crate::virtio::fs::FS_MAX_TAG_LEN;
 use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::VhostUserBackend;
 
 const MAX_QUEUE_NUM: usize = 2; /* worker queue and high priority queue */
-const MAX_VRING_LEN: u16 = 1024;
 
 async fn handle_fs_queue(
     mut queue: virtio::Queue,
     mem: GuestMemory,
-    doorbell: Arc<Mutex<Doorbell>>,
+    doorbell: Doorbell,
     kick_evt: EventAsync,
     server: Arc<fuse::Server<PassthroughFs>>,
     tube: Arc<Mutex<Tube>>,
@@ -118,11 +117,7 @@ impl FsBackend {
 
 impl VhostUserBackend for FsBackend {
     fn max_queue_num(&self) -> usize {
-        return MAX_QUEUE_NUM;
-    }
-
-    fn max_vring_len(&self) -> u16 {
-        return MAX_VRING_LEN;
+        MAX_QUEUE_NUM
     }
 
     fn features(&self) -> u64 {
@@ -177,18 +172,15 @@ impl VhostUserBackend for FsBackend {
     fn start_queue(
         &mut self,
         idx: usize,
-        mut queue: virtio::Queue,
+        queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Arc<Mutex<Doorbell>>,
+        doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
         if let Some(handle) = self.workers.get_mut(idx).and_then(Option::take) {
             warn!("Starting new queue handler without stopping old handler");
             handle.abort();
         }
-
-        // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-        queue.ack_features(self.acked_features);
 
         let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;

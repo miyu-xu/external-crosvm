@@ -1,21 +1,18 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! Implements pci devices and busses.
 
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_bus_master;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_mixer;
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 mod ac97_regs;
+mod acpi;
 #[cfg(unix)]
 mod coiommu;
 mod msi;
@@ -26,6 +23,7 @@ mod pci_device;
 mod pci_root;
 #[cfg(unix)]
 mod pcie;
+mod pm;
 mod pvpanic;
 mod stub;
 #[cfg(unix)]
@@ -33,13 +31,14 @@ mod vfio_pci;
 
 use libc::EINVAL;
 
-// TODO(b:236297362): build it on windows as weil.
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Backend;
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Dev;
-#[cfg(all(unix, feature = "audio"))]
+#[cfg(feature = "audio")]
 pub use self::ac97::Ac97Parameters;
+pub use self::acpi::DeviceVcfgRegister;
+pub use self::acpi::PowerResourceMethod;
 #[cfg(unix)]
 pub use self::coiommu::CoIommuDev;
 #[cfg(unix)]
@@ -70,6 +69,7 @@ pub use self::pci_device::BarRange;
 pub use self::pci_device::Error as PciDeviceError;
 pub use self::pci_device::PciBus;
 pub use self::pci_device::PciDevice;
+pub use self::pci_device::PreferredIrq;
 pub use self::pci_root::PciConfigIo;
 pub use self::pci_root::PciConfigMmio;
 pub use self::pci_root::PciRoot;
@@ -78,9 +78,13 @@ pub use self::pci_root::PciVirtualConfigMmio;
 #[cfg(unix)]
 pub use self::pcie::PciBridge;
 #[cfg(unix)]
+pub use self::pcie::PcieDownstreamPort;
+#[cfg(unix)]
 pub use self::pcie::PcieHostPort;
 #[cfg(unix)]
 pub use self::pcie::PcieRootPort;
+#[cfg(unix)]
+pub use self::pcie::PcieUpstreamPort;
 pub use self::pvpanic::PvPanicCode;
 pub use self::pvpanic::PvPanicPciDevice;
 pub use self::stub::StubPciDevice;
@@ -89,7 +93,7 @@ pub use self::stub::StubPciParameters;
 pub use self::vfio_pci::VfioPciDevice;
 
 /// PCI has four interrupt pins A->D.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub enum PciInterruptPin {
     IntA,
     IntB,
@@ -107,7 +111,7 @@ pub const PCI_VENDOR_ID_INTEL: u16 = 0x8086;
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CrosvmDeviceId {
     Pit = 1,
     Pic = 2,
@@ -127,6 +131,7 @@ pub enum CrosvmDeviceId {
     UserspaceIrqChip = 16,
     VmWatchdog = 17,
     Pflash = 18,
+    VirtioMmio = 19,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -152,13 +157,14 @@ impl TryFrom<u16> for CrosvmDeviceId {
             16 => Ok(CrosvmDeviceId::UserspaceIrqChip),
             17 => Ok(CrosvmDeviceId::VmWatchdog),
             18 => Ok(CrosvmDeviceId::Pflash),
+            19 => Ok(CrosvmDeviceId::VirtioMmio),
             _ => Err(base::Error::new(EINVAL)),
         }
     }
 }
 
 /// A wrapper structure for pci device and vendor id.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct PciId {
     vendor_id: u16,
     device_id: u16,

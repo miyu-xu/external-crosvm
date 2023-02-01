@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@ use std::time::Instant;
 use aarch64::AArch64 as Arch;
 use anyhow::anyhow;
 use anyhow::Result;
+use arch::CpuSet;
 use arch::LinuxArch;
 use arch::RunnableLinuxVm;
 use arch::VcpuAffinity;
@@ -40,6 +41,11 @@ use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::SelectResult;
 use cros_async::TimerAsync;
+use cros_tracing::trace_event;
+use crosvm_cli::bail_exit_code;
+use crosvm_cli::sys::windows::exit::Exit;
+use crosvm_cli::sys::windows::exit::ExitContext;
+use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
 use devices::tsc::TscSyncMitigations;
 use devices::Bus;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -71,7 +77,6 @@ use hypervisor::VmAArch64 as VmArch;
 use hypervisor::VmX86_64 as VmArch;
 use sync::Condvar;
 use sync::Mutex;
-use tracing::trace_event;
 use vm_control::VmRunMode;
 use winapi::shared::winerror::ERROR_RETRY;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -81,11 +86,9 @@ use x86_64::cpuid::CpuIdContext;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use x86_64::X8664arch as Arch;
 
-use crate::bail_exit_code;
-use crate::crosvm::sys::windows::exit::Exit;
-use crate::crosvm::sys::windows::exit::ExitContext;
-use crate::crosvm::sys::windows::exit::ExitContextAnyhow;
+#[cfg(feature = "stats")]
 use crate::crosvm::sys::windows::stats::StatisticsCollector;
+#[cfg(feature = "stats")]
 use crate::crosvm::sys::windows::stats::VmExitStatistics;
 use crate::sys::windows::save_vcpu_tsc_offset;
 use crate::sys::windows::ExitState;
@@ -166,7 +169,7 @@ impl VcpuRunThread {
         irq_chip: &mut dyn IrqChipArch,
         vcpu_count: usize,
         run_rt: bool,
-        vcpu_affinity: Option<Vec<usize>>,
+        vcpu_affinity: Option<CpuSet>,
         no_smt: bool,
         has_bios: bool,
         host_cpu_topology: bool,
@@ -209,6 +212,7 @@ impl VcpuRunThread {
             false, /* enable_pnp_data */
             no_smt,
             false, /* itmt */
+            None,  /* hybrid_type */
         ));
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -264,7 +268,7 @@ impl VcpuRunThread {
         mut irq_chip: Box<dyn IrqChipArch + 'static>,
         vcpu_count: usize,
         run_rt: bool,
-        vcpu_affinity: Option<Vec<usize>>,
+        vcpu_affinity: Option<CpuSet>,
         delay_rt: bool,
         no_smt: bool,
         start_barrier: Arc<Barrier>,
@@ -275,7 +279,7 @@ impl VcpuRunThread {
         vm_evt_wrtube: SendTube,
         requires_pvclock_ctrl: bool,
         run_mode_arc: Arc<VcpuRunMode>,
-        stats: Option<Arc<Mutex<StatisticsCollector>>>,
+        #[cfg(feature = "stats")] stats: Option<Arc<Mutex<StatisticsCollector>>>,
         host_cpu_topology: bool,
         tsc_offset: Option<u64>,
         force_calibrated_tsc_leaf: bool,
@@ -314,6 +318,7 @@ impl VcpuRunThread {
                         false, /* enable_pnp_data */
                         no_smt,
                         false, /* itmt */
+                        None,  /* hybrid_type */
                     );
 
                     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -368,6 +373,7 @@ impl VcpuRunThread {
                         mmio_bus,
                         requires_pvclock_ctrl,
                         run_mode_arc,
+                        #[cfg(feature = "stats")]
                         stats,
                         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                         cpuid_context,
@@ -375,7 +381,10 @@ impl VcpuRunThread {
                 };
 
                 let final_event_data = match vcpu_fn().unwrap_or_else(|e| {
-                    error!("vcpu {} run loop exited with error: {}", context.cpu_id, e);
+                    error!(
+                        "vcpu {} run loop exited with error: {:#}",
+                        context.cpu_id, e
+                    );
                     ExitState::Stop
                 }) {
                     ExitState::Stop => VmEventType::Exit,
@@ -556,7 +565,7 @@ pub fn run_all_vcpus<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     exit_evt: &Event,
     vm_evt_wrtube: &SendTube,
     pvclock_host_tube: &Option<Tube>,
-    stats: &Option<Arc<Mutex<StatisticsCollector>>>,
+    #[cfg(feature = "stats")] stats: &Option<Arc<Mutex<StatisticsCollector>>>,
     host_cpu_topology: bool,
     run_mode_arc: Arc<VcpuRunMode>,
     tsc_sync_mitigations: TscSyncMitigations,
@@ -577,11 +586,11 @@ pub fn run_all_vcpus<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         };
 
         // TSC sync mitigations may set vcpu affinity and set a TSC offset
-        let (vcpu_affinity, tsc_offset): (Option<Vec<usize>>, Option<u64>) =
+        let (vcpu_affinity, tsc_offset): (Option<CpuSet>, Option<u64>) =
             if let Some(mitigation_affinity) = tsc_sync_mitigations.get_vcpu_affinity(cpu_id) {
                 if vcpu_affinity.is_none() {
                     (
-                        Some(mitigation_affinity),
+                        Some(CpuSet::new(mitigation_affinity)),
                         tsc_sync_mitigations.get_vcpu_tsc_offset(cpu_id),
                     )
                 } else {
@@ -633,6 +642,7 @@ pub fn run_all_vcpus<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                 .exit_context(Exit::CloneTube, "failed to clone tube")?,
             pvclock_host_tube.is_none(),
             run_mode_arc.clone(),
+            #[cfg(feature = "stats")]
             stats.clone(),
             host_cpu_topology,
             tsc_offset,
@@ -665,16 +675,21 @@ fn vcpu_loop<V>(
     mmio_bus: Bus,
     requires_pvclock_ctrl: bool,
     run_mode_arc: Arc<VcpuRunMode>,
-    stats: Option<Arc<Mutex<StatisticsCollector>>>,
+    #[cfg(feature = "stats")] stats: Option<Arc<Mutex<StatisticsCollector>>>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] cpuid_context: CpuIdContext,
 ) -> Result<ExitState>
 where
     V: VcpuArch + 'static,
 {
+    #[cfg(feature = "stats")]
     let mut exit_stats = VmExitStatistics::new();
-    mmio_bus.stats.lock().set_enabled(stats.is_some());
-    io_bus.stats.lock().set_enabled(stats.is_some());
-    exit_stats.set_enabled(stats.is_some());
+
+    #[cfg(feature = "stats")]
+    {
+        mmio_bus.stats.lock().set_enabled(stats.is_some());
+        io_bus.stats.lock().set_enabled(stats.is_some());
+        exit_stats.set_enabled(stats.is_some());
+    }
 
     let mut save_tsc_offset = true;
 
@@ -729,6 +744,7 @@ where
                 save_tsc_offset = false;
             }
 
+            #[cfg(feature = "stats")]
             let start = exit_stats.start_stat();
 
             match exit {
@@ -890,6 +906,7 @@ where
                 },
             }
 
+            #[cfg(feature = "stats")]
             exit_stats.end_stat(&exit, start);
         }
 
@@ -913,6 +930,7 @@ where
                     }
                     VmRunMode::Breakpoint => {}
                     VmRunMode::Exiting => {
+                        #[cfg(feature = "stats")]
                         if let Some(stats) = stats {
                             let mut collector = stats.lock();
                             collector.pio_bus_stats.push(io_bus.stats);
@@ -966,7 +984,7 @@ mod tests {
     fn stall_monitor_closes_on_exit_evt() -> Result<()> {
         let SetupData { monitor, exit_evt } = set_up_stall_monitor(1)?;
 
-        let _ = exit_evt.write(1)?;
+        exit_evt.signal()?;
         let _ = monitor
             .run(&exit_evt)?
             .join()

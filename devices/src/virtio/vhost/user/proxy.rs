@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,7 @@ use anyhow::bail;
 use anyhow::Context;
 use base::error;
 use base::info;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
 use base::EventToken;
@@ -40,6 +41,7 @@ use base::Tube;
 use base::WaitContext;
 use data_model::DataInit;
 use data_model::Le32;
+use hypervisor::Datamatch;
 use libc::recv;
 use libc::MSG_DONTWAIT;
 use libc::MSG_PEEK;
@@ -52,6 +54,7 @@ use vm_control::VmMemoryRequest;
 use vm_control::VmMemoryResponse;
 use vm_control::VmMemorySource;
 use vm_memory::udmabuf::UdmabufDriver;
+use vm_memory::udmabuf::UdmabufDriverTrait;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vmm_vhost::connection::socket::Endpoint as SocketEndpoint;
@@ -64,7 +67,6 @@ use vmm_vhost::message::VhostUserMemoryRegion;
 use vmm_vhost::message::VhostUserMsgHeader;
 use vmm_vhost::message::VhostUserMsgValidator;
 use vmm_vhost::message::VhostUserShmemMapMsg;
-use vmm_vhost::message::VhostUserShmemMapMsgFlags;
 use vmm_vhost::message::VhostUserShmemUnmapMsg;
 use vmm_vhost::message::VhostUserU64;
 use vmm_vhost::Error as VhostError;
@@ -95,6 +97,7 @@ use crate::virtio::Writer;
 use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
 use crate::virtio::VIRTIO_MSI_NO_VECTOR;
 use crate::PciAddress;
+use crate::Suspendable;
 
 // Note: There are two sets of queues that will be mentioned here. 1st set is
 // for this Virtio PCI device itself. 2nd set is the actual device backends
@@ -235,6 +238,10 @@ struct KickData {
 #[derive(Default)]
 struct Vring {
     kick_data: KickData,
+    // The call event is registered with KVM_IOEVENTFD so that the kernel signals it
+    // directly. Although the proxy device doesn't write to it, we need to keep a reference
+    // because unregistering the eventfd requires passing the it back to KVM_IOEVENTFD
+    // with a deassign flag.
     call_evt: Option<Event>,
 }
 
@@ -248,6 +255,9 @@ struct Worker {
 
     // To communicate with the main process.
     main_process_tube: Tube,
+
+    // The bar representing the doorbell and notification.
+    io_pci_bar: Alloc,
 
     // The bar representing the shared memory regions.
     shmem_pci_bar: Alloc,
@@ -299,8 +309,6 @@ enum Token {
     SiblingKick { index: usize },
     // crosvm has requested the device to shut down.
     Kill,
-    // Message from the main thread.
-    MainThread,
     // An iommu fault occured. Generally means the device process died.
     IommuFault,
 }
@@ -436,7 +444,6 @@ impl Worker {
         &mut self,
         rx_queue_evt: Event,
         tx_queue_evt: Event,
-        main_thread_tube: Tube,
         kill_evt: Event,
     ) -> Result<ExitReason> {
         let fault_event = self
@@ -459,7 +466,6 @@ impl Worker {
             (&self.slave_req_helper, Token::SiblingSocket),
             (&rx_queue_evt, Token::RxQueue),
             (&tx_queue_evt, Token::TxQueue),
-            (&main_thread_tube, Token::MainThread),
             (&kill_evt, Token::Kill),
             (&fault_event, Token::IommuFault),
         ])
@@ -494,7 +500,7 @@ impl Worker {
                         }
                     }
                     Token::RxQueue => {
-                        if let Err(e) = rx_queue_evt.read() {
+                        if let Err(e) = rx_queue_evt.wait() {
                             bail!("error reading rx queue Event: {}", e);
                         }
 
@@ -506,7 +512,7 @@ impl Worker {
                         }
                     }
                     Token::TxQueue => {
-                        if let Err(e) = tx_queue_evt.read() {
+                        if let Err(e) = tx_queue_evt.wait() {
                             bail!("error reading tx queue event: {}", e);
                         }
                         self.process_tx()
@@ -524,13 +530,8 @@ impl Worker {
                             );
                         }
                     }
-                    Token::MainThread => {
-                        if let Err(e) = self.process_doorbell_message(&main_thread_tube) {
-                            bail!("error processing doorbell message: {}", e);
-                        }
-                    }
                     Token::Kill => {
-                        let _ = kill_evt.read();
+                        let _ = kill_evt.wait();
                         return Ok(ExitReason::Killed);
                     }
                 }
@@ -889,9 +890,19 @@ impl Worker {
         let file = file.ok_or_else(|| anyhow!("no file found for SET_VRING_CALL"))?;
 
         // Safe because we own the file.
-        self.vrings[index as usize].call_evt =
-            unsafe { Some(Event::from_raw_descriptor(file.into_raw_descriptor())) };
+        let evt = unsafe { Event::from_raw_descriptor(file.into_raw_descriptor()) };
 
+        self.send_memory_request(&VmMemoryRequest::IoEvent {
+            evt: evt.try_clone().context("failed to dup event")?,
+            allocation: self.io_pci_bar,
+            offset: DOORBELL_OFFSET + DOORBELL_OFFSET_MULTIPLIER as u64 * index as u64,
+            datamatch: Datamatch::AnyLength,
+            register: true,
+        })
+        .context("failed to register IoEvent")?;
+
+        // Save the eventfd because we will need to supply it to KVM to unregister the eventfd.
+        self.vrings[index as usize].call_evt = Some(evt);
         Ok(())
     }
 
@@ -973,15 +984,7 @@ impl Worker {
             .export(msg.fd_offset, msg.len)
             .context("failed to export")?;
 
-        let prot = match (
-            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_R),
-            msg.flags.contains(VhostUserShmemMapMsgFlags::MAP_W),
-        ) {
-            (true, true) => Protection::read_write(),
-            (true, false) => Protection::read(),
-            (false, true) => Protection::write(),
-            (false, false) => bail!("unsupported protection"),
-        };
+        let prot = Protection::from(msg.flags);
         let regions = regions
             .iter()
             .map(|r| {
@@ -1136,7 +1139,7 @@ impl Worker {
             .as_ref()
             .with_context(|| format!("kick data not set for {}-th vring", index))?;
         kick_evt
-            .read()
+            .wait()
             .map_err(|e| anyhow!("failed to read kick event for {}-th vring: {}", index, e))?;
         match kick_data.msi_vector {
             Some(msi_vector) => {
@@ -1147,22 +1150,6 @@ impl Worker {
                 bail!("MSI vector not set for {}-th vring", index);
             }
         }
-    }
-
-    // Processes a message sent, on `main_thread_tube`, in response to a doorbell write. It writes
-    // to the corresponding call event of the vring index sent over `main_thread_tube`.
-    fn process_doorbell_message(&mut self, main_thread_tube: &Tube) -> Result<()> {
-        let index: usize = main_thread_tube
-            .recv()
-            .context("failed to receive doorbell data")?;
-        let call_evt = self.vrings[index]
-            .call_evt
-            .as_ref()
-            .ok_or(anyhow!("call event for {}-th ring is not set", index))?;
-        call_evt
-            .write(1)
-            .with_context(|| format!("failed to write call event for {}-th ring", index))?;
-        Ok(())
     }
 
     // Clean up memory regions that the worker registered so that the device can start another
@@ -1237,6 +1224,30 @@ impl Worker {
         }
         Ok(())
     }
+
+    // Unregister all vring_call eventfds.
+    fn unregister_vring_call_eventfds(&mut self) -> Result<()> {
+        let mut last_err = None;
+        let vring_call_evts: Vec<(usize, Event)> = self
+            .vrings
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(idx, v)| v.call_evt.take().map(|e| (idx, e)))
+            .collect();
+        for (idx, evt) in vring_call_evts {
+            if let Err(e) = self.send_memory_request(&VmMemoryRequest::IoEvent {
+                evt,
+                allocation: self.io_pci_bar,
+                offset: DOORBELL_OFFSET + DOORBELL_OFFSET_MULTIPLIER as u64 * idx as u64,
+                datamatch: Datamatch::AnyLength,
+                register: false,
+            }) {
+                error!("failed to unregister ioevent: idx={}:, {:#}", idx, e);
+                last_err = Some(e);
+            }
+        }
+        last_err.map_or(Ok(()), Err)
+    }
 }
 
 // Doorbell capability of the proxy device.
@@ -1304,9 +1315,6 @@ enum State {
     },
     /// The worker thread is running.
     Running {
-        // To communicate with the worker thread.
-        worker_thread_tube: Tube,
-
         kill_evt: Event,
         worker_thread: thread::JoinHandle<Result<()>>,
     },
@@ -1415,29 +1423,6 @@ impl VirtioVhostUser {
         Ok(())
     }
 
-    // Handles writes to the DOORBELL region of the BAR as per the VVU spec.
-    fn write_bar_doorbell(&mut self, offset: u64) {
-        match &*self.state.lock() {
-            State::Running {
-                worker_thread_tube, ..
-            } => {
-                // The |offset| represents the Vring number who call event needs to be
-                // written to.
-                let vring = (offset / DOORBELL_OFFSET_MULTIPLIER as u64) as usize;
-
-                if let Err(e) = worker_thread_tube.send(&vring) {
-                    error!("failed to send doorbell write request: {}", e);
-                }
-            }
-            s => {
-                error!(
-                    "write_bar_doorbell is called in an invalid state {} with offset={}",
-                    s, offset,
-                );
-            }
-        }
-    }
-
     // Implement writing to the notifications bar as per the VVU spec.
     fn write_bar_notifications(&mut self, offset: u64, data: &[u8]) {
         if data.len() < std::mem::size_of::<u16>() {
@@ -1527,10 +1512,6 @@ impl VirtioVhostUser {
         // Clone to pass it into a worker thread.
         let state_cloned = Arc::clone(&self.state);
 
-        // Create tube to communicate with the worker thread and update the state.
-        let (worker_thread_tube, main_thread_tube) =
-            Tube::pair().expect("failed to create tube pair");
-
         // Use `State::Invalid` as the intermediate state while preparing the proper next state.
         // Once a worker thread is successfully started, `self.state` will be updated to `Running`.
         let old_state: State = std::mem::replace(&mut *state, State::Invalid);
@@ -1583,6 +1564,7 @@ impl VirtioVhostUser {
         };
 
         // Safe because a PCI bar is guaranteed to be allocated at this point.
+        let io_pci_bar = self.io_pci_bar.expect("PCI bar unallocated");
         let shmem_pci_bar = self.shmem_pci_bar.expect("PCI bar unallocated");
 
         // Initialize the Worker with the Msix vector values to be injected for
@@ -1598,7 +1580,7 @@ impl VirtioVhostUser {
         // This thread will wait for the sibling to connect and the continuously parse messages from
         // the sibling as well as the device (over Virtio).
         let worker_result = thread::Builder::new()
-            .name("virtio_vhost_user".to_string())
+            .name("v_vhost_user".to_string())
             .spawn(move || {
                 // Block until the connection with the sibling is established. We do this in a
                 // thread to avoid blocking the main thread.
@@ -1619,6 +1601,7 @@ impl VirtioVhostUser {
                     rx_queue,
                     tx_queue,
                     main_process_tube,
+                    io_pci_bar,
                     shmem_pci_bar,
                     shmem_pci_bar_mem_offset: 0,
                     vrings,
@@ -1634,7 +1617,6 @@ impl VirtioVhostUser {
                 let run_result = worker.run(
                     rx_queue_evt.try_clone().unwrap(),
                     tx_queue_evt.try_clone().unwrap(),
-                    main_thread_tube,
                     kill_evt,
                 );
 
@@ -1644,11 +1626,20 @@ impl VirtioVhostUser {
                     return Ok(());
                 }
 
+                // Unregister any vring_call eventfds in case we need to
+                // reuse the proxy device later.
+                if let Err(e) = worker.unregister_vring_call_eventfds() {
+                    error!("error unmapping ioevent: {:#}", e);
+                    *state_cloned.lock() = State::Invalid;
+                    return Ok(());
+                }
+
                 match run_result {
                     Ok(ExitReason::IommuFault) => {
                         info!("worker thread exited due to IOMMU fault");
                         Ok(())
                     }
+
                     Ok(ExitReason::Killed) => {
                         info!("worker thread exited successfully");
                         Ok(())
@@ -1689,18 +1680,15 @@ impl VirtioVhostUser {
                 }
             });
 
-        match worker_result {
+        *state = match worker_result {
             Err(e) => {
                 error!("failed to spawn virtio_vhost_user worker: {}", e);
                 return;
             }
-            Ok(worker_thread) => {
-                *state = State::Running {
-                    worker_thread_tube,
-                    kill_evt: self_kill_evt,
-                    worker_thread,
-                };
-            }
+            Ok(worker_thread) => State::Running {
+                kill_evt: self_kill_evt,
+                worker_thread,
+            },
         }
     }
 }
@@ -1714,7 +1702,7 @@ impl Drop for VirtioVhostUser {
             ..
         } = std::mem::replace(&mut *state, State::Invalid)
         {
-            match kill_evt.write(1) {
+            match kill_evt.signal() {
                 Ok(()) => {
                     // Ignore the result because there is nothing we can do about it.
                     let _ = worker_thread.join();
@@ -1750,8 +1738,6 @@ impl VirtioDevice for VirtioVhostUser {
             }
         };
 
-        // `self.worker_thread_tube` is set after a fork / keep_rds is called in multiprocess mode.
-        // Hence, it's not required to be processed in this function.
         rds
     }
 
@@ -1872,13 +1858,14 @@ impl VirtioDevice for VirtioVhostUser {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != NUM_PROXY_DEVICE_QUEUES || queue_evts.len() != NUM_PROXY_DEVICE_QUEUES {
-            error!("bad queue length: {} {}", queues.len(), queue_evts.len());
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != NUM_PROXY_DEVICE_QUEUES {
+            return Err(anyhow!("bad queue length: {}", queues.len()));
         }
+
+        let (rx_queue, rx_queue_evt) = queues.remove(0);
+        let (tx_queue, tx_queue_evt) = queues.remove(0);
 
         let mut state = self.state.lock();
         // Use `State::Invalid` as the intermediate state here.
@@ -1894,18 +1881,22 @@ impl VirtioDevice for VirtioVhostUser {
                     main_process_tube,
                     mem,
                     interrupt,
-                    rx_queue: queues.remove(0),
-                    tx_queue: queues.remove(0),
-                    rx_queue_evt: queue_evts.remove(0),
-                    tx_queue_evt: queue_evts.remove(0),
+                    rx_queue,
+                    tx_queue,
+                    rx_queue_evt,
+                    tx_queue_evt,
                     iommu: self.iommu.take().unwrap(),
                 };
             }
             s => {
                 // If the old state is not `Initialized`, it becomes `Invalid`.
-                error!("activate() is called in an unexpected state: {}", s);
+                return Err(anyhow!(
+                    "activate() is called in an unexpected state: {}",
+                    s
+                ));
             }
         };
+        Ok(())
     }
 
     fn read_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &mut [u8]) {
@@ -1928,7 +1919,14 @@ impl VirtioDevice for VirtioVhostUser {
         }
 
         if (DOORBELL_OFFSET..NOTIFICATIONS_OFFSET).contains(&offset) {
-            self.write_bar_doorbell(offset - DOORBELL_OFFSET);
+            // The vring_call eventfds which back doorbells are registered with the
+            // host kernel via KVM_IOEVENTFD, so the host kernel will signal them
+            // directly. If we're here, then that means the guest wrote to a doorbell
+            // without a registered eventfd, so there's nothing for us to signal.
+            warn!(
+                "doorbell write with no corresponding evenetfd: offset={}",
+                offset
+            );
         } else if (NOTIFICATIONS_OFFSET..NOTIFICATIONS_END).contains(&offset) {
             self.write_bar_notifications(offset - NOTIFICATIONS_OFFSET, data);
         } else {
@@ -1970,7 +1968,7 @@ impl VirtioDevice for VirtioVhostUser {
                 // e.g. The VVU device backend in the guest is killed unexpectedly.
                 // To support this case, we might need to reset iommu's state as well.
 
-                if let Err(e) = kill_evt.write(1) {
+                if let Err(e) = kill_evt.signal() {
                     error!("failed to notify the kill event: {}", e);
                 }
 
@@ -1995,3 +1993,5 @@ impl VirtioDevice for VirtioVhostUser {
         self.pci_address
     }
 }
+
+impl Suspendable for VirtioVhostUser {}

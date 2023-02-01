@@ -1,19 +1,19 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::mem;
-use std::net::Ipv4Addr;
 use std::path::Path;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
 use base::RawDescriptor;
 use base::Tube;
-use net_util::MacAddress;
 use net_util::TapT;
 use vhost::NetT as VhostNetT;
 use virtio_sys::virtio_net;
@@ -28,6 +28,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
+use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 2;
@@ -51,22 +52,10 @@ where
     T: TapT,
     U: VhostNetT<T>,
 {
-    /// Create a new virtio network device with the given IP address and
-    /// netmask.
-    pub fn new(
-        vhost_net_device_path: &Path,
-        base_features: u64,
-        ip_addr: Ipv4Addr,
-        netmask: Ipv4Addr,
-        mac_addr: MacAddress,
-    ) -> Result<Net<T, U>> {
+    /// Creates a new virtio network device from a tap device that has already been
+    /// configured.
+    pub fn new(vhost_net_device_path: &Path, base_features: u64, tap: T) -> Result<Net<T, U>> {
         let kill_evt = Event::new().map_err(Error::CreateKillEvent)?;
-
-        let tap: T = T::new(true, false).map_err(Error::TapOpen)?;
-        tap.set_ip_addr(ip_addr).map_err(Error::TapSetIp)?;
-        tap.set_netmask(netmask).map_err(Error::TapSetNetmask)?;
-        tap.set_mac_address(mac_addr)
-            .map_err(Error::TapSetMacAddress)?;
 
         // Set offload flags to match the virtio features below.
         tap.set_offload(
@@ -79,7 +68,6 @@ where
         tap.set_vnet_hdr_size(vnet_hdr_size)
             .map_err(Error::TapSetVnetHdrSize)?;
 
-        tap.enable().map_err(Error::TapEnable)?;
         let vhost_net_handle = U::new(vhost_net_device_path).map_err(Error::VhostOpen)?;
 
         let avail_features = base_features
@@ -122,7 +110,7 @@ where
         // Only kill the child if it claimed its event.
         if self.workers_kill_evt.is_none() {
             // Ignore the result because there is nothing we can do about it.
-            let _ = self.kill_evt.write(1);
+            let _ = self.kill_evt.signal();
         }
 
         if let Some(worker_thread) = self.worker_thread.take() {
@@ -197,76 +185,74 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != NUM_QUEUES || queue_evts.len() != NUM_QUEUES {
-            error!("net: expected {} queues, got {}", NUM_QUEUES, queues.len());
-            return;
+        queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != NUM_QUEUES {
+            return Err(anyhow!(
+                "net: expected {} queues, got {}",
+                NUM_QUEUES,
+                queues.len()
+            ));
         }
 
-        if let Some(vhost_net_handle) = self.vhost_net_handle.take() {
-            if let Some(tap) = self.tap.take() {
-                if let Some(vhost_interrupt) = self.vhost_interrupt.take() {
-                    if let Some(kill_evt) = self.workers_kill_evt.take() {
-                        let acked_features = self.acked_features;
-                        let socket = if self.response_tube.is_some() {
-                            self.response_tube.take()
-                        } else {
-                            None
-                        };
-                        let mut worker = Worker::new(
-                            queues,
-                            vhost_net_handle,
-                            vhost_interrupt,
-                            interrupt,
-                            acked_features,
-                            kill_evt,
-                            socket,
-                        );
-                        let activate_vqs = |handle: &U| -> Result<()> {
-                            for idx in 0..NUM_QUEUES {
-                                handle
-                                    .set_backend(idx, Some(&tap))
-                                    .map_err(Error::VhostNetSetBackend)?;
-                            }
-                            Ok(())
-                        };
-                        let result = worker.init(mem, queue_evts, QUEUE_SIZES, activate_vqs);
-                        if let Err(e) = result {
-                            error!("net worker thread exited with error: {}", e);
-                        }
-                        let worker_result = thread::Builder::new()
-                            .name("vhost_net".to_string())
-                            .spawn(move || {
-                                let cleanup_vqs = |handle: &U| -> Result<()> {
-                                    for idx in 0..NUM_QUEUES {
-                                        handle
-                                            .set_backend(idx, None)
-                                            .map_err(Error::VhostNetSetBackend)?;
-                                    }
-                                    Ok(())
-                                };
-                                let result = worker.run(cleanup_vqs);
-                                if let Err(e) = result {
-                                    error!("net worker thread exited with error: {}", e);
-                                }
-                                (worker, tap)
-                            });
-
-                        match worker_result {
-                            Err(e) => {
-                                error!("failed to spawn vhost_net worker: {}", e);
-                                return;
-                            }
-                            Ok(join_handle) => {
-                                self.worker_thread = Some(join_handle);
-                            }
-                        }
-                    }
-                }
+        let vhost_net_handle = self
+            .vhost_net_handle
+            .take()
+            .context("missing vhost_net_handle")?;
+        let tap = self.tap.take().context("missing tap")?;
+        let vhost_interrupt = self
+            .vhost_interrupt
+            .take()
+            .context("missing vhost_interrupt")?;
+        let kill_evt = self.workers_kill_evt.take().context("missing kill_evt")?;
+        let acked_features = self.acked_features;
+        let socket = if self.response_tube.is_some() {
+            self.response_tube.take()
+        } else {
+            None
+        };
+        let mut worker = Worker::new(
+            queues,
+            vhost_net_handle,
+            vhost_interrupt,
+            interrupt,
+            acked_features,
+            kill_evt,
+            socket,
+            self.supports_iommu(),
+        );
+        let activate_vqs = |handle: &U| -> Result<()> {
+            for idx in 0..NUM_QUEUES {
+                handle
+                    .set_backend(idx, Some(&tap))
+                    .map_err(Error::VhostNetSetBackend)?;
             }
-        }
+            Ok(())
+        };
+        worker
+            .init(mem, QUEUE_SIZES, activate_vqs)
+            .context("net worker init exited with error")?;
+        let worker_thread = thread::Builder::new()
+            .name("vhost_net".to_string())
+            .spawn(move || {
+                let cleanup_vqs = |handle: &U| -> Result<()> {
+                    for idx in 0..NUM_QUEUES {
+                        handle
+                            .set_backend(idx, None)
+                            .map_err(Error::VhostNetSetBackend)?;
+                    }
+                    Ok(())
+                };
+                let result = worker.run(cleanup_vqs);
+                if let Err(e) = result {
+                    error!("net worker thread exited with error: {}", e);
+                }
+                (worker, tap)
+            })
+            .context("failed to spawn vhost_net worker")?;
+
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 
     fn on_device_sandboxed(&mut self) {
@@ -331,7 +317,7 @@ where
 
     fn reset(&mut self) -> bool {
         // Only kill the child if it claimed its event.
-        if self.workers_kill_evt.is_none() && self.kill_evt.write(1).is_err() {
+        if self.workers_kill_evt.is_none() && self.kill_evt.signal().is_err() {
             error!("{}: failed to notify the kill event", self.debug_label());
             return false;
         }
@@ -356,12 +342,18 @@ where
     }
 }
 
+impl<T, U> Suspendable for Net<T, U>
+where
+    T: TapT + 'static,
+    U: VhostNetT<T> + 'static,
+{
+}
+
 #[cfg(test)]
 pub mod tests {
+    use std::net::Ipv4Addr;
     use std::path::PathBuf;
     use std::result;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Arc;
 
     use hypervisor::ProtectionType;
     use net_util::sys::unix::fakes::FakeTap;
@@ -374,6 +366,7 @@ pub mod tests {
     use crate::virtio::base_features;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
     use crate::IrqLevelEvent;
+    use net_util::TapTCommon;
 
     fn create_guest_memory() -> result::Result<GuestMemory, GuestMemoryError> {
         let start_addr1 = GuestAddress(0x0);
@@ -382,15 +375,19 @@ pub mod tests {
     }
 
     fn create_net_common() -> Net<FakeTap, FakeNet<FakeTap>> {
+        let tap = FakeTap::new(true, false).unwrap();
+        tap.set_ip_addr(Ipv4Addr::new(127, 0, 0, 1))
+            .map_err(Error::TapSetIp)
+            .unwrap();
+        tap.set_netmask(Ipv4Addr::new(255, 255, 255, 0))
+            .map_err(Error::TapSetNetmask)
+            .unwrap();
+        tap.set_mac_address("de:21:e8:47:6b:6a".parse().unwrap())
+            .unwrap();
+        tap.enable().unwrap();
+
         let features = base_features(ProtectionType::Unprotected);
-        Net::<FakeTap, FakeNet<FakeTap>>::new(
-            &PathBuf::from(""),
-            features,
-            Ipv4Addr::new(127, 0, 0, 1),
-            Ipv4Addr::new(255, 255, 255, 0),
-            "de:21:e8:47:6b:6a".parse().unwrap(),
-        )
-        .unwrap()
+        Net::<FakeTap, FakeNet<FakeTap>>::new(&PathBuf::from(""), features, tap).unwrap()
     }
 
     #[test]
@@ -436,16 +433,13 @@ pub mod tests {
         let mut net = create_net_common();
         let guest_memory = create_guest_memory().unwrap();
         // Just testing that we don't panic, for now
-        net.activate(
+        let _ = net.activate(
             guest_memory,
-            Interrupt::new(
-                Arc::new(AtomicUsize::new(0)),
-                IrqLevelEvent::new().unwrap(),
-                None,
-                VIRTIO_MSI_NO_VECTOR,
-            ),
-            vec![Queue::new(1)],
-            vec![Event::new().unwrap()],
+            Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
+            vec![
+                (Queue::new(1), Event::new().unwrap()),
+                (Queue::new(1), Event::new().unwrap()),
+            ],
         );
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium OS Authors. All rights reserved.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,11 +38,10 @@ impl GuestMemory {
     ///
     /// This feature is only available on Unix, where a MemoryMapping can remove a mapped range.
     pub fn remove_range(&self, addr: GuestAddress, count: u64) -> Result<()> {
-        self.do_in_region(addr, move |mapping, offset, _| {
-            mapping
-                .remove_range(offset, count as usize)
-                .map_err(|e| Error::MemoryAccess(addr, e))
-        })
+        let (mapping, offset, _) = self.find_region(addr)?;
+        mapping
+            .remove_range(offset, count as usize)
+            .map_err(|e| Error::MemoryAccess(addr, e))
     }
 
     /// Handles guest memory policy hints/advices.

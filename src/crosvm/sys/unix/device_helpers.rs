@@ -1,12 +1,10 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fs::OpenOptions;
-use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
@@ -39,22 +37,16 @@ use devices::virtio::memory_mapper::MemoryMapperTrait;
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 use devices::virtio::vfio_wrapper::VfioWrapper;
 use devices::virtio::vhost::user::proxy::VirtioVhostUser;
-use devices::virtio::vhost::user::vmm::Block as VhostUserBlock;
-use devices::virtio::vhost::user::vmm::Console as VhostUserConsole;
-use devices::virtio::vhost::user::vmm::Fs as VhostUserFs;
-use devices::virtio::vhost::user::vmm::Gpu as VhostUserGpu;
-use devices::virtio::vhost::user::vmm::Mac80211Hwsim as VhostUserMac80211Hwsim;
-use devices::virtio::vhost::user::vmm::Net as VhostUserNet;
-use devices::virtio::vhost::user::vmm::Snd as VhostUserSnd;
-use devices::virtio::vhost::user::vmm::Video as VhostUserVideo;
-use devices::virtio::vhost::user::vmm::Vsock as VhostUserVsock;
-use devices::virtio::vhost::user::vmm::Wl as VhostUserWl;
+use devices::virtio::vhost::user::vmm::VhostUserVirtioDevice;
 use devices::virtio::vhost::user::VhostUserDevice;
 use devices::virtio::vhost::vsock::VhostVsockConfig;
 #[cfg(feature = "balloon")]
 use devices::virtio::BalloonMode;
 use devices::virtio::Console;
+use devices::virtio::NetError;
+use devices::virtio::NetParametersMode;
 use devices::virtio::VirtioDevice;
+use devices::virtio::VirtioDeviceType;
 use devices::BusDeviceObj;
 use devices::IommuDevType;
 use devices::PciAddress;
@@ -62,15 +54,18 @@ use devices::PciDevice;
 #[cfg(feature = "tpm")]
 use devices::SoftwareTpm;
 use devices::VfioDevice;
+use devices::VfioDeviceType;
 use devices::VfioPciDevice;
 use devices::VfioPlatformDevice;
-#[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
 use devices::VtpmProxy;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
 use minijail::Minijail;
 use net_util::sys::unix::Tap;
 use net_util::MacAddress;
+use net_util::TapT;
+use net_util::TapTCommon;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
@@ -82,13 +77,16 @@ use crate::crosvm::config::JailConfig;
 use crate::crosvm::config::TouchDeviceOption;
 use crate::crosvm::config::VhostUserFsOption;
 use crate::crosvm::config::VhostUserOption;
-use crate::crosvm::config::VhostUserWlOption;
 use crate::crosvm::config::VvuOption;
 
 pub enum TaggedControlTube {
     Fs(Tube),
     Vm(Tube),
-    VmMemory(Tube),
+    VmMemory {
+        tube: Tube,
+        /// See devices::virtio::VirtioDevice.expose_shared_memory_region_with_viommu
+        expose_with_viommu: bool,
+    },
     VmIrq(Tube),
     VmMsync(Tube),
 }
@@ -97,7 +95,7 @@ impl AsRef<Tube> for TaggedControlTube {
     fn as_ref(&self) -> &Tube {
         use self::TaggedControlTube::*;
         match &self {
-            Fs(tube) | Vm(tube) | VmMemory(tube) | VmIrq(tube) | VmMsync(tube) => tube,
+            Fs(tube) | Vm(tube) | VmMemory { tube, .. } | VmIrq(tube) | VmMsync(tube) => tube,
         }
     }
 }
@@ -136,44 +134,19 @@ impl IntoUnixStream for UnixStream {
 
 pub type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 
-/// Type of virtio device.
-///
-/// The virtio protocol can be backed by several means, which affects a few things about the device
-/// - for instance, the seccomp policy we need to use when jailing the device.
-pub enum VirtioDeviceType {
-    /// A regular (in-VMM) virtio device.
-    Regular,
-    /// Socket-backed vhost-user device.
-    VhostUser,
-    /// VFIO-backed vhost-user device, aka virtio-vhost-user.
-    Vvu,
-}
-
-impl VirtioDeviceType {
-    /// Returns the seccomp policy file that we will want to load depending on the jail type,
-    /// constructed from `base`.
-    fn seccomp_policy_file(&self, base: &str) -> String {
-        match self {
-            VirtioDeviceType::Regular => format!("{base}_device"),
-            VirtioDeviceType::VhostUser => format!("{base}_device_vhost_user"),
-            VirtioDeviceType::Vvu => format!("{base}_device_vvu"),
-        }
-    }
-}
-
 /// A trait for spawning virtio device instances and jails from their configuration structure.
 ///
 /// Implementors become able to create virtio devices and jails following their own configuration.
 /// This trait also provides a few convenience methods for e.g. creating a virtio device and jail
 /// at once.
-pub trait VirtioDeviceBuilder {
+pub trait VirtioDeviceBuilder: Sized {
     /// Base name of the device, as it will appear in logs.
     const NAME: &'static str;
 
-    /// Create a regular virtio device from the configuration and `protected_vm` setting.
+    /// Create a regular virtio device from the configuration and `protection_type` setting.
     fn create_virtio_device(
-        &self,
-        protected_vm: ProtectionType,
+        self,
+        protection_type: ProtectionType,
     ) -> anyhow::Result<Box<dyn VirtioDevice>>;
 
     /// Create a device suitable for being run as a vhost-user instance.
@@ -181,7 +154,7 @@ pub trait VirtioDeviceBuilder {
     /// It is ok to leave this method unimplemented if the device is not intended to be used with
     /// vhost-user.
     fn create_vhost_user_device(
-        &self,
+        self,
         _keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
         unimplemented!()
@@ -194,9 +167,12 @@ pub trait VirtioDeviceBuilder {
     fn create_jail(
         &self,
         jail_config: &Option<JailConfig>,
-        jail_type: VirtioDeviceType,
+        virtio_transport: VirtioDeviceType,
     ) -> anyhow::Result<Option<Minijail>> {
-        simple_jail(jail_config, &jail_type.seccomp_policy_file(Self::NAME))
+        simple_jail(
+            jail_config,
+            &virtio_transport.seccomp_policy_file(Self::NAME),
+        )
     }
 
     /// Helper method to return a `VirtioDeviceStub` filled using `create_virtio_device` and
@@ -204,14 +180,13 @@ pub trait VirtioDeviceBuilder {
     ///
     /// This helper should cover the needs of most devices when run as regular virtio devices.
     fn create_virtio_device_and_jail(
-        &self,
-        protected_vm: ProtectionType,
+        self,
+        protection_type: ProtectionType,
         jail_config: &Option<JailConfig>,
     ) -> DeviceResult {
-        Ok(VirtioDeviceStub {
-            dev: self.create_virtio_device(protected_vm)?,
-            jail: self.create_jail(jail_config, VirtioDeviceType::Regular)?,
-        })
+        let jail = self.create_jail(jail_config, VirtioDeviceType::Regular)?;
+        let dev = self.create_virtio_device(protection_type)?;
+        Ok(VirtioDeviceStub { dev, jail })
     }
 }
 
@@ -220,17 +195,13 @@ pub trait VirtioDeviceBuilder {
 pub struct DiskConfig<'a> {
     /// Options for disk creation.
     disk: &'a DiskOption,
-    /// Optional control tube for the device. Placed behind a Cell so it can be taken from a
-    /// non-mutable reference.
-    device_tube: Cell<Option<Tube>>,
+    /// Optional control tube for the device.
+    device_tube: Option<Tube>,
 }
 
 impl<'a> DiskConfig<'a> {
     pub fn new(disk: &'a DiskOption, device_tube: Option<Tube>) -> Self {
-        Self {
-            disk,
-            device_tube: Cell::new(device_tube),
-        }
+        Self { disk, device_tube }
     }
 }
 
@@ -238,88 +209,77 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
     const NAME: &'static str = "block";
 
     fn create_virtio_device(
-        &self,
-        protected_vm: ProtectionType,
+        self,
+        protection_type: ProtectionType,
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
-        let disk = self.disk;
-        let disk_device_tube = self.device_tube.take();
+        info!(
+            "Trying to attach block device: {}",
+            self.disk.path.display(),
+        );
+        let disk_image = self.disk.open()?;
 
-        let raw_image = disk.open_as_raw_image()?;
-
-        info!("Trying to attach block device: {}", disk.path.display());
-        let dev = if disk::async_ok(&raw_image).context("failed to check disk async_ok")? {
-            let async_file = disk::create_async_disk_file(raw_image)
-                .context("failed to create async virtual disk")?;
-            Box::new(
-                virtio::BlockAsync::new(
-                    virtio::base_features(protected_vm),
-                    async_file,
-                    disk.read_only,
-                    disk.sparse,
-                    disk.block_size,
-                    disk.id,
-                    disk_device_tube,
-                )
-                .context("failed to create block device")?,
-            ) as Box<dyn VirtioDevice>
-        } else {
-            let disk_file =
-                disk::create_disk_file(raw_image, disk.sparse, disk::MAX_NESTING_DEPTH, &disk.path)
-                    .context("failed to create virtual disk")?;
-            Box::new(
-                virtio::Block::new(
-                    virtio::base_features(protected_vm),
-                    disk_file,
-                    disk.read_only,
-                    disk.sparse,
-                    disk.block_size,
-                    disk.id,
-                    disk_device_tube,
-                )
-                .context("failed to create block device")?,
+        Ok(Box::new(
+            virtio::BlockAsync::new(
+                virtio::base_features(protection_type),
+                disk_image,
+                self.disk.read_only,
+                self.disk.sparse,
+                self.disk.block_size,
+                self.disk.id,
+                self.device_tube,
+                None,
+                self.disk.async_executor,
+                None,
             )
-        };
-
-        Ok(dev)
+            .context("failed to create block device")?,
+        ))
     }
 
     fn create_vhost_user_device(
-        &self,
+        self,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
         let disk = self.disk;
-
-        let disk_device_tube = self.device_tube.take();
-        if let Some(device_tube) = &disk_device_tube {
-            keep_rds.push(device_tube.as_raw_descriptor());
-        }
-
-        let async_file = disk.open_as_async_file()?;
-        keep_rds.extend(async_file.as_raw_descriptors());
-
+        let disk_image = disk.open()?;
         let block = Box::new(
             virtio::BlockAsync::new(
                 virtio::base_features(ProtectionType::Unprotected),
-                async_file,
+                disk_image,
                 disk.read_only,
                 disk.sparse,
                 disk.block_size,
                 disk.id,
-                disk_device_tube,
+                self.device_tube,
+                None,
+                disk.async_executor,
+                None,
             )
             .context("failed to create block device")?,
         );
+        keep_rds.extend(block.keep_rds());
 
         Ok(block)
     }
 }
 
+fn vhost_user_connection(path: &Path) -> Result<UnixStream> {
+    UnixStream::connect(path).with_context(|| {
+        format!(
+            "failed to connect to vhost-user socket path {}",
+            path.display()
+        )
+    })
+}
+
 pub fn create_vhost_user_block_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserBlock::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user block device")?;
+    let dev = VhostUserVirtioDevice::new_block(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user block device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -329,11 +289,14 @@ pub fn create_vhost_user_block_device(
 }
 
 pub fn create_vhost_user_console_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserConsole::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user console device")?;
+    let dev = VhostUserVirtioDevice::new_console(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user console device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -343,12 +306,12 @@ pub fn create_vhost_user_console_device(
 }
 
 pub fn create_vhost_user_fs_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     option: &VhostUserFsOption,
 ) -> DeviceResult {
-    let dev = VhostUserFs::new(
-        virtio::base_features(protected_vm),
-        &option.socket,
+    let dev = VhostUserVirtioDevice::new_fs(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&option.socket)?,
         &option.tag,
     )
     .context("failed to set up vhost-user fs device")?;
@@ -361,11 +324,14 @@ pub fn create_vhost_user_fs_device(
 }
 
 pub fn create_vhost_user_mac80211_hwsim_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserMac80211Hwsim::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user mac80211_hwsim device")?;
+    let dev = VhostUserVirtioDevice::new_mac80211_hwsim(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user mac80211_hwsim device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -375,11 +341,14 @@ pub fn create_vhost_user_mac80211_hwsim_device(
 }
 
 pub fn create_vhost_user_snd_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     option: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserSnd::new(virtio::base_features(protected_vm), &option.socket)
-        .context("failed to set up vhost-user snd device")?;
+    let dev = VhostUserVirtioDevice::new_snd(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&option.socket)?,
+    )
+    .context("failed to set up vhost-user snd device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -389,13 +358,16 @@ pub fn create_vhost_user_snd_device(
 }
 
 pub fn create_vhost_user_gpu_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
     // The crosvm gpu device expects us to connect the tube before it will accept a vhost-user
     // connection.
-    let dev = VhostUserGpu::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user gpu device")?;
+    let dev = VhostUserVirtioDevice::new_gpu(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user gpu device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -405,7 +377,7 @@ pub fn create_vhost_user_gpu_device(
 }
 
 pub fn create_vvu_proxy_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     opt: &VvuOption,
     tube: Tube,
@@ -415,7 +387,7 @@ pub fn create_vvu_proxy_device(
         UnixListener::bind(&opt.socket).context("failed to bind listener for vvu proxy device")?;
 
     let dev = VirtioVhostUser::new(
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
         listener,
         tube,
         opt.addr,
@@ -431,11 +403,11 @@ pub fn create_vvu_proxy_device(
 }
 
 pub fn create_rng_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
 ) -> DeviceResult {
     let dev =
-        virtio::Rng::new(virtio::base_features(protected_vm)).context("failed to set up rng")?;
+        virtio::Rng::new(virtio::base_features(protection_type)).context("failed to set up rng")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -445,13 +417,13 @@ pub fn create_rng_device(
 
 #[cfg(feature = "audio")]
 pub fn create_virtio_snd_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     snd_params: SndParameters,
 ) -> DeviceResult {
     let backend = snd_params.backend;
     let dev = virtio::snd::common_backend::VirtioSnd::new(
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
         snd_params,
     )
     .context("failed to create cras sound device")?;
@@ -462,6 +434,7 @@ pub fn create_virtio_snd_device(
         Backend::NULL => "snd_null_device",
         #[cfg(feature = "audio_cras")]
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::CRAS) => "snd_cras_device",
+        #[cfg(not(feature = "audio_cras"))]
         _ => unreachable!(),
     };
 
@@ -498,7 +471,7 @@ pub fn create_virtio_snd_device(
 
 #[cfg(feature = "tpm")]
 pub fn create_software_tpm_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
 ) -> DeviceResult {
     use std::ffi::CString;
@@ -541,7 +514,7 @@ pub fn create_software_tpm_device(
     }
 
     let backend = SoftwareTpm::new(tpm_storage).context("failed to create SoftwareTpm")?;
-    let dev = virtio::Tpm::new(Box::new(backend), virtio::base_features(protected_vm));
+    let dev = virtio::Tpm::new(Box::new(backend), virtio::base_features(protection_type));
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -549,9 +522,9 @@ pub fn create_software_tpm_device(
     })
 }
 
-#[cfg(all(feature = "tpm", feature = "chromeos", target_arch = "x86_64"))]
+#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
 pub fn create_vtpm_proxy_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
 ) -> DeviceResult {
     let mut tpm_jail = simple_jail(jail_config, "vtpm_proxy_device")?;
@@ -577,7 +550,7 @@ pub fn create_vtpm_proxy_device(
     }
 
     let backend = VtpmProxy::new();
-    let dev = virtio::Tpm::new(Box::new(backend), virtio::base_features(protected_vm));
+    let dev = virtio::Tpm::new(Box::new(backend), virtio::base_features(protection_type));
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -586,7 +559,7 @@ pub fn create_vtpm_proxy_device(
 }
 
 pub fn create_single_touch_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     single_touch_spec: &TouchDeviceOption,
     idx: u32,
@@ -602,7 +575,7 @@ pub fn create_single_touch_device(
         socket,
         width,
         height,
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
     )
     .context("failed to set up input device")?;
     Ok(VirtioDeviceStub {
@@ -612,7 +585,7 @@ pub fn create_single_touch_device(
 }
 
 pub fn create_multi_touch_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     multi_touch_spec: &TouchDeviceOption,
     idx: u32,
@@ -628,7 +601,7 @@ pub fn create_multi_touch_device(
         socket,
         width,
         height,
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
     )
     .context("failed to set up input device")?;
 
@@ -639,7 +612,7 @@ pub fn create_multi_touch_device(
 }
 
 pub fn create_trackpad_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     trackpad_spec: &TouchDeviceOption,
     idx: u32,
@@ -655,7 +628,7 @@ pub fn create_trackpad_device(
         socket,
         width,
         height,
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
     )
     .context("failed to set up input device")?;
 
@@ -666,7 +639,7 @@ pub fn create_trackpad_device(
 }
 
 pub fn create_mouse_device<T: IntoUnixStream>(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     mouse_socket: T,
     idx: u32,
@@ -675,7 +648,7 @@ pub fn create_mouse_device<T: IntoUnixStream>(
         .into_unix_stream()
         .context("failed configuring virtio mouse")?;
 
-    let dev = virtio::new_mouse(idx, socket, virtio::base_features(protected_vm))
+    let dev = virtio::new_mouse(idx, socket, virtio::base_features(protection_type))
         .context("failed to set up input device")?;
 
     Ok(VirtioDeviceStub {
@@ -685,7 +658,7 @@ pub fn create_mouse_device<T: IntoUnixStream>(
 }
 
 pub fn create_keyboard_device<T: IntoUnixStream>(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     keyboard_socket: T,
     idx: u32,
@@ -694,7 +667,7 @@ pub fn create_keyboard_device<T: IntoUnixStream>(
         .into_unix_stream()
         .context("failed configuring virtio keyboard")?;
 
-    let dev = virtio::new_keyboard(idx, socket, virtio::base_features(protected_vm))
+    let dev = virtio::new_keyboard(idx, socket, virtio::base_features(protection_type))
         .context("failed to set up input device")?;
 
     Ok(VirtioDeviceStub {
@@ -704,7 +677,7 @@ pub fn create_keyboard_device<T: IntoUnixStream>(
 }
 
 pub fn create_switches_device<T: IntoUnixStream>(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     switches_socket: T,
     idx: u32,
@@ -713,7 +686,7 @@ pub fn create_switches_device<T: IntoUnixStream>(
         .into_unix_stream()
         .context("failed configuring virtio switches")?;
 
-    let dev = virtio::new_switches(idx, socket, virtio::base_features(protected_vm))
+    let dev = virtio::new_switches(idx, socket, virtio::base_features(protection_type))
         .context("failed to set up input device")?;
 
     Ok(VirtioDeviceStub {
@@ -723,7 +696,7 @@ pub fn create_switches_device<T: IntoUnixStream>(
 }
 
 pub fn create_vinput_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     dev_path: &Path,
 ) -> DeviceResult {
@@ -733,7 +706,7 @@ pub fn create_vinput_device(
         .open(dev_path)
         .with_context(|| format!("failed to open vinput device {}", dev_path.display()))?;
 
-    let dev = virtio::new_evdev(dev_file, virtio::base_features(protected_vm))
+    let dev = virtio::new_evdev(dev_file, virtio::base_features(protection_type))
         .context("failed to set up input device")?;
 
     Ok(VirtioDeviceStub {
@@ -744,7 +717,7 @@ pub fn create_vinput_device(
 
 #[cfg(feature = "balloon")]
 pub fn create_balloon_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     mode: BalloonMode,
     tube: Tube,
@@ -753,7 +726,7 @@ pub fn create_balloon_device(
     enabled_features: u64,
 ) -> DeviceResult {
     let dev = virtio::Balloon::new(
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
         tube,
         inflate_tube,
         init_balloon_size,
@@ -772,7 +745,7 @@ pub fn create_balloon_device(
 /// features and number of queue pairs as parameters, and is responsible for creating the device
 /// itself.
 pub fn create_net_device<F, T>(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     mut vq_pairs: u16,
     vcpu_count: usize,
@@ -780,14 +753,14 @@ pub fn create_net_device<F, T>(
     create_device: F,
 ) -> DeviceResult
 where
-    F: Fn(u64, u16) -> Result<T>,
+    F: FnOnce(u64, u16) -> Result<T>,
     T: VirtioDevice + 'static,
 {
     if vcpu_count < vq_pairs as usize {
         warn!("the number of net vq pairs must not exceed the vcpu count, falling back to single queue mode");
         vq_pairs = 1;
     }
-    let features = virtio::base_features(protected_vm);
+    let features = virtio::base_features(protection_type);
 
     let dev = create_device(features, vq_pairs)?;
 
@@ -797,106 +770,97 @@ where
     })
 }
 
-/// Returns a network device created from a new TAP interface configured with `host_ip`, `netmask`,
-/// and `mac_address`.
-pub fn create_net_device_from_config(
-    protected_vm: ProtectionType,
-    jail_config: &Option<JailConfig>,
-    vq_pairs: u16,
-    vcpu_count: usize,
-    vhost_net: Option<PathBuf>,
-    host_ip: Ipv4Addr,
-    netmask: Ipv4Addr,
-    mac_address: MacAddress,
-) -> DeviceResult {
-    if let Some(vhost_net_device_path) = vhost_net {
-        create_net_device(
-            protected_vm,
-            jail_config,
-            vq_pairs,
-            vcpu_count,
-            "vhost_net_device",
-            |features, _vq_pairs| {
-                virtio::vhost::Net::<Tap, vhost::Net<Tap>>::new(
-                    &vhost_net_device_path,
-                    features,
-                    host_ip,
-                    netmask,
-                    mac_address,
+/// Create a new tap interface based on NetParametersMode.
+pub fn create_tap_for_net_device(
+    mode: &NetParametersMode,
+    multi_vq: bool,
+) -> DeviceResult<(Tap, Option<MacAddress>)> {
+    match mode {
+        NetParametersMode::TapName { tap_name, mac } => {
+            let tap = Tap::new_with_name(tap_name.as_bytes(), true, multi_vq)
+                .map_err(NetError::TapOpen)?;
+            Ok((tap, *mac))
+        }
+        NetParametersMode::TapFd { tap_fd, mac } => {
+            // Safe because we ensure that we get a unique handle to the fd.
+            let tap = unsafe {
+                Tap::from_raw_descriptor(
+                    validate_raw_descriptor(*tap_fd)
+                        .context("failed to validate tap descriptor")?,
                 )
-                .context("failed to set up vhost networking")
-            },
-        )
-    } else {
-        create_net_device(
-            protected_vm,
-            jail_config,
-            vq_pairs,
-            vcpu_count,
-            "net_device",
-            |features, vq_pairs| {
-                virtio::Net::<Tap>::new(features, host_ip, netmask, mac_address, vq_pairs)
-                    .context("failed to create virtio network device")
-            },
-        )
+                .context("failed to create tap device")?
+            };
+            Ok((tap, *mac))
+        }
+        NetParametersMode::RawConfig {
+            host_ip,
+            netmask,
+            mac,
+        } => {
+            let tap = Tap::new(true, multi_vq).map_err(NetError::TapOpen)?;
+            tap.set_ip_addr(*host_ip).map_err(NetError::TapSetIp)?;
+            tap.set_netmask(*netmask).map_err(NetError::TapSetNetmask)?;
+            tap.set_mac_address(*mac)
+                .map_err(NetError::TapSetMacAddress)?;
+            tap.enable().map_err(NetError::TapEnable)?;
+            Ok((tap, None))
+        }
     }
 }
 
-/// Returns a network device from a file descriptor to a configured TAP interface.
-pub fn create_tap_net_device_from_fd(
-    protected_vm: ProtectionType,
+/// Returns a virtio network device created from a new TAP device.
+pub fn create_virtio_net_device_from_tap<T: TapT + ReadNotifier + 'static>(
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     vq_pairs: u16,
     vcpu_count: usize,
-    tap_fd: RawDescriptor,
+    tap: T,
+    mac: Option<MacAddress>,
 ) -> DeviceResult {
     create_net_device(
-        protected_vm,
+        protection_type,
         jail_config,
         vq_pairs,
         vcpu_count,
         "net_device",
-        |features, vq_pairs| {
-            // Safe because we ensure that we get a unique handle to the fd.
-            let tap = unsafe {
-                Tap::from_raw_descriptor(
-                    validate_raw_descriptor(tap_fd).context("failed to validate tap descriptor")?,
-                )
-                .context("failed to create tap device")?
-            };
-
-            virtio::Net::from(features, tap, vq_pairs).context("failed to create tap net device")
+        move |features, vq_pairs| {
+            virtio::Net::new(features, tap, vq_pairs, mac)
+                .context("failed to set up virtio networking")
         },
     )
 }
 
-/// Returns a network device created by opening the persistent, configured TAP interface `tap_name`.
-pub fn create_tap_net_device_from_name(
-    protected_vm: ProtectionType,
+/// Returns a virtio-vhost network device created from a new TAP device.
+pub fn create_virtio_vhost_net_device_from_tap<T: TapT + 'static>(
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     vq_pairs: u16,
     vcpu_count: usize,
-    tap_name: &[u8],
+    vhost_net_device_path: PathBuf,
+    tap: T,
 ) -> DeviceResult {
     create_net_device(
-        protected_vm,
+        protection_type,
         jail_config,
         vq_pairs,
         vcpu_count,
-        "net_device",
-        |features, vq_pairs| {
-            virtio::Net::<Tap>::new_from_name(features, tap_name, vq_pairs)
-                .context("failed to create configured virtio network device")
+        "vhost_net_device",
+        move |features, _vq_pairs| {
+            virtio::vhost::Net::<T, vhost::Net<T>>::new(&vhost_net_device_path, features, tap)
+                .context("failed to set up virtio-vhost networking")
         },
     )
 }
 
 pub fn create_vhost_user_net_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserNet::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user net device")?;
+    let dev = VhostUserVirtioDevice::new_net(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user net device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -906,11 +870,14 @@ pub fn create_vhost_user_net_device(
 }
 
 pub fn create_vhost_user_vsock_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
 ) -> DeviceResult {
-    let dev = VhostUserVsock::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user vsock device")?;
+    let dev = VhostUserVirtioDevice::new_vsock(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user vsock device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -920,13 +887,16 @@ pub fn create_vhost_user_vsock_device(
 }
 
 pub fn create_vhost_user_wl_device(
-    protected_vm: ProtectionType,
-    opt: &VhostUserWlOption,
+    protection_type: ProtectionType,
+    opt: &VhostUserOption,
 ) -> DeviceResult {
     // The crosvm wl device expects us to connect the tube before it will accept a vhost-user
     // connection.
-    let dev = VhostUserWl::new(virtio::base_features(protected_vm), &opt.socket)
-        .context("failed to set up vhost-user wl device")?;
+    let dev = VhostUserVirtioDevice::new_wl(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
+    )
+    .context("failed to set up vhost-user wl device")?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -936,7 +906,7 @@ pub fn create_vhost_user_wl_device(
 }
 
 pub fn create_wayland_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     wayland_socket_paths: &BTreeMap<String, PathBuf>,
     resource_bridge: Option<Tube>,
@@ -947,7 +917,7 @@ pub fn create_wayland_device(
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| anyhow!("wayland socket path has no parent or file name"))?;
 
-    let features = virtio::base_features(protected_vm);
+    let features = virtio::base_features(protection_type);
     let dev = virtio::Wl::new(features, wayland_socket_paths.clone(), resource_bridge)
         .context("failed to create wayland device")?;
 
@@ -976,7 +946,7 @@ pub fn create_wayland_device(
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub fn create_video_device(
     backend: VideoBackendType,
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     typ: VideoDeviceType,
     resource_bridge: Tube,
@@ -1002,9 +972,18 @@ pub fn create_video_device(
                 "size=67108864",
             )?;
 
-            #[cfg(feature = "libvda")]
-            // Render node for libvda.
-            if backend == VideoBackendType::Libvda || backend == VideoBackendType::LibvdaVd {
+            let need_drm_device = match backend {
+                #[cfg(any(feature = "libvda", feature = "libvda-stub"))]
+                VideoBackendType::Libvda => true,
+                #[cfg(any(feature = "libvda", feature = "libvda-stub"))]
+                VideoBackendType::LibvdaVd => true,
+                #[cfg(feature = "vaapi")]
+                VideoBackendType::Vaapi => true,
+                #[cfg(feature = "ffmpeg")]
+                VideoBackendType::Ffmpeg => false,
+            };
+
+            if need_drm_device {
                 // follow the implementation at:
                 // https://chromium.googlesource.com/chromiumos/platform/minigbm/+/c06cc9cccb3cf3c7f9d2aec706c27c34cd6162a0/cros_gralloc/cros_gralloc_driver.cc#90
                 const DRM_NUM_NODES: u32 = 63;
@@ -1044,7 +1023,7 @@ pub fn create_video_device(
 
     Ok(VirtioDeviceStub {
         dev: Box::new(devices::virtio::VideoDevice::new(
-            virtio::base_features(protected_vm),
+            virtio::base_features(protection_type),
             typ,
             backend,
             Some(resource_bridge),
@@ -1058,13 +1037,13 @@ pub fn register_video_device(
     backend: VideoBackendType,
     devs: &mut Vec<VirtioDeviceStub>,
     video_tube: Tube,
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     typ: VideoDeviceType,
 ) -> Result<()> {
     devs.push(create_video_device(
         backend,
-        protected_vm,
+        protection_type,
         jail_config,
         typ,
         video_tube,
@@ -1073,13 +1052,13 @@ pub fn register_video_device(
 }
 
 pub fn create_vhost_user_video_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     opt: &VhostUserOption,
     device_type: VideoDeviceType,
 ) -> DeviceResult {
-    let dev = VhostUserVideo::new(
-        virtio::base_features(protected_vm),
-        &opt.socket,
+    let dev = VhostUserVirtioDevice::new_video(
+        virtio::base_features(protection_type),
+        vhost_user_connection(&opt.socket)?,
         device_type,
     )
     .context("failed to set up vhost-user video device")?;
@@ -1092,11 +1071,11 @@ pub fn create_vhost_user_video_device(
 }
 
 pub fn create_vhost_vsock_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     vhost_config: &VhostVsockConfig,
 ) -> DeviceResult {
-    let features = virtio::base_features(protected_vm);
+    let features = virtio::base_features(protection_type);
 
     let dev = virtio::vhost::Vsock::new(features, vhost_config)
         .context("failed to set up virtual socket device")?;
@@ -1108,7 +1087,7 @@ pub fn create_vhost_vsock_device(
 }
 
 pub fn create_fs_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     uid_map: &str,
     gid_map: &str,
@@ -1140,7 +1119,7 @@ pub fn create_fs_device(
         create_base_minijail(src, Some(max_open_files), None)?
     };
 
-    let features = virtio::base_features(protected_vm);
+    let features = virtio::base_features(protection_type);
     // TODO(chirantan): Use more than one worker once the kernel driver has been fixed to not panic
     // when num_queues > 1.
     let dev = virtio::fs::Fs::new(features, tag, 1, fs_cfg, device_tube)
@@ -1153,7 +1132,7 @@ pub fn create_fs_device(
 }
 
 pub fn create_9p_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     uid_map: &str,
     gid_map: &str,
@@ -1191,7 +1170,7 @@ pub fn create_9p_device(
         (None, src)
     };
 
-    let features = virtio::base_features(protected_vm);
+    let features = virtio::base_features(protection_type);
     p9_cfg.root = root.into();
     let dev = virtio::P9::new(features, tag, p9_cfg).context("failed to create 9p device")?;
 
@@ -1202,7 +1181,7 @@ pub fn create_9p_device(
 }
 
 pub fn create_pmem_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     vm: &mut impl Vm,
     resources: &mut SystemAllocator,
@@ -1297,7 +1276,7 @@ pub fn create_pmem_device(
         .context("failed to add pmem device memory")?;
 
     let dev = virtio::Pmem::new(
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
         fd,
         GuestAddress(mapping_address),
         slot,
@@ -1313,7 +1292,7 @@ pub fn create_pmem_device(
 }
 
 pub fn create_iommu_device(
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
     iova_max_addr: u64,
     endpoints: BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
@@ -1323,7 +1302,7 @@ pub fn create_iommu_device(
     iommu_device_tube: Tube,
 ) -> DeviceResult {
     let dev = virtio::Iommu::new(
-        virtio::base_features(protected_vm),
+        virtio::base_features(protection_type),
         endpoints,
         iova_max_addr,
         hp_endpoints_ranges,
@@ -1354,25 +1333,25 @@ fn add_bind_mounts(param: &SerialParameters, jail: &mut Minijail) -> Result<(), 
 }
 
 /// For creating console virtio devices.
-impl VirtioDeviceBuilder for SerialParameters {
+impl VirtioDeviceBuilder for &SerialParameters {
     const NAME: &'static str = "serial";
 
     fn create_virtio_device(
-        &self,
-        protected_vm: ProtectionType,
+        self,
+        protection_type: ProtectionType,
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
         let mut keep_rds = Vec::new();
         let evt = Event::new().context("failed to create event")?;
 
         // TODO(b/238440998): Switch back to AsyncConsole in android.
         Ok(Box::new(
-            self.create_serial_device::<Console>(protected_vm, &evt, &mut keep_rds)
+            self.create_serial_device::<Console>(protection_type, &evt, &mut keep_rds)
                 .context("failed to create console device")?,
         ))
     }
 
     fn create_vhost_user_device(
-        &self,
+        self,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
         Ok(Box::new(virtio::vhost::user::create_vu_console_device(
@@ -1383,9 +1362,10 @@ impl VirtioDeviceBuilder for SerialParameters {
     fn create_jail(
         &self,
         jail_config: &Option<JailConfig>,
-        jail_type: VirtioDeviceType,
+        virtio_transport: VirtioDeviceType,
     ) -> anyhow::Result<Option<Minijail>> {
-        let jail = match simple_jail(jail_config, &jail_type.seccomp_policy_file("serial"))? {
+        let jail = match simple_jail(jail_config, &virtio_transport.seccomp_policy_file("serial"))?
+        {
             Some(mut jail) => {
                 // Create a tmpfs in the device's root directory so that we can bind mount the
                 // log socket directory into it.
@@ -1412,10 +1392,10 @@ impl VirtioDeviceBuilder for SerialParameters {
 #[cfg(feature = "audio")]
 pub fn create_sound_device(
     path: &Path,
-    protected_vm: ProtectionType,
+    protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
 ) -> DeviceResult {
-    let dev = virtio::new_sound(path, virtio::base_features(protected_vm))
+    let dev = virtio::new_sound(path, virtio::base_features(protection_type))
         .context("failed to create sound device")?;
 
     Ok(VirtioDeviceStub {
@@ -1424,41 +1404,37 @@ pub fn create_sound_device(
     })
 }
 
+#[allow(clippy::large_enum_variant)]
+pub enum VfioDeviceVariant {
+    Pci(VfioPciDevice),
+    Platform(VfioPlatformDevice),
+}
+
 pub fn create_vfio_device(
     jail_config: &Option<JailConfig>,
     vm: &impl Vm,
     resources: &mut SystemAllocator,
     control_tubes: &mut Vec<TaggedControlTube>,
     vfio_path: &Path,
-    bus_num: Option<u8>,
+    hotplug: bool,
+    hotplug_bus: Option<u8>,
     guest_address: Option<PciAddress>,
     coiommu_endpoints: Option<&mut Vec<u16>>,
     iommu_dev: IommuDevType,
-) -> DeviceResult<(Box<VfioPciDevice>, Option<Minijail>, Option<VfioWrapper>)> {
+    #[cfg(feature = "direct")] is_intel_lpss: bool,
+) -> DeviceResult<(VfioDeviceVariant, Option<Minijail>, Option<VfioWrapper>)> {
     let vfio_container = VfioCommonSetup::vfio_get_container(iommu_dev, Some(vfio_path))
         .context("failed to get vfio container")?;
 
-    // create MSI, MSI-X, and Mem request sockets for each vfio device
-    let (vfio_host_tube_msi, vfio_device_tube_msi) =
-        Tube::pair().context("failed to create tube")?;
-    control_tubes.push(TaggedControlTube::VmIrq(vfio_host_tube_msi));
-
-    let (vfio_host_tube_msix, vfio_device_tube_msix) =
-        Tube::pair().context("failed to create tube")?;
-    control_tubes.push(TaggedControlTube::VmIrq(vfio_host_tube_msix));
-
     let (vfio_host_tube_mem, vfio_device_tube_mem) =
         Tube::pair().context("failed to create tube")?;
-    control_tubes.push(TaggedControlTube::VmMemory(vfio_host_tube_mem));
+    control_tubes.push(TaggedControlTube::VmMemory {
+        tube: vfio_host_tube_mem,
+        expose_with_viommu: false,
+    });
 
-    let hotplug = bus_num.is_some();
-    let vfio_device_tube_vm = if hotplug {
-        let (vfio_host_tube_vm, device_tube_vm) = Tube::pair().context("failed to create tube")?;
-        control_tubes.push(TaggedControlTube::Vm(vfio_host_tube_vm));
-        Some(device_tube_vm)
-    } else {
-        None
-    };
+    let (vfio_host_tube_vm, vfio_device_tube_vm) = Tube::pair().context("failed to create tube")?;
+    control_tubes.push(TaggedControlTube::Vm(vfio_host_tube_vm));
 
     let vfio_device = VfioDevice::new_passthrough(
         &vfio_path,
@@ -1467,80 +1443,78 @@ pub fn create_vfio_device(
         iommu_dev != IommuDevType::NoIommu,
     )
     .context("failed to create vfio device")?;
-    let mut vfio_pci_device = Box::new(
-        VfioPciDevice::new(
-            #[cfg(feature = "direct")]
-            vfio_path,
-            vfio_device,
-            bus_num,
-            guest_address,
-            vfio_device_tube_msi,
-            vfio_device_tube_msix,
-            vfio_device_tube_mem,
-            vfio_device_tube_vm,
-        )
-        .context("failed to create VfioPciDevice")?,
-    );
-    // early reservation for pass-through PCI devices.
-    let endpoint_addr = vfio_pci_device
-        .allocate_address(resources)
-        .context("failed to allocate resources early for vfio pci dev")?;
 
-    let viommu_mapper = match iommu_dev {
-        IommuDevType::NoIommu => None,
-        IommuDevType::VirtioIommu => {
-            Some(VfioWrapper::new(vfio_container, vm.get_memory().clone()))
-        }
-        IommuDevType::CoIommu => {
-            if let Some(endpoints) = coiommu_endpoints {
-                endpoints.push(endpoint_addr.to_u32() as u16);
+    match vfio_device.device_type() {
+        VfioDeviceType::Pci => {
+            let (vfio_host_tube_msi, vfio_device_tube_msi) =
+                Tube::pair().context("failed to create tube")?;
+            control_tubes.push(TaggedControlTube::VmIrq(vfio_host_tube_msi));
+
+            let (vfio_host_tube_msix, vfio_device_tube_msix) =
+                Tube::pair().context("failed to create tube")?;
+            control_tubes.push(TaggedControlTube::VmIrq(vfio_host_tube_msix));
+
+            let mut vfio_pci_device = VfioPciDevice::new(
+                vfio_path,
+                vfio_device,
+                hotplug,
+                hotplug_bus,
+                guest_address,
+                vfio_device_tube_msi,
+                vfio_device_tube_msix,
+                vfio_device_tube_mem,
+                vfio_device_tube_vm,
+                #[cfg(feature = "direct")]
+                is_intel_lpss,
+            )?;
+            // early reservation for pass-through PCI devices.
+            let endpoint_addr = vfio_pci_device
+                .allocate_address(resources)
+                .context("failed to allocate resources early for vfio pci dev")?;
+
+            let viommu_mapper = match iommu_dev {
+                IommuDevType::NoIommu => None,
+                IommuDevType::VirtioIommu => {
+                    Some(VfioWrapper::new(vfio_container, vm.get_memory().clone()))
+                }
+                IommuDevType::CoIommu => {
+                    if let Some(endpoints) = coiommu_endpoints {
+                        endpoints.push(endpoint_addr.to_u32() as u16);
+                    } else {
+                        bail!("Missed coiommu_endpoints vector to store the endpoint addr");
+                    }
+                    None
+                }
+            };
+
+            if hotplug {
+                Ok((VfioDeviceVariant::Pci(vfio_pci_device), None, viommu_mapper))
             } else {
-                bail!("Missed coiommu_endpoints vector to store the endpoint addr");
+                Ok((
+                    VfioDeviceVariant::Pci(vfio_pci_device),
+                    simple_jail(jail_config, "vfio_device")?,
+                    viommu_mapper,
+                ))
             }
-            None
         }
-    };
+        VfioDeviceType::Platform => {
+            if guest_address.is_some() {
+                bail!("guest-address is not supported for VFIO platform devices");
+            }
 
-    if hotplug {
-        Ok((vfio_pci_device, None, viommu_mapper))
-    } else {
-        Ok((
-            vfio_pci_device,
-            simple_jail(jail_config, "vfio_device")?,
-            viommu_mapper,
-        ))
+            if hotplug {
+                bail!("hotplug is not supported for VFIO platform devices");
+            }
+
+            let vfio_plat_dev = VfioPlatformDevice::new(vfio_device, vfio_device_tube_mem);
+
+            Ok((
+                VfioDeviceVariant::Platform(vfio_plat_dev),
+                simple_jail(jail_config, "vfio_platform_device")?,
+                None,
+            ))
+        }
     }
-}
-
-pub fn create_vfio_platform_device(
-    jail_config: &Option<JailConfig>,
-    vm: &impl Vm,
-    _resources: &mut SystemAllocator,
-    control_tubes: &mut Vec<TaggedControlTube>,
-    vfio_path: &Path,
-    _endpoints: &mut BTreeMap<u32, Arc<Mutex<Box<dyn MemoryMapperTrait>>>>,
-    iommu_dev: IommuDevType,
-) -> DeviceResult<(VfioPlatformDevice, Option<Minijail>)> {
-    let vfio_container = VfioCommonSetup::vfio_get_container(iommu_dev, Some(vfio_path))
-        .context("Failed to create vfio device")?;
-
-    let (vfio_host_tube_mem, vfio_device_tube_mem) =
-        Tube::pair().context("failed to create tube")?;
-    control_tubes.push(TaggedControlTube::VmMemory(vfio_host_tube_mem));
-
-    let vfio_device = VfioDevice::new_passthrough(
-        &vfio_path,
-        vm,
-        vfio_container,
-        iommu_dev != IommuDevType::NoIommu,
-    )
-    .context("Failed to create vfio device")?;
-    let vfio_plat_dev = VfioPlatformDevice::new(vfio_device, vfio_device_tube_mem);
-
-    Ok((
-        vfio_plat_dev,
-        simple_jail(jail_config, "vfio_platform_device")?,
-    ))
 }
 
 /// Setup for devices with virtio-iommu

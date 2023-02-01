@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -543,6 +543,7 @@ pub unsafe fn kill(pid: Pid, signum: c_int) -> Result<()> {
 /// Note that this is only useful for signals between SIGRTMIN and SIGRTMAX because these are
 /// guaranteed to not be used by the C runtime.
 ///
+/// # Safety
 /// This is marked unsafe because the implementation of this trait must guarantee that the returned
 /// pthread_t is valid and has a lifetime at least that of the trait object.
 pub unsafe trait Killable {
@@ -716,5 +717,27 @@ impl Drop for KillOnDrop {
         if let Err(err) = kill_tree(&mut self.process, self.timeout) {
             eprintln!("failed to kill child process group: {}", err);
         }
+    }
+}
+
+// Represents a temporarily blocked signal. It will unblock the signal when dropped.
+pub struct BlockedSignal {
+    signal_num: c_int,
+}
+
+impl BlockedSignal {
+    // Returns a `BlockedSignal` if the specified signal can be blocked, otherwise None.
+    pub fn new(signal_num: c_int) -> Option<BlockedSignal> {
+        if block_signal(signal_num).is_ok() {
+            Some(BlockedSignal { signal_num })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for BlockedSignal {
+    fn drop(&mut self) {
+        unblock_signal(self.signal_num).expect("failed to restore signal mask");
     }
 }

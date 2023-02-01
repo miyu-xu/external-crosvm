@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium OS Authors. All rights reserved.
+// Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,8 @@ pub mod syslog;
 mod acpi_event;
 mod capabilities;
 mod descriptor;
-mod eventfd;
+mod event;
+mod file;
 mod file_flags;
 pub mod file_traits;
 mod get_filesystem_type;
@@ -30,9 +31,11 @@ mod mmap;
 pub mod net;
 mod netlink;
 mod notifiers;
+pub mod panic_handler;
 pub mod platform_timer_resolution;
 mod poll;
 mod priority;
+pub mod process;
 mod sched;
 pub mod scoped_signal_handler;
 mod shm;
@@ -45,8 +48,6 @@ mod timer;
 pub mod vsock;
 mod write_zeroes;
 
-use std::cell::Cell;
-use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fs::remove_file;
 use std::fs::File;
@@ -58,27 +59,19 @@ use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixDatagram;
 use std::os::unix::net::UnixListener;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
+use std::process::ExitStatus;
 use std::ptr;
 use std::time::Duration;
 
 pub use acpi_event::*;
 pub use capabilities::drop_capabilities;
 pub use descriptor::*;
-// EventFd is deprecated. Use Event instead. EventFd will be removed as soon as rest of the current
-// users migrate.
-// TODO(b:231344063): Remove EventFd.
-pub use eventfd::EventFd as Event;
-pub use eventfd::EventFd;
-pub use eventfd::EventReadResult;
+pub use event::EventExt;
+pub(crate) use event::PlatformEvent;
+pub use file::FileDataIterator;
 pub use file_flags::*;
-pub use file_traits::AsRawFds;
-pub use file_traits::FileAllocate;
-pub use file_traits::FileGetLen;
-pub use file_traits::FileReadWriteAtVolatile;
-pub use file_traits::FileReadWriteVolatile;
-pub use file_traits::FileSetLen;
-pub use file_traits::FileSync;
 pub use get_filesystem_type::*;
 pub use ioctl::*;
 use libc::c_int;
@@ -89,6 +82,7 @@ use libc::syscall;
 use libc::sysconf;
 use libc::waitpid;
 use libc::SYS_getpid;
+use libc::SYS_getppid;
 use libc::SYS_gettid;
 use libc::EINVAL;
 use libc::F_GETFL;
@@ -107,7 +101,6 @@ pub use poll::EventContext;
 pub use priority::*;
 pub use sched::*;
 pub use scoped_signal_handler::*;
-pub use shm::kernel_has_memfd;
 pub use shm::MemfdSeals;
 pub use shm::SharedMemory;
 pub use shm::Unix as SharedMemoryUnix;
@@ -137,9 +130,6 @@ pub type Pid = libc::pid_t;
 pub type Uid = libc::uid_t;
 pub type Gid = libc::gid_t;
 pub type Mode = libc::mode_t;
-
-/// Used to mark types as !Sync.
-pub type UnsyncMarker = std::marker::PhantomData<Cell<usize>>;
 
 #[macro_export]
 macro_rules! syscall {
@@ -179,6 +169,13 @@ pub fn round_up_to_page_size(v: usize) -> usize {
 pub fn getpid() -> Pid {
     // Safe because this syscall can never fail and we give it a valid syscall number.
     unsafe { syscall(SYS_getpid as c_long) as Pid }
+}
+
+/// Safe wrapper for the geppid Linux systemcall.
+#[inline(always)]
+pub fn getppid() -> Pid {
+    // Safe because this syscall can never fail and we give it a valid syscall number.
+    unsafe { syscall(SYS_getppid as c_long) as Pid }
 }
 
 /// Safe wrapper for the gettid Linux systemcall.
@@ -318,39 +315,13 @@ impl AsRawPid for std::process::Child {
     }
 }
 
-/// A logical set of the values *status can take from libc::wait and libc::waitpid.
-pub enum WaitStatus {
-    Continued,
-    Exited(u8),
-    Running,
-    Signaled(Signal),
-    Stopped(Signal),
-}
-
-impl From<c_int> for WaitStatus {
-    fn from(status: c_int) -> WaitStatus {
-        use WaitStatus::*;
-        if libc::WIFEXITED(status) {
-            Exited(libc::WEXITSTATUS(status) as u8)
-        } else if libc::WIFSIGNALED(status) {
-            Signaled(Signal::try_from(libc::WTERMSIG(status)).unwrap())
-        } else if libc::WIFSTOPPED(status) {
-            Stopped(Signal::try_from(libc::WSTOPSIG(status)).unwrap())
-        } else if libc::WIFCONTINUED(status) {
-            Continued
-        } else {
-            Running
-        }
-    }
-}
-
 /// A safe wrapper around waitpid.
 ///
 /// On success if a process was reaped, it will be returned as the first value.
-/// The second returned value is the WaitStatus from the libc::waitpid() call.
+/// The second returned value is the ExitStatus from the libc::waitpid() call.
 ///
 /// Note: this can block if libc::WNOHANG is not set and EINTR is not handled internally.
-pub fn wait_for_pid<A: AsRawPid>(pid: A, options: c_int) -> Result<(Option<Pid>, WaitStatus)> {
+pub fn wait_for_pid<A: AsRawPid>(pid: A, options: c_int) -> Result<(Option<Pid>, ExitStatus)> {
     let pid = pid.as_raw_pid();
     let mut status: c_int = 1;
     // Safe because status is owned and the error is checked.
@@ -360,7 +331,7 @@ pub fn wait_for_pid<A: AsRawPid>(pid: A, options: c_int) -> Result<(Option<Pid>,
     }
     Ok((
         if ret == 0 { None } else { Some(ret) },
-        WaitStatus::from(status),
+        ExitStatus::from_raw(status),
     ))
 }
 
@@ -663,8 +634,6 @@ pub fn number_of_logical_cores() -> Result<usize> {
 mod tests {
     use std::io::Write;
 
-    use libc::EBADF;
-
     use super::*;
 
     #[test]
@@ -676,36 +645,5 @@ mod tests {
         add_fd_flags(tx.as_raw_fd(), libc::O_NONBLOCK).expect("Failed to set tx non blocking");
         tx.write(&[0u8; 8])
             .expect_err("Write after fill didn't fail");
-    }
-
-    #[test]
-    fn safe_descriptor_from_path_valid() {
-        assert!(safe_descriptor_from_path(Path::new("/proc/self/fd/2"))
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn safe_descriptor_from_path_invalid_integer() {
-        assert_eq!(
-            safe_descriptor_from_path(Path::new("/proc/self/fd/blah")),
-            Err(Error::new(EINVAL))
-        );
-    }
-
-    #[test]
-    fn safe_descriptor_from_path_invalid_fd() {
-        assert_eq!(
-            safe_descriptor_from_path(Path::new("/proc/self/fd/42")),
-            Err(Error::new(EBADF))
-        );
-    }
-
-    #[test]
-    fn safe_descriptor_from_path_none() {
-        assert_eq!(
-            safe_descriptor_from_path(Path::new("/something/else")).unwrap(),
-            None
-        );
     }
 }

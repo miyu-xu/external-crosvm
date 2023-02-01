@@ -1,9 +1,11 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 //! The cross-domain component type, specialized for allocating and sharing resources across domain
 //! boundaries.
+
+#![cfg(not(target_os = "fuchsia"))]
 
 use std::collections::BTreeMap as Map;
 use std::collections::VecDeque;
@@ -12,6 +14,8 @@ use std::fs::File;
 use std::mem::size_of;
 use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::thread;
 
 use base::error;
@@ -21,10 +25,7 @@ use base::FileReadWriteVolatile;
 use base::SafeDescriptor;
 use base::WaitContext;
 use data_model::DataInit;
-use data_model::VolatileMemory;
 use data_model::VolatileSlice;
-use sync::Condvar;
-use sync::Mutex;
 
 use super::sys::descriptor_analysis;
 use super::sys::SystemStream;
@@ -126,7 +127,7 @@ pub struct CrossDomain {
 // be stored in a Slab or vector.  Descriptors received from the Wayland socket *seem* to come one
 // at a time, and can be stored as options.  Need to confirm.
 pub(crate) fn add_item(item_state: &CrossDomainItemState, item: CrossDomainItem) -> u32 {
-    let mut items = item_state.lock();
+    let mut items = item_state.lock().unwrap();
 
     let item_id = match item {
         CrossDomainItem::ImageRequirements(_) => {
@@ -171,7 +172,7 @@ impl CrossDomainState {
     }
 
     pub(crate) fn add_job(&self, job: CrossDomainJob) {
-        let mut jobs = self.jobs.lock();
+        let mut jobs = self.jobs.lock().unwrap();
         if let Some(queue) = jobs.as_mut() {
             queue.push_back(job);
             self.jobs_cvar.notify_one();
@@ -179,18 +180,18 @@ impl CrossDomainState {
     }
 
     fn end_jobs(&self) {
-        let mut jobs = self.jobs.lock();
+        let mut jobs = self.jobs.lock().unwrap();
         *jobs = None;
         // Only one worker thread in the current implementation.
         self.jobs_cvar.notify_one();
     }
 
     fn wait_for_job(&self) -> Option<CrossDomainJob> {
-        let mut jobs = self.jobs.lock();
+        let mut jobs = self.jobs.lock().unwrap();
         loop {
             match jobs.as_mut()?.pop_front() {
                 Some(job) => return Some(job),
-                None => jobs = self.jobs_cvar.wait(jobs),
+                None => jobs = self.jobs_cvar.wait(jobs).unwrap(),
             }
         }
     }
@@ -199,7 +200,7 @@ impl CrossDomainState {
     where
         T: DataInit,
     {
-        let mut context_resources = self.context_resources.lock();
+        let mut context_resources = self.context_resources.lock().unwrap();
         let mut bytes_read: usize = 0;
 
         let resource = context_resources
@@ -337,11 +338,11 @@ impl CrossDomainWorker {
                     //
                     // Fence handling is tied to some new data transfer across a pollable
                     // descriptor.  When we're adding new descriptors, we stop polling.
-                    resample_evt.read()?;
+                    resample_evt.wait()?;
                     self.state.add_job(CrossDomainJob::HandleFence(fence));
                 }
                 CrossDomainToken::WaylandReadPipe(pipe_id) => {
-                    let mut items = self.item_state.lock();
+                    let mut items = self.item_state.lock().unwrap();
                     let mut cmd_read: CrossDomainReadWrite = Default::default();
                     let bytes_read;
 
@@ -404,7 +405,7 @@ impl CrossDomainWorker {
                     }
                 }
                 CrossDomainJob::AddReadPipe(read_pipe_id) => {
-                    let items = self.item_state.lock();
+                    let items = self.item_state.lock().unwrap();
                     let item = items
                         .table
                         .get(&read_pipe_id)
@@ -443,6 +444,7 @@ impl CrossDomainContext {
         if !self
             .context_resources
             .lock()
+            .unwrap()
             .contains_key(&cmd_init.ring_id)
         {
             return Err(RutabagaError::InvalidResourceId);
@@ -514,7 +516,11 @@ impl CrossDomainContext {
             flags: RutabagaGrallocFlags::new(cmd_get_reqs.flags),
         };
 
-        let reqs = self.gralloc.lock().get_image_memory_requirements(info)?;
+        let reqs = self
+            .gralloc
+            .lock()
+            .unwrap()
+            .get_image_memory_requirements(info)?;
 
         let mut response = CrossDomainImageRequirements {
             strides: reqs.strides,
@@ -529,7 +535,9 @@ impl CrossDomainContext {
 
         if let Some(ref vk_info) = reqs.vulkan_info {
             response.memory_idx = vk_info.memory_idx as i32;
-            response.physical_device_idx = vk_info.physical_device_idx as i32;
+            // We return -1 for now since physical_device_idx is deprecated. If this backend is
+            // put back into action, it should be using device_id from the request instead.
+            response.physical_device_idx = -1;
         }
 
         if let Some(state) = &self.state {
@@ -546,7 +554,7 @@ impl CrossDomainContext {
         cmd_write: &CrossDomainReadWrite,
         opaque_data: VolatileSlice,
     ) -> RutabagaResult<()> {
-        let mut items = self.item_state.lock();
+        let mut items = self.item_state.lock().unwrap();
 
         // Most of the time, hang-up and writing will be paired.  In lieu of this, remove the
         // item rather than getting a reference.  In case of an error, there's not much to do
@@ -586,7 +594,7 @@ impl Drop for CrossDomainContext {
         if let Some(kill_evt) = self.kill_evt.take() {
             // Don't join the the worker thread unless the write to `kill_evt` is successful.
             // Otherwise, this may block indefinitely.
-            match kill_evt.write(1) {
+            match kill_evt.signal() {
                 Ok(_) => (),
                 Err(e) => {
                     error!("failed to write cross domain kill event: {}", e);
@@ -614,7 +622,7 @@ impl RutabagaContext for CrossDomainContext {
         // allocations.  We do want to remove Wayland keymaps, since they are mapped the guest
         // and then never used again.  The current protocol encodes this as divisiblity by 2.
         if item_id % 2 == 0 {
-            let items = self.item_state.lock();
+            let items = self.item_state.lock().unwrap();
             let item = items
                 .table
                 .get(&item_id)
@@ -632,7 +640,7 @@ impl RutabagaContext for CrossDomainContext {
                     // cross-domain use case, so whatever.
                     let hnd = match handle_opt {
                         Some(handle) => handle,
-                        None => self.gralloc.lock().allocate_memory(*reqs)?,
+                        None => self.gralloc.lock().unwrap().allocate_memory(*reqs)?,
                     };
 
                     let info_3d = Resource3DInfo {
@@ -664,6 +672,7 @@ impl RutabagaContext for CrossDomainContext {
             let item = self
                 .item_state
                 .lock()
+                .unwrap()
                 .table
                 .remove(&item_id)
                 .ok_or(RutabagaError::InvalidCrossDomainItemId)?;
@@ -694,32 +703,39 @@ impl RutabagaContext for CrossDomainContext {
         }
     }
 
-    fn submit_cmd(&mut self, commands: &mut [u8]) -> RutabagaResult<()> {
-        let size = commands.len();
-        let slice = VolatileSlice::new(commands);
-        let mut offset: usize = 0;
-
-        while offset < size {
-            let hdr: CrossDomainHeader = slice.get_ref(offset)?.load();
+    fn submit_cmd(&mut self, mut commands: &mut [u8]) -> RutabagaResult<()> {
+        while !commands.is_empty() {
+            let hdr = CrossDomainHeader::read_from_prefix(commands)
+                .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
             match hdr.cmd {
                 CROSS_DOMAIN_CMD_INIT => {
-                    let cmd_init: CrossDomainInit = slice.get_ref(offset)?.load();
+                    let cmd_init = CrossDomainInit::read_from_prefix(commands)
+                        .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
                     self.initialize(&cmd_init)?;
                 }
                 CROSS_DOMAIN_CMD_GET_IMAGE_REQUIREMENTS => {
-                    let cmd_get_reqs: CrossDomainGetImageRequirements =
-                        slice.get_ref(offset)?.load();
+                    let cmd_get_reqs = CrossDomainGetImageRequirements::read_from_prefix(commands)
+                        .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
                     self.get_image_requirements(&cmd_get_reqs)?;
                 }
                 CROSS_DOMAIN_CMD_SEND => {
                     let opaque_data_offset = size_of::<CrossDomainSendReceive>();
-                    let cmd_send: CrossDomainSendReceive = slice.get_ref(offset)?.load();
+                    let cmd_send = CrossDomainSendReceive::read_from_prefix(commands)
+                        .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
-                    let opaque_data =
-                        slice.sub_slice(opaque_data_offset, cmd_send.opaque_data_size as usize)?;
+                    let opaque_data = VolatileSlice::new(
+                        commands
+                            .get_mut(
+                                opaque_data_offset
+                                    ..opaque_data_offset + cmd_send.opaque_data_size as usize,
+                            )
+                            .ok_or(RutabagaError::InvalidCommandSize(
+                                cmd_send.opaque_data_size as usize,
+                            ))?,
+                    );
 
                     self.send(&cmd_send, &[opaque_data])?;
                 }
@@ -728,17 +744,28 @@ impl RutabagaContext for CrossDomainContext {
                 }
                 CROSS_DOMAIN_CMD_WRITE => {
                     let opaque_data_offset = size_of::<CrossDomainReadWrite>();
-                    let cmd_write: CrossDomainReadWrite = slice.get_ref(offset)?.load();
+                    let cmd_write = CrossDomainReadWrite::read_from_prefix(commands)
+                        .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
-                    let opaque_data =
-                        slice.sub_slice(opaque_data_offset, cmd_write.opaque_data_size as usize)?;
+                    let opaque_data = VolatileSlice::new(
+                        commands
+                            .get_mut(
+                                opaque_data_offset
+                                    ..opaque_data_offset + cmd_write.opaque_data_size as usize,
+                            )
+                            .ok_or(RutabagaError::InvalidCommandSize(
+                                cmd_write.opaque_data_size as usize,
+                            ))?,
+                    );
 
                     self.write(&cmd_write, opaque_data)?;
                 }
                 _ => return Err(RutabagaError::SpecViolation("invalid cross domain command")),
             }
 
-            offset += hdr.cmd_size as usize;
+            commands = commands
+                .get_mut(hdr.cmd_size as usize..)
+                .ok_or(RutabagaError::InvalidCommandSize(hdr.cmd_size as usize))?;
         }
 
         Ok(())
@@ -746,7 +773,7 @@ impl RutabagaContext for CrossDomainContext {
 
     fn attach(&mut self, resource: &mut RutabagaResource) {
         if resource.blob_mem == RUTABAGA_BLOB_MEM_GUEST {
-            self.context_resources.lock().insert(
+            self.context_resources.lock().unwrap().insert(
                 resource.resource_id,
                 CrossDomainResource {
                     handle: None,
@@ -754,7 +781,7 @@ impl RutabagaContext for CrossDomainContext {
                 },
             );
         } else if let Some(ref handle) = resource.handle {
-            self.context_resources.lock().insert(
+            self.context_resources.lock().unwrap().insert(
                 resource.resource_id,
                 CrossDomainResource {
                     handle: Some(handle.clone()),
@@ -765,7 +792,10 @@ impl RutabagaContext for CrossDomainContext {
     }
 
     fn detach(&mut self, resource: &RutabagaResource) {
-        self.context_resources.lock().remove(&resource.resource_id);
+        self.context_resources
+            .lock()
+            .unwrap()
+            .remove(&resource.resource_id);
     }
 
     fn context_create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
@@ -800,11 +830,11 @@ impl RutabagaComponent for CrossDomain {
             }
         }
 
-        if self.gralloc.lock().supports_dmabuf() {
+        if self.gralloc.lock().unwrap().supports_dmabuf() {
             caps.supports_dmabuf = 1;
         }
 
-        if self.gralloc.lock().supports_external_gpu_memory() {
+        if self.gralloc.lock().unwrap().supports_external_gpu_memory() {
             caps.supports_external_gpu_memory = 1;
         }
 

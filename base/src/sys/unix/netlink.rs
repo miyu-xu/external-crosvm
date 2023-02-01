@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -79,7 +79,7 @@ pub struct NlAttrWithData<'a> {
 }
 
 fn nlattr_align(offset: usize) -> usize {
-    return (offset + NLATTR_ALIGN_TO - 1) & !(NLATTR_ALIGN_TO - 1);
+    (offset + NLATTR_ALIGN_TO - 1) & !(NLATTR_ALIGN_TO - 1)
 }
 
 /// Iterator over `struct NlAttr` as received from a netlink socket.
@@ -293,7 +293,7 @@ impl NetlinkGenericSocket {
         data[payload_start..payload_end].copy_from_slice(family_name.as_bytes());
 
         // Safe because we pass a valid, owned socket fd and a valid pointer/size for the buffer.
-        let _bytes_read = unsafe {
+        unsafe {
             let res = libc::send(
                 self.sock.as_raw_fd(),
                 allocation.as_ptr() as *mut libc::c_void,
@@ -308,12 +308,12 @@ impl NetlinkGenericSocket {
 
         // Return the answer
         match self.recv() {
-            Ok(msg) => return Ok(msg),
+            Ok(msg) => Ok(msg),
             Err(e) => {
                 error!("recv get_family returned with error {}", e);
-                return Err(e);
+                Err(e)
             }
-        };
+        }
     }
 }
 

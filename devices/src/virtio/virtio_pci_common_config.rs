@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -124,13 +124,10 @@ impl VirtioPciCommonConfig {
             0x16 => self.queue_select,
             0x18 => self.with_queue(queues, |q| q.size()).unwrap_or(0),
             0x1a => self.with_queue(queues, |q| q.vector()).unwrap_or(0),
-            0x1c => {
-                if self.with_queue(queues, |q| q.ready()).unwrap_or(false) {
-                    1
-                } else {
-                    0
-                }
-            }
+            0x1c => self
+                .with_queue(queues, |q| q.ready())
+                .unwrap_or(false)
+                .into(),
             0x1e => self.queue_select, // notify_off
             _ => 0,
         }
@@ -249,6 +246,7 @@ mod tests {
     use vm_memory::GuestMemory;
 
     use super::*;
+    use crate::Suspendable;
 
     struct DummyDevice(DeviceType);
     const QUEUE_SIZE: u16 = 256;
@@ -268,14 +266,16 @@ mod tests {
             &mut self,
             _mem: GuestMemory,
             _interrupt: Interrupt,
-            _queues: Vec<Queue>,
-            _queue_evts: Vec<Event>,
-        ) {
+            _queues: Vec<(Queue, Event)>,
+        ) -> anyhow::Result<()> {
+            Ok(())
         }
         fn features(&self) -> u64 {
             DUMMY_FEATURES
         }
     }
+
+    impl Suspendable for DummyDevice {}
 
     #[test]
     fn write_base_regs() {

@@ -119,8 +119,7 @@
       "--output_json",
       "/path/to/tmp/json",
       "--revision",
-      "crosvm@HEAD",
-      "--gerrit_no_reset"
+      "crosvm@HEAD"
     ],
     "cwd": "[CACHE]/builder",
     "env": {
@@ -237,6 +236,19 @@
     "cmd": [
       "vpython3",
       "[CACHE]/builder/crosvm/tools/dev_container",
+      "--pull"
+    ],
+    "cwd": "[CACHE]/builder/crosvm",
+    "infra_step": true,
+    "name": "Prepare Container Build.Prepare dev_container.Force pull dev_container",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "vpython3",
+      "[CACHE]/builder/crosvm/tools/dev_container",
       "--verbose",
       "true"
     ],
@@ -260,6 +272,110 @@
       "CROSVM_CONTAINER_CACHE": "[CACHE]/builder/dev_container"
     },
     "name": "Build"
+  },
+  {
+    "cmd": [],
+    "name": "Uploading coverage"
+  },
+  {
+    "cmd": [],
+    "name": "Uploading coverage.install crosvm/codecov",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@1@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "vpython3",
+      "-u",
+      "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
+      "--json-output",
+      "/path/to/tmp/json",
+      "ensure-directory",
+      "--mode",
+      "0777",
+      "[START_DIR]/cipd_tool/crosvm/codecov/latest"
+    ],
+    "cwd": "[CACHE]/builder/crosvm",
+    "env": {
+      "CROSVM_CONTAINER_CACHE": "[CACHE]/builder/dev_container"
+    },
+    "infra_step": true,
+    "name": "Uploading coverage.install crosvm/codecov.ensure package directory",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "cipd",
+      "ensure",
+      "-root",
+      "[START_DIR]/cipd_tool/crosvm/codecov/latest",
+      "-ensure-file",
+      "crosvm/codecov/${platform} latest",
+      "-max-threads",
+      "0",
+      "-json-output",
+      "/path/to/tmp/json"
+    ],
+    "cwd": "[CACHE]/builder/crosvm",
+    "env": {
+      "CROSVM_CONTAINER_CACHE": "[CACHE]/builder/dev_container"
+    },
+    "infra_step": true,
+    "name": "Uploading coverage.install crosvm/codecov.ensure_installed",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@2@@@",
+      "@@@STEP_LOG_LINE@json.output@{@@@",
+      "@@@STEP_LOG_LINE@json.output@  \"result\": {@@@",
+      "@@@STEP_LOG_LINE@json.output@    \"\": [@@@",
+      "@@@STEP_LOG_LINE@json.output@      {@@@",
+      "@@@STEP_LOG_LINE@json.output@        \"instance_id\": \"resolved-instance_id-of-latest----------\", @@@",
+      "@@@STEP_LOG_LINE@json.output@        \"package\": \"crosvm/codecov/resolved-platform\"@@@",
+      "@@@STEP_LOG_LINE@json.output@      }@@@",
+      "@@@STEP_LOG_LINE@json.output@    ]@@@",
+      "@@@STEP_LOG_LINE@json.output@  }@@@",
+      "@@@STEP_LOG_LINE@json.output@}@@@",
+      "@@@STEP_LOG_END@json.output@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "[CACHE]/builder/crosvm",
+    "env": {
+      "CROSVM_CONTAINER_CACHE": "[CACHE]/builder/dev_container"
+    },
+    "name": "Uploading coverage.Get git sha",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@1@@@"
+    ]
+  },
+  {
+    "cmd": [
+      "bash",
+      "RECIPE_MODULE[crosvm::crosvm]/resources/codecov_wrapper.sh",
+      "[START_DIR]/cipd_tool/crosvm/codecov/latest/codecov",
+      "--nonZero",
+      "--slug=google/crosvm",
+      "--sha=",
+      "--branch=main",
+      "-X=search",
+      "-f",
+      "coverage.lcov"
+    ],
+    "cwd": "[CACHE]/builder/crosvm",
+    "env": {
+      "CROSVM_CONTAINER_CACHE": "[CACHE]/builder/dev_container"
+    },
+    "name": "Uploading coverage.Uploading to covecov.io",
+    "~followup_annotations": [
+      "@@@STEP_NEST_LEVEL@1@@@"
+    ]
   },
   {
     "name": "$result"

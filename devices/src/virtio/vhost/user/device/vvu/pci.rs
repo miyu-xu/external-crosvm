@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -307,9 +307,6 @@ impl VvuPciDevice {
         let vfio_dev = Arc::new(open_vfio_device(&vfio_path)?);
         let config = VfioPciConfig::new(vfio_dev.clone());
         let caps = VvuPciCaps::new(&config)?;
-        vfio_dev
-            .check_device_info()
-            .context("failed to check VFIO device information")?;
 
         let page_mask = vfio_dev
             .vfio_get_iommu_page_size_mask()

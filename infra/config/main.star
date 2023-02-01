@@ -238,12 +238,13 @@ def verify_builder(
             cq_group = "main",
         )
 
-def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
+def verify_linux_builder(arch, crosvm_direct = False, coverage = True, **kwargs):
     """Creates a verify builder that builds crosvm on linux
 
     Args:
         arch: Architecture to build and test
         crosvm_direct: Test crosvm-direct instead of crosvm
+        coverage: Disable coverage collection
         **kwargs: Passed to verify_builder
     """
     name = "linux_%s" % arch
@@ -264,6 +265,7 @@ def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
         },
         postsubmit_properties = {
             "repeat_tests": 3,
+            "coverage": coverage,
         },
         presubmit_properties = {
             "retry_tests": 2,
@@ -271,29 +273,6 @@ def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
         caches = [
             swarming.cache("builder", name = "linux_builder_cache"),
         ],
-        category = "linux",
-        **kwargs
-    )
-
-def verify_chromeos_builder(board, **kwargs):
-    """Creates a verify builder that builds crosvm for ChromeOS
-
-    Args:
-        board: ChromeOS board to build and test
-        **kwargs: Passed to verify_builder
-    """
-    verify_builder(
-        name = "chromeos_%s" % board,
-        dimensions = {
-            "os": "Ubuntu",
-            "cpu": "x86-64",
-        },
-        executable = luci.recipe(
-            name = "build_chromeos",
-        ),
-        properties = {
-            "board": board,
-        },
         category = "linux",
         **kwargs
     )
@@ -335,9 +314,21 @@ def infra_builder(name, postsubmit, **args):
 verify_linux_builder("x86_64")
 verify_linux_builder("x86_64", crosvm_direct = True)
 verify_linux_builder("aarch64")
-verify_linux_builder("armhf")
+verify_linux_builder("armhf", coverage = False)
+verify_linux_builder("mingw64", coverage = False)
 
-verify_chromeos_builder("amd64-generic", presubmit = False)
+verify_builder(
+    name = "chromeos_hatch",
+    dimensions = {
+        "os": "Ubuntu",
+        "cpu": "x86-64",
+    },
+    executable = luci.recipe(
+        name = "build_chromeos_hatch",
+    ),
+    category = "linux",
+    presubmit = False,
+)
 
 verify_builder(
     name = "windows",
@@ -378,14 +369,6 @@ infra_builder(
     name = "build_docs",
     executable = luci.recipe(
         name = "build_docs",
-    ),
-    postsubmit = True,
-)
-
-infra_builder(
-    name = "build_coverage",
-    executable = luci.recipe(
-        name = "build_coverage",
     ),
     postsubmit = True,
 )

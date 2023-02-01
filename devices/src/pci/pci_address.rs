@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 use std::fmt;
 use std::fmt::Display;
+use std::path::Path;
 use std::str::FromStr;
 
 use remain::sorted;
@@ -14,7 +15,7 @@ use serde::Serializer;
 use thiserror::Error as ThisError;
 
 /// Identifies a single component of a [`PciAddress`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PciAddressComponent {
     Domain,
     Bus,
@@ -23,7 +24,7 @@ pub enum PciAddressComponent {
 }
 
 /// PCI address parsing and conversion errors.
-#[derive(ThisError, Debug, PartialEq)]
+#[derive(ThisError, Debug, PartialEq, Eq)]
 #[sorted]
 pub enum Error {
     /// The specified component was outside the valid range.
@@ -32,6 +33,9 @@ pub enum Error {
     /// The specified component could not be parsed as a hexadecimal number.
     #[error("{0:?} failed to parse as hex")]
     InvalidHex(PciAddressComponent),
+    /// The given PCI device path is invalid
+    #[error("Invalid PCI device path")]
+    InvalidHostPath,
     /// A delimiter (`:` or `.`) between the two specified components was missing or incorrect.
     #[error("Missing delimiter between {0:?} and {1:?}")]
     MissingDelimiter(PciAddressComponent, PciAddressComponent),
@@ -238,6 +242,22 @@ impl PciAddress {
         (PciAddress { bus, dev, func }, register)
     }
 
+    /// Construct [`PciAddress`] from a system PCI path
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The system PCI path. The file name of this path must be a valid PCI address.
+    ///
+    /// # Errors
+    ///
+    /// If the path given is invalid or filename is an invalid PCI address, this function will
+    /// return error.
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let os_str = path.file_name().ok_or(Error::InvalidHostPath)?;
+        let pci_str = os_str.to_str().ok_or(Error::InvalidHostPath)?;
+        PciAddress::from_str(pci_str)
+    }
+
     /// Encode [`PciAddress`] into CONFIG_ADDRESS value.
     ///
     /// See [`PciAddress::from_config_address()`] for details of the encoding.
@@ -278,6 +298,35 @@ impl PciAddress {
         ((Self::BUS_MASK & self.bus as u32) << (Self::FUNCTION_BITS_NUM + Self::DEVICE_BITS_NUM))
             | ((Self::DEVICE_MASK & self.dev as u32) << Self::FUNCTION_BITS_NUM)
             | (Self::FUNCTION_MASK & self.func as u32)
+    }
+
+    /// Convert D:F PCI address to a linux style devfn.
+    ///
+    /// The device and function numbers are packed into an u8 as follows:
+    ///
+    /// | Bits 7-3 | Bits 2-0 |
+    /// |----------|----------|
+    /// |  Device  | Function |
+    pub fn devfn(&self) -> u8 {
+        (self.dev << Self::FUNCTION_BITS_NUM) | self.func
+    }
+
+    /// Convert D:F PCI address to an ACPI _ADR.
+    ///
+    /// The device and function numbers are packed into an u32 as follows:
+    ///
+    /// | Bits 31-16 | Bits 15-0 |
+    /// |------------|-----------|
+    /// |   Device   | Function  |
+    pub fn acpi_adr(&self) -> u32 {
+        ((Self::DEVICE_MASK & self.dev as u32) << 16) | (Self::FUNCTION_MASK & self.func as u32)
+    }
+
+    /// Convert B:D:F PCI address to a PCI PME Requester ID.
+    ///
+    /// The output is identical to `to_u32()` except that only the lower 16 bits are needed
+    pub fn pme_requester_id(&self) -> u16 {
+        self.to_u32() as u16
     }
 
     /// Returns true if the address points to PCI root host-bridge.
