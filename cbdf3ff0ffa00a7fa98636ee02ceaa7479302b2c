@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "646ba5e4_916ae2b4",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-02-02T18:44:52Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f4c8d841_7ff45195",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 6
+      },
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "0d735a64_e4149bfb",
@@ -37,6 +61,24 @@
       "writtenOn": "2023-02-01T22:07:04Z",
       "side": 1,
       "message": "khei/fmayle - we don\u0027t do this, but it seems like a good practice. Our scripts should handle these or track them.\n\nThough - anyway, Chris, since it\u0027s a small change and you have already put the upstream commit there, do we need this patch file?",
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d0d21d87_7bc9a6b1",
+        "filename": "patches/uuid-update-1.2.2.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-02-02T18:44:52Z",
+      "side": 1,
+      "message": "Yes, I think we should keep this in spite of the upstream commit.  It\u0027s easier to stick to the procedure and remove the patch on the next update than deal with a special case.",
+      "parentUuid": "0d735a64_e4149bfb",
       "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
