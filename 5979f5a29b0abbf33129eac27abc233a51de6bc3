@@ -52,6 +52,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8346ae50_b9a3b480",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 48,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-03T22:38:17Z",
+      "side": 1,
+      "message": "i noticed that we\u0027ve got a similar entry in the FDT,  `fdt.property_string(\"compatible\", \"linux,dummy-virt\")?;`, and crosvm is generally linux-first when it comes to guest OSs, so i\u0027ll just mark this as resolved since non-linux guests are probably a whole separate discussion",
+      "parentUuid": "2d5b48b4_f38fc33e",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3429a1b6_be27d108",
