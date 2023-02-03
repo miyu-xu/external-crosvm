@@ -81,6 +81,24 @@
       "parentUuid": "0d735a64_e4149bfb",
       "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3067c276_6f7c008d",
+        "filename": "patches/uuid-update-1.2.2.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-03T20:43:06Z",
+      "side": 1,
+      "message": "crosvm is already a special case, this technique isn\u0027t really usable with our current workflow, it will just end up being documentation that goes obsolete right away.\n\nUnlike the external/rust/crates repos, where you update to pristine upstream source each time, we are doing a `git merge` and this change will get carried on automatically (or cause a merge conflict). Theoretically, for each merge, we could instead `git reset` to the new upstream head and then apply a series of patches like this. It might be worth exploring that.",
+      "parentUuid": "d0d21d87_7bc9a6b1",
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
