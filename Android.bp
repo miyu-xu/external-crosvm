@@ -48,6 +48,7 @@ rust_binary {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "geniezone",
         "qcow",
         "usb",
     ],

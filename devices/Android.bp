@@ -209,6 +209,7 @@ rust_library {
     features: [
         "audio",
         "balloon",
+        "geniezone",
         "usb",
     ],
     rustlibs: [
