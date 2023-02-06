@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5dec97f1_45bea359",
+        "filename": "src/crosvm/sys/unix/jail_helpers.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-06T22:42:57Z",
+      "side": 0,
+      "message": "note - I think we may be able to resolve b/246968493. Will look at it after this merge.",
+      "range": {
+        "startLine": 26,
+        "startChar": 7,
+        "endLine": 29,
+        "endChar": 0
+      },
+      "revId": "061d643d344a37387f361e9d7046cf334ceb87b5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
