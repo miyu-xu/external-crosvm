@@ -78,6 +78,7 @@ cfg_if::cfg_if! {
         use libc::{getegid, geteuid};
 
         static KVM_PATH: &str = "/dev/kvm";
+        static GENIEZONE_PATH: &str = "/dev/gzvm";
         static VHOST_NET_PATH: &str = "/dev/vhost-net";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
@@ -1103,6 +1104,9 @@ pub struct Config {
     pub force_s2idle: bool,
     #[cfg(feature = "gdb")]
     pub gdb: Option<u32>,
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(all(unix, feature = "geniezone"))]
+    pub geniezone_device_path: PathBuf,
     #[cfg(all(windows, feature = "gpu"))]
     pub gpu_backend_config: Option<GpuBackendConfig>,
     #[cfg(feature = "gpu")]
@@ -1323,6 +1327,9 @@ impl Default for Config {
             gpu_render_server_parameters: None,
             #[cfg(all(windows, feature = "gpu"))]
             gpu_vmm_config: None,
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            #[cfg(all(unix, feature = "geniezone"))]
+            geniezone_device_path: PathBuf::from(GENIEZONE_PATH),
             host_cpu_topology: false,
             #[cfg(windows)]
             host_guid: None,

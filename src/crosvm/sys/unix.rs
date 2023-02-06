@@ -28,6 +28,7 @@ use std::ops::RangeInclusive;
 use std::os::unix::prelude::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -95,6 +96,9 @@ use devices::IrqChipAArch64 as IrqChipArch;
 use devices::IrqChipX86_64 as IrqChipArch;
 use devices::IrqEventIndex;
 use devices::IrqEventSource;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use devices::GeniezoneKernelIrqChip;
 use devices::KvmKernelIrqChip;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::KvmSplitIrqChip;
@@ -124,6 +128,15 @@ use devices::VirtioPciDevice;
 use devices::XhciController;
 #[cfg(feature = "gpu")]
 use gpu::*;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::Geniezone;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::GeniezoneVcpu;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::GeniezoneVm;
 use hypervisor::kvm::Kvm;
 use hypervisor::kvm::KvmVcpu;
 use hypervisor::kvm::KvmVm;
@@ -1313,6 +1326,61 @@ fn create_guest_memory(
     })
 }
 
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+fn run_gz(cfg: Config, components: VmComponents) -> Result<ExitState> {
+    let gzvm = Geniezone::new_with_path(&PathBuf::from("/dev/gzvm")).with_context(|| {
+        format!(
+            "failed to open GenieZone device {}",
+            cfg.geniezone_device_path.display(),
+        )
+    })?;
+
+    let CreateGuestMemoryResult {
+        guest_mem,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    } = create_guest_memory(&cfg, &components, &gzvm)?;
+
+    let vm = GeniezoneVm::new(&gzvm, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protection_type,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        bail!("Failed to create protected VM");
+    }
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    enum GeniezoneIrqChip {
+        Kernel(GeniezoneKernelIrqChip),
+    }
+
+    impl GeniezoneIrqChip {
+        fn as_mut(&mut self) -> &mut dyn IrqChipArch {
+            match self {
+                GeniezoneIrqChip::Kernel(i) => i,
+            }
+        }
+    }
+
+    let ioapic_host_tube;
+    let mut irq_chip = if cfg.split_irqchip {
+        unimplemented!("Geniezone does not support split irqchip mode");
+    }else {
+        ioapic_host_tube = None;
+
+        GeniezoneIrqChip::Kernel(
+            GeniezoneKernelIrqChip::new(vm_clone, components.vcpu_count)
+                .context("failed to create IRQ chip")?,
+        )
+    };
+
+    run_vm::<GeniezoneVcpu, GeniezoneVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+}
+
 fn run_kvm(cfg: Config, components: VmComponents) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).with_context(|| {
         format!(
@@ -1405,9 +1473,18 @@ fn run_kvm(cfg: Config, components: VmComponents) -> Result<ExitState> {
     )
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(feature = "geniezone")]
+    if cfg.geniezone_device_path.exists() {
+        return Ok(HypervisorKind::Geniezone);
+    }
+    bail!("no hypervisor enabled!");
 }
+
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
     if let Some(async_executor) = cfg.async_executor {
@@ -1417,13 +1494,16 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
 
     let components = setup_vm_components(&cfg)?;
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
         HypervisorKind::Kvm => run_kvm(cfg, components),
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        #[cfg(feature = "geniezone")]
+        HypervisorKind::Geniezone => run_gz(cfg, components,),
     }
 }
 
