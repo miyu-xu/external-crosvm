@@ -211,6 +211,7 @@ impl DescriptorChain {
 
     fn is_valid(&self) -> bool {
         if self.len > 0 {
+<<<<<<< HEAD   (b68a63 Merge remote-tracking branch 'aosp/upstream-main' into merge)
             // Each region in `self.regions` must be a contiguous range in `self.mem`.
             if !self
                 .regions
@@ -218,6 +219,19 @@ impl DescriptorChain {
                 .all(|r| self.mem.is_valid_range(r.gpa, r.len as u64))
             {
                 return false;
+=======
+            match self.get_mem_regions() {
+                Ok(regions) => {
+                    // Each region in `self.regions` must be a contiguous range in `self.mem`.
+                    if !regions.iter().all(|r| self.mem.is_valid_range(r.gpa, r.len as u64)) {
+                        return false;
+                    }
+                }
+                Err(e) => {
+                    error!("{:#}", e);
+                    return false;
+                }
+>>>>>>> BRANCH (f60235 Merge cherrypicks of ['ag/20586865'] into tm-qpr1-release.)
             }
         }
 
