@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "00c9952c_efd09cfe",
+        "filename": "android-fork-stats.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 3,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-08T19:46:53Z",
+      "side": 1,
+      "message": "maybe could do something like `UPSTREAM_COMMIT\u003d$(git merge-base HEAD aosp/upstream-main)` to improve this",
+      "revId": "3d4a9119b827ebfe506a9b2e4e208167a264044c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
