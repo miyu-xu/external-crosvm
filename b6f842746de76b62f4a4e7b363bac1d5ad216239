@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "f7322a1b_942ec8bc",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-09T01:14:08Z",
+      "side": 1,
+      "message": "i think it would be better to do the review upstream (in https://crrev.com/c/4170415). i\u0027ve posted comments there\n\nwhen it looks good, we\u0027ll submit it upstream and the changes will be pulled into AOSP via the regular merge process",
+      "revId": "b6f842746de76b62f4a4e7b363bac1d5ad216239",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "04452422_e4c98a86",
         "filename": "hypervisor/src/geniezone/aarch64.rs",
         "patchSetId": 5
