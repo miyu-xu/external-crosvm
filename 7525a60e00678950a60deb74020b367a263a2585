@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f85296d3_9149a512",
+        "filename": "gunyah_sys/bindgen.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-09T00:03:12Z",
+      "side": 1,
+      "message": "does this \"just work\" or do you have to manually grab the gunyah header and put it there?",
+      "revId": "7525a60e00678950a60deb74020b367a263a2585",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
