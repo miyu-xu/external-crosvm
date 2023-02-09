@@ -580,6 +580,22 @@ fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> 
     Ok(())
 }
 
+fn create_trusty_node(fdt: &mut FdtWriter) -> Result<()> {
+    let trusty_node = fdt.begin_node("trusty")?;
+    fdt.property_u32("#address-cells", 2)?;
+    fdt.property_u32("#size-cells", 2)?;
+    fdt.property_string("compatible", "android,trusty-smc-v1")?;
+    fdt.property_u32("ranges", 0)?;
+
+    // create a virtio node
+    let trusty_virtio_node = fdt.begin_node("virtio")?;
+    fdt.property_string("compatible", "android,trusty-virtio-v1")?;
+    fdt.end_node(trusty_virtio_node)?;
+
+    fdt.end_node(trusty_node)?;
+    Ok(())
+}
+
 /// Creates a flattened device tree containing all of the parameters for the
 /// kernel and loads it into the guest memory at the specified offset.
 ///
@@ -677,6 +693,7 @@ pub fn create_fdt(
     if !cpu_frequencies.is_empty() {
         create_virt_cpufreq_node(&mut fdt, num_cpus as u64)?;
     }
+    create_trusty_node(&mut fdt)?;
     // End giant node
     fdt.end_node(root_node)?;
 
