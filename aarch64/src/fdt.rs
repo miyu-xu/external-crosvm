@@ -624,6 +624,26 @@ fn add_symbols_entry(fdt: &mut Fdt, symbol: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
+fn create_trusty_node(fdt: &mut Fdt) -> Result<()> {
+    let trusty_ffa_node = fdt.root_mut().subnode_mut("trusty-ffa")?;
+    trusty_ffa_node.set_prop("compatible", "android,trusty-ffa-v1")?;
+
+    let trusty_node = trusty_ffa_node.subnode_mut("trusty-core")?;
+    trusty_node.set_prop("#address-cells", 0x2u32)?;
+    trusty_node.set_prop("#size-cells", 0x2u32)?;
+    trusty_node.set_prop("compatible", "android,trusty-core-v1")?;
+    trusty_node.set_prop("ranges", 0x0u32)?;
+
+    // create a test node
+    let trusty_test_node = trusty_node.subnode_mut("trusty-test")?;
+    trusty_test_node.set_prop("compatible", "android,trusty-test-v1")?;
+
+    // create a virtio node
+    let trusty_virtio_node = trusty_node.subnode_mut("virtio")?;
+    trusty_virtio_node.set_prop("compatible", "android,trusty-virtio-v1")?;
+    Ok(())
+}
+
 /// Creates a flattened device tree containing all of the parameters for the
 /// kernel and loads it into the guest memory at the specified offset.
 ///
@@ -759,6 +779,7 @@ pub fn create_fdt(
         #[cfg(any(target_os = "android", target_os = "linux"))]
         &phandles,
     )?;
+    create_trusty_node(&mut fdt)?;
 
     let fdt_final = fdt.finish()?;
 
