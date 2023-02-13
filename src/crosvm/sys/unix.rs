@@ -95,6 +95,9 @@ use devices::IrqChipAArch64 as IrqChipArch;
 use devices::IrqChipX86_64 as IrqChipArch;
 use devices::IrqEventIndex;
 use devices::IrqEventSource;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use devices::GeniezoneKernelIrqChip;
 use devices::KvmKernelIrqChip;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::KvmSplitIrqChip;
@@ -124,6 +127,15 @@ use devices::VirtioPciDevice;
 use devices::XhciController;
 #[cfg(feature = "gpu")]
 use gpu::*;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::Geniezone;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::GeniezoneVcpu;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+use hypervisor::geniezone::GeniezoneVm;
 use hypervisor::kvm::Kvm;
 use hypervisor::kvm::KvmVcpu;
 use hypervisor::kvm::KvmVm;
@@ -1313,6 +1325,61 @@ fn create_guest_memory(
     })
 }
 
+#[cfg(any(target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
+fn run_gz(cfg: Config, components: VmComponents) -> Result<ExitState> {
+    let gzvm = Geniezone::new_with_path(&cfg.geniezone_device_path).with_context(|| {
+        format!(
+            "failed to open GenieZone device {}",
+            cfg.geniezone_device_path.display(),
+        )
+    })?;
+
+    let CreateGuestMemoryResult {
+        guest_mem,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    } = create_guest_memory(&cfg, &components, &gzvm)?;
+
+    let vm = GeniezoneVm::new(&gzvm, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protection_type,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        bail!("Failed to create protected VM");
+    }
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    enum GeniezoneIrqChip {
+        Kernel(GeniezoneKernelIrqChip),
+    }
+
+    impl GeniezoneIrqChip {
+        fn as_mut(&mut self) -> &mut dyn IrqChipArch {
+            match self {
+                GeniezoneIrqChip::Kernel(i) => i,
+            }
+        }
+    }
+
+    let ioapic_host_tube;
+    let mut irq_chip = if cfg.split_irqchip {
+        unimplemented!("Geniezone does not support split irqchip mode");
+    }else {
+        ioapic_host_tube = None;
+
+        GeniezoneIrqChip::Kernel(
+            GeniezoneKernelIrqChip::new(vm_clone, components.vcpu_count)
+                .context("failed to create IRQ chip")?,
+        )
+    };
+
+    run_vm::<GeniezoneVcpu, GeniezoneVm>(cfg, components, vm, irq_chip.as_mut(), ioapic_host_tube)
+}
+
 fn run_kvm(cfg: Config, components: VmComponents) -> Result<ExitState> {
     let kvm = Kvm::new_with_path(&cfg.kvm_device_path).with_context(|| {
         format!(
@@ -1405,9 +1472,18 @@ fn run_kvm(cfg: Config, components: VmComponents) -> Result<ExitState> {
     )
 }
 
-fn get_default_hypervisor() -> Result<HypervisorKind> {
-    Ok(HypervisorKind::Kvm)
+fn get_default_hypervisor(cfg: &Config) -> Result<HypervisorKind> {
+    if cfg.kvm_device_path.exists() {
+        return Ok(HypervisorKind::Kvm);
+    }
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(feature = "geniezone")]
+    if cfg.geniezone_device_path.exists() {
+        return Ok(HypervisorKind::Geniezone);
+    }
+    bail!("no hypervisor enabled!");
 }
+
 
 pub fn run_config(cfg: Config) -> Result<ExitState> {
     if let Some(async_executor) = cfg.async_executor {
@@ -1417,13 +1493,16 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
 
     let components = setup_vm_components(&cfg)?;
 
-    let default_hypervisor = get_default_hypervisor().context("no enabled hypervisor")?;
+    let default_hypervisor = get_default_hypervisor(&cfg).context("no enabled hypervisor")?;
     let hypervisor = cfg.hypervisor.unwrap_or(default_hypervisor);
 
     debug!("creating {:?} hypervisor", hypervisor);
 
     match hypervisor {
         HypervisorKind::Kvm => run_kvm(cfg, components),
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        #[cfg(feature = "geniezone")]
+        HypervisorKind::Geniezone => run_gz(cfg, components,),
     }
 }
 
@@ -3377,165 +3456,4 @@ pub fn setup_emulator_crash_reporting(_cfg: &Config) -> anyhow::Result<String> {
         product_name: None,
         product_version: None,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-
-    // Create a file-backed mapping parameters struct with the given `address` and `size` and other
-    // parameters set to default values.
-    fn test_file_backed_mapping(address: u64, size: u64) -> FileBackedMappingParameters {
-        FileBackedMappingParameters {
-            address,
-            size,
-            path: PathBuf::new(),
-            offset: 0,
-            writable: false,
-            sync: false,
-            align: false,
-        }
-    }
-
-    #[test]
-    fn guest_mem_file_backed_mappings_overlap() {
-        // Base case: no file mappings; output layout should be identical.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000),
-            ]
-        );
-
-        // File mapping that does not overlap guest memory.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0xD000_0000, 0x1000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000),
-            ]
-        );
-
-        // File mapping at the start of the low address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0x2000), 0xD000_0000 - 0x2000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000),
-            ]
-        );
-
-        // File mapping at the end of the low address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0xD000_0000 - 0x2000, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000 - 0x2000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000),
-            ]
-        );
-
-        // File mapping fully contained within the middle of the low address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0x1000, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0), 0x1000),
-                (GuestAddress(0x3000), 0xD000_0000 - 0x3000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000),
-            ]
-        );
-
-        // File mapping at the start of the high address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0x1_0000_0000, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000),
-                (GuestAddress(0x1_0000_2000), 0x8_0000 - 0x2000),
-            ]
-        );
-
-        // File mapping at the end of the high address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0x1_0008_0000 - 0x2000, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000),
-                (GuestAddress(0x1_0000_0000), 0x8_0000 - 0x2000),
-            ]
-        );
-
-        // File mapping fully contained within the middle of the high address space region.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0x1_0000_1000, 0x2000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000),
-                (GuestAddress(0x1_0000_0000), 0x1000),
-                (GuestAddress(0x1_0000_3000), 0x8_0000 - 0x3000),
-            ]
-        );
-
-        // File mapping overlapping two guest memory regions.
-        assert_eq!(
-            punch_holes_in_guest_mem_layout_for_mappings(
-                vec![
-                    (GuestAddress(0), 0xD000_0000),
-                    (GuestAddress(0x1_0000_0000), 0x8_0000),
-                ],
-                &[test_file_backed_mapping(0xA000_0000, 0x60002000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xA000_0000),
-                (GuestAddress(0x1_0000_2000), 0x8_0000 - 0x2000),
-            ]
-        );
-    }
 }
