@@ -36,6 +36,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "50ea1a6f_33dbc66c",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-02-13T16:32:44Z",
+      "side": 1,
+      "message": "please refer to src/crosvm/sys/unix.rs file for a simple probing logic being implemented in get_default_hypervisor function",
+      "parentUuid": "9f179458_489b175e",
+      "revId": "9212a30f3c2fe197d9946fb0c2edd6d36fd182e0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3e01529c_93f50b93",
