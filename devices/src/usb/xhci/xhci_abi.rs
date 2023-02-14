@@ -738,7 +738,6 @@ unsafe impl DataInit for EventRingSegmentTableEntry {}
 unsafe impl DataInit for InputControlContext {}
 unsafe impl DataInit for SlotContext {}
 unsafe impl DataInit for EndpointContext {}
-
 unsafe impl DataInit for DeviceContext {}
 unsafe impl DataInit for AddressedTrb {}
 
@@ -772,7 +771,7 @@ pub struct EventRingSegmentTableEntry {
 }
 
 #[bitfield]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, AsBytes, FromBytes)]
 pub struct InputControlContext {
     // Xhci spec 6.2.5.1.
     drop_context_flags: B32,
@@ -804,7 +803,7 @@ impl InputControlContext {
 pub const DEVICE_CONTEXT_ENTRY_SIZE: usize = 32usize;
 
 #[bitfield]
-#[derive(Clone, Copy, FromBytes)]
+#[derive(Clone, Copy, FromBytes, AsBytes)]
 pub struct SlotContext {
     route_string: B20,
     speed: B4,
@@ -857,7 +856,8 @@ pub struct EndpointContext {
 }
 
 /// Device context.
-#[derive(Clone, Copy, Debug, FromBytes)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, FromBytes, AsBytes)]
 pub struct DeviceContext {
     pub slot_context: SlotContext,
     pub endpoint_context: [EndpointContext; 31],

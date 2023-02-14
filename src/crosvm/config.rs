@@ -53,6 +53,7 @@ use devices::StubPciParameters;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use hypervisor::CpuHybridType;
 use hypervisor::ProtectionType;
+use jail::JailConfig;
 use resources::AddressRange;
 use serde::Deserialize;
 use serde::Serialize;
@@ -564,33 +565,6 @@ pub struct HostPcieRootPortParameters {
     pub hp_gpe: Option<u32>,
 }
 
-fn jail_config_default_pivot_root() -> PathBuf {
-    PathBuf::from(option_env!("DEFAULT_PIVOT_ROOT").unwrap_or("/var/empty"))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, serde_keyvalue::FromKeyValues)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct JailConfig {
-    #[serde(default = "jail_config_default_pivot_root")]
-    pub pivot_root: PathBuf,
-    #[cfg(unix)]
-    #[serde(default)]
-    pub seccomp_policy_dir: Option<PathBuf>,
-    #[serde(default)]
-    pub seccomp_log_failures: bool,
-}
-
-impl Default for JailConfig {
-    fn default() -> Self {
-        JailConfig {
-            pivot_root: jail_config_default_pivot_root(),
-            #[cfg(unix)]
-            seccomp_policy_dir: None,
-            seccomp_log_failures: false,
-        }
-    }
-}
-
 fn parse_hex_or_decimal(maybe_hex_string: &str) -> Result<u64, String> {
     // Parse string starting with 0x as hex and others as numbers.
     if let Some(hex_string) = maybe_hex_string.strip_prefix("0x") {
@@ -1047,6 +1021,8 @@ mod serde_serial_params {
 #[derive(Serialize, Deserialize)]
 #[remain::sorted]
 pub struct Config {
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    pub ac_adapter: bool,
     #[cfg(feature = "audio")]
     pub ac97_parameters: Vec<Ac97Parameters>,
     pub acpi_tables: Vec<PathBuf>,
@@ -1259,6 +1235,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            ac_adapter: false,
             #[cfg(feature = "audio")]
             ac97_parameters: Vec::new(),
             acpi_tables: Vec::new(),
@@ -1656,6 +1634,7 @@ fn validate_file_backed_mapping(mapping: &mut FileBackedMappingParameters) -> Re
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_update)]
 mod tests {
     use argh::FromArgs;
     use devices::PciClassCode;
@@ -2221,74 +2200,6 @@ mod tests {
         assert!(parse_userspace_msr_options("0x10,type=w,action=pass,from=f").is_err());
         assert!(parse_userspace_msr_options("0x10").is_err());
         assert!(parse_userspace_msr_options("hoge").is_err());
-    }
-
-    #[test]
-    fn parse_jailconfig() {
-        let config: JailConfig = Default::default();
-        assert_eq!(
-            config,
-            JailConfig {
-                pivot_root: jail_config_default_pivot_root(),
-                #[cfg(unix)]
-                seccomp_policy_dir: None,
-                seccomp_log_failures: false,
-            }
-        );
-
-        let config: JailConfig = from_key_values("").unwrap();
-        assert_eq!(config, Default::default());
-
-        let config: JailConfig = from_key_values("pivot-root=/path/to/pivot/root").unwrap();
-        assert_eq!(
-            config,
-            JailConfig {
-                pivot_root: "/path/to/pivot/root".into(),
-                ..Default::default()
-            }
-        );
-
-        cfg_if::cfg_if! {
-            if #[cfg(unix)] {
-                let config: JailConfig = from_key_values("seccomp-policy-dir=/path/to/seccomp/dir").unwrap();
-                assert_eq!(config, JailConfig {
-                    seccomp_policy_dir: Some("/path/to/seccomp/dir".into()),
-                    ..Default::default()
-                });
-            }
-        }
-
-        let config: JailConfig = from_key_values("seccomp-log-failures").unwrap();
-        assert_eq!(
-            config,
-            JailConfig {
-                seccomp_log_failures: true,
-                ..Default::default()
-            }
-        );
-
-        let config: JailConfig = from_key_values("seccomp-log-failures=false").unwrap();
-        assert_eq!(
-            config,
-            JailConfig {
-                seccomp_log_failures: false,
-                ..Default::default()
-            }
-        );
-
-        let config: JailConfig =
-            from_key_values("pivot-root=/path/to/pivot/root,seccomp-log-failures=true").unwrap();
-        #[allow(clippy::needless_update)]
-        let expected = JailConfig {
-            pivot_root: "/path/to/pivot/root".into(),
-            seccomp_log_failures: true,
-            ..Default::default()
-        };
-        assert_eq!(config, expected);
-
-        let config: Result<JailConfig, String> =
-            from_key_values("seccomp-log-failures,invalid-arg=value");
-        assert!(config.is_err());
     }
 
     #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]

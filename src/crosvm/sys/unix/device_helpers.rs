@@ -61,6 +61,7 @@ use devices::VfioPlatformDevice;
 use devices::VtpmProxy;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
+use jail::*;
 use minijail::Minijail;
 use net_util::sys::unix::Tap;
 use net_util::MacAddress;
@@ -72,8 +73,6 @@ use resources::SystemAllocator;
 use sync::Mutex;
 use vm_memory::GuestAddress;
 
-use super::jail_helpers::*;
-use crate::crosvm::config::JailConfig;
 use crate::crosvm::config::TouchDeviceOption;
 use crate::crosvm::config::VhostUserFsOption;
 use crate::crosvm::config::VhostUserOption;

@@ -14,6 +14,7 @@ dependencies = [
  "gdbstub",
  "gdbstub_arch",
  "hypervisor",
+ "jail",
  "kernel_cmdline",
  "kernel_loader",
  "libc",
@@ -33,8 +34,8 @@ dependencies = [
 name = "acpi_tables"
 version = "0.1.0"
 dependencies = [
- "data_model 0.1.1-alpha.1",
  "tempfile",
+ "zerocopy",
 ]
 
 [[package]]
@@ -79,6 +80,7 @@ dependencies = [
  "gdbstub",
  "gdbstub_arch",
  "hypervisor",
+ "jail",
  "kernel_cmdline",
  "libc",
  "minijail",
@@ -558,7 +560,6 @@ dependencies = [
  "base",
  "bit_field",
  "broker_ipc",
- "cc",
  "cfg-if",
  "crash_report",
  "cros_async",
@@ -576,6 +577,7 @@ dependencies = [
  "gdbstub_arch",
  "gpu_display",
  "hypervisor",
+ "jail",
  "kernel_cmdline",
  "kernel_loader",
  "kvm",
@@ -610,7 +612,6 @@ dependencies = [
  "vhost",
  "vm_control",
  "vm_memory",
- "which",
  "win_audio",
  "win_util",
  "winapi",
@@ -822,6 +823,7 @@ dependencies = [
  "thiserror",
  "uuid",
  "vm_memory",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1085,6 +1087,7 @@ dependencies = [
  "vm_control",
  "win_util",
  "winapi",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1197,6 +1200,21 @@ name = "itoa"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112c678d4050afce233f4f2852bb2eb519230b3cf12f33585275537d7e41578d"
+
+[[package]]
+name = "jail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base",
+ "cfg-if",
+ "libc",
+ "minijail",
+ "once_cell",
+ "serde",
+ "serde_keyvalue",
+ "which",
+]
 
 [[package]]
 name = "jobserver"
@@ -1344,6 +1362,7 @@ dependencies = [
  "base",
  "data_model 0.1.1-alpha.1",
  "libc",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1518,7 +1537,6 @@ dependencies = [
  "base",
  "cfg-if",
  "cros_async",
- "data_model 0.1.1-alpha.1",
  "libc",
  "libslirp-sys",
  "metrics",
@@ -1532,6 +1550,7 @@ dependencies = [
  "thiserror",
  "virtio_sys",
  "winapi",
+ "zerocopy",
 ]
 
 [[package]]
@@ -1938,6 +1957,7 @@ dependencies = [
  "remain",
  "serde",
  "thiserror",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2101,6 +2121,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "userfaultfd",
+ "userfaultfd-sys",
  "vm_memory",
 ]
 
@@ -2275,6 +2296,7 @@ dependencies = [
  "static_assertions",
  "thiserror",
  "usb_sys",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2323,7 +2345,7 @@ name = "vfio_sys"
 version = "0.1.0"
 dependencies = [
  "base",
- "data_model 0.1.1-alpha.1",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2346,6 +2368,7 @@ version = "0.1.0"
 dependencies = [
  "base",
  "data_model 0.1.1-alpha.1",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2378,6 +2401,7 @@ dependencies = [
 name = "vm_memory"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base",
  "bitflags",
  "cfg-if",
@@ -2386,6 +2410,7 @@ dependencies = [
  "libc",
  "remain",
  "serde",
+ "serde_json",
  "thiserror",
  "zerocopy",
 ]
@@ -2639,6 +2664,7 @@ dependencies = [
  "devices",
  "gdbstub_arch",
  "hypervisor",
+ "jail",
  "kernel_cmdline",
  "kernel_loader",
  "libc",
