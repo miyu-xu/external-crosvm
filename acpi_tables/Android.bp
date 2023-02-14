@@ -25,8 +25,8 @@ rust_test {
     },
     edition: "2021",
     rustlibs: [
-        "libdata_model",
         "libtempfile",
+        "libzerocopy",
     ],
 }
 
@@ -40,7 +40,7 @@ rust_library {
     srcs: ["src/lib.rs"],
     edition: "2021",
     rustlibs: [
-        "libdata_model",
         "libtempfile",
+        "libzerocopy",
     ],
 }

@@ -4,7 +4,7 @@
 #
 # This script generates Android.bp files for this and all subdirs of this
 #
-DIR="${ANDROID_BUILD_TOP}/external/crosvm/seccomp"
+DIR="${ANDROID_BUILD_TOP}/external/crosvm/jail/seccomp"
 
 function remove_trailing_slash {
   if [[ $1 == "/" ]]; then

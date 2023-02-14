@@ -33,6 +33,7 @@ rust_library {
         "libgdbstub",
         "libgdbstub_arch",
         "libhypervisor",
+        "libjail",
         "libkernel_cmdline",
         "libkernel_loader",
         "liblibc",

@@ -1,20 +1,18 @@
-# Copyright 2020 The ChromiumOS Authors
+# Copyright 2021 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# Rules from common_device.policy with mmap and mprotect removed because the video device needs
-# to allow more arguments for them.
+# Rules from common_device.policy with some rules removed because they block certain flags needed
+# for gpu.
 brk: 1
 clock_gettime: 1
-clone: arg0 & CLONE_THREAD
 clone3: 1
 close: 1
-dup2: 1
+dup3: 1
 dup: 1
 epoll_create1: 1
 epoll_ctl: 1
 epoll_pwait: 1
-epoll_wait: 1
 eventfd2: 1
 exit: 1
 exit_group: 1
@@ -27,7 +25,6 @@ io_uring_setup: 1
 io_uring_register: 1
 io_uring_enter: 1
 kill: 1
-lseek: 1
 madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
 membarrier: 1
 mremap: 1
@@ -35,10 +32,8 @@ munmap: 1
 nanosleep: 1
 clock_nanosleep: 1
 pipe2: 1
-poll: 1
 ppoll: 1
 read: 1
-readlink: 1
 readlinkat: 1
 readv: 1
 recvfrom: 1
@@ -56,48 +51,57 @@ set_robust_list: 1
 sigaltstack: 1
 write: 1
 writev: 1
-fcntl: 1
 uname: 1
 
-# Syscalls specific to video devices.
-clock_getres: 1
-connect: 1
-getdents: 1
-getdents64: 1
-getegid: 1
-geteuid: 1
-getgid: 1
-getresgid: 1
-getresuid: 1
-getsockname: 1
-getuid: 1
-# ioctl: arg1 == DRM_IOCTL_*
-ioctl: arg1 & 0x6400
-memfd_create: 1
-newfstatat: 1
-openat: 1
-setpriority: 1
-socket: arg0 == AF_UNIX
-stat: 1
-fstat: 1
-fstatfs: 1
-statx: 1
+# Required for perfetto tracing
+getsockopt: 1
+shutdown: 1
 
-# Rules needed for minigbm on AMD devices.
+## Rules specific to gpu
+connect: 1
 getrandom: 1
-lstat: 1
-# mmap/mprotect differ from the common_device.policy
+lseek: 1
+ftruncate: 1
+statx: 1
+fstat: 1
+newfstatat: 1
+getdents64: 1
+sysinfo: 1
+fstatfs: 1
+prctl: arg0 == PR_SET_NAME || arg0 == PR_GET_NAME
+
+# 0x6400 == DRM_IOCTL_BASE, 0x8000 = KBASE_IOCTL_TYPE (mali), 0x40086200 = DMA_BUF_IOCTL_SYNC, 0x40087543 == UDMABUF_CREATE_LIST
+ioctl: arg1 & 0x6400 || arg1 & 0x8000 || arg1 == 0x40086200 || arg1 == 0x40087543
+
+# Used for sharing memory with wayland. arg1 == MFD_CLOEXEC|MFD_ALLOW_SEALING
+memfd_create: arg1 == 3
+
+## mmap/mprotect differ from the common_device.policy
 mmap: arg2 == PROT_READ|PROT_WRITE || arg2 == PROT_NONE || arg2 == PROT_READ|PROT_EXEC || arg2 == PROT_WRITE || arg2 == PROT_READ
 mprotect: arg2 == PROT_READ|PROT_WRITE || arg2 == PROT_NONE || arg2 == PROT_READ
+openat: 1
+
+## Rules specific to pvr
+geteuid: 1
+getuid: 1
+fcntl: 1
+tgkill: 1
+
+# Rules specific to Mesa.
+sched_setscheduler: 1
 sched_setaffinity: 1
-sched_setscheduler: arg1 == SCHED_IDLE || arg1 == SCHED_BATCH
+kcmp: 1
 
-# Required by mesa on AMD GPU
-sysinfo: 1
+# Rules for Mesa's u_trace thread
+setpriority: 1
 
-prctl: arg0 == PR_SET_NAME
+# Rules for Vulkan loader / layers
+faccessat: 1
+faccessat2: 1
+getgid: 1
+getegid: 1
 
 ## Rules for vmm-swap
 userfaultfd: 1
-# 0xc018aa3f == UFFDIO_API
-ioctl: arg1 == 0xc018aa3f
+# 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
+ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00

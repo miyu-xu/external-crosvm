@@ -20,6 +20,7 @@ rust_library {
     srcs: ["src/lib.rs"],
     edition: "2021",
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbitflags",
         "libcfg_if",
@@ -27,6 +28,7 @@ rust_library {
         "libdata_model",
         "liblibc",
         "libserde",
+        "libserde_json",
         "libthiserror",
         "libzerocopy",
     ],
@@ -48,6 +50,7 @@ rust_test {
     },
     edition: "2021",
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libbitflags",
         "libcfg_if",
@@ -55,6 +58,7 @@ rust_test {
         "libdata_model",
         "liblibc",
         "libserde",
+        "libserde_json",
         "libthiserror",
         "libzerocopy",
     ],

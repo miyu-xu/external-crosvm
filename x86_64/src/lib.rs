@@ -27,14 +27,6 @@ mod msr_index;
 #[allow(non_camel_case_types)]
 #[allow(clippy::all)]
 mod mpspec;
-// These mpspec types are only data, reading them from data is a safe initialization.
-unsafe impl data_model::DataInit for mpspec::mpc_bus {}
-unsafe impl data_model::DataInit for mpspec::mpc_cpu {}
-unsafe impl data_model::DataInit for mpspec::mpc_intsrc {}
-unsafe impl data_model::DataInit for mpspec::mpc_ioapic {}
-unsafe impl data_model::DataInit for mpspec::mpc_table {}
-unsafe impl data_model::DataInit for mpspec::mpc_lintsrc {}
-unsafe impl data_model::DataInit for mpspec::mpf_intel {}
 
 #[cfg(unix)]
 pub mod msr;
@@ -89,8 +81,6 @@ use devices::Debugcon;
 use devices::IrqChip;
 use devices::IrqChipX86_64;
 use devices::IrqEventSource;
-#[cfg(windows)]
-use devices::Minijail;
 use devices::PciAddress;
 use devices::PciConfigIo;
 use devices::PciConfigMmio;
@@ -125,6 +115,8 @@ use hypervisor::VcpuX86_64;
 use hypervisor::Vm;
 use hypervisor::VmCap;
 use hypervisor::VmX86_64;
+#[cfg(windows)]
+use jail::FakeMinijailStub as Minijail;
 #[cfg(unix)]
 use minijail::Minijail;
 use once_cell::sync::OnceCell;
@@ -151,6 +143,8 @@ use crate::msr_index::*;
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("error allocating a single gpe")]
+    AllocateGpe,
     #[error("error allocating IO resource: {0}")]
     AllocateIOResouce(resources::Error),
     #[error("error allocating a single irq")]
@@ -295,7 +289,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct X8664arch;
 
 // Like `bootparam::setup_data` without the incomplete array field at the end, which allows us to
-// safely implement Copy, Clone, and DataInit.
+// safely implement Copy, Clone
 #[repr(C)]
 #[derive(Copy, Clone, Default, FromBytes, AsBytes)]
 struct setup_data_hdr {
@@ -303,8 +297,6 @@ struct setup_data_hdr {
     pub type_: u32,
     pub len: u32,
 }
-
-unsafe impl data_model::DataInit for setup_data_hdr {}
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -456,6 +448,7 @@ fn configure_system(
     params.hdr.boot_flag = KERNEL_BOOT_FLAG_MAGIC;
     params.hdr.header = KERNEL_HDR_MAGIC;
     params.hdr.cmd_line_ptr = cmdline_addr.offset() as u32;
+    params.ext_cmd_line_ptr = (cmdline_addr.offset() >> 32) as u32;
     params.hdr.cmdline_size = cmdline_size as u32;
     params.hdr.kernel_alignment = KERNEL_MIN_ALIGNMENT_BYTES;
     if let Some(setup_data) = setup_data {
@@ -874,6 +867,8 @@ impl arch::LinuxArch for X8664arch {
             &mut resume_notify_devices,
             #[cfg(feature = "swap")]
             swap_controller,
+            #[cfg(unix)]
+            components.ac_adapter,
         )?;
 
         // Create customized SSDT table
@@ -1767,6 +1762,7 @@ impl X8664arch {
         max_bus: u8,
         resume_notify_devices: &mut Vec<Arc<Mutex<dyn BusResumeDevice>>>,
         #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        #[cfg(unix)] ac_adapter: bool,
     ) -> Result<(acpi::AcpiDevResource, Option<BatControl>)> {
         // The AML data for the acpi devices
         let mut amls = Vec::new();
@@ -1846,12 +1842,45 @@ impl X8664arch {
 
         let pm_sci_evt = devices::IrqLevelEvent::new().map_err(Error::CreateEvent)?;
 
+        #[cfg(unix)]
+        let acdc = if ac_adapter {
+            // Allocate GPE for AC adapter notfication
+            let gpe = resources.allocate_gpe().ok_or(Error::AllocateGpe)?;
+
+            let alloc = resources.get_anon_alloc();
+            let mmio_base = resources
+                .allocate_mmio(
+                    devices::ac_adapter::ACDC_VIRT_MMIO_SIZE,
+                    alloc,
+                    "AcAdapter".to_string(),
+                    resources::AllocOptions::new().align(devices::ac_adapter::ACDC_VIRT_MMIO_SIZE),
+                )
+                .unwrap();
+            let ac_adapter_dev = devices::ac_adapter::AcAdapter::new(mmio_base, gpe);
+            let ac_dev = Arc::new(Mutex::new(ac_adapter_dev));
+            mmio_bus
+                .insert(
+                    ac_dev.clone(),
+                    mmio_base,
+                    devices::ac_adapter::ACDC_VIRT_MMIO_SIZE,
+                )
+                .unwrap();
+
+            ac_dev.lock().to_aml_bytes(&mut amls);
+            Some(ac_dev)
+        } else {
+            None
+        };
+        #[cfg(windows)]
+        let acdc = None;
+
         let mut pmresource = devices::ACPIPMResource::new(
             pm_sci_evt.try_clone().map_err(Error::CloneEvent)?,
             #[cfg(feature = "direct")]
             direct_evt_info,
             suspend_evt,
             vm_evt_wrtube,
+            acdc,
         );
         pmresource.to_aml_bytes(&mut amls);
         irq_chip

@@ -103,7 +103,6 @@ use devices::IrqChip;
 use devices::IrqChipAArch64 as IrqChipArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use devices::IrqChipX86_64 as IrqChipArch;
-use devices::Minijail;
 use devices::UserspaceIrqChip;
 use devices::VirtioPciDevice;
 #[cfg(feature = "whpx")]
@@ -155,6 +154,7 @@ use hypervisor::VmAArch64 as VmArch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use hypervisor::VmX86_64 as VmArch;
 use irq_wait::IrqWaitWorker;
+use jail::FakeMinijailStub as Minijail;
 #[cfg(not(feature = "crash-report"))]
 pub(crate) use panic_hook::set_panic_hook;
 use resources::SystemAllocator;
@@ -913,6 +913,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 
     let (device_ctrl_tube, device_ctrl_resp) = Tube::pair().context("failed to create tube")?;
     guest_os.devices_thread = match create_devices_worker_thread(
+        guest_os.vm.get_memory().clone(),
         guest_os.io_bus.clone(),
         guest_os.mmio_bus.clone(),
         device_ctrl_resp,

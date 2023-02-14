@@ -26,6 +26,7 @@ rust_library {
         "libstatic_assertions",
         "libthiserror",
         "libusb_sys",
+        "libzerocopy",
     ],
     proc_macros: ["libremain"],
 }
@@ -51,6 +52,7 @@ rust_test {
         "libstatic_assertions",
         "libthiserror",
         "libusb_sys",
+        "libzerocopy",
     ],
     proc_macros: ["libremain"],
 }

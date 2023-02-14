@@ -34,6 +34,7 @@ rust_library {
         "liblinux_input_sys",
         "libserde",
         "libthiserror",
+        "libzerocopy",
     ],
     proc_macros: ["libremain"],
     static_libs: ["libdisplay_wl"],
