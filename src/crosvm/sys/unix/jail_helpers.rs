@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (2c116b Merge changes I879c212e,I3b85e814)
 // Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -364,3 +365,5 @@ fn add_current_user_to_jail(jail: &mut Minijail) -> Result<()> {
     }
     Ok(())
 }
+=======
+>>>>>>> BRANCH (8cdbfb jail: create jail crate from jail_helpers.rs)

@@ -154,7 +154,6 @@ pub enum CrossPlatformCommands {
     Version(VersionCommand),
     Vfio(VfioCrosvmCommand),
     Snapshot(SnapshotCommand),
-    Restore(RestoreCommand),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -631,26 +630,12 @@ pub struct SnapshotTakeCommand {
 }
 
 #[derive(FromArgs)]
-#[argh(subcommand)]
-/// Snapshot commands
-pub enum SnapshotSubCommands {
-    Take(SnapshotTakeCommand),
-}
-#[derive(FromArgs)]
-#[argh(subcommand, name = "restore", description = "Restore commands")]
-/// Restore commands
-pub struct RestoreCommand {
-    #[argh(subcommand)]
-    pub restore_command: RestoreSubCommands,
-}
-
-#[derive(FromArgs)]
-#[argh(subcommand, name = "apply")]
-/// Restore VM
-pub struct RestoreApplyCommand {
-    #[argh(positional, arg_name = "restore_path")]
-    /// VM Restore image path
-    pub restore_path: PathBuf,
+#[argh(subcommand, name = "restore")]
+/// Restore VM state from a snapshot created by take
+pub struct SnapshotRestoreCommand {
+    #[argh(positional)]
+    /// path to snapshot to restore
+    pub snapshot_path: PathBuf,
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
     pub socket_path: String,
@@ -658,9 +643,10 @@ pub struct RestoreApplyCommand {
 
 #[derive(FromArgs)]
 #[argh(subcommand)]
-/// Restore commands
-pub enum RestoreSubCommands {
-    Apply(RestoreApplyCommand),
+/// Snapshot commands
+pub enum SnapshotSubCommands {
+    Take(SnapshotTakeCommand),
+    Restore(SnapshotRestoreCommand),
 }
 
 /// Container for GpuParameters that have been fixed after parsing using serde.
@@ -764,6 +750,15 @@ fn overwrite<T>(left: &mut T, right: T) {
 #[argh(subcommand, name = "run", description = "Start a new crosvm instance")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RunCommand {
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[argh(switch)]
+    #[serde(default)]
+    #[merge(strategy = overwrite_false)]
+    /// enable AC adapter device
+    /// It purpose is to emulate ACPI ACPI0003 device, replicate and propagate the
+    /// ac adapter status from the host to the guest.
+    pub ac_adapter: bool,
+
     #[cfg(feature = "audio")]
     #[argh(
         option,
@@ -2738,16 +2733,21 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.battery_config = cmd.battery;
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+        {
+            cfg.ac_adapter = cmd.ac_adapter;
+        }
 
         #[cfg(feature = "gdb")]
         {
             cfg.gdb = cmd.gdb;
         }
 
+        cfg.host_cpu_topology = cmd.host_cpu_topology;
+
         #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
         {
             cfg.enable_hwp = cmd.enable_hwp;
-            cfg.host_cpu_topology = cmd.host_cpu_topology;
             cfg.force_s2idle = cmd.s2idle;
             cfg.pcie_ecam = cmd.pcie_ecam;
             cfg.pci_low_start = cmd.pci_start;
