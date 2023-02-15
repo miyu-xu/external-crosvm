@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e97720cf_2c4abbb4",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-02-15T19:14:24Z",
+      "side": 1,
+      "message": "Is it private by default?\nIf public, every project has access to it?",
+      "range": {
+        "startLine": 105,
+        "startChar": 18,
+        "endLine": 105,
+        "endChar": 38
+      },
+      "revId": "d5392a93dc071671e07be32bcb938caacdc1a188",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
