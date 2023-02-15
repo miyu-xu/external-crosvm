@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a40d355_dc13605e",
+        "filename": "jail/seccomp/x86_64/gpu_common.policy",
+        "patchSetId": 2
+      },
+      "lineNbr": 73,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-15T02:16:37Z",
+      "side": 1,
+      "message": "note that this and the other policy diff are just copied from the old version of the file",
+      "revId": "0712050989f453ceece1a3ffa4647c23061460ee",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
