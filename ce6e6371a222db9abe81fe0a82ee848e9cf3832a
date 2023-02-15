@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f65fe60a_224eb322",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 299,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-15T23:20:10Z",
+      "side": 1,
+      "message": "I guess see comment on parent CL, but this would break downstream users of internal crosvm libraries for instance. I do think it\u0027s a good change actually - for sure - but use defaults_visibility as well :D",
+      "range": {
+        "startLine": 299,
+        "startChar": 0,
+        "endLine": 299,
+        "endChar": 54
+      },
+      "revId": "ce6e6371a222db9abe81fe0a82ee848e9cf3832a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
