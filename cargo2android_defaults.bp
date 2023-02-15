@@ -36,4 +36,5 @@ rust_defaults {
 rust_defaults {
     name: "crosvm_inner_defaults",
     defaults: ["crosvm_defaults"],
+    visibility: ["//external/crosvm:__subpackages__"],
 }

@@ -62,4 +62,8 @@ rust_library {
         "libenumn",
         "libremain",
     ],
+    visibility: [
+        "//packages/modules/Virtualization/authfs",
+        "//packages/modules/Virtualization/zipfuse",
+    ],
 }
