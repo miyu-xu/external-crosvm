@@ -22,6 +22,30 @@
       },
       "revId": "d5392a93dc071671e07be32bcb938caacdc1a188",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "351a1b3a_1074aad9",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-15T19:24:40Z",
+      "side": 1,
+      "message": "\u003e Is it private by default?\n\nthe soong default is public (unfortunately), but all of the crosvm modules are inheriting from \"crosvm_inner_defaults\", which is setting the visibility to include only modules inside \"external/crosvm\"\n\n\u003e If public, every project has access to it?\n\nyeah. i\u0027m OK making this a short allowlist like the others if you all think it is a good idea. my main concern to start with is to keep people from adding more dependencies on internal crosvm modules (at least without giving us some notice), depending on the crosvm binary is comparatively less problematic",
+      "parentUuid": "e97720cf_2c4abbb4",
+      "range": {
+        "startLine": 105,
+        "startChar": 18,
+        "endLine": 105,
+        "endChar": 38
+      },
+      "revId": "d5392a93dc071671e07be32bcb938caacdc1a188",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
