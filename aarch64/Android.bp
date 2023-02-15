@@ -12,7 +12,7 @@ package {
 
 rust_library {
     name: "libaarch64",
-    defaults: ["crosvm_defaults"],
+    defaults: ["crosvm_inner_defaults"],
     host_supported: true,
     crate_name: "aarch64",
     cargo_env_compat: true,

@@ -12,7 +12,7 @@ package {
 
 rust_library {
     name: "libx86_64_rust",
-    defaults: ["crosvm_defaults"],
+    defaults: ["crosvm_inner_defaults"],
     stem: "libx86_64",
     host_supported: true,
     crate_name: "x86_64",
@@ -65,7 +65,7 @@ rust_library {
 
 rust_test {
     name: "x86_64_test_src_lib",
-    defaults: ["crosvm_defaults"],
+    defaults: ["crosvm_inner_defaults"],
     host_supported: true,
     crate_name: "x86_64",
     cargo_env_compat: true,
@@ -122,7 +122,7 @@ rust_test {
 
 rust_test {
     name: "x86_64_test_tests_integration_main",
-    defaults: ["crosvm_defaults"],
+    defaults: ["crosvm_inner_defaults"],
     host_supported: true,
     crate_name: "integration",
     cargo_env_compat: true,
@@ -180,7 +180,7 @@ rust_test {
 
 rust_test {
     name: "x86_64_test_tests_unix",
-    defaults: ["crosvm_defaults"],
+    defaults: ["crosvm_inner_defaults"],
     host_supported: true,
     crate_name: "unix",
     cargo_env_compat: true,
