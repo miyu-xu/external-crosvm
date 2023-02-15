@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e430d6bf_7f87e92d",
+        "filename": "jail/seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-15T02:22:39Z",
+      "side": 1,
+      "message": "hey why do we need this different path btw (and in the parent CL)? Should we have a bug for it?",
+      "range": {
+        "startLine": 7,
+        "startChar": 42,
+        "endLine": 7,
+        "endChar": 46
+      },
+      "revId": "2de0adb3ab81dc68ed5300bf209e867e1d8ccc0b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
