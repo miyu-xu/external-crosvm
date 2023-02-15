@@ -22,6 +22,30 @@
       },
       "revId": "2de0adb3ab81dc68ed5300bf209e867e1d8ccc0b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f093b8b4_beef41ab",
+        "filename": "jail/seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-15T02:36:23Z",
+      "side": 1,
+      "message": "this entire file is android specific. i don\u0027t think we can completely get rid of it, but i think we can simplify it if we switch to using ahead of time compiled BPF policies. tracked in http://b/241306374",
+      "parentUuid": "e430d6bf_7f87e92d",
+      "range": {
+        "startLine": 7,
+        "startChar": 42,
+        "endLine": 7,
+        "endChar": 46
+      },
+      "revId": "2de0adb3ab81dc68ed5300bf209e867e1d8ccc0b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
