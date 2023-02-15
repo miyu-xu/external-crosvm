@@ -261,4 +261,5 @@ rust_library {
         },
     },
     shared_libs: ["libcap"], // specified in src/unix/capabilities.rs
+    visibility: ["//packages/modules/Virtualization/virtualizationmanager"],
 }
