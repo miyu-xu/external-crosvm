@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b1953fb7_84542da0",
+        "filename": "Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 291,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-02-15T23:19:08Z",
+      "side": 1,
+      "message": "this can be prevented by adding \"defaults_visibility: ...\" in Android.bp (visibility on a defaults module will affect the modules that use the defaults)",
+      "range": {
+        "startLine": 291,
+        "startChar": 0,
+        "endLine": 291,
+        "endChar": 75
+      },
+      "revId": "52b327f7c5520f1de99deb14b1b3e9ccf0e56bf9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
