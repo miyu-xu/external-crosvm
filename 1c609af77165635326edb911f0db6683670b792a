@@ -16,6 +16,24 @@
       "message": "this commit is suppose to allow us to revert the diff at https://android-review.git.corp.google.com/c/platform/external/crosvm/+/2441581/3/src/crosvm/config.rs#2251. up to you whether to give it a try",
       "revId": "1c609af77165635326edb911f0db6683670b792a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75dff186_49812fc0",
+        "filename": "/MERGE_LIST",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-02-21T23:24:46Z",
+      "side": 1,
+      "message": "Thanks for the reminder! aosp/2449228",
+      "parentUuid": "a7306e1f_45bcb180",
+      "revId": "1c609af77165635326edb911f0db6683670b792a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
