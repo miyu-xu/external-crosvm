@@ -57,13 +57,10 @@ pub trait VhostUserListenerTrait {
 
     /// Start processing requests for a `VhostUserDevice` on `listener`. Returns when the front-end
     /// side disconnects or an error occurs.
-    fn run_device(self, device: Box<dyn VhostUserDevice>) -> anyhow::Result<()>
+    fn run_device(self, ex: Executor, device: Box<dyn VhostUserDevice>) -> anyhow::Result<()>
     where
         Self: Sized,
     {
-        let ex = Executor::new()?;
-        let backend = device.into_backend(&ex)?;
-
-        ex.run_until(self.run_backend(backend, &ex))?
+        ex.run_until(self.run_backend(device.into_backend(&ex)?, &ex))?
     }
 }

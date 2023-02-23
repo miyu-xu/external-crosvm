@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(not(test))]
 #![no_main]
 
 use std::io::Cursor;
@@ -77,12 +78,10 @@ fuzz_target!(|bytes| {
     }
 
     let mut q = Queue::new(QUEUE_SIZE);
-    q.set_ready(true);
     q.set_size(QUEUE_SIZE / 2);
-    q.max_size = QUEUE_SIZE;
+    q.set_ready(true);
 
-    let queue_evts: Vec<Event> = vec![Event::new().unwrap()];
-    let queue_evt = queue_evts[0].try_clone().unwrap();
+    let queue_evt = Event::new().unwrap();
 
     let features = base_features(ProtectionType::Unprotected);
 
@@ -97,19 +96,21 @@ fuzz_target!(|bytes| {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
-    block.activate(
-        mem,
-        Interrupt::new(
-            IrqLevelEvent::new().unwrap(),
-            None,   // msix_config
-            0xFFFF, // VIRTIO_MSI_NO_VECTOR
-        ),
-        vec![q],
-        queue_evts,
-    );
+    block
+        .activate(
+            mem,
+            Interrupt::new(
+                IrqLevelEvent::new().unwrap(),
+                None,   // msix_config
+                0xFFFF, // VIRTIO_MSI_NO_VECTOR
+            ),
+            vec![(q, queue_evt.try_clone().unwrap())],
+        )
+        .unwrap();
 
     queue_evt.signal().unwrap(); // Rings the doorbell
 });

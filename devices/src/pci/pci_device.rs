@@ -699,11 +699,11 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
 }
 
 impl<T: PciDevice + ?Sized> Suspendable for Box<T> {
-    fn snapshot(&self) -> anyhow::Result<String> {
+    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
         (**self).snapshot()
     }
 
-    fn restore(&mut self, data: &str) -> anyhow::Result<()> {
+    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
         (**self).restore(data)
     }
 
@@ -762,7 +762,7 @@ mod tests {
         }
 
         fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-            (&mut self.config_regs).write_reg(reg_idx, offset, data)
+            self.config_regs.write_reg(reg_idx, offset, data)
         }
 
         fn read_bar(&mut self, _addr: u64, _data: &mut [u8]) {}

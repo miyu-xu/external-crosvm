@@ -22,7 +22,7 @@ pub enum CrashReportReason {
     Unknown,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 enum CrashTubeCommand {
     UploadCrashReport(CrashReportReason),
 }
@@ -34,6 +34,7 @@ pub mod product_type {
     pub const NET: &str = "KiwiEmulator_net";
     pub const SLIRP: &str = "KiwiEmulator_slirp";
     pub const METRICS: &str = "KiwiEmulator_metrics";
+    pub const GPU: &str = "KiwiEmulator_gpu";
 }
 
 /// Attributes about a process that are required to set up annotations for crash reports.

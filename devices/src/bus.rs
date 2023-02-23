@@ -9,10 +9,15 @@ use std::cmp::Ordering;
 use std::cmp::PartialEq;
 use std::cmp::PartialOrd;
 use std::collections::btree_map::BTreeMap;
+use std::collections::hash_map::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::result;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use anyhow::Context;
+use base::error;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,7 +56,7 @@ impl std::fmt::Display for BusAccessInfo {
 
 /// Result of a write to a device's PCI configuration space.
 /// This value represents the state change(s) that occurred due to the write.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfigWriteResult {
     /// The BusRange in the vector will be removed from mmio_bus
     pub mmio_remove: Vec<BusRange>,
@@ -70,7 +75,7 @@ pub struct ConfigWriteResult {
     pub removed_pci_devices: Vec<PciAddress>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BusType {
     Mmio,
     Io,
@@ -137,6 +142,35 @@ pub trait BusDevice: Send + Suspendable {
 pub trait BusDeviceSync: BusDevice + Sync {
     fn read(&self, offset: BusAccessInfo, data: &mut [u8]);
     fn write(&self, offset: BusAccessInfo, data: &[u8]);
+    fn snapshot_sync(&self) -> anyhow::Result<serde_json::Value> {
+        Err(anyhow!(
+            "snapshot_sync not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+    /// Load a saved snapshot of an image.
+    fn restore_sync(&self, _data: serde_json::Value) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "restore_sync not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+    /// Stop all threads related to the device.
+    /// Sleep should be idempotent.
+    fn sleep_sync(&self) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "sleep_sync not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+    /// Create/Resume all threads related to the device.
+    /// Wake should be idempotent.
+    fn wake_sync(&self) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "wake_sync not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
 }
 
 pub trait BusResumeDevice: Send {
@@ -148,7 +182,7 @@ pub trait BusResumeDevice: Send {
 /// The key to identify hotplug device from host view.
 /// like host sysfs path for vfio pci device, host disk file
 /// path for virtio block device
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum HostHotPlugKey {
     UpstreamPort { host_addr: PciAddress },
     DownstreamPort { host_addr: PciAddress },
@@ -333,6 +367,124 @@ impl Bus {
             }
         }
         None
+    }
+
+    pub fn sleep_devices(&self) -> anyhow::Result<()> {
+        let devices_lock = &(self.devices).lock();
+        for (_, device_entry) in devices_lock.iter() {
+            match &(device_entry.device) {
+                BusDeviceEntry::OuterSync(dev) => {
+                    let mut device_lock = (*dev).lock();
+                    if let Err(e) = device_lock.sleep() {
+                        //TODO: Enable this line when b/232437513 is done
+                        // return Err(anyhow!("Failed to sleep {}.", (*device_lock).debug_label()));
+                        error!("Failed to sleep {}: {}", (*device_lock).debug_label(), e);
+                    }
+                }
+                BusDeviceEntry::InnerSync(dev) => {
+                    (**dev).sleep_sync().context("failed to sleep device")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn wake_devices(&self) -> anyhow::Result<()> {
+        let devices_lock = &(self.devices).lock();
+        for (_, device_entry) in devices_lock.iter() {
+            match &(device_entry.device) {
+                BusDeviceEntry::OuterSync(dev) => {
+                    let mut device_lock = (*dev).lock();
+                    if let Err(e) = device_lock.wake() {
+                        //TODO: Enable this line when b/232437513 is done
+                        // return Err(anyhow!("Failed to wake {}.", (*device_lock).debug_label()));
+                        error!("Failed to wake {}: {}", (*device_lock).debug_label(), e);
+                    };
+                }
+                BusDeviceEntry::InnerSync(dev) => {
+                    (**dev).wake_sync().context("failed to wake device")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn snapshot_devices(
+        &self,
+        mut add_snapshot: impl FnMut(u32, serde_json::Value),
+    ) -> anyhow::Result<()> {
+        let devices_lock = &(self.devices).lock();
+        for (_, device_entry) in devices_lock.iter() {
+            let (device_id, serialized_device, device_label) = match &(device_entry.device) {
+                BusDeviceEntry::OuterSync(dev) => {
+                    let device_lock = (*dev).lock();
+                    (
+                        u32::from(device_lock.device_id()),
+                        (*device_lock).snapshot(),
+                        (*device_lock).debug_label(),
+                    )
+                }
+                BusDeviceEntry::InnerSync(dev) => (
+                    u32::from((dev).device_id()),
+                    (**dev).snapshot_sync(),
+                    (**dev).debug_label(),
+                ),
+            };
+            match serialized_device {
+                Ok(snapshot) => {
+                    add_snapshot(device_id, snapshot);
+                }
+                Err(e) => {
+                    //TODO: Enable this line when b/232437513 is done
+                    // return Err(anyhow!("Failed to snapshot {}.", (*device_lock).debug_label()));
+                    error!("Failed to snapshot {}: {}.", device_label, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn restore_devices(
+        &self,
+        devices_map: &mut HashMap<u32, VecDeque<serde_json::Value>>,
+    ) -> anyhow::Result<()> {
+        let devices_lock = &(self.devices).lock();
+        for (_, device_entry) in devices_lock.iter() {
+            match &(device_entry.device) {
+                BusDeviceEntry::OuterSync(dev) => {
+                    let mut device_lock = (*dev).lock();
+                    let device_id = u32::from(device_lock.device_id());
+                    let device_data = devices_map.get_mut(&device_id);
+                    match device_data {
+                        Some(dev_dq) => {
+                            match dev_dq.pop_front() {
+                                Some(dev_data) => {
+                                    (*device_lock).restore(dev_data).context("device failed to restore snapshot")?;
+                                }
+                                None => base::info!("no data found in snapshot for {}", device_lock.debug_label()),
+                            }
+                        },
+                        None => base::info!("device {} does not have stored data in the snapshot. Device data will not change.", (*device_lock).debug_label()),
+                    }
+                }
+                BusDeviceEntry::InnerSync(dev) => {
+                    let device_id = u32::from(dev.device_id());
+                    let device_data = devices_map.get_mut(&device_id);
+                    match device_data {
+                        Some(dev_dq) => {
+                            match dev_dq.pop_front() {
+                                Some(dev_data) => {
+                                    (**dev).restore_sync(dev_data).context("device failed to restore snapshot")?;
+                                }
+                                None => base::info!("no data found in snapshot for {}", (**dev).debug_label()),
+                            }
+                        },
+                        None => base::info!("device {} does not have stored data in the snapshot. Device data will not change.", dev.debug_label()),
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Puts the given device at the given address space.
@@ -550,7 +702,6 @@ impl Bus {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Context;
     use anyhow::Result as AnyhowResult;
 
     use super::*;
@@ -571,12 +722,12 @@ mod tests {
     }
 
     impl Suspendable for DummyDevice {
-        fn snapshot(&self) -> AnyhowResult<String> {
-            serde_json::to_string_pretty(&self).context("error serializing")
+        fn snapshot(&self) -> AnyhowResult<serde_json::Value> {
+            serde_json::to_value(self).context("error serializing")
         }
 
-        fn restore(&mut self, data: &str) -> AnyhowResult<()> {
-            *self = serde_json::from_str(data).context("error deserializing")?;
+        fn restore(&mut self, data: serde_json::Value) -> AnyhowResult<()> {
+            *self = serde_json::from_value(data).context("error deserializing")?;
             Ok(())
         }
 
@@ -627,12 +778,12 @@ mod tests {
     }
 
     impl Suspendable for ConstantDevice {
-        fn snapshot(&self) -> AnyhowResult<String> {
-            serde_json::to_string_pretty(&self).context("error serializing")
+        fn snapshot(&self) -> AnyhowResult<serde_json::Value> {
+            serde_json::to_value(self).context("error serializing")
         }
 
-        fn restore(&mut self, data: &str) -> AnyhowResult<()> {
-            *self = serde_json::from_str(data).context("error deserializing")?;
+        fn restore(&mut self, data: serde_json::Value) -> AnyhowResult<()> {
+            *self = serde_json::from_value(data).context("error deserializing")?;
             Ok(())
         }
 
@@ -643,6 +794,10 @@ mod tests {
         fn wake(&mut self) -> AnyhowResult<()> {
             Ok(())
         }
+    }
+
+    fn modify_constant_device(constant: &mut ConstantDevice) {
+        constant.uses_full_addr = !constant.uses_full_addr;
     }
 
     #[test]
@@ -730,15 +885,21 @@ mod tests {
         assert!(bus.write(0x15, &values));
     }
 
-    suspendable_tests! {
-        dummy_device: DummyDevice,
-        constant_device_true: ConstantDevice {
+    suspendable_tests!(
+        constant_device_true,
+        ConstantDevice {
             uses_full_addr: true,
         },
-        constant_device_false: ConstantDevice {
+        modify_constant_device
+    );
+
+    suspendable_tests!(
+        constant_device_false,
+        ConstantDevice {
             uses_full_addr: false,
         },
-    }
+        modify_constant_device
+    );
 
     #[test]
     fn bus_range_contains() {

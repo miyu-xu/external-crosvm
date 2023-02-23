@@ -39,7 +39,6 @@ use crate::virtio::SharedMemoryRegion;
 use crate::virtio::VirtioDevice;
 
 const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
-const MAX_VRING_LEN: u16 = gpu::QUEUE_SIZES[0];
 
 #[derive(Clone)]
 struct SharedReader {
@@ -99,10 +98,6 @@ impl VhostUserBackend for GpuBackend {
         MAX_QUEUE_NUM
     }
 
-    fn max_vring_len(&self) -> u16 {
-        MAX_VRING_LEN
-    }
-
     fn features(&self) -> u64 {
         self.gpu.borrow().features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
     }
@@ -148,7 +143,7 @@ impl VhostUserBackend for GpuBackend {
     fn start_queue(
         &mut self,
         idx: usize,
-        mut queue: Queue,
+        queue: Queue,
         mem: GuestMemory,
         doorbell: Doorbell,
         kick_evt: Event,
@@ -165,9 +160,6 @@ impl VhostUserBackend for GpuBackend {
             1 => return Ok(()),
             _ => bail!("attempted to start unknown queue: {}", idx),
         }
-
-        // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-        queue.ack_features(self.acked_features());
 
         let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;
@@ -246,5 +238,14 @@ impl VhostUserBackend for GpuBackend {
         }
 
         self.backend_req_conn = VhostBackendReqConnectionState::Connected(conn);
+    }
+}
+
+impl Drop for GpuBackend {
+    fn drop(&mut self) {
+        // Workers are detached and will leak unless they are aborted. Aborting marks the
+        // Abortable task, then wakes it up. This means the executor should be asked to continue
+        // running for one more step after the backend is destroyed.
+        self.reset();
     }
 }

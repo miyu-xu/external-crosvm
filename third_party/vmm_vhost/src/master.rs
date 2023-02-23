@@ -14,6 +14,7 @@ use base::AsRawDescriptor;
 use base::Event;
 use base::RawDescriptor;
 use base::INVALID_DESCRIPTOR;
+use data_model::zerocopy_from_reader;
 use data_model::DataInit;
 
 use crate::backend::VhostBackend;
@@ -410,8 +411,7 @@ impl<E: Endpoint<MasterReq>> VhostUserMaster for Master<E> {
             return Err(VhostUserError::InvalidParam);
         }
 
-        let flag = if enable { 1 } else { 0 };
-        let val = VhostUserVringState::new(queue_index as u32, flag);
+        let val = VhostUserVringState::new(queue_index as u32, enable.into());
         let hdr = node.send_request_with_body(MasterReq::SET_VRING_ENABLE, &val, None)?;
         node.wait_for_ack(&hdr)
     }
@@ -587,8 +587,7 @@ impl<E: Endpoint<MasterReq>> VhostUserMaster for Master<E> {
         for _ in 0..body_reply.value {
             regions.push(
                 // Can't fail because the input is the correct size.
-                VhostSharedMemoryRegion::from_reader(&buf_reply[offset..(offset + struct_size)])
-                    .unwrap(),
+                zerocopy_from_reader(&buf_reply[offset..(offset + struct_size)]).unwrap(),
             );
             offset += struct_size;
         }

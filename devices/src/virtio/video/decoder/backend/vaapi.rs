@@ -4,11 +4,9 @@
 
 #![deny(missing_docs)]
 
-use std::borrow::Borrow;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use anyhow::anyhow;
@@ -270,7 +268,7 @@ impl VaapiDecoder {
 
     /// Creates a new instance of the Vaapi decoder.
     pub fn new() -> Result<Self> {
-        let display = libva::Display::open()?;
+        let display = libva::Display::open().ok_or_else(|| anyhow!("failed to open VA display"))?;
 
         let va_profiles = display.query_config_profiles()?;
 
@@ -395,6 +393,63 @@ pub struct Resolution {
     height: u32,
 }
 
+trait AsBufferHandle {
+    type BufferHandle: BufferHandle;
+    fn as_buffer_handle(&self) -> &Self::BufferHandle;
+}
+
+impl AsBufferHandle for &mut GuestResource {
+    type BufferHandle = GuestResourceHandle;
+
+    fn as_buffer_handle(&self) -> &Self::BufferHandle {
+        &self.handle
+    }
+}
+
+impl AsBufferHandle for GuestResourceHandle {
+    type BufferHandle = Self;
+
+    fn as_buffer_handle(&self) -> &Self::BufferHandle {
+        self
+    }
+}
+
+/// A convenience type implementing persistent slice access for BufferHandles.
+struct BufferMapping<T: AsBufferHandle> {
+    #[allow(dead_code)]
+    /// The underlying resource. Must be kept so as not to drop the BufferHandle
+    resource: T,
+    /// The mapping that backs the underlying slices returned by AsRef and AsMut
+    mapping: MemoryMappingArena,
+}
+
+impl<T: AsBufferHandle> BufferMapping<T> {
+    /// Creates a new BufferMap
+    pub fn new(resource: T, offset: usize, size: usize) -> Result<Self> {
+        let mapping = resource.as_buffer_handle().get_mapping(offset, size)?;
+
+        Ok(Self { resource, mapping })
+    }
+}
+
+impl<T: AsBufferHandle> AsRef<[u8]> for BufferMapping<T> {
+    fn as_ref(&self) -> &[u8] {
+        let mapping = &self.mapping;
+        // Safe because the mapping is linear and we own it, so it will not be unmapped during
+        // the lifetime of this slice.
+        unsafe { std::slice::from_raw_parts(mapping.as_ptr(), mapping.size()) }
+    }
+}
+
+impl<T: AsBufferHandle> AsMut<[u8]> for BufferMapping<T> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        let mapping = &self.mapping;
+        // Safe because the mapping is linear and we own it, so it will not be unmapped during
+        // the lifetime of this slice.
+        unsafe { std::slice::from_raw_parts_mut(mapping.as_ptr(), mapping.size()) }
+    }
+}
+
 /// A decoder session for the libva backend
 pub struct VaapiDecoderSession {
     /// The implementation for the codec specific logic.
@@ -412,48 +467,6 @@ pub struct VaapiDecoderSession {
     flushing: bool,
     /// The last value for "display_order" we have managed to output.
     last_display_order: u64,
-}
-
-/// A convenience type implementing persistent slice access for BufferHandles.
-pub struct BufferMapping<T: Borrow<U>, U: BufferHandle> {
-    #[allow(dead_code)]
-    /// The underlying resource. Must be kept so as not to drop the BufferHandle
-    resource: T,
-    /// The mapping that backs the underlying slices returned by AsRef and AsMut
-    mapping: MemoryMappingArena,
-    /// A phantom so that the U parameter is used.
-    phantom: PhantomData<U>,
-}
-
-impl<T: Borrow<U>, U: BufferHandle> BufferMapping<T, U> {
-    /// Creates a new BufferMap
-    pub fn new(resource: T, offset: usize, size: usize) -> Result<Self> {
-        let mapping = resource.borrow().get_mapping(offset, size)?;
-
-        Ok(Self {
-            resource,
-            mapping,
-            phantom: PhantomData,
-        })
-    }
-}
-
-impl<T: Borrow<U>, U: BufferHandle> AsRef<[u8]> for BufferMapping<T, U> {
-    fn as_ref(&self) -> &[u8] {
-        let mapping = &self.mapping;
-        // Safe because the mapping is linear and we own it, so it will not be unmapped during
-        // the lifetime of this slice.
-        unsafe { std::slice::from_raw_parts(mapping.as_ptr(), mapping.size()) }
-    }
-}
-
-impl<T: Borrow<U>, U: BufferHandle> AsMut<[u8]> for BufferMapping<T, U> {
-    fn as_mut(&mut self) -> &mut [u8] {
-        let mapping = &self.mapping;
-        // Safe because the mapping is linear and we own it, so it will not be unmapped during
-        // the lifetime of this slice.
-        unsafe { std::slice::from_raw_parts_mut(mapping.as_ptr(), mapping.size()) }
-    }
 }
 
 impl VaapiDecoderSession {
@@ -498,8 +511,7 @@ impl VaapiDecoderSession {
 
         // Get a mapping from the start of the buffer to the size of the
         // underlying decoded data in the Image.
-        let mut output_map: BufferMapping<_, GuestResourceHandle> =
-            BufferMapping::new(&mut output_buffer.handle, 0, buffer_size)?;
+        let mut output_map = BufferMapping::new(output_buffer, 0, buffer_size)?;
 
         let output_bytes = output_map.as_mut();
 
@@ -635,14 +647,14 @@ impl VaapiDecoderSession {
             bytes_used,
         } = job;
 
-        let bitstream_map: BufferMapping<_, GuestResourceHandle> = BufferMapping::new(
+        let bitstream_map = BufferMapping::new(
             resource,
             offset.try_into().unwrap(),
             bytes_used.try_into().unwrap(),
         )
         .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
 
-        let frames = self.codec.decode(timestamp, &bitstream_map);
+        let frames = self.codec.decode(timestamp, bitstream_map.as_ref());
 
         // We are always done with the input buffer after `self.codec.decode()`.
         self.event_queue
@@ -657,10 +669,10 @@ impl VaapiDecoderSession {
         match frames {
             Ok(frames) => {
                 if self.codec.negotiation_possible() {
-                    let resolution = self.codec.backend().coded_resolution().unwrap();
+                    let resolution = self.codec.coded_resolution().unwrap();
 
                     let drc_params = DrcParams {
-                        min_num_buffers: self.codec.backend().num_resources_total(),
+                        min_num_buffers: self.codec.num_resources_total(),
                         width: resolution.width,
                         height: resolution.height,
                         visible_rect: Rect {
@@ -1000,58 +1012,32 @@ impl DecoderBackend for VaapiDecoder {
     }
 
     fn new_session(&mut self, format: Format) -> VideoResult<Self::Session> {
-        let display = Display::open().map_err(VideoError::BackendFailure)?;
+        let display = Display::open().ok_or(VideoError::BackendFailure(anyhow!(
+            "failed to open VA display"
+        )))?;
 
         let codec: Box<dyn VideoDecoder> = match format {
-            Format::VP8 => {
-                let backend = Box::new(
-                    cros_codecs::decoders::vp8::backends::stateless::vaapi::Backend::new(
-                        Rc::clone(&display),
-                    )
-                    .unwrap(),
-                );
-
-                Box::new(
-                    cros_codecs::decoders::vp8::decoder::Decoder::new(
-                        backend,
-                        cros_codecs::decoders::BlockingMode::NonBlocking,
-                    )
-                    .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+            Format::VP8 => Box::new(
+                cros_codecs::decoders::vp8::decoder::Decoder::new_vaapi(
+                    display,
+                    cros_codecs::decoders::BlockingMode::NonBlocking,
                 )
-            }
-
-            Format::VP9 => {
-                let backend = Box::new(
-                    cros_codecs::decoders::vp9::backends::stateless::vaapi::Backend::new(
-                        Rc::clone(&display),
-                    )
-                    .unwrap(),
-                );
-
-                Box::new(
-                    cros_codecs::decoders::vp9::decoder::Decoder::new(
-                        backend,
-                        cros_codecs::decoders::BlockingMode::NonBlocking,
-                    )
-                    .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+            ),
+            Format::VP9 => Box::new(
+                cros_codecs::decoders::vp9::decoder::Decoder::new_vaapi(
+                    display,
+                    cros_codecs::decoders::BlockingMode::NonBlocking,
                 )
-            }
-
-            Format::H264 => {
-                let backend = Box::new(
-                    cros_codecs::decoders::h264::backends::stateless::vaapi::Backend::new(
-                        Rc::clone(&display),
-                    )
-                    .unwrap(),
-                );
-                Box::new(
-                    cros_codecs::decoders::h264::decoder::Decoder::new(
-                        backend,
-                        cros_codecs::decoders::BlockingMode::NonBlocking,
-                    )
-                    .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+            ),
+            Format::H264 => Box::new(
+                cros_codecs::decoders::h264::decoder::Decoder::new_vaapi(
+                    display,
+                    cros_codecs::decoders::BlockingMode::NonBlocking,
                 )
-            }
+                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+            ),
             _ => return Err(VideoError::InvalidFormat),
         };
 
@@ -1069,6 +1055,7 @@ impl DecoderBackend for VaapiDecoder {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::*;
     use super::*;
 
     #[test]
@@ -1079,5 +1066,17 @@ mod tests {
         let caps = decoder.get_capabilities();
         assert!(!caps.input_formats().is_empty());
         assert!(!caps.output_formats().is_empty());
+    }
+
+    // Decode using guest memory input and output buffers.
+    #[test]
+    // Ignore this test by default as it requires libva-compatible hardware.
+    #[ignore]
+    fn test_decode_h264_guestmem_to_guestmem() {
+        decode_h264_generic(
+            &mut VaapiDecoder::new().unwrap(),
+            build_guest_mem_handle,
+            build_guest_mem_handle,
+        );
     }
 }

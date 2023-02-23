@@ -5,6 +5,47 @@
 import enum
 from typing import List, Dict
 
+BUILD_FEATURES: Dict[str, str] = {
+    "x86_64-unknown-linux-gnu": "linux-x86_64",
+    "aarch64-unknown-linux-gnu": "linux-aarch64",
+    "armv7-unknown-linux-gnueabihf": "linux-armhf",
+    "x86_64-pc-windows-gnu": "win64",
+    "x86_64-pc-windows-msvc": "win64",
+}
+
+# Configuration of integration tests
+#
+# The configuration below only applies to integration tests to fine tune which tests can be run
+# on which platform (e.g. aarch64 emulation does not pass kvm tests).
+#
+# This configuration does NOT apply to unit tests.
+
+# List of integration tests that will ask for root privileges.
+ROOT_TESTS = [
+    "package(net_util) & binary(unix_tap)",
+]
+
+# Do not run these tests on any platform.
+DO_NOT_RUN = [
+    "package(io_uring)",
+]
+
+# Do not run these tests for aarch64 builds
+DO_NOT_RUN_AARCH64 = [
+    "package(hypervisor)",
+    "package(e2e_tests)",
+    "package(kvm)",
+]
+
+# Do not run these tests for win64 builds
+DO_NOT_RUN_WIN64 = [
+    "package(e2e_tests)",
+]
+
+# Deprecated test configuration for tools/run_tests
+#
+# This will eventually be fully replaced the above configuration
+
 
 class TestOption(enum.Enum):
     # Do not build tests for all, or just some platforms.
@@ -19,6 +60,7 @@ class TestOption(enum.Enum):
     DO_NOT_RUN_ARMHF = "do_not_run_armhf"
     DO_NOT_RUN_AARCH64 = "do_not_run_aarch64"
     DO_NOT_RUN_X86_64 = "do_not_run_x86_64"
+    DO_NOT_RUN_WIN64 = "do_not_run_win64"
 
     # Do not run on foreign architecture kernel (e.g. running armhf on aarch64
     # or running aarch64 on the host with user-space emulation)
@@ -42,68 +84,30 @@ class TestOption(enum.Enum):
     # This test needs longer than usual to run.
     LARGE = "large"
 
+    # Integration test that requires root privileges to execute.
+    # Note that this does not apply to unit tests, which will never be allowed privileged access
+    # to the system.
+    REQUIRES_ROOT = "requires_root"
+
 
 # Configuration to restrict how and where tests of a certain crate can
 # be build and run.
 #
 # Please add a bug number when restricting a tests.
 
-# This is just too big to keep in main list for now
-WIN64_DISABLED_CRATES = [
-    "aarch64",
-    "cros_asyncv2",
-    "cros-fuzz",
-    "crosvm_plugin",
-    "crosvm-fuzz",
-    "ffi",
-    "ffmpeg",
-    "fuse",
-    "fuzz",
-    "gpu_display",
-    "e2e_tests",
-    "io_uring",
-    "kvm",
-    "libcras_stub",
-    "libva",
-    "libvda",
-    "minijail-sys",
-    "minijail",
-    "p9",
-    "qcow_utils",
-    "rutabaga_gralloc",
-    "swap",
-    "system_api_stub",
-    "tpm2-sys",
-    "tpm2",
-    "usb_util",
-]
-
 CRATE_OPTIONS: Dict[str, List[TestOption]] = {
-    "crosvm-fuzz": [TestOption.DO_NOT_BUILD],  # b/194499769
-    "cros-fuzz": [TestOption.DO_NOT_BUILD],
-    "fuzz": [TestOption.DO_NOT_BUILD],
     "hypervisor": [
         TestOption.DO_NOT_RUN_AARCH64,
     ],  # b/181672912
     "e2e_tests": [  # b/180196508
         TestOption.LARGE,
         TestOption.DO_NOT_RUN_AARCH64,
+        TestOption.DO_NOT_RUN_WIN64,  # b/262270352
     ],
     "io_uring": [TestOption.DO_NOT_RUN],  # b/202294403
     "kvm": [
         TestOption.DO_NOT_RUN_AARCH64,
     ],  # b/181674144
-    "libvda": [TestOption.DO_NOT_RUN],  # b/202293971
     "sandbox": [TestOption.DO_NOT_RUN],
-}
-
-for name in WIN64_DISABLED_CRATES:
-    CRATE_OPTIONS[name] = CRATE_OPTIONS.get(name, []) + [TestOption.DO_NOT_BUILD_WIN64]
-
-BUILD_FEATURES: Dict[str, str] = {
-    "x86_64-unknown-linux-gnu": "linux-x86_64",
-    "aarch64-unknown-linux-gnu": "linux-aarch64",
-    "armv7-unknown-linux-gnueabihf": "linux-armhf",
-    "x86_64-pc-windows-gnu": "win64",
-    "x86_64-pc-windows-msvc": "win64",
+    "net_util": [TestOption.REQUIRES_ROOT],
 }

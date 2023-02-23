@@ -36,6 +36,10 @@ use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::message::VhostUserVirtioFeatures;
 
 use crate::virtio::base_features;
+use crate::virtio::device_constants::wl::QUEUE_SIZES;
+use crate::virtio::device_constants::wl::VIRTIO_WL_F_SEND_FENCES;
+use crate::virtio::device_constants::wl::VIRTIO_WL_F_TRANS_FLAGS;
+use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
 use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::VhostBackendReqConnection;
 use crate::virtio::vhost::user::device::handler::VhostBackendReqConnectionState;
@@ -46,8 +50,7 @@ use crate::virtio::wl;
 use crate::virtio::Queue;
 use crate::virtio::SharedMemoryRegion;
 
-const MAX_QUEUE_NUM: usize = wl::QUEUE_SIZES.len();
-const MAX_VRING_LEN: u16 = wl::QUEUE_SIZE;
+const MAX_QUEUE_NUM: usize = QUEUE_SIZES.len();
 
 async fn run_out_queue(
     mut queue: Queue,
@@ -115,9 +118,9 @@ impl WlBackend {
         resource_bridge: Option<Tube>,
     ) -> WlBackend {
         let features = base_features(ProtectionType::Unprotected)
-            | 1 << wl::VIRTIO_WL_F_TRANS_FLAGS
-            | 1 << wl::VIRTIO_WL_F_SEND_FENCES
-            | 1 << wl::VIRTIO_WL_F_USE_SHMEM
+            | 1 << VIRTIO_WL_F_TRANS_FLAGS
+            | 1 << VIRTIO_WL_F_SEND_FENCES
+            | 1 << VIRTIO_WL_F_USE_SHMEM
             | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         WlBackend {
             ex: ex.clone(),
@@ -140,10 +143,6 @@ impl VhostUserBackend for WlBackend {
         MAX_QUEUE_NUM
     }
 
-    fn max_vring_len(&self) -> u16 {
-        MAX_VRING_LEN
-    }
-
     fn features(&self) -> u64 {
         self.features
     }
@@ -156,13 +155,13 @@ impl VhostUserBackend for WlBackend {
 
         self.acked_features |= value;
 
-        if value & (1 << wl::VIRTIO_WL_F_TRANS_FLAGS) != 0 {
+        if value & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0 {
             self.use_transition_flags = true;
         }
-        if value & (1 << wl::VIRTIO_WL_F_SEND_FENCES) != 0 {
+        if value & (1 << VIRTIO_WL_F_SEND_FENCES) != 0 {
             self.use_send_vfd_v2 = true;
         }
-        if value & (1 << wl::VIRTIO_WL_F_USE_SHMEM) != 0 {
+        if value & (1 << VIRTIO_WL_F_USE_SHMEM) != 0 {
             self.use_shmem = true;
         }
 
@@ -202,7 +201,7 @@ impl VhostUserBackend for WlBackend {
     fn start_queue(
         &mut self,
         idx: usize,
-        mut queue: Queue,
+        queue: Queue,
         mem: GuestMemory,
         doorbell: Doorbell,
         kick_evt: Event,
@@ -211,9 +210,6 @@ impl VhostUserBackend for WlBackend {
             warn!("Starting new queue handler without stopping old handler");
             handle.abort();
         }
-
-        // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
-        queue.ack_features(self.acked_features);
 
         let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;
@@ -400,7 +396,7 @@ pub fn run_wl_device(opts: Options) -> anyhow::Result<()> {
     let ex = Executor::new().context("failed to create executor")?;
 
     let listener =
-        VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, wl::QUEUE_SIZES.len(), None)?;
+        VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, QUEUE_SIZES.len(), None)?;
 
     let backend = Box::new(WlBackend::new(&ex, wayland_paths, resource_bridge));
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.

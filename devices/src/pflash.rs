@@ -50,7 +50,7 @@ fn pflash_parameters_default_block_size() -> u32 {
     4 * (1 << 10)
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PflashParameters {
     pub path: PathBuf,
     #[serde(default = "pflash_parameters_default_block_size")]
@@ -231,7 +231,15 @@ impl BusDevice for Pflash {
     }
 }
 
-impl Suspendable for Pflash {}
+impl Suspendable for Pflash {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

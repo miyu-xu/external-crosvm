@@ -16,6 +16,7 @@ use std::thread;
 use std::time::Duration;
 use std::u32;
 
+use anyhow::Context;
 use base::error;
 use base::info;
 use base::warn;
@@ -33,9 +34,9 @@ use cros_async::AsyncError;
 use cros_async::AsyncTube;
 use cros_async::EventAsync;
 use cros_async::Executor;
+use cros_async::ExecutorKind;
 use cros_async::SelectResult;
 use cros_async::TimerAsync;
-use data_model::DataInit;
 use data_model::Le16;
 use data_model::Le32;
 use data_model::Le64;
@@ -50,6 +51,7 @@ use thiserror::Error as ThisError;
 use vm_control::DiskControlCommand;
 use vm_control::DiskControlResult;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
 
 use crate::virtio::async_utils;
 use crate::virtio::block::sys::*;
@@ -87,8 +89,7 @@ use crate::virtio::Writer;
 use crate::Suspendable;
 
 const DEFAULT_QUEUE_SIZE: u16 = 256;
-// ANDROID(b/251366833): We've temporarily reduced the number of queues to debug an issue.
-pub const DEFAULT_NUM_QUEUES: u16 = 1; // 16;
+pub const DEFAULT_NUM_QUEUES: u16 = 16;
 
 const SECTOR_SHIFT: u8 = 9;
 const SECTOR_SIZE: u64 = 0x01 << SECTOR_SHIFT;
@@ -476,17 +477,12 @@ pub async fn flush_disk(
 fn run_worker(
     ex: Executor,
     interrupt: Interrupt,
-    queues: Vec<Queue>,
+    queues: Vec<(Queue, Event)>,
     mem: GuestMemory,
     disk_state: &Rc<AsyncMutex<DiskState>>,
     control_tube: &Option<AsyncTube>,
-    queue_evts: Vec<Event>,
     kill_evt: Event,
 ) -> Result<(), String> {
-    if queues.len() != queue_evts.len() {
-        return Err("Number of queues and events must match.".to_string());
-    }
-
     // One flush timer per disk.
     let timer = Timer::new().expect("Failed to create a timer");
     let flush_timer_armed = Rc::new(RefCell::new(false));
@@ -515,19 +511,13 @@ fn run_worker(
 
     let queue_handlers = queues
         .into_iter()
-        .map(|q| Rc::new(RefCell::new(q)))
-        .zip(
-            queue_evts
-                .into_iter()
-                .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue")),
-        )
         .map(|(queue, event)| {
             handle_queue(
                 ex.clone(),
                 mem.clone(),
                 Rc::clone(disk_state),
-                Rc::clone(&queue),
-                event,
+                Rc::new(RefCell::new(queue)),
+                EventAsync::new(event, &ex).expect("Failed to create async event for queue"),
                 interrupt.clone(),
                 Rc::clone(&flush_timer),
                 Rc::clone(&flush_timer_armed),
@@ -575,6 +565,7 @@ pub struct BlockAsync {
     pub(crate) id: Option<BlockId>,
     pub(crate) control_tube: Option<Tube>,
     pub(crate) queue_sizes: Vec<u16>,
+    pub(crate) executor_kind: ExecutorKind,
     kill_evt: Option<Event>,
     worker_thread: Option<thread::JoinHandle<(Box<dyn DiskFile>, Option<Tube>)>>,
 }
@@ -590,6 +581,7 @@ impl BlockAsync {
         id: Option<BlockId>,
         control_tube: Option<Tube>,
         queue_size: Option<u16>,
+        executor_kind: Option<ExecutorKind>,
         num_queues: Option<u16>,
     ) -> SysResult<BlockAsync> {
         if block_size % SECTOR_SIZE as u32 != 0 {
@@ -624,6 +616,7 @@ impl BlockAsync {
             Self::build_avail_features(base_features, read_only, sparse, multi_queue);
 
         let seg_max = get_seg_max(q_size);
+        let executor_kind = executor_kind.unwrap_or_default();
 
         Ok(BlockAsync {
             disk_image: Some(disk_image),
@@ -638,6 +631,7 @@ impl BlockAsync {
             kill_evt: None,
             worker_thread: None,
             control_tube,
+            executor_kind,
         })
     }
 
@@ -906,81 +900,71 @@ impl VirtioDevice for BlockAsync {
                 self.queue_sizes.len() as u16,
             )
         };
-        copy_config(data, 0, config_space.as_slice(), offset);
+        copy_config(data, 0, config_space.as_bytes(), offset);
     }
 
     fn activate(
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
-    ) {
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed creating kill Event pair: {}", e);
-                return;
-            }
-        };
+        queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed creating kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
         let read_only = self.read_only;
         let sparse = self.sparse;
         let disk_size = self.disk_size.clone();
         let id = self.id.take();
-        if let Some(disk_image) = self.disk_image.take() {
-            let control_tube = self.control_tube.take();
-            let worker_result =
-                thread::Builder::new()
-                    .name("virtio_blk".to_string())
-                    .spawn(move || {
-                        let ex = Executor::new().expect("Failed to create an executor");
+        let executor_kind = self.executor_kind;
+        let disk_image = self.disk_image.take().context("missing disk image")?;
+        let control_tube = self.control_tube.take();
+        let worker_thread = thread::Builder::new()
+            .name("virtio_blk".to_string())
+            .spawn(move || {
+                let ex = Executor::with_executor_kind(executor_kind)
+                    .expect("Failed to create an executor");
 
-                        let async_control = control_tube
-                            .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
-                        let async_image = match disk_image.to_async_disk(&ex) {
-                            Ok(d) => d,
-                            Err(e) => panic!("Failed to create async disk {}", e),
-                        };
-                        let disk_state = Rc::new(AsyncMutex::new(DiskState {
-                            disk_image: async_image,
-                            disk_size,
-                            read_only,
-                            sparse,
-                            id,
-                        }));
-                        if let Err(err_string) = run_worker(
-                            ex,
-                            interrupt,
-                            queues,
-                            mem,
-                            &disk_state,
-                            &async_control,
-                            queue_evts,
-                            kill_evt,
-                        ) {
-                            error!("{}", err_string);
-                        }
-
-                        let disk_state = match Rc::try_unwrap(disk_state) {
-                            Ok(d) => d.into_inner(),
-                            Err(_) => panic!("too many refs to the disk"),
-                        };
-                        (
-                            disk_state.disk_image.into_inner(),
-                            async_control.map(|c| c.into()),
-                        )
-                    });
-
-            self.worker_thread = match worker_result {
-                Err(e) => {
-                    error!("failed to spawn virtio_blk worker: {}", e);
-                    return;
+                let async_control = control_tube
+                    .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
+                let async_image = match disk_image.to_async_disk(&ex) {
+                    Ok(d) => d,
+                    Err(e) => panic!("Failed to create async disk {}", e),
+                };
+                let disk_state = Rc::new(AsyncMutex::new(DiskState {
+                    disk_image: async_image,
+                    disk_size,
+                    read_only,
+                    sparse,
+                    id,
+                }));
+                if let Err(err_string) = run_worker(
+                    ex,
+                    interrupt,
+                    queues,
+                    mem,
+                    &disk_state,
+                    &async_control,
+                    kill_evt,
+                ) {
+                    error!("{}", err_string);
                 }
-                Ok(join_handle) => Some(join_handle),
-            }
-        }
+
+                let disk_state = match Rc::try_unwrap(disk_state) {
+                    Ok(d) => d.into_inner(),
+                    Err(_) => panic!("too many refs to the disk"),
+                };
+                (
+                    disk_state.disk_image.into_inner(),
+                    async_control.map(|c| c.into()),
+                )
+            })
+            .context("failed to spawn virtio_blk worker")?;
+
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -1013,7 +997,6 @@ impl Suspendable for BlockAsync {}
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-    use std::fs::OpenOptions;
     use std::mem::size_of_val;
     use std::sync::atomic::AtomicU64;
 
@@ -1021,6 +1004,7 @@ mod tests {
     use data_model::Le64;
     use disk::SingleFileDisk;
     use hypervisor::ProtectionType;
+    use tempfile::tempfile;
     use tempfile::TempDir;
     use vm_memory::GuestAddress;
 
@@ -1031,10 +1015,7 @@ mod tests {
 
     #[test]
     fn read_size() {
-        let tempdir = TempDir::new().unwrap();
-        let mut path = tempdir.path().to_owned();
-        path.push("disk_image");
-        let f = File::create(&path).unwrap();
+        let f = tempfile().unwrap();
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
@@ -1044,6 +1025,7 @@ mod tests {
             true,
             false,
             512,
+            None,
             None,
             None,
             None,
@@ -1062,10 +1044,7 @@ mod tests {
 
     #[test]
     fn read_block_size() {
-        let tempdir = TempDir::new().unwrap();
-        let mut path = tempdir.path().to_owned();
-        path.push("disk_image");
-        let f = File::create(&path).unwrap();
+        let f = tempfile().unwrap();
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
@@ -1075,6 +1054,7 @@ mod tests {
             true,
             false,
             4096,
+            None,
             None,
             None,
             None,
@@ -1107,6 +1087,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
             // writable device should set VIRTIO_BLK_F_FLUSH + VIRTIO_BLK_F_DISCARD
@@ -1129,6 +1110,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
             // writable device should set VIRTIO_F_FLUSH + VIRTIO_BLK_F_RO
@@ -1147,6 +1129,7 @@ mod tests {
                 true,
                 true,
                 512,
+                None,
                 None,
                 None,
                 None,
@@ -1179,6 +1162,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1197,6 +1181,7 @@ mod tests {
             None,
             None,
             Some(128),
+            None,
             Some(1),
         )
         .unwrap();
@@ -1209,15 +1194,7 @@ mod tests {
     fn read_last_sector() {
         let ex = Executor::new().expect("creating an executor failed");
 
-        let tempdir = TempDir::new().unwrap();
-        let mut path = tempdir.path().to_owned();
-        path.push("disk_image");
-        let f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)
-            .unwrap();
+        let f = tempfile().unwrap();
         let disk_size = 0x1000;
         f.set_len(disk_size).unwrap();
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
@@ -1278,15 +1255,7 @@ mod tests {
 
     #[test]
     fn read_beyond_last_sector() {
-        let tempdir = TempDir::new().unwrap();
-        let mut path = tempdir.path().to_owned();
-        path.push("disk_image");
-        let f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)
-            .unwrap();
+        let f = tempfile().unwrap();
         let disk_size = 0x1000;
         f.set_len(disk_size).unwrap();
         let mem = Rc::new(
@@ -1349,15 +1318,7 @@ mod tests {
     fn get_id() {
         let ex = Executor::new().expect("creating an executor failed");
 
-        let tempdir = TempDir::new().unwrap();
-        let mut path = tempdir.path().to_owned();
-        path.push("disk_image");
-        let f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)
-            .unwrap();
+        let f = tempfile().unwrap();
         let disk_size = 0x1000;
         f.set_len(disk_size).unwrap();
 

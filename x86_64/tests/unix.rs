@@ -10,10 +10,12 @@ use std::arch::x86_64::__cpuid_count;
 
 use hypervisor::CpuConfigX86_64;
 use x86_64::cpuid::filter_cpuid;
-use x86_64::cpuid::{
-    EBX_CLFLUSH_CACHELINE, EBX_CLFLUSH_SIZE_SHIFT, EBX_CPUID_SHIFT, EBX_CPU_COUNT_SHIFT,
-    ECX_HYPERVISOR_SHIFT, EDX_HTT_SHIFT,
-};
+use x86_64::cpuid::EBX_CLFLUSH_CACHELINE;
+use x86_64::cpuid::EBX_CLFLUSH_SIZE_SHIFT;
+use x86_64::cpuid::EBX_CPUID_SHIFT;
+use x86_64::cpuid::EBX_CPU_COUNT_SHIFT;
+use x86_64::cpuid::ECX_HYPERVISOR_SHIFT;
+use x86_64::cpuid::EDX_HTT_SHIFT;
 use x86_64::CpuIdContext;
 
 #[test]
@@ -48,7 +50,7 @@ fn feature_and_vendor_name() {
         },
     });
 
-    let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, false);
+    let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, false, None);
     filter_cpuid(
         &mut cpuid,
         &CpuIdContext::new(

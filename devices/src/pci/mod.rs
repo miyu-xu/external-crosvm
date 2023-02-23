@@ -23,6 +23,7 @@ mod pci_device;
 mod pci_root;
 #[cfg(unix)]
 mod pcie;
+mod pm;
 mod pvpanic;
 mod stub;
 #[cfg(unix)]
@@ -110,7 +111,7 @@ pub const PCI_VENDOR_ID_INTEL: u16 = 0x8086;
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CrosvmDeviceId {
     Pit = 1,
     Pic = 2,
@@ -131,6 +132,7 @@ pub enum CrosvmDeviceId {
     VmWatchdog = 17,
     Pflash = 18,
     VirtioMmio = 19,
+    AcAdapter = 20,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -157,13 +159,14 @@ impl TryFrom<u16> for CrosvmDeviceId {
             17 => Ok(CrosvmDeviceId::VmWatchdog),
             18 => Ok(CrosvmDeviceId::Pflash),
             19 => Ok(CrosvmDeviceId::VirtioMmio),
+            20 => Ok(CrosvmDeviceId::AcAdapter),
             _ => Err(base::Error::new(EINVAL)),
         }
     }
 }
 
 /// A wrapper structure for pci device and vendor id.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct PciId {
     vendor_id: u16,
     device_id: u16,

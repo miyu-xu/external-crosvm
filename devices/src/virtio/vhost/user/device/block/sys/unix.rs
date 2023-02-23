@@ -48,9 +48,10 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         read_only: fileopts.contains(&"read-only"),
         root: false,
         sparse: false,
-        o_direct: false,
+        direct: false,
         block_size: 512,
         id: None,
+        async_executor: None,
     };
 
     let block = Box::new(BlockAsync::new(
@@ -63,8 +64,8 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         None,
         None,
         None,
-    )?)
-    .into_backend(&ex)?;
+        None,
+    )?);
 
     let listener = VhostUserListener::new_from_socket_or_vfio(
         &opts.socket,
@@ -73,6 +74,6 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         None,
     )?;
     info!("vhost-user disk device ready, starting run loop...");
-    // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    ex.run_until(listener.run_backend(block, &ex))?
+
+    listener.run_device(ex, block)
 }

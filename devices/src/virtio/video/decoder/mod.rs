@@ -561,7 +561,7 @@ impl<D: DecoderBackend> Decoder<D> {
             .map_err(|_| VideoError::InvalidArgument)?,
         };
 
-        let offset = plane_offsets.get(0).copied().unwrap_or(0);
+        let offset = plane_offsets.first().copied().unwrap_or(0);
         ctx.register_resource(queue_type, resource_id, resource, offset);
 
         if queue_type == QueueType::Input {
@@ -673,11 +673,21 @@ impl<D: DecoderBackend> Decoder<D> {
                 // Don't enqueue this resource to the host.
                 Ok(())
             }
-            QueueOutputResourceResult::Reused(buffer_id) => ctx
-                .session
-                .as_mut()
-                .ok_or(VideoError::InvalidOperation)?
-                .reuse_output_buffer(buffer_id),
+            QueueOutputResourceResult::Reused(buffer_id) => {
+                let res = ctx.pending_responses.iter()
+                    .find(|&res| {
+                        matches!(res, PendingResponse::PictureReady { picture_buffer_id, .. } if *picture_buffer_id == buffer_id)
+                    });
+
+                if res.is_some() {
+                    Ok(())
+                } else {
+                    ctx.session
+                        .as_mut()
+                        .ok_or(VideoError::InvalidOperation)?
+                        .reuse_output_buffer(buffer_id)
+                }
+            }
             QueueOutputResourceResult::Registered(buffer_id) => {
                 // Take full ownership of the output resource, since we will only import it once
                 // into the backend.
