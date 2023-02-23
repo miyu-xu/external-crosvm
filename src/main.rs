@@ -5,8 +5,7 @@
 //! Runs a virtual machine
 //!
 //! ## Feature flags
-// TODO(b/255384162) Enable this again once the third party lib is imported
-//#![doc = document_features::document_features!()]
+#![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
 
 #[cfg(any(feature = "composite-disk", feature = "qcow"))]
 use std::fs::OpenOptions;
@@ -28,7 +27,8 @@ use crosvm::cmdline;
 use crosvm::config::executable_is_plugin;
 use crosvm::config::Config;
 use devices::virtio::vhost::user::device::run_block_device;
-#[cfg(unix)]
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::device::run_gpu_device;
 use devices::virtio::vhost::user::device::run_net_device;
 #[cfg(feature = "composite-disk")]
 use disk::create_composite_disk;
@@ -47,7 +47,7 @@ use crosvm::cmdline::Command;
 use crosvm::cmdline::CrossPlatformCommands;
 use crosvm::cmdline::CrossPlatformDevicesCommands;
 #[cfg(windows)]
-use sys::windows::metrics;
+use sys::windows::setup_metrics_reporting;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_add;
 #[cfg(feature = "gpu")]
@@ -69,6 +69,8 @@ use vm_control::BalloonControlCommand;
 use vm_control::DiskControlCommand;
 use vm_control::HotPlugDeviceInfo;
 use vm_control::HotPlugDeviceType;
+use vm_control::RestoreCommand;
+use vm_control::SnapshotCommand;
 use vm_control::SwapCommand;
 use vm_control::UsbControlResult;
 use vm_control::VmRequest;
@@ -83,7 +85,7 @@ use crate::sys::init_log;
 static ALLOCATOR: scudo::GlobalScudoAllocator = scudo::GlobalScudoAllocator;
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Exit code from crosvm,
 enum CommandStatus {
     /// Exit with success. Also used to mean VM stopped successfully.
@@ -156,9 +158,10 @@ where
     crosvm::sys::setup_emulator_crash_reporting(&cfg)?;
 
     #[cfg(windows)]
-    metrics::setup_metrics_reporting()?;
+    setup_metrics_reporting()?;
 
     init_log(log_config, &cfg)?;
+    cros_tracing::init();
     let exit_state = crate::sys::run_config(cfg)?;
     Ok(CommandStatus::from(exit_state))
 }
@@ -173,16 +176,16 @@ fn suspend_vms(cmd: cmdline::SuspendCommand) -> std::result::Result<(), ()> {
 
 fn swap_vms(cmd: cmdline::SwapCommand) -> std::result::Result<(), ()> {
     use cmdline::SwapSubcommands::*;
-    match cmd.nested {
-        Enable(params) => {
-            let req = VmRequest::Swap(SwapCommand::Enable);
-            vms_request(&req, &Path::new(&params.socket_path))
-        }
-        Status(params) => do_swap_status(&Path::new(&params.socket_path)),
-        LogPageFault(params) => {
-            let req = VmRequest::Swap(SwapCommand::StartPageFaultLogging);
-            vms_request(&req, &Path::new(&params.socket_path))
-        }
+    let (req, path) = match &cmd.nested {
+        Enable(params) => (VmRequest::Swap(SwapCommand::Enable), &params.socket_path),
+        SwapOut(params) => (VmRequest::Swap(SwapCommand::SwapOut), &params.socket_path),
+        Disable(params) => (VmRequest::Swap(SwapCommand::Disable), &params.socket_path),
+        Status(params) => (VmRequest::Swap(SwapCommand::Status), &params.socket_path),
+    };
+    if let VmRequest::Swap(SwapCommand::Status) = req {
+        do_swap_status(path)
+    } else {
+        vms_request(&req, path)
     }
 }
 
@@ -286,7 +289,7 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
         .read(true)
         .write(true)
         .truncate(true)
-        .open(&composite_image_path)
+        .open(composite_image_path)
         .map_err(|e| {
             error!(
                 "Failed opening composite disk image file at '{}': {}",
@@ -424,7 +427,8 @@ fn start_device(opts: cmdline::DeviceCommand) -> std::result::Result<(), ()> {
     let result = match opts.command {
         cmdline::DeviceSubcommand::CrossPlatform(command) => match command {
             CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
-            #[cfg(unix)]
+            #[cfg(feature = "gpu")]
+            CrossPlatformDevicesCommands::Gpu(cfg) => run_gpu_device(cfg),
             CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
         },
         cmdline::DeviceSubcommand::Sys(command) => sys::start_device(command),
@@ -517,6 +521,26 @@ fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
             Err(())
         }
     }
+}
+
+fn snapshot_vm(cmd: cmdline::SnapshotCommand) -> std::result::Result<(), ()> {
+    use cmdline::SnapshotSubCommands::*;
+    let (socket_path, request) = match cmd.snapshot_command {
+        Take(path) => {
+            let req = VmRequest::Snapshot(SnapshotCommand::Take {
+                snapshot_path: path.snapshot_path,
+            });
+            (path.socket_path, req)
+        }
+        Restore(path) => {
+            let req = VmRequest::Restore(RestoreCommand::Apply {
+                restore_path: path.snapshot_path,
+            });
+            (path.socket_path, req)
+        }
+    };
+    let socket_path = Path::new(&socket_path);
+    vms_request(&request, socket_path)
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -694,6 +718,9 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     CrossPlatformCommands::Vfio(cmd) => {
                         modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
                     }
+                    CrossPlatformCommands::Snapshot(cmd) => {
+                        snapshot_vm(cmd).map_err(|_| anyhow!("snapshot subcommand failed"))
+                    }
                 }
                 .map(|_| CommandStatus::SuccessOrVmStop)
             }
@@ -753,8 +780,6 @@ mod tests {
         assert!(!is_flag("no-leading-dash"));
     }
 
-    // TODO(b/238361778) this doesn't work on Windows because is_flag isn't called yet.
-    #[cfg(unix)]
     #[test]
     fn args_split_long() {
         assert_eq!(
@@ -765,8 +790,6 @@ mod tests {
         );
     }
 
-    // TODO(b/238361778) this doesn't work on Windows because is_flag isn't called yet.
-    #[cfg(unix)]
     #[test]
     fn args_split_short() {
         assert_eq!(

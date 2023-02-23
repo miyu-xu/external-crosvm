@@ -295,7 +295,7 @@ struct Worker {
     pending_unmap: Option<u64 /* shmem_offset */>,
 }
 
-#[derive(EventToken, Debug, Clone, PartialEq)]
+#[derive(EventToken, Debug, Clone, PartialEq, Eq)]
 enum Token {
     // Data is available on the Vhost-user sibling socket.
     SiblingSocket,
@@ -1580,7 +1580,7 @@ impl VirtioVhostUser {
         // This thread will wait for the sibling to connect and the continuously parse messages from
         // the sibling as well as the device (over Virtio).
         let worker_result = thread::Builder::new()
-            .name("virtio_vhost_user".to_string())
+            .name("v_vhost_user".to_string())
             .spawn(move || {
                 // Block until the connection with the sibling is established. We do this in a
                 // thread to avoid blocking the main thread.
@@ -1858,13 +1858,14 @@ impl VirtioDevice for VirtioVhostUser {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != NUM_PROXY_DEVICE_QUEUES || queue_evts.len() != NUM_PROXY_DEVICE_QUEUES {
-            error!("bad queue length: {} {}", queues.len(), queue_evts.len());
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != NUM_PROXY_DEVICE_QUEUES {
+            return Err(anyhow!("bad queue length: {}", queues.len()));
         }
+
+        let (rx_queue, rx_queue_evt) = queues.remove(0);
+        let (tx_queue, tx_queue_evt) = queues.remove(0);
 
         let mut state = self.state.lock();
         // Use `State::Invalid` as the intermediate state here.
@@ -1880,18 +1881,22 @@ impl VirtioDevice for VirtioVhostUser {
                     main_process_tube,
                     mem,
                     interrupt,
-                    rx_queue: queues.remove(0),
-                    tx_queue: queues.remove(0),
-                    rx_queue_evt: queue_evts.remove(0),
-                    tx_queue_evt: queue_evts.remove(0),
+                    rx_queue,
+                    tx_queue,
+                    rx_queue_evt,
+                    tx_queue_evt,
                     iommu: self.iommu.take().unwrap(),
                 };
             }
             s => {
                 // If the old state is not `Initialized`, it becomes `Invalid`.
-                error!("activate() is called in an unexpected state: {}", s);
+                return Err(anyhow!(
+                    "activate() is called in an unexpected state: {}",
+                    s
+                ));
             }
         };
+        Ok(())
     }
 
     fn read_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &mut [u8]) {

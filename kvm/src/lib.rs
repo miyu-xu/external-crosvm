@@ -6,6 +6,8 @@
 //!
 //! New code should use the `hypervisor` crate instead.
 
+#![cfg(unix)]
+
 mod cap;
 
 use std::cell::RefCell;
@@ -26,8 +28,6 @@ use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 
 #[allow(unused_imports)]
-use base::block_signal;
-#[allow(unused_imports)]
 use base::ioctl;
 #[allow(unused_imports)]
 use base::ioctl_with_mut_ptr;
@@ -43,6 +43,7 @@ use base::ioctl_with_val;
 use base::pagesize;
 #[allow(unused_imports)]
 use base::signal;
+use base::sys::BlockedSignal;
 #[allow(unused_imports)]
 use base::unblock_signal;
 #[allow(unused_imports)]
@@ -256,6 +257,7 @@ impl Kvm {
     // Ideally, this would take a description of the memory map and return
     // the closest machine type for this VM. Here, we just return the maximum
     // the kernel support.
+    #[allow(clippy::useless_conversion)]
     pub fn get_vm_type(&self) -> c_ulong {
         // Safe because we know self is a real kvm fd
         match unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_ARM_VM_IPA_SIZE.into()) }
@@ -664,7 +666,7 @@ impl Vm {
     pub fn set_irq_line(&self, irq: u32, active: bool) -> Result<()> {
         let mut irq_level = kvm_irq_level::default();
         irq_level.__bindgen_anon_1.irq = irq;
-        irq_level.level = if active { 1 } else { 0 };
+        irq_level.level = active.into();
 
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
@@ -1152,7 +1154,7 @@ impl Vcpu {
         // kernel told us how large it was. The pointer is page aligned so casting to a different
         // type is well defined, hence the clippy allow attribute.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
-        run.immediate_exit = if exit { 1 } else { 0 };
+        run.immediate_exit = exit.into();
     }
 
     /// Sets/clears the bit for immediate exit for the vcpu on the current thread.
@@ -1160,7 +1162,7 @@ impl Vcpu {
         VCPU_THREAD.with(|v| {
             if let Some(state) = &(*v.borrow()) {
                 unsafe {
-                    (*state.run).immediate_exit = if exit { 1 } else { 0 };
+                    (*state.run).immediate_exit = exit.into();
                 };
             }
         });
@@ -1740,25 +1742,3 @@ impl Drop for RunnableVcpu {
 /// Hides the zero length array behind a bounds check.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub type CpuId = FlexibleArrayWrapper<kvm_cpuid2, kvm_cpuid_entry2>;
-
-// Represents a temporarily blocked signal. It will unblock the signal when dropped.
-struct BlockedSignal {
-    signal_num: c_int,
-}
-
-impl BlockedSignal {
-    // Returns a `BlockedSignal` if the specified signal can be blocked, otherwise None.
-    fn new(signal_num: c_int) -> Option<BlockedSignal> {
-        if block_signal(signal_num).is_ok() {
-            Some(BlockedSignal { signal_num })
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for BlockedSignal {
-    fn drop(&mut self) {
-        unblock_signal(self.signal_num).expect("failed to restore signal mask");
-    }
-}

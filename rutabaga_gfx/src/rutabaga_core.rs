@@ -7,10 +7,12 @@
 use std::collections::BTreeMap as Map;
 use std::sync::Arc;
 
-use base::SafeDescriptor;
+use crate::base_internal::SafeDescriptor;
 use data_model::VolatileSlice;
 
+#[cfg(not(target_os = "fuchsia"))]
 use crate::cross_domain::CrossDomain;
+
 #[cfg(feature = "gfxstream")]
 use crate::gfxstream::Gfxstream;
 use crate::rutabaga_2d::Rutabaga2D;
@@ -847,9 +849,16 @@ impl RutabagaBuilder {
         self
     }
 
-    /// Sets use external blob in virglrenderer.
+    /// Sets use external blob in gfxstream + virglrenderer.
     pub fn set_use_external_blob(mut self, v: bool) -> RutabagaBuilder {
+        self.gfxstream_flags = self.gfxstream_flags.use_external_blob(v);
         self.virglrenderer_flags = self.virglrenderer_flags.use_external_blob(v);
+        self
+    }
+
+    /// Sets use system blob in gfxstream.
+    pub fn set_use_system_blob(mut self, v: bool) -> RutabagaBuilder {
+        self.gfxstream_flags = self.gfxstream_flags.use_system_blob(v);
         self
     }
 
@@ -990,9 +999,13 @@ impl RutabagaBuilder {
                 push_capset(RUTABAGA_CAPSET_GFXSTREAM);
             }
 
-            let cross_domain = CrossDomain::init(self.channels)?;
-            rutabaga_components.insert(RutabagaComponentType::CrossDomain, cross_domain);
-            push_capset(RUTABAGA_CAPSET_CROSS_DOMAIN);
+            cfg_if::cfg_if! {
+                   if #[cfg(not(target_os = "fuchsia"))] {
+                      let cross_domain = CrossDomain::init(self.channels)?;
+                      rutabaga_components.insert(RutabagaComponentType::CrossDomain, cross_domain);
+                      push_capset(RUTABAGA_CAPSET_CROSS_DOMAIN);
+                   }
+            }
         }
 
         Ok(Rutabaga {

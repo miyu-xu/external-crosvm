@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -51,7 +52,10 @@ use hypervisor::VcpuInitAArch64;
 use hypervisor::VcpuRegAArch64;
 use hypervisor::Vm;
 use hypervisor::VmAArch64;
+#[cfg(windows)]
+use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
+#[cfg(unix)]
 use minijail::Minijail;
 use remain::sorted;
 use resources::AddressRange;
@@ -117,12 +121,47 @@ enum PayloadType {
     Kernel(LoadedKernel),
 }
 
+impl PayloadType {
+    fn entry(&self) -> GuestAddress {
+        match self {
+            Self::Bios {
+                entry,
+                image_size: _,
+            } => *entry,
+            Self::Kernel(k) => k.entry,
+        }
+    }
+
+    fn size(&self) -> u64 {
+        match self {
+            Self::Bios {
+                entry: _,
+                image_size,
+            } => *image_size,
+            Self::Kernel(k) => k.size,
+        }
+    }
+}
+
 fn get_kernel_addr() -> GuestAddress {
     GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET)
 }
 
 fn get_bios_addr() -> GuestAddress {
     GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_BIOS_OFFSET)
+}
+
+// When static swiotlb allocation is required, returns the address it should be allocated at.
+// Otherwise, returns None.
+fn get_swiotlb_addr(
+    memory_size: u64,
+    hypervisor: &(impl Hypervisor + ?Sized),
+) -> Option<GuestAddress> {
+    if hypervisor.check_capability(HypervisorCap::StaticSwiotlbAllocationRequired) {
+        Some(GuestAddress(AARCH64_PHYS_MEM_START + memory_size))
+    } else {
+        None
+    }
 }
 
 // Serial device requires 8 bytes of registers;
@@ -196,6 +235,8 @@ pub enum Error {
     CreateSocket(io::Error),
     #[error("failed to create VCPU: {0}")]
     CreateVcpu(base::Error),
+    #[error("custom pVM firmware could not be loaded: {0}")]
+    CustomPvmFwLoadFailure(arch::LoadImageError),
     #[error("vm created wrong kind of vcpu")]
     DowncastVcpu,
     #[error("failed to enable singlestep execution: {0}")]
@@ -218,10 +259,8 @@ pub enum Error {
     LoadElfKernel(kernel_loader::Error),
     #[error("failed to map arm pvtime memory: {0}")]
     MapPvtimeError(base::Error),
-    #[error("failed to protect vm: {0}")]
-    ProtectVm(base::Error),
     #[error("pVM firmware could not be loaded: {0}")]
-    PvmFwLoadFailure(arch::LoadImageError),
+    PvmFwLoadFailure(base::Error),
     #[error("ramoops address is different from high_mmio_base: {0} vs {1}")]
     RamoopsAddress(u64, u64),
     #[error("error reading guest memory: {0}")]
@@ -286,6 +325,7 @@ impl arch::LinuxArch for AArch64 {
     /// These should be used to configure the GuestMemory structure for the platform.
     fn guest_memory_layout(
         components: &VmComponents,
+        hypervisor: &impl Hypervisor,
     ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
         let mut memory_regions =
             vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size)];
@@ -296,6 +336,12 @@ impl arch::LinuxArch for AArch64 {
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
             ));
+        }
+
+        if let Some(size) = components.swiotlb {
+            if let Some(addr) = get_swiotlb_addr(components.memory_size, hypervisor) {
+                memory_regions.push((addr, size));
+            }
         }
 
         Ok(memory_regions)
@@ -320,7 +366,9 @@ impl arch::LinuxArch for AArch64 {
         devs: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>,
         irq_chip: &mut dyn IrqChipAArch64,
         vcpu_ids: &mut Vec<usize>,
+        dump_device_tree_blob: Option<PathBuf>,
         _debugcon_jail: Option<Minijail>,
+        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmAArch64,
@@ -343,9 +391,12 @@ impl arch::LinuxArch for AArch64 {
                 }
             }
             VmImage::Kernel(ref mut kernel_image) => {
-                let loaded_kernel = if let Ok(elf_kernel) =
-                    kernel_loader::load_elf64(&mem, get_kernel_addr(), kernel_image)
-                {
+                let loaded_kernel = if let Ok(elf_kernel) = kernel_loader::load_elf(
+                    &mem,
+                    get_kernel_addr(),
+                    kernel_image,
+                    AARCH64_PHYS_MEM_START,
+                ) {
                     elf_kernel
                 } else {
                     kernel_loader::load_arm64_kernel(&mem, get_kernel_addr(), kernel_image)
@@ -429,14 +480,14 @@ impl arch::LinuxArch for AArch64 {
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
             )
-            .map_err(Error::PvmFwLoadFailure)?;
+            .map_err(Error::CustomPvmFwLoadFailure)?;
         } else if components.hv_cfg.protection_type.runs_firmware() {
             // Tell the hypervisor to load the pVM firmware.
             vm.load_protected_vm_firmware(
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
             )
-            .map_err(Error::ProtectVm)?;
+            .map_err(Error::PvmFwLoadFailure)?;
         }
 
         for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
@@ -473,6 +524,8 @@ impl arch::LinuxArch for AArch64 {
             &mut vm,
             (devices::AARCH64_GIC_NR_SPIS - AARCH64_IRQ_BASE) as usize,
             None,
+            #[cfg(feature = "swap")]
+            swap_controller,
         )
         .map_err(Error::CreatePciRoot)?;
 
@@ -492,6 +545,8 @@ impl arch::LinuxArch for AArch64 {
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,
                 system_allocator,
+                #[cfg(feature = "swap")]
+                swap_controller,
             )
             .map_err(Error::CreatePlatformBus)?;
         pid_debug_label_map.append(&mut platform_pid_debug_label_map);
@@ -512,6 +567,8 @@ impl arch::LinuxArch for AArch64 {
             com_evt_2_4.get_trigger(),
             serial_parameters,
             serial_jail,
+            #[cfg(feature = "swap")]
+            swap_controller,
         )
         .map_err(Error::CreateSerialDevices)?;
 
@@ -575,6 +632,8 @@ impl arch::LinuxArch for AArch64 {
                     irq_chip.as_irq_chip_mut(),
                     bat_irq,
                     system_allocator,
+                    #[cfg(feature = "swap")]
+                    swap_controller,
                 )
                 .map_err(Error::CreateBatDevices)?;
                 (
@@ -606,14 +665,21 @@ impl arch::LinuxArch for AArch64 {
             components.cpu_capacity,
             fdt_offset,
             cmdline.as_str(),
+            (payload.entry(), payload.size() as usize),
             initrd,
             components.android_fstab,
             irq_chip.get_vgic_version() == DeviceKind::ArmVgicV3,
             use_pmu,
             psci_version,
-            components.swiotlb,
+            components.swiotlb.map(|size| {
+                (
+                    get_swiotlb_addr(components.memory_size, vm.get_hypervisor()),
+                    size,
+                )
+            }),
             bat_mmio_base_and_irq,
             vmwdt_cfg,
+            dump_device_tree_blob,
         )
         .map_err(Error::CreateFdt)?;
 
@@ -640,6 +706,7 @@ impl arch::LinuxArch for AArch64 {
             root_config: pci_root,
             platform_devices,
             hotplug_bus: BTreeMap::new(),
+            devices_thread: None,
         })
     }
 
@@ -666,6 +733,7 @@ impl arch::LinuxArch for AArch64 {
         _minijail: Option<Minijail>,
         _resources: &mut SystemAllocator,
         _tube: &mpsc::Sender<PciRootCommand>,
+        #[cfg(feature = "swap")] _swap_controller: Option<&swap::SwapController>,
     ) -> std::result::Result<PciAddress, Self::Error> {
         // hotplug function isn't verified on AArch64, so set it unsupported here.
         Err(Error::Unsupported)
@@ -864,17 +932,12 @@ impl AArch64 {
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
-            let (image_addr, image_size) = match payload {
-                PayloadType::Bios { entry, image_size } => (*entry, *image_size),
-                PayloadType::Kernel(loaded_kernel) => (loaded_kernel.entry, loaded_kernel.size),
-            };
-
             let entry_addr = if protection_type.loads_firmware() {
                 Some(AARCH64_PROTECTED_VM_FW_START)
             } else if protection_type.runs_firmware() {
                 None // Initial PC value is set by the hypervisor
             } else {
-                Some(image_addr.offset())
+                Some(payload.entry().offset())
             };
 
             /* PC -- entry point */
@@ -887,10 +950,10 @@ impl AArch64 {
 
             if protection_type.runs_firmware() {
                 /* X1 -- payload entry point */
-                regs.insert(VcpuRegAArch64::X(1), image_addr.offset());
+                regs.insert(VcpuRegAArch64::X(1), payload.entry().offset());
 
                 /* X2 -- image size */
-                regs.insert(VcpuRegAArch64::X(2), image_size as u64);
+                regs.insert(VcpuRegAArch64::X(2), payload.size());
             }
         }
 

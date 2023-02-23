@@ -34,7 +34,6 @@ use std::result::Result as StdResult;
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 pub use balloon_control::BalloonStats;
 #[cfg(feature = "balloon")]
@@ -55,6 +54,7 @@ use base::Result;
 use base::SafeDescriptor;
 use base::SharedMemory;
 use base::Tube;
+use base::TubeError;
 use hypervisor::Datamatch;
 use hypervisor::IoEventAddress;
 use hypervisor::IrqRoute;
@@ -76,7 +76,6 @@ use rutabaga_gfx::VulkanInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
-use sys::kill_handle;
 #[cfg(unix)]
 pub use sys::FsMappingRequest;
 #[cfg(unix)]
@@ -111,10 +110,11 @@ pub enum VcpuControl {
     Debug(VcpuDebug),
     RunState(VmRunMode),
     MakeRT,
+    GetStates,
 }
 
 /// Mode of execution for the VM.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum VmRunMode {
     /// The default run mode indicating the VCPUs are running.
     Running,
@@ -150,11 +150,18 @@ pub trait GpeNotify: Send {
     fn notify(&mut self) {}
 }
 
+// Trait for devices that get notification on specific PCI PME
+pub trait PmeNotify: Send {
+    fn notify(&mut self, _requester_id: u16) {}
+}
+
 pub trait PmResource {
     fn pwrbtn_evt(&mut self) {}
     fn slpbtn_evt(&mut self) {}
     fn gpe_evt(&mut self, _gpe: u32) {}
+    fn pme_evt(&mut self, _requester_id: u16) {}
     fn register_gpe_notify_dev(&mut self, _gpe: u32, _notify_dev: Arc<Mutex<dyn GpeNotify>>) {}
+    fn register_pme_notify_dev(&mut self, _bus: u8, _notify_dev: Arc<Mutex<dyn PmeNotify>>) {}
 }
 
 /// The maximum number of devices that can be listed in one `UsbControlCommand`.
@@ -263,6 +270,45 @@ impl Display for UsbControlResult {
             FailedToInitHostDevice => write!(f, "failed_to_init_host_device"),
         }
     }
+}
+
+/// Commands for snapshot feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SnapshotCommand {
+    Take { snapshot_path: PathBuf },
+}
+
+/// Response for [SnapshotCommand]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SnapshotControlResult {
+    /// The request is accepted successfully.
+    Ok,
+    /// The command fails.
+    Failed(String),
+    /// Request VM shut down in case of major failures.
+    Shutdown,
+}
+/// Commands for restore feature
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RestoreCommand {
+    Apply { restore_path: PathBuf },
+}
+
+/// Response for [RestoreCommand]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RestoreControlResult {
+    /// The request is accepted successfully.
+    Ok,
+    /// The command fails.
+    Failed(String),
+}
+
+/// Commands for actions on devices and the devices control thread.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DeviceControlCommand {
+    SnapshotDevices { snapshot_path: PathBuf },
+    RestoreDevices { restore_path: PathBuf },
+    Exit,
 }
 
 /// Source of a `VmMemoryRequest::RegisterMemory` mapping.
@@ -706,7 +752,7 @@ impl Display for BatControlResult {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum BatteryType {
     Goldfish,
@@ -910,8 +956,9 @@ pub enum PvClockCommandResponse {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SwapCommand {
     Enable,
+    SwapOut,
+    Disable,
     Status,
-    StartPageFaultLogging,
 }
 
 cfg_if::cfg_if! {
@@ -943,6 +990,8 @@ pub enum VmRequest {
     Resume,
     /// Inject a general-purpose event.
     Gpe(u32),
+    /// Inject a PCI PME
+    PciPme(u16),
     /// Make the VM's RT VCPU real-time.
     MakeRT,
     /// Command for balloon driver.
@@ -965,6 +1014,10 @@ pub enum VmRequest {
         device: HotPlugDeviceInfo,
         add: bool,
     },
+    /// Command to Snapshot devices
+    Snapshot(SnapshotCommand),
+    /// Command to Restore devices
+    Restore(RestoreCommand),
 }
 
 pub fn handle_disk_command(command: &DiskControlCommand, disk_host_tube: &Tube) -> VmResponse {
@@ -1005,6 +1058,77 @@ fn map_descriptor(
     }
 }
 
+// Get vCPU state. vCPUs are expected to all hold the same state.
+// In this function, there may be a time where vCPUs are not
+fn get_vcpu_state(
+    kick_vcpus: impl Fn(VcpuControl),
+    state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+    vcpu_num: usize,
+) -> std::result::Result<VmRunMode, SysError> {
+    kick_vcpus(VcpuControl::GetStates);
+    let mut current_mode_vec: Vec<VmRunMode> = Vec::new();
+    for _ in 0..vcpu_num {
+        match state_from_vcpu_channel.recv() {
+            Ok(state) => current_mode_vec.push(state),
+            Err(e) => {
+                error!("Failed to get vCPU state: {}", e);
+                return Err(SysError::new(EIO));
+            }
+        };
+    }
+    if current_mode_vec.is_empty() {
+        return Err(SysError::new(EIO));
+    }
+    let first_state = current_mode_vec[0];
+    if first_state == VmRunMode::Exiting {
+        panic!("Attempt to snapshot while exiting.");
+    }
+    if current_mode_vec.iter().any(|x| *x != first_state) {
+        // We do not panic here. It could be that vCPUs are transitioning from one mode to another.
+        error!("Unknown VM state: vCPUs hold different states.");
+        return Err(SysError::new(EIO));
+    }
+    Ok(first_state)
+}
+
+fn do_while_vcpus_suspended<T: for<'de> serde::Deserialize<'de>>(
+    kick_vcpus: impl Fn(VcpuControl),
+    state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+    vcpu_num: usize,
+    run_action: impl Fn() -> std::result::Result<(), TubeError>,
+    device_control_tube: &Tube,
+) -> std::result::Result<T, SysError> {
+    // get initial vcpu state
+    let current_mode = get_vcpu_state(&kick_vcpus, state_from_vcpu_channel, vcpu_num)?;
+    let saved_run_mode = current_mode;
+    if current_mode != VmRunMode::Suspending {
+        kick_vcpus(VcpuControl::RunState(VmRunMode::Suspending));
+    }
+    // Blocking call, waiting for response to ensure vCPU state was updated.
+    // In case of failure, where a vCPU still has the state running, start up vcpus and abort
+    // operation.
+    let current_mode = get_vcpu_state(&kick_vcpus, state_from_vcpu_channel, vcpu_num)?;
+    if current_mode != VmRunMode::Suspending {
+        error!("vCPUs failed to all suspend. Kicking back all vCPUs to their previous state: {saved_run_mode}");
+        kick_vcpus(VcpuControl::RunState(saved_run_mode));
+        return Err(SysError::new(EIO));
+    }
+    if let Err(e) = run_action() {
+        error!("fail to send command to devices control socket: {}", e);
+        kick_vcpus(VcpuControl::RunState(saved_run_mode));
+        return Err(SysError::new(EIO));
+    };
+    let response: T = match device_control_tube.recv() {
+        Ok(response) => response,
+        Err(e) => {
+            error!("fail to recv command from device control socket: {}", e);
+            return Err(SysError::new(EIO));
+        }
+    };
+    kick_vcpus(VcpuControl::RunState(saved_run_mode));
+    Ok(response)
+}
+
 impl VmRequest {
     /// Executes this request on the given Vm and other mutable state.
     ///
@@ -1021,9 +1145,12 @@ impl VmRequest {
         #[cfg(feature = "gpu")] gpu_control_tube: &Tube,
         usb_control_tube: Option<&Tube>,
         bat_control: &mut Option<BatControl>,
-        vcpu_handles: &[(JoinHandle<()>, mpsc::Sender<VcpuControl>)],
+        kick_vcpus: impl Fn(VcpuControl),
         force_s2idle: bool,
         #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        device_control_tube: &Tube,
+        state_from_vcpu_channel: &mpsc::Receiver<VmRunMode>,
+        vcpu_size: usize,
     ) -> VmResponse {
         match *self {
             VmRequest::Exit => {
@@ -1065,6 +1192,32 @@ impl VmRequest {
                 }
                 VmResponse::Err(SysError::new(ENOTSUP))
             }
+            VmRequest::Swap(SwapCommand::SwapOut) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.swap_out() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap out failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
+            VmRequest::Swap(SwapCommand::Disable) => {
+                #[cfg(feature = "swap")]
+                if let Some(swap_controller) = swap_controller {
+                    return match swap_controller.disable() {
+                        Ok(()) => VmResponse::Ok,
+                        Err(e) => {
+                            error!("swap disable failed: {}", e);
+                            VmResponse::Err(SysError::new(EINVAL))
+                        }
+                    };
+                }
+                VmResponse::Err(SysError::new(ENOTSUP))
+            }
             VmRequest::Swap(SwapCommand::Status) => {
                 #[cfg(feature = "swap")]
                 if let Some(swap_controller) = swap_controller {
@@ -1072,19 +1225,6 @@ impl VmRequest {
                         Ok(status) => VmResponse::SwapStatus(status),
                         Err(e) => {
                             error!("swap status failed: {}", e);
-                            VmResponse::Err(SysError::new(EINVAL))
-                        }
-                    };
-                }
-                VmResponse::Err(SysError::new(ENOTSUP))
-            }
-            VmRequest::Swap(SwapCommand::StartPageFaultLogging) => {
-                #[cfg(feature = "swap")]
-                if let Some(swap_controller) = swap_controller {
-                    return match swap_controller.start_page_fault_logging() {
-                        Ok(()) => VmResponse::Ok,
-                        Err(e) => {
-                            error!("swap log_page_fault failed: {}", e);
                             VmResponse::Err(SysError::new(EINVAL))
                         }
                     };
@@ -1108,8 +1248,17 @@ impl VmRequest {
                 VmResponse::Ok
             }
             VmRequest::Gpe(gpe) => {
-                if pm.is_some() {
-                    pm.as_ref().unwrap().lock().gpe_evt(gpe);
+                if let Some(pm) = pm.as_ref() {
+                    pm.lock().gpe_evt(gpe);
+                    VmResponse::Ok
+                } else {
+                    error!("{:#?} not supported", *self);
+                    VmResponse::Err(SysError::new(ENOTSUP))
+                }
+            }
+            VmRequest::PciPme(requester_id) => {
+                if let Some(pm) = pm.as_ref() {
+                    pm.lock().pme_evt(requester_id);
                     VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
@@ -1117,13 +1266,7 @@ impl VmRequest {
                 }
             }
             VmRequest::MakeRT => {
-                #[allow(unused_variables)] // `handle` is unused on Windows.
-                for (handle, channel) in vcpu_handles {
-                    if let Err(e) = channel.send(VcpuControl::MakeRT) {
-                        error!("failed to send MakeRT: {}", e);
-                    }
-                    kill_handle(handle);
-                }
+                kick_vcpus(VcpuControl::MakeRT);
                 VmResponse::Ok
             }
             #[cfg(feature = "balloon")]
@@ -1261,6 +1404,40 @@ impl VmRequest {
                 }
             }
             VmRequest::HotPlugCommand { device: _, add: _ } => VmResponse::Ok,
+            VmRequest::Snapshot(SnapshotCommand::Take { ref snapshot_path }) => {
+                let response: SnapshotControlResult = match do_while_vcpus_suspended(
+                    &kick_vcpus,
+                    state_from_vcpu_channel,
+                    vcpu_size,
+                    || {
+                        device_control_tube.send(&DeviceControlCommand::SnapshotDevices {
+                            snapshot_path: snapshot_path.clone(),
+                        })
+                    },
+                    device_control_tube,
+                ) {
+                    Ok(res) => res,
+                    Err(e) => return VmResponse::Err(e),
+                };
+                VmResponse::SnapshotResponse(response)
+            }
+            VmRequest::Restore(RestoreCommand::Apply { ref restore_path }) => {
+                let response: RestoreControlResult = match do_while_vcpus_suspended(
+                    &kick_vcpus,
+                    state_from_vcpu_channel,
+                    vcpu_size,
+                    || {
+                        device_control_tube.send(&DeviceControlCommand::RestoreDevices {
+                            restore_path: restore_path.clone(),
+                        })
+                    },
+                    device_control_tube,
+                ) {
+                    Ok(res) => res,
+                    Err(e) => return VmResponse::Err(e),
+                };
+                VmResponse::RestoreResponse(response)
+            }
         }
     }
 }
@@ -1291,6 +1468,10 @@ pub enum VmResponse {
     BatResponse(BatControlResult),
     /// Results of swap status command.
     SwapStatus(SwapStatus),
+    /// Results of snapshot commands.
+    SnapshotResponse(SnapshotControlResult),
+    /// Results of restore commands.
+    RestoreResponse(RestoreControlResult),
 }
 
 impl Display for VmResponse {
@@ -1329,6 +1510,8 @@ impl Display for VmResponse {
                         .unwrap_or_else(|_| "invalid_response".to_string()),
                 )
             }
+            SnapshotResponse(result) => write!(f, "snapshot control request result {:?}", result),
+            RestoreResponse(result) => write!(f, "restore control request result {:?}", result),
         }
     }
 }

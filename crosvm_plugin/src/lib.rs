@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(unix)]
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #![allow(non_camel_case_types)]
 
@@ -308,7 +309,7 @@ impl crosvm {
     }
 
     fn get_id_allocator(&self) -> &IdAllocator {
-        &*self.id_allocator
+        &self.id_allocator
     }
 
     fn main_transaction(
@@ -1427,7 +1428,7 @@ pub unsafe extern "C" fn crosvm_new_connection(self_: *mut crosvm, out: *mut *mu
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_destroy_connection(self_: *mut *mut crosvm) -> c_int {
     let _u = record(Stat::DestroyConnection);
-    Box::from_raw(*self_);
+    drop(Box::from_raw(*self_));
     *self_ = null_mut();
     0
 }

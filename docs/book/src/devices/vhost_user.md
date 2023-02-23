@@ -14,7 +14,7 @@ crosvm VMM work together.
 
 Let's take a block device as an example and see how to start vhost-user devices.
 
-First, start vhost-user block backend with `crosvm device` command, which waits for a vmm process
+First, start vhost-user block backend with `crosvm devices` command, which waits for a vmm process
 connecting to the socket.
 
 ```sh
@@ -25,9 +25,7 @@ mkfs.ext4 disk.img
 VHOST_USER_SOCK=/tmp/vhost-user.socket
 
 # Start vhost-user block backend listening on $VHOST_USER_SOCK
-crosvm device block \
-  --socket "${VHOST_USER_SOCK}" \
-  --file disk.img
+crosvm devices --block vhost=${VHOST_USER_SOCK},path=disk.img
 ```
 
 Then, open another terminal and start a vmm process with `--vhost-user-blk` flag.
@@ -36,7 +34,7 @@ Then, open another terminal and start a vmm process with `--vhost-user-blk` flag
 crosvm run \
   --vhost-user-blk "${VHOST_USER_SOCK}" \
   <usual crosvm arguments>
-  vmlinux
+  /path/to/bzImage
 ```
 
 As a result, `disk.img` should be exposed as `/dev/vda` just like with `--block disk.img`.

@@ -15,7 +15,7 @@ use serde::Serializer;
 use thiserror::Error as ThisError;
 
 /// Identifies a single component of a [`PciAddress`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PciAddressComponent {
     Domain,
     Bus,
@@ -24,7 +24,7 @@ pub enum PciAddressComponent {
 }
 
 /// PCI address parsing and conversion errors.
-#[derive(ThisError, Debug, PartialEq)]
+#[derive(ThisError, Debug, PartialEq, Eq)]
 #[sorted]
 pub enum Error {
     /// The specified component was outside the valid range.
@@ -320,6 +320,13 @@ impl PciAddress {
     /// |   Device   | Function  |
     pub fn acpi_adr(&self) -> u32 {
         ((Self::DEVICE_MASK & self.dev as u32) << 16) | (Self::FUNCTION_MASK & self.func as u32)
+    }
+
+    /// Convert B:D:F PCI address to a PCI PME Requester ID.
+    ///
+    /// The output is identical to `to_u32()` except that only the lower 16 bits are needed
+    pub fn pme_requester_id(&self) -> u16 {
+        self.to_u32() as u16
     }
 
     /// Returns true if the address points to PCI root host-bridge.

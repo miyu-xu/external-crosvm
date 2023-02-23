@@ -4,16 +4,16 @@
 
 use std::path::PathBuf;
 
+use argh::FromArgValue;
 use argh::FromArgs;
 use cros_async::ExecutorKind;
 use devices::virtio::block::block::DiskOption;
 use devices::virtio::vhost::user::device;
 use devices::virtio::vhost::user::VhostUserParams;
 use devices::SerialParameters;
+use jail::JailConfig;
 
-use crate::crosvm::config::from_key_values;
 use crate::crosvm::config::validate_serial_parameters;
-use crate::crosvm::config::JailConfig;
 
 #[derive(FromArgs)]
 #[argh(subcommand)]
@@ -23,14 +23,12 @@ pub enum DeviceSubcommand {
     #[cfg(feature = "audio")]
     Snd(device::SndOptions),
     Fs(device::FsOptions),
-    #[cfg(feature = "gpu")]
-    Gpu(device::GpuOptions),
     Vsock(device::VsockOptions),
     Wl(device::WlOptions),
 }
 
 fn parse_vu_serial_options(s: &str) -> Result<VhostUserParams<SerialParameters>, String> {
-    let params: VhostUserParams<SerialParameters> = from_key_values(s)?;
+    let params = VhostUserParams::<SerialParameters>::from_arg_value(s)?;
 
     validate_serial_parameters(&params.device)?;
 
@@ -95,7 +93,14 @@ pub struct DevicesCommand {
     pub serial: Vec<VhostUserParams<SerialParameters>>,
 
     #[argh(option, arg_name = "block options")]
-    /// start a block device (see help from run command for options)
+    /// start a block device.
+    /// The value must be a comma separated key-value pairs in the
+    /// form of `vhost=PATH[,block options]`.
+    /// Possible key values:
+    ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
+    ///        This parameter must be given in first position.
+    ///     block options:
+    ///        See help from `crosvm run` command.
     pub block: Vec<VhostUserParams<DiskOption>>,
 
     #[argh(option, short = 's', arg_name = "PATH")]

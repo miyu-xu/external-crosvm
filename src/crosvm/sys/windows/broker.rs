@@ -31,19 +31,23 @@ use base::error;
 use base::generate_uuid;
 use base::info;
 use base::named_pipes;
-use base::named_pipes::BlockingMode;
-use base::named_pipes::FramingMode;
 use base::syslog;
 use base::warn;
 use base::AsRawDescriptor;
+use base::BlockingMode;
 use base::Descriptor;
 use base::DuplicateHandleRequest;
 use base::DuplicateHandleResponse;
 use base::Event;
 use base::EventToken;
+use base::FramingMode;
 use base::RawDescriptor;
 use base::ReadNotifier;
+use base::RecvTube;
 use base::SafeDescriptor;
+use base::SendTube;
+#[cfg(feature = "gpu")]
+use base::StreamChannel;
 use base::Timer;
 use base::Tube;
 use base::WaitContext;
@@ -64,6 +68,10 @@ use crosvm_cli::sys::windows::exit::ExitCode;
 use crosvm_cli::sys::windows::exit::ExitCodeWrapper;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::device::gpu::sys::windows::GpuBackendConfig;
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::device::gpu::sys::windows::GpuVmmConfig;
 #[cfg(feature = "slirp")]
 use devices::virtio::vhost::user::device::NetBackendConfig;
 #[cfg(feature = "gpu")]
@@ -75,6 +83,8 @@ use metrics::MetricEventType;
 use net_util::slirp::sys::windows::SlirpStartupConfig;
 #[cfg(feature = "slirp")]
 use net_util::slirp::sys::windows::SLIRP_BUFFER_SIZE;
+use serde::Deserialize;
+use serde::Serialize;
 use tube_transporter::TubeToken;
 use tube_transporter::TubeTransferData;
 use tube_transporter::TubeTransporter;
@@ -83,30 +93,16 @@ use win_util::ProcessType;
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::um::processthreadsapi::TerminateProcess;
 
+use crate::sys::windows::get_gpu_product_configs;
 use crate::Config;
 
 const KILL_CHILD_EXIT_CODE: u32 = 1;
 
-/// With the GPU case, only the backend needs the event devices (input device source end), so
-/// we have two structs. This one is sent to the backend, and the other goes to the main process.
-#[cfg(feature = "gpu")]
-struct GpuDeviceBackend {
-    bootstrap_tube: Tube,
-    vhost_user: Tube,
-    event_devices: Vec<EventDevice>,
-}
-
-/// Main process end for a GPU device.
-#[cfg(feature = "gpu")]
-struct GpuDeviceVMM {
-    bootstrap_tube: Tube,
-    vhost_user: Tube,
-}
-
-/// Example of the function that would be in linux.rs.
-#[cfg(feature = "gpu")]
-fn platform_create_gpus(_cfg: Config) -> Vec<(GpuDeviceBackend, GpuDeviceVMM)> {
-    unimplemented!()
+/// Tubes created by the broker and sent to child processes via the bootstrap tube.
+#[derive(Serialize, Deserialize)]
+pub struct BrokerTubes {
+    pub vm_evt_wrtube: SendTube,
+    pub vm_evt_rdtube: RecvTube,
 }
 
 /// This struct represents a configured "disk" device as returned by the platform's API. There will
@@ -138,6 +134,7 @@ fn process_policy(process_type: ProcessType, cfg: &Config) -> sandbox::policy::P
         ProcessType::Metrics => sandbox::policy::METRICS,
         ProcessType::Net => sandbox::policy::NET,
         ProcessType::Slirp => sandbox::policy::SLIRP,
+        ProcessType::Gpu => sandbox::policy::GPU,
     };
     #[cfg(feature = "asan")]
     adjust_asan_policy(&mut policy);
@@ -518,7 +515,7 @@ fn run_internal(mut cfg: Config) -> Result<()> {
     let mut metric_tubes = Vec::new();
     let metrics_controller = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
-        &["run-metrics"],
+        ["run-metrics"],
         get_log_path(&cfg, "metrics_stdout.log"),
         get_log_path(&cfg, "metrics_stderr.log"),
         ProcessType::Metrics,
@@ -539,7 +536,7 @@ fn run_internal(mut cfg: Config) -> Result<()> {
 
     let mut main_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
-        &["run-main"],
+        ["run-main"],
         get_log_path(&cfg, "main_stdout.log"),
         get_log_path(&cfg, "main_stderr.log"),
         ProcessType::Main,
@@ -578,6 +575,38 @@ fn run_internal(mut cfg: Config) -> Result<()> {
         &process_invariants,
     )?;
 
+    let (vm_evt_wrtube, vm_evt_rdtube) =
+        Tube::directional_pair().context("failed to create vm event tube")?;
+
+    #[cfg(feature = "gpu")]
+    let gpu_cfg = platform_create_gpu(
+        &cfg,
+        &mut main_child,
+        &mut exit_events,
+        vm_evt_wrtube
+            .try_clone()
+            .exit_context(Exit::CloneEvent, "failed to clone event")?,
+    )?;
+
+    #[cfg(feature = "gpu")]
+    let _gpu_child = if cfg.vhost_user_gpu.is_empty() {
+        // Pass both backend and frontend configs to main process.
+        cfg.gpu_backend_config = Some(gpu_cfg.0);
+        cfg.gpu_vmm_config = Some(gpu_cfg.1);
+        None
+    } else {
+        Some(start_up_gpu(
+            &mut cfg,
+            gpu_cfg,
+            &mut main_child,
+            &mut children,
+            &mut wait_ctx,
+            &mut metric_tubes,
+            #[cfg(feature = "process-invariants")]
+            &process_invariants,
+        )?)
+    };
+
     // Wait until all device processes are spun up so main TubeTransporter will have all the
     // device control and Vhost tubes.
     main_child
@@ -600,29 +629,32 @@ fn run_internal(mut cfg: Config) -> Result<()> {
     main_child.bootstrap_tube.send(&exit_event).unwrap();
     exit_events.push(exit_event);
 
+    let broker_tubes = BrokerTubes {
+        vm_evt_wrtube,
+        vm_evt_rdtube,
+    };
+    main_child.bootstrap_tube.send(&broker_tubes).unwrap();
+
     // Setup our own metrics agent
     {
         let broker_metrics = metrics_tube_pair(&mut metric_tubes)?;
         metrics::initialize(broker_metrics);
-        #[cfg(feature = "kiwi")]
-        {
-            let use_vulkan = if cfg!(feature = "gpu") {
-                match &cfg.gpu_parameters {
-                    Some(params) => Some(params.use_vulkan),
-                    None => {
-                        warn!("No GPU parameters set on crosvm config.");
-                        None
-                    }
+        let use_vulkan = if cfg!(feature = "gpu") {
+            match &cfg.gpu_parameters {
+                Some(params) => Some(params.use_vulkan),
+                None => {
+                    warn!("No GPU parameters set on crosvm config.");
+                    None
                 }
-            } else {
-                None
-            };
-            anti_tamper::setup_common_metric_invariants(
-                &cfg.product_version,
-                &cfg.product_channel,
-                &use_vulkan,
-            );
-        }
+            }
+        } else {
+            None
+        };
+        anti_tamper::setup_common_metric_invariants(
+            &cfg.product_version,
+            &cfg.product_channel,
+            &use_vulkan.unwrap_or_default(),
+        );
     }
 
     // We have all the metrics tubes from other children, so give them to the metrics controller
@@ -796,10 +828,7 @@ impl Supervisor {
     }
 
     fn all_non_metrics_processes_exited(&self) -> bool {
-        #[cfg(not(feature = "kiwi"))]
-        return self.children.len() == 0;
-        #[cfg(feature = "kiwi")]
-        return self.children.len() == 0 || self.is_only_metrics_process_running();
+        self.children.len() == 0 || self.is_only_metrics_process_running()
     }
 
     fn start_exit_timer(&mut self, timeout_token: Token) -> Result<()> {
@@ -1066,7 +1095,7 @@ fn spawn_block_backend(
     vhost_user_device_tube.set_target_pid(main_child.alias_pid);
     let block_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
-        &["device", "block"],
+        ["device", "block"],
         get_log_path(cfg, &format!("disk_{}_stdout.log", log_index)),
         get_log_path(cfg, &format!("disk_{}_stderr.log", log_index)),
         ProcessType::Block,
@@ -1127,7 +1156,7 @@ where
         )
         .exit_context(Exit::SandboxError, "sandbox operation failed")?;
     policy
-        .set_job_level(process_policy.job_level, 0)
+        .set_job_level(process_policy.job_level, process_policy.ui_exceptions)
         .exit_context(Exit::SandboxError, "sandbox operation failed")?;
     policy
         .set_integrity_level(process_policy.integrity_level)
@@ -1250,8 +1279,8 @@ fn start_up_net_backend(
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<(ChildProcess, ChildProcess)> {
     let (host_pipe, guest_pipe) = named_pipes::pair_with_buffer_size(
-        &FramingMode::Message,
-        &BlockingMode::Wait,
+        &FramingMode::Message.into(),
+        &BlockingMode::Blocking.into(),
         /* timeout= */ 0,
         /* buffer_size= */ SLIRP_BUFFER_SIZE,
         /* overlapped= */ true,
@@ -1318,7 +1347,7 @@ fn spawn_slirp(
 ) -> Result<ChildProcess> {
     let slirp_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
-        &["run-slirp"],
+        ["run-slirp"],
         get_log_path(cfg, "slirp_stdout.log"),
         get_log_path(cfg, "slirp_stderr.log"),
         ProcessType::Slirp,
@@ -1353,7 +1382,7 @@ fn spawn_net_backend(
 
     let net_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
-        &["device", "net"],
+        ["device", "net"],
         get_log_path(cfg, "net_stdout.log"),
         get_log_path(cfg, "net_stderr.log"),
         ProcessType::Net,
@@ -1381,6 +1410,142 @@ fn spawn_net_backend(
     Ok(net_child)
 }
 
+#[cfg(feature = "gpu")]
+/// Create backend and VMM configurations for the GPU device.
+fn platform_create_gpu(
+    cfg: &Config,
+    #[allow(unused_variables)] main_child: &mut ChildProcess,
+    exit_events: &mut Vec<Event>,
+    exit_evt_wrtube: SendTube,
+) -> Result<(GpuBackendConfig, GpuVmmConfig)> {
+    let exit_event = Event::new().exit_context(Exit::CreateEvent, "failed to create exit event")?;
+    exit_events.push(
+        exit_event
+            .try_clone()
+            .exit_context(Exit::CloneEvent, "failed to clone event")?,
+    );
+
+    let mut event_devices = vec![];
+    let mut input_event_multi_touch_pipes = vec![];
+    let mut input_event_mouse_pipes = vec![];
+    let mut input_event_keyboard_pipes = vec![];
+
+    for _ in cfg.virtio_multi_touch.iter() {
+        let (event_device_pipe, virtio_input_pipe) =
+            StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
+        event_devices.push(EventDevice::touchscreen(event_device_pipe));
+        input_event_multi_touch_pipes.push(virtio_input_pipe);
+    }
+
+    for _ in cfg.virtio_mice.iter() {
+        let (event_device_pipe, virtio_input_pipe) =
+            StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
+        event_devices.push(EventDevice::mouse(event_device_pipe));
+        input_event_mouse_pipes.push(virtio_input_pipe);
+    }
+
+    // One keyboard
+    let (event_device_pipe, virtio_input_pipe) =
+        StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+            .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
+    event_devices.push(EventDevice::keyboard(event_device_pipe));
+    input_event_keyboard_pipes.push(virtio_input_pipe);
+
+    let (backend_config_product, vmm_config_product) =
+        get_gpu_product_configs(cfg, main_child.alias_pid)?;
+
+    let backend_config = GpuBackendConfig {
+        device_vhost_user_tube: None,
+        exit_event,
+        exit_evt_wrtube,
+        event_devices,
+        params: cfg
+            .gpu_parameters
+            .as_ref()
+            .expect("missing GpuParameters in config")
+            .clone(),
+        product_config: backend_config_product,
+    };
+
+    let vmm_config = GpuVmmConfig {
+        main_vhost_user_tube: None,
+        input_event_multi_touch_pipes,
+        input_event_mouse_pipes,
+        input_event_keyboard_pipes,
+        product_config: vmm_config_product,
+    };
+
+    Ok((backend_config, vmm_config))
+}
+
+#[cfg(feature = "gpu")]
+/// Returns a gpu child process for vhost-user GPU.
+fn start_up_gpu(
+    cfg: &mut Config,
+    gpu_cfg: (GpuBackendConfig, GpuVmmConfig),
+    main_child: &mut ChildProcess,
+    children: &mut HashMap<u32, ChildCleanup>,
+    wait_ctx: &mut WaitContext<Token>,
+    metric_tubes: &mut Vec<Tube>,
+    #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
+) -> Result<ChildProcess> {
+    let (mut backend_cfg, mut vmm_cfg) = gpu_cfg;
+
+    let (mut main_vhost_user_tube, mut device_host_user_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+
+    let gpu_child = spawn_child(
+        current_exe().unwrap().to_str().unwrap(),
+        ["device", "gpu"],
+        get_log_path(cfg, "gpu_stdout.log"),
+        get_log_path(cfg, "gpu_stderr.log"),
+        ProcessType::Gpu,
+        children,
+        wait_ctx,
+        /* skip_bootstrap= */
+        #[cfg(test)]
+        false,
+        /* use_sandbox= */
+        cfg.jail_config.is_some(),
+        vec![],
+        cfg,
+    )?;
+
+    gpu_child
+        .tube_transporter
+        .serialize_and_transport(gpu_child.process_id)
+        .exit_context(Exit::TubeTransporterInit, "failed to initialize tube")?;
+
+    // Update target PIDs to new child.
+    device_host_user_tube.set_target_pid(main_child.alias_pid);
+    main_vhost_user_tube.set_target_pid(gpu_child.alias_pid);
+
+    // Insert vhost-user tube to backend / frontend configs.
+    backend_cfg.device_vhost_user_tube = Some(device_host_user_tube);
+    vmm_cfg.main_vhost_user_tube = Some(main_vhost_user_tube);
+
+    // Send VMM config to main process. Note we don't set gpu_backend_config, since it is passed to
+    // the child.
+    cfg.gpu_vmm_config = Some(vmm_cfg);
+
+    let startup_args = CommonChildStartupArgs::new(
+        get_log_path(cfg, "gpu_syslog.log"),
+        #[cfg(feature = "crash-report")]
+        create_crash_report_attrs(cfg, product_type::GPU),
+        #[cfg(feature = "process-invariants")]
+        process_invariants.clone(),
+        Some(metrics_tube_pair(metric_tubes)?),
+    )?;
+    gpu_child.bootstrap_tube.send(&startup_args).unwrap();
+
+    // Send backend config to GPU child.
+    gpu_child.bootstrap_tube.send(&backend_cfg).unwrap();
+
+    Ok(gpu_child)
+}
+
 /// Spawns a child process, sending it a control tube as the --bootstrap=HANDLE_NUMBER argument.
 /// stdout & stderr are redirected to the provided file paths.
 fn spawn_child<I, S>(
@@ -1401,8 +1566,8 @@ where
     S: AsRef<OsStr>,
 {
     let (tube_transport_pipe, tube_transport_main_child) = named_pipes::pair(
-        &FramingMode::Message,
-        &BlockingMode::Wait,
+        &FramingMode::Message.into(),
+        &BlockingMode::Blocking.into(),
         /* timeout= */ 0,
     )
     .exit_context(Exit::CreateSocket, "failed to create socket")?;
@@ -1563,7 +1728,7 @@ mod tests {
             let exit_events = vec![Event::new().unwrap()];
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "2"],
+                ["127.0.0.1", "-n", "2"],
                 None,
                 None,
                 ProcessType::Main,
@@ -1591,7 +1756,7 @@ mod tests {
             let exit_events = vec![Event::new().unwrap()];
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "4"],
+                ["127.0.0.1", "-n", "4"],
                 None,
                 None,
                 ProcessType::Main,
@@ -1604,7 +1769,7 @@ mod tests {
             );
             let _child_device = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "2"],
+                ["127.0.0.1", "-n", "2"],
                 None,
                 None,
                 ProcessType::Block,
@@ -1631,7 +1796,7 @@ mod tests {
             let exit_events = vec![Event::new().unwrap()];
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "2"],
+                ["127.0.0.1", "-n", "2"],
                 None,
                 None,
                 ProcessType::Main,
@@ -1644,7 +1809,7 @@ mod tests {
             );
             let _child_device = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "11"],
+                ["127.0.0.1", "-n", "11"],
                 None,
                 None,
                 ProcessType::Block,
@@ -1676,7 +1841,7 @@ mod tests {
             let exit_events = vec![Event::new().unwrap()];
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "11"],
+                ["127.0.0.1", "-n", "11"],
                 None,
                 None,
                 ProcessType::Main,
@@ -1689,7 +1854,7 @@ mod tests {
             );
             let _child_device = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "2"],
+                ["127.0.0.1", "-n", "2"],
                 None,
                 None,
                 ProcessType::Block,
@@ -1721,7 +1886,7 @@ mod tests {
             let exit_events = vec![Event::new().unwrap()];
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "2"],
+                ["127.0.0.1", "-n", "2"],
                 None,
                 None,
                 ProcessType::Main,
@@ -1734,7 +1899,7 @@ mod tests {
             );
             let _child_device = spawn_child(
                 "cmd",
-                &["/c", "exit -1"],
+                ["/c", "exit -1"],
                 None,
                 None,
                 ProcessType::Block,
@@ -1769,7 +1934,7 @@ mod tests {
             let mut children: HashMap<u32, ChildCleanup> = HashMap::new();
             let _child_main = spawn_child(
                 "ping",
-                &["127.0.0.1", "-n", "3"],
+                ["127.0.0.1", "-n", "3"],
                 None,
                 None,
                 ProcessType::Main,

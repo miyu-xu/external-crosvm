@@ -9,6 +9,8 @@
 
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 #[cfg(feature = "video-encoder")]
 use base::info;
@@ -17,11 +19,11 @@ use base::Error as SysError;
 use base::Event;
 use base::RawDescriptor;
 use base::Tube;
-use data_model::DataInit;
 use data_model::Le32;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
 
 use crate::virtio;
 use crate::virtio::copy_config;
@@ -155,15 +157,13 @@ pub fn build_config(backend: VideoBackendType) -> virtio_video_config {
     let mut device_name = [0u8; 32];
     match backend {
         #[cfg(feature = "libvda")]
-        VideoBackendType::Libvda => (&mut device_name[0..6]).copy_from_slice("libvda".as_bytes()),
+        VideoBackendType::Libvda => device_name[0..6].copy_from_slice("libvda".as_bytes()),
         #[cfg(feature = "libvda")]
-        VideoBackendType::LibvdaVd => {
-            (&mut device_name[0..8]).copy_from_slice("libvdavd".as_bytes())
-        }
+        VideoBackendType::LibvdaVd => device_name[0..8].copy_from_slice("libvdavd".as_bytes()),
         #[cfg(feature = "ffmpeg")]
-        VideoBackendType::Ffmpeg => (&mut device_name[0..6]).copy_from_slice("ffmpeg".as_bytes()),
+        VideoBackendType::Ffmpeg => device_name[0..6].copy_from_slice("ffmpeg".as_bytes()),
         #[cfg(feature = "vaapi")]
-        VideoBackendType::Vaapi => (&mut device_name[0..5]).copy_from_slice("vaapi".as_bytes()),
+        VideoBackendType::Vaapi => device_name[0..5].copy_from_slice("vaapi".as_bytes()),
     };
     virtio_video_config {
         version: Le32::from(0),
@@ -199,55 +199,35 @@ impl VirtioDevice for VideoDevice {
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         let mut cfg = build_config(self.backend);
-        copy_config(data, 0, cfg.as_mut_slice(), offset);
+        copy_config(data, 0, cfg.as_bytes_mut(), offset);
     }
 
-    // Allow error! and early return anywhere in function
-    #[allow(clippy::needless_return)]
     fn activate(
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<virtio::queue::Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
+        mut queues: Vec<(virtio::queue::Queue, Event)>,
+    ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
-            error!(
+            return Err(anyhow!(
                 "wrong number of queues are passed: expected {}, actual {}",
                 queues.len(),
                 QUEUE_SIZES.len()
-            );
-            return;
-        }
-        if queue_evts.len() != QUEUE_SIZES.len() {
-            error!(
-                "wrong number of events are passed: expected {}, actual {}",
-                queue_evts.len(),
-                QUEUE_SIZES.len()
-            );
+            ));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to create kill Event pair: {:?}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
-        let cmd_queue = queues.remove(0);
-        let cmd_evt = queue_evts.remove(0);
-        let event_queue = queues.remove(0);
-        let event_evt = queue_evts.remove(0);
+        let (cmd_queue, cmd_evt) = queues.remove(0);
+        let (event_queue, event_evt) = queues.remove(0);
         let backend = self.backend;
-        let resource_bridge = match self.resource_bridge.take() {
-            Some(r) => r,
-            None => {
-                error!("no resource bridge is passed");
-                return;
-            }
-        };
+        let resource_bridge = self
+            .resource_bridge
+            .take()
+            .context("no resource bridge is passed")?;
         let mut worker = Worker::new(
             mem.clone(),
             cmd_queue,
@@ -259,7 +239,7 @@ impl VirtioDevice for VideoDevice {
         let worker_result = match &self.device_type {
             #[cfg(feature = "video-decoder")]
             VideoDeviceType::Decoder => thread::Builder::new()
-                .name("virtio video decoder".to_owned())
+                .name("v_video_decoder".to_owned())
                 .spawn(move || {
                     let device: Box<dyn Device> =
                         match create_decoder_device(backend, resource_bridge, mem) {
@@ -277,7 +257,7 @@ impl VirtioDevice for VideoDevice {
                 }),
             #[cfg(feature = "video-encoder")]
             VideoDeviceType::Encoder => thread::Builder::new()
-                .name("virtio video encoder".to_owned())
+                .name("v_video_encoder".to_owned())
                 .spawn(move || {
                     let device: Box<dyn Device> = match backend {
                         #[cfg(feature = "libvda")]
@@ -330,13 +310,13 @@ impl VirtioDevice for VideoDevice {
             // A device will never be created for a device type not enabled
             device_type => unreachable!("Not compiled with {:?} enabled", device_type),
         };
-        if let Err(e) = worker_result {
-            error!(
-                "failed to spawn virtio_video worker for {:?}: {}",
-                &self.device_type, e
-            );
-            return;
-        }
+        worker_result.with_context(|| {
+            format!(
+                "failed to spawn virtio_video worker for {:?}",
+                &self.device_type
+            )
+        })?;
+        Ok(())
     }
 }
 

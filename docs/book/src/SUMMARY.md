@@ -2,11 +2,13 @@
 
 - [Introduction](./introduction.md)
 - [Building Crosvm](./building_crosvm.md)
+  - [Building Crosvm on Windows](./building_crosvm/windows.md)
 - [Testing](./testing.md)
 - [Running Crosvm](./running_crosvm/index.md)
   - [Example Usage](./running_crosvm/example_usage.md)
   - [Advanced Usage](./running_crosvm/advanced_usage.md)
   - [Custom Kernel / Rootfs](./running_crosvm/custom_kernel_rootfs.md)
+  - [Options and Configuration Files](./running_crosvm/options.md)
   - [System Requirements](./running_crosvm/requirements.md)
   - [Features](./running_crosvm/features.md)
   - [Programmatic Interaction](./running_crosvm/programmatic_interaction.md)

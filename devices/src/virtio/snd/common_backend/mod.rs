@@ -8,9 +8,9 @@ use std::io;
 use std::rc::Rc;
 use std::thread;
 
+use anyhow::anyhow;
 use anyhow::Context;
 use audio_streams::BoxError;
-use audio_streams::StreamSourceGenerator;
 use base::debug;
 use base::error;
 use base::warn;
@@ -23,7 +23,6 @@ use cros_async::sync::Mutex as AsyncMutex;
 use cros_async::AsyncError;
 use cros_async::EventAsync;
 use cros_async::Executor;
-use data_model::DataInit;
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Canceled;
@@ -35,6 +34,7 @@ use futures::Future;
 use futures::FutureExt;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
 
 use crate::virtio::async_utils;
 use crate::virtio::copy_config;
@@ -48,6 +48,9 @@ use crate::virtio::snd::parameters::Parameters;
 use crate::virtio::snd::parameters::StreamSourceBackend;
 use crate::virtio::snd::sys::create_stream_source_generators as sys_create_stream_source_generators;
 use crate::virtio::snd::sys::set_audio_thread_priority;
+use crate::virtio::snd::sys::SysAsyncStreamObjects;
+use crate::virtio::snd::sys::SysAudioStreamSourceGenerator;
+use crate::virtio::snd::sys::SysBufferWriter;
 use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
@@ -71,6 +74,9 @@ pub enum Error {
     /// Creating stream failed.
     #[error("Failed to create stream: {0}")]
     CreateStream(BoxError),
+    /// Creating stream failed.
+    #[error("No stream source found.")]
+    EmptyStreamSource,
     /// Creating kill event failed.
     #[error("Failed to create kill event: {0}")]
     CreateKillEvent(SysError),
@@ -131,11 +137,17 @@ pub enum Error {
 }
 
 pub enum DirectionalStream {
-    Input(Box<dyn audio_streams::capture::AsyncCaptureBufferStream>),
-    Output(Box<dyn audio_streams::AsyncPlaybackBufferStream>),
+    Input(
+        Box<dyn audio_streams::capture::AsyncCaptureBufferStream>,
+        usize, // `period_size` in `usize`
+    ),
+    Output(
+        Box<dyn audio_streams::AsyncPlaybackBufferStream>,
+        Box<dyn PlaybackBufferWriter>,
+    ),
 }
 
-#[derive(Copy, Clone, std::cmp::PartialEq)]
+#[derive(Copy, Clone, std::cmp::PartialEq, Eq)]
 pub enum WorkerStatus {
     Pause = 0,
     Running = 1,
@@ -170,10 +182,10 @@ const SUPPORTED_FRAME_RATES: u64 = 1 << VIRTIO_SND_PCM_RATE_8000
 
 // Response from pcm_worker to pcm_queue
 pub struct PcmResponse {
-    desc_index: u16,
-    status: virtio_snd_pcm_status, // response to the pcm message
-    writer: Writer,
-    done: Option<oneshot::Sender<()>>, // when pcm response is written to the queue
+    pub(crate) desc_index: u16,
+    pub(crate) status: virtio_snd_pcm_status, // response to the pcm message
+    pub(crate) writer: Writer,
+    pub(crate) done: Option<oneshot::Sender<()>>, // when pcm response is written to the queue
 }
 
 pub struct VirtioSnd {
@@ -209,7 +221,7 @@ impl VirtioSnd {
 pub(crate) fn create_stream_source_generators(
     params: &Parameters,
     snd_data: &SndData,
-) -> Vec<Box<dyn StreamSourceGenerator>> {
+) -> Vec<SysAudioStreamSourceGenerator> {
     match params.backend {
         StreamSourceBackend::NULL => create_null_stream_source_generators(snd_data),
         StreamSourceBackend::Sys(backend) => {
@@ -353,38 +365,32 @@ impl VirtioDevice for VirtioSnd {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        copy_config(data, 0, self.cfg.as_slice(), offset)
+        copy_config(data, 0, self.cfg.as_bytes(), offset)
     }
 
     fn activate(
         &mut self,
         guest_mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != self.queue_sizes.len() || queue_evts.len() != self.queue_sizes.len() {
-            error!(
+        queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != self.queue_sizes.len() {
+            return Err(anyhow!(
                 "snd: expected {} queues, got {}",
                 self.queue_sizes.len(),
                 queues.len()
-            );
+            ));
         }
 
-        let (self_kill_evt, kill_evt) =
-            match Event::new().and_then(|evt| Ok((evt.try_clone()?, evt))) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!("failed to create kill Event pair: {}", e);
-                    return;
-                }
-            };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|evt| Ok((evt.try_clone()?, evt)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
         let snd_data = self.snd_data.clone();
         let stream_source_generators = create_stream_source_generators(&self.params, &snd_data);
-        let worker_result = thread::Builder::new()
-            .name("virtio_snd w".to_string())
+        let join_handle = thread::Builder::new()
+            .name("v_snd_common".to_string())
             .spawn(move || {
                 set_audio_thread_priority();
                 if let Err(err_string) = run_worker(
@@ -392,22 +398,15 @@ impl VirtioDevice for VirtioSnd {
                     queues,
                     guest_mem,
                     snd_data,
-                    queue_evts,
                     kill_evt,
                     stream_source_generators,
                 ) {
                     error!("{}", err_string);
                 }
-            });
-
-        let join_handle = match worker_result {
-            Err(e) => {
-                error!("failed to spawn virtio_snd worker: {}", e);
-                return;
-            }
-            Ok(join_handle) => join_handle,
-        };
+            })
+            .context("failed to spawn virtio_snd worker")?;
         self.worker_threads.push(join_handle);
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -436,12 +435,11 @@ enum LoopState {
 
 fn run_worker(
     interrupt: Interrupt,
-    mut queues: Vec<Queue>,
+    queues: Vec<(Queue, Event)>,
     mem: GuestMemory,
     snd_data: SndData,
-    queue_evts: Vec<Event>,
     kill_evt: Event,
-    stream_source_generators: Vec<Box<dyn StreamSourceGenerator>>,
+    stream_source_generators: Vec<SysAudioStreamSourceGenerator>,
 ) -> Result<(), String> {
     let ex = Executor::new().expect("Failed to create an executor");
 
@@ -458,20 +456,23 @@ fn run_worker(
         .collect();
     let streams = Rc::new(AsyncMutex::new(streams));
 
-    let mut ctrl_queue = queues.remove(0);
-    let _event_queue = queues.remove(0);
-    let tx_queue = Rc::new(AsyncMutex::new(queues.remove(0)));
-    let rx_queue = Rc::new(AsyncMutex::new(queues.remove(0)));
-
-    let mut evts_async: Vec<EventAsync> = queue_evts
+    let mut queues: Vec<(Queue, EventAsync)> = queues
         .into_iter()
-        .map(|e| EventAsync::new(e, &ex).expect("Failed to create async event for queue"))
+        .map(|(q, e)| {
+            (
+                q,
+                EventAsync::new(e, &ex).expect("Failed to create async event for queue"),
+            )
+        })
         .collect();
 
-    let mut ctrl_queue_evt = evts_async.remove(0);
-    let _event_queue_evt = evts_async.remove(0);
-    let tx_queue_evt = evts_async.remove(0);
-    let rx_queue_evt = evts_async.remove(0);
+    let (mut ctrl_queue, mut ctrl_queue_evt) = queues.remove(0);
+    let (_event_queue, _event_queue_evt) = queues.remove(0);
+    let (tx_queue, tx_queue_evt) = queues.remove(0);
+    let (rx_queue, rx_queue_evt) = queues.remove(0);
+
+    let tx_queue = Rc::new(AsyncMutex::new(tx_queue));
+    let rx_queue = Rc::new(AsyncMutex::new(rx_queue));
 
     let (tx_send, mut tx_recv) = mpsc::unbounded();
     let (rx_send, mut rx_recv) = mpsc::unbounded();

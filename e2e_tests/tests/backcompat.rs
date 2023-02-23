@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 pub mod fixture;
-use fixture::Config;
-use fixture::TestVm;
+use fixture::vm::Config;
+use fixture::vm::TestVm;
 
 // Tests for possible backwards compatibility issues.
 //
@@ -15,9 +15,23 @@ use fixture::TestVm;
 // Many changes to PCI devices can cause issues, e.g. some users depend on crosvm always choosing
 // the same PCI slots for particular devices.
 #[test]
-fn backcompat_test_simple_lspci() {
+fn backcompat_test() {
     let mut vm = TestVm::new(Config::new()).unwrap();
-    let expected = include_str!("goldens/backcompat_test_simple_lspci.txt").trim();
+    backcompat_test_simple_lspci(&mut vm);
+}
+
+#[test]
+fn backcompat_test_disable_sandbox() {
+    let mut vm = TestVm::new(Config::new().disable_sandbox()).unwrap();
+    backcompat_test_simple_lspci(&mut vm);
+}
+
+fn backcompat_test_simple_lspci(vm: &mut TestVm) {
+    let expected = if cfg!(windows) {
+        include_str!("goldens/backcompat_test_simple_lspci_win.txt").trim()
+    } else {
+        include_str!("goldens/backcompat_test_simple_lspci.txt").trim()
+    };
     let result = vm
         .exec_in_guest("lspci -n")
         .unwrap()

@@ -270,7 +270,7 @@ pub unsafe fn create_file_mapping(
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum ThreadState {
     // The specified thread was not suspended.
     NotSuspended,
@@ -333,6 +333,7 @@ pub enum ProcessType {
     Metrics = 3,
     Net = 4,
     Slirp = 5,
+    Gpu = 6,
 }
 
 #[cfg(test)]

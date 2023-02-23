@@ -16,6 +16,8 @@ use std::marker::PhantomData;
 use base::Protection;
 use bitflags::bitflags;
 use data_model::DataInit;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 use crate::VringConfigData;
 
@@ -667,7 +669,6 @@ impl VhostUserVringAddr {
     }
 
     /// Create a new instance from `VringConfigData`.
-    #[cfg_attr(feature = "cargo-clippy", allow(clippy::identity_conversion))]
     pub fn from_config_data(index: u32, config_data: &VringConfigData) -> Self {
         let log_addr = config_data.log_addr.unwrap_or(0);
         VhostUserVringAddr {
@@ -1165,7 +1166,7 @@ impl QueueRegionPacked {
 
 /// Virtio shared memory descriptor.
 #[repr(packed)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, FromBytes, AsBytes)]
 pub struct VhostSharedMemoryRegion {
     /// The shared memory region's shmid.
     pub id: u8,
@@ -1174,8 +1175,6 @@ pub struct VhostSharedMemoryRegion {
     /// The length of the shared memory region.
     pub length: u64,
 }
-// Safe because it only has data and has no implicit padding.
-unsafe impl DataInit for VhostSharedMemoryRegion {}
 
 impl VhostSharedMemoryRegion {
     /// New instance of VhostSharedMemoryRegion struct

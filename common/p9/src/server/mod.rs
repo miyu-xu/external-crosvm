@@ -257,6 +257,16 @@ impl<'a, T> Deref for MaybeOwned<'a, T> {
     }
 }
 
+impl<'a, T> AsRef<T> for MaybeOwned<'a, T> {
+    fn as_ref(&self) -> &T {
+        use MaybeOwned::*;
+        match self {
+            Borrowed(borrowed) => borrowed,
+            Owned(ref owned) => owned,
+        }
+    }
+}
+
 fn ebadf() -> io::Error {
     io::Error::from_raw_os_error(libc::EBADF)
 }
@@ -300,27 +310,30 @@ fn lookup(parent: &File, name: &CStr) -> io::Result<File> {
 fn do_walk(
     proc: &File,
     wnames: Vec<String>,
-    start: File,
+    start: &File,
     ascii_casefold: bool,
     mds: &mut Vec<libc::stat64>,
 ) -> io::Result<File> {
-    let mut current = start;
+    let mut current = MaybeOwned::Borrowed(start);
 
     for wname in wnames {
         let name = string_to_cstring(wname)?;
-        current = lookup(&current, &name).or_else(|e| {
+        current = MaybeOwned::Owned(lookup(current.as_ref(), &name).or_else(|e| {
             if ascii_casefold {
                 if let Some(libc::ENOENT) = e.raw_os_error() {
-                    return ascii_casefold_lookup(proc, &current, name.to_bytes());
+                    return ascii_casefold_lookup(proc, current.as_ref(), name.to_bytes());
                 }
             }
 
             Err(e)
-        })?;
+        })?);
         mds.push(stat(&current)?);
     }
 
-    Ok(current)
+    match current {
+        MaybeOwned::Owned(owned) => Ok(owned),
+        MaybeOwned::Borrowed(borrowed) => borrowed.try_clone(),
+    }
 }
 
 fn open_fid(proc: &File, path: &File, p9_flags: u32) -> io::Result<File> {
@@ -429,38 +442,50 @@ impl Server {
         let Tframe { tag, msg } = WireFormat::decode(&mut reader.take(self.cfg.msize as u64))?;
 
         let rmsg = match msg {
-            Tmessage::Version(ref version) => self.version(version).map(Rmessage::Version),
-            Tmessage::Flush(ref flush) => self.flush(flush).and(Ok(Rmessage::Flush)),
-            Tmessage::Walk(walk) => self.walk(walk).map(Rmessage::Walk),
-            Tmessage::Read(ref read) => self.read(read).map(Rmessage::Read),
-            Tmessage::Write(ref write) => self.write(write).map(Rmessage::Write),
-            Tmessage::Clunk(ref clunk) => self.clunk(clunk).and(Ok(Rmessage::Clunk)),
-            Tmessage::Remove(ref remove) => self.remove(remove).and(Ok(Rmessage::Remove)),
-            Tmessage::Attach(ref attach) => self.attach(attach).map(Rmessage::Attach),
-            Tmessage::Auth(ref auth) => self.auth(auth).map(Rmessage::Auth),
-            Tmessage::Statfs(ref statfs) => self.statfs(statfs).map(Rmessage::Statfs),
-            Tmessage::Lopen(ref lopen) => self.lopen(lopen).map(Rmessage::Lopen),
-            Tmessage::Lcreate(lcreate) => self.lcreate(lcreate).map(Rmessage::Lcreate),
-            Tmessage::Symlink(ref symlink) => self.symlink(symlink).map(Rmessage::Symlink),
-            Tmessage::Mknod(ref mknod) => self.mknod(mknod).map(Rmessage::Mknod),
-            Tmessage::Rename(ref rename) => self.rename(rename).and(Ok(Rmessage::Rename)),
-            Tmessage::Readlink(ref readlink) => self.readlink(readlink).map(Rmessage::Readlink),
-            Tmessage::GetAttr(ref get_attr) => self.get_attr(get_attr).map(Rmessage::GetAttr),
-            Tmessage::SetAttr(ref set_attr) => self.set_attr(set_attr).and(Ok(Rmessage::SetAttr)),
-            Tmessage::XattrWalk(ref xattr_walk) => {
+            Ok(Tmessage::Version(ref version)) => self.version(version).map(Rmessage::Version),
+            Ok(Tmessage::Flush(ref flush)) => self.flush(flush).and(Ok(Rmessage::Flush)),
+            Ok(Tmessage::Walk(walk)) => self.walk(walk).map(Rmessage::Walk),
+            Ok(Tmessage::Read(ref read)) => self.read(read).map(Rmessage::Read),
+            Ok(Tmessage::Write(ref write)) => self.write(write).map(Rmessage::Write),
+            Ok(Tmessage::Clunk(ref clunk)) => self.clunk(clunk).and(Ok(Rmessage::Clunk)),
+            Ok(Tmessage::Remove(ref remove)) => self.remove(remove).and(Ok(Rmessage::Remove)),
+            Ok(Tmessage::Attach(ref attach)) => self.attach(attach).map(Rmessage::Attach),
+            Ok(Tmessage::Auth(ref auth)) => self.auth(auth).map(Rmessage::Auth),
+            Ok(Tmessage::Statfs(ref statfs)) => self.statfs(statfs).map(Rmessage::Statfs),
+            Ok(Tmessage::Lopen(ref lopen)) => self.lopen(lopen).map(Rmessage::Lopen),
+            Ok(Tmessage::Lcreate(lcreate)) => self.lcreate(lcreate).map(Rmessage::Lcreate),
+            Ok(Tmessage::Symlink(ref symlink)) => self.symlink(symlink).map(Rmessage::Symlink),
+            Ok(Tmessage::Mknod(ref mknod)) => self.mknod(mknod).map(Rmessage::Mknod),
+            Ok(Tmessage::Rename(ref rename)) => self.rename(rename).and(Ok(Rmessage::Rename)),
+            Ok(Tmessage::Readlink(ref readlink)) => self.readlink(readlink).map(Rmessage::Readlink),
+            Ok(Tmessage::GetAttr(ref get_attr)) => self.get_attr(get_attr).map(Rmessage::GetAttr),
+            Ok(Tmessage::SetAttr(ref set_attr)) => {
+                self.set_attr(set_attr).and(Ok(Rmessage::SetAttr))
+            }
+            Ok(Tmessage::XattrWalk(ref xattr_walk)) => {
                 self.xattr_walk(xattr_walk).map(Rmessage::XattrWalk)
             }
-            Tmessage::XattrCreate(ref xattr_create) => self
+            Ok(Tmessage::XattrCreate(ref xattr_create)) => self
                 .xattr_create(xattr_create)
                 .and(Ok(Rmessage::XattrCreate)),
-            Tmessage::Readdir(ref readdir) => self.readdir(readdir).map(Rmessage::Readdir),
-            Tmessage::Fsync(ref fsync) => self.fsync(fsync).and(Ok(Rmessage::Fsync)),
-            Tmessage::Lock(ref lock) => self.lock(lock).map(Rmessage::Lock),
-            Tmessage::GetLock(ref get_lock) => self.get_lock(get_lock).map(Rmessage::GetLock),
-            Tmessage::Link(link) => self.link(link).and(Ok(Rmessage::Link)),
-            Tmessage::Mkdir(mkdir) => self.mkdir(mkdir).map(Rmessage::Mkdir),
-            Tmessage::RenameAt(rename_at) => self.rename_at(rename_at).and(Ok(Rmessage::RenameAt)),
-            Tmessage::UnlinkAt(unlink_at) => self.unlink_at(unlink_at).and(Ok(Rmessage::UnlinkAt)),
+            Ok(Tmessage::Readdir(ref readdir)) => self.readdir(readdir).map(Rmessage::Readdir),
+            Ok(Tmessage::Fsync(ref fsync)) => self.fsync(fsync).and(Ok(Rmessage::Fsync)),
+            Ok(Tmessage::Lock(ref lock)) => self.lock(lock).map(Rmessage::Lock),
+            Ok(Tmessage::GetLock(ref get_lock)) => self.get_lock(get_lock).map(Rmessage::GetLock),
+            Ok(Tmessage::Link(link)) => self.link(link).and(Ok(Rmessage::Link)),
+            Ok(Tmessage::Mkdir(mkdir)) => self.mkdir(mkdir).map(Rmessage::Mkdir),
+            Ok(Tmessage::RenameAt(rename_at)) => {
+                self.rename_at(rename_at).and(Ok(Rmessage::RenameAt))
+            }
+            Ok(Tmessage::UnlinkAt(unlink_at)) => {
+                self.unlink_at(unlink_at).and(Ok(Rmessage::UnlinkAt))
+            }
+            Err(e) => {
+                // The header was successfully decoded, but the body failed to decode - send an
+                // error response for this tag.
+                let error = format!("Tframe message decode failed: {}", e);
+                Err(io::Error::new(io::ErrorKind::InvalidData, error))
+            }
         };
 
         // Errors while handling requests are never fatal.
@@ -544,11 +569,7 @@ impl Server {
         }
 
         // We need to walk the tree.  First get the starting path.
-        let start = self
-            .fids
-            .get(&walk.fid)
-            .ok_or_else(ebadf)
-            .and_then(|fid| fid.path.try_clone())?;
+        let start = &self.fids.get(&walk.fid).ok_or_else(ebadf)?.path;
 
         // Now walk the tree and break on the first error, if any.
         let expected_len = walk.wnames.len();
@@ -740,9 +761,24 @@ impl Server {
         Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP))
     }
 
-    fn readlink(&mut self, _readlink: &Treadlink) -> io::Result<Rreadlink> {
-        // symlinks are not allowed
-        Err(io::Error::from_raw_os_error(libc::EACCES))
+    fn readlink(&mut self, readlink: &Treadlink) -> io::Result<Rreadlink> {
+        let fid = self.fids.get(&readlink.fid).ok_or_else(ebadf)?;
+
+        let mut link = vec![0; libc::PATH_MAX as usize];
+
+        // Safe because this will only modify `link` and we check the return value.
+        let len = syscall!(unsafe {
+            libc::readlinkat(
+                fid.path.as_raw_fd(),
+                [0].as_ptr(),
+                link.as_mut_ptr() as *mut libc::c_char,
+                link.len(),
+            )
+        })? as usize;
+        link.truncate(len);
+        let target = String::from_utf8(link)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        Ok(Rreadlink { target })
     }
 
     fn get_attr(&mut self, get_attr: &Tgetattr) -> io::Result<Rgetattr> {

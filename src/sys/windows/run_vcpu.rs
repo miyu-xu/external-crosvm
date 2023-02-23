@@ -20,6 +20,7 @@ use std::time::Instant;
 use aarch64::AArch64 as Arch;
 use anyhow::anyhow;
 use anyhow::Result;
+use arch::CpuSet;
 use arch::LinuxArch;
 use arch::RunnableLinuxVm;
 use arch::VcpuAffinity;
@@ -168,7 +169,7 @@ impl VcpuRunThread {
         irq_chip: &mut dyn IrqChipArch,
         vcpu_count: usize,
         run_rt: bool,
-        vcpu_affinity: Option<Vec<usize>>,
+        vcpu_affinity: Option<CpuSet>,
         no_smt: bool,
         has_bios: bool,
         host_cpu_topology: bool,
@@ -211,6 +212,7 @@ impl VcpuRunThread {
             false, /* enable_pnp_data */
             no_smt,
             false, /* itmt */
+            None,  /* hybrid_type */
         ));
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -266,7 +268,7 @@ impl VcpuRunThread {
         mut irq_chip: Box<dyn IrqChipArch + 'static>,
         vcpu_count: usize,
         run_rt: bool,
-        vcpu_affinity: Option<Vec<usize>>,
+        vcpu_affinity: Option<CpuSet>,
         delay_rt: bool,
         no_smt: bool,
         start_barrier: Arc<Barrier>,
@@ -316,6 +318,7 @@ impl VcpuRunThread {
                         false, /* enable_pnp_data */
                         no_smt,
                         false, /* itmt */
+                        None,  /* hybrid_type */
                     );
 
                     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -583,11 +586,11 @@ pub fn run_all_vcpus<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         };
 
         // TSC sync mitigations may set vcpu affinity and set a TSC offset
-        let (vcpu_affinity, tsc_offset): (Option<Vec<usize>>, Option<u64>) =
+        let (vcpu_affinity, tsc_offset): (Option<CpuSet>, Option<u64>) =
             if let Some(mitigation_affinity) = tsc_sync_mitigations.get_vcpu_affinity(cpu_id) {
                 if vcpu_affinity.is_none() {
                     (
-                        Some(mitigation_affinity),
+                        Some(CpuSet::new(mitigation_affinity)),
                         tsc_sync_mitigations.get_vcpu_tsc_offset(cpu_id),
                     )
                 } else {
