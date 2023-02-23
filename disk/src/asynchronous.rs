@@ -32,7 +32,6 @@ use crate::Result;
 /// This is meant to be a transitional type, not a long-term solution for async disk support. Disk
 /// formats should be migrated to support async instead (b/219595052).
 pub struct AsyncDiskFileWrapper<T: DiskFile + Send> {
-    blocking_pool: BlockingPool,
     inner: Arc<Mutex<T>>,
 }
 
@@ -40,7 +39,6 @@ impl<T: DiskFile + Send> AsyncDiskFileWrapper<T> {
     #[allow(dead_code)] // Only used if qcow or android-sparse features are enabled
     pub fn new(disk_file: T, _ex: &Executor) -> Self {
         Self {
-            blocking_pool: BlockingPool::new(1, Duration::from_secs(10)),
             inner: Arc::new(Mutex::new(disk_file)),
         }
     }
@@ -83,21 +81,14 @@ impl<
     > AsyncDisk for AsyncDiskFileWrapper<T>
 {
     fn into_inner(self: Box<Self>) -> Box<dyn DiskFile> {
-        self.blocking_pool
-            .shutdown(None)
-            .expect("AsyncDiskFile pool shutdown failed");
         let mtx: Mutex<T> = Arc::try_unwrap(self.inner).expect("AsyncDiskFile arc unwrap failed");
         Box::new(mtx.into_inner())
     }
 
     async fn fsync(&self) -> Result<()> {
         let inner_clone = self.inner.clone();
-        self.blocking_pool
-            .spawn(move || {
                 let mut disk_file = inner_clone.lock();
                 disk_file.fsync().map_err(Error::IoFsync)
-            })
-            .await
     }
 
     async fn read_to_mem<'a>(
@@ -108,8 +99,6 @@ impl<
     ) -> Result<usize> {
         let inner_clone = self.inner.clone();
         let mem_offsets = mem_offsets.to_vec();
-        self.blocking_pool
-            .spawn(move || {
                 let mut disk_file = inner_clone.lock();
                 let mut size = 0;
                 for region in mem_offsets {
@@ -124,8 +113,6 @@ impl<
                     file_offset += bytes_read as u64;
                 }
                 Ok(size)
-            })
-            .await
     }
 
     async fn write_from_mem<'a>(
@@ -136,8 +123,6 @@ impl<
     ) -> Result<usize> {
         let inner_clone = self.inner.clone();
         let mem_offsets = mem_offsets.to_vec();
-        self.blocking_pool
-            .spawn(move || {
                 let mut disk_file = inner_clone.lock();
                 let mut size = 0;
                 for region in mem_offsets {
@@ -152,31 +137,21 @@ impl<
                     file_offset += bytes_written as u64;
                 }
                 Ok(size)
-            })
-            .await
     }
 
     async fn punch_hole(&self, file_offset: u64, length: u64) -> Result<()> {
         let inner_clone = self.inner.clone();
-        self.blocking_pool
-            .spawn(move || {
                 let mut disk_file = inner_clone.lock();
                 disk_file
                     .punch_hole(file_offset, length)
                     .map_err(Error::PunchHole)
-            })
-            .await
     }
 
     async fn write_zeroes_at(&self, file_offset: u64, length: u64) -> Result<()> {
         let inner_clone = self.inner.clone();
-        self.blocking_pool
-            .spawn(move || {
                 let mut disk_file = inner_clone.lock();
                 disk_file
                     .write_zeroes_all_at(file_offset, length as usize)
                     .map_err(Error::WriteZeroes)
-            })
-            .await
     }
 }
