@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -27,6 +29,8 @@ use vm_control::VmMsyncRequest;
 use vm_control::VmMsyncResponse;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 use super::async_utils;
 use super::copy_config;
@@ -57,7 +61,7 @@ struct virtio_pmem_config {
 // Safe because it only has data and has no implicit padding.
 unsafe impl DataInit for virtio_pmem_config {}
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
 #[repr(C)]
 struct virtio_pmem_resp {
     status_code: Le32,
@@ -66,7 +70,7 @@ struct virtio_pmem_resp {
 // Safe because it only has data and has no implicit padding.
 unsafe impl DataInit for virtio_pmem_resp {}
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
 #[repr(C)]
 struct virtio_pmem_req {
     type_: Le32,
@@ -317,54 +321,45 @@ impl VirtioDevice for Pmem {
         &mut self,
         memory: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_events: Vec<Event>,
-    ) {
-        if queues.len() != 1 || queue_events.len() != 1 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != 1 {
+            return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
 
-        let queue = queues.remove(0);
-        let queue_event = queue_events.remove(0);
+        let (queue, queue_event) = queues.remove(0);
 
         let mapping_arena_slot = self.mapping_arena_slot;
         // We checked that this fits in a usize in `Pmem::new`.
         let mapping_size = self.mapping_size as usize;
 
-        if let Some(pmem_device_tube) = self.pmem_device_tube.take() {
-            let (self_kill_event, kill_event) =
-                match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!("failed creating kill Event pair: {}", e);
-                        return;
-                    }
-                };
-            self.kill_event = Some(self_kill_event);
+        let pmem_device_tube = self
+            .pmem_device_tube
+            .take()
+            .context("missing pmem device tube")?;
 
-            let worker_result = thread::Builder::new()
-                .name("virtio_pmem".to_string())
-                .spawn(move || {
-                    run_worker(
-                        queue_event,
-                        queue,
-                        pmem_device_tube,
-                        interrupt,
-                        kill_event,
-                        memory,
-                        mapping_arena_slot,
-                        mapping_size,
-                    )
-                });
+        let (self_kill_event, kill_event) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed creating kill Event pair")?;
+        self.kill_event = Some(self_kill_event);
 
-            self.worker_thread = match worker_result {
-                Err(e) => {
-                    error!("failed to spawn virtio_pmem worker: {}", e);
-                    return;
-                }
-                Ok(join_handle) => Some(join_handle),
-            }
-        }
+        let worker_thread = thread::Builder::new()
+            .name("v_pmem".to_string())
+            .spawn(move || {
+                run_worker(
+                    queue_event,
+                    queue,
+                    pmem_device_tube,
+                    interrupt,
+                    kill_event,
+                    memory,
+                    mapping_arena_slot,
+                    mapping_size,
+                )
+            })
+            .context("failed to spawn virtio_pmem worker")?;
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 }
 

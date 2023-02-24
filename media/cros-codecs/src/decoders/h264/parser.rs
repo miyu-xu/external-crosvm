@@ -38,14 +38,17 @@ const DEFAULT_8X8_INTER: [u8; 64] = [
 
 const MAX_PPS_COUNT: usize = 256;
 const MAX_SPS_COUNT: usize = 32;
+///
+/// The maximum number of pictures in the DPB, as per A.3.1, clause h)
+const DPB_MAX_SIZE: usize = 16;
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Point<T> {
     pub x: T,
     pub y: T,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rect<T> {
     pub min: Point<T>,
     pub max: Point<T>,
@@ -75,7 +78,7 @@ pub enum NaluType {
     SliceDepth = 21,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RefPicListModification {
     modification_of_pic_nums_idc: u8,
     /* if modification_of_pic_nums_idc == 0 || 1 */
@@ -101,7 +104,7 @@ impl RefPicListModification {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PredWeightTable {
     luma_log2_weight_denom: u8,
     chroma_log2_weight_denom: u8,
@@ -155,7 +158,7 @@ impl PredWeightTable {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RefPicMarkingInner {
     /// Specifies a control operation to be applied to affect the reference
     /// picture marking. The `memory_management_control_operation` syntax element
@@ -202,7 +205,7 @@ impl RefPicMarkingInner {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RefPicMarking {
     /// Specifies how the previously-decoded pictures in the decoded picture
     /// buffer are treated after decoding of an IDR picture. See Annex C.
@@ -239,7 +242,7 @@ impl RefPicMarking {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SliceHeader {
     /// Specifies the address of the first macroblock in the slice.
     first_mb_in_slice: u32,
@@ -504,7 +507,7 @@ impl<T> Slice<T> {
     }
 }
 
-#[derive(N, Clone, Copy, Debug, PartialEq)]
+#[derive(N, Clone, Copy, Debug, PartialEq, Eq)]
 /// See table 7-6 in the specification.
 pub enum SliceType {
     P = 0,
@@ -547,12 +550,49 @@ impl Default for SliceType {
     }
 }
 
+#[derive(N)]
+pub enum Profile {
+    Baseline = 66,
+    Main = 77,
+    High = 100,
+}
+
+#[derive(N, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    L1 = 10,
+    L1B = 9,
+    L1_1 = 11,
+    L1_2 = 12,
+    L1_3 = 13,
+    L2_0 = 20,
+    L2_1 = 21,
+    L2_2 = 22,
+    L3 = 30,
+    L3_1 = 31,
+    L3_2 = 32,
+    L4 = 40,
+    L4_1 = 41,
+    L4_2 = 42,
+    L5 = 50,
+    L5_1 = 51,
+    L5_2 = 52,
+    L6 = 60,
+    L6_1 = 61,
+    L6_2 = 62,
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Level::L1
+    }
+}
+
 /// A H264 Sequence Parameter Set. A syntax structure containing syntax elements
 /// that apply to zero or more entire coded video sequences as determined by the
 /// content of a seq_parameter_set_id syntax element found in the picture
 /// parameter set referred to by the pic_parameter_set_id syntax element found
 /// in each slice header.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sps {
     /// Identifies the sequence parameter set that is referred to by the picture
     /// parameter set
@@ -575,7 +615,7 @@ pub struct Sps {
     constraint_set5_flag: bool,
 
     /// Level to which the coded video sequence conforms
-    level_idc: u8,
+    level_idc: Level,
 
     /// Specifies the chroma sampling relative to the luma sampling as specified
     /// in clause 6.2.
@@ -767,7 +807,7 @@ impl Sps {
     pub fn constraint_set5_flag(&self) -> bool {
         self.constraint_set5_flag
     }
-    pub fn level_idc(&self) -> u8 {
+    pub fn level_idc(&self) -> Level {
         self.level_idc
     }
     pub fn chroma_format_idc(&self) -> u8 {
@@ -927,6 +967,66 @@ impl Sps {
             },
         }
     }
+
+    pub fn max_dpb_frames(&self) -> Result<usize> {
+        let profile = Profile::n(self.profile_idc())
+            .with_context(|| format!("Unsupported profile {}", self.profile_idc()))?;
+        let mut level = self.level_idc();
+
+        // A.3.1 and A.3.2: Level 1b for Baseline, Constrained Baseline and Main
+        // profile if level_idc == 11 and constraint_set3_flag == 1
+        if matches!(level, Level::L1_1)
+            && (matches!(profile, Profile::Baseline) || matches!(profile, Profile::Main))
+            && self.constraint_set3_flag()
+        {
+            level = Level::L1B;
+        };
+
+        // Table A.1
+        let max_dpb_mbs = match level {
+            Level::L1 => 396,
+            Level::L1B => 396,
+            Level::L1_1 => 900,
+            Level::L1_2 => 2376,
+            Level::L1_3 => 2376,
+            Level::L2_0 => 2376,
+            Level::L2_1 => 4752,
+            Level::L2_2 => 8100,
+            Level::L3 => 8100,
+            Level::L3_1 => 18000,
+            Level::L3_2 => 20480,
+            Level::L4 => 32768,
+            Level::L4_1 => 32768,
+            Level::L4_2 => 34816,
+            Level::L5 => 110400,
+            Level::L5_1 => 184320,
+            Level::L5_2 => 184320,
+            Level::L6 => 696320,
+            Level::L6_1 => 696320,
+            Level::L6_2 => 696320,
+        };
+
+        let width_mb = self.width() / 16;
+        let height_mb = self.height() / 16;
+
+        let max_dpb_frames =
+            std::cmp::min(max_dpb_mbs / (width_mb * height_mb), DPB_MAX_SIZE as u32) as usize;
+
+        let mut max_dpb_frames = std::cmp::max(max_dpb_frames, self.max_num_ref_frames() as usize);
+
+        if self.vui_parameters_present_flag() && self.vui_parameters().bitstream_restriction_flag()
+        {
+            max_dpb_frames = std::cmp::max(
+                1,
+                self.vui_parameters()
+                    .max_dec_frame_buffering()
+                    .try_into()
+                    .unwrap(),
+            );
+        }
+
+        Ok(max_dpb_frames)
+    }
 }
 
 impl Default for Sps {
@@ -984,7 +1084,7 @@ impl Default for Sps {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HrdParams {
     /// Plus 1 specifies the number of alternative CPB specifications in the
     /// bitstream. The value of `cpb_cnt_minus1` shall be in the range of 0 to 31,
@@ -1057,7 +1157,7 @@ impl HrdParams {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VuiParams {
     /// Specifies whether `aspect_ratio_idc` is present.
     aspect_ratio_info_present_flag: bool,
@@ -1376,7 +1476,7 @@ impl Default for VuiParams {
 /// A H264 Picture Parameter Set. A syntax structure containing syntax elements
 /// that apply to zero or more entire coded pictures as determined by the
 /// `pic_parameter_set_id` syntax element found in each slice header.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pps {
     /// Identifies the picture parameter set that is referred to in the slice header.
     pic_parameter_set_id: u8,
@@ -1937,7 +2037,8 @@ impl Parser {
         // skip reserved_zero_2bits
         r.skip_bits(2)?;
 
-        sps.level_idc = r.read_bits(8)?;
+        let level: u8 = r.read_bits(8)?;
+        sps.level_idc = Level::n(level).with_context(|| format!("Unsupported level {}", level))?;
         sps.seq_parameter_set_id = r.read_ue_max(31)?;
 
         if sps.profile_idc == 100
@@ -2673,6 +2774,7 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for Nalu<T> {
 mod tests {
     use std::io::Cursor;
 
+    use crate::decoders::h264::parser::Level;
     use crate::decoders::h264::parser::Nalu;
     use crate::decoders::h264::parser::NaluType;
     use crate::decoders::h264::parser::Parser;
@@ -2749,7 +2851,7 @@ mod tests {
             assert_eq!(sps.constraint_set3_flag, false);
             assert_eq!(sps.constraint_set4_flag, false);
             assert_eq!(sps.constraint_set5_flag, false);
-            assert_eq!(sps.level_idc, 13);
+            assert_eq!(sps.level_idc, Level::L1_3);
             assert_eq!(sps.chroma_format_idc, 1);
             assert_eq!(sps.separate_colour_plane_flag, false);
             assert_eq!(sps.bit_depth_luma_minus8, 0);

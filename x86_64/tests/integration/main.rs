@@ -35,7 +35,6 @@ use resources::SystemAllocator;
 use sync::Mutex;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-
 use x86_64::acpi;
 use x86_64::arch_memory_regions;
 use x86_64::bootparam;
@@ -138,6 +137,8 @@ where
         &mut vm,
         4,
         None,
+        #[cfg(feature = "swap")]
+        None,
     )
     .unwrap();
     let pci = Arc::new(Mutex::new(pci));
@@ -167,6 +168,8 @@ where
         &io_bus,
         &serial_params,
         None,
+        #[cfg(feature = "swap")]
+        None,
     )
     .unwrap();
 
@@ -174,7 +177,7 @@ where
 
     let mut cmdline = X8664arch::get_base_linux_cmdline();
 
-    cmdline.insert_str(&param_args).unwrap();
+    cmdline.insert_str(param_args).unwrap();
 
     let params = bootparam::boot_params::default();
     // write our custom kernel code to start_addr
@@ -212,6 +215,10 @@ where
         &mmio_bus,
         max_bus,
         &mut resume_notify_devices,
+        #[cfg(feature = "swap")]
+        None,
+        #[cfg(unix)]
+        false,
     )
     .unwrap();
 
@@ -222,6 +229,7 @@ where
         None,
         kernel_end,
         params,
+        None,
     )
     .expect("failed to setup system_memory");
 
@@ -261,7 +269,7 @@ where
                 .add_vcpu(0, &vcpu)
                 .expect("failed to add vcpu to irqchip");
 
-            let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, false);
+            let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, false, None);
             if !vm.check_capability(VmCap::EarlyInitCpuid) {
                 setup_cpuid(&hyp, &irq_chip, &vcpu, 0, 1, cpu_config).unwrap();
             }

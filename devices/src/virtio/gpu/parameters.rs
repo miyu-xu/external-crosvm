@@ -37,12 +37,12 @@ mod serde_context_mask {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, FromKeyValues)]
+#[derive(Clone, Debug, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 pub struct GpuParameters {
     #[serde(rename = "backend")]
     pub mode: GpuMode,
-    #[serde(skip)]
+    #[serde(rename = "displays")]
     pub display_params: Vec<DisplayParameters>,
     // `width` and `height` are supported for CLI backwards compatibility.
     #[serde(rename = "width")]
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn context_mask_serialize_deserialize() {
-        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
         struct ContextMask {
             #[serde(rename = "context-types", with = "serde_context_mask")]
             pub value: u64,

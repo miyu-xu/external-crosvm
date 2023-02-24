@@ -6,6 +6,8 @@ use std::io;
 use std::io::Write;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Event;
@@ -23,6 +25,8 @@ use super::Interrupt;
 use super::Queue;
 use super::SignalableInterrupt;
 use super::VirtioDevice;
+use super::VirtioDeviceSaved;
+use crate::virtio::virtio_device::Error as VirtioError;
 use crate::virtio::Writer;
 use crate::Suspendable;
 
@@ -37,6 +41,7 @@ pub type Result<T> = std::result::Result<T, RngError>;
 struct Worker {
     interrupt: Interrupt,
     queue: Queue,
+    queue_evt: Event,
     mem: GuestMemory,
 }
 
@@ -77,7 +82,7 @@ impl Worker {
         needs_interrupt
     }
 
-    fn run(&mut self, queue_evt: Event, kill_evt: Event) {
+    fn run(mut self, kill_evt: Event) -> anyhow::Result<VirtioDeviceSaved> {
         #[derive(EventToken)]
         enum Token {
             QueueAvailable,
@@ -86,13 +91,12 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
-            (&queue_evt, Token::QueueAvailable),
+            (&self.queue_evt, Token::QueueAvailable),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
             Err(e) => {
-                error!("failed creating WaitContext: {}", e);
-                return;
+                return Err(anyhow!("failed creating WaitContext: {}", e));
             }
         };
         if let Some(resample_evt) = self.interrupt.get_resample_evt() {
@@ -100,8 +104,7 @@ impl Worker {
                 .add(resample_evt, Token::InterruptResample)
                 .is_err()
             {
-                error!("failed adding resample event to WaitContext.");
-                return;
+                return Err(anyhow!("failed adding resample event to WaitContext."));
             }
         }
 
@@ -118,7 +121,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        if let Err(e) = queue_evt.wait() {
+                        if let Err(e) = self.queue_evt.wait() {
                             error!("failed reading queue Event: {}", e);
                             break 'wait;
                         }
@@ -134,13 +137,16 @@ impl Worker {
                 self.queue.trigger_interrupt(&self.mem, &self.interrupt);
             }
         }
+        Ok(VirtioDeviceSaved {
+            queues: vec![self.queue],
+        })
     }
 }
 
 /// Virtio device for exposing entropy to the guest OS through virtio.
 pub struct Rng {
     kill_evt: Option<Event>,
-    worker_thread: Option<thread::JoinHandle<Worker>>,
+    worker_thread: Option<thread::JoinHandle<anyhow::Result<VirtioDeviceSaved>>>,
     virtio_features: u64,
 }
 
@@ -157,14 +163,9 @@ impl Rng {
 
 impl Drop for Rng {
     fn drop(&mut self) {
-        if let Some(kill_evt) = self.kill_evt.take() {
-            // Ignore the result because there is nothing we can do about it.
-            let _ = kill_evt.signal();
-        }
-
-        if let Some(worker_thread) = self.worker_thread.take() {
-            let _ = worker_thread.join();
-        }
+        if let Err(e) = self.stop() {
+            error!("{}", e);
+        };
     }
 }
 
@@ -189,45 +190,33 @@ impl VirtioDevice for Rng {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != 1 || queue_evts.len() != 1 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != 1 {
+            return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to create kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
-        let queue = queues.remove(0);
+        let (queue, queue_evt) = queues.remove(0);
 
-        let worker_result =
-            thread::Builder::new()
-                .name("virtio_rng".to_string())
-                .spawn(move || {
-                    let mut worker = Worker {
-                        interrupt,
-                        queue,
-                        mem,
-                    };
-                    worker.run(queue_evts.remove(0), kill_evt);
-                    worker
-                });
-
-        match worker_result {
-            Err(e) => {
-                error!("failed to spawn virtio_rng worker: {}", e);
-            }
-            Ok(join_handle) => {
-                self.worker_thread = Some(join_handle);
-            }
-        }
+        let worker_thread = thread::Builder::new()
+            .name("v_rng".to_string())
+            .spawn(move || {
+                let worker = Worker {
+                    interrupt,
+                    queue,
+                    queue_evt,
+                    mem,
+                };
+                worker.run(kill_evt)
+            })
+            .context("failed to spawn virtio_rng worker")?;
+        self.worker_thread = Some(worker_thread);
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
@@ -248,6 +237,21 @@ impl VirtioDevice for Rng {
             }
         }
         false
+    }
+
+    fn stop(&mut self) -> std::result::Result<Option<VirtioDeviceSaved>, VirtioError> {
+        if let Some(kill_evt) = self.kill_evt.take() {
+            kill_evt.signal().map_err(VirtioError::KillEventFailure)?;
+        }
+
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let state = (worker_thread
+                .join()
+                .map_err(|e| VirtioError::ThreadJoinFailure(format!("{:?}", e)))?)
+            .map_err(VirtioError::InThreadFailure)?;
+            return Ok(Some(state));
+        }
+        Ok(None)
     }
 }
 

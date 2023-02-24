@@ -99,6 +99,9 @@ use crate::virtio::SharedMemoryMapper;
 use crate::virtio::SharedMemoryRegion;
 use crate::virtio::SignalableInterrupt;
 
+/// Largest valid number of entries in a virtqueue.
+const MAX_VRING_LEN: u16 = 32768;
+
 /// An event to deliver an interrupt to the guest.
 ///
 /// Unlike `devices::Interrupt`, this doesn't support interrupt status and signal resampling.
@@ -160,9 +163,6 @@ pub fn vmm_va_to_gpa(maps: &[MappingInfo], vmm_va: u64) -> VhostResult<GuestAddr
 pub trait VhostUserBackend {
     /// The maximum number of queues that this backend can manage.
     fn max_queue_num(&self) -> usize;
-
-    /// The maximum length that virtqueues can take with this backend.
-    fn max_vring_len(&self) -> u16;
 
     /// The set of feature bits that this backend supports.
     fn features(&self) -> u64;
@@ -362,34 +362,29 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
 }
 
 /// Structure to have an event loop for interaction between a VMM and `VhostUserBackend`.
-pub struct DeviceRequestHandler<O>
-where
-    O: VhostUserPlatformOps,
-{
+pub struct DeviceRequestHandler {
     vrings: Vec<Vring>,
     owned: bool,
     vmm_maps: Option<Vec<MappingInfo>>,
     mem: Option<GuestMemory>,
     backend: Box<dyn VhostUserBackend>,
-    ops: O,
+    ops: Box<dyn VhostUserPlatformOps>,
 }
 
-impl DeviceRequestHandler<VhostUserRegularOps> {
+impl DeviceRequestHandler {
     pub fn new(backend: Box<dyn VhostUserBackend>) -> Self {
-        Self::new_with_ops(backend, VhostUserRegularOps)
+        Self::new_with_ops(backend, Box::new(VhostUserRegularOps))
     }
-}
 
-impl<O> DeviceRequestHandler<O>
-where
-    O: VhostUserPlatformOps,
-{
     /// Creates a vhost-user handler instance for `backend` with a different set of platform ops
     /// than the regular vhost-user ones.
-    pub(crate) fn new_with_ops(backend: Box<dyn VhostUserBackend>, ops: O) -> Self {
+    pub(crate) fn new_with_ops(
+        backend: Box<dyn VhostUserBackend>,
+        ops: Box<dyn VhostUserPlatformOps>,
+    ) -> Self {
         let mut vrings = Vec::with_capacity(backend.max_queue_num());
         for _ in 0..backend.max_queue_num() {
-            vrings.push(Vring::new(backend.max_vring_len() as u16));
+            vrings.push(Vring::new(MAX_VRING_LEN));
         }
 
         DeviceRequestHandler {
@@ -403,7 +398,7 @@ where
     }
 }
 
-impl<O: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for DeviceRequestHandler<O> {
+impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     fn protocol(&self) -> Protocol {
         self.ops.protocol()
     }
@@ -485,10 +480,7 @@ impl<O: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for DeviceRequestHandl
     }
 
     fn set_vring_num(&mut self, index: u32, num: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len()
-            || num == 0
-            || num > self.backend.max_vring_len().into()
-        {
+        if index as usize >= self.vrings.len() || num == 0 || num > MAX_VRING_LEN.into() {
             return Err(VhostError::InvalidParam);
         }
         self.vrings[index as usize].queue.set_size(num as u16);
@@ -523,7 +515,7 @@ impl<O: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for DeviceRequestHandl
     }
 
     fn set_vring_base(&mut self, index: u32, base: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len() || base >= self.backend.max_vring_len().into() {
+        if index as usize >= self.vrings.len() || base >= MAX_VRING_LEN.into() {
             return Err(VhostError::InvalidParam);
         }
 
@@ -567,10 +559,19 @@ impl<O: VhostUserPlatformOps> VhostUserSlaveReqHandlerMut for DeviceRequestHandl
         }
 
         let kick_evt = self.ops.set_vring_kick(index, file)?;
-        let vring = &mut self.vrings[index as usize];
+
+        // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
+        vring.queue.ack_features(self.backend.acked_features());
         vring.queue.set_ready(true);
 
-        let queue = vring.queue.clone();
+        let queue = match vring.queue.activate() {
+            Ok(queue) => queue,
+            Err(e) => {
+                error!("failed to activate vring: {:#}", e);
+                return Err(VhostError::SlaveInternalError);
+            }
+        };
+
         let doorbell = vring.doorbell.clone().ok_or(VhostError::InvalidOperation)?;
         let mem = self
             .mem
@@ -866,7 +867,6 @@ mod tests {
 
     impl FakeBackend {
         const MAX_QUEUE_NUM: usize = 16;
-        const MAX_VRING_LEN: u16 = 256;
 
         pub(super) fn new() -> Self {
             Self {
@@ -880,10 +880,6 @@ mod tests {
     impl VhostUserBackend for FakeBackend {
         fn max_queue_num(&self) -> usize {
             Self::MAX_QUEUE_NUM
-        }
-
-        fn max_vring_len(&self) -> u16 {
-            Self::MAX_VRING_LEN
         }
 
         fn features(&self) -> u64 {
@@ -1017,7 +1013,7 @@ mod tests {
         // Device side
         let handler = std::sync::Mutex::new(DeviceRequestHandler::new_with_ops(
             Box::new(FakeBackend::new()),
-            VhostUserRegularOps,
+            Box::new(VhostUserRegularOps),
         ));
         let mut listener = SlaveListener::<SocketListener, _>::new(listener, handler).unwrap();
 
@@ -1027,31 +1023,31 @@ mod tests {
         let mut listener = listener.accept().unwrap().unwrap();
 
         // VhostUserHandler::new()
-        listener.handle_request().expect("set_owner");
-        listener.handle_request().expect("get_features");
-        listener.handle_request().expect("set_features");
-        listener.handle_request().expect("get_protocol_features");
-        listener.handle_request().expect("set_protocol_features");
+        handle_request(&mut listener).expect("set_owner");
+        handle_request(&mut listener).expect("get_features");
+        handle_request(&mut listener).expect("set_features");
+        handle_request(&mut listener).expect("get_protocol_features");
+        handle_request(&mut listener).expect("set_protocol_features");
 
         // VhostUserHandler::read_config()
-        listener.handle_request().expect("get_config");
+        handle_request(&mut listener).expect("get_config");
 
         // VhostUserHandler::set_mem_table()
-        listener.handle_request().expect("set_mem_table");
+        handle_request(&mut listener).expect("set_mem_table");
 
         for _ in 0..QUEUES_NUM {
             // VhostUserHandler::activate_vring()
-            listener.handle_request().expect("set_vring_num");
-            listener.handle_request().expect("set_vring_addr");
-            listener.handle_request().expect("set_vring_base");
-            listener.handle_request().expect("set_vring_call");
-            listener.handle_request().expect("set_vring_kick");
-            listener.handle_request().expect("set_vring_enable");
+            handle_request(&mut listener).expect("set_vring_num");
+            handle_request(&mut listener).expect("set_vring_addr");
+            handle_request(&mut listener).expect("set_vring_base");
+            handle_request(&mut listener).expect("set_vring_call");
+            handle_request(&mut listener).expect("set_vring_kick");
+            handle_request(&mut listener).expect("set_vring_enable");
         }
 
         dev_bar.wait();
 
-        match listener.handle_request() {
+        match handle_request(&mut listener) {
             Err(VhostError::ClientExit) => (),
             r => panic!("Err(ClientExit) was expected but {:?}", r),
         }
@@ -1081,31 +1077,38 @@ mod tests {
         }
     }
 
+    fn handle_request<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>>(
+        handler: &mut SlaveReqHandler<S, E>,
+    ) -> Result<(), VhostError> {
+        let (hdr, files) = handler.recv_header()?;
+        handler.process_message(hdr, files)
+    }
+
     pub(super) fn test_handle_requests<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>>(
         req_handler: &mut SlaveReqHandler<S, E>,
         queues_num: usize,
     ) {
         // VhostUserHandler::new()
-        req_handler.handle_request().expect("set_owner");
-        req_handler.handle_request().expect("get_features");
-        req_handler.handle_request().expect("set_features");
-        req_handler.handle_request().expect("get_protocol_features");
-        req_handler.handle_request().expect("set_protocol_features");
+        handle_request(req_handler).expect("set_owner");
+        handle_request(req_handler).expect("get_features");
+        handle_request(req_handler).expect("set_features");
+        handle_request(req_handler).expect("get_protocol_features");
+        handle_request(req_handler).expect("set_protocol_features");
 
         // VhostUserHandler::read_config()
-        req_handler.handle_request().expect("get_config");
+        handle_request(req_handler).expect("get_config");
 
         // VhostUserHandler::set_mem_table()
-        req_handler.handle_request().expect("set_mem_table");
+        handle_request(req_handler).expect("set_mem_table");
 
         for _ in 0..queues_num {
             // VhostUserHandler::activate_vring()
-            req_handler.handle_request().expect("set_vring_num");
-            req_handler.handle_request().expect("set_vring_addr");
-            req_handler.handle_request().expect("set_vring_base");
-            req_handler.handle_request().expect("set_vring_call");
-            req_handler.handle_request().expect("set_vring_kick");
-            req_handler.handle_request().expect("set_vring_enable");
+            handle_request(req_handler).expect("set_vring_num");
+            handle_request(req_handler).expect("set_vring_addr");
+            handle_request(req_handler).expect("set_vring_base");
+            handle_request(req_handler).expect("set_vring_call");
+            handle_request(req_handler).expect("set_vring_kick");
+            handle_request(req_handler).expect("set_vring_enable");
         }
     }
 }

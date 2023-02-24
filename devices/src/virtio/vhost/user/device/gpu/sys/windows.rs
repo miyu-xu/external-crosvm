@@ -4,7 +4,6 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -30,7 +29,6 @@ use cros_async::IoSourceExt;
 use futures::future::AbortHandle;
 use futures::future::Abortable;
 use gpu_display::EventDevice;
-use gpu_display::EventDeviceKind;
 use hypervisor::ProtectionType;
 use serde::Deserialize;
 use serde::Serialize;
@@ -48,7 +46,14 @@ use crate::virtio::Gpu;
 use crate::virtio::GpuDisplayParameters;
 use crate::virtio::GpuParameters;
 
-async fn run_display(display: EventAsync, state: Rc<RefCell<gpu::Frontend>>) {
+pub mod generic;
+pub use generic as product;
+
+async fn run_display(
+    display: EventAsync,
+    state: Rc<RefCell<gpu::Frontend>>,
+    gpu: Rc<RefCell<gpu::Gpu>>,
+) {
     loop {
         if let Err(e) = display.next_val().await {
             error!(
@@ -63,7 +68,13 @@ async fn run_display(display: EventAsync, state: Rc<RefCell<gpu::Frontend>>) {
                 error!("Failed to process display events: {}", e);
                 break;
             }
-            ProcessDisplayResult::CloseRequested => break,
+            ProcessDisplayResult::CloseRequested => {
+                let res = gpu.borrow().send_exit_evt();
+                if res.is_err() {
+                    error!("Failed to send exit event: {:?}", res);
+                }
+                break;
+            }
             ProcessDisplayResult::Success => {}
         }
     }
@@ -86,7 +97,10 @@ impl GpuBackend {
 
         let (handle, registration) = AbortHandle::new_pair();
         self.ex
-            .spawn_local(Abortable::new(run_display(display, state), registration))
+            .spawn_local(Abortable::new(
+                run_display(display, state, self.gpu.clone()),
+                registration,
+            ))
             .detach();
         self.platform_workers.borrow_mut().push(handle);
 
@@ -109,28 +123,31 @@ pub struct Options {
 /// Main process end for a GPU device.
 #[derive(Deserialize, Serialize)]
 pub struct GpuVmmConfig {
-    // Tube for setting up the vhost-user connection.
-    pub vhost_user_tube: Option<Tube>,
-    // Tube for service.
-    pub gpu_main_service_tube: Option<Tube>,
+    // Tube for setting up the vhost-user connection. May not exist if not using vhost-user.
+    pub main_vhost_user_tube: Option<Tube>,
     // Pipes to receive input events on.
-    pub input_event_device_pipes: VecDeque<(EventDeviceKind, StreamChannel)>,
+    pub input_event_multi_touch_pipes: Vec<StreamChannel>,
+    pub input_event_mouse_pipes: Vec<StreamChannel>,
+    pub input_event_keyboard_pipes: Vec<StreamChannel>,
+    pub product_config: product::GpuVmmConfig,
 }
 
 /// Config arguments passed through the bootstrap Tube from the broker to the Gpu backend
 /// process.
 #[derive(Deserialize, Serialize)]
 pub struct GpuBackendConfig {
+    // Tube for setting up the vhost-user connection. May not exist if not using vhost-user.
+    pub device_vhost_user_tube: Option<Tube>,
     // An event for an incoming exit request.
     pub exit_event: Event,
     // A tube to send an exit request.
     pub exit_evt_wrtube: SendTube,
     // Event devices to send input events to.
     pub event_devices: Vec<EventDevice>,
-    // Tube for service.
-    pub gpu_device_service_tube: Tube,
     // GPU parameters.
     pub params: GpuParameters,
+    // Product related configurations.
+    pub product_config: product::GpuBackendConfig,
 }
 
 pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
@@ -141,7 +158,6 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let mut tubes = read_from_tube_transporter(raw_transport_tube)?;
 
     let bootstrap_tube = tubes.get_tube(TubeToken::Bootstrap)?;
-    let vhost_user_tube = tubes.get_tube(TubeToken::VhostUser)?;
 
     let startup_args: CommonChildStartupArgs = bootstrap_tube.recv::<CommonChildStartupArgs>()?;
     let _child_cleanup = common_child_setup(startup_args)?;
@@ -149,6 +165,10 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let mut config: GpuBackendConfig = bootstrap_tube
         .recv()
         .context("failed to parse GPU backend config from bootstrap tube")?;
+
+    let vhost_user_tube = config
+        .device_vhost_user_tube
+        .expect("vhost-user gpu tube must be set");
 
     if config.params.display_params.is_empty() {
         config
@@ -161,18 +181,15 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         (&config.params.display_params[0]).into(),
     )];
 
-    let wndproc_thread = virtio::gpu::start_wndproc_thread(
-        #[cfg(feature = "kiwi")]
-        config.params.display_params[0]
-            .gpu_main_display_tube
-            .clone(),
-        #[cfg(not(feature = "kiwi"))]
-        None,
-    )
-    .context("failed to start wndproc_thread")?;
+    let wndproc_thread =
+        virtio::gpu::start_wndproc_thread(None).context("failed to start wndproc_thread")?;
 
     // Required to share memory across processes.
     let external_blob = true;
+
+    // Fallback for when external_blob is not available on the machine. Currently always off.
+    let system_blob = false;
+
     let base_features = virtio::base_features(ProtectionType::Unprotected);
 
     let gpu = Rc::new(RefCell::new(Gpu::new(
@@ -185,10 +202,9 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         None,
         config.event_devices,
         external_blob,
+        system_blob,
         base_features,
         /*channels=*/ Default::default(),
-        #[cfg(feature = "kiwi")]
-        Some(config.gpu_device_service_tube),
         wndproc_thread,
     )));
 
@@ -217,9 +233,12 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     // }
 
     info!("vhost-user gpu device ready, starting run loop...");
+
+    // Run until the backend is finished.
     if let Err(e) = ex.run_until(handler.run(vhost_user_tube, config.exit_event, &ex)) {
         bail!("error occurred: {}", e);
     }
 
-    Ok(())
+    // Process any tasks from the backend's destructor.
+    Ok(ex.run_until(async {})?)
 }

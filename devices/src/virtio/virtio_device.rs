@@ -7,10 +7,13 @@ use std::sync::Arc;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
 use anyhow::Result;
+use base::Error as BaseError;
 use base::Event;
 use base::Protection;
 use base::RawDescriptor;
+use remain::sorted;
 use sync::Mutex;
+use thiserror::Error;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
@@ -24,7 +27,7 @@ use crate::pci::PciCapability;
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
 use crate::Suspendable;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtioTransportType {
     Pci,
     Mmio,
@@ -117,9 +120,8 @@ pub trait VirtioDevice: Send + Suspendable {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<Queue>,
-        queue_evts: Vec<Event>,
-    );
+        queues: Vec<(Queue, Event)>,
+    ) -> Result<()>;
 
     /// Optionally deactivates this device. If the reset method is
     /// not able to reset the virtio device, or the virtio device model doesn't
@@ -202,4 +204,27 @@ pub trait VirtioDevice: Send + Suspendable {
     /// than via raw guest physical address. This function is only provided so
     /// devices can remain backwards compatible with older drivers.
     fn set_shared_memory_region_base(&mut self, _addr: GuestAddress) {}
+
+    /// Stop the device and return queues and GuestMemory to the underlying bus that the virtio
+    /// device resides on (Pci/Mmio) to preserve their state.
+    fn stop(&mut self) -> Result<Option<VirtioDeviceSaved>, Error> {
+        Err(Error::NotImplemented(self.debug_label()))
+    }
+}
+
+#[sorted]
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("thread error: {0}")]
+    InThreadFailure(anyhow::Error),
+    #[error("failed to kill {0} worker thread")]
+    KillEventFailure(BaseError),
+    #[error("Stop is not implemented for: {0}")]
+    NotImplemented(String),
+    #[error("thread ending failed: {0}")]
+    ThreadJoinFailure(String),
+}
+
+pub struct VirtioDeviceSaved {
+    pub queues: Vec<Queue>,
 }

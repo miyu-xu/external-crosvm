@@ -46,8 +46,10 @@ pub fn build_protos_explicit(
             file.to_str().expect("proto path must be UTF-8")
         );
     }
-    fs::create_dir_all(&out_dir).unwrap();
-    gen_protos(out_dir, proto_paths, includes);
+    fs::create_dir_all(out_dir).unwrap();
+    if !proto_paths.is_empty() {
+        gen_protos(out_dir, proto_paths, includes);
+    }
     create_gen_file(out_dir, proto_paths);
 }
 
@@ -69,7 +71,7 @@ fn to_includes(proto_paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn gen_protos(out_dir: &PathBuf, proto_paths: &[PathBuf], includes: &[PathBuf]) {
-    if let Err(e) = protoc_rust::Codegen::new()
+    protoc_rust::Codegen::new()
         .out_dir(out_dir)
         .inputs(proto_paths)
         .includes(includes)
@@ -78,11 +80,7 @@ fn gen_protos(out_dir: &PathBuf, proto_paths: &[PathBuf], includes: &[PathBuf]) 
             ..Default::default()
         })
         .run()
-    {
-        println!("failed to build Rust protos: {}", e);
-        println!("protos in failed build: {:?}", proto_paths);
-        println!("includes in failed build: {:?}", includes);
-    }
+        .expect("failed to compile Rust protos");
 }
 
 fn create_gen_file(out_dir: &PathBuf, proto_files: &[PathBuf]) {

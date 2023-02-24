@@ -6,6 +6,7 @@
 mod aarch64;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
+use base::sys::BlockedSignal;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86_64;
@@ -28,7 +29,6 @@ use std::ptr::copy_nonoverlapping;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use base::block_signal;
 use base::errno_result;
 use base::error;
 use base::ioctl;
@@ -37,7 +37,6 @@ use base::ioctl_with_ref;
 use base::ioctl_with_val;
 use base::pagesize;
 use base::signal;
-use base::unblock_signal;
 use base::AsRawDescriptor;
 use base::Error;
 use base::Event;
@@ -138,7 +137,7 @@ pub struct Kvm {
     kvm: SafeDescriptor,
 }
 
-type KvmCap = kvm::Cap;
+pub type KvmCap = kvm::Cap;
 
 impl Kvm {
     pub fn new_with_path(device_path: &Path) -> Result<Kvm> {
@@ -293,7 +292,7 @@ impl KvmVm {
     pub fn set_irq_line(&self, irq: u32, active: bool) -> Result<()> {
         let mut irq_level = kvm_irq_level::default();
         irq_level.__bindgen_anon_1.irq = irq;
-        irq_level.level = if active { 1 } else { 0 };
+        irq_level.level = active.into();
 
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
@@ -439,7 +438,18 @@ impl KvmVm {
     pub fn check_raw_capability(&self, capability: KvmCap) -> bool {
         // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
         // it's an unavailable extension and returns 0.
-        unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), capability as c_ulong) == 1 }
+        let ret = unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), capability as c_ulong) };
+        match capability {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            KvmCap::BusLockDetect => {
+                if ret > 0 {
+                    ret as u32 & KVM_BUS_LOCK_DETECTION_EXIT == KVM_BUS_LOCK_DETECTION_EXIT
+                } else {
+                    false
+                }
+            }
+            _ => ret == 1,
+        }
     }
 
     // Currently only used on aarch64, but works on any architecture.
@@ -494,6 +504,21 @@ impl Vm for KvmVm {
             VmCap::PvClockSuspend => self.check_raw_capability(KvmCap::KvmclockCtrl),
             VmCap::Protected => self.check_raw_capability(KvmCap::ArmProtectedVm),
             VmCap::EarlyInitCpuid => false,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            VmCap::BusLockDetect => self.check_raw_capability(KvmCap::BusLockDetect),
+        }
+    }
+
+    fn enable_capability(&self, c: VmCap, _flags: u32) -> Result<bool> {
+        match c {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            VmCap::BusLockDetect => {
+                let args = [KVM_BUS_LOCK_DETECTION_EXIT as u64, 0, 0, 0];
+                Ok(unsafe {
+                    self.enable_raw_capability(KvmCap::BusLockDetect, _flags, &args) == Ok(())
+                })
+            }
+            _ => Ok(false),
         }
     }
 
@@ -817,14 +842,14 @@ impl Vcpu for KvmVcpu {
         // kernel told us how large it was. The pointer is page aligned so casting to a different
         // type is well defined, hence the clippy allow attribute.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
-        run.immediate_exit = if exit { 1 } else { 0 };
+        run.immediate_exit = exit.into();
     }
 
     fn set_local_immediate_exit(exit: bool) {
         VCPU_THREAD.with(|v| {
             if let Some(state) = &(*v.borrow()) {
                 unsafe {
-                    (*state.run).immediate_exit = if exit { 1 } else { 0 };
+                    (*state.run).immediate_exit = exit.into();
                 };
             }
         });
@@ -992,6 +1017,7 @@ impl Vcpu for KvmVcpu {
                 let data = msr.data;
                 Ok(VcpuExit::WrMsr { index, data })
             }
+            KVM_EXIT_X86_BUS_LOCK => Ok(VcpuExit::BusLock),
             r => panic!("unknown kvm exit reason: {}", r),
         }
     }
@@ -1196,6 +1222,7 @@ impl TryFrom<HypervisorCap> for KvmCap {
             HypervisorCap::Xcrs => Ok(KvmCap::Xcrs),
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             HypervisorCap::CalibratedTscLeafRequired => Err(Error::new(libc::EINVAL)),
+            HypervisorCap::StaticSwiotlbAllocationRequired => Err(Error::new(libc::EINVAL)),
         }
     }
 }
@@ -1228,28 +1255,6 @@ impl From<&IrqRoute> for kvm_irq_routing_entry {
                 ..Default::default()
             },
         }
-    }
-}
-
-// Represents a temporarily blocked signal. It will unblock the signal when dropped.
-struct BlockedSignal {
-    signal_num: c_int,
-}
-
-impl BlockedSignal {
-    // Returns a `BlockedSignal` if the specified signal can be blocked, otherwise None.
-    fn new(signal_num: c_int) -> Option<BlockedSignal> {
-        if block_signal(signal_num).is_ok() {
-            Some(BlockedSignal { signal_num })
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for BlockedSignal {
-    fn drop(&mut self) {
-        unblock_signal(self.signal_num).expect("failed to restore signal mask");
     }
 }
 

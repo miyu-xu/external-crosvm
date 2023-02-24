@@ -4,13 +4,16 @@
 
 mod block;
 #[cfg(feature = "gpu")]
-mod gpu;
+pub mod gpu;
 mod handler;
 mod listener;
+#[cfg(feature = "audio")]
+mod snd;
 
 pub use block::run_block_device;
 pub use block::Options as BlockOptions;
 use cros_async::Executor;
+use cros_async::ExecutorKind;
 #[cfg(feature = "gpu")]
 pub use gpu::run_gpu_device;
 #[cfg(feature = "gpu")]
@@ -19,12 +22,14 @@ pub use handler::VhostBackendReqConnectionState;
 pub use handler::VhostUserBackend;
 pub use listener::sys::VhostUserListener;
 pub use listener::VhostUserListenerTrait;
+#[cfg(feature = "audio")]
+pub use snd::run_snd_device;
+#[cfg(feature = "audio")]
+pub use snd::Options as SndOptions;
 
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
         mod console;
-        #[cfg(feature = "audio")]
-        mod snd;
         mod fs;
         mod net;
         mod vsock;
@@ -34,8 +39,6 @@ cfg_if::cfg_if! {
         pub use vsock::{run_vsock_device, Options as VsockOptions};
         pub use wl::{run_wl_device, parse_wayland_sock, Options as WlOptions};
         pub use console::{create_vu_console_device, run_console_device, Options as ConsoleOptions};
-        #[cfg(feature = "audio")]
-        pub use snd::{run_snd_device, Options as SndOptions};
         pub use fs::{run_fs_device, Options as FsOptions};
         pub use net::{run_net_device, Options as NetOptions};
     } else if #[cfg(windows)] {
@@ -54,10 +57,10 @@ cfg_if::cfg_if! {
 /// Upon being given an [[Executor]], a device can be converted into a [[VhostUserBackend]], which
 /// can then process the requests from the front-end.
 ///
-/// We don't build `VhostUserBackend`s directly because in the case of jailing, the device is built
-/// in the main process but it runs in the jailed child process. Since `Executor`s cannot be passed
-/// to other processes, we cannot access the device's executor at build time and thus need to
-/// perform this 2-step dance before we can run the vhost-user device jailed.
+/// We don't build `VhostUserBackend`s directly to ensure that a `VhostUserBackend` starts to
+/// process queues in the jailed process, not in the main process. `VhostUserDevice` calls
+/// [[VhostUserDevice::into_backend()]] only after jailing, which ensures that any operations by
+/// `VhostUserBackend` is done in the jailed process.
 pub trait VhostUserDevice {
     /// The maximum number of queues that this device can manage.
     fn max_queue_num(&self) -> usize;
@@ -67,4 +70,9 @@ pub trait VhostUserDevice {
     /// If the device needs to perform something after being jailed, this is also the right place
     /// to do it.
     fn into_backend(self: Box<Self>, ex: &Executor) -> anyhow::Result<Box<dyn VhostUserBackend>>;
+
+    /// The preferred ExecutorKind of an Executor to accept by [`VhostUserDevice::into_backend()`].
+    fn executor_kind(&self) -> Option<ExecutorKind> {
+        None
+    }
 }

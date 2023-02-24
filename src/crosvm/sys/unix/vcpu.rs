@@ -12,6 +12,8 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::thread;
 use std::thread::JoinHandle;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::time::Duration;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use aarch64::AArch64 as Arch;
@@ -19,6 +21,7 @@ use aarch64::AArch64 as Arch;
 use aarch64::MsrHandlers;
 use anyhow::Context;
 use anyhow::Result;
+use arch::CpuSet;
 use arch::LinuxArch;
 use arch::MsrConfig;
 use base::*;
@@ -62,6 +65,8 @@ use x86_64::msr::MsrHandlers;
 use x86_64::X8664arch as Arch;
 
 use super::ExitState;
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+use crate::crosvm::ratelimit::Ratelimit;
 
 pub fn setup_vcpu_signal_handler<T: Vcpu>(use_hypervisor_signals: bool) -> Result<()> {
     if use_hypervisor_signals {
@@ -116,7 +121,7 @@ fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
 /// Set the VCPU thread affinity and other per-thread scheduler properties.
 /// This function will be called from each VCPU thread at startup.
 pub fn set_vcpu_thread_scheduling(
-    vcpu_affinity: Vec<usize>,
+    vcpu_affinity: CpuSet,
     enable_per_vm_core_scheduling: bool,
     vcpu_cgroup_tasks_file: Option<File>,
     run_rt: bool,
@@ -215,119 +220,6 @@ where
     Ok((vcpu, vcpu_run_handle))
 }
 
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
-fn handle_debug_msg<V>(
-    cpu_id: usize,
-    vcpu: &V,
-    guest_mem: &GuestMemory,
-    d: VcpuDebug,
-    reply_tube: &mpsc::Sender<VcpuDebugStatusMessage>,
-) -> Result<()>
-where
-    V: VcpuArch + 'static,
-{
-    match d {
-        VcpuDebug::ReadRegs => {
-            let msg = VcpuDebugStatusMessage {
-                cpu: cpu_id as usize,
-                msg: VcpuDebugStatus::RegValues(
-                    <Arch as arch::GdbOps<V>>::read_registers(vcpu as &V)
-                        .context("failed to handle a gdb ReadRegs command")?,
-                ),
-            };
-            reply_tube
-                .send(msg)
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::WriteRegs(regs) => {
-            <Arch as arch::GdbOps<V>>::write_registers(vcpu as &V, &regs)
-                .context("failed to handle a gdb WriteRegs command")?;
-            reply_tube
-                .send(VcpuDebugStatusMessage {
-                    cpu: cpu_id as usize,
-                    msg: VcpuDebugStatus::CommandComplete,
-                })
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::ReadReg(reg) => {
-            let msg = VcpuDebugStatusMessage {
-                cpu: cpu_id as usize,
-                msg: VcpuDebugStatus::RegValue(
-                    <Arch as arch::GdbOps<V>>::read_register(vcpu as &V, reg)
-                        .context("failed to handle a gdb ReadReg command")?,
-                ),
-            };
-            reply_tube
-                .send(msg)
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::WriteReg(reg, buf) => {
-            <Arch as arch::GdbOps<V>>::write_register(vcpu as &V, reg, &buf)
-                .context("failed to handle a gdb WriteReg command")?;
-            reply_tube
-                .send(VcpuDebugStatusMessage {
-                    cpu: cpu_id as usize,
-                    msg: VcpuDebugStatus::CommandComplete,
-                })
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::ReadMem(vaddr, len) => {
-            let msg = VcpuDebugStatusMessage {
-                cpu: cpu_id as usize,
-                msg: VcpuDebugStatus::MemoryRegion(
-                    <Arch as arch::GdbOps<V>>::read_memory(vcpu as &V, guest_mem, vaddr, len)
-                        .unwrap_or(Vec::new()),
-                ),
-            };
-            reply_tube
-                .send(msg)
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::WriteMem(vaddr, buf) => {
-            <Arch as arch::GdbOps<V>>::write_memory(vcpu as &V, guest_mem, vaddr, &buf)
-                .context("failed to handle a gdb WriteMem command")?;
-            reply_tube
-                .send(VcpuDebugStatusMessage {
-                    cpu: cpu_id as usize,
-                    msg: VcpuDebugStatus::CommandComplete,
-                })
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::EnableSinglestep => {
-            <Arch as arch::GdbOps<V>>::enable_singlestep(vcpu as &V)
-                .context("failed to handle a gdb EnableSingleStep command")?;
-            reply_tube
-                .send(VcpuDebugStatusMessage {
-                    cpu: cpu_id as usize,
-                    msg: VcpuDebugStatus::CommandComplete,
-                })
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::GetHwBreakPointCount => {
-            let msg = VcpuDebugStatusMessage {
-                cpu: cpu_id as usize,
-                msg: VcpuDebugStatus::HwBreakPointCount(
-                    <Arch as arch::GdbOps<V>>::get_max_hw_breakpoints(vcpu as &V)
-                        .context("failed to get max number of HW breakpoints")?,
-                ),
-            };
-            reply_tube
-                .send(msg)
-                .context("failed to send a debug status to GDB thread")
-        }
-        VcpuDebug::SetHwBreakPoint(addrs) => {
-            <Arch as arch::GdbOps<V>>::set_hw_breakpoints(vcpu as &V, &addrs)
-                .context("failed to handle a gdb SetHwBreakPoint command")?;
-            reply_tube
-                .send(VcpuDebugStatusMessage {
-                    cpu: cpu_id as usize,
-                    msg: VcpuDebugStatus::CommandComplete,
-                })
-                .context("failed to send a debug status to GDB thread")
-        }
-    }
-}
-
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 fn handle_s2idle_request(
     _privileged_vm: bool,
@@ -391,6 +283,9 @@ fn vcpu_loop<V>(
     guest_mem: GuestMemory,
     msr_handlers: MsrHandlers,
     guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+    to_vm_control: mpsc::Sender<VmRunMode>,
 ) -> ExitState
 where
     V: VcpuArch + 'static,
@@ -461,16 +356,17 @@ where
                             any(target_arch = "x86_64", target_arch = "aarch64"),
                             feature = "gdb"
                         ))]
-                        VcpuControl::Debug(d) => match &to_gdb_tube {
-                            Some(ref ch) => {
-                                if let Err(e) = handle_debug_msg(cpu_id, &vcpu, &guest_mem, d, ch) {
-                                    error!("Failed to handle gdb message: {}", e);
-                                }
+                        VcpuControl::Debug(d) => {
+                            if let Err(e) = crate::crosvm::gdb::vcpu_control_debug(
+                                cpu_id,
+                                &vcpu,
+                                &guest_mem,
+                                d,
+                                to_gdb_tube.as_ref(),
+                            ) {
+                                error!("Failed to handle VcpuControl::Debug message: {:#}", e);
                             }
-                            None => {
-                                error!("VcpuControl::Debug received while GDB feature is disabled: {:?}", d);
-                            }
-                        },
+                        }
                         VcpuControl::MakeRT => {
                             if run_rt && delay_rt {
                                 info!("Making vcpu {} RT\n", cpu_id);
@@ -483,6 +379,11 @@ where
                                     warn!("Failed to set vcpu to real time: {}", e);
                                 }
                             }
+                        }
+                        VcpuControl::GetStates => {
+                            if let Err(e) = to_vm_control.send(run_mode) {
+                                error!("Failed to send GetState: {}", e);
+                            };
                         }
                     }
                 }
@@ -560,21 +461,24 @@ where
                 Ok(VcpuExit::SystemEventS2Idle) => {
                     handle_s2idle_request(privileged_vm, &guest_suspended_cvar);
                 }
-                #[rustfmt::skip] Ok(VcpuExit::Debug { .. }) => {
-                    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+                Ok(VcpuExit::Debug) => {
+                    #[cfg(all(
+                        any(target_arch = "x86_64", target_arch = "aarch64"),
+                        feature = "gdb"
+                    ))]
+                    if let Err(e) =
+                        crate::crosvm::gdb::vcpu_exit_debug(cpu_id, to_gdb_tube.as_ref())
                     {
-                        let msg = VcpuDebugStatusMessage {
-                            cpu: cpu_id as usize,
-                            msg: VcpuDebugStatus::HitBreakPoint,
-                        };
-                        if let Some(ref ch) = to_gdb_tube {
-                            if let Err(e) = ch.send(msg) {
-                                error!("failed to notify breakpoint to GDB thread: {}", e);
-                                return ExitState::Crash;
-                            }
-                        }
-                        run_mode = VmRunMode::Breakpoint;
+                        error!("Failed to handle VcpuExit::Debug: {:#}", e);
+                        return ExitState::Crash;
                     }
+
+                    run_mode = VmRunMode::Breakpoint;
+                }
+                #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+                Ok(VcpuExit::BusLock) => {
+                    let delay_ns: u64 = bus_lock_ratelimit_ctrl.lock().ratelimit_calculate_delay(1);
+                    thread::sleep(Duration::from_nanos(delay_ns));
                 }
                 Ok(r) => warn!("unexpected vcpu exit: {:?}", r),
                 Err(e) => match e.errno() {
@@ -616,7 +520,7 @@ pub fn run_vcpu<V>(
     mut irq_chip: Box<dyn IrqChipArch + 'static>,
     vcpu_count: usize,
     run_rt: bool,
-    vcpu_affinity: Vec<usize>,
+    vcpu_affinity: CpuSet,
     delay_rt: bool,
     start_barrier: Arc<Barrier>,
     has_bios: bool,
@@ -635,6 +539,9 @@ pub fn run_vcpu<V>(
     vcpu_cgroup_tasks_file: Option<File>,
     userspace_msr: BTreeMap<u32, MsrConfig>,
     guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+    to_vm_control: mpsc::Sender<VmRunMode>,
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
@@ -731,6 +638,9 @@ where
                     guest_mem,
                     msr_handlers,
                     guest_suspended_cvar,
+                    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+                    bus_lock_ratelimit_ctrl,
+                    to_vm_control,
                 )
             };
 

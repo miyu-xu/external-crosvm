@@ -6,10 +6,11 @@
 //! frontend devices without compile-time dependencies on their corresponding
 //! backend devices.
 
-use data_model::DataInit;
 use data_model::Le16;
 use data_model::Le32;
 use data_model::Le64;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 pub mod block {
     use super::*;
@@ -33,7 +34,7 @@ pub mod block {
     pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
     pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
     #[repr(C)]
     pub struct virtio_blk_geometry {
         cylinders: Le16,
@@ -41,10 +42,7 @@ pub mod block {
         sectors: u8,
     }
 
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_blk_geometry {}
-
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
     #[repr(C)]
     pub struct virtio_blk_topology {
         physical_block_exp: u8,
@@ -53,10 +51,7 @@ pub mod block {
         opt_io_size: Le32,
     }
 
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_blk_topology {}
-
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
     #[repr(C, packed)]
     pub struct virtio_blk_config {
         pub capacity: Le64,
@@ -77,10 +72,7 @@ pub mod block {
         pub unused1: [u8; 3],
     }
 
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_blk_config {}
-
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
     #[repr(C)]
     pub(crate) struct virtio_blk_req_header {
         pub req_type: Le32,
@@ -88,10 +80,7 @@ pub mod block {
         pub sector: Le64,
     }
 
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_blk_req_header {}
-
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
     #[repr(C)]
     pub(crate) struct virtio_blk_discard_write_zeroes {
         pub sector: Le64,
@@ -100,9 +89,14 @@ pub mod block {
     }
 
     pub(crate) const VIRTIO_BLK_DISCARD_WRITE_ZEROES_FLAG_UNMAP: u32 = 1 << 0;
+}
 
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_blk_discard_write_zeroes {}
+pub mod fs {
+    /// The maximum allowable length of the tag used to identify a specific virtio-fs device.
+    pub const FS_MAX_TAG_LEN: usize = 36;
+
+    // The fs device does not have a fixed number of queues.
+    pub const QUEUE_SIZE: u16 = 1024;
 }
 
 pub mod gpu {
@@ -110,7 +104,7 @@ pub mod gpu {
 
     // First queue is for virtio gpu commands. Second queue is for cursor commands, which we expect
     // there to be fewer of.
-    pub const QUEUE_SIZES: &[u16] = &[256, 16];
+    pub const QUEUE_SIZES: &[u16] = &[512, 16];
 
     pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
     pub const VIRTIO_GPU_F_EDID: u32 = 1;
@@ -123,7 +117,7 @@ pub mod gpu {
 
     pub const VIRTIO_GPU_SHM_ID_HOST_VISIBLE: u8 = 0x0001;
 
-    #[derive(Copy, Clone, Debug, Default)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
     #[repr(C)]
     pub struct virtio_gpu_config {
         pub events_read: Le32,
@@ -131,30 +125,27 @@ pub mod gpu {
         pub num_scanouts: Le32,
         pub num_capsets: Le32,
     }
-
-    unsafe impl DataInit for virtio_gpu_config {}
 }
 
 pub mod snd {
     use super::*;
 
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone, Default, AsBytes, FromBytes)]
     #[repr(C, packed)]
     pub struct virtio_snd_config {
         pub jacks: Le32,
         pub streams: Le32,
         pub chmaps: Le32,
     }
-    // Safe because it only has data and has no implicit padding.
-    unsafe impl DataInit for virtio_snd_config {}
 }
 
 pub mod video {
-    use data_model::DataInit;
     use data_model::Le32;
     use serde::Deserialize;
     use serde::Serialize;
     use serde_keyvalue::FromKeyValues;
+    use zerocopy::AsBytes;
+    use zerocopy::FromBytes;
 
     // CMD_QUEUE_SIZE = max number of command descriptors for input and output queues
     // Experimentally, it appears a stream allocates 16 input and 26 output buffers = 42 total
@@ -180,7 +171,7 @@ pub mod video {
         Encoder,
     }
 
-    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
     #[serde(rename_all = "kebab-case")]
     pub enum VideoBackendType {
         #[cfg(feature = "libvda")]
@@ -238,13 +229,26 @@ pub mod video {
     }
 
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone)]
+    #[derive(Debug, Default, Copy, Clone, FromBytes, AsBytes)]
     pub struct virtio_video_config {
         pub version: Le32,
         pub max_caps_length: Le32,
         pub max_resp_length: Le32,
         pub device_name: [u8; 32],
     }
-    // Safe because auto-generated structs have no implicit padding.
-    unsafe impl DataInit for virtio_video_config {}
+}
+
+pub mod vsock {
+    pub const QUEUE_SIZE: u16 = 256;
+    pub const NUM_QUEUES: usize = 3;
+    pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
+}
+
+pub mod wl {
+    pub const QUEUE_SIZE: u16 = 256;
+    pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
+
+    pub const VIRTIO_WL_F_TRANS_FLAGS: u32 = 0x01;
+    pub const VIRTIO_WL_F_SEND_FENCES: u32 = 0x02;
+    pub const VIRTIO_WL_F_USE_SHMEM: u32 = 0x03;
 }

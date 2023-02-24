@@ -12,7 +12,6 @@ use base::Event;
 use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::IntoAsync;
-use data_model::DataInit;
 use futures::future::AbortHandle;
 use net_util::TapT;
 use once_cell::sync::OnceCell;
@@ -20,6 +19,7 @@ pub use sys::start_device as run_net_device;
 pub use sys::Options;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
+use zerocopy::AsBytes;
 
 use crate::virtio;
 use crate::virtio::net::build_config;
@@ -36,7 +36,6 @@ thread_local! {
 // TODO(b/188947559): Come up with better way to include these constants. Compiler errors happen
 // if they are kept in the trait.
 const MAX_QUEUE_NUM: usize = 3; /* rx, tx, ctrl */
-const MAX_VRING_LEN: u16 = 1024;
 
 async fn run_tx_queue<T: TapT>(
     mut queue: virtio::Queue,
@@ -112,10 +111,6 @@ where
         MAX_QUEUE_NUM
     }
 
-    fn max_vring_len(&self) -> u16 {
-        MAX_VRING_LEN
-    }
-
     fn features(&self) -> u64 {
         self.avail_features
     }
@@ -156,8 +151,8 @@ where
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu);
-        virtio::copy_config(data, 0, config_space.as_slice(), offset);
+        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu, None);
+        virtio::copy_config(data, 0, config_space.as_bytes(), offset);
     }
 
     fn reset(&mut self) {}

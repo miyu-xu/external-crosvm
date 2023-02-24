@@ -210,7 +210,7 @@ class Triple(NamedTuple):
         cargo_target = str(self)
         env["CARGO_BUILD_TARGET"] = cargo_target
         env["CARGO_TARGET_DIR"] = str(self.target_dir)
-        env["CROSVM_TARGET_DIR"] = str(crosvm_target_dir)
+        env["CROSVM_TARGET_DIR"] = str(crosvm_target_dir())
         return env
 
     def __str__(self):
@@ -392,6 +392,7 @@ def exec_file_on_target(
     args: List[str] = [],
     extra_files: List[Path] = [],
     generate_profile: bool = False,
+    execute_as_root: bool = False,
     **kwargs: Any,
 ):
     """Executes a file on the test target.
@@ -432,11 +433,14 @@ def exec_file_on_target(
             env["LLVM_PROFILE_FILE"] = f"{profile_prefix}.%p"
 
         cmd_line = [*prefix, str(filepath), *args]
+        if execute_as_root:
+            cmd_line = ["sudo", "--preserve-env", *cmd_line]
         return subprocess.run(
             cmd_line,
             env=env,
             timeout=timeout,
             text=True,
+            shell=False,
             **kwargs,
         )
     else:

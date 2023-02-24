@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use anyhow::Result;
+use named_lock::NamedLock;
 
 mod sys;
 
@@ -73,7 +74,17 @@ fn get_url(library: &str, filename: &str, version: u32) -> String {
     format!("{BASE_URL}{platform}/{arch}/{toolchain}/{library}/{build_type}/{version}/{filename}",)
 }
 
-fn download_file(url: &str, destination: &Path) -> Result<()> {
+pub fn download_file(url: &str, destination: &Path) -> Result<()> {
+    let lock = NamedLock::create("crosvm_prebuilts_download")?;
+    let _guard = lock.lock()?;
+
+    // Another process may have already downloaded this since we last checked.
+    if destination.exists() {
+        println!("Prebuilt {destination:?} has already been downloaded by another process.");
+        return Ok(());
+    }
+
+    println!("Downloading prebuilt {url} to {destination:?}");
     let mut cmd = sys::download_command(url, destination);
     match cmd.status() {
         Ok(exit_code) => {

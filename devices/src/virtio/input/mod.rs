@@ -13,6 +13,8 @@ use std::io::Read;
 use std::io::Write;
 use std::thread;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -499,7 +501,8 @@ impl<T: EventSource> Worker<T> {
                 }
             };
 
-            let mut needs_interrupt = false;
+            let mut eventq_needs_interrupt = false;
+            let mut statusq_needs_interrupt = false;
             for wait_event in wait_events.iter().filter(|e| e.is_readable) {
                 match wait_event.token {
                     Token::EventQAvailable => {
@@ -507,7 +510,7 @@ impl<T: EventSource> Worker<T> {
                             error!("failed reading event queue Event: {}", e);
                             break 'wait;
                         }
-                        needs_interrupt |= self.send_events();
+                        eventq_needs_interrupt |= self.send_events();
                     }
                     Token::StatusQAvailable => {
                         if let Err(e) = status_queue_evt.wait() {
@@ -515,13 +518,13 @@ impl<T: EventSource> Worker<T> {
                             break 'wait;
                         }
                         match self.process_status_queue() {
-                            Ok(b) => needs_interrupt |= b,
+                            Ok(b) => statusq_needs_interrupt |= b,
                             Err(e) => error!("failed processing status events: {}", e),
                         }
                     }
                     Token::InputEventsAvailable => match self.event_source.receive_events() {
                         Err(e) => error!("error receiving events: {}", e),
-                        Ok(_cnt) => needs_interrupt |= self.send_events(),
+                        Ok(_cnt) => eventq_needs_interrupt |= self.send_events(),
                     },
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
@@ -532,8 +535,12 @@ impl<T: EventSource> Worker<T> {
                     }
                 }
             }
-            if needs_interrupt {
+            if eventq_needs_interrupt {
                 self.event_queue
+                    .trigger_interrupt(&self.guest_memory, &self.interrupt);
+            }
+            if statusq_needs_interrupt {
+                self.status_queue
                     .trigger_interrupt(&self.guest_memory, &self.interrupt);
             }
         }
@@ -603,55 +610,43 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<Queue>,
-        mut queue_evts: Vec<Event>,
-    ) {
-        if queues.len() != 2 || queue_evts.len() != 2 {
-            return;
+        mut queues: Vec<(Queue, Event)>,
+    ) -> anyhow::Result<()> {
+        if queues.len() != 2 {
+            return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
-        let (self_kill_evt, kill_evt) = match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("failed to create kill Event pair: {}", e);
-                return;
-            }
-        };
+        let (self_kill_evt, kill_evt) = Event::new()
+            .and_then(|e| Ok((e.try_clone()?, e)))
+            .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
         // Status is queue 1, event is queue 0
-        let status_queue = queues.remove(1);
-        let status_queue_evt = queue_evts.remove(1);
+        let (status_queue, status_queue_evt) = queues.remove(1);
+        let (event_queue, event_queue_evt) = queues.remove(0);
 
-        let event_queue = queues.remove(0);
-        let event_queue_evt = queue_evts.remove(0);
+        let source = self
+            .source
+            .take()
+            .context("tried to activate device without a source for events")?;
+        let worker_thread = thread::Builder::new()
+            .name("v_input".to_string())
+            .spawn(move || {
+                let mut worker = Worker {
+                    interrupt,
+                    event_source: source,
+                    event_queue,
+                    status_queue,
+                    guest_memory: mem,
+                };
+                worker.run(event_queue_evt, status_queue_evt, kill_evt);
+                worker
+            })
+            .context("failed to spawn virtio_input worker")?;
 
-        if let Some(source) = self.source.take() {
-            let worker_result = thread::Builder::new()
-                .name(String::from("virtio_input"))
-                .spawn(move || {
-                    let mut worker = Worker {
-                        interrupt,
-                        event_source: source,
-                        event_queue,
-                        status_queue,
-                        guest_memory: mem,
-                    };
-                    worker.run(event_queue_evt, status_queue_evt, kill_evt);
-                    worker
-                });
+        self.worker_thread = Some(worker_thread);
 
-            match worker_result {
-                Err(e) => {
-                    error!("failed to spawn virtio_input worker: {}", e);
-                }
-                Ok(join_handle) => {
-                    self.worker_thread = Some(join_handle);
-                }
-            }
-        } else {
-            error!("tried to activate device without a source for events");
-        }
+        Ok(())
     }
 
     fn reset(&mut self) -> bool {
