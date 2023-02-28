@@ -70,6 +70,30 @@
       },
       "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8b735986_02fc5c9a",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-02-28T21:14:25Z",
+      "side": 1,
+      "message": "If you look at the new Android.bp and think \"we don\u0027t actually want or need this in Android\", then doing an exclude like this is a good solution. Otherwise you need to figure out how to get the new Android.bp to build.",
+      "parentUuid": "5daeb422_1e7d2ed7",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 14
+      },
+      "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
