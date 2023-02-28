@@ -94,6 +94,30 @@
       },
       "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "386c1249_3acd22dd",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-02-28T21:16:08Z",
+      "side": 1,
+      "message": "That is indeed what happened - failed to build, and saw fixture now has a Cargo.toml which led to me adding it to skip since I know e2e_tests are only enabled on x86_64.\n\nWe shouldn\u0027t want to enable e2e_tests until they\u0027re supported for more architectures -\u003e disable them right now.",
+      "parentUuid": "5daeb422_1e7d2ed7",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 14
+      },
+      "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
