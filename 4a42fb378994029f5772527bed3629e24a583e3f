@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6993eb27_162fb8ef",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-02-28T20:17:21Z",
+      "side": 1,
+      "message": "Is this added manually? If so, how do we determine we need to add it here?",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 14
+      },
+      "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
