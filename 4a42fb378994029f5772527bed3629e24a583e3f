@@ -46,6 +46,30 @@
       },
       "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5daeb422_1e7d2ed7",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-02-28T21:01:13Z",
+      "side": 1,
+      "message": "Thanks! So it failed to build after the merge and you noticed it was in e2e_tests and remembered it should be added here? Basically, how would I know to do this in the future if I didn\u0027t ask these questions?",
+      "parentUuid": "8353e377_3718caf0",
+      "range": {
+        "startLine": 29,
+        "startChar": 0,
+        "endLine": 29,
+        "endChar": 14
+      },
+      "revId": "4a42fb378994029f5772527bed3629e24a583e3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
