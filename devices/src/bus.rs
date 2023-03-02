@@ -17,10 +17,10 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::error;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use sync::Mutex;
 use thiserror::Error;
 
@@ -378,7 +378,7 @@ impl Bus {
                     if let Err(e) = device_lock.sleep() {
                         //TODO: Enable this line when b/232437513 is done
                         // return Err(anyhow!("Failed to sleep {}.", (*device_lock).debug_label()));
-                        eprintln!("Failed to sleep {}: {}", (*device_lock).debug_label(), e);
+                        error!("Failed to sleep {}: {}", (*device_lock).debug_label(), e);
                     }
                 }
                 BusDeviceEntry::InnerSync(dev) => {
@@ -398,7 +398,7 @@ impl Bus {
                     if let Err(e) = device_lock.wake() {
                         //TODO: Enable this line when b/232437513 is done
                         // return Err(anyhow!("Failed to wake {}.", (*device_lock).debug_label()));
-                        eprintln!("Failed to wake {}: {}", (*device_lock).debug_label(), e);
+                        error!("Failed to wake {}: {}", (*device_lock).debug_label(), e);
                     };
                 }
                 BusDeviceEntry::InnerSync(dev) => {
@@ -409,7 +409,10 @@ impl Bus {
         Ok(())
     }
 
-    pub fn snapshot_devices(&self, devices_vec: &mut Vec<serde_json::Value>) -> anyhow::Result<()> {
+    pub fn snapshot_devices(
+        &self,
+        mut add_snapshot: impl FnMut(u32, serde_json::Value),
+    ) -> anyhow::Result<()> {
         let devices_lock = &(self.devices).lock();
         for (_, device_entry) in devices_lock.iter() {
             let (device_id, serialized_device, device_label) = match &(device_entry.device) {
@@ -429,15 +432,12 @@ impl Bus {
             };
             match serialized_device {
                 Ok(snapshot) => {
-                    let serialized_dev = json! ({
-                        device_id.to_string(): snapshot,
-                    });
-                    devices_vec.push(serialized_dev);
+                    add_snapshot(device_id, snapshot);
                 }
                 Err(e) => {
                     //TODO: Enable this line when b/232437513 is done
                     // return Err(anyhow!("Failed to snapshot {}.", (*device_lock).debug_label()));
-                    eprintln!("Failed to snapshot {}: {}.", device_label, e);
+                    error!("Failed to snapshot {}: {}.", device_label, e);
                 }
             }
         }
