@@ -27,9 +27,9 @@ from impl.common import (
 def main(check: bool = False, nightly: bool = False):
     chdir(CROSVM_ROOT)
     cmd(
-        "./tools/presubmit format",
+        "./tools/health-check --all rust_format python_format markdown_format",
         "--fix" if not check else None,
-        "--nightly-fmt" if nightly else None,
+        "--nightly" if nightly else None,
     ).fg()
 
 

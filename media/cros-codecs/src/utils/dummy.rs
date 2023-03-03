@@ -7,12 +7,15 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::decoders::BlockingMode;
 use crate::decoders::DecodedHandle;
-use crate::decoders::DynHandle;
+use crate::decoders::DynPicture;
+use crate::decoders::FrameInfo;
 use crate::decoders::MappableHandle;
+use crate::decoders::Picture;
 use crate::decoders::Result;
 use crate::decoders::StatelessBackendResult;
 use crate::decoders::VideoDecoderBackend;
@@ -31,17 +34,17 @@ impl MappableHandle for BackendHandle {
     }
 }
 
-impl DynHandle for BackendHandle {
+impl<CodecData: FrameInfo> DynPicture for Picture<CodecData, BackendHandle> {
     fn dyn_mappable_handle_mut<'a>(&'a mut self) -> Box<dyn MappableHandle + 'a> {
         Box::new(BackendHandle)
     }
 }
 
-pub struct Handle {
-    pub handle: Rc<RefCell<BackendHandle>>,
+pub struct Handle<T> {
+    pub handle: Rc<RefCell<T>>,
 }
 
-impl Clone for Handle {
+impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         Self {
             handle: Rc::clone(&self.handle),
@@ -49,15 +52,16 @@ impl Clone for Handle {
     }
 }
 
-impl DecodedHandle for Handle {
+impl<T: FrameInfo> DecodedHandle for Handle<Picture<T, BackendHandle>> {
+    type CodecData = T;
     type BackendHandle = BackendHandle;
 
-    fn handle_rc(&self) -> &Rc<RefCell<Self::BackendHandle>> {
+    fn picture_container(&self) -> &Rc<RefCell<Picture<Self::CodecData, Self::BackendHandle>>> {
         &self.handle
     }
 
     fn display_resolution(&self) -> Resolution {
-        Default::default()
+        self.picture().data.display_resolution()
     }
 
     fn display_order(&self) -> Option<u64> {
@@ -65,26 +69,22 @@ impl DecodedHandle for Handle {
     }
 
     fn set_display_order(&mut self, _: u64) {}
-
-    fn timestamp(&self) -> u64 {
-        0
-    }
 }
 
 /// Dummy backend that can be used for any codec.
-pub(crate) struct Backend;
+pub(crate) struct Backend<H>(PhantomData<H>);
 
-impl Backend {
+impl<H> Backend<H> {
     pub(crate) fn new() -> Self {
-        Self
+        Self(Default::default())
     }
 }
 
-impl VideoDecoderBackend for Backend
+impl<H> VideoDecoderBackend for Backend<H>
 where
-    Handle: DecodedHandle,
+    Handle<H>: DecodedHandle,
 {
-    type Handle = Handle;
+    type Handle = Handle<H>;
 
     fn num_resources_total(&self) -> usize {
         1

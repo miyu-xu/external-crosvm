@@ -111,4 +111,4 @@ Branch foo tracking origin/main
 
 
 if __name__ == "__main__":
-    unittest.main(warnings="ignore")
+    unittest.main()

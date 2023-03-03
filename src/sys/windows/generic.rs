@@ -18,18 +18,10 @@ use base::WaitContext;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use devices::virtio;
-#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::gpu::sys::windows::product;
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuBackendConfig as GpuBackendConfigProduct;
-#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuVmmConfig as GpuVmmConfigProduct;
-#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::GpuVmmConfig;
-#[cfg(feature = "audio")]
-use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig as SndBackendConfigProduct;
-#[cfg(feature = "audio")]
-use devices::virtio::vhost::user::snd::sys::windows::product::SndVmmConfig as SndVmmConfigProduct;
-#[cfg(feature = "audio")]
-use devices::virtio::vhost::user::snd::sys::windows::SndVmmConfig;
 use devices::virtio::DisplayBackend;
 use devices::virtio::EventDevice;
 use devices::virtio::Gpu;
@@ -186,7 +178,7 @@ pub(super) fn create_gpu(
     gpu_parameters: &GpuParameters,
     event_devices: Vec<EventDevice>,
     features: u64,
-    _product_args: GpuBackendConfigProduct,
+    _product_args: product::GpuBackendConfig,
 ) -> Result<Gpu> {
     let wndproc_thread =
         virtio::gpu::start_wndproc_thread(None).expect("Failed to start wndproc_thread!");
@@ -207,44 +199,25 @@ pub(super) fn create_gpu(
     ))
 }
 
-#[cfg(feature = "gpu")]
 pub(super) fn push_gpu_control_tubes(
     _control_tubes: &mut [SharedTaggedControlTube],
     _gpu_vmm_config: &mut GpuVmmConfig,
 ) {
 }
 
-#[cfg(feature = "audio")]
-pub(super) fn push_snd_control_tubes(
-    _control_tubes: &mut [SharedTaggedControlTube],
-    _snd_vmm_config: &mut SndVmmConfig,
-) {
-}
-
-#[cfg(feature = "audio")]
-pub(crate) fn num_input_sound_devices(_cfg: &Config) -> u32 {
+pub(super) fn num_input_sound_devices(_cfg: &Config) -> u32 {
     0
 }
 
-#[cfg(feature = "audio")]
-pub(crate) fn num_input_sound_streams(_cfg: &Config) -> u32 {
+pub(super) fn num_input_sound_streams(_cfg: &Config) -> u32 {
     0
 }
 
-#[cfg(feature = "gpu")]
 pub(crate) fn get_gpu_product_configs(
     cfg: &Config,
     alias_pid: u32,
 ) -> Result<(GpuBackendConfigProduct, GpuVmmConfigProduct)> {
     Ok((GpuBackendConfigProduct {}, GpuVmmConfigProduct {}))
-}
-
-#[cfg(feature = "audio")]
-pub(crate) fn get_snd_product_configs(
-    _cfg: &Config,
-    _alias_pid: u32,
-) -> Result<(SndBackendConfigProduct, SndVmmConfigProduct)> {
-    Ok((SndBackendConfigProduct {}, SndVmmConfigProduct {}))
 }
 
 #[cfg(feature = "audio")]

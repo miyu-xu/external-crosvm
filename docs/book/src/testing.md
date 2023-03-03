@@ -3,8 +3,6 @@
 Crosvm runs on a variety of platforms with a significant amount of platform-specific code. Testing
 on all the supported platforms is crucial to keep crosvm healthy.
 
-## Types of tests
-
 ### Unit Tests
 
 Unit tests are your standard rust tests embedded with the rest of the code in `src/` and wrapped in
@@ -20,6 +18,7 @@ unit tests:
 - Avoid global state in unit tests
 
 This allows us to execute unit tests for any platform using emulators such as qemu-static or wine64.
+It also allows them to execute quickly with parallel execution.
 
 ### Integration tests
 
@@ -27,12 +26,10 @@ Cargo has native support for
 [integration testing](https://doc.rust-lang.org/rust-by-example/testing/integration_testing.html).
 Integration tests are written just like unit tests, but live in a separate directory at `tests/`.
 
-Integration tests **guarantee that the test has privileged access to the test environment**. They
-are only executed when a device-under-test (DUT) is specified when running tests:
+Integration tests **guarantee that the test has privileged access to the test environment** and that
+tests are executed exclusively on a system to prevent conflicts with each other.
 
-```sh
-./tools/run_tests --dut=vm|host
-```
+This allows tests to do all the things unit tests cannot do, at the cost of slower execution.
 
 ### End To End (E2E) tests
 
@@ -48,18 +45,6 @@ high level testing of its VM features on ChromeOS hardware, while AOSP is runnin
 VM features on AOSP hardware.
 
 Upstream crosvm is not involved in these tests and they are not executed in crosvm CI.
-
-## Parallel test execution
-
-Crosvm tests are executed in parallel, each test case in it's own process via
-[cargo nextest](http://nexte.st).
-
-This requires tests to be cautious about global state, especially integration tests which interact
-with system devices.
-
-If you require exclusive access to a device or file, you have to use
-[file-based locking](https://docs.rs/namedlock/latest/namedlock/) to prevent access by other test
-processes.
 
 ## Platorms tested
 

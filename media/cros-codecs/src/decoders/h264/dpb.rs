@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 use std::cell::Ref;
-use std::cell::RefCell;
 use std::cell::RefMut;
 use std::rc::Rc;
 
@@ -11,24 +10,17 @@ use anyhow::anyhow;
 use anyhow::Result;
 use log::debug;
 
+use crate::decoders::h264::backends::ContainedPicture;
 use crate::decoders::h264::picture::Field;
+use crate::decoders::h264::picture::H264Picture;
 use crate::decoders::h264::picture::IsIdr;
 use crate::decoders::h264::picture::PictureData;
 use crate::decoders::h264::picture::Reference;
 use crate::decoders::DecodedHandle;
 
-// Shortcut to refer to a DPB entry.
-//
-// The first member of the tuple is the `PictureData` for the frame.
-//
-// The second member is the backend handle of the frame. It can be `None` if the inserted picture
-// is non-existing (i.e. `nonexisting` is true on the `PictureData`).
-#[derive(Clone)]
-pub struct DpbEntry<T: DecodedHandle>(pub Rc<RefCell<PictureData>>, pub Option<T>);
-
-pub struct Dpb<T: DecodedHandle> {
-    /// List of `PictureData` and backend handles to decoded pictures.
-    entries: Vec<DpbEntry<T>>,
+pub struct Dpb<T> {
+    /// The list of handles to decoded pictures.
+    handles: Vec<T>,
     /// The maximum number of pictures that can be stored.
     max_num_pics: usize,
     /// Whether we're decoding in interlaced mode. Interlaced support is
@@ -39,27 +31,30 @@ pub struct Dpb<T: DecodedHandle> {
     interlaced: bool,
 }
 
-impl<T: DecodedHandle> Dpb<T> {
+impl<T> Dpb<T>
+where
+    T: DecodedHandle<CodecData = PictureData<<T as DecodedHandle>::BackendHandle>>,
+{
     /// Returns an iterator over the underlying H264 pictures stored in the
-    /// DPB.
-    pub fn pictures(&self) -> impl Iterator<Item = Ref<'_, PictureData>> {
-        self.entries.iter().map(|h| h.0.borrow())
+    /// handles.
+    pub fn pictures(
+        &self,
+    ) -> impl Iterator<Item = Ref<'_, H264Picture<<T as DecodedHandle>::BackendHandle>>> + '_ {
+        self.handles.iter().map(|h| h.picture())
     }
 
     /// Returns a mutable iterator over the underlying H264 pictures stored in
-    /// the DPB.
-    pub fn pictures_mut(&mut self) -> impl Iterator<Item = RefMut<'_, PictureData>> {
-        self.entries.iter().map(|h| h.0.borrow_mut())
+    /// the handles.
+    pub fn pictures_mut(
+        &self,
+    ) -> impl Iterator<Item = RefMut<'_, H264Picture<<T as DecodedHandle>::BackendHandle>>> + '_
+    {
+        self.handles.iter().map(|h| h.picture_mut())
     }
 
-    /// Returns the length of the DPB.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Get a reference to the whole DPB entries.
-    pub fn entries(&self) -> &Vec<DpbEntry<T>> {
-        &self.entries
+    /// Get a reference to the dpb's picture handles.
+    pub fn handles(&self) -> &Vec<T> {
+        &self.handles
     }
 
     /// Set the dpb's max num pics.
@@ -92,18 +87,17 @@ impl<T: DecodedHandle> Dpb<T> {
 
     /// Find the short term reference picture with the lowest `frame_num_wrap`
     /// value.
-    pub fn find_short_term_lowest_frame_num_wrap(&self) -> Option<Rc<RefCell<PictureData>>> {
+    pub fn find_short_term_lowest_frame_num_wrap(&self) -> Option<T> {
         let lowest = self
-            .entries
+            .handles()
             .iter()
+            .cloned()
             .filter(|h| {
-                let p = h.0.borrow();
+                let p = h.picture();
                 matches!(p.reference(), Reference::ShortTerm)
             })
-            .cloned()
-            .map(|h| h.0)
             .min_by_key(|h| {
-                let p = h.borrow();
+                let p = h.picture();
                 p.frame_num_wrap
             });
 
@@ -120,8 +114,8 @@ impl<T: DecodedHandle> Dpb<T> {
     /// Remove unused pictures from the DPB. A picture is not going to be used
     /// anymore if it's a) not a reference and b) not needed for output
     pub fn remove_unused(&mut self) {
-        self.entries.retain(|handle| {
-            let pic = handle.0.borrow();
+        self.handles.retain(|handle| {
+            let pic = handle.picture();
             let discard = !pic.is_ref() && !pic.needed_for_output;
 
             if discard {
@@ -133,7 +127,7 @@ impl<T: DecodedHandle> Dpb<T> {
     }
 
     /// Find a short term reference picture with the given `pic_num` value.
-    pub fn find_short_term_with_pic_num(&self, pic_num: i32) -> Option<DpbEntry<T>> {
+    pub fn find_short_term_with_pic_num(&self, pic_num: i32) -> Option<T> {
         let position = self
             .pictures()
             .position(|p| matches!(p.reference(), Reference::ShortTerm) && p.pic_num == pic_num);
@@ -144,15 +138,12 @@ impl<T: DecodedHandle> Dpb<T> {
             position
         );
 
-        Some(self.entries[position?].clone())
+        Some(self.handles[position?].clone())
     }
 
     /// Find a long term reference picture with the given `long_term_pic_num`
     /// value.
-    pub fn find_long_term_with_long_term_pic_num(
-        &self,
-        long_term_pic_num: i32,
-    ) -> Option<DpbEntry<T>> {
+    pub fn find_long_term_with_long_term_pic_num(&self, long_term_pic_num: i32) -> Option<T> {
         let position = self.pictures().position(|p| {
             matches!(p.reference(), Reference::LongTerm) && p.long_term_pic_num == long_term_pic_num
         });
@@ -163,26 +154,22 @@ impl<T: DecodedHandle> Dpb<T> {
             position
         );
 
-        Some(self.entries[position?].clone())
+        Some(self.handles[position?].clone())
     }
 
-    /// Store a picture and its backend handle in the DPB.
-    pub fn store_picture(
-        &mut self,
-        picture: Rc<RefCell<PictureData>>,
-        handle: Option<T>,
-    ) -> Result<()> {
+    /// Store a picture in the DPB.
+    pub fn store_picture(&mut self, handle: T) -> Result<()> {
         let max_pics = if self.interlaced {
             self.max_num_pics * 2
         } else {
             self.max_num_pics
         };
 
-        if self.entries.len() >= max_pics {
+        if self.handles.len() >= max_pics {
             return Err(anyhow!("Can't add a picture to the DPB: DPB is full."));
         }
 
-        let mut pic_mut = picture.borrow_mut();
+        let mut pic_mut = handle.picture_mut();
 
         // C.4.2. Decoding of gaps in frame_num and storage of "non-existing"
         // pictures
@@ -194,23 +181,21 @@ impl<T: DecodedHandle> Dpb<T> {
 
         if pic_mut.is_second_field() {
             let first_field_rc = pic_mut.other_field_unchecked();
-            drop(pic_mut);
             let mut first_field = first_field_rc.borrow_mut();
-            first_field.set_second_field_to(&picture);
-        } else {
             drop(pic_mut);
+            first_field.set_second_field_to(Rc::clone(handle.picture_container()));
+            pic_mut = handle.picture_mut();
         }
 
-        let pic = picture.borrow();
         debug!(
             "Stored picture POC {:?}, field {:?}, the DPB length is {:?}",
-            pic.pic_order_cnt,
-            pic.field,
-            self.entries.len()
+            pic_mut.pic_order_cnt,
+            pic_mut.field,
+            self.handles.len() + 1
         );
-        drop(pic);
 
-        self.entries.push(DpbEntry(picture, handle));
+        drop(pic_mut);
+        self.handles.push(handle);
 
         Ok(())
     }
@@ -218,7 +203,7 @@ impl<T: DecodedHandle> Dpb<T> {
     /// Whether the DPB has an empty slot for a new picture.
     pub fn has_empty_frame_buffer(&self) -> bool {
         if !self.interlaced {
-            self.entries.len() < self.max_num_pics
+            self.handles.len() < self.max_num_pics
         } else {
             let count = self
                 .pictures()
@@ -234,7 +219,7 @@ impl<T: DecodedHandle> Dpb<T> {
 
     /// Whether the DPB needs bumping, as described by clauses 1, 4, 5, 6 of
     /// C.4.5.3 "Bumping" process.
-    pub fn needs_bumping(&self, to_insert: &PictureData) -> bool {
+    pub fn needs_bumping(&self, to_insert: &H264Picture<T::BackendHandle>) -> bool {
         // In C.4.5.3 we handle clauses 2 and 3 separately. All other clauses
         // check for an empty frame buffer first. Here we handle:
         //    - There is no empty frame buffer and a empty frame buffer is
@@ -267,7 +252,7 @@ impl<T: DecodedHandle> Dpb<T> {
         }
 
         let lowest_poc = match self.find_lowest_poc_for_bumping() {
-            Some(handle) => handle.0.borrow().pic_order_cnt,
+            Some(handle) => handle.picture().pic_order_cnt,
             None => return false,
         };
 
@@ -276,7 +261,7 @@ impl<T: DecodedHandle> Dpb<T> {
     }
 
     /// Find the lowest POC in the DPB that can be bumped.
-    fn find_lowest_poc_for_bumping(&self) -> Option<DpbEntry<T>> {
+    fn find_lowest_poc_for_bumping(&self) -> Option<T> {
         let lowest = self
             .pictures()
             .filter(|pic| {
@@ -292,35 +277,37 @@ impl<T: DecodedHandle> Dpb<T> {
             .min_by_key(|pic| pic.pic_order_cnt)?;
 
         let position = self
-            .entries
+            .handles
             .iter()
-            .position(|handle| handle.0.borrow().pic_order_cnt == lowest.pic_order_cnt)
+            .position(|handle| handle.picture().pic_order_cnt == lowest.pic_order_cnt)
             .unwrap();
 
-        Some(self.entries[position].clone())
+        Some(self.handles[position].clone())
     }
 
     /// Gets the position of `needle` in the DPB, if any.
-    fn get_position(&self, needle: &Rc<RefCell<PictureData>>) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|handle| Rc::ptr_eq(&handle.0, needle))
+    fn get_position(&self, needle: &ContainedPicture<T::BackendHandle>) -> Option<usize> {
+        self.handles.iter().position(|handle| {
+            let p = handle.picture_container();
+            Rc::ptr_eq(p, needle)
+        })
     }
 
     /// Bump the dpb, returning a picture as per the bumping process described in C.4.5.3.
     /// Note that this picture will still be referenced by its pair, if any.
-    pub fn bump(&mut self, flush: bool) -> Option<DpbEntry<T>> {
+    pub fn bump(&mut self, flush: bool) -> Option<T> {
         let handle = self.find_lowest_poc_for_bumping()?;
-        let mut pic = handle.0.borrow_mut();
+        let pic_rc = handle.picture_container();
+        let mut pic = pic_rc.borrow_mut();
 
         debug!("Bumping picture {:#?} from the dpb", pic);
 
         pic.needed_for_output = false;
 
         if !pic.is_ref() || flush {
-            let index = self.get_position(&handle.0).unwrap();
+            let index = self.get_position(pic_rc).unwrap();
             log::debug!("removed picture {:#?} from dpb", pic);
-            self.entries.remove(index);
+            self.handles.remove(index);
         }
 
         if pic.other_field().is_some() {
@@ -331,7 +318,7 @@ impl<T: DecodedHandle> Dpb<T> {
             if !other_field.is_ref() {
                 log::debug!("other_field: removed picture {:#?} from dpb", other_field);
                 let index = self.get_position(&other_field_rc).unwrap();
-                self.entries.remove(index);
+                self.handles.remove(index);
             }
         }
 
@@ -340,7 +327,7 @@ impl<T: DecodedHandle> Dpb<T> {
     }
 
     /// Drains the DPB by continuously invoking the bumping process.
-    pub fn drain(&mut self) -> Vec<DpbEntry<T>> {
+    pub fn drain(&mut self) -> Vec<T> {
         debug!("Draining the DPB.");
 
         let mut pics = vec![];
@@ -366,46 +353,44 @@ impl<T: DecodedHandle> Dpb<T> {
     }
 
     /// Gets a Vec<ContainedPicture> of short term refs into `out`
-    pub fn get_short_term_refs(&self, out: &mut Vec<DpbEntry<T>>) {
+    pub fn get_short_term_refs(&self, out: &mut Vec<T>) {
         out.extend(
-            self.entries
+            self.handles()
                 .iter()
-                .filter(|&handle| matches!(handle.0.borrow().reference(), Reference::ShortTerm))
+                .filter(|&handle| matches!(handle.picture().reference(), Reference::ShortTerm))
                 .cloned(),
         )
     }
 
     /// Gets a Vec<ContainedPicture> of long term refs into `out`
-    pub fn get_long_term_refs(&self, out: &mut Vec<DpbEntry<T>>) {
+    pub fn get_long_term_refs(&self, out: &mut Vec<T>) {
         out.extend(
-            self.entries
+            self.handles()
                 .iter()
-                .filter(|&handle| matches!(handle.0.borrow().reference(), Reference::LongTerm))
+                .filter(|&handle| matches!(handle.picture().reference(), Reference::LongTerm))
                 .cloned(),
         )
     }
 }
 
-impl<T: DecodedHandle> Default for Dpb<T> {
+impl<Handle> Default for Dpb<Handle> {
     fn default() -> Self {
         // See https://github.com/rust-lang/rust/issues/26925 on why this can't
         // be derived.
         Self {
-            entries: Default::default(),
+            handles: Default::default(),
             max_num_pics: Default::default(),
             interlaced: Default::default(),
         }
     }
 }
 
-impl<T: DecodedHandle> std::fmt::Debug for Dpb<T> {
+impl<T> std::fmt::Debug for Dpb<T>
+where
+    T: DecodedHandle<CodecData = PictureData<<T as DecodedHandle>::BackendHandle>>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let pics = self
-            .entries
-            .iter()
-            .map(|h| &h.0)
-            .enumerate()
-            .collect::<Vec<_>>();
+        let pics = self.pictures().enumerate().collect::<Vec<_>>();
         f.debug_struct("Dpb")
             .field("pictures", &pics)
             .field("max_num_pics", &self.max_num_pics)

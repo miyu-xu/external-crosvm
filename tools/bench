@@ -5,7 +5,8 @@
 
 import os
 
-from impl.common import CROSVM_ROOT, run_main, cmd, chdir, Triple
+from impl.common import CROSVM_ROOT, run_main, cmd, chdir
+from impl.test_target import Triple
 
 bench = cmd("cargo test").with_color_flag()
 
