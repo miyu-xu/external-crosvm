@@ -2214,6 +2214,13 @@ pub struct RunCommand {
     ///     and give CAP_SETUID/CAP_SETGID to the crosvm.
     pub shared_dir: Vec<SharedDir>,
 
+    #[cfg(feature = "media")]
+    #[argh(switch)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// enable the simple virtio-media device
+    pub simple_media: Option<bool>,
+
     #[argh(
         option,
         arg_name = "[path=]PATH[,width=WIDTH][,height=HEIGHT][,name=NAME]",
@@ -2375,6 +2382,14 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
     pub unprotected_vm_with_firmware: Option<PathBuf>,
+
+    #[cfg(feature = "media")]
+    #[argh(option, arg_name = "[device]")]
+    #[serde(skip)]
+    #[merge(strategy = append)]
+    /// path to a V4L2 device to expose to the guest using the
+    /// virtio-v4l2 protocol.
+    pub v4l2_proxy: Vec<PathBuf>,
 
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
@@ -3593,6 +3608,12 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.stub_pci_devices = cmd.stub_pci_device;
 
         cfg.fdt_position = cmd.fdt_position;
+
+        #[cfg(feature = "media")]
+        {
+            cfg.v4l2_proxy = cmd.v4l2_proxy;
+            cfg.simple_media = cmd.simple_media.unwrap_or_default();
+        }
 
         cfg.file_backed_mappings = cmd.file_backed_mapping;
 

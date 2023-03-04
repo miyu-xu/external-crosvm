@@ -32,6 +32,8 @@ pub mod block;
 pub mod console;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(feature = "media")]
+pub mod media;
 pub mod resource_bridge;
 pub mod scsi;
 #[cfg(feature = "audio")]
@@ -182,6 +184,7 @@ pub enum DeviceType {
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     Pvclock = virtio_ids::VIRTIO_ID_PVCLOCK,
+    Media = virtio_ids::VIRTIO_ID_MEDIA,
 }
 
 impl DeviceType {
@@ -212,6 +215,7 @@ impl DeviceType {
             DeviceType::Wl => 2,            // in, out
             DeviceType::Tpm => 1,           // request queue
             DeviceType::Pvclock => 1,       // request queue
+            DeviceType::Media => 2,         // commandq, eventq
         }
     }
 }
@@ -241,6 +245,7 @@ impl std::fmt::Display for DeviceType {
             DeviceType::VideoEncoder => write!(f, "video-encoder"),
             DeviceType::Mac80211HwSim => write!(f, "mac80211-hwsim"),
             DeviceType::Scmi => write!(f, "scmi"),
+            DeviceType::Media => write!(f, "media"),
         }
     }
 }

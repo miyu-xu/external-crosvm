@@ -668,6 +668,18 @@ fn create_virtio_devices(
         }
     }
 
+    #[cfg(feature = "media")]
+    {
+        for v4l2_device in &cfg.v4l2_proxy {
+            devs.push(create_v4l2_device(cfg.protection_type, &v4l2_device)?);
+        }
+    }
+
+    #[cfg(feature = "media")]
+    if cfg.simple_media {
+        devs.push(create_simple_media_device(cfg.protection_type)?);
+    }
+
     #[cfg(feature = "video-decoder")]
     {
         for (tube, backend) in video_dec_cfg {
