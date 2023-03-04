@@ -60,6 +60,9 @@ impl Display for AvError {
 /// lifetime here.
 pub struct AvCodec(&'static ffi::AVCodec);
 
+/// SAFETY: `AVCodec` is static and thus safe to share.
+unsafe impl Send for AvCodec {}
+
 #[derive(Debug, ThisError)]
 pub enum AvCodecOpenError {
     #[error("failed to allocate AVContext object")]

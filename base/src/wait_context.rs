@@ -94,6 +94,7 @@ pub struct TriggeredEvent<T: EventToken> {
     pub token: T,
     pub is_readable: bool,
     pub is_writable: bool,
+    pub is_pri: bool,
     pub is_hungup: bool,
 }
 
@@ -109,6 +110,8 @@ pub enum EventType {
     Read,
     Write,
     ReadWrite,
+    Event,
+    EventRead,
 }
 
 /// Used to wait for multiple objects which are eligible for waiting.

@@ -257,6 +257,15 @@ fn create_virtio_devices(
         )?);
     }
 
+    #[cfg(all(feature = "media", feature = "video-decoder"))]
+    let media_adapter_cfg = if cfg.media_adapter {
+        let (video_tube, gpu_tube) = Tube::pair().expect("failed to create tube for media adapter");
+        resource_bridges.push(gpu_tube);
+        Some(video_tube)
+    } else {
+        None
+    };
+
     #[cfg(feature = "video-decoder")]
     let video_dec_cfg = cfg
         .video_dec
@@ -665,6 +674,26 @@ fn create_virtio_devices(
                 snd_params,
             )?);
         }
+    }
+
+    #[cfg(feature = "media")]
+    {
+        for v4l2_device in &cfg.v4l2_proxy {
+            devs.push(create_v4l2_device(cfg.protection_type, &v4l2_device)?);
+        }
+    }
+
+    #[cfg(feature = "media")]
+    if cfg.simple_media {
+        devs.push(create_simple_media_device(cfg.protection_type)?);
+    }
+
+    #[cfg(all(feature = "media", feature = "video-decoder", feature = "ffmpeg"))]
+    if let Some(media_adapter_tube) = media_adapter_cfg {
+        devs.push(create_virtio_media_adapter(
+            cfg.protection_type,
+            media_adapter_tube,
+        )?);
     }
 
     #[cfg(feature = "video-decoder")]

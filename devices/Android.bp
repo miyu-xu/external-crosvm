@@ -285,4 +285,13 @@ rust_library {
         "libremain",
     ],
     visibility: ["//vendor:__subpackages__"],
+    target: {
+        android: {
+            rustlibs: ["libvirtio_media"],
+            features: [
+                "media",
+                "media-decoder",
+            ],
+        },
+    },
 }

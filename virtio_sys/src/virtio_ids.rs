@@ -54,5 +54,6 @@ pub const VIRTIO_ID_PARAM_SERV: u32 = 38;
 pub const VIRTIO_ID_AUDIO_POLICY: u32 = 39;
 pub const VIRTIO_ID_BT: u32 = 40;
 pub const VIRTIO_ID_GPIO: u32 = 41;
+pub const VIRTIO_ID_MEDIA: u32 = 59;
 pub const VIRTIO_ID_WL: u32 = 63;
 pub const VIRTIO_ID_TPM: u32 = 62;

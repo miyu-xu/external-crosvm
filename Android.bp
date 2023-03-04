@@ -139,6 +139,11 @@ rust_binary {
             },
         },
         android: {
+            rustlibs: ["libvirtio_media"],
+            features: [
+                "media",
+                "media-decoder",
+            ],
             shared_libs: [
                 // TODO(b/332677108): remove libc++ when display service is rewritten in rust.
                 "libc++",

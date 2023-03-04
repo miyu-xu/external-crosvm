@@ -18,6 +18,7 @@ use libc::ENOENT;
 use libc::EPOLLHUP;
 use libc::EPOLLIN;
 use libc::EPOLLOUT;
+use libc::EPOLLPRI;
 use libc::EPOLLRDHUP;
 use libc::EPOLL_CLOEXEC;
 use libc::EPOLL_CTL_ADD;
@@ -44,6 +45,8 @@ impl From<EventType> for u32 {
             EventType::Read => EPOLLIN,
             EventType::Write => EPOLLOUT,
             EventType::ReadWrite => EPOLLIN | EPOLLOUT,
+            EventType::Event => EPOLLPRI,
+            EventType::EventRead => EPOLLPRI | EPOLLIN,
         };
         v as u32
     }
@@ -263,6 +266,7 @@ impl<T: EventToken> EventContext<T> {
                     token: T::from_raw_token(e.u64),
                     is_readable: e.events & (EPOLLIN as u32) != 0,
                     is_writable: e.events & (EPOLLOUT as u32) != 0,
+                    is_pri: e.events & (EPOLLPRI as u32) != 0,
                     is_hungup: e.events & ((EPOLLHUP | EPOLLRDHUP) as u32) != 0,
                 }
             })
