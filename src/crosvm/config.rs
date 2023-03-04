@@ -874,6 +874,8 @@ pub struct Config {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[serde(skip)]
     pub shared_dirs: Vec<SharedDir>,
+    #[cfg(feature = "media")]
+    pub simple_media_device: bool,
     #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pub slirp_capture_file: Option<String>,
     #[cfg(target_arch = "x86_64")]
@@ -892,6 +894,9 @@ pub struct Config {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(feature = "media")]
+    pub v4l2_proxy: Vec<PathBuf>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
     pub vcpu_count: Option<usize>,
@@ -1095,6 +1100,8 @@ impl Default for Config {
             service_pipe_name: None,
             #[cfg(any(target_os = "android", target_os = "linux"))]
             shared_dirs: Vec::new(),
+            #[cfg(feature = "media")]
+            simple_media_device: Default::default(),
             #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file: None,
             #[cfg(target_arch = "x86_64")]
@@ -1144,6 +1151,9 @@ impl Default for Config {
             virtio_input: Vec::new(),
             #[cfg(feature = "audio")]
             virtio_snds: Vec::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(feature = "media")]
+            v4l2_proxy: Vec::new(),
             #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
             wayland_socket_paths: BTreeMap::new(),
