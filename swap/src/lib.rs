@@ -20,11 +20,13 @@ pub mod userfaultfd;
 // this is public only for integration tests.
 pub mod worker;
 
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::stderr;
 use std::io::stdout;
 use std::ops::Range;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -50,12 +52,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use vm_memory::GuestMemory;
 
+#[cfg(feature = "log_page_fault")]
 use crate::logger::PageFaultEventLogger;
 use crate::page_handler::MoveToStaging;
 use crate::page_handler::PageHandler;
 use crate::processes::freeze_all_processes;
 use crate::userfaultfd::register_regions;
 use crate::userfaultfd::unregister_regions;
+use crate::userfaultfd::Factory as UffdFactory;
 use crate::userfaultfd::UffdEvent;
 use crate::userfaultfd::Userfaultfd;
 use crate::worker::Channel;
@@ -64,78 +68,65 @@ use crate::worker::Worker;
 /// The max size of chunks to swap out/in at once.
 const MAX_SWAP_CHUNK_SIZE: usize = 2 * 1024 * 1024; // = 2MB
 
-/// Current status of vmm-swap.
+/// Current state of vmm-swap.
+///
+/// This should not contain fields but be a plain enum because this will be displayed to user using
+/// `serde_json` crate.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Status {
+pub enum State {
     /// vmm-swap is ready. userfaultfd is disabled until vmm-swap is enabled.
     Ready,
     /// Pages in guest memory are moved to the staging memory.
-    Pending {
-        /// take taken for moving memory to staging.
-        move_staging_time_ms: u128,
-        /// metrics
-        metrics: Metrics,
-    },
-    /// swap-out is in progress. this is not used for now because the monitor process runs in a
-    /// single thread.
-    InProgress {
-        /// take taken for moving memory to staging.
-        move_staging_time_ms: u128,
-        /// metrics
-        metrics: Metrics,
-    },
+    Pending,
+    /// swap-out is in progress.
+    SwapOutInProgress,
     /// swap out succeeded.
-    Active {
-        /// take taken for moving memory to staging.
-        move_staging_time_ms: u128,
-        /// time taken for swap-out.
-        swap_time_ms: u128,
-        /// metrics
-        metrics: Metrics,
-    },
+    Active,
+    /// swap-in is in progress.
+    SwapInInProgress,
     /// swap out failed.
-    Failed {
-        /// metrics
-        metrics: Metrics,
-    },
+    Failed,
 }
 
-impl Status {
-    fn generate(swap_out_state: &Option<SwapOutState>, page_handler: &Option<PageHandler>) -> Self {
-        if let Some(page_handler) = page_handler.as_ref() {
-            let metrics = Metrics::new(page_handler);
-            match *swap_out_state {
-                Some(SwapOutState::Pending {
-                    move_staging_time_ms,
-                }) => Self::Pending {
-                    move_staging_time_ms,
-                    metrics,
-                },
-                Some(SwapOutState::InProgress {
-                    move_staging_time_ms,
-                    ..
-                }) => Self::InProgress {
-                    move_staging_time_ms,
-                    metrics,
-                },
-                Some(SwapOutState::Completed {
-                    move_staging_time_ms,
-                    swap_time_ms,
-                }) => Self::Active {
-                    move_staging_time_ms,
-                    swap_time_ms,
-                    metrics,
-                },
-                None => Self::Failed { metrics },
-            }
-        } else {
-            Self::Ready
+impl From<&SwapState> for State {
+    fn from(state: &SwapState) -> Self {
+        match state {
+            SwapState::Disabled => State::Ready,
+            SwapState::SwapOutPending => State::Pending,
+            SwapState::InProgress {
+                direction: SwapDirection::Out,
+                ..
+            } => State::SwapOutInProgress,
+            SwapState::SwapOutCompleted => State::Active,
+            SwapState::Failed => State::Failed,
         }
     }
 }
 
+/// Latency and number of pages of swap operations (move to staging, swap out, swap in).
+///
+/// The meaning of `StateTransition` depends on `State`.
+///
+/// | `State`             | `StateTransition`                            |
+/// |---------------------|----------------------------------------------|
+/// | `Ready`             | empty or transition record of `swap disable` |
+/// | `Pending`           | transition record of `swap enable`           |
+/// | `SwapOutInProgress` | transition record of `swap out`              |
+/// | `Active`            | transition record of `swap out`              |
+/// | `SwapInInProgress`  | transition record of `swap disable`          |
+/// | `Failed`            | empty                                        |
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct StateTransition {
+    /// The number of pages moved for the state transition.
+    pages: usize,
+    /// Time taken for the state transition.
+    time_ms: u128,
+}
+
 /// Current metrics of vmm-swap.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+///
+/// This is only available while vmm-swap is enabled.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Metrics {
     /// count of pages on RAM.
     resident_pages: usize,
@@ -168,22 +159,32 @@ impl Metrics {
     }
 }
 
-enum SwapOutState {
-    Pending {
-        move_staging_time_ms: u128,
-    },
-    InProgress {
-        move_staging_time_ms: u128,
-        started_time: Instant,
-        swapped_pages: usize,
-    },
-    Completed {
-        move_staging_time_ms: u128,
-        swap_time_ms: u128,
-    },
+/// The response to `crosvm swap status` command.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Status {
+    state: State,
+    metrics: Metrics,
+    state_transition: StateTransition,
 }
 
-/// commands used in vmm-swap feature internally between [SwapController] and [monitor_process].
+impl Status {
+    fn new(
+        state: &SwapState,
+        state_transition: &StateTransition,
+        page_handler: &Option<PageHandler>,
+    ) -> Self {
+        Status {
+            state: state.into(),
+            metrics: page_handler
+                .as_ref()
+                .map(Metrics::new)
+                .unwrap_or_else(Metrics::default),
+            state_transition: state_transition.clone(),
+        }
+    }
+}
+
+/// Commands used in vmm-swap feature internally between [SwapController] and [monitor_process].
 #[derive(Serialize, Deserialize, Debug)]
 enum Command {
     Enable,
@@ -193,12 +194,12 @@ enum Command {
     Status,
     #[serde(with = "base::platform::with_raw_descriptor")]
     ProcessForked(RawDescriptor),
-    StartPageFaultLogging,
 }
 
 /// [SwapController] provides APIs to control vmm-swap.
 pub struct SwapController {
     child_process: Child,
+    uffd_factory: UffdFactory,
     tube: Tube,
 }
 
@@ -212,20 +213,46 @@ impl SwapController {
     /// * `guest_memory` - fresh new [GuestMemory]. Any pages on the [GuestMemory] must not be
     ///   touched.
     /// * `swap_dir` - directory to store swap files.
-    pub fn launch(guest_memory: GuestMemory, swap_dir: PathBuf) -> anyhow::Result<Self> {
+    pub fn launch(guest_memory: GuestMemory, swap_dir: &Path) -> anyhow::Result<Self> {
         info!("vmm-swap is enabled. launch monitor process.");
 
-        let mut keep_rds = vec![stdout().as_raw_descriptor(), stderr().as_raw_descriptor()];
+        let uffd_factory = UffdFactory::new();
+        let uffd = uffd_factory.create().context("create userfaultfd")?;
+
+        // The swap file is created as `O_TMPFILE` from the specified directory. As benefits:
+        //
+        // * it has no chance to conflict.
+        // * it has a security benefit that no one (except root) can access the swap file.
+        // * it will be automatically deleted by the kernel when crosvm exits/dies or on reboot if
+        //   the device panics/hard-resets while crosvm is running.
+        let swap_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_TMPFILE | libc::O_EXCL)
+            .mode(0o000) // other processes with the same uid can't open the file
+            .open(swap_dir)?;
 
         let (tube_main_process, tube_monitor_process) = Tube::pair().context("create swap tube")?;
-        keep_rds.push(tube_monitor_process.as_raw_descriptor());
+
+        #[cfg(feature = "log_page_fault")]
+        let page_fault_logger = PageFaultEventLogger::create(&swap_dir, &guest_memory)
+            .context("create page fault logger")?;
+
+        let mut keep_rds = vec![
+            stdout().as_raw_descriptor(),
+            stderr().as_raw_descriptor(),
+            uffd.as_raw_descriptor(),
+            swap_file.as_raw_descriptor(),
+            tube_monitor_process.as_raw_descriptor(),
+            #[cfg(feature = "log_page_fault")]
+            page_fault_logger.as_raw_descriptor(),
+        ];
 
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
         keep_rds.extend(guest_memory.as_raw_descriptors());
 
-        let userfaultfd = Userfaultfd::new().context("create userfaultfd")?;
-        keep_rds.push(userfaultfd.as_raw_descriptor());
+        keep_rds.extend(uffd_factory.as_raw_descriptors());
 
         // TODO(b/258351526): setup minijail details
         let jail = Minijail::new().context("create minijail")?;
@@ -234,9 +261,14 @@ impl SwapController {
         // current process)
         let child_process =
             fork_process(jail, keep_rds, Some(String::from("swap monitor")), || {
-                if let Err(e) =
-                    monitor_process(tube_monitor_process, guest_memory, userfaultfd, swap_dir)
-                {
+                if let Err(e) = monitor_process(
+                    tube_monitor_process,
+                    guest_memory,
+                    uffd,
+                    swap_file,
+                    #[cfg(feature = "log_page_fault")]
+                    page_fault_logger,
+                ) {
                     panic!("page_fault_handler_thread exited with error: {:?}", e)
                 }
             })
@@ -245,8 +277,12 @@ impl SwapController {
         // send first status request to the monitor process and wait for the response until setup on
         // the monitor process completes.
         tube_main_process.send(&Command::Status)?;
-        match tube_main_process.recv().context("recv initial status")? {
-            Status::Ready => {
+        match tube_main_process
+            .recv::<Status>()
+            .context("recv initial status")?
+            .state
+        {
+            State::Ready => {
                 // The initial state of swap status is Ready and this is a signal that the
                 // monitoring process completes setup and is running.
             }
@@ -257,6 +293,7 @@ impl SwapController {
 
         Ok(Self {
             child_process,
+            uffd_factory,
             tube: tube_main_process,
         })
     }
@@ -316,17 +353,6 @@ impl SwapController {
         Ok(status)
     }
 
-    /// Start page fault logging.
-    ///
-    /// This returns as soon as it succeeds to send request to the monitor process.
-    /// Requests will be ignored if it is already start logging.
-    pub fn start_page_fault_logging(&self) -> anyhow::Result<()> {
-        self.tube
-            .send(&Command::StartPageFaultLogging)
-            .context("send page fault logging request")?;
-        Ok(())
-    }
-
     /// Shutdown the monitor process.
     ///
     /// This blocks until the monitor process exits.
@@ -349,7 +375,7 @@ impl SwapController {
     /// Userfaultfd(2) originally has `UFFD_FEATURE_EVENT_FORK`. But it is not applicable to crosvm
     /// since it does not support non-root user namespace.
     pub fn on_process_forked(&self) -> anyhow::Result<()> {
-        let uffd = Userfaultfd::new().context("create userfaultfd")?;
+        let uffd = self.uffd_factory.create().context("create userfaultfd")?;
         self.tube
             .send(&Command::ProcessForked(uffd.as_raw_descriptor()))
             .context("send forked event")?;
@@ -361,7 +387,9 @@ impl SwapController {
 
 impl AsRawDescriptors for SwapController {
     fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
-        self.tube.as_raw_descriptors()
+        let mut rds = self.uffd_factory.as_raw_descriptors();
+        rds.push(self.tube.as_raw_descriptor());
+        rds
     }
 }
 
@@ -425,12 +453,12 @@ fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<Range<usize>> {
     regions
 }
 
-fn start_monitoring(
+fn start_monitoring<'a>(
     uffd_list: &mut UffdList,
     guest_memory: &GuestMemory,
-    swap_dir: &Path,
+    swap_file: &'a File,
     channel: Arc<Channel<MoveToStaging>>,
-) -> anyhow::Result<PageHandler> {
+) -> anyhow::Result<PageHandler<'a>> {
     // Drain the event queue to ensure that the uffds for all forked processes are being monitored.
     let mut new_uffds = Vec::new();
     for uffd in uffd_list.get_list() {
@@ -448,7 +476,7 @@ fn start_monitoring(
 
     let regions = regions_from_guest_memory(guest_memory);
 
-    let page_hander = PageHandler::create(swap_dir, &regions, channel).context("enable swap")?;
+    let page_hander = PageHandler::create(swap_file, &regions, channel).context("enable swap")?;
 
     // safe because the regions are from guest memory and uffd_list contains all the processes of
     // crosvm.
@@ -477,12 +505,29 @@ fn disable_monitoring(
     Ok(num_pages)
 }
 
+enum SwapDirection {
+    Out,
+    // TODO(b/265606668): Add `In` to swap-in concurrently.
+}
+
+enum SwapState {
+    Disabled,
+    SwapOutPending,
+    InProgress {
+        direction: SwapDirection,
+        started_time: Instant,
+    },
+    SwapOutCompleted,
+    Failed,
+}
+
 /// the main thread of the monitor process.
 fn monitor_process(
     tube: Tube,
     guest_memory: GuestMemory,
     uffd: Userfaultfd,
-    swap_dir: PathBuf,
+    swap_file: File,
+    #[cfg(feature = "log_page_fault")] mut page_fault_logger: PageFaultEventLogger,
 ) -> anyhow::Result<()> {
     info!("monitor_process started");
 
@@ -501,17 +546,16 @@ fn monitor_process(
     let worker = Worker::new(n_worker, n_worker);
 
     let mut uffd_list = UffdList::new(uffd, &wait_ctx);
-    let mut swap_out_state: Option<SwapOutState> = None;
+    let mut state: SwapState = SwapState::Disabled;
+    let mut state_transition = StateTransition::default();
     let mut page_handler_opt: Option<PageHandler> = None;
-    let mut page_fault_logger: Option<PageFaultEventLogger> = None;
 
     'wait: loop {
-        let events = match swap_out_state {
-            Some(SwapOutState::InProgress {
-                ref move_staging_time_ms,
-                ref mut swapped_pages,
-                ref started_time,
-            }) => {
+        let events = match &state {
+            SwapState::InProgress {
+                direction,
+                started_time,
+            } => {
                 let events = wait_ctx
                     .wait_timeout(Duration::ZERO)
                     .context("wait poll events")?;
@@ -519,23 +563,22 @@ fn monitor_process(
                 // proceed swap out only when there is no page fault (or other) events.
                 if events.is_empty() {
                     // page_handler must be present when state is InProgress.
-                    let num_pages = page_handler_opt
-                        .as_mut()
-                        .unwrap()
-                        .swap_out(MAX_SWAP_CHUNK_SIZE)
-                        .context("swap out")?;
-                    if num_pages == 0 {
-                        let swap_time_ms = started_time.elapsed().as_millis();
-                        info!(
-                            "swap out {} pages to file in {} ms",
-                            swapped_pages, swap_time_ms
-                        );
-                        swap_out_state = Some(SwapOutState::Completed {
-                            move_staging_time_ms: *move_staging_time_ms,
-                            swap_time_ms,
-                        });
-                    } else {
-                        *swapped_pages += num_pages;
+                    let page_handler = page_handler_opt.as_mut().unwrap();
+                    match direction {
+                        SwapDirection::Out => {
+                            let num_pages = page_handler
+                                .swap_out(MAX_SWAP_CHUNK_SIZE)
+                                .context("swap out")?;
+                            state_transition.pages += num_pages;
+                            state_transition.time_ms = started_time.elapsed().as_millis();
+                            if num_pages == 0 {
+                                info!(
+                                    "swap out {} pages to file in {} ms",
+                                    state_transition.pages, state_transition.time_ms
+                                );
+                                state = SwapState::SwapOutCompleted;
+                            }
+                        }
                     }
                     continue;
                 }
@@ -563,9 +606,8 @@ fn monitor_process(
                     } {
                         match event {
                             UffdEvent::Pagefault { addr, .. } => {
-                                if let Some(ref mut page_fault_logger) = page_fault_logger {
-                                    page_fault_logger.log_page_fault(addr as usize, id_uffd);
-                                }
+                                #[cfg(feature = "log_page_fault")]
+                                page_fault_logger.log_page_fault(addr as usize, id_uffd);
                                 if let Some(ref mut page_handler) = page_handler_opt {
                                     page_handler
                                         .handle_page_fault(uffd, addr as usize)
@@ -611,7 +653,7 @@ fn monitor_process(
                             page_handler_opt = Some(start_monitoring(
                                 &mut uffd_list,
                                 &guest_memory,
-                                &swap_dir,
+                                &swap_file,
                                 worker.channel.clone(),
                             )?);
                         }
@@ -619,7 +661,7 @@ fn monitor_process(
 
                         info!("start moving memory to staging");
                         let t0 = std::time::Instant::now();
-                        let mut num_pages = 0;
+                        state_transition = StateTransition::default();
 
                         let result = {
                             let _processes_guard =
@@ -631,7 +673,7 @@ fn monitor_process(
                                     // * no process access the guest memory (freeze_all_processes())
                                     // * page fault events are handled by PageHandler.
                                     // * wait for all the copy completed within _processes_guard.
-                                    num_pages += unsafe {
+                                    state_transition.pages += unsafe {
                                         page_handler.move_to_staging(host_addr, shm, shm_offset)
                                     }
                                     .context("move to staging")?;
@@ -641,75 +683,79 @@ fn monitor_process(
                             worker.channel.wait_complete();
                             result
                         };
+                        state_transition.time_ms = t0.elapsed().as_millis();
 
                         match result {
                             Ok(()) => {
-                                let move_time_ms = t0.elapsed().as_millis();
-                                info!("move {} pages to staging in {} ms", num_pages, move_time_ms);
+                                info!(
+                                    "move {} pages to staging in {} ms",
+                                    state_transition.pages, state_transition.time_ms
+                                );
                                 if page_handler.compute_resident_pages() > 0 {
                                     error!(
                                         "active page is not zero just after swap out but {} pages",
                                         page_handler.compute_resident_pages()
                                     );
                                 }
-                                swap_out_state = Some(SwapOutState::Pending {
-                                    move_staging_time_ms: move_time_ms,
-                                });
+                                state = SwapState::SwapOutPending;
                             }
                             Err(e) => {
                                 error!("failed to move memory to staging: {}", e);
-                                swap_out_state = None;
+                                state = SwapState::Failed;
+                                state_transition = StateTransition::default();
                             }
                         }
                     }
-                    Command::SwapOut => {
-                        if let Some(SwapOutState::Pending {
-                            move_staging_time_ms,
-                        }) = swap_out_state
-                        {
-                            swap_out_state = Some(SwapOutState::InProgress {
-                                move_staging_time_ms,
+                    Command::SwapOut => match &state {
+                        SwapState::SwapOutPending => {
+                            state = SwapState::InProgress {
+                                direction: SwapDirection::Out,
                                 started_time: std::time::Instant::now(),
-                                swapped_pages: 0,
-                            });
+                            };
+                            state_transition = StateTransition::default();
                             info!("start swapping out.");
-                        } else {
-                            warn!("swap is not enabled.");
                         }
-                    }
+                        state => {
+                            warn!("swap out is not ready. state: {:?}", State::from(state));
+                        }
+                    },
                     Command::Disable => {
-                        if let Some(page_handler) = page_handler_opt.take() {
-                            // clear swap_out_state.
-                            if let Some(SwapOutState::InProgress { .. }) = swap_out_state.take() {
+                        match &state {
+                            SwapState::Disabled => {
+                                warn!("swap is already disabled.");
+                                continue;
+                            }
+                            SwapState::InProgress {
+                                direction: SwapDirection::Out,
+                                ..
+                            } => {
                                 info!("swap out is aborted.");
                             }
+                            _ => {}
+                        }
+                        if let Some(page_handler) = page_handler_opt.take() {
                             let t0 = std::time::Instant::now();
-                            let num_pages =
+                            state_transition.pages =
                                 disable_monitoring(page_handler, &uffd_list, &guest_memory)?;
-                            let time_took_ms = t0.elapsed().as_millis();
+                            state_transition.time_ms = t0.elapsed().as_millis();
                             info!(
                                 "swap in all {} pages in {} ms. swap disabled.",
-                                num_pages, time_took_ms
+                                state_transition.pages, state_transition.time_ms
                             );
+                            // Truncate the swap file to hold minimum resources while disabled.
+                            swap_file.set_len(0).context("clear swap file")?;
+                            state = SwapState::Disabled;
                         } else {
-                            warn!("swap is already disabled.");
+                            error!("swap is already disabled.");
                         }
                     }
                     Command::Exit => {
                         break 'wait;
                     }
                     Command::Status => {
-                        let status = Status::generate(&swap_out_state, &page_handler_opt);
+                        let status = Status::new(&state, &state_transition, &page_handler_opt);
                         tube.send(&status).context("send status response")?;
                         info!("swap status: {:?}.", status);
-                    }
-                    Command::StartPageFaultLogging => {
-                        if page_fault_logger.is_none() {
-                            page_fault_logger = Some(
-                                PageFaultEventLogger::create(&swap_dir, &guest_memory)
-                                    .context("create page fault logger")?,
-                            )
-                        }
                     }
                 },
             };
