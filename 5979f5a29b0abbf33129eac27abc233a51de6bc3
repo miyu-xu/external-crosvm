@@ -37,6 +37,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "54390de9_74e08809",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 40,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "Gunyah considers this interface is stable and has forward/backward compatibility.",
+      "parentUuid": "b5042f22_7266d8fd",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "2d5b48b4_f38fc33e",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 2
@@ -72,6 +90,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "7fe0201c_e37bee0e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 48,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "I checked closely into this property. It\u0027s recommended to have it, but it\u0027s also the default value which won\u0027t be changed for backwards compatibility. We can remove.\n\nDirectly to \"does gunyah only support linux guests?\" -- Gunyah is only tested booting Linux-like guests.",
+      "parentUuid": "2d5b48b4_f38fc33e",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3429a1b6_be27d108",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 2
@@ -95,6 +131,53 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "876529b3_09f5a8b2",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "Yes, help for this one is appreciated. The constant originates from aarch64 currently and hypervisor crate can\u0027t depend on aarch64.",
+      "parentUuid": "3429a1b6_be27d108",
+      "range": {
+        "startLine": 67,
+        "startChar": 40,
+        "endLine": 67,
+        "endChar": 75
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a349e173_638d982a",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "This is a crosvm-level assumption. Gunyah presently overwrites the existing swiotlb node, but we\u0027ll update Gunyah to not need this property.",
+      "range": {
+        "startLine": 105,
+        "startChar": 76,
+        "endLine": 105,
+        "endChar": 111
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "e40d7710_26763dbd",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 2
@@ -106,6 +189,24 @@
       "writtenOn": "2023-01-31T00:05:48Z",
       "side": 1,
       "message": "you shouldn\u0027t be issuing VM configuration ioctls as part of the FDT creation\n\nmaybe we can add another method to the VM trait for setting this and then call it in `build_vm` after the `fdt::create_fdt` call?",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "316a49c1_58157b0e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "I am fine with this approach, I can add this in the v4 patchsets.",
+      "parentUuid": "e40d7710_26763dbd",
       "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -133,6 +234,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "aba35df5_9f14b2c3",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 249,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "561bbdf0_bc62b8ce",
+      "range": {
+        "startLine": 246,
+        "startChar": 0,
+        "endLine": 249,
+        "endChar": 9
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c843896b_65bfb89e",
@@ -146,6 +271,24 @@
       "writtenOn": "2023-01-31T01:04:37Z",
       "side": 1,
       "message": "this unwrap is probably fine to be honest",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fdd9fc58_611d20e4",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 280,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:28:22Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c843896b_65bfb89e",
       "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
