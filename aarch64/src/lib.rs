@@ -299,14 +299,18 @@ impl arch::LinuxArch for AArch64 {
         hypervisor: &impl Hypervisor,
     ) -> std::result::Result<Vec<(GuestAddress, u64, bool)>, Self::Error> {
         let mut memory_regions =
-            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size, false)];
+            vec![(
+                GuestAddress(AARCH64_PHYS_MEM_START),
+                components.memory_size,
+                components.hv_cfg.protection_type.isolates_memory(),
+            )];
 
         // Allocate memory for the pVM firmware.
         if components.hv_cfg.protection_type.runs_firmware() {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
-                false,
+                components.hv_cfg.protection_type.isolates_memory(),
             ));
         }
 
