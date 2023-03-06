@@ -16,6 +16,24 @@
       "message": "Duplicate syscalls are suppose to fail to compile. However, there is a bug where when compiled ahead-of-time, they are merged instead of throwing an error (http://b/268567700).\n\nThe behavior here wouldn\u0027t match either mode (it drops earlier definitions instead of merging). For now, we need to manually merge them.\n\nFor a long term fix, I\u0027m working on switching us to use ahead-of-time compilation for the policies so that we see the same behavior as upstream crosvm.",
       "revId": "d791adffcf1db731ef9b4c54336cff7a8d105854",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b5994a54_489c0d16",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-06T19:23:58Z",
+      "side": 1,
+      "message": "A script like this would be great to detect the error quickly and fail the build though. Could you make it error if a duplicate is detected but otherwise pass the text as-is?",
+      "parentUuid": "f767b483_f41af2ce",
+      "revId": "d791adffcf1db731ef9b4c54336cff7a8d105854",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
