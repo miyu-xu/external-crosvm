@@ -615,19 +615,21 @@ pub fn arch_memory_regions(size: u64, bios_size: Option<u64>) -> Vec<(GuestAddre
     if mem_end <= end_32bit_gap_start {
         regions.push((GuestAddress(mem_start), size));
         if let Some(bios_size) = bios_size {
-            regions.push((bios_start(bios_size), bios_size));
+            regions.push((bios_start(bios_size), bios_size, false));
         }
     } else {
         regions.push((
             GuestAddress(mem_start),
             end_32bit_gap_start.offset() - mem_start,
+            false,
         ));
         if let Some(bios_size) = bios_size {
-            regions.push((bios_start(bios_size), bios_size));
+            regions.push((bios_start(bios_size), bios_size, false));
         }
         regions.push((
             first_addr_past_32bits,
             mem_end.offset_from(end_32bit_gap_start),
+            false,
         ));
     }
 
@@ -640,7 +642,7 @@ impl arch::LinuxArch for X8664arch {
     fn guest_memory_layout(
         components: &VmComponents,
         _hypervisor: &impl Hypervisor,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
+    ) -> std::result::Result<Vec<(GuestAddress, u64, bool)>, Self::Error> {
         init_low_memory_layout(components.pcie_ecam, components.pci_low_start);
 
         let bios_size = match &components.vm_image {

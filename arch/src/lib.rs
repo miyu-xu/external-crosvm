@@ -402,7 +402,7 @@ pub trait LinuxArch {
     fn guest_memory_layout(
         components: &VmComponents,
         hypervisor: &impl hypervisor::Hypervisor,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error>;
+    ) -> std::result::Result<Vec<(GuestAddress, u64, bool)>, Self::Error>;
 
     /// Gets the configuration for a new `SystemAllocator` that fits the given `Vm`'s memory layout.
     ///

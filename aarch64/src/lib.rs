@@ -326,21 +326,22 @@ impl arch::LinuxArch for AArch64 {
     fn guest_memory_layout(
         components: &VmComponents,
         hypervisor: &impl Hypervisor,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
+    ) -> std::result::Result<Vec<(GuestAddress, u64, bool)>, Self::Error> {
         let mut memory_regions =
-            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size)];
+            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size, false)];
 
         // Allocate memory for the pVM firmware.
         if components.hv_cfg.protection_type.runs_firmware() {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
+                false,
             ));
         }
 
         if let Some(size) = components.swiotlb {
             if let Some(addr) = get_swiotlb_addr(components.memory_size, hypervisor) {
-                memory_regions.push((addr, size));
+                memory_regions.push((addr, size, false));
             }
         }
 

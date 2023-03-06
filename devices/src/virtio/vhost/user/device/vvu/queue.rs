@@ -193,7 +193,7 @@ impl UserQueue {
             .alloc_iova(mem_size, tag)
             .context("failed to allocate queue iova")?;
 
-        let mem = QueueMemory::new(&[(IOVA(iova_start), mem_size)])
+        let mem = QueueMemory::new(&[(IOVA(iova_start), mem_size, false)])
             .map_err(|e| anyhow!("failed to create QueueMemory for virtqueue: {}", e))?;
 
         let host_addr = mem

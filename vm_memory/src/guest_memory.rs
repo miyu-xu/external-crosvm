@@ -78,6 +78,7 @@ pub type Result<T> = result::Result<T, Error>;
 pub enum BackingObject {
     Shm(Arc<SharedMemory>),
     File(Arc<File>),
+    Rsm(Arc<SharedMemory>),
 }
 
 impl AsRawDescriptor for BackingObject {
@@ -85,6 +86,7 @@ impl AsRawDescriptor for BackingObject {
         match self {
             Self::Shm(shm) => shm.as_raw_descriptor(),
             Self::File(f) => f.as_raw_descriptor(),
+            Self::Rsm(rsm) => rsm.as_raw_descriptor(),
         }
     }
 }
@@ -94,6 +96,7 @@ impl AsRef<dyn AsRawDescriptor + Sync + Send> for BackingObject {
         match self {
             BackingObject::Shm(shm) => shm.as_ref(),
             BackingObject::File(f) => f.as_ref(),
+            BackingObject::Rsm(rsm) => rsm.as_ref(),
         }
     }
 }
@@ -187,7 +190,7 @@ impl AsRawDescriptors for GuestMemory {
 
 impl GuestMemory {
     /// Creates backing shm for GuestMemory regions
-    fn create_shm(ranges: &[(GuestAddress, u64)]) -> Result<SharedMemory> {
+    fn create_shm(ranges: &[(GuestAddress, u64, bool)]) -> Result<SharedMemory> {
         let mut aligned_size = 0;
         let pg_size = pagesize();
         for range in ranges {
@@ -211,7 +214,7 @@ impl GuestMemory {
 
     /// Creates a container for guest memory regions.
     /// Valid memory regions are specified as a Vec of (Address, Size) tuples sorted by Address.
-    pub fn new(ranges: &[(GuestAddress, u64)]) -> Result<GuestMemory> {
+    pub fn new(ranges: &[(GuestAddress, u64, bool)]) -> Result<GuestMemory> {
         // Create shm
         let shm = Arc::new(GuestMemory::create_shm(ranges)?);
 
@@ -241,7 +244,10 @@ impl GuestMemory {
             regions.push(MemoryRegion {
                 mapping,
                 guest_base: range.0,
-                shared_obj: BackingObject::Shm(shm.clone()),
+                shared_obj: match range.2 {
+                    true => BackingObject::Rsm(shm.clone()),
+                    false => BackingObject::Shm(shm.clone())
+                },
                 obj_offset: offset,
             });
 
@@ -290,7 +296,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_end_addr() -> Result<(), ()> {
     ///     let start_addr = GuestAddress(0x1000);
-    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///     assert_eq!(start_addr.checked_add(0x400), Some(gm.end_addr()));
     ///     Ok(())
     /// # }
@@ -407,7 +413,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_write_u64() -> Result<(), ()> {
     /// #   let start_addr = GuestAddress(0x1000);
-    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///     let res = gm.write_at_addr(&[1,2,3,4,5], GuestAddress(0x200)).map_err(|_| ())?;
     ///     assert_eq!(5, res);
     ///     Ok(())
@@ -433,7 +439,7 @@ impl GuestMemory {
     /// use vm_memory::{guest_memory, GuestAddress, GuestMemory};
     ///
     /// fn test_write_all() -> guest_memory::Result<()> {
-    ///     let ranges = &[(GuestAddress(0x1000), 0x400)];
+    ///     let ranges = &[(GuestAddress(0x1000), 0x400, false)];
     ///     let gm = GuestMemory::new(ranges)?;
     ///     gm.write_all_at_addr(b"zyxwvut", GuestAddress(0x1200))
     /// }
@@ -464,7 +470,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_write_u64() -> Result<(), ()> {
     /// #   let start_addr = GuestAddress(0x1000);
-    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///     let buf = &mut [0u8; 16];
     ///     let res = gm.read_at_addr(buf, GuestAddress(0x200)).map_err(|_| ())?;
     ///     assert_eq!(16, res);
@@ -490,7 +496,7 @@ impl GuestMemory {
     /// use vm_memory::{guest_memory, GuestAddress, GuestMemory};
     ///
     /// fn test_read_exact() -> guest_memory::Result<()> {
-    ///     let ranges = &[(GuestAddress(0x1000), 0x400)];
+    ///     let ranges = &[(GuestAddress(0x1000), 0x400, false)];
     ///     let gm = GuestMemory::new(ranges)?;
     ///     let mut buffer = [0u8; 0x200];
     ///     gm.read_exact_at_addr(&mut buffer, GuestAddress(0x1200))
@@ -519,7 +525,7 @@ impl GuestMemory {
     /// # fn test_read_u64() -> Result<u64, ()> {
     /// #     let start_addr1 = GuestAddress(0x0);
     /// #     let start_addr2 = GuestAddress(0x400);
-    /// #     let mut gm = GuestMemory::new(&vec![(start_addr1, 0x400), (start_addr2, 0x400)])
+    /// #     let mut gm = GuestMemory::new(&vec![(start_addr1, 0x400, false), (start_addr2, 0x400, false)])
     /// #         .map_err(|_| ())?;
     ///       let num1: u64 = gm.read_obj_from_addr(GuestAddress(32)).map_err(|_| ())?;
     ///       let num2: u64 = gm.read_obj_from_addr(GuestAddress(0x400+32)).map_err(|_| ())?;
@@ -550,7 +556,7 @@ impl GuestMemory {
     /// # fn test_read_u64() -> Result<u64, ()> {
     /// #     let start_addr1 = GuestAddress(0x0);
     /// #     let start_addr2 = GuestAddress(0x400);
-    /// #     let mut gm = GuestMemory::new(&vec![(start_addr1, 0x400), (start_addr2, 0x400)])
+    /// #     let mut gm = GuestMemory::new(&vec![(start_addr1, 0x400, false), (start_addr2, 0x400, false)])
     /// #         .map_err(|_| ())?;
     ///       let num1: u64 = gm.read_obj_from_addr_volatile(GuestAddress(32)).map_err(|_| ())?;
     ///       let num2: u64 = gm.read_obj_from_addr_volatile(GuestAddress(0x400+32)).map_err(|_| ())?;
@@ -574,7 +580,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_write_u64() -> Result<(), ()> {
     /// #   let start_addr = GuestAddress(0x1000);
-    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///     gm.write_obj_at_addr(55u64, GuestAddress(0x1100))
     ///         .map_err(|_| ())
     /// # }
@@ -599,7 +605,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_write_u64() -> Result<(), ()> {
     /// #   let start_addr = GuestAddress(0x1000);
-    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///     gm.write_obj_at_addr_volatile(55u64, GuestAddress(0x1100))
     ///         .map_err(|_| ())
     /// # }
@@ -626,7 +632,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
     /// # fn test_volatile_slice() -> Result<(), GuestMemoryError> {
     /// #   let start_addr = GuestAddress(0x1000);
-    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400)])?;
+    /// #   let mut gm = GuestMemory::new(&vec![(start_addr, 0x400, false)])?;
     ///     let vslice = gm.get_slice_at_addr(GuestAddress(0x1010), 30)?;
     ///     vslice.write_bytes(99);
     /// #   Ok(())
@@ -665,7 +671,7 @@ impl GuestMemory {
     /// # use std::path::Path;
     /// # fn test_read_random() -> Result<u32, ()> {
     /// #     let start_addr = GuestAddress(0x1000);
-    /// #     let gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #     let gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///       let mut file = File::open(Path::new("/dev/urandom")).map_err(|_| ())?;
     ///       let addr = GuestAddress(0x1010);
     ///       gm.read_to_memory(addr, &mut file, 128).map_err(|_| ())?;
@@ -704,7 +710,7 @@ impl GuestMemory {
     /// # use std::path::Path;
     /// # fn test_write_null() -> Result<(), ()> {
     /// #     let start_addr = GuestAddress(0x1000);
-    /// #     let gm = GuestMemory::new(&vec![(start_addr, 0x400)]).map_err(|_| ())?;
+    /// #     let gm = GuestMemory::new(&vec![(start_addr, 0x400, false)]).map_err(|_| ())?;
     ///       let mut file = File::open(Path::new("/dev/null")).map_err(|_| ())?;
     ///       let addr = GuestAddress(0x1010);
     ///       gm.write_from_memory(addr, &mut file, 128).map_err(|_| ())?;
@@ -737,7 +743,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_host_addr() -> Result<(), ()> {
     ///     let start_addr = GuestAddress(0x1000);
-    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x500)]).map_err(|_| ())?;
+    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x500, false)]).map_err(|_| ())?;
     ///     let addr = gm.get_host_address(GuestAddress(0x1200)).unwrap();
     ///     println!("Host address is {:p}", addr);
     ///     Ok(())
@@ -765,7 +771,7 @@ impl GuestMemory {
     /// # use vm_memory::{GuestAddress, GuestMemory};
     /// # fn test_host_addr() -> Result<(), ()> {
     ///     let start_addr = GuestAddress(0x1000);
-    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x500)]).map_err(|_| ())?;
+    ///     let mut gm = GuestMemory::new(&vec![(start_addr, 0x500, false)]).map_err(|_| ())?;
     ///     let addr = gm.get_host_address_range(GuestAddress(0x1200), 0x200).unwrap();
     ///     println!("Host address is {:p}", addr);
     ///     Ok(())
@@ -856,8 +862,8 @@ impl GuestMemory {
     /// let addr_a = GuestAddress(0x10000);
     /// let addr_b = GuestAddress(0x80000);
     /// let mut gm = GuestMemory::new(&vec![
-    ///     (addr_a, 0x20000),
-    ///     (addr_b, 0x30000)]).expect("failed to create GuestMemory");
+    ///     (addr_a, 0x20000, false),
+    ///     (addr_b, 0x30000, false)]).expect("failed to create GuestMemory");
     /// let offset = gm.offset_from_base(GuestAddress(0x95000))
     ///                .expect("failed to get offset");
     /// assert_eq!(offset, 0x35000);
@@ -959,8 +965,8 @@ mod tests {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
 
-        assert!(GuestMemory::new(&[(start_addr1, 0x100), (start_addr2, 0x400)]).is_err());
-        assert!(GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x10000)]).is_ok());
+        assert!(GuestMemory::new(&[(start_addr1, 0x100, false), (start_addr2, 0x400, false)]).is_err());
+        assert!(GuestMemory::new(&[(start_addr1, 0x10000, false), (start_addr2, 0x10000, false)]).is_ok());
     }
 
     #[test]
@@ -968,7 +974,7 @@ mod tests {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
         // The memory regions are `[0x0, 0x10000)`, `[0x10000, 0x20000)`.
-        let gm = GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x10000)]).unwrap();
+        let gm = GuestMemory::new(&[(start_addr1, 0x10000, false), (start_addr2, 0x10000, false)]).unwrap();
 
         // Although each address in `[0x0, 0x20000)` is valid, `is_valid_range()` returns false for
         // a range that is across multiple underlying regions.
@@ -981,7 +987,7 @@ mod tests {
     fn overlap_memory() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
-        assert!(GuestMemory::new(&[(start_addr1, 0x20000), (start_addr2, 0x20000)]).is_err());
+        assert!(GuestMemory::new(&[(start_addr1, 0x20000, false), (start_addr2, 0x20000, false)]).is_err());
     }
 
     #[test]
@@ -989,7 +995,7 @@ mod tests {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x40000);
         // The memory regions are `[0x0, 0x20000)`, `[0x40000, 0x60000)`.
-        let gm = GuestMemory::new(&[(start_addr1, 0x20000), (start_addr2, 0x20000)]).unwrap();
+        let gm = GuestMemory::new(&[(start_addr1, 0x20000, false), (start_addr2, 0x20000, false)]).unwrap();
 
         assert!(gm.address_in_range(GuestAddress(0x10000)));
         assert!(!gm.address_in_range(GuestAddress(0x30000)));
@@ -1023,7 +1029,7 @@ mod tests {
     fn test_read_u64() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
-        let gm = GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x10000)]).unwrap();
+        let gm = GuestMemory::new(&[(start_addr1, 0x10000, false), (start_addr2, 0x10000, false)]).unwrap();
 
         let val1: u64 = 0xaa55aa55aa55aa55;
         let val2: u64 = 0x55aa55aa55aa55aa;
@@ -1042,7 +1048,7 @@ mod tests {
         let size_region1 = 0x10000;
         let start_region2 = GuestAddress(0x10000);
         let size_region2 = 0x20000;
-        let gm = GuestMemory::new(&[(start_region1, size_region1), (start_region2, size_region2)])
+        let gm = GuestMemory::new(&[(start_region1, size_region1, false), (start_region2, size_region2, false)])
             .unwrap();
 
         let mem_size = gm.memory_size();
@@ -1058,7 +1064,7 @@ mod tests {
     fn guest_to_host() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
-        let mem = GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x40000)]).unwrap();
+        let mem = GuestMemory::new(&[(start_addr1, 0x10000, false), (start_addr2, 0x40000, false)]).unwrap();
 
         // Verify the host addresses match what we expect from the mappings.
         let addr1_base = get_mapping(&mem, start_addr1).unwrap();
@@ -1077,7 +1083,7 @@ mod tests {
     fn guest_to_host_range() {
         let start_addr1 = GuestAddress(0x0);
         let start_addr2 = GuestAddress(0x10000);
-        let mem = GuestMemory::new(&[(start_addr1, 0x10000), (start_addr2, 0x40000)]).unwrap();
+        let mem = GuestMemory::new(&[(start_addr1, 0x10000, false), (start_addr2, 0x40000, false)]).unwrap();
 
         // Verify the host addresses match what we expect from the mappings.
         let addr1_base = get_mapping(&mem, start_addr1).unwrap();
@@ -1104,7 +1110,7 @@ mod tests {
         let size_region1 = 0x10000;
         let start_region2 = GuestAddress(0x10000);
         let size_region2 = 0x20000;
-        let gm = GuestMemory::new(&[(start_region1, size_region1), (start_region2, size_region2)])
+        let gm = GuestMemory::new(&[(start_region1, size_region1, false), (start_region2, size_region2, false)])
             .unwrap();
 
         gm.write_obj_at_addr(0x1337u16, GuestAddress(0x0)).unwrap();

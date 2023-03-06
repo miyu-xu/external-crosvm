@@ -1237,14 +1237,14 @@ pub enum ExitState {
 // Remove ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
 // Returns the updated guest memory layout.
 fn punch_holes_in_guest_mem_layout_for_mappings(
-    guest_mem_layout: Vec<(GuestAddress, u64)>,
+    guest_mem_layout: Vec<(GuestAddress, u64, bool)>,
     file_backed_mappings: &[FileBackedMappingParameters],
-) -> Vec<(GuestAddress, u64)> {
+) -> Result<Vec<(GuestAddress, u64, bool)>> {
     // Create a set containing (start, end) pairs with exclusive end (end = start + size; the byte
     // at end is not included in the range).
     let mut layout_set = BTreeSet::new();
-    for (addr, size) in &guest_mem_layout {
-        layout_set.insert((addr.offset(), addr.offset() + size));
+    for (addr, size, restricted) in &guest_mem_layout {
+        layout_set.insert((addr.offset(), addr.offset() + size, *restricted));
     }
 
     for mapping in file_backed_mappings {
@@ -1252,29 +1252,32 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         let mapping_end = mapping_start + mapping.size;
 
         // Repeatedly split overlapping guest memory regions until no overlaps remain.
-        while let Some((range_start, range_end)) = layout_set
+        while let Some((range_start, range_end, restricted)) = layout_set
             .iter()
-            .find(|&&(range_start, range_end)| {
+            .find(|&&(range_start, range_end, _)| {
                 mapping_start < range_end && mapping_end > range_start
             })
             .cloned()
         {
-            layout_set.remove(&(range_start, range_end));
+            if (restricted) {
+                return Err(base::Error::new(libc::EINVAL)).context("Trying to map file to guest-private memory.");
+            }
+            layout_set.remove(&(range_start, range_end, restricted));
 
             if range_start < mapping_start {
-                layout_set.insert((range_start, mapping_start));
+                layout_set.insert((range_start, mapping_start, restricted));
             }
             if range_end > mapping_end {
-                layout_set.insert((mapping_end, range_end));
+                layout_set.insert((mapping_end, range_end, restricted));
             }
         }
     }
 
     // Build the final guest memory layout from the modified layout_set.
-    layout_set
+    Ok(layout_set
         .iter()
-        .map(|(start, end)| (GuestAddress(*start), end - start))
-        .collect()
+        .map(|(start, end, restricted)| (GuestAddress(*start), end - start, *restricted))
+        .collect())
 }
 
 struct CreateGuestMemoryResult {
@@ -1292,7 +1295,7 @@ fn create_guest_memory(
         .context("failed to create guest memory layout")?;
 
     let guest_mem_layout =
-        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings);
+        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings)?;
 
     let guest_mem = GuestMemory::new(&guest_mem_layout).context("failed to create guest memory")?;
     let mut mem_policy = MemoryPolicy::empty();
