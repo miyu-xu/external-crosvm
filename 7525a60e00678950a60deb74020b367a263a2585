@@ -16,6 +16,24 @@
       "message": "does this \"just work\" or do you have to manually grab the gunyah header and put it there?",
       "revId": "7525a60e00678950a60deb74020b367a263a2585",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "12322de2_befca629",
+        "filename": "gunyah_sys/bindgen.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 29,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-06T22:27:15Z",
+      "side": 1,
+      "message": "Crosvm looks at out-of-tree location for the kernel headers which I guess probably comes if you sync some repo manifest. I \"hacked up\" the bindgen scripts to use the AOSP kernel path I have and then it \"just works\".\n\nhttps://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/tools/impl/bindgen-common.sh#7",
+      "parentUuid": "f85296d3_9149a512",
+      "revId": "7525a60e00678950a60deb74020b367a263a2585",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
