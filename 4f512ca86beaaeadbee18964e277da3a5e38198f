@@ -16,6 +16,46 @@
       "message": "I\u0027ll let @fmayle@google.com +2, he\u0027s been working with seccomp recently and will have better insight.",
       "revId": "4f512ca86beaaeadbee18964e277da3a5e38198f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "95cdefbe_e6efd818",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-07T17:32:42Z",
+      "side": 1,
+      "message": "thanks!",
+      "revId": "4f512ca86beaaeadbee18964e277da3a5e38198f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f30a0648_2a5425d3",
+        "filename": "jail/seccomp/aarch64/gpu_common.policy",
+        "patchSetId": 2
+      },
+      "lineNbr": 76,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-07T17:32:42Z",
+      "side": 1,
+      "message": "missing `||`",
+      "range": {
+        "startLine": 76,
+        "startChar": 121,
+        "endLine": 76,
+        "endChar": 122
+      },
+      "revId": "4f512ca86beaaeadbee18964e277da3a5e38198f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
