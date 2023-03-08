@@ -591,18 +591,22 @@ pub fn create_fdt(
     // End giant node
     fdt.end_node(root_node)?;
 
-    let fdt_final = fdt.finish(fdt_max_size)?;
-
-    let written = guest_mem
-        .write_at_addr(fdt_final.as_slice(), fdt_address)
-        .map_err(|_| Error::FdtGuestMemoryWriteError)?;
-    if written < fdt_max_size {
-        return Err(Error::FdtGuestMemoryWriteError);
-    }
+    let fdt_final = fdt.finish()?;
 
     if let Some(file_path) = dump_device_tree_blob {
         std::fs::write(&file_path, &fdt_final)
             .map_err(|e| Error::FdtDumpIoError(e, file_path.clone()))?;
+    }
+
+    if fdt_final.len() > fdt_max_size {
+        return Err(Error::TotalSizeTooLarge);
+    }
+
+    let written = guest_mem
+        .write_at_addr(fdt_final.as_slice(), fdt_address)
+        .map_err(|_| Error::FdtGuestMemoryWriteError)?;
+    if written < fdt_final.len() {
+        return Err(Error::FdtGuestMemoryWriteError);
     }
 
     Ok(())
