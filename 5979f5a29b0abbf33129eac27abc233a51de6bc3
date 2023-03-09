@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a7be92f3_c597d809",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-09T23:36:18Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a395e099_390d83c7",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b5042f22_7266d8fd",
