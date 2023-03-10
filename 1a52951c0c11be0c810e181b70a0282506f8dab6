@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "376e52b5_7ad809a3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1782620
+      },
+      "writtenOn": "2023-03-10T09:28:37Z",
+      "side": 1,
+      "message": "I see that you have extended the BackingObject type to add support for the restricted fd. A better approach might be to add a new field to MemoryRegion for the restricted fd instead. The main reason is that confidential computing proposals such as TDX and Arm CCA that encrypt the private memory, and therefore cannot do shared\u003c-\u003eprivate conversions in place, require two backing objects, one for the restricted/private memory, and another for the shared memory. The conversion happens by copying between the two. In the case of pKVM (and for Gunyah if I\u0027m not wrong) it\u0027s not the case, but crosvm should be able to support all cases. Moreover, I think that that would simplify the code a bit.\n\nFor reference, here\u0027s the proposed patch that adds TDX support to QEMU:\n\nhttps://github.com/chao-p/qemu/commit/7abaf69ea847e8bc1f57eeb907cf82d55b2ca271\n\nhttps://github.com/chao-p/qemu/blob/privmem-v10/include/exec/ramblock.h",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3598d815_7268a0b9",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1262,
+      "author": {
+        "id": 1782620
+      },
+      "writtenOn": "2023-03-10T09:28:37Z",
+      "side": 1,
+      "message": "For pKVM, we plan to support mapping restricted memory if it\u0027s been shared. Since that\u0027s not the case yet, I don\u0027t have any issues with this, but thought I\u0027d point this out.",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "399b45e0_78d948a3",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1782620
+      },
+      "writtenOn": "2023-03-10T09:28:37Z",
+      "side": 1,
+      "message": "Like I noted in the high-level reply, I think it would make more sense to have another BackingObject, or even maybe create a new type of BackingObject (e.g., RestrictedBackingObject?), and have that as a second backing object in MemoryRegion.\n\nThis is mainly to support use-cases where there are two backing objects for the same memory (one for shared and one for private). I also think that it might make the plumbing a bit simpler.",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
