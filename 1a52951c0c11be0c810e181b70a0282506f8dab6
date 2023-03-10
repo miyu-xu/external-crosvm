@@ -37,6 +37,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "543d7f0b_6792e488",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1262,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-10T19:20:55Z",
+      "side": 1,
+      "message": "This code is all at VM init before the guest has started up. I think all of crosvm\u0027s guest memory layout code is essentially immutable after init right now. I assume pKVM sharing restricted memory is going to be at run time, right? We\u0027ll probably need a bigger refactoring to support it",
+      "parentUuid": "3598d815_7268a0b9",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "399b45e0_78d948a3",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
@@ -48,6 +66,75 @@
       "writtenOn": "2023-03-10T09:28:37Z",
       "side": 1,
       "message": "Like I noted in the high-level reply, I think it would make more sense to have another BackingObject, or even maybe create a new type of BackingObject (e.g., RestrictedBackingObject?), and have that as a second backing object in MemoryRegion.\n\nThis is mainly to support use-cases where there are two backing objects for the same memory (one for shared and one for private). I also think that it might make the plumbing a bit simpler.",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8fd484d7_2de37dd8",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 216,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-10T19:20:55Z",
+      "side": 1,
+      "message": "update",
+      "range": {
+        "startLine": 216,
+        "startChar": 54,
+        "endLine": 216,
+        "endChar": 77
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bdb82f0a_55f3b0cd",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 217,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-10T19:20:55Z",
+      "side": 1,
+      "message": "instead of a bool, we should probably use something like `struct MemoryRegionOptions { bool restricted }`\n\n(maybe wait for more discussion first since it is tedious)",
+      "range": {
+        "startLine": 217,
+        "startChar": 45,
+        "endLine": 217,
+        "endChar": 49
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7ab696b3_fdfa8586",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 242,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-10T19:20:55Z",
+      "side": 1,
+      "message": "can we avoid mmap\u0027ing the restricted regions? i thought that is the whole motivation\n\nif gunyah needs the regions to be mmap\u0027d, then it seems like we\u0027ll really need to model more things because we\u0027ll need long term support for\n\n1. hypervisors where all memory is shared (the status quo) or where some memory private but we can bank on crosvm not touching it by accident (pKVM today)\n2. hypervisors where all memory must be mapped, but only some memory is shared and crosvm needs to track the distinction explicitly (needed for gunyah?)\n3. hypervisors where only shared memory is mapped (eventual KVM + memfd_restricted use case)",
+      "range": {
+        "startLine": 238,
+        "startChar": 0,
+        "endLine": 242,
+        "endChar": 54
+      },
       "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
