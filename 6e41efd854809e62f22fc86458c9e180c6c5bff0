@@ -16,6 +16,24 @@
       "message": "do you have an expectations in mind for what exactly should be finish by the time this is called? or, alternatively, what is not OK to do after it? technically there is some initialization after the start call (e.g. the vcpu init IIUC)",
       "revId": "6e41efd854809e62f22fc86458c9e180c6c5bff0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "76e811fe_a8c4ba6b",
+        "filename": "hypervisor/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 199,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-13T18:22:40Z",
+      "side": 1,
+      "message": "We\u0027re ok with having vcpu initialization come after the VM start for now. That *might* change, but it looks non-trivial to synchronize VM start with all the threads. Is it OK to defer to if/when that happens?",
+      "parentUuid": "75de8715_a9448d51",
+      "revId": "6e41efd854809e62f22fc86458c9e180c6c5bff0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
