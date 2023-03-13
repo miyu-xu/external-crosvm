@@ -34,6 +34,24 @@
       "parentUuid": "75de8715_a9448d51",
       "revId": "6e41efd854809e62f22fc86458c9e180c6c5bff0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "462ca6bd_83f0e63d",
+        "filename": "hypervisor/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 199,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T21:21:10Z",
+      "side": 1,
+      "message": "Yeah, I just think it is important to document what you expect since it isn\u0027t obvious. If we are refactoring and need to move the `start` call around, then we need to know at least vaguely what the requirements are. Maybe something \"should be called after all devices initialization, except vCPU initialization\" is good",
+      "parentUuid": "76e811fe_a8c4ba6b",
+      "revId": "6e41efd854809e62f22fc86458c9e180c6c5bff0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
