@@ -72,6 +72,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "8f8f3c43_ae331915",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-13T18:47:57Z",
+      "side": 1,
+      "message": "I was expecting that we would create a new type behind `Rsm` which more properly reflects the info needed for restricted_memfd (maybe just: `Arc\u003c(SharedMemory, Option\u003cRestrictedMemFd\u003e)`?) once restricted memfd lands.\n\n\u003e This is mainly to support use-cases where there are two backing objects for the same memory (one for shared and one for private). I also think that it might make the plumbing a bit simpler.\n\nI think that can also work. Would need to update `GuestMemory::with_regions` to add the new field.",
+      "parentUuid": "399b45e0_78d948a3",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "8fd484d7_2de37dd8",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
@@ -129,6 +147,30 @@
       "writtenOn": "2023-03-10T19:20:55Z",
       "side": 1,
       "message": "can we avoid mmap\u0027ing the restricted regions? i thought that is the whole motivation\n\nif gunyah needs the regions to be mmap\u0027d, then it seems like we\u0027ll really need to model more things because we\u0027ll need long term support for\n\n1. hypervisors where all memory is shared (the status quo) or where some memory private but we can bank on crosvm not touching it by accident (pKVM today)\n2. hypervisors where all memory must be mapped, but only some memory is shared and crosvm needs to track the distinction explicitly (needed for gunyah?)\n3. hypervisors where only shared memory is mapped (eventual KVM + memfd_restricted use case)",
+      "range": {
+        "startLine": 238,
+        "startChar": 0,
+        "endLine": 242,
+        "endChar": 54
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "03653d8a_6da094fa",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 242,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-13T18:47:57Z",
+      "side": 1,
+      "message": "\u003e can we avoid mmap\u0027ing the restricted regions? i thought that is the whole motivation\n\nThis is plan for restricted_memfd but it\u0027s not yet upstream.\n\n--\n\nI\u0027d let Fuad confirm, but I was suspecting the kvm crate would ignore the restricted memfd info if it\u0027s running under the current ACKs. Crosvm would behave as it does today even though crosvm had allocated restricted memfd. I was planning to do the same for Gunyah.",
+      "parentUuid": "7ab696b3_fdfa8586",
       "range": {
         "startLine": 238,
         "startChar": 0,
