@@ -55,6 +55,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c4f1b9fb_533da401",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1263,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:30:30Z",
+      "side": 1,
+      "message": "```\nreturn Err(anyhow!(\"Trying to map file to guest-private memory.\"));\n```\n\nor equivalently\n\n```\nbail!(\"Trying to map file to guest-private memory.\");\n```",
+      "range": {
+        "startLine": 1263,
+        "startChar": 16,
+        "endLine": 1263,
+        "endChar": 114
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "399b45e0_78d948a3",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
@@ -84,6 +107,29 @@
       "side": 1,
       "message": "I was expecting that we would create a new type behind `Rsm` which more properly reflects the info needed for restricted_memfd (maybe just: `Arc\u003c(SharedMemory, Option\u003cRestrictedMemFd\u003e)`?) once restricted memfd lands.\n\n\u003e This is mainly to support use-cases where there are two backing objects for the same memory (one for shared and one for private). I also think that it might make the plumbing a bit simpler.\n\nI think that can also work. Would need to update `GuestMemory::with_regions` to add the new field.",
       "parentUuid": "399b45e0_78d948a3",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8fadba1e_627e8bd6",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:30:30Z",
+      "side": 1,
+      "message": "How about\n\n```\npub enum BackingObject {\n    Shm(Arc\u003cSharedMemory\u003e),\n    File(Arc\u003cFile\u003e),\n    /// Memory that is private to the guest. The host (including crosvm)\n    /// should never access this memory.\n    PrivateShm(Arc\u003cSharedMemory\u003e),\n}\n```",
+      "range": {
+        "startLine": 81,
+        "startChar": 4,
+        "endLine": 81,
+        "endChar": 7
+      },
       "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -171,6 +217,30 @@
       "side": 1,
       "message": "\u003e can we avoid mmap\u0027ing the restricted regions? i thought that is the whole motivation\n\nThis is plan for restricted_memfd but it\u0027s not yet upstream.\n\n--\n\nI\u0027d let Fuad confirm, but I was suspecting the kvm crate would ignore the restricted memfd info if it\u0027s running under the current ACKs. Crosvm would behave as it does today even though crosvm had allocated restricted memfd. I was planning to do the same for Gunyah.",
       "parentUuid": "7ab696b3_fdfa8586",
+      "range": {
+        "startLine": 238,
+        "startChar": 0,
+        "endLine": 242,
+        "endChar": 54
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "eba0b8bb_f1b1a619",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 242,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:30:30Z",
+      "side": 1,
+      "message": "OK, so in the Android U kernel, gunyah won\u0027t be using restricted_memfd either. crosvm is going to have to continue working with the Android U kernel.\n\nI think your imagining that the real restricted_memfd support in crosvm could be sort of backwards compatible with the older kernels. I\u0027m skeptical of that and also think it would be confusing to have \"restricted_memfd\" code paths that technically don\u0027t use restricted_memfd.\n\nI suggest we name and document things in this CL such that they are distinct from the eventual restricted_memfd support. If we can get lucky, then maybe restricted_memfd can subsume this but it is probably fine if it doesn\u0027t.\n\nI\u0027m leaving some other comments with name and comment ideas, but otherwise no action required for this comment if you agree.",
+      "parentUuid": "03653d8a_6da094fa",
       "range": {
         "startLine": 238,
         "startChar": 0,
