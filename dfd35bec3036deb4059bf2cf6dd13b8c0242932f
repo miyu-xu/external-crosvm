@@ -34,6 +34,24 @@
       "parentUuid": "7dc55057_1dcbae2a",
       "revId": "dfd35bec3036deb4059bf2cf6dd13b8c0242932f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "05787ce4_fe537b84",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-03-13T03:10:14Z",
+      "side": 1,
+      "message": "Sorry for the late reply, we\u0027re now focusing on the chromium upstream first according to reviewer\u0027s suggestion.\n\nThe reason we separated the change of Cargo.toml to another commit was due to the concern of making it clear for reviewers to differentiate which part of the code change here in aosp/external/crosvm/ was identical to the the change in chromium/crosmv/crosvm/ submitted from MTK. By doing so, we intended to accelerate the reviewing process, however, it turned out this practice may lead to some double effort on the same patch.",
+      "parentUuid": "1879effe_cc0357e8",
+      "revId": "dfd35bec3036deb4059bf2cf6dd13b8c0242932f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
