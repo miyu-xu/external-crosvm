@@ -1,0 +1,73 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3e960644_fc284508",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 4
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:47:54Z",
+      "side": 1,
+      "message": "if we do this, it should be done similarly for x86. in other words, it the new method should be on `Vcpu`, not `VcpuAArch64`",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 7
+      },
+      "revId": "6d0073c9b1c9e2c722ee1571c1e6e1a958010186",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c2db6776_5ecf8991",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 4
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:47:54Z",
+      "side": 1,
+      "message": "how about a cmdline flag that control whether to set the registers. this doesn\u0027t sound like hypervisor specific behavior, it is part of the contract with the guest OS, right?",
+      "range": {
+        "startLine": 9,
+        "startChar": 0,
+        "endLine": 10,
+        "endChar": 72
+      },
+      "revId": "6d0073c9b1c9e2c722ee1571c1e6e1a958010186",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "086c7c70_31954ea9",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 4
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-13T23:47:54Z",
+      "side": 1,
+      "message": "if there is extra stuff you need to do, maybe we could have a trait method for pre/post-vcpu init hooks?",
+      "range": {
+        "startLine": 11,
+        "startChar": 0,
+        "endLine": 12,
+        "endChar": 35
+      },
+      "revId": "6d0073c9b1c9e2c722ee1571c1e6e1a958010186",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
