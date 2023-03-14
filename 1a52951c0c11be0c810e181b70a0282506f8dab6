@@ -182,6 +182,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "944335de_ee4dc638",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 217,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T17:09:42Z",
+      "side": 1,
+      "message": "Would it be OK to add `new_with_options(ranges: \u0026[(GuestAddress, u64, MemoryRegionOptions)])`? `new(ranges: \u0026[(GuestAddress, u64)])` remains unchanged and continues the default behavior for today (shared memory).\n\nThis makes the changes much less intrusive.",
+      "parentUuid": "bdb82f0a_55f3b0cd",
+      "range": {
+        "startLine": 217,
+        "startChar": 45,
+        "endLine": 217,
+        "endChar": 49
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "7ab696b3_fdfa8586",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
