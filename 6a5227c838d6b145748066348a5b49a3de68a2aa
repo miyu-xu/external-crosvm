@@ -190,6 +190,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e116e29e_046d89a5",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T23:36:50Z",
+      "side": 1,
+      "message": "I don\u0027t think anyone has a full design for restricted_memfd in crosvm and ofc it is still not in upstream so might change. To start with I think adding a hypervisor capability that is somewhat gunyah specific and does exactly what you want here would be easiest. This is all crosvm internals, so we can freely evolve it later.",
+      "parentUuid": "2dd70294_1fb01691",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
