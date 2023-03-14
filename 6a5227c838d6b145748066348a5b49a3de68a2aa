@@ -142,6 +142,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2dd70294_1fb01691",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T23:31:03Z",
+      "side": 1,
+      "message": "I agree hypervisor capability for restricted_memfd is right way to communicate whether kernel supports it. When would crosvm take advantage of this capability and for which memory regions?",
+      "parentUuid": "951ab5a8_79c7c8b6",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
