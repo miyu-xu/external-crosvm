@@ -84,7 +84,7 @@ impl HaxmVm {
         // Haxm creates additional device paths when VMs are created
         let vm_descriptor = open_haxm_vm_device(USE_GHAXM.load(Ordering::Relaxed), vm_id)?;
 
-        guest_mem.with_regions(|_, guest_addr, size, host_addr, _, _| {
+        guest_mem.with_regions(|_, guest_addr, size, host_addr, _, _, _| {
             unsafe {
                 // Safe because the guest regions are guaranteed not to overlap.
                 set_user_memory_region(

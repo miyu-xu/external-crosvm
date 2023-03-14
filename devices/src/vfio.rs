@@ -392,7 +392,7 @@ impl VfioContainer {
 
                     if !iommu_enabled {
                         vm.get_memory().with_regions(
-                            |_index, guest_addr, size, host_addr, _mmap, _fd_offset| {
+                            |_index, guest_addr, size, host_addr, _mmap, _fd_offset, _options| {
                                 // Safe because the guest regions are guaranteed not to overlap
                                 unsafe {
                                     self.vfio_dma_map(

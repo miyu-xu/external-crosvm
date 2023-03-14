@@ -218,7 +218,7 @@ impl WhpxVm {
             .map_err(WhpxError::SetupPartition)?;
 
         guest_mem
-            .with_regions(|_, guest_addr, size, host_addr, _, _| {
+            .with_regions(|_, guest_addr, size, host_addr, _, _, _| {
                 unsafe {
                     // Safe because the guest regions are guaranteed not to overlap.
                     set_user_memory_region(

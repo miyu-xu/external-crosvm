@@ -101,7 +101,7 @@ struct PageFaultInitialLog {
 fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<MemoryRegion> {
     let mut regions = Vec::new();
     guest_memory
-        .with_regions::<_, ()>(|_, _, len, base_address, _, _| {
+        .with_regions::<_, ()>(|_, _, len, base_address, _, _, _| {
             regions.push(MemoryRegion { base_address, len });
             Ok(())
         })

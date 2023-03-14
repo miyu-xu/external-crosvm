@@ -445,7 +445,7 @@ impl<'a> UffdList<'a> {
 fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<Range<usize>> {
     let mut regions = Vec::new();
     guest_memory
-        .with_regions::<_, ()>(|_, _, region_size, host_addr, _, _| {
+        .with_regions::<_, ()>(|_, _, region_size, host_addr, _, _, _| {
             regions.push(host_addr..(host_addr + region_size));
             Ok(())
         })
@@ -667,7 +667,7 @@ fn monitor_process(
                             let _processes_guard =
                                 freeze_all_processes().context("freeze processes")?;
                             let result = guest_memory.with_regions::<_, anyhow::Error>(
-                                |_, _, _, host_addr, shm, shm_offset| {
+                                |_, _, _, host_addr, shm, shm_offset, _| {
                                     // safe because:
                                     // * all the regions are registered to all userfaultfd
                                     // * no process access the guest memory (freeze_all_processes())

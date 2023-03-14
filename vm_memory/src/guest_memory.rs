@@ -434,7 +434,15 @@ impl GuestMemory {
     ///  * shm_offset: usize
     pub fn with_regions<F, E>(&self, mut cb: F) -> result::Result<(), E>
     where
-        F: FnMut(usize, GuestAddress, usize, usize, &BackingObject, u64) -> result::Result<(), E>,
+        F: FnMut(
+            usize,
+            GuestAddress,
+            usize,
+            usize,
+            &BackingObject,
+            u64,
+            MemoryRegionOptions,
+        ) -> result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(
@@ -444,6 +452,7 @@ impl GuestMemory {
                 region.mapping.as_ptr() as usize,
                 &region.shared_obj,
                 region.obj_offset,
+                region.options,
             )?;
         }
         Ok(())
@@ -1166,7 +1175,7 @@ mod tests {
         gm.write_obj_at_addr(0x0420u16, GuestAddress(0x10000))
             .unwrap();
 
-        let _ = gm.with_regions::<_, ()>(|index, _, size, _, obj, offset| {
+        let _ = gm.with_regions::<_, ()>(|index, _, size, _, obj, offset, _| {
             let shm = match obj {
                 BackingObject::Shm(s) => s,
                 _ => {
