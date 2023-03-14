@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "cafc695f_0e902a2d",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 4
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T22:20:05Z",
+      "side": 1,
+      "message": "However, the implementation is arch-specific.",
+      "parentUuid": "3e960644_fc284508",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 7
+      },
+      "revId": "6d0073c9b1c9e2c722ee1571c1e6e1a958010186",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "c2db6776_5ecf8991",
         "filename": "/COMMIT_MSG",
         "patchSetId": 4
