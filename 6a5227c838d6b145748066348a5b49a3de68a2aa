@@ -94,6 +94,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "86f91f5e_6acee2c7",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T23:10:02Z",
+      "side": 1,
+      "message": "\u003e `protection_type.isolates_memory()` is not ever going to imply restricted_memfd (at least not in any time frame worth considering at this point)\n\nWhat would the decision factor be to use restricted_memfd, assuming kernel can support it? I was thinking the decision is same was what Gunyah needs today.",
+      "parentUuid": "4bf99e99_9a9d8bc0",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
