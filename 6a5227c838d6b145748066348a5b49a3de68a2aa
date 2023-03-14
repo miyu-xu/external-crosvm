@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "706a0982_9dccf336",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:54:49Z",
+      "side": 1,
+      "message": "this will break pKVM if the \"restricted\" bit does anything more than provide information to the gunyah backend. i think originally you changed the MemoryRegion accessors to check this bit and error if protected memory was accessed and that seems to be gone now so there is technically no problem, but i\u0027m worried it will cause confusion later\n\ncan you add a new hypervisor capability to guard this?",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
