@@ -118,6 +118,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "951ab5a8_79c7c8b6",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T23:20:52Z",
+      "side": 1,
+      "message": "I\u0027m imagining that the presence of the hypervisor capability is how we communicate that the kernel supports it. Do you have a different idea?",
+      "parentUuid": "86f91f5e_6acee2c7",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
