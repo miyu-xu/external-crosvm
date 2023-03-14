@@ -104,7 +104,7 @@ impl Geniezone {
 
 impl GeniezoneVm {
     /// Does platform specific initialization for the GeniezoneVm.
-    pub fn init_arch(&self, cfg: &Config) -> Result<()> {
+    pub fn arch_init(&self, cfg: &Config) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         if cfg.mte {
             // Safe because it does not take pointer arguments.
@@ -189,6 +189,17 @@ impl VmAArch64 for GeniezoneVm {
         _fdt: &mut FdtWriter,
         _phandles: &BTreeMap<&str, u32>,
     ) -> cros_fdt::Result<()> {
+        Ok(())
+    }
+
+    fn init_arch(
+        &self,
+        _payload: &PayloadType,
+        _fdt_address: GuestAddress,
+        _protection_type: ProtectionType,
+        _firmware_address: u64,
+        _fdt_size: usize,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -617,7 +628,7 @@ impl GeniezoneVm {
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
         };
-        vm.init_arch(&cfg)?;
+        vm.arch_init(&cfg)?;
         Ok(vm)
     }
 
