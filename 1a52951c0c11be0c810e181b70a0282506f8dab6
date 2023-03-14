@@ -206,6 +206,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d6a36225_21433abe",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 217,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T22:50:39Z",
+      "side": 1,
+      "message": "Seems reasonable to me. Maybe you could mark the option-less one with `#[cfg(test)]` since most of the users are in tests. All of the non-test code should probably be explicit about the options.",
+      "parentUuid": "944335de_ee4dc638",
+      "range": {
+        "startLine": 217,
+        "startChar": 45,
+        "endLine": 217,
+        "endChar": 49
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "7ab696b3_fdfa8586",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
