@@ -70,6 +70,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4bf99e99_9a9d8bc0",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T22:55:19Z",
+      "side": 1,
+      "message": "i get that, but, as i said, i think it will cause confusion once restricted_memfd is added, especially if some pKVM code in crosvm decides to start using the bit, then we\u0027ll have a mess to untangle\n\n`protection_type.isolates_memory()` is not ever going to imply restricted_memfd (at least not in any time frame worth considering at this point)",
+      "parentUuid": "1e789447_20fc7d1e",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
