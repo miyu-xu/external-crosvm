@@ -13,6 +13,7 @@ use downcast_rs::impl_downcast;
 use gdbstub::arch::Arch;
 #[cfg(feature = "gdb")]
 use gdbstub_arch::aarch64::AArch64 as GdbArch;
+use kernel_loader::LoadedKernel;
 use libc::EINVAL;
 use vm_memory::GuestAddress;
 
@@ -20,8 +21,39 @@ use crate::Hypervisor;
 use crate::IrqRoute;
 use crate::IrqSource;
 use crate::IrqSourceChip;
+use crate::ProtectionType;
 use crate::Vcpu;
 use crate::Vm;
+
+pub enum PayloadType {
+    Bios {
+        entry: GuestAddress,
+        image_size: u64,
+    },
+    Kernel(LoadedKernel),
+}
+
+impl PayloadType {
+    pub fn entry(&self) -> GuestAddress {
+        match self {
+            Self::Bios {
+                entry,
+                image_size: _,
+            } => *entry,
+            Self::Kernel(k) => k.entry,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        match self {
+            Self::Bios {
+                entry: _,
+                image_size,
+            } => *image_size,
+            Self::Kernel(k) => k.size,
+        }
+    }
+}
 
 /// Represents a version of Power State Coordination Interface (PSCI).
 #[derive(Eq, Ord, PartialEq, PartialOrd)]
@@ -79,6 +111,16 @@ pub trait VmAArch64: Vm {
         fdt: &mut FdtWriter,
         phandles: &BTreeMap<&str, u32>,
     ) -> cros_fdt::Result<()>;
+
+    // Initialize a VM. Called after building the VM.
+    fn init_vm(
+        &self,
+        payload: &PayloadType,
+        fdt_address: GuestAddress,
+        protection_type: ProtectionType,
+        firmware_address: u64,
+        fdt_size: usize,
+    ) -> Result<()>;
 }
 
 /// A wrapper around creating and using a VCPU on aarch64.
