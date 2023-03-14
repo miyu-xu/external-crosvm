@@ -22,6 +22,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8d267d63_49dcd9f1",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T15:51:29Z",
+      "side": 1,
+      "message": "Right now it only provides bit to gunyah backend. This bit would eventually be used to know whether this memory needs to be backed by restricted_memfd, too.",
+      "parentUuid": "706a0982_9dccf336",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
