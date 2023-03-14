@@ -46,6 +46,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1e789447_20fc7d1e",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T15:52:47Z",
+      "side": 1,
+      "message": "With that in mind, I don\u0027t think hypervisor capability is necessary here.",
+      "parentUuid": "8d267d63_49dcd9f1",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
