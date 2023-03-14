@@ -71,6 +71,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b537ca8c_6ed6a899",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 40,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:37:28Z",
+      "side": 1,
+      "message": "sounds good, thanks",
+      "parentUuid": "54390de9_74e08809",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2d5b48b4_f38fc33e",
@@ -124,6 +142,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0a705a88_808dfe16",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 48,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:37:28Z",
+      "side": 1,
+      "message": "up to you",
+      "parentUuid": "7fe0201c_e37bee0e",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3429a1b6_be27d108",
@@ -161,6 +197,30 @@
       "side": 1,
       "message": "Yes, help for this one is appreciated. The constant originates from aarch64 currently and hypervisor crate can\u0027t depend on aarch64.",
       "parentUuid": "3429a1b6_be27d108",
+      "range": {
+        "startLine": 67,
+        "startChar": 40,
+        "endLine": 67,
+        "endChar": 75
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "06625a61_dde24d78",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:37:28Z",
+      "side": 1,
+      "message": "maybe we could pass a struct of misc fdt properties (just this phandle to start with) as an argument to `VmAArch64::create_fdt` as a workaround",
+      "parentUuid": "876529b3_09f5a8b2",
       "range": {
         "startLine": 67,
         "startChar": 40,

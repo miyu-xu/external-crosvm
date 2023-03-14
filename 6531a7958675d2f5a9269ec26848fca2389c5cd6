@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fd718959_248faadb",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:37:28Z",
+      "side": 1,
+      "message": "can you document what is expected here? is the hypervisor going to implicitly set the PC to the entry point and x0 to the fdt address?",
+      "revId": "6531a7958675d2f5a9269ec26848fca2389c5cd6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c31b87a5_41f86d85",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 373,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-14T00:37:28Z",
+      "side": 1,
+      "message": "duplicate",
+      "revId": "6531a7958675d2f5a9269ec26848fca2389c5cd6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
