@@ -45,6 +45,7 @@ use hypervisor::CpuConfigAArch64;
 use hypervisor::DeviceKind;
 use hypervisor::Hypervisor;
 use hypervisor::HypervisorCap;
+use hypervisor::PayloadType;
 use hypervisor::ProtectionType;
 use hypervisor::VcpuAArch64;
 use hypervisor::VcpuFeature;
@@ -54,7 +55,7 @@ use hypervisor::Vm;
 use hypervisor::VmAArch64;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
-use kernel_loader::LoadedKernel;
+
 #[cfg(unix)]
 use minijail::Minijail;
 use remain::sorted;
@@ -114,36 +115,6 @@ const PSR_F_BIT: u64 = 0x00000040;
 const PSR_I_BIT: u64 = 0x00000080;
 const PSR_A_BIT: u64 = 0x00000100;
 const PSR_D_BIT: u64 = 0x00000200;
-
-enum PayloadType {
-    Bios {
-        entry: GuestAddress,
-        image_size: u64,
-    },
-    Kernel(LoadedKernel),
-}
-
-impl PayloadType {
-    fn entry(&self) -> GuestAddress {
-        match self {
-            Self::Bios {
-                entry,
-                image_size: _,
-            } => *entry,
-            Self::Kernel(k) => k.entry,
-        }
-    }
-
-    fn size(&self) -> u64 {
-        match self {
-            Self::Bios {
-                entry: _,
-                image_size,
-            } => *image_size,
-            Self::Kernel(k) => k.size,
-        }
-    }
-}
 
 fn get_kernel_addr() -> GuestAddress {
     GuestAddress(AARCH64_PHYS_MEM_START + AARCH64_KERNEL_OFFSET)
@@ -255,6 +226,8 @@ pub enum Error {
     InitPvtimeError(base::Error),
     #[error("initrd could not be loaded: {0}")]
     InitrdLoadFailure(arch::LoadImageError),
+    #[error("failed to initialize virtual machine {0}")]
+    InitVmError(base::Error),
     #[error("kernel could not be loaded: {0}")]
     KernelLoadFailure(kernel_loader::Error),
     #[error("error loading Kernel from Elf image: {0}")]
@@ -701,6 +674,15 @@ impl arch::LinuxArch for AArch64 {
         )
         .map_err(Error::CreateFdt)?;
 
+        vm.init_arch(
+            &payload,
+            fdt_offset,
+            components.hv_cfg.protection_type,
+            AARCH64_PROTECTED_VM_FW_START,
+            AARCH64_FDT_MAX_SIZE.try_into().unwrap(),
+        )
+        .map_err(Error::InitVmError)?;
+
         Ok(RunnableLinuxVm {
             vm,
             vcpu_count,
@@ -1007,6 +989,7 @@ impl MsrHandlers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kernel_loader::LoadedKernel;
 
     #[test]
     fn vcpu_init_unprotected_kernel() {

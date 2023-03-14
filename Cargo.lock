@@ -1149,6 +1149,7 @@ dependencies = [
  "fnv",
  "gdbstub",
  "gdbstub_arch",
+ "kernel_loader",
  "kvm",
  "kvm_sys",
  "libc",

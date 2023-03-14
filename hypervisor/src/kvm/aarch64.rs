@@ -46,6 +46,7 @@ use crate::ClockState;
 use crate::DeviceKind;
 use crate::Hypervisor;
 use crate::IrqSourceChip;
+use crate::PayloadType;
 use crate::ProtectionType;
 use crate::PsciVersion;
 use crate::VcpuAArch64;
@@ -214,6 +215,17 @@ impl VmAArch64 for KvmVm {
         _fdt: &mut FdtWriter,
         _phandles: &BTreeMap<&str, u32>,
     ) -> cros_fdt::Result<()> {
+        Ok(())
+    }
+
+    fn init_arch(
+        &self,
+        _payload: &PayloadType,
+        _fdt_address: GuestAddress,
+        _protection_type: ProtectionType,
+        _firmware_address: u64,
+        _fdt_size: usize,
+    ) -> Result<()> {
         Ok(())
     }
 }
