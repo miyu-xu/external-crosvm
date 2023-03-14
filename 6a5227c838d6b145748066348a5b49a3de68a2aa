@@ -166,6 +166,30 @@
       },
       "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a30ca5c3_81b9069e",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 305,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-14T23:35:29Z",
+      "side": 1,
+      "message": "\u003e Do you have a different idea?\n\nI don\u0027t have other different idea for communicating the kernel support. I think there\u0027s a two part decision. Part of the decision is kernel support (via a hypervisor capability). The other part I thought would just be \"isolates_memory()\"",
+      "parentUuid": "2dd70294_1fb01691",
+      "range": {
+        "startLine": 305,
+        "startChar": 16,
+        "endLine": 305,
+        "endChar": 68
+      },
+      "revId": "6a5227c838d6b145748066348a5b49a3de68a2aa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
