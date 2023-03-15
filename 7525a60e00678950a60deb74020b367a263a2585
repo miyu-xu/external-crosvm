@@ -122,6 +122,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "8bf1d453_1b2c7d06",
+        "filename": "gunyah_sys/bindgen.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-15T23:04:48Z",
+      "side": 1,
+      "message": "Nevermind, not required to enable Gunyah. Maybe it is still nice to have?",
+      "parentUuid": "8a60d0cc_4574fdb5",
+      "range": {
+        "startLine": 13,
+        "startChar": 0,
+        "endLine": 22,
+        "endChar": 36
+      },
+      "revId": "7525a60e00678950a60deb74020b367a263a2585",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f85296d3_9149a512",
         "filename": "gunyah_sys/bindgen.sh",
         "patchSetId": 2
