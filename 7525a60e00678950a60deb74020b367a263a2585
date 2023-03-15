@@ -50,6 +50,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "a8df4768_6ff28cc2",
+        "filename": "gunyah_sys/bindgen.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-15T21:36:05Z",
+      "side": 1,
+      "message": "Yeah, I think that is a good idea. https://crrev.com/c/4170415 is also using the same technique.\n\nAlternatively, you can add a line like https://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/aarch64/src/lib.rs#7 to this crate, but I like the other idea more personally\n\nI think kvm_sys is only at the root for historical reasons.",
+      "parentUuid": "5ffc750e_76841622",
+      "range": {
+        "startLine": 13,
+        "startChar": 0,
+        "endLine": 22,
+        "endChar": 36
+      },
+      "revId": "7525a60e00678950a60deb74020b367a263a2585",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f85296d3_9149a512",
         "filename": "gunyah_sys/bindgen.sh",
         "patchSetId": 2
