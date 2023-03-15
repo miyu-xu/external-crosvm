@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5ffc750e_76841622",
+        "filename": "gunyah_sys/bindgen.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-15T21:20:29Z",
+      "side": 1,
+      "message": "I tried dropping the x86 stuff but then tests started to fail because it wanted to compile gunyah_sys even if gunyah itself wasn\u0027t enabled.\n\nI see the Windows hypervisors put the bindings directly in hypervisor/src/haxm/haxm_sys (ditto for whpx). Should gunyah_sys be the same?",
+      "parentUuid": "036318ee_ce6f0508",
+      "range": {
+        "startLine": 13,
+        "startChar": 0,
+        "endLine": 22,
+        "endChar": 36
+      },
+      "revId": "7525a60e00678950a60deb74020b367a263a2585",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f85296d3_9149a512",
         "filename": "gunyah_sys/bindgen.sh",
         "patchSetId": 2
