@@ -313,8 +313,8 @@ crash-report = ["broker_ipc/crash-report", "crash_report"]
 #! Note that these may include project specific features that will not be functional at runtime but
 #! are enabled for compile and test coverage.
 
-## All features that are compiled and tested for aarch64
-all-aarch64 = [
+## All features that are compiled and tested for aarch64 and x86_64
+all-default = [
     "android-sparse",
     "arc_quota",
     "audio_cras",
@@ -344,8 +344,14 @@ all-aarch64 = [
     "x",
 ]
 
+## All features that are compiled and tested for aarch64
+all-aarch64 = [
+    "all-default",
+    "gunyah",
+]
+
 ## All features that are compiled and tested for x86_64
-all-x86_64 = ["all-aarch64", "plugin", "scudo"]
+all-x86_64 = ["all-default", "plugin", "scudo"]
 
 ## All features that are compiled and tested for armhf
 ## Note: This platform is deprecated and will be phased out.
