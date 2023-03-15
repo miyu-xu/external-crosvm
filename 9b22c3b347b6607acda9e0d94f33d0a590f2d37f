@@ -16,6 +16,24 @@
       "message": "Since we\u0027re here anyway, having these two very similar names is a long-standing point of confusion - it would be nice to clarify the difference between `cpu_id` (which is a plain 0-based index, I think) and `vcpu_id` (which should ideally be treated as an opaque ID from the hypervisor) by renaming them to be more different. The new names should make it obvious that one shouldn\u0027t be assigned to the other, since we currently mix up the nomenclature in other functions.\n\nThat can probably be cleaned up in another commit, though. Feel free to submit this one upstream as-is, since it\u0027s clearly correct.",
       "revId": "9b22c3b347b6607acda9e0d94f33d0a590f2d37f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bf06a61a_ba182d13",
+        "filename": "src/linux/vcpu.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-03-15T18:35:09Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "daef5336_5f8519c9",
+      "revId": "9b22c3b347b6607acda9e0d94f33d0a590f2d37f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
