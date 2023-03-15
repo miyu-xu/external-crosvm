@@ -18,6 +18,41 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "10dbd57d_6ec2697f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-15T22:42:42Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "5fe736f3_46eca319",
+      "revId": "919633e95edbd24187340004ce866b64007a1cf7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "650f261f_650f636a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-15T22:42:42Z",
+      "side": 1,
+      "message": "I squashed and uploaded to aosp/master branch due to new merge procedure: https://android-review.googlesource.com/c/platform/external/crosvm/+/2490966",
+      "revId": "919633e95edbd24187340004ce866b64007a1cf7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "768558b6_893bbdb3",
@@ -31,6 +66,24 @@
       "writtenOn": "2023-03-15T21:51:47Z",
       "side": 1,
       "message": "so this mounts the whole AOSP repo inside the container?\n\ndo the usual crosvm commands like `./tools/dev_container ./tools/fmt` work or do you have to include the crosvm path inside AOSP when using this, like `./tools/dev_container ./external/crosvm/tools/fmt`?",
+      "revId": "919633e95edbd24187340004ce866b64007a1cf7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d35e939b_88ad2f9d",
+        "filename": "tools/dev_container",
+        "patchSetId": 3
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-15T22:42:42Z",
+      "side": 1,
+      "message": "You would be able to do usual crosvm commands like `./tools/dev_container ./tools/fmt`\n\n`--workdir /workspace/external/crosvm` ensures that the starting directory is `external/crosvm`",
+      "parentUuid": "768558b6_893bbdb3",
       "revId": "919633e95edbd24187340004ce866b64007a1cf7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
