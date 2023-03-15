@@ -1,5 +1,23 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6c7a9aa7_43185009",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-03-15T18:13:40Z",
+      "side": 1,
+      "message": "This seems to be based on a super outdated crosvm tree; the `run_kvm()` function has already been split out of `run_config()` upstream: https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform/crosvm/src/crosvm/sys/unix.rs;l\u003d1443;drc\u003dff42de009890d2e8bc654aa8f007ceedf1d4918d",
+      "revId": "2bd7c2dbc7290f5d094b267a7ae68f48a596279b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
