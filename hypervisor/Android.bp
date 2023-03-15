@@ -28,6 +28,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -71,6 +72,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -114,6 +116,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -157,6 +160,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -200,6 +204,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -243,6 +248,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -286,6 +292,7 @@ rust_test {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
@@ -324,6 +331,7 @@ rust_library {
         "gdb",
         "gdbstub",
         "gdbstub_arch",
+        "gunyah",
     ],
     rustlibs: [
         "libanyhow",
