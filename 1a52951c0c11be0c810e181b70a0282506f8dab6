@@ -230,6 +230,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "57920455_0de91cb6",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 217,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-03-15T01:25:39Z",
+      "side": 1,
+      "message": "Adding a `MemoryRegionOptions` or something similar sounds good.\n\nDefinitely prefer something other than a plain unnamed `bool`, as it\u0027s not clear what it means without the context of a name or enum variant.",
+      "parentUuid": "d6a36225_21433abe",
+      "range": {
+        "startLine": 217,
+        "startChar": 45,
+        "endLine": 217,
+        "endChar": 49
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "7ab696b3_fdfa8586",
         "filename": "vm_memory/src/guest_memory.rs",
         "patchSetId": 1
