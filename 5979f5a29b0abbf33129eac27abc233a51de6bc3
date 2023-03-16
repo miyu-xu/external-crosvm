@@ -233,6 +233,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "3623f972_4ed32c3a",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 67,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-16T00:25:57Z",
+      "side": 1,
+      "message": "Missed this in latest patchset. It\u0027s fixed up now for next patchset revision, but I\u0027ll wait for any other review comments.",
+      "parentUuid": "06625a61_dde24d78",
+      "range": {
+        "startLine": 67,
+        "startChar": 40,
+        "endLine": 67,
+        "endChar": 75
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a349e173_638d982a",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 2
@@ -244,6 +268,30 @@
       "writtenOn": "2023-03-06T22:28:22Z",
       "side": 1,
       "message": "This is a crosvm-level assumption. Gunyah presently overwrites the existing swiotlb node, but we\u0027ll update Gunyah to not need this property.",
+      "range": {
+        "startLine": 105,
+        "startChar": 76,
+        "endLine": 105,
+        "endChar": 111
+      },
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "58928ab2_a5ee5a5f",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-16T00:25:57Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a349e173_638d982a",
       "range": {
         "startLine": 105,
         "startChar": 76,
@@ -285,6 +333,24 @@
       "side": 1,
       "message": "I am fine with this approach, I can add this in the v4 patchsets.",
       "parentUuid": "e40d7710_26763dbd",
+      "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "acc15b90_1685cd15",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-16T00:25:57Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "316a49c1_58157b0e",
       "revId": "5979f5a29b0abbf33129eac27abc233a51de6bc3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
