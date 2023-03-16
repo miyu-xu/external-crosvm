@@ -441,6 +441,30 @@
       },
       "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b36ea420_77d39201",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 242,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-16T21:24:19Z",
+      "side": 1,
+      "message": "LGTM",
+      "parentUuid": "da9093dd_6bae1993",
+      "range": {
+        "startLine": 238,
+        "startChar": 0,
+        "endLine": 242,
+        "endChar": 54
+      },
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
