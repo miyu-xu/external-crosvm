@@ -22,6 +22,30 @@
       },
       "revId": "ae051a558b7aaf2e98e92d738eda11f3041693ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0ffd89b1_493f538d",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1270,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-16T21:28:56Z",
+      "side": 1,
+      "message": "I don\u0027t think file_backed_mappings have options. We could require that `options.purpose \u003d\u003d GuestMemoryRegion` (or `Default::default()` if that\u0027s better pedantically)",
+      "parentUuid": "1a55420d_0947209f",
+      "range": {
+        "startLine": 1263,
+        "startChar": 0,
+        "endLine": 1270,
+        "endChar": 13
+      },
+      "revId": "ae051a558b7aaf2e98e92d738eda11f3041693ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
