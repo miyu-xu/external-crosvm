@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1a55420d_0947209f",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1270,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-16T21:10:16Z",
+      "side": 1,
+      "message": "if there is an overlap and the options aren\u0027t the same, then we probably should error out",
+      "range": {
+        "startLine": 1263,
+        "startChar": 0,
+        "endLine": 1270,
+        "endChar": 13
+      },
+      "revId": "ae051a558b7aaf2e98e92d738eda11f3041693ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
