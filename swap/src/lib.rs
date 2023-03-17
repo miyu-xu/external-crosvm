@@ -51,6 +51,7 @@ use minijail::Minijail;
 use serde::Deserialize;
 use serde::Serialize;
 use vm_memory::GuestMemory;
+use vm_memory::MemoryRegionInformation;
 
 #[cfg(feature = "log_page_fault")]
 use crate::logger::PageFaultEventLogger;
@@ -445,10 +446,14 @@ impl<'a> UffdList<'a> {
 fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<Range<usize>> {
     let mut regions = Vec::new();
     guest_memory
-        .with_regions::<_, ()>(|_, _, region_size, host_addr, _, _| {
-            regions.push(host_addr..(host_addr + region_size));
-            Ok(())
-        })
+        .with_regions::<_, ()>(
+            |MemoryRegionInformation {
+                 size, host_addr, ..
+             }| {
+                regions.push(host_addr..(host_addr + size));
+                Ok(())
+            },
+        )
         .unwrap(); // the callback never return error.
     regions
 }
@@ -667,7 +672,12 @@ fn monitor_process(
                             let _processes_guard =
                                 freeze_all_processes().context("freeze processes")?;
                             let result = guest_memory.with_regions::<_, anyhow::Error>(
-                                |_, _, _, host_addr, shm, shm_offset| {
+                                |MemoryRegionInformation {
+                                     host_addr,
+                                     shm,
+                                     shm_offset,
+                                     ..
+                                 }| {
                                     // safe because:
                                     // * all the regions are registered to all userfaultfd
                                     // * no process access the guest memory (freeze_all_processes())
