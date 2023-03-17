@@ -16,6 +16,24 @@
       "message": "how does this contrast with `Vm::start`? (from https://r.android.com/2370143)",
       "revId": "1683369924eb10f0df3c7783b793e2e02b041a4c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "66bb9a47_a5578702",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-17T16:08:35Z",
+      "side": 1,
+      "message": "Vm::start is architecture agnostic whereas this is architecture-specific. I could drop `Vm::start` and do the `GH_VM_START` ioctl inside init_vm. Let me know preference.",
+      "parentUuid": "21247386_4efe425c",
+      "revId": "1683369924eb10f0df3c7783b793e2e02b041a4c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
