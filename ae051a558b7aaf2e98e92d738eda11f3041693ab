@@ -70,6 +70,30 @@
       },
       "revId": "ae051a558b7aaf2e98e92d738eda11f3041693ab",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "eb1df5bb_0a8e8f90",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1270,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-03-17T00:23:15Z",
+      "side": 1,
+      "message": "This should work as written, but maybe it would be less confusing if `layout_set` was changed to a `BTreeMap\u003cAddressRange, MemoryRegionOptions\u003e` or something along those lines. (The exact representation doesn\u0027t matter much, it\u0027s just an intermediate format that we use to reconstruct the final list of memory regions as a `Vec`.) That can be deferred to a separate cleanup, though.",
+      "parentUuid": "63ea314b_fb3de2f4",
+      "range": {
+        "startLine": 1263,
+        "startChar": 0,
+        "endLine": 1270,
+        "endChar": 13
+      },
+      "revId": "ae051a558b7aaf2e98e92d738eda11f3041693ab",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
