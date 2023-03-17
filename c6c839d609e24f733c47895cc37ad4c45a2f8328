@@ -16,6 +16,24 @@
       "message": "i\u0027m a little afraid this will get abused and also that it makes `create_fdt` harder to unit test (if eventually there are more unit tests for it), but we can always swap it out with something like `vm: \u0026impl Fn(\u0026mut FdWriter)` later to hide the full vm interface",
       "revId": "c6c839d609e24f733c47895cc37ad4c45a2f8328",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3be3fa4b_18bdae9d",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 560,
+      "author": {
+        "id": 1539256
+      },
+      "writtenOn": "2023-03-17T22:35:34Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "290bb1b5_d4ccf2ec",
+      "revId": "c6c839d609e24f733c47895cc37ad4c45a2f8328",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
