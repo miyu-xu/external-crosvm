@@ -53,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "63483b26_f1a6d774",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1262,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T20:14:36Z",
+      "side": 1,
+      "message": "Resolving since the CL is very different now.",
+      "parentUuid": "543d7f0b_6792e488",
+      "revId": "1a52951c0c11be0c810e181b70a0282506f8dab6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c4f1b9fb_533da401",
