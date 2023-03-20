@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b4492dee_98671c74",
+        "filename": "crosvm_control/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-20T23:24:39Z",
+      "side": 1,
+      "message": "I did - I\u0027ll save a new patch. Is there a way to handle this through cargo_embargo?",
+      "parentUuid": "4a559fd8_c9e7bc98",
+      "range": {
+        "startLine": 28,
+        "startChar": 4,
+        "endLine": 28,
+        "endChar": 6
+      },
+      "revId": "74d9ea8da668448336cc93af349a11f1c0168b5e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "cf840e5b_c967a62e",
         "filename": "jail/seccomp/x86_64/battery.policy",
         "patchSetId": 1
