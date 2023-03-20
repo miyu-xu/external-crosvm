@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d675476b_bd1cfb00",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 115,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-20T22:11:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "7ccf2a5d_2d656d5e",
+      "revId": "5adbb44353345a61a0894dd4528ce6840e3687a0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "741e5730_23daba16",
@@ -31,6 +49,30 @@
       "writtenOn": "2023-03-20T20:31:17Z",
       "side": 1,
       "message": "how about `init` or `init_arch`",
+      "range": {
+        "startLine": 116,
+        "startChar": 7,
+        "endLine": 116,
+        "endChar": 14
+      },
+      "revId": "5adbb44353345a61a0894dd4528ce6840e3687a0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "71f56915_919e700f",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-20T22:11:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "741e5730_23daba16",
       "range": {
         "startLine": 116,
         "startChar": 7,
