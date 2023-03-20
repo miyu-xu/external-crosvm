@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7ccf2a5d_2d656d5e",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 115,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T20:31:17Z",
+      "side": 1,
+      "message": "add a note that it happens to be called before the vCPUs are created",
+      "revId": "5adbb44353345a61a0894dd4528ce6840e3687a0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "741e5730_23daba16",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T20:31:17Z",
+      "side": 1,
+      "message": "how about `init` or `init_arch`",
+      "range": {
+        "startLine": 116,
+        "startChar": 7,
+        "endLine": 116,
+        "endChar": 14
+      },
+      "revId": "5adbb44353345a61a0894dd4528ce6840e3687a0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
