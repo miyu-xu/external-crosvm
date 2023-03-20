@@ -50,6 +50,24 @@
       "message": "do not merge - CF does not boot. I\u0027m also going to push libtest-mimic and revert this patch.",
       "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3c07c009_04f14e4e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-03-20T21:38:06Z",
+      "side": 1,
+      "message": "how could presubmit pass in that case?",
+      "parentUuid": "0d8cbf4f_e9711389",
+      "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
