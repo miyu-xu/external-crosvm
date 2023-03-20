@@ -1,0 +1,118 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3c8b7c3c_b1e63a1a",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 73,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "would this comment make more sense in the else clause?",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1fdd7148_f2273dd3",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "might want to include an error message",
+      "range": {
+        "startLine": 83,
+        "startChar": 28,
+        "endLine": 83,
+        "endChar": 42
+      },
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ffa0ad21_014c3fe9",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 143,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "you want to fall through and add the \"shm\" nodes for the first `GuestMemoryRegion` region + all non-`GuestMemoryRegion` and non-`ProtectedFirmwareRegion` regions. is that right?\n\nit is probably worth explicitly listing `StaticSwiotlbRegion` here instead of using the catch all\n\nreally you might want to make both these match statements \"exhaustive\" so that if we add more enum variants we will get a compiler error here and can double check with you if the new type needs special gunyah handling",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "559421cf_3f30ac11",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 178,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "unused?",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3f038f69_2546f9dc",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "`.find_region(payload.entry())`",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f9467a33_360d3128",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 189,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-20T21:14:37Z",
+      "side": 1,
+      "message": "region?",
+      "range": {
+        "startLine": 189,
+        "startChar": 64,
+        "endLine": 189,
+        "endChar": 70
+      },
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
