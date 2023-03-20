@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "65201c46_cfe2433f",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 538,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-20T22:12:00Z",
+      "side": 1,
+      "message": "Done, mentioned in the trait",
+      "parentUuid": "3bdb71c9_5a01892c",
+      "revId": "25d380a29b255fc88ba7bd65edb7157ee0f31f30",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "aafbcfbc_c551cb30",
@@ -41,6 +59,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9cd28c2f_370e9f8b",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 539,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-20T22:12:00Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "aafbcfbc_c551cb30",
+      "range": {
+        "startLine": 539,
+        "startChar": 17,
+        "endLine": 539,
+        "endChar": 20
+      },
+      "revId": "25d380a29b255fc88ba7bd65edb7157ee0f31f30",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4e9434cf_547d70d6",
@@ -54,6 +96,30 @@
       "writtenOn": "2023-03-20T20:38:33Z",
       "side": 1,
       "message": "```\n    let dma_pool_phandle \u003d match swiotlb {\n        Some(x) \u003d\u003e {\n            let phandle \u003d create_resv_memory_node(\u0026mut fdt, x)?;\n            phandles.insert(\"restricted_dma_reserved\", phandle);\n            Some(phandle)\n        }\n        None \u003d\u003e None,\n    };\n```",
+      "range": {
+        "startLine": 581,
+        "startChar": 0,
+        "endLine": 587,
+        "endChar": 5
+      },
+      "revId": "25d380a29b255fc88ba7bd65edb7157ee0f31f30",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6fec3248_10392616",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 587,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-20T22:12:00Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4e9434cf_547d70d6",
       "range": {
         "startLine": 581,
         "startChar": 0,
