@@ -33,6 +33,23 @@
       "message": "Is this still needed, because libmimic is landed?",
       "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0d8cbf4f_e9711389",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-20T21:15:10Z",
+      "side": 1,
+      "message": "do not merge - CF does not boot. I\u0027m also going to push libtest-mimic and revert this patch.",
+      "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
