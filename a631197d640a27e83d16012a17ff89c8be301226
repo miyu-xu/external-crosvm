@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b182b99a_dc17e402",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-03-21T22:37:18Z",
+      "side": 1,
+      "message": "do we need `vendor_available: true` for the libraries to be built? Or is that implied somewhere in the build system?",
+      "revId": "a631197d640a27e83d16012a17ff89c8be301226",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
