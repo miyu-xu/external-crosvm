@@ -140,6 +140,24 @@
       "parentUuid": "c64dd7af_5a742231",
       "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6731075d_ae4fd2c2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-21T18:46:20Z",
+      "side": 1,
+      "message": "For the 2nd issue, I added a `.exists()` check to validate it, which also seems to be the solution that will be taken upstream. Done\nThank you Frederick!",
+      "parentUuid": "d7461373_70bb797f",
+      "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
