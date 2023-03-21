@@ -122,6 +122,24 @@
       "parentUuid": "e8072265_83154773",
       "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d7461373_70bb797f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-21T18:00:52Z",
+      "side": 1,
+      "message": "I can reproduce when sandboxing is enabled. There are two issues\n\nparse error in a policy file https://android-review.git.corp.google.com/c/platform/external/crosvm/+/2497520/comment/aab7e1ee_72350d0c/\n\nmissing sysfs file https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4304743/comment/cb904471_bb3fefea/\n\nfor the second one, we can either revert that CL or maybe comment out the relevant lines temporarily\n\n```\n--- a/jail/src/helpers.rs\n+++ b/jail/src/helpers.rs\n@@ -324,9 +321,9 @@ pub fn create_gpu_minijail(root: \u0026Path, config: \u0026SandboxConfig) -\u003e Result\u003cMinija\n     let sys_dev_char_path \u003d Path::new(\"/sys/dev/char\");\n     jail.mount_bind(sys_dev_char_path, sys_dev_char_path, false)?;\n\n-    // Necessary for CGROUP control of the vGPU threads\n-    let sys_cpuset_path \u003d Path::new(\"/sys/fs/cgroup/cpuset\");\n-    jail.mount_bind(sys_cpuset_path, sys_cpuset_path, true)?;\n+    //     // Necessary for CGROUP control of the vGPU threads\n+    //     let sys_cpuset_path \u003d Path::new(\"/sys/fs/cgroup/cpuset\");\n+    //     jail.mount_bind(sys_cpuset_path, sys_cpuset_path, true)?;\n\n     let sys_devices_path \u003d Path::new(\"/sys/devices\");\n     jail.mount_bind(sys_devices_path, sys_devices_path, false)?;\n```",
+      "parentUuid": "c64dd7af_5a742231",
+      "revId": "8b1a5305c3391c0381c4d58696710006043e8660",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
