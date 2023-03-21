@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aab7e1ee_72350d0c",
+        "filename": "jail/seccomp/x86_64/common_device.policy",
+        "patchSetId": 2
+      },
+      "lineNbr": 60,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-21T17:58:10Z",
+      "side": 1,
+      "message": "minijail doesn\u0027t mean to support comments on the same line as a policy, you need to do something like\n\n```\n--- a/jail/seccomp/x86_64/common_device.policy\n+++ b/jail/seccomp/x86_64/common_device.policy\n@@ -57,7 +57,8 @@ sendmsg: 1\n sendto: 1\n set_robust_list: 1\n sigaltstack: 1\n-tgkill: 1 # arg2 \u003d\u003d SIGABRT -- ANDROID(b/270404912): modified to 1 - duplicate error.\n+# arg2 \u003d\u003d SIGABRT -- ANDROID(b/270404912): modified to 1 - duplicate error.\n+tgkill: 1\n write: 1\n writev: 1\n fcntl: 1\n```",
+      "revId": "cc98bfdbbfb458dae3f803ad0c3742dc0ea014f0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
