@@ -16,6 +16,24 @@
       "message": "I think the shm offset was a `u64` before; was that change intentional?\n\n(`u64` and `usize` might not be the same size while larger file offsets may still be valid, e.g. on a 32-bit arm userspace running on a 64-bit kernel)",
       "revId": "3845184fc18cbc885cbb567c86173f8b623479bf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "025950ec_4fc96f61",
+        "filename": "vm_memory/src/guest_memory.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 108,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-21T20:00:32Z",
+      "side": 1,
+      "message": "Ah, it wasn\u0027t intentional. The docstring mentioned `usize` but the implementation was `u64`. I can update to u64.",
+      "parentUuid": "5952625d_2226501a",
+      "revId": "3845184fc18cbc885cbb567c86173f8b623479bf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
