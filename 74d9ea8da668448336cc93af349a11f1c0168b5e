@@ -72,6 +72,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e25a0c1e_4f222f32",
+        "filename": "crosvm_control/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 28,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-21T00:58:11Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "aca36cba_84c04ba4",
+      "range": {
+        "startLine": 28,
+        "startChar": 4,
+        "endLine": 28,
+        "endChar": 6
+      },
+      "revId": "74d9ea8da668448336cc93af349a11f1c0168b5e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cf840e5b_c967a62e",
@@ -85,6 +109,24 @@
       "writtenOn": "2023-03-20T19:51:01Z",
       "side": 1,
       "message": "need to adjust the `tgkill` entry in common_device.policy (as discussed in chat)",
+      "revId": "74d9ea8da668448336cc93af349a11f1c0168b5e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9c5dacfe_f3aaf00e",
+        "filename": "jail/seccomp/x86_64/battery.policy",
+        "patchSetId": 1
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-21T00:58:11Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "cf840e5b_c967a62e",
       "revId": "74d9ea8da668448336cc93af349a11f1c0168b5e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
