@@ -16,6 +16,24 @@
       "message": "do we need `vendor_available: true` for the libraries to be built? Or is that implied somewhere in the build system?",
       "revId": "a631197d640a27e83d16012a17ff89c8be301226",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "57bef10e_83fb0ab6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-21T22:56:53Z",
+      "side": 1,
+      "message": "i think it somehow works already (unless they are just adding these downstream themselves). all of these libs get statically linked into the `rust_binary`, i wonder if `vendor_available` doesn\u0027t apply in that case?\n\ngoing to leave it out for now",
+      "parentUuid": "b182b99a_dc17e402",
+      "revId": "a631197d640a27e83d16012a17ff89c8be301226",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
