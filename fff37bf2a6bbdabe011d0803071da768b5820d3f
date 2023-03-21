@@ -1,5 +1,23 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e71010d7_e703320c",
+        "filename": "crosvm_control/cargo2android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-21T22:20:31Z",
+      "side": 1,
+      "message": "this file isn\u0027t being used. you\u0027ve got to add an option to the cargo_embargo.json for the tool to pick it up (was similar for cargo2android.py)\n\ni\u0027ll fix it while i\u0027m making other tweaks around here",
+      "revId": "fff37bf2a6bbdabe011d0803071da768b5820d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
