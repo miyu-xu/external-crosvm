@@ -325,8 +325,13 @@ pub fn create_gpu_minijail(root: &Path, config: &SandboxConfig) -> Result<Minija
     jail.mount_bind(sys_dev_char_path, sys_dev_char_path, false)?;
 
     // Necessary for CGROUP control of the vGPU threads
+    // This is not necessary UNLESS one wants to make use
+    // of the gpu cgroup command line options.
     let sys_cpuset_path = Path::new("/sys/fs/cgroup/cpuset");
+<<<<<<< HEAD   (a63119 ANDROID: allow vendor code to access some internal crosvm li)
     // ANDROID: b:270404912 - Added exists to validate path exists.
+=======
+>>>>>>> BRANCH (65d98b aarch64: MTK GenieZone hypervisor enablement as Crosvm backe)
     if sys_cpuset_path.exists() {
         jail.mount_bind(sys_cpuset_path, sys_cpuset_path, true)?;
     }
