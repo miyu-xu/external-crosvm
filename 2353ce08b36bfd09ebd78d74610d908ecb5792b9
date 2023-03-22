@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "5756e5cd_1e0af65f",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 73,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3c8b7c3c_b1e63a1a",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1fdd7148_f2273dd3",
@@ -31,6 +49,30 @@
       "writtenOn": "2023-03-20T21:14:37Z",
       "side": 1,
       "message": "might want to include an error message",
+      "range": {
+        "startLine": 83,
+        "startChar": 28,
+        "endLine": 83,
+        "endChar": 42
+      },
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "961b011e_7746f850",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "1fdd7148_f2273dd3",
       "range": {
         "startLine": 83,
         "startChar": 28,
@@ -58,6 +100,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ca87eb4a_624c5e8e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 143,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ffa0ad21_014c3fe9",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "559421cf_3f30ac11",
@@ -71,6 +131,24 @@
       "writtenOn": "2023-03-20T21:14:37Z",
       "side": 1,
       "message": "unused?",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cb9e2f56_eb197dbb",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 178,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "559421cf_3f30ac11",
       "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -92,6 +170,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fe7b1110_ad375a35",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3f038f69_2546f9dc",
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f9467a33_360d3128",
@@ -105,6 +201,30 @@
       "writtenOn": "2023-03-20T21:14:37Z",
       "side": 1,
       "message": "region?",
+      "range": {
+        "startLine": 189,
+        "startChar": 64,
+        "endLine": 189,
+        "endChar": 70
+      },
+      "revId": "2353ce08b36bfd09ebd78d74610d908ecb5792b9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6c002c94_4dc0cc50",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 189,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-22T15:56:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f9467a33_360d3128",
       "range": {
         "startLine": 189,
         "startChar": 64,
