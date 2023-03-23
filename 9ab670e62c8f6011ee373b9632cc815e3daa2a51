@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "93332334_b1bb5be0",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 197,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-23T23:32:26Z",
+      "side": 1,
+      "message": "maybe s/parcel/region/ here too",
+      "range": {
+        "startLine": 197,
+        "startChar": 11,
+        "endLine": 197,
+        "endChar": 37
+      },
+      "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
