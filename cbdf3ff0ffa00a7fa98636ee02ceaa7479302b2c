@@ -99,6 +99,24 @@
       "parentUuid": "d0d21d87_7bc9a6b1",
       "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a5892eff_c1aa29da",
+        "filename": "patches/uuid-update-1.2.2.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-23T22:47:40Z",
+      "side": 1,
+      "message": "To clarify, I\u0027m just suggesting we delete this file. The other part of the CL looks good to me.",
+      "parentUuid": "3067c276_6f7c008d",
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
