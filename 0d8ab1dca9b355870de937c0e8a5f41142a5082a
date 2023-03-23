@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38b36630_9fc86f91",
+        "filename": "hypervisor/src/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 120,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-03-23T23:51:03Z",
+      "side": 1,
+      "message": "It seems like Gunyah needs the entry point but otherwise doesn\u0027t care which `PayloadType` is loaded - is that accurate?\n\nIf that\u0027s the case, maybe we can just pass in the entry point address as a `u64` or `GuestAddress` to `init_arch()`, and then we don\u0027t need to move `PayloadType` into `hypervisor`.\n\n---\n\nMy motivation to avoid moving `PayloadType` into the `hypervisor` crate is that `hypervisor` should ideally just implement a framework for building a VMM; the `arch` and `aarch64`/`x86_64` crates (plus `main.rs` and related files in the main binary crate) make up a concrete VMM implementation that contains the policy decisions about how the guest is configured, which virtio devices to add, how to load the kernel into the guest memory, etc., and I would prefer not to leak those details into `hypervisor`.\n\nIt\u0027s okay to break this abstraction if we absolutely must (the `ProtectionType` stuff is already somewhat crossing this line), but it should only be done if we can\u0027t make it work otherwise.",
+      "revId": "0d8ab1dca9b355870de937c0e8a5f41142a5082a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
