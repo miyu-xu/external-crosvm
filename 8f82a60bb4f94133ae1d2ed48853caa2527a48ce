@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9358e0e0_af69d2e8",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 455,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-23T23:08:54Z",
+      "side": 1,
+      "message": "maybe worth making this type explicit or adding a comment. at first i assumed it was default values for each register, but it is actually an empty list of registers (so nothing gets initialized)",
+      "range": {
+        "startLine": 455,
+        "startChar": 16,
+        "endLine": 455,
+        "endChar": 34
+      },
+      "revId": "8f82a60bb4f94133ae1d2ed48853caa2527a48ce",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
