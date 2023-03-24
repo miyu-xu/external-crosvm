@@ -22,6 +22,30 @@
       },
       "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8e0f686f_90e1071b",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 197,
+      "author": {
+        "id": 1539256
+      },
+      "writtenOn": "2023-03-24T00:23:44Z",
+      "side": 1,
+      "message": "I\u0027d like to use Gunyah terms since it\u0027s a Gunyah detail/requirement. I\u0027ll make that parcel \u003d\u003d region more clear though.",
+      "parentUuid": "93332334_b1bb5be0",
+      "range": {
+        "startLine": 197,
+        "startChar": 11,
+        "endLine": 197,
+        "endChar": 37
+      },
+      "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
