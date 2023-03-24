@@ -46,6 +46,29 @@
       },
       "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d41e13eb_2bd0a5ff",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 759,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-24T01:18:48Z",
+      "side": 1,
+      "message": "```\n   --\u003e hypervisor/src/gunyah/mod.rs:759:21\n    |\n759 |                     gh_vm_status_GH_VM_STATUS_EXITED \u003d\u003e {\n    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper case: `GH_VM_STATUS_GH_VM_STATUS_EXITED`\n```\n\nBuild gives this warning. How do I overcome it? `gh_vm_status_GH_VM_STATUS_EXITED` comes from bindgen.",
+      "range": {
+        "startLine": 759,
+        "startChar": 19,
+        "endLine": 759,
+        "endChar": 52
+      },
+      "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
