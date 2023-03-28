@@ -1,0 +1,13 @@
+diff --git a/metrics/Android.bp b/metrics/Android.bp
+index 7ec27b461..7ac7203be 100644
+--- a/metrics/Android.bp
++++ b/metrics/Android.bp
+@@ -36,7 +36,7 @@ rust_library {
+         "libanyhow",
+         "libbase_rust",
+         "libcfg_if",
+-        "libprotobuf",
++        "libprotobuf_deprecated",
+         "libserde",
+     ],
+ }
