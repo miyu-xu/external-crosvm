@@ -117,6 +117,30 @@
       },
       "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c3cff9ce_6067d4c4",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 13
+      },
+      "lineNbr": 759,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-03-28T17:50:20Z",
+      "side": 1,
+      "message": "Looks like KVM has same set up/issue as Gunyah for `kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V2`. I\u0027ll leave the warning alone.",
+      "parentUuid": "e2298d31_1ad7fd67",
+      "range": {
+        "startLine": 759,
+        "startChar": 19,
+        "endLine": 759,
+        "endChar": 52
+      },
+      "revId": "9ab670e62c8f6011ee373b9632cc815e3daa2a51",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
