@@ -117,6 +117,24 @@
       "parentUuid": "3067c276_6f7c008d",
       "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5020c0b4_fe4f5ea9",
+        "filename": "patches/uuid-update-1.2.2.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-03-29T21:15:43Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a5892eff_c1aa29da",
+      "revId": "cbdf3ff0ffa00a7fa98636ee02ceaa7479302b2c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
