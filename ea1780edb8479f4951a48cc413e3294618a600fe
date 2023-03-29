@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b3fd02f5_e9a25d53",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-29T17:38:39Z",
+      "side": 1,
+      "message": "(it is depending on some of crosvm\u0027s internal crates)",
+      "parentUuid": "6f5f6799_074b852e",
+      "revId": "ea1780edb8479f4951a48cc413e3294618a600fe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f8f38b59_97dea025",
         "filename": "protos/patches/Android.bp.patch",
         "patchSetId": 5
