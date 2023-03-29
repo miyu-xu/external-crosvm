@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8484ca02_1c278377",
+        "filename": "Cargo.lock",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-29T01:49:19Z",
+      "side": 1,
+      "message": "revert before submitting",
+      "revId": "2087602916d50abbe7269b19f8f79db7ec0c2f71",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a7f60125_04fef0b7",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 2
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-29T01:49:19Z",
+      "side": 1,
+      "message": "it might be easier to add an entry to this list, then you shouldn\u0027t need the patch files\n\n```\n\"libprotobuf\": \"libprotobuf_deprecated\",\n```",
+      "revId": "2087602916d50abbe7269b19f8f79db7ec0c2f71",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
