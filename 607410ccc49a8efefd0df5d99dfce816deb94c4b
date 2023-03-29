@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ac439782_5e8b1836",
+        "filename": "base/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 50,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-03-29T22:47:55Z",
+      "side": 0,
+      "message": "There\u0027s more deletions in base/Android.bp than the patch file. Were most of the deletions done by cargo_embargo?",
+      "range": {
+        "startLine": 40,
+        "startChar": 0,
+        "endLine": 50,
+        "endChar": 32
+      },
+      "revId": "607410ccc49a8efefd0df5d99dfce816deb94c4b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
