@@ -22,6 +22,30 @@
       },
       "revId": "607410ccc49a8efefd0df5d99dfce816deb94c4b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0af61511_a9bf4b71",
+        "filename": "base/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 50,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-29T22:53:58Z",
+      "side": 0,
+      "message": "Yeah, cargo_embargo is deleting the whole base_test_tests_process module because is a \"harness-less\" test. This part of the patch was meant to tweak that module, but since it doesn\u0027t exist anymore the patch can\u0027t apply unless we delete this part.\n\nHopefully when we bring it back we can fix the issue described in the comment so that we don\u0027t need to resurrect the patch.",
+      "parentUuid": "ac439782_5e8b1836",
+      "range": {
+        "startLine": 40,
+        "startChar": 0,
+        "endLine": 50,
+        "endChar": 32
+      },
+      "revId": "607410ccc49a8efefd0df5d99dfce816deb94c4b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
