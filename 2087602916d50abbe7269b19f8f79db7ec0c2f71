@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "15395ab1_63dee77c",
+        "filename": "Cargo.lock",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1054468
+      },
+      "writtenOn": "2023-03-29T08:50:50Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "8484ca02_1c278377",
+      "revId": "2087602916d50abbe7269b19f8f79db7ec0c2f71",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a7f60125_04fef0b7",
