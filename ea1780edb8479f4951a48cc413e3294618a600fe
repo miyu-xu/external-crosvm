@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "6f5f6799_074b852e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-03-29T17:37:47Z",
+      "side": 1,
+      "message": "```\nerror[E0599]: no function or associated item named `parse_from_reader` found for struct `FSVerityDigests` in the current scope\n   --\u003e packages/modules/Virtualization/authfs/src/main.rs:278:38\n    |\n278 |         let proto \u003d FSVerityDigests::parse_from_reader(\u0026mut reader)?;\n    |                                      ^^^^^^^^^^^^^^^^^ function or associated item not found in `FSVerityDigests`\n    |\n    \u003d help: items from traits can only be used if the trait is in scope\n```\n\nlooks like you might need to hold back the protobuf version for `authfs` too",
+      "revId": "ea1780edb8479f4951a48cc413e3294618a600fe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "f8f38b59_97dea025",
         "filename": "protos/patches/Android.bp.patch",
         "patchSetId": 5
