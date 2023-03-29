@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f8f38b59_97dea025",
+        "filename": "protos/patches/Android.bp.patch",
+        "patchSetId": 5
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-03-29T14:29:50Z",
+      "side": 1,
+      "message": "This is already a problem, but why is this here twice?",
+      "revId": "ea1780edb8479f4951a48cc413e3294618a600fe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
