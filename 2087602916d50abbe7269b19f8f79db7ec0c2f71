@@ -33,6 +33,24 @@
       "message": "it might be easier to add an entry to this list, then you shouldn\u0027t need the patch files\n\n```\n\"libprotobuf\": \"libprotobuf_deprecated\",\n```",
       "revId": "2087602916d50abbe7269b19f8f79db7ec0c2f71",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "387c856d_f19acc85",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 2
+      },
+      "lineNbr": 49,
+      "author": {
+        "id": 1054468
+      },
+      "writtenOn": "2023-03-29T08:17:01Z",
+      "side": 1,
+      "message": "Good idea. Done.\n\nLooks like the substitution happens before the patch files are applied, so I still need to modify the existing patch files, but don\u0027t need to add new ones.",
+      "parentUuid": "a7f60125_04fef0b7",
+      "revId": "2087602916d50abbe7269b19f8f79db7ec0c2f71",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
