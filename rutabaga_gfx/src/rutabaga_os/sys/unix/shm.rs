@@ -7,9 +7,11 @@ use std::ffi::CStr;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::OwnedFd;
 
+use libc::c_char;
+use libc::c_int;
+use libc::c_long;
+use libc::c_uint;
 use libc::off_t;
-use nix::sys::memfd::memfd_create;
-use nix::sys::memfd::MemFdCreateFlag;
 use nix::unistd::ftruncate;
 use nix::unistd::sysconf;
 use nix::unistd::SysconfVar;
@@ -19,6 +21,12 @@ use crate::rutabaga_os::descriptor::IntoRawDescriptor;
 use crate::rutabaga_os::RawDescriptor;
 use crate::rutabaga_utils::RutabagaError;
 use crate::rutabaga_utils::RutabagaResult;
+
+const MFD_CLOEXEC: c_uint = 0x0001;
+
+unsafe fn memfd_create(name: *const c_char, flags: c_uint) -> c_int {
+    libc::syscall(libc::SYS_memfd_create as c_long, name, flags) as c_int
+}
 
 pub struct SharedMemory {
     fd: OwnedFd,
@@ -33,7 +41,10 @@ impl SharedMemory {
     ///
     /// The file descriptor is opened with the close on exec flag and allows memfd sealing.
     pub fn new(debug_name: &CStr, size: u64) -> RutabagaResult<SharedMemory> {
-        let raw_fd = memfd_create(debug_name, MemFdCreateFlag::MFD_CLOEXEC)?;
+        let raw_fd = unsafe { memfd_create(debug_name.as_ptr() as *const c_char, MFD_CLOEXEC) };
+        if raw_fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
         let size_off_t: off_t = size.try_into()?;
         ftruncate(raw_fd, size_off_t)?;
 
