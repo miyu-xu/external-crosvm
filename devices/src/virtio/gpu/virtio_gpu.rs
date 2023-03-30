@@ -22,7 +22,7 @@ use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
 use rutabaga_gfx::Rutabaga;
 use rutabaga_gfx::RutabagaBuilder;
-#[cfg(windows)]
+// #[cfg(windows)]
 use rutabaga_gfx::RutabagaError;
 use rutabaga_gfx::RutabagaFence;
 use rutabaga_gfx::RutabagaFenceHandler;
@@ -550,7 +550,7 @@ impl VirtioGpu {
             return Ok(OkNoData);
         }
 
-        #[cfg(windows)]
+        // #[cfg(windows)]
         match self.rutabaga.resource_flush(resource_id) {
             Ok(_) => return Ok(OkNoData),
             Err(RutabagaError::Unsupported) => {}
