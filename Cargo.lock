@@ -253,8 +253,25 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "clap 3.2.23",
- "env_logger",
+ "lazy_static",
+ "lazycell",
+ "peeking_take_while",
+ "proc-macro2",
+ "quote 1.0.21",
+ "regex",
+ "rustc-hash",
+ "shlex",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.63.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36d860121800b2a9a94f9b5604b332d5cffb234ce17609ea479d723dbc9d3885"
+dependencies = [
+ "bitflags",
+ "cexpr",
+ "clang-sys",
  "lazy_static",
  "lazycell",
  "log",
@@ -264,6 +281,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
+ "syn 1.0.103",
  "which",
 ]
 
@@ -1215,6 +1233,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hypervisor"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base",
  "bit_field",
  "bitflags",
@@ -1231,6 +1250,7 @@ dependencies = [
  "memoffset 0.6.5",
  "once_cell",
  "serde",
+ "serde_json",
  "sync",
  "tempfile",
  "thiserror",
@@ -1557,6 +1577,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memoffset"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "merge"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1609,7 +1638,7 @@ dependencies = [
 name = "minijail-sys"
 version = "0.0.14"
 dependencies = [
- "bindgen",
+ "bindgen 0.63.0",
  "libc",
  "pkg-config",
  "which",
@@ -1701,6 +1730,20 @@ dependencies = [
  "bitflags",
  "cfg-if",
  "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.26.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfdda3d196821d6af13126e40375cdf7da646a96114af134d5f417a9a1dc8e1a"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "libc",
+ "memoffset 0.7.1",
+ "pin-utils",
+ "static_assertions",
 ]
 
 [[package]]
@@ -2080,14 +2123,16 @@ name = "rutabaga_gfx"
 version = "0.1.1-alpha.1"
 dependencies = [
  "anyhow",
- "base",
  "cfg-if",
  "data_model 0.1.1-alpha.1",
  "libc",
+ "log",
+ "nix 0.26.2",
  "pkg-config",
  "remain",
  "serde",
  "thiserror",
+ "winapi",
  "zerocopy",
 ]
 
@@ -2460,7 +2505,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2cbcf2717fa856a7226499babbbccb07353ea2fc2b27defd38bd13b1227cc78"
 dependencies = [
- "bindgen",
+ "bindgen 0.60.1",
  "cc",
  "cfg-if",
 ]
