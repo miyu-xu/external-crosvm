@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e760b8c5_3178c124",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 17
+      },
+      "lineNbr": 1491,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-04-03T23:30:54Z",
+      "side": 0,
+      "message": "revert to old message (probably a minor rebase mistake)",
+      "revId": "a794e35d3c016cf8eceb2e4666398f0a6be753ec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
