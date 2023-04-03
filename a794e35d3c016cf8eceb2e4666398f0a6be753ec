@@ -16,6 +16,24 @@
       "message": "revert to old message (probably a minor rebase mistake)",
       "revId": "a794e35d3c016cf8eceb2e4666398f0a6be753ec",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bfa78fe3_18506f55",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 17
+      },
+      "lineNbr": 1491,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-04-03T23:33:45Z",
+      "side": 0,
+      "message": "Yep, it was.",
+      "parentUuid": "e760b8c5_3178c124",
+      "revId": "a794e35d3c016cf8eceb2e4666398f0a6be753ec",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
