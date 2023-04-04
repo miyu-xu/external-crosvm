@@ -34,6 +34,24 @@
       "parentUuid": "5964f8f1_f731c103",
       "revId": "ce6bcb2b5777fcd472e8849c140dbf7bdd11b33e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a6581e8e_118dc80b",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/gunyah.h",
+        "patchSetId": 16
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-04-04T21:13:07Z",
+      "side": 1,
+      "message": "Maybe we can remove this header + the `tools/bindgen-all-the-things` from this CL initially, like we did for geniezone and then take it as a follow up action item to fetch the headers from the android repo as part of re-regening the bindings.",
+      "parentUuid": "5964f8f1_f731c103",
+      "revId": "ce6bcb2b5777fcd472e8849c140dbf7bdd11b33e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
