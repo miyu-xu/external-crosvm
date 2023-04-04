@@ -52,6 +52,24 @@
       "parentUuid": "5964f8f1_f731c103",
       "revId": "ce6bcb2b5777fcd472e8849c140dbf7bdd11b33e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5d71ad13_2400b9b9",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/gunyah.h",
+        "patchSetId": 16
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-04-04T21:19:36Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a6581e8e_118dc80b",
+      "revId": "ce6bcb2b5777fcd472e8849c140dbf7bdd11b33e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
