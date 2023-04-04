@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5964f8f1_f731c103",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/gunyah.h",
+        "patchSetId": 16
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-04-04T21:04:11Z",
+      "side": 1,
+      "message": "Will this file be available from other sources? I think the path of least resistance would be to avoid checking this in to the crosvm repo due to the difference in licenses.",
+      "revId": "ce6bcb2b5777fcd472e8849c140dbf7bdd11b33e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
