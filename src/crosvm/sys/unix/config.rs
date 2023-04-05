@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use devices::IommuDevType;
 use devices::PciAddress;
@@ -14,11 +13,15 @@ use serde_keyvalue::FromKeyValues;
 
 use crate::crosvm::config::Config;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub enum HypervisorKind {
-    Kvm,
+    Kvm {
+        device: Option<PathBuf>,
+    },
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     #[cfg(feature = "geniezone")]
+<<<<<<< HEAD   (a16c67 ANDROID: Enable Gunyah)
     Geniezone,
     #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
     Gunyah,
@@ -38,6 +41,15 @@ impl FromStr for HypervisorKind {
             _ => Err("invalid hypervisor backend"),
         }
     }
+=======
+    Geniezone {
+        device: Option<PathBuf>,
+    },
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+    Gunyah {
+        device: Option<PathBuf>,
+    },
+>>>>>>> BRANCH (994eda crosvm: unix: Run Gunyah Virtual Machines)
 }
 
 #[cfg(feature = "audio")]

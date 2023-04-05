@@ -1,3 +1,10 @@
+<<<<<<< HEAD   (a16c67 ANDROID: Enable Gunyah)
+=======
+// Copyright 2023 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+>>>>>>> BRANCH (994eda crosvm: unix: Run Gunyah Virtual Machines)
 use std::collections::BTreeMap;
 
 use cros_fdt::FdtWriter;

@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (a16c67 ANDROID: Enable Gunyah)
 use base::Error;
 use base::Event;
 use base::Result;
@@ -7,6 +8,19 @@ use hypervisor::IrqRoute;
 use hypervisor::MPState;
 use hypervisor::Vcpu;
 use libc::ENOTSUP;
+=======
+// Copyright 2023 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+use base::Event;
+use base::Result;
+use hypervisor::gunyah::GunyahVm;
+use hypervisor::DeviceKind;
+use hypervisor::IrqRoute;
+use hypervisor::MPState;
+use hypervisor::Vcpu;
+>>>>>>> BRANCH (994eda crosvm: unix: Run Gunyah Virtual Machines)
 
 use crate::IrqChip;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]

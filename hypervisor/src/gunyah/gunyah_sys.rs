@@ -1,3 +1,10 @@
+<<<<<<< HEAD   (a16c67 ANDROID: Enable Gunyah)
+=======
+// Copyright 2023 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+>>>>>>> BRANCH (994eda crosvm: unix: Run Gunyah Virtual Machines)
 //! Bindings for the Linux Gunyah API.
 
 #![allow(non_upper_case_globals)]
