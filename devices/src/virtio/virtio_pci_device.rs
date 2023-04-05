@@ -742,6 +742,9 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn ioevents(&self) -> Vec<(&Event, u64, Datamatch)> {
+        // ANDROID(b/271204121): This functionality is broken and keeps pKVM from booting.
+        return Vec::new();
+
         let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
         self.queue_evts
