@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "31e45dea_b8031835",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-04-10T19:55:15Z",
+      "side": 1,
+      "message": "The merge-1 script does this already, so figured parity would be nice.",
+      "revId": "61caee94d0d5712a586d0ae4ba00ad9f943fc7a7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
