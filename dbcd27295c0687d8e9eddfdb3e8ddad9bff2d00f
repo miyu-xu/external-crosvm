@@ -16,6 +16,24 @@
       "message": "Hi. There are a couple more files that need to be updated for this. I\u0027ve sent https://r.android.com/2526526 to handle all of it",
       "revId": "dbcd27295c0687d8e9eddfdb3e8ddad9bff2d00f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "855d8dc6_68d5bcb4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1984281
+      },
+      "writtenOn": "2023-04-10T01:46:23Z",
+      "side": 1,
+      "message": "Thank you Frederick, we\u0027re going to abandon this CL.",
+      "parentUuid": "aa8de1b3_74955d00",
+      "revId": "dbcd27295c0687d8e9eddfdb3e8ddad9bff2d00f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
