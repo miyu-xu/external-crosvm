@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "43d268da_c2dd8a99",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-04-17T19:13:49Z",
+      "side": 1,
+      "message": "Ping for +2 -- upstream side already reviewed: crrev.com/c/4428537, but this needs to land before the upstream since gfxstream upstream is in AOSP.",
+      "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
