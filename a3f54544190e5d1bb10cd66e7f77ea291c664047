@@ -69,6 +69,24 @@
       "parentUuid": "abee3e59_5b4bd120",
       "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "26774d08_bb397d2b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-04-17T22:00:46Z",
+      "side": 1,
+      "message": "ah, I see. Though - it seems like the upstream change could also be landed first? and then this?\n\nWe\u0027d like to merge http://r.android.com/2541270 first here and then merge this after (in-between the merges with upstream). In the worst case, we can merge next week\u0027s upstream merge with the vulkan-cereal change (we update crosvm weekly).",
+      "parentUuid": "3e7e9f08_5457c9f7",
+      "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
