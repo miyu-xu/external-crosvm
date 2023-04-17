@@ -2854,8 +2854,89 @@ impl FileSystem for PassthroughFs {
 mod tests {
     use super::*;
 
+    use std::path::Path;
+
+    use named_lock::NamedLock;
+    use tempfile::TempDir;
+
+    const UNITTEST_LOCK_NAME: &str = "passthroughfs_unittest_lock";
+
+    // Create an instance of `Context` with valid uid, gid, and pid.
+    // The correct ids are necessary for test cases where new files are created.
+    fn get_context() -> Context {
+        // Both these calls are safe because they take no parameters, and only return an integer
+        // value. The kernel also guarantees that they can never fail.
+        let uid = unsafe { libc::syscall(SYS_GETEUID) as libc::uid_t };
+        let gid = unsafe { libc::syscall(SYS_GETEGID) as libc::gid_t };
+        let pid = std::process::id() as libc::pid_t;
+        Context { uid, gid, pid }
+    }
+
+    /// Creates the given directories and files under `temp_dir`.
+    fn create_test_data(temp_dir: &TempDir, dirs: &[&str], files: &[&str]) {
+        let path = temp_dir.path();
+
+        for d in dirs {
+            std::fs::create_dir_all(path.join(d)).unwrap();
+        }
+
+        for f in files {
+            File::create(path.join(f)).unwrap();
+        }
+    }
+
+    /// Looks up the given `path` in `fs`.
+    fn lookup(fs: &PassthroughFs, path: &Path) -> io::Result<Inode> {
+        let mut inode = 1;
+        let ctx = get_context();
+        for name in path.iter() {
+            let name = CString::new(name.to_str().unwrap()).unwrap();
+            let ent = match fs.lookup(ctx, inode, &name) {
+                Ok(ent) => ent,
+                Err(e) => {
+                    return Err(e);
+                }
+            };
+            inode = ent.inode;
+        }
+        Ok(inode)
+    }
+
+    /// Creates a file at the given `path`.
+    fn create(fs: &PassthroughFs, path: &Path) -> io::Result<Entry> {
+        let parent = path.parent().unwrap();
+        let filename = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
+        let parent_inode = lookup(fs, parent)?;
+        let ctx = get_context();
+        fs.create(ctx, parent_inode, &filename, 0o666, libc::O_RDWR as u32, 0)
+            .map(|(entry, _, _)| entry)
+    }
+
+    /// Removes a file at the given `path`.
+    fn unlink(fs: &PassthroughFs, path: &Path) -> io::Result<()> {
+        let parent = path.parent().unwrap();
+        let filename = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
+        let parent_inode = lookup(fs, parent)?;
+        let ctx = get_context();
+        fs.unlink(ctx, parent_inode, &filename)
+    }
+
+    /// Forgets cache.
+    fn forget(fs: &PassthroughFs, path: &Path) -> io::Result<()> {
+        let ctx = get_context();
+        let inode = lookup(fs, path)?;
+        // Pass `u64::MAX` to ensure that the refcount goes to 0 and we forget inode.
+        fs.forget(ctx, inode, u64::MAX);
+        Ok(())
+    }
+
     #[test]
     fn rewrite_xattr_names() {
+        // Since PassthroughFs may executes process-wide operations such as `fchdir`, acquire
+        // `NamedLock` before starting each unit test creating a `PassthroughFs` instance.
+        let lock = NamedLock::create(UNITTEST_LOCK_NAME).expect("create named lock");
+        let _guard = lock.lock().expect("acquire named lock");
+
         let cfg = Config {
             rewrite_security_xattrs: true,
             ..Default::default()
@@ -2920,5 +3001,220 @@ mod tests {
         let mut actual = no_nul_with_prefix.to_vec();
         strip_xattr_prefix(&mut actual);
         assert_eq!(&actual[..], b"security.sehash");
+    }
+
+    #[test]
+    fn lookup_files() {
+        // Since PassthroughFs may executes process-wide operations such as `fchdir`, acquire
+        // `NamedLock` before starting each unit test creating a `PassthroughFs` instance.
+        let lock = NamedLock::create(UNITTEST_LOCK_NAME).expect("create named lock");
+        let _guard = lock.lock().expect("acquire named lock");
+
+        let temp_dir = TempDir::new().unwrap();
+        create_test_data(&temp_dir, &["dir"], &["a.txt", "dir/b.txt"]);
+
+        let cfg = Default::default();
+        let fs = PassthroughFs::new("tag", cfg).unwrap();
+
+        let capable = FsOptions::empty();
+        fs.init(capable).unwrap();
+
+        assert!(lookup(&fs, &temp_dir.path().join("a.txt")).is_ok());
+        assert!(lookup(&fs, &temp_dir.path().join("dir")).is_ok());
+        assert!(lookup(&fs, &temp_dir.path().join("dir/b.txt")).is_ok());
+
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("nonexistent-file"))
+                .expect_err("file must not exist")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        // "A.txt" is different from "a.txt".
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("A.txt"))
+                .expect_err("file must not exist")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn lookup_files_ascii_casefold() {
+        // Since PassthroughFs may executes process-wide operations such as `fchdir`, acquire
+        // `NamedLock` before starting each unit test creating a `PassthroughFs` instance.
+        let lock = NamedLock::create(UNITTEST_LOCK_NAME).expect("create named lock");
+        let _guard = lock.lock().expect("acquire named lock");
+
+        let temp_dir = TempDir::new().unwrap();
+        create_test_data(&temp_dir, &["dir"], &["a.txt", "dir/b.txt"]);
+
+        let cfg = Config {
+            ascii_casefold: true,
+            ..Default::default()
+        };
+        let fs = PassthroughFs::new("tag", cfg).unwrap();
+
+        let capable = FsOptions::empty();
+        fs.init(capable).unwrap();
+
+        // Ensure that "A.txt" is equated with "a.txt".
+        let a_inode = lookup(&fs, &temp_dir.path().join("a.txt")).expect("a.txt must be found");
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("A.txt")).expect("A.txt must exist"),
+            a_inode
+        );
+
+        let dir_inode = lookup(&fs, &temp_dir.path().join("dir")).expect("dir must be found");
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("DiR")).expect("DiR must exist"),
+            dir_inode
+        );
+
+        let b_inode =
+            lookup(&fs, &temp_dir.path().join("dir/b.txt")).expect("dir/b.txt must be found");
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("dIr/B.TxT")).expect("dIr/B.TxT must exist"),
+            b_inode
+        );
+
+        assert_eq!(
+            lookup(&fs, &temp_dir.path().join("nonexistent-file"))
+                .expect_err("file must not exist")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    fn test_create_and_remove(ascii_casefold: bool) {
+        // Since PassthroughFs may executes process-wide operations such as `fchdir`, acquire
+        // `NamedLock` before starting each unit test creating a `PassthroughFs` instance.
+        let lock = NamedLock::create(UNITTEST_LOCK_NAME).expect("create named lock");
+        let _guard = lock.lock().expect("acquire named lock");
+
+        let temp_dir = TempDir::new().unwrap();
+        let timeout = Duration::from_millis(10);
+        let cfg = Config {
+            entry_timeout: timeout,
+            attr_timeout: timeout,
+            cache_policy: CachePolicy::Auto,
+            ascii_casefold,
+            ..Default::default()
+        };
+        let fs = PassthroughFs::new("tag", cfg).unwrap();
+
+        let capable = FsOptions::empty();
+        fs.init(capable).unwrap();
+
+        // Create a.txt and b.txt.
+        let a_path = temp_dir.path().join("a.txt");
+        let b_path = temp_dir.path().join("b.txt");
+        let a_entry = create(&fs, &a_path).expect("create a.txt");
+        let b_entry = create(&fs, &b_path).expect("create b.txt");
+        assert_eq!(
+            a_entry.inode,
+            lookup(&fs, &a_path).expect("lookup a.txt"),
+            "Created file 'a.txt' must be looked up"
+        );
+        assert_eq!(
+            b_entry.inode,
+            lookup(&fs, &b_path).expect("lookup b.txt"),
+            "Created file 'b.txt' must be looked up"
+        );
+
+        // Remove a.txt only
+        unlink(&fs, &a_path).expect("Remove");
+        assert_eq!(
+            lookup(&fs, &a_path)
+                .expect_err("file must not exist")
+                .kind(),
+            io::ErrorKind::NotFound,
+            "a.txt must be removed"
+        );
+        // "A.TXT" must not be found regardless of whether casefold is enabled or not.
+        let upper_a_path = temp_dir.path().join("A.TXT");
+        assert_eq!(
+            lookup(&fs, &upper_a_path)
+                .expect_err("file must not exist")
+                .kind(),
+            io::ErrorKind::NotFound,
+            "A.txt must be removed"
+        );
+
+        // Check if the host file system doesn't have a.txt but does b.txt.
+        assert!(!a_path.exists(), "a.txt must be removed");
+        assert!(b_path.exists(), "b.txt must exist");
+    }
+
+    #[test]
+    fn create_and_remove() {
+        test_create_and_remove(false /* casefold */);
+    }
+
+    #[test]
+    fn create_and_remove_casefold() {
+        test_create_and_remove(true /* casefold */);
+    }
+
+    fn test_create_and_forget(ascii_casefold: bool) {
+        // Since PassthroughFs may executes process-wide operations such as `fchdir`, acquire
+        // `NamedLock` before starting each unit test creating a `PassthroughFs` instance.
+        let lock = NamedLock::create(UNITTEST_LOCK_NAME).expect("create named lock");
+        let _guard = lock.lock().expect("acquire named lock");
+
+        let temp_dir = TempDir::new().unwrap();
+        let timeout = Duration::from_millis(10);
+        let cfg = Config {
+            entry_timeout: timeout,
+            attr_timeout: timeout,
+            cache_policy: CachePolicy::Auto,
+            ascii_casefold,
+            ..Default::default()
+        };
+        let fs = PassthroughFs::new("tag", cfg).unwrap();
+
+        let capable = FsOptions::empty();
+        fs.init(capable).unwrap();
+
+        // Create a.txt.
+        let a_path = temp_dir.path().join("a.txt");
+        let a_entry = create(&fs, &a_path).expect("create a.txt");
+        assert_eq!(
+            a_entry.inode,
+            lookup(&fs, &a_path).expect("lookup a.txt"),
+            "Created file 'a.txt' must be looked up"
+        );
+
+        // Forget a.txt's inode from PassthroughFs's internal cache.
+        forget(&fs, &a_path).expect("forget a.txt");
+
+        if ascii_casefold {
+            let upper_a_path = temp_dir.path().join("A.TXT");
+            let new_a_inode = lookup(&fs, &upper_a_path).expect("lookup a.txt");
+            assert_ne!(
+                a_entry.inode, new_a_inode,
+                "inode must be changed after forget()"
+            );
+            assert_eq!(
+                new_a_inode,
+                lookup(&fs, &a_path).expect("lookup a.txt"),
+                "inode must be same for a.txt and A.TXT"
+            );
+        } else {
+            assert_ne!(
+                a_entry.inode,
+                lookup(&fs, &a_path).expect("lookup a.txt"),
+                "inode must be changed after forget()"
+            );
+        }
+    }
+
+    #[test]
+    fn create_and_forget() {
+        test_create_and_forget(false /* ascii_casefold */);
+    }
+
+    #[test]
+    fn create_and_forget_casefold() {
+        test_create_and_forget(true /* ascii_casefold */);
     }
 }

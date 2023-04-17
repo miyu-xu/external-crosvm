@@ -113,7 +113,7 @@ def check_crosvm_tests(platform: Platform):
             return None
         dut = None
         if platform == "x86_64":
-            dut = "--dut=host"
+            dut = "--dut=vm"
         elif platform == "aarch64":
             dut = "--dut=vm"
         return cmd("./tools/run_tests --platform", platform, dut).with_color_flag()
@@ -406,8 +406,6 @@ GROUPS: List[Group] = [
         checks=[
             "copyright_header",
             "file_ends_with_newline",
-            "infra_configs",
-            "infra_tests",
             "line_endings",
             "markdown_format",
             "mdbook",
@@ -418,7 +416,8 @@ GROUPS: List[Group] = [
             "rust_features",
             "rust_format",
             "rust_lockfiles",
-        ],
+        ]
+        + (["infra_configs", "infra_tests"] if not is_kiwi_repo() else []),
     ),
     *(
         Group(
