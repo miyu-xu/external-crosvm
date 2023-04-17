@@ -16,6 +16,23 @@
       "message": "Ping for +2 -- upstream side already reviewed: crrev.com/c/4428537, but this needs to land before the upstream since gfxstream upstream is in AOSP.",
       "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c7c949ac_671ee1a1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-04-17T21:16:21Z",
+      "side": 1,
+      "message": "Can this be applied to upstream crosvm first, before merging into Android?",
+      "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
