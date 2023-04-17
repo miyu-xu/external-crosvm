@@ -51,6 +51,24 @@
       "parentUuid": "c7c949ac_671ee1a1",
       "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3e7e9f08_5457c9f7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-04-17T21:49:58Z",
+      "side": 1,
+      "message": "The upstream crosvm change depends on the upstream vulkan-cereal change, which is in AOSP.  So we should land this first, and then land the upstream variation shortly thereafter.",
+      "parentUuid": "abee3e59_5b4bd120",
+      "revId": "a3f54544190e5d1bb10cd66e7f77ea291c664047",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
