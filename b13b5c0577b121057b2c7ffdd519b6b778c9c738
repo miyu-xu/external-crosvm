@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4fe0964b_4b2810d0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1958315
+      },
+      "writtenOn": "2023-04-18T12:09:44Z",
+      "side": 1,
+      "message": "Frederick is OOO till May. +Andrew, could you take a look?",
+      "revId": "b13b5c0577b121057b2c7ffdd519b6b778c9c738",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
