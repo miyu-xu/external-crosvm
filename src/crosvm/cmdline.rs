@@ -11,9 +11,6 @@ cfg_if::cfg_if! {
 
         use super::sys::config::VfioOption;
         use super::config::SharedDir;
-    } else if #[cfg(windows)] {
-        use crate::crosvm::sys::config::IrqChipKind;
-
     }
 }
 
@@ -61,6 +58,7 @@ use merge::bool::overwrite_false;
 use merge::vec::append;
 use resources::AddressRange;
 use serde::Deserialize;
+use serde::Serialize;
 #[cfg(feature = "gpu")]
 use serde_keyvalue::FromKeyValues;
 
@@ -102,6 +100,7 @@ use crate::crosvm::config::GidMap;
 #[cfg(feature = "direct")]
 use crate::crosvm::config::HostPcieRootPortParameters;
 use crate::crosvm::config::HypervisorKind;
+use crate::crosvm::config::IrqChipKind;
 use crate::crosvm::config::MemOptions;
 use crate::crosvm::config::TouchDeviceOption;
 use crate::crosvm::config::VhostUserFsOption;
@@ -586,8 +585,8 @@ pub struct UsbListCommand {
 /// This allows the letters assigned to each disk to reflect the order of their declaration, as
 /// we have several options for specifying disks (rwroot, root, etc) and order can thus be lost
 /// when they are aggregated.
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields, from = "DiskOption")]
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields, from = "DiskOption", into = "DiskOption")]
 struct DiskOptionWithId {
     disk_option: DiskOption,
     index: usize,
@@ -611,6 +610,12 @@ impl From<DiskOption> for DiskOptionWithId {
             disk_option,
             index: DISK_COUNTER.fetch_add(1, Ordering::Relaxed),
         }
+    }
+}
+
+impl From<DiskOptionWithId> for DiskOption {
+    fn from(disk_option_with_id: DiskOptionWithId) -> Self {
+        disk_option_with_id.disk_option
     }
 }
 
@@ -699,6 +704,12 @@ fn load_config_file<P: AsRef<Path>>(config_file: P) -> Result<Box<RunCommand>, S
         .map(Box::new)
 }
 
+#[cfg(feature = "config-file")]
+fn write_config_file(config_file: &Path, cmd: &RunCommand) -> Result<(), String> {
+    let file = std::fs::File::create(config_file).map_err(|e| e.to_string())?;
+    serde_json::to_writer_pretty(file, cmd).map_err(|e| e.to_string())
+}
+
 /// Overwrite an `Option<T>` if the right member is set.
 ///
 /// The default merge strategy for `Option<T>` is to merge `right` into `left` iff `left.is_none()`.
@@ -751,7 +762,7 @@ fn overwrite<T>(left: &mut T, right: T) {
 /// review to make sure they won't be obsoleted.
 #[remain::sorted]
 #[argh_helpers::pad_description_for_argh]
-#[derive(FromArgs, Deserialize, merge::Merge)]
+#[derive(FromArgs, Deserialize, Serialize, merge::Merge)]
 #[argh(subcommand, name = "run", description = "Start a new crosvm instance")]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RunCommand {
@@ -1084,6 +1095,13 @@ pub struct RunCommand {
     /// directory with smbios_entry_point/DMI files
     pub dmi: Option<PathBuf>,
 
+    #[cfg(feature = "config-file")]
+    #[argh(option, arg_name = "CONFIG_FILE")]
+    #[serde(skip)]
+    #[merge(skip)]
+    /// path to a JSON configuration file to write the current configuration.
+    dump_cfg: Option<PathBuf>,
+
     #[argh(option, long = "dump-device-tree-blob", arg_name = "FILE")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -1292,11 +1310,9 @@ pub struct RunCommand {
     /// initial ramdisk to load
     pub initrd: Option<PathBuf>,
 
-    #[cfg(windows)]
     #[argh(option, arg_name = "kernel|split|userspace")]
-    #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// type of interrupt controller emulation.  \"split\" is only available for x86 KVM.
+    /// type of interrupt controller emulation. "split" is only available for x86 KVM.
     pub irqchip: Option<IrqChipKind>,
 
     #[argh(switch)]
@@ -1850,6 +1866,22 @@ pub struct RunCommand {
     ///        supports POSIX ACLs.  This should only be enabled
     ///        when the underlying file system supports POSIX ACLs.
     ///        The default value for this option is "true".
+    ///     uid=UID - uid of the device process in the user
+    ///        namespace created by minijail. (default: 0)
+    ///     gid=GID - gid of the device process in the user
+    ///        namespace created by minijail. (default: 0)
+    ///     Options uid and gid are useful when the crosvm process
+    ///     has no CAP_SETGID/CAP_SETUID but an identity mapping of
+    ///     the current user/group between the VM and the host is
+    ///     required. Say the current user and the crosvm process
+    ///     has uid 5000, a user can use "uid=5000" and
+    ///     "uidmap=5000 5000 1" such that files owned by user
+    ///     5000 still appear to be owned by user 5000 in the VM.
+    ///     These 2 options are useful only when there is 1 user
+    ///     in the VM accessing shared files. If multiple users
+    ///     want to access the shared file, gid/uid options are
+    ///     useless. It'd be better to create a new user namespace
+    ///     and give CAP_SETUID/CAP_SETGID to the crosvm.
     pub shared_dir: Vec<SharedDir>,
 
     #[argh(option, arg_name = "PATH:WIDTH:HEIGHT")]
@@ -1886,7 +1918,7 @@ pub struct RunCommand {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[argh(switch)]
-    #[serde(skip)] // TODO(b/255223604)
+    #[serde(skip)] // Deprecated - use `irq_chip` instead.
     #[merge(strategy = overwrite_false)]
     /// (EXPERIMENTAL) enable split-irqchip support
     pub split_irqchip: bool,
@@ -1936,7 +1968,7 @@ pub struct RunCommand {
     pub switches: Vec<PathBuf>,
 
     #[argh(option, arg_name = "TAG")]
-    #[serde(skip)] // TODO(b/255223604)
+    #[serde(skip)] // Deprecated - use `CrosvmCmdlineArgs::syslog_tag` instead.
     #[merge(strategy = overwrite_option)]
     /// when logging to syslog, use the provided tag
     pub syslog_tag: Option<String>,
@@ -2261,6 +2293,11 @@ impl TryFrom<RunCommand> for super::config::Config {
             cmd.squash()
         };
 
+        #[cfg(feature = "config-file")]
+        if let Some(cfg_path) = &cmd.dump_cfg {
+            write_config_file(cfg_path, &cmd)?;
+        }
+
         let mut cfg = Self::default();
         // TODO: we need to factor out some(?) of the checks into config::validate_config
 
@@ -2525,7 +2562,6 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.product_name = cmd.product_name;
             cfg.exit_stats = cmd.exit_stats;
             cfg.host_guid = cmd.host_guid;
-            cfg.irq_chip = cmd.irqchip;
             cfg.kernel_log_file = cmd.kernel_log_file;
             cfg.log_file = cmd.log_file;
             cfg.logs_directory = cmd.logs_directory;
@@ -2544,7 +2580,6 @@ impl TryFrom<RunCommand> for super::config::Config {
             {
                 cfg.slirp_capture_file = cmd.slirp_capture_file;
             }
-            cfg.syslog_tag = cmd.syslog_tag;
             cfg.product_channel = cmd.product_channel;
             cfg.product_version = cmd.product_version;
         }
@@ -2674,9 +2709,16 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.virtio_switches = cmd.switches;
         cfg.virtio_input_evdevs = cmd.evdev;
 
+        cfg.irq_chip = cmd.irqchip;
+
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        {
-            cfg.split_irqchip = cmd.split_irqchip;
+        if cmd.split_irqchip {
+            if cmd.irqchip.is_some() {
+                return Err("cannot use `--irqchip` and `--split-irqchip` together".to_string());
+            }
+
+            log::warn!("`--split-irqchip` is deprecated; please use `--irqchip=split`");
+            cfg.irq_chip = Some(IrqChipKind::Split);
         }
 
         cfg.initrd_path = cmd.initrd;

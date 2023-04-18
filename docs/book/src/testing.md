@@ -51,14 +51,14 @@ Upstream crosvm is not involved in these tests and they are not executed in cros
 
 ## Parallel test execution
 
-Crosvm tests are executed in parallel, each test case in it's own process via
+Crosvm tests are executed in parallel, each test case in its own process via
 [cargo nextest](http://nexte.st).
 
 This requires tests to be cautious about global state, especially integration tests which interact
 with system devices.
 
 If you require exclusive access to a device or file, you have to use
-[file-based locking](https://docs.rs/namedlock/latest/namedlock/) to prevent access by other test
+[file-based locking](https://docs.rs/named-lock/latest/named_lock) to prevent access by other test
 processes.
 
 ## Platorms tested
