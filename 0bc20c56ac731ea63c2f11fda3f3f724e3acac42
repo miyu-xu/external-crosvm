@@ -16,6 +16,29 @@
       "message": "Apologies, uploaded while build was going...",
       "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d43dff13_93239e00",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-04-18T23:27:33Z",
+      "side": 1,
+      "message": "@Vatsa, should we move alignment as well? I think alignment would only be useful when `size` is set, but it\u0027s not part of the \"either/or\".",
+      "range": {
+        "startLine": 105,
+        "startChar": 0,
+        "endLine": 105,
+        "endChar": 2
+      },
+      "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
