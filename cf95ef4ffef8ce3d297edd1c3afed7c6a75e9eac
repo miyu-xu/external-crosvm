@@ -16,6 +16,24 @@
       "message": "Adding @denniskempin@google.com for review on the changes in tests.\nSome tests are using NamedLocks to ensure sequential running.\nI believe the desired behavior can be achieved using a mutex shared between tests, without using a new library.\n\nThoughts?",
       "revId": "cf95ef4ffef8ce3d297edd1c3afed7c6a75e9eac",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b18c4214_751f666f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2023-04-18T20:19:05Z",
+      "side": 1,
+      "message": "It cannot be achieved with in-process locks, since each test case is run in a separate process upstream. So we need NamedLocks for cross-process locks.\n\nhttps://crosvm.dev/book/testing.html#parallel-test-execution\n\nOr in more detail:\n\nhttps://nexte.st/book/how-it-works.html\n\nReplacing this with a mutex lock for running the test in AOSP seems reasonable, but may cause a maintenance burden in the long run. So I would recommend adding the the namedlock crate to AOSP.",
+      "parentUuid": "dd9aad05_cdeb373e",
+      "revId": "cf95ef4ffef8ce3d297edd1c3afed7c6a75e9eac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
