@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "73eff1ca_3f5d57d7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-04-18T23:24:38Z",
+      "side": 1,
+      "message": "Apologies, uploaded while build was going...",
+      "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
