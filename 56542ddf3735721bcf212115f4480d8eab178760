@@ -16,6 +16,23 @@
       "message": "Hi Steven,\n\nFriendly ping. Could you please review this cl?",
       "revId": "56542ddf3735721bcf212115f4480d8eab178760",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fc526e55_cf2e7c22",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1958315
+      },
+      "writtenOn": "2023-04-19T12:40:47Z",
+      "side": 1,
+      "message": "Thanks for the review!\n\nLet me know if the visibility needs to be adjusted differently. I\u0027ll fix that in a subsequent cl.",
+      "revId": "56542ddf3735721bcf212115f4480d8eab178760",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
