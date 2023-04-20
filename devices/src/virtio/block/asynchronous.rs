@@ -832,6 +832,14 @@ impl BlockAsync {
                     .fsync()
                     .await
                     .map_err(ExecuteError::Flush)?;
+
+                if *flush_timer_armed.borrow() {
+                    flush_timer
+                        .borrow_mut()
+                        .clear()
+                        .map_err(ExecuteError::TimerReset)?;
+                    *flush_timer_armed.borrow_mut() = false;
+                }
             }
             VIRTIO_BLK_T_GET_ID => {
                 if let Some(id) = disk_state.id {
@@ -1416,14 +1424,14 @@ mod tests {
         assert_eq!(returned_id, *id);
     }
 
-    // TODO(b/270225199): enable this test on Windows once IoSourceExt::into_source is implemented
+    // TODO(b/270225199): enable this test on Windows once IoSource::into_source is implemented
     #[cfg(unix)]
     #[test]
     fn reset_and_reactivate_single_worker() {
         reset_and_reactivate(false);
     }
 
-    // TODO(b/270225199): enable this test on Windows once IoSourceExt::into_source is implemented
+    // TODO(b/270225199): enable this test on Windows once IoSource::into_source is implemented
     #[cfg(unix)]
     #[test]
     fn reset_and_reactivate_multiple_workers() {
@@ -1501,7 +1509,7 @@ mod tests {
         .expect("re-activate should succeed");
     }
 
-    // TODO(b/270225199): enable this test on Windows once IoSourceExt::into_source is implemented,
+    // TODO(b/270225199): enable this test on Windows once IoSource::into_source is implemented,
     // or after finding a good way to prevent BlockAsync::drop() from panicking due to that.
     #[cfg(unix)]
     #[test]
@@ -1509,7 +1517,7 @@ mod tests {
         resize(false);
     }
 
-    // TODO(b/270225199): enable this test on Windows once IoSourceExt::into_source is implemented,
+    // TODO(b/270225199): enable this test on Windows once IoSource::into_source is implemented,
     // or after finding a good way to prevent BlockAsync::drop() from panicking due to that.
     #[cfg(unix)]
     #[test]
@@ -1624,7 +1632,7 @@ mod tests {
         );
     }
 
-    // TODO(b/270225199): enable this test on Windows once IoSourceExt::into_source is implemented,
+    // TODO(b/270225199): enable this test on Windows once IoSource::into_source is implemented,
     // or after finding a good way to prevent BlockAsync::drop() from panicking due to that.
     #[cfg(unix)]
     #[test]

@@ -4,7 +4,7 @@
 
 prefix ?= /usr/local
 libdir = ${prefix}/lib
-includedir = ${prefix}/lib
+includedir = ${prefix}/include/rutabaga_gfx
 
 ifdef debug
   release :=
@@ -26,10 +26,9 @@ RUTABAGA_VERSION := $(RUTABAGA_VERSION_MAJOR).1.1-alpha.1
 all: build
 
 build:
-	cargo build $(release)
+	cargo build --features=gfxstream $(release)
 
 install: build
-	mkdir -p $(DESTDIR)$(prefix)
 	install -D -m 755 $(OUT)/$(LIB_NAME) $(DESTDIR)$(libdir)
 	ln -sf $(DESTDIR)$(prefix)/$(LIB_NAME) $(DESTDIR)$(libdir)/$(LIB_NAME).$(RUTABAGA_VERSION)
 	ln -sf $(DESTDIR)$(prefix)/$(LIB_NAME) $(DESTDIR)$(libdir)/$(LIB_NAME).$(RUTABAGA_VERSION_MAJOR)
