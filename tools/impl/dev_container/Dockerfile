@@ -20,7 +20,7 @@ FROM docker.io/debian:testing-slim
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
+    PATH=/workspace/tools:/usr/local/cargo/bin:$PATH
 
 # Install pipx applications globally in /usr/local/bin
 ENV PIPX_HOME=/usr/local/pipx \
@@ -54,6 +54,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=private \
     && ./install-armhf-deps \
     && ./install-mingw64-deps
 
+# Add wine64 to PATH, as debian removed alternative entry to wine64
+ENV PATH=/usr/lib/wine:$PATH
+
 # Install an older version of binutils-mingw-w64-x86-64. The latest version is crashing when
 # linking crosvm. See b/265995780
 RUN wget https://snapshot.debian.org/archive/debian/20230101T091029Z/pool/main/b/binutils-mingw-w64/binutils-mingw-w64-x86-64_2.38.90.20220713-2%2B9%2Bb1_amd64.deb \
@@ -69,15 +72,9 @@ COPY --chmod=555 .cargo/config.debian.toml /.cargo/config.toml
 # Install catapult dashboard upload tool
 COPY --from=gobuilder /root/infra/cmd/catapult/catapult /tools/
 
-# Prebuild aarch64 VM image for faster startup.
-COPY tools/aarch64vm /tools/
-COPY /tools/impl/testvm.py /tools/impl/
-COPY /tools/impl/testvm/version /tools/impl/testvm/
-RUN sudo chmod 755 -R /tools \
-    && /tools/aarch64vm build
-
 # Cache CARGO_HOME between container runs in CI.
 VOLUME /cache
+ENV CROSVM_CACHE_DIR=/cache
 ENV CARGO_HOME=/cache/cargo_home
 
 VOLUME /workspace

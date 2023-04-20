@@ -15,6 +15,7 @@ epoll_pwait: 1
 eventfd2: 1
 exit: 1
 exit_group: 1
+ftruncate: 1
 futex: 1
 getcwd: 1
 getpid: 1
@@ -27,6 +28,7 @@ kill: 1
 lseek: 1
 madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
 membarrier: 1
+memfd_create: 1
 mmap: arg2 in ~PROT_EXEC
 mprotect: arg2 in ~PROT_EXEC
 mremap: 1
@@ -51,12 +53,14 @@ sendmsg: 1
 sendto: 1
 set_robust_list: 1
 sigaltstack: 1
+tgkill: arg2 == SIGABRT
 write: 1
 writev: 1
 fcntl: 1
 uname: 1
 
-## Rules for vmm-swap
-userfaultfd: 1
-# 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
-ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00
+# ANDROID(b/271625758): disabled to fix duplicate syscall error.
+# ## Rules for vmm-swap
+# userfaultfd: 1
+# # 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
+# ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00

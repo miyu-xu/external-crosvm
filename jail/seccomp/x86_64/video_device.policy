@@ -18,6 +18,7 @@ epoll_wait: 1
 eventfd2: 1
 exit: 1
 exit_group: 1
+ftruncate: 1
 futex: 1
 getcwd: 1
 getpid: 1
@@ -97,7 +98,8 @@ sysinfo: 1
 
 prctl: arg0 == PR_SET_NAME
 
-## Rules for vmm-swap
-userfaultfd: 1
-# 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
-ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00
+# ANDROID(b/271625758): disabled to fix duplicate syscall error.
+# ## Rules for vmm-swap
+# userfaultfd: 1
+# # 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
+# ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00

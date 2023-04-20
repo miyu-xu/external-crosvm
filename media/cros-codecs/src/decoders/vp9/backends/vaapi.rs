@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
@@ -14,10 +13,8 @@ use libva::Display;
 use libva::Picture as VaPicture;
 use libva::SegmentParameterVP9;
 
-use crate::decoders::vp9::backends::AsBackendHandle;
 use crate::decoders::vp9::backends::Result as StatelessBackendResult;
 use crate::decoders::vp9::backends::StatelessDecoderBackend;
-use crate::decoders::vp9::backends::Vp9Picture;
 use crate::decoders::vp9::decoder::Decoder;
 use crate::decoders::vp9::decoder::Segmentation;
 use crate::decoders::vp9::parser::BitDepth;
@@ -36,7 +33,6 @@ use crate::decoders::VideoDecoderBackend;
 use crate::utils::vaapi::DecodedHandle as VADecodedHandle;
 use crate::utils::vaapi::GenericBackendHandle;
 use crate::utils::vaapi::NegotiationStatus;
-use crate::utils::vaapi::PendingJob;
 use crate::utils::vaapi::StreamInfo;
 use crate::utils::vaapi::VaapiBackend;
 use crate::Resolution;
@@ -87,7 +83,7 @@ impl StreamInfo for &Header {
 }
 
 struct Backend {
-    backend: VaapiBackend<Header, Header>,
+    backend: VaapiBackend<Header>,
 
     #[cfg(test)]
     /// Test params. Saves the metadata sent to VA-API for the purposes of
@@ -171,8 +167,8 @@ impl Backend {
     }
 
     /// Gets the VASurfaceID for the given `picture`.
-    fn surface_id(picture: &Vp9Picture<GenericBackendHandle>) -> libva::VASurfaceID {
-        picture.backend_handle.as_ref().unwrap().surface_id()
+    fn surface_id(picture: &GenericBackendHandle) -> libva::VASurfaceID {
+        picture.surface_id()
     }
 
     fn build_pic_param(
@@ -183,7 +179,7 @@ impl Backend {
             .iter()
             .map(|h| {
                 if let Some(h) = h {
-                    Self::surface_id(&h.picture())
+                    Self::surface_id(&h.handle())
                 } else {
                     libva::constants::VA_INVALID_SURFACE
                 }
@@ -318,29 +314,30 @@ impl StatelessDecoderBackend for Backend {
 
     fn submit_picture(
         &mut self,
-        picture: Vp9Picture<AsBackendHandle<Self::Handle>>,
+        picture: &Header,
         reference_frames: &[Option<Self::Handle>; NUM_REF_FRAMES],
         bitstream: &[u8],
         timestamp: u64,
         segmentation: &[Segmentation; MAX_SEGMENTS],
-        block: bool,
+        block: BlockingMode,
     ) -> StatelessBackendResult<Self::Handle> {
         self.backend.negotiation_status = NegotiationStatus::Negotiated;
-
-        let context = self.backend.metadata_state.context()?;
-
-        let pic_param =
-            context.create_buffer(Backend::build_pic_param(&picture.data, reference_frames)?)?;
 
         #[cfg(test)]
         {
             let seg = segmentation.clone();
             self.save_params(
-                Backend::build_pic_param(&picture.data, reference_frames)?,
+                Backend::build_pic_param(picture, reference_frames)?,
                 Backend::build_slice_param(&seg, bitstream.len())?,
                 libva::BufferType::SliceData(Vec::from(bitstream)),
             );
         }
+
+        let metadata = self.backend.metadata_state.get_parsed_mut()?;
+        let context = &metadata.context;
+
+        let pic_param =
+            context.create_buffer(Backend::build_pic_param(picture, reference_frames)?)?;
 
         let slice_param =
             context.create_buffer(Backend::build_slice_param(segmentation, bitstream.len())?)?;
@@ -348,55 +345,19 @@ impl StatelessDecoderBackend for Backend {
         let slice_data =
             context.create_buffer(libva::BufferType::SliceData(Vec::from(bitstream)))?;
 
-        let context = self.backend.metadata_state.context()?;
-
-        let surface = self
-            .backend
-            .metadata_state
-            .get_surface()?
+        let surface = metadata
+            .surface_pool
+            .get_surface()
             .ok_or(StatelessBackendError::OutOfResources)?;
 
-        let surface_id = surface.id();
-
-        let mut va_picture = VaPicture::new(timestamp, Rc::clone(&context), surface);
+        let mut va_picture = VaPicture::new(timestamp, Rc::clone(context), surface);
 
         // Add buffers with the parsed data.
         va_picture.add_buffer(pic_param);
         va_picture.add_buffer(slice_param);
         va_picture.add_buffer(slice_data);
 
-        let va_picture = va_picture.begin()?.render()?.end()?;
-
-        let picture = Rc::new(RefCell::new(picture));
-
-        if block {
-            let va_picture = va_picture.sync()?;
-
-            let map_format = self.backend.metadata_state.map_format()?;
-
-            let backend_handle = GenericBackendHandle::new_ready(
-                va_picture,
-                Rc::clone(map_format),
-                self.backend.metadata_state.display_resolution()?,
-            );
-
-            picture.borrow_mut().backend_handle = Some(backend_handle);
-        } else {
-            // Append to our queue of pending jobs
-            let pending_job = PendingJob {
-                va_picture,
-                codec_picture: Rc::clone(&picture),
-            };
-
-            self.backend.pending_jobs.push_back(pending_job);
-
-            picture.borrow_mut().backend_handle =
-                Some(GenericBackendHandle::new_pending(surface_id));
-        }
-
-        self.backend
-            .build_va_decoded_handle(&picture)
-            .map_err(|e| StatelessBackendError::Other(anyhow!(e)))
+        self.backend.process_picture(va_picture, block)
     }
 
     #[cfg(test)]
@@ -406,7 +367,7 @@ impl StatelessDecoderBackend for Backend {
 }
 
 impl VideoDecoderBackend for Backend {
-    type Handle = VADecodedHandle<Vp9Picture<GenericBackendHandle>>;
+    type Handle = VADecodedHandle;
 
     fn coded_resolution(&self) -> Option<Resolution> {
         self.backend.coded_resolution()
@@ -445,7 +406,7 @@ impl VideoDecoderBackend for Backend {
     }
 }
 
-impl Decoder<VADecodedHandle<Vp9Picture<GenericBackendHandle>>> {
+impl Decoder<VADecodedHandle> {
     // Creates a new instance of the decoder using the VAAPI backend.
     pub fn new_vaapi(display: Rc<Display>, blocking_mode: BlockingMode) -> Result<Self> {
         Self::new(Box::new(Backend::new(display)?), blocking_mode)
@@ -469,7 +430,7 @@ mod tests {
     use crate::decoders::vp9::parser::NUM_REF_FRAMES;
     use crate::decoders::BlockingMode;
     use crate::decoders::DecodedHandle;
-    use crate::decoders::DynPicture;
+    use crate::decoders::DynHandle;
 
     fn get_test_params(
         backend: &dyn StatelessDecoderBackend<Handle = AssociatedHandle>,
@@ -480,10 +441,10 @@ mod tests {
     fn process_handle(
         handle: &AssociatedHandle,
         dump_yuv: bool,
-        expected_crcs: Option<&mut Vec<&str>>,
+        expected_crcs: Option<&Vec<&str>>,
         frame_num: i32,
     ) {
-        let mut picture = handle.picture_mut();
+        let mut picture = handle.handle_mut();
         let mut backend_handle = picture.dyn_mappable_handle_mut();
 
         let buffer_size = backend_handle.image_size();
@@ -523,7 +484,7 @@ mod tests {
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
+            let expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
             let mut frame_num = 0;
             let display = Display::open().unwrap();
             let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
@@ -534,7 +495,7 @@ mod tests {
                     // write assertions against any particular value used therein.
                     let params = &get_test_params(decoder.backend())[frame_num as usize];
 
-                    process_handle(handle, false, Some(&mut expected_crcs), frame_num);
+                    process_handle(handle, false, Some(&expected_crcs), frame_num);
 
                     let pic_param = match params.pic_param {
                         BufferType::PictureParameter(PictureParameter::VP9(ref pic_param)) => {
@@ -719,7 +680,7 @@ mod tests {
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
+            let expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
 
             let mut frame_num = 0;
             let display = Display::open().unwrap();
@@ -734,7 +695,7 @@ mod tests {
                     // no decode operation is made.
                     let params = get_test_params(decoder.backend()).get(frame_num as usize);
 
-                    process_handle(handle, false, Some(&mut expected_crcs), frame_num);
+                    process_handle(handle, false, Some(&expected_crcs), frame_num);
 
                     if let Some(params) = params {
                         let pic_param = match params.pic_param {
@@ -932,7 +893,7 @@ mod tests {
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
+            let expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
 
             let mut frame_num = 0;
             let display = Display::open().unwrap();
@@ -947,7 +908,7 @@ mod tests {
                     // no decode operation is made.
                     let _params = get_test_params(decoder.backend()).get(frame_num as usize);
 
-                    process_handle(handle, false, Some(&mut expected_crcs), frame_num);
+                    process_handle(handle, false, Some(&expected_crcs), frame_num);
 
                     frame_num += 1;
                 });
@@ -979,7 +940,7 @@ mod tests {
         let blocking_modes = [BlockingMode::Blocking, BlockingMode::NonBlocking];
 
         for blocking_mode in blocking_modes {
-            let mut expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
+            let expected_crcs = STREAM_CRCS.lines().collect::<Vec<_>>();
             let mut frame_num = 0;
             let display = Display::open().unwrap();
             let mut decoder = Decoder::new_vaapi(display, blocking_mode).unwrap();
@@ -997,8 +958,8 @@ mod tests {
                     // check so as to not fail because of that, as some of the
                     // intermediary resolutions in this file fail this
                     // condition.
-                    let expected_crcs = if handle.picture().data.width() % 4 == 0 {
-                        Some(&mut expected_crcs)
+                    let expected_crcs = if handle.display_resolution().width % 4 == 0 {
+                        Some(&expected_crcs)
                     } else {
                         None
                     };

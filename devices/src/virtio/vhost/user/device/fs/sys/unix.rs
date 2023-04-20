@@ -72,6 +72,8 @@ fn jail_and_fork(
     let pid = unsafe { j.fork(Some(&keep_rds))? };
 
     if pid > 0 {
+        // Current FS driver jail does not use seccomp and jail_and_fork() does not have other
+        // users, so we do nothing here for seccomp_trace
         unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     }
 
@@ -91,7 +93,7 @@ fn jail_and_fork(
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn start_device(opts: Options) -> anyhow::Result<()> {
     let ex = Executor::new().context("Failed to create executor")?;
-    let fs_device = Box::new(FsBackend::new(&ex, &opts.tag)?);
+    let fs_device = Box::new(FsBackend::new(&ex, &opts.tag, opts.cfg)?);
 
     let mut keep_rds = fs_device.keep_rds.clone();
     let listener = VhostUserListener::new_from_socket_or_vfio(

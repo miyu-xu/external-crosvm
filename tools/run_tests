@@ -23,8 +23,8 @@ from impl.common import (
     run_main,
     sudo_is_passwordless,
     verbose,
+    Triple,
 )
-from impl.test_target import Triple
 from impl.test_config import ROOT_TESTS, DO_NOT_RUN, DO_NOT_RUN_AARCH64, DO_NOT_RUN_WIN64, E2E_TESTS
 from impl import testvm
 
@@ -119,6 +119,18 @@ def check_host_prerequisites(run_root_tests: bool):
         if not os.access(device, os.R_OK | os.W_OK):
             console.print(f"{device} access is required", style="red")
             sys.exit(1)
+
+
+def check_build_prerequisites(triple: Triple):
+    installed_toolchains = cmd("rustup target list --installed").lines()
+    if str(triple) not in installed_toolchains:
+        console.print(f"Your host is not configured to build for [green]{triple}[/green]")
+        console.print(f"[green]Tip:[/green] Run tests in the dev container with:")
+        console.print()
+        console.print(
+            f"  [blue]$ tools/dev_container tools/run_tests {' '.join(sys.argv[1:])}[/blue]"
+        )
+        sys.exit(1)
 
 
 def get_vm_arch(triple: Triple):
@@ -252,6 +264,8 @@ def main(
     console.print(f"  Unit tests:        [bold]{unit_test_str}[/bold]")
     console.print(f"  Integration tests: [bold]{integration_test_str}[/bold]")
     console.print()
+
+    check_build_prerequisites(triple)
 
     # Print tips in certain configurations.
     if dut and not run_root_tests:
