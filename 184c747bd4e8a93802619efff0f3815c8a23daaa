@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a5e3df43_1151a900",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-04-21T21:40:35Z",
+      "side": 1,
+      "message": "Is this change also needed for Android U? or is it okay in Android V only?",
+      "revId": "184c747bd4e8a93802619efff0f3815c8a23daaa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
