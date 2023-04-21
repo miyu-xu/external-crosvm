@@ -16,6 +16,24 @@
       "message": "Is this change also needed for Android U? or is it okay in Android V only?",
       "revId": "184c747bd4e8a93802619efff0f3815c8a23daaa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bdbdf933_3fb9dda6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-04-21T22:20:06Z",
+      "side": 1,
+      "message": "Srivatsa indicated it was needed for pvmfw which means Android U to me",
+      "parentUuid": "a5e3df43_1151a900",
+      "revId": "184c747bd4e8a93802619efff0f3815c8a23daaa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
