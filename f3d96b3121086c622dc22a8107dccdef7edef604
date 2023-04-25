@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "45bfa564_4d7682cd",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-04-25T17:36:16Z",
+      "side": 1,
+      "message": "Upstream side landed here:\n\ncrrev.com/c/4470287",
+      "revId": "f3d96b3121086c622dc22a8107dccdef7edef604",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
