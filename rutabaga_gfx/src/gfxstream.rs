@@ -74,6 +74,15 @@ type stream_renderer_box = virgl_box;
 #[allow(non_camel_case_types)]
 type stream_renderer_fence = RutabagaFence;
 
+#[allow(non_camel_case_types)]
+pub type stream_renderer_resource_create_args = virgl_renderer_resource_create_args;
+
+#[allow(non_camel_case_types)]
+pub type stream_renderer_box = virgl_box;
+
+#[allow(non_camel_case_types)]
+pub type stream_renderer_fence = RutabagaFence;
+
 extern "C" {
     // Entry point for the stream renderer.
     fn stream_renderer_init(
@@ -314,7 +323,7 @@ impl Gfxstream {
 
     fn export_blob(&self, resource_id: u32) -> RutabagaResult<Arc<RutabagaHandle>> {
         let mut stream_handle: stream_renderer_handle = Default::default();
-        let ret = unsafe { stream_renderer_export_blob(resource_id as u32, &mut stream_handle) };
+        let ret = unsafe { stream_renderer_export_blob(resource_id, &mut stream_handle) };
         ret_to_res(ret)?;
 
         // Safe because the handle was just returned by a successful gfxstream call so it must be
@@ -404,6 +413,8 @@ impl RutabagaComponent for Gfxstream {
             vulkan_info: None,
             backing_iovecs: None,
             component_mask: 1 << (RutabagaComponentType::Gfxstream as u8),
+            size: 0,
+            mapping: None,
         })
     }
 
@@ -504,7 +515,7 @@ impl RutabagaComponent for Gfxstream {
         let (iovecs, num_iovecs) = match buf {
             Some(buf) => {
                 iov.base = buf.as_ptr() as *mut c_void;
-                iov.len = buf.size() as usize;
+                iov.len = buf.size();
                 (&mut iov as *mut RutabagaIovec as *mut iovec, 1)
             }
             None => (null_mut(), 0),
@@ -590,6 +601,8 @@ impl RutabagaComponent for Gfxstream {
             vulkan_info: self.vulkan_info(resource_id).ok(),
             backing_iovecs: iovec_opt,
             component_mask: 1 << (RutabagaComponentType::Gfxstream as u8),
+            size: resource_create_blob.size,
+            mapping: None,
         })
     }
 
