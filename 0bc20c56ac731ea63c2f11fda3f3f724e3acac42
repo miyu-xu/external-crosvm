@@ -39,6 +39,30 @@
       },
       "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5754f29d_a4cad910",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1984376
+      },
+      "writtenOn": "2023-04-27T14:17:38Z",
+      "side": 1,
+      "message": "I think alignment and size go together. So if we are not adding size, we should omit alignment also. However that will need a change in pvmfw as it expects alignment to be mandatorily present.\n\n@ptosi will submit a fix for it separately after the current set gets merged. Pls let me know.",
+      "parentUuid": "d43dff13_93239e00",
+      "range": {
+        "startLine": 105,
+        "startChar": 0,
+        "endLine": 105,
+        "endChar": 2
+      },
+      "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
