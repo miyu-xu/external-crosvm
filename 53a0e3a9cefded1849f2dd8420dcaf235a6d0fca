@@ -80,6 +80,30 @@
       },
       "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a8011088_3c96bcef",
+        "filename": "fuse/src/server.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 542,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-04-27T20:11:08Z",
+      "side": 1,
+      "message": "The change upstream was to remove `unnecessary casts` actually https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4391102. We can ask to revert the change, otherwise we would have to look at upstreaming to libc and update the lib.\n\nHere\u0027s the difference in libc (c_int vs c_uint).\nAndroid: https://github.com/rust-lang/libc/blob/8077351f4b28a1b9fc46e2ac11a530d782264273/src/unix/linux_like/android/mod.rs#L1223\nLinux: https://github.com/rust-lang/libc/blob/86593ceee82f9d7880f572917dab88f9c6c5cf60/src/unix/linux_like/linux/mod.rs#L1919 \n\n@dverkamp@chromium.org any thoughts on reverting, even if it means having unnecessary casts on linux?",
+      "parentUuid": "f0db3a17_dc009271",
+      "range": {
+        "startLine": 542,
+        "startChar": 8,
+        "endLine": 542,
+        "endChar": 61
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
