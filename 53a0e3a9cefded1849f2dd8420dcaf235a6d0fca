@@ -104,6 +104,30 @@
       },
       "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "54d03b05_0ccc4590",
+        "filename": "fuse/src/server.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 542,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-04-27T20:21:05Z",
+      "side": 1,
+      "message": "If the casts are required on Android\u0027s libc, they can be re-added, but it will need to be guarded with an `#[allow(clippy::whatever_lint)]` and a comment explaining why it\u0027s needed.\n\nIt would be great if we could get at least compile-testing against bionic (or whatever libc android is using now) in upstream crosvm so this can be caught earlier.",
+      "parentUuid": "a8011088_3c96bcef",
+      "range": {
+        "startLine": 542,
+        "startChar": 8,
+        "endLine": 542,
+        "endChar": 61
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
