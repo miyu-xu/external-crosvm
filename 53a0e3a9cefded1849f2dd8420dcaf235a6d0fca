@@ -16,6 +16,52 @@
       "message": "@gurchetansingh@google.com I see in aosp/2538171 the types aren\u0027t public, but upstream they are.\n\nCan you confirm this change is good?",
       "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a0e34d33_a93a7f00",
+        "filename": "base/src/sys/unix/get_filesystem_type.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 24,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-04-27T19:58:22Z",
+      "side": 1,
+      "message": "same question about upstreaming",
+      "range": {
+        "startLine": 23,
+        "startChar": 0,
+        "endLine": 24,
+        "endChar": 32
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f0db3a17_dc009271",
+        "filename": "fuse/src/server.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 542,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-04-27T19:58:22Z",
+      "side": 1,
+      "message": "Can we upstream these changes? It won\u0027t hurt to cast upstream will it?\n(don\u0027t block this merge to wait, but maybe make a bug and add it to the comment?)",
+      "range": {
+        "startLine": 542,
+        "startChar": 8,
+        "endLine": 542,
+        "endChar": 61
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
