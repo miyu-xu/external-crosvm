@@ -34,6 +34,24 @@
       "parentUuid": "dd9aad05_cdeb373e",
       "revId": "cf95ef4ffef8ce3d297edd1c3afed7c6a75e9eac",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "63ca0dba_d4a925b0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-04-27T19:57:22Z",
+      "side": 1,
+      "message": "Imported NamedLocks, change reverted.",
+      "parentUuid": "b18c4214_751f666f",
+      "revId": "cf95ef4ffef8ce3d297edd1c3afed7c6a75e9eac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

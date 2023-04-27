@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "65480d11_f5aa0303",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-04-27T19:57:22Z",
+      "side": 1,
+      "message": "@gurchetansingh@google.com I see in aosp/2538171 the types aren\u0027t public, but upstream they are.\n\nCan you confirm this change is good?",
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
