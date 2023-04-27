@@ -59,6 +59,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "43b96f74_b1512006",
+        "filename": "base/src/sys/unix/get_filesystem_type.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 24,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-04-27T23:19:30Z",
+      "side": 1,
+      "message": "b/279955468#comment2",
+      "parentUuid": "a0e34d33_a93a7f00",
+      "range": {
+        "startLine": 23,
+        "startChar": 0,
+        "endLine": 24,
+        "endChar": 32
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f0db3a17_dc009271",
@@ -173,6 +197,29 @@
         "startChar": 8,
         "endLine": 542,
         "endChar": 61
+      },
+      "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8cbdf56f_265f2663",
+        "filename": "riscv64/Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-04-27T23:19:30Z",
+      "side": 1,
+      "message": "dangling TODO? we should add this?",
+      "range": {
+        "startLine": 4,
+        "startChar": 3,
+        "endLine": 4,
+        "endChar": 7
       },
       "revId": "53a0e3a9cefded1849f2dd8420dcaf235a6d0fca",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
