@@ -539,7 +539,11 @@ impl<F: FileSystem + Sync> Server<F> {
         let Rename2In { newdir, flags, .. } =
             zerocopy_from_reader(&mut r).map_err(Error::DecodeMessage)?;
 
+<<<<<<< HEAD   (3d37a0 Merge remote-tracking branch 'aosp/upstream-main' into merge)
         // ANDROID: Libc on android requires a specific cast.
+=======
+        #[allow(clippy::unnecessary_cast)]
+>>>>>>> BRANCH (72d4c1 src: implement IRQ flushing on Windows.)
         let flags = flags & (libc::RENAME_EXCHANGE | libc::RENAME_NOREPLACE) as u32;
 
         self.do_rename(in_header, size_of::<Rename2In>(), newdir, flags, r, w)
