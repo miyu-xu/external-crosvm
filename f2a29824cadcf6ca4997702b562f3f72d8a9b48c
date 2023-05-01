@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6d791162_1aee9b0e",
+        "filename": "disk/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 40,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-05-01T22:54:01Z",
+      "side": 1,
+      "message": "I\u0027m intrigued actually as to why libprotobuf has to be added manually and is not generated. I don\u0027t see any rule in cargo_embargo.json that would block it from being generated.\nI have a feeling the line had to be modified because the patch was applied?\n\npower_monitor seems to have it generated? Or was that a manual addition as well?\n\nIf it could be generated, this could mean reducing the diffs in .patch files, or deleting some .patch files.",
+      "range": {
+        "startLine": 40,
+        "startChar": 9,
+        "endLine": 40,
+        "endChar": 20
+      },
+      "revId": "f2a29824cadcf6ca4997702b562f3f72d8a9b48c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
