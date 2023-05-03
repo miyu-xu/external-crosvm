@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "67bb3d64_c50ea438",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-05-03T21:21:01Z",
+      "side": 1,
+      "message": "Could we revert http://r.android.com/2575212 directly?\n\nOr after this merges with the whole topic, could you revert this change, and then revert the above one?",
+      "revId": "cbff6dc3256b8b6d8351ecef9377727a414f5900",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
