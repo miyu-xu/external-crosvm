@@ -16,6 +16,24 @@
       "message": "Does this need to get picked manually? I thought there was an automerge that would pick it up.",
       "revId": "775de14bd059adeafeddaca5ddd5365c6db173fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "82e139d0_beeeb8d7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-05-10T00:45:35Z",
+      "side": 1,
+      "message": "There is an auto-merge setup and it will be picked up, but we may want it sooner.",
+      "parentUuid": "4a00414c_9c493760",
+      "revId": "775de14bd059adeafeddaca5ddd5365c6db173fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
