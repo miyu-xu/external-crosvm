@@ -16,6 +16,24 @@
       "message": "Could we revert http://r.android.com/2575212 directly?\n\nOr after this merges with the whole topic, could you revert this change, and then revert the above one?",
       "revId": "cbff6dc3256b8b6d8351ecef9377727a414f5900",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3a1ce85c_bcf41adb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1986725
+      },
+      "writtenOn": "2023-05-10T11:41:21Z",
+      "side": 1,
+      "message": "I have reverted the above change.",
+      "parentUuid": "67bb3d64_c50ea438",
+      "revId": "cbff6dc3256b8b6d8351ecef9377727a414f5900",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
