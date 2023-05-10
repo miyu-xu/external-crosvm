@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4a00414c_9c493760",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-05-10T00:20:25Z",
+      "side": 1,
+      "message": "Does this need to get picked manually? I thought there was an automerge that would pick it up.",
+      "revId": "775de14bd059adeafeddaca5ddd5365c6db173fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
