@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 use std::fs::File;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -35,10 +37,10 @@ use hypervisor::VcpuRunHandle;
 use libc::c_int;
 #[cfg(target_arch = "riscv64")]
 use riscv64::Riscv64 as Arch;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+use sync::Condvar;
 use sync::Mutex;
 use vm_control::*;
-#[cfg(feature = "gdb")]
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use vm_memory::GuestMemory;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use x86_64::msr::MsrHandlers;
@@ -201,6 +203,47 @@ where
     Ok((vcpu, vcpu_run_handle))
 }
 
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn handle_s2idle_request(
+    _privileged_vm: bool,
+    _guest_suspended_cvar: &Arc<(Mutex<bool>, Condvar)>,
+) {
+}
+
+// Allow error! and early return anywhere in function
+#[allow(clippy::needless_return)]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn handle_s2idle_request(privileged_vm: bool, guest_suspended_cvar: &Arc<(Mutex<bool>, Condvar)>) {
+    const POWER_STATE_FREEZE: &[u8] = b"freeze";
+
+    // For non privileged guests, wake up blocked thread on condvar, which is awaiting
+    // non-privileged guest suspension to finish.
+    if !privileged_vm {
+        let (lock, cvar) = &**guest_suspended_cvar;
+        let mut guest_suspended = lock.lock();
+        *guest_suspended = true;
+
+        cvar.notify_one();
+        info!("dbg: s2idle notified");
+
+        return;
+    }
+
+    // For privileged guests, proceed with the suspend request
+    let mut power_state = match OpenOptions::new().write(true).open("/sys/power/state") {
+        Ok(s) => s,
+        Err(err) => {
+            error!("Failed on open /sys/power/state: {}", err);
+            return;
+        }
+    };
+
+    if let Err(err) = power_state.write(POWER_STATE_FREEZE) {
+        error!("Failed on writing to /sys/power/state: {}", err);
+        return;
+    }
+}
+
 fn vcpu_loop<V>(
     mut run_mode: VmRunMode,
     cpu_id: usize,
@@ -214,9 +257,15 @@ fn vcpu_loop<V>(
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     use_hypervisor_signals: bool,
-    #[cfg(feature = "gdb")] to_gdb_tube: Option<mpsc::Sender<VcpuDebugStatusMessage>>,
-    #[cfg(feature = "gdb")] guest_mem: GuestMemory,
+    privileged_vm: bool,
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+    to_gdb_tube: Option<
+        mpsc::Sender<VcpuDebugStatusMessage>,
+    >,
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+    guest_mem: GuestMemory,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] msr_handlers: MsrHandlers,
+    guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
     bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
 ) -> ExitState
@@ -285,7 +334,10 @@ where
                                 VmRunMode::Exiting => return ExitState::Stop,
                             }
                         }
-                        #[cfg(feature = "gdb")]
+                        #[cfg(all(
+                            any(target_arch = "x86_64", target_arch = "aarch64"),
+                            feature = "gdb"
+                        ))]
                         VcpuControl::Debug(d) => {
                             if let Err(e) = crate::crosvm::gdb::vcpu_control_debug(
                                 cpu_id,
@@ -406,8 +458,14 @@ where
                     info!("system crash event on vcpu {}", cpu_id);
                     return ExitState::Stop;
                 }
+                Ok(VcpuExit::SystemEventS2Idle) => {
+                    handle_s2idle_request(privileged_vm, &guest_suspended_cvar);
+                }
                 Ok(VcpuExit::Debug) => {
-                    #[cfg(feature = "gdb")]
+                    #[cfg(all(
+                        any(target_arch = "x86_64", target_arch = "aarch64"),
+                        feature = "gdb"
+                    ))]
                     if let Err(e) =
                         crate::crosvm::gdb::vcpu_exit_debug(cpu_id, to_gdb_tube.as_ref())
                     {
@@ -493,12 +551,16 @@ pub fn run_vcpu<V>(
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     use_hypervisor_signals: bool,
-    #[cfg(feature = "gdb")] to_gdb_tube: Option<mpsc::Sender<VcpuDebugStatusMessage>>,
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))] to_gdb_tube: Option<
+        mpsc::Sender<VcpuDebugStatusMessage>,
+    >,
     enable_per_vm_core_scheduling: bool,
     cpu_config: Option<CpuConfigArch>,
+    privileged_vm: bool,
     vcpu_cgroup_tasks_file: Option<File>,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     userspace_msr: std::collections::BTreeMap<u32, arch::MsrConfig>,
+    guest_suspended_cvar: Arc<(Mutex<bool>, Condvar)>,
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
     bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
     run_mode: VmRunMode,
@@ -523,7 +585,7 @@ where
                     return ExitState::Stop;
                 }
 
-                #[cfg(feature = "gdb")]
+                #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
                 let guest_mem = vm.get_memory().clone();
 
                 let runnable_vcpu = runnable_vcpu(
@@ -579,12 +641,20 @@ where
                     requires_pvclock_ctrl,
                     from_main_tube,
                     use_hypervisor_signals,
-                    #[cfg(feature = "gdb")]
+                    privileged_vm,
+                    #[cfg(all(
+                        any(target_arch = "x86_64", target_arch = "aarch64"),
+                        feature = "gdb"
+                    ))]
                     to_gdb_tube,
-                    #[cfg(feature = "gdb")]
+                    #[cfg(all(
+                        any(target_arch = "x86_64", target_arch = "aarch64"),
+                        feature = "gdb"
+                    ))]
                     guest_mem,
                     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                     msr_handlers,
+                    guest_suspended_cvar,
                     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
                     bus_lock_ratelimit_ctrl,
                 )

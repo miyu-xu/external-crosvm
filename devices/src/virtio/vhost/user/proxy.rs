@@ -91,9 +91,11 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::PciCapabilityType;
 use crate::virtio::Queue;
+use crate::virtio::Reader;
 use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::virtio::VirtioPciCap;
+use crate::virtio::Writer;
 use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
 use crate::virtio::VIRTIO_MSI_NO_VECTOR;
 use crate::PciAddress;
@@ -585,7 +587,7 @@ impl Worker {
                 ConnStatus::NoDataAvailable => return Ok(RxqStatus::Processed),
             };
 
-            let mut desc = match self.rx_queue.peek(&self.mem) {
+            let desc = match self.rx_queue.peek(&self.mem) {
                 Some(d) => d,
                 None => {
                     return Ok(RxqStatus::DescriptorsExhausted);
@@ -629,7 +631,7 @@ impl Worker {
                 // message to the virt queue and return how many bytes
                 // were written.
                 match res {
-                    Ok(()) => self.forward_msg_to_device(&mut desc, &hdr, &buf),
+                    Ok(()) => self.forward_msg_to_device(&desc, &hdr, &buf),
                     Err(e) => Err(e),
                 }
             };
@@ -715,11 +717,11 @@ impl Worker {
     // queue. Returns the number of bytes written to the virt queue.
     fn forward_msg_to_device<R: Req>(
         &mut self,
-        desc_chain: &mut DescriptorChain,
+        desc_chain: &DescriptorChain,
         hdr: &VhostUserMsgHeader<R>,
         buf: &[u8],
     ) -> Result<u32> {
-        let writer = &mut desc_chain.writer;
+        let mut writer = Writer::new(desc_chain);
 
         if writer.available_bytes() < buf.len() + std::mem::size_of::<VhostUserMsgHeader<R>>() {
             bail!("rx buffer too small to accomodate server data");
@@ -1072,8 +1074,8 @@ impl Worker {
     // Processes data from the device backend (via virtio Tx queue) and forward it to
     // the Vhost-user sibling over its socket connection.
     fn process_tx(&mut self) -> Result<()> {
-        while let Some(mut desc_chain) = self.tx_queue.pop(&self.mem) {
-            let reader = &mut desc_chain.reader;
+        while let Some(desc_chain) = self.tx_queue.pop(&self.mem) {
+            let mut reader = Reader::new(&desc_chain);
             let expected_count = reader.available_bytes();
             let mut msg = vec![0; expected_count];
             reader

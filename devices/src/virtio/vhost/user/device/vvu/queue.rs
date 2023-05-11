@@ -436,6 +436,8 @@ mod test {
 
     use super::*;
     use crate::virtio::Queue as DeviceQueue;
+    use crate::virtio::Reader;
+    use crate::virtio::Writer;
 
     // An allocator that just allocates 0 as an IOVA.
     struct SimpleIovaAllocator(RefCell<bool>);
@@ -465,16 +467,18 @@ mod test {
     }
 
     fn device_write(mem: &QueueMemory, q: &mut DeviceQueue, data: &[u8]) -> usize {
-        let mut desc_chain = q.pop(mem).unwrap();
-        let written = desc_chain.writer.write(data).unwrap();
+        let desc_chain = q.pop(mem).unwrap();
+        let mut writer = Writer::new(&desc_chain);
+        let written = writer.write(data).unwrap();
         q.add_used(mem, desc_chain, written as u32);
         written
     }
 
     fn device_read(mem: &QueueMemory, q: &mut DeviceQueue, len: usize) -> Vec<u8> {
-        let mut desc_chain = q.pop(mem).unwrap();
+        let desc_chain = q.pop(mem).unwrap();
+        let mut reader = Reader::new(&desc_chain);
         let mut buf = vec![0; len];
-        desc_chain.reader.read_exact(&mut buf).unwrap();
+        reader.read_exact(&mut buf).unwrap();
         q.add_used(mem, desc_chain, len as u32);
         buf
     }

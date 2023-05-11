@@ -9,9 +9,8 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 base = { path = "../base" }
-libc = "0.2.65"
-swap = { path = "../swap", default-features = false }
 vm_control = { path = "../vm_control" }
+libc = "0.2.65"
 
 [build-dependencies]
 anyhow = "*"

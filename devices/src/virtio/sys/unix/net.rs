@@ -17,7 +17,9 @@ use super::super::super::net::NetError;
 use super::super::super::net::Token;
 use super::super::super::net::Worker;
 use super::super::super::Queue;
+use super::super::super::Reader;
 use super::super::super::SignalableInterrupt;
+use super::super::super::Writer;
 
 pub fn process_rx<I: SignalableInterrupt, T: TapT>(
     interrupt: &I,
@@ -30,7 +32,7 @@ pub fn process_rx<I: SignalableInterrupt, T: TapT>(
 
     // Read as many frames as possible.
     loop {
-        let mut desc_chain = match rx_queue.peek(mem) {
+        let desc_chain = match rx_queue.peek(mem) {
             Some(desc) => desc,
             None => {
                 exhausted_queue = true;
@@ -38,7 +40,7 @@ pub fn process_rx<I: SignalableInterrupt, T: TapT>(
             }
         };
 
-        let writer = &mut desc_chain.writer;
+        let mut writer = Writer::new(&desc_chain);
 
         match writer.write_from(&mut tap, writer.available_bytes()) {
             Ok(_) => {}
@@ -82,8 +84,8 @@ pub fn process_tx<I: SignalableInterrupt, T: TapT>(
     mem: &GuestMemory,
     mut tap: &mut T,
 ) {
-    while let Some(mut desc_chain) = tx_queue.pop(mem) {
-        let reader = &mut desc_chain.reader;
+    while let Some(desc_chain) = tx_queue.pop(mem) {
+        let mut reader = Reader::new(&desc_chain);
         let expected_count = reader.available_bytes();
         match reader.read_to(&mut tap, expected_count) {
             Ok(count) => {

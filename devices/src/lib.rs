@@ -25,7 +25,6 @@ pub mod irqchip;
 mod pci;
 mod pflash;
 pub mod pl030;
-pub mod pmc_virt;
 mod serial;
 pub mod serial_device;
 #[cfg(feature = "tpm")]
@@ -154,7 +153,6 @@ cfg_if::cfg_if! {
         };
         pub use self::platform::VfioPlatformDevice;
         pub use self::ac_adapter::AcAdapter;
-        pub use self::pmc_virt::VirtualPmc;
         pub use self::proxy::Error as ProxyError;
         pub use self::proxy::ProxyDevice;
         #[cfg(feature = "usb")]

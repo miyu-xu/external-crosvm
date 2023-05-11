@@ -107,10 +107,9 @@ fuzz_target!(|data: &[u8]| {
 
         while let Some(avail_desc) = q.pop(mem) {
             let total = avail_desc
-                .writer
-                .get_remaining()
+                .writable_mem_regions()
                 .iter()
-                .try_fold(0u32, |sum, cur| sum.checked_add(cur.size() as u32));
+                .try_fold(0u32, |sum, cur| sum.checked_add(cur.len as u32));
             q.add_used(mem, avail_desc, total.unwrap_or(0));
         }
     });

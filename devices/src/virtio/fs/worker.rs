@@ -158,9 +158,11 @@ pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
     slot: u32,
 ) -> Result<()> {
     let mapper = Mapper::new(Arc::clone(tube), slot);
-    while let Some(mut avail_desc) = queue.pop(mem) {
-        let total =
-            server.handle_message(&mut avail_desc.reader, &mut avail_desc.writer, &mapper)?;
+    while let Some(avail_desc) = queue.pop(mem) {
+        let reader = Reader::new(&avail_desc);
+        let writer = Writer::new(&avail_desc);
+
+        let total = server.handle_message(reader, writer, &mapper)?;
 
         queue.add_used(mem, avail_desc, total as u32);
         queue.trigger_interrupt(mem, interrupt);

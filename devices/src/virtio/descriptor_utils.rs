@@ -35,28 +35,24 @@ use crate::virtio::SplitDescriptorChain;
 
 #[derive(Clone)]
 struct DescriptorChainRegions {
-    regions: SmallVec<[MemRegion; 2]>,
-
+    regions: SmallVec<[cros_async::MemRegion; 16]>,
     // For virtio devices that operate on IOVAs rather than guest phyiscal
     // addresses, the IOVA regions must be exported from virtio-iommu to get
     // the underlying memory regions. It is only valid for the virtio device
     // to access those memory regions while they remain exported, so maintain
     // references to the exported regions until the descriptor chain is
     // dropped.
-    _exported_regions: Option<Arc<Vec<ExportedRegion>>>,
+    _exported_regions: Vec<ExportedRegion>,
 
     current: usize,
     bytes_consumed: usize,
 }
 
 impl DescriptorChainRegions {
-    fn new(
-        regions: SmallVec<[MemRegion; 2]>,
-        exported_regions: Option<Arc<Vec<ExportedRegion>>>,
-    ) -> Self {
+    fn new(regions: &[cros_async::MemRegion], exported_regions: &[ExportedRegion]) -> Self {
         DescriptorChainRegions {
-            regions,
-            _exported_regions: exported_regions,
+            regions: regions.into(),
+            _exported_regions: exported_regions.into(),
             current: 0,
             bytes_consumed: 0,
         }
@@ -231,15 +227,14 @@ impl<'a, T: FromBytes> Iterator for ReaderIterator<'a, T> {
 }
 
 impl Reader {
-    /// Construct a new Reader wrapper over `readable_regions`.
-    pub fn new_from_regions(
-        mem: &GuestMemory,
-        readable_regions: SmallVec<[MemRegion; 2]>,
-        exported_regions: Option<Arc<Vec<ExportedRegion>>>,
-    ) -> Reader {
+    /// Construct a new Reader wrapper over `desc_chain`.
+    pub fn new(desc_chain: &DescriptorChain) -> Reader {
         Reader {
-            mem: mem.clone(),
-            regions: DescriptorChainRegions::new(readable_regions, exported_regions),
+            mem: desc_chain.mem().clone(),
+            regions: DescriptorChainRegions::new(
+                desc_chain.readable_mem_regions(),
+                desc_chain.exported_regions(),
+            ),
         }
     }
 
@@ -431,10 +426,6 @@ impl Reader {
         self.regions.bytes_consumed()
     }
 
-    pub fn get_remaining_regions(&self) -> &[MemRegion] {
-        self.regions.get_remaining_regions()
-    }
-
     /// Returns a `&[VolatileSlice]` that represents all the remaining data in this `Reader`.
     /// Calling this method does not actually consume any data from the `Reader` and callers should
     /// call `consume` to advance the `Reader`.
@@ -498,15 +489,14 @@ pub struct Writer {
 }
 
 impl Writer {
-    /// Construct a new Writer wrapper over `writable_regions`.
-    pub fn new_from_regions(
-        mem: &GuestMemory,
-        writable_regions: SmallVec<[MemRegion; 2]>,
-        exported_regions: Option<Arc<Vec<ExportedRegion>>>,
-    ) -> Writer {
+    /// Construct a new Writer wrapper over `desc_chain`.
+    pub fn new(desc_chain: &DescriptorChain) -> Writer {
         Writer {
-            mem: mem.clone(),
-            regions: DescriptorChainRegions::new(writable_regions, exported_regions),
+            mem: desc_chain.mem().clone(),
+            regions: DescriptorChainRegions::new(
+                desc_chain.writable_mem_regions(),
+                desc_chain.exported_regions(),
+            ),
         }
     }
 
@@ -672,10 +662,6 @@ impl Writer {
         self.regions.bytes_consumed()
     }
 
-    pub fn get_remaining_regions(&self) -> &[MemRegion] {
-        self.regions.get_remaining_regions()
-    }
-
     /// Returns a `&[VolatileSlice]` that represents all the remaining data in this `Writer`.
     /// Calling this method does not actually advance the current position of the `Writer` in the
     /// buffer and callers should call `consume_bytes` to advance the `Writer`. Not calling
@@ -808,7 +794,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -821,7 +807,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
         assert_eq!(reader.available_bytes(), 106);
         assert_eq!(reader.bytes_read(), 0);
 
@@ -849,7 +835,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -862,7 +848,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let writer = &mut chain.writer;
+        let mut writer = Writer::new(&chain);
         assert_eq!(writer.available_bytes(), 106);
         assert_eq!(writer.bytes_written(), 0);
 
@@ -890,7 +876,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -898,7 +884,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
         assert_eq!(reader.available_bytes(), 0);
         assert_eq!(reader.bytes_read(), 0);
 
@@ -915,7 +901,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -923,7 +909,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let writer = &mut chain.writer;
+        let mut writer = Writer::new(&chain);
         assert_eq!(writer.available_bytes(), 0);
         assert_eq!(writer.bytes_written(), 0);
 
@@ -940,7 +926,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -949,7 +935,7 @@ mod tests {
         )
         .expect("create_descriptor_chain failed");
 
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         // Open a file in read-only mode so writes to it to trigger an I/O error.
         let device_file = if cfg!(windows) { "NUL" } else { "/dev/zero" };
@@ -971,7 +957,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -980,7 +966,7 @@ mod tests {
         )
         .expect("create_descriptor_chain failed");
 
-        let writer = &mut chain.writer;
+        let mut writer = Writer::new(&chain);
 
         let mut file = tempfile().unwrap();
 
@@ -1001,7 +987,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1016,8 +1002,8 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
-        let writer = &mut chain.writer;
+        let mut reader = Reader::new(&chain);
+        let mut writer = Writer::new(&chain);
 
         assert_eq!(reader.bytes_read(), 0);
         assert_eq!(writer.bytes_written(), 0);
@@ -1052,7 +1038,7 @@ mod tests {
         let secret: Le32 = 0x12345678.into();
 
         // Create a descriptor chain with memory regions that are properly separated.
-        let mut chain_writer = create_descriptor_chain(
+        let chain_writer = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1060,13 +1046,13 @@ mod tests {
             123,
         )
         .expect("create_descriptor_chain failed");
-        let writer = &mut chain_writer.writer;
+        let mut writer = Writer::new(&chain_writer);
         writer
             .write_obj(secret)
             .expect("write_obj should not fail here");
 
         // Now create new descriptor chain pointing to the same memory and try to read it.
-        let mut chain_reader = create_descriptor_chain(
+        let chain_reader = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1074,7 +1060,7 @@ mod tests {
             123,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain_reader.reader;
+        let mut reader = Reader::new(&chain_reader);
         match reader.read_obj::<Le32>() {
             Err(_) => panic!("read_obj should not fail here"),
             Ok(read_secret) => assert_eq!(read_secret, secret),
@@ -1088,7 +1074,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1097,7 +1083,7 @@ mod tests {
         )
         .expect("create_descriptor_chain failed");
 
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let mut buf = vec![0; 1024];
 
@@ -1117,7 +1103,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1132,7 +1118,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let other = reader.split_at(32);
         assert_eq!(reader.available_bytes(), 32);
@@ -1146,7 +1132,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1161,7 +1147,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let other = reader.split_at(24);
         assert_eq!(reader.available_bytes(), 24);
@@ -1175,7 +1161,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1190,7 +1176,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let other = reader.split_at(128);
         assert_eq!(reader.available_bytes(), 128);
@@ -1204,7 +1190,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1219,7 +1205,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let other = reader.split_at(0);
         assert_eq!(reader.available_bytes(), 0);
@@ -1233,7 +1219,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1248,7 +1234,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let other = reader.split_at(256);
         assert_eq!(
@@ -1265,7 +1251,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1273,7 +1259,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut chain.reader;
+        let mut reader = Reader::new(&chain);
 
         let mut buf = vec![0u8; 64];
         assert_eq!(
@@ -1289,7 +1275,7 @@ mod tests {
         let memory_start_addr = GuestAddress(0x0);
         let memory = GuestMemory::new(&[(memory_start_addr, 0x10000)]).unwrap();
 
-        let mut chain = create_descriptor_chain(
+        let chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1297,7 +1283,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let writer = &mut chain.writer;
+        let mut writer = Writer::new(&chain);
 
         let buf = vec![0xdeu8; 64];
         assert_eq!(
@@ -1318,7 +1304,7 @@ mod tests {
             0x0303030303030303.into(),
         ];
 
-        let mut write_chain = create_descriptor_chain(
+        let write_chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1326,12 +1312,12 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let writer = &mut write_chain.writer;
+        let mut writer = Writer::new(&write_chain);
         writer
             .consume(vs.clone())
             .expect("failed to consume() a vector");
 
-        let mut read_chain = create_descriptor_chain(
+        let read_chain = create_descriptor_chain(
             &memory,
             GuestAddress(0x0),
             GuestAddress(0x100),
@@ -1339,7 +1325,7 @@ mod tests {
             0,
         )
         .expect("create_descriptor_chain failed");
-        let reader = &mut read_chain.reader;
+        let mut reader = Reader::new(&read_chain);
         let vs_read = reader
             .collect::<io::Result<Vec<Le64>>, _>()
             .expect("failed to collect() values");
@@ -1372,7 +1358,7 @@ mod tests {
         let Reader {
             mem: _,
             mut regions,
-        } = chain.reader;
+        } = Reader::new(&chain);
 
         let drain = regions
             .get_remaining_regions_with_count(::std::usize::MAX)
@@ -1429,7 +1415,7 @@ mod tests {
         let Reader {
             mem: _,
             mut regions,
-        } = chain.reader;
+        } = Reader::new(&chain);
 
         let drain = regions
             .get_remaining_with_count(&memory, ::std::usize::MAX)

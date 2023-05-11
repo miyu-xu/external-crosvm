@@ -40,7 +40,9 @@ use crate::virtio::video::response::Response;
 use crate::virtio::video::Error;
 use crate::virtio::video::Result;
 use crate::virtio::DescriptorChain;
+use crate::virtio::Reader;
 use crate::virtio::SignalableInterrupt;
+use crate::virtio::Writer;
 
 /// Worker that takes care of running the virtio video device.
 pub struct Worker<I: SignalableInterrupt> {
@@ -84,15 +86,16 @@ impl<I: SignalableInterrupt> Worker<I> {
         if responses.is_empty() {
             return Ok(());
         }
-        while let Some((mut desc, response)) = responses.pop_front() {
-            if let Err(e) = response.write(&mut desc.writer) {
+        while let Some((desc, response)) = responses.pop_front() {
+            let mut writer = Writer::new(&desc);
+            if let Err(e) = response.write(&mut writer) {
                 error!(
                     "failed to write a command response for {:?}: {}",
                     response, e
                 );
             }
-            let len = desc.writer.bytes_written() as u32;
-            self.cmd_queue.add_used(&self.mem, desc, len);
+            self.cmd_queue
+                .add_used(&self.mem, desc, writer.bytes_written() as u32);
         }
         self.cmd_queue
             .trigger_interrupt(&self.mem, &self.cmd_queue_interrupt);
@@ -101,16 +104,17 @@ impl<I: SignalableInterrupt> Worker<I> {
 
     /// Writes a `VideoEvt` into the event queue.
     fn write_event(&mut self, event: event::VideoEvt) -> Result<()> {
-        let mut desc = self
+        let desc = self
             .event_queue
             .pop(&self.mem)
             .ok_or(Error::DescriptorNotAvailable)?;
 
+        let mut writer = Writer::new(&desc);
         event
-            .write(&mut desc.writer)
+            .write(&mut writer)
             .map_err(|error| Error::WriteEventFailure { event, error })?;
-        let len = desc.writer.bytes_written() as u32;
-        self.event_queue.add_used(&self.mem, desc, len);
+        self.event_queue
+            .add_used(&self.mem, desc, writer.bytes_written() as u32);
         self.event_queue
             .trigger_interrupt(&self.mem, &self.event_queue_interrupt);
         Ok(())
@@ -194,10 +198,12 @@ impl<I: SignalableInterrupt> Worker<I> {
         &mut self,
         device: &mut dyn Device,
         wait_ctx: &WaitContext<Token>,
-        mut desc: DescriptorChain,
+        desc: DescriptorChain,
     ) -> Result<VecDeque<WritableResp>> {
         let mut responses: VecDeque<WritableResp> = Default::default();
-        let cmd = VideoCmd::from_reader(&mut desc.reader).map_err(Error::ReadFailure)?;
+        let mut reader = Reader::new(&desc);
+
+        let cmd = VideoCmd::from_reader(&mut reader).map_err(Error::ReadFailure)?;
 
         // If a destruction command comes, cancel pending requests.
         // TODO(b/161774071): Allow `process_cmd` to return multiple responses and move this

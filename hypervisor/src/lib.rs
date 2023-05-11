@@ -448,6 +448,7 @@ pub enum VcpuExit {
     SystemEventShutdown,
     SystemEventReset,
     SystemEventCrash,
+    SystemEventS2Idle,
     RdMsr {
         index: u32,
     },
