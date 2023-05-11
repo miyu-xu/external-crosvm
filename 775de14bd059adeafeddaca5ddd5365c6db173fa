@@ -34,6 +34,24 @@
       "parentUuid": "4a00414c_9c493760",
       "revId": "775de14bd059adeafeddaca5ddd5365c6db173fa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9829844c_91e3d026",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-11T02:21:40Z",
+      "side": 1,
+      "message": "No auto merger yet, but we do a merge every week. This CL is included in https://r.android.com/2585131 which I\u0027ll submit as soon as a manual test I\u0027m running finishes",
+      "parentUuid": "82e139d0_beeeb8d7",
+      "revId": "775de14bd059adeafeddaca5ddd5365c6db173fa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
