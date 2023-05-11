@@ -14,11 +14,6 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
-    features: [
-        "gdb",
-        "gdbstub",
-        "gdbstub_arch",
-    ],
 }
 
 rust_test {
@@ -35,9 +30,4 @@ rust_test {
         unit_test: true,
     },
     edition: "2021",
-    features: [
-        "gdb",
-        "gdbstub",
-        "gdbstub_arch",
-    ],
 }

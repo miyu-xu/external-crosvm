@@ -23,7 +23,6 @@ rust_ffi_shared {
     rustlibs: [
         "libbase_rust",
         "liblibc",
-        "libswap",
         "libvm_control",
     ],
     // The build.rs file compiles the generated C header just as a test, which
@@ -46,7 +45,6 @@ rust_ffi_static {
     rustlibs: [
         "libbase_rust",
         "liblibc",
-        "libswap",
         "libvm_control",
     ],
     // The build.rs file compiles the generated C header just as a test, which
