@@ -52,6 +52,23 @@
       "parentUuid": "bdbdf933_3fb9dda6",
       "revId": "184c747bd4e8a93802619efff0f3815c8a23daaa",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "442635de_0b69d83f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-12T21:43:26Z",
+      "side": 1,
+      "message": "sent upstream as https://crrev.com/c/4529575",
+      "revId": "184c747bd4e8a93802619efff0f3815c8a23daaa",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
