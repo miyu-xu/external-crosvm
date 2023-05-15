@@ -57,3 +57,24 @@ rust_library {
     ],
     proc_macros: ["libremain"],
 }
+
+rust_library {
+    name: "libkernel_loader",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "kernel_loader",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libbase_rust",
+        "libdata_model",
+        "liblibc",
+        "libresources",
+        "libthiserror",
+        "libvm_memory",
+        "libzerocopy",
+    ],
+    proc_macros: ["libremain"],
+}

@@ -27,3 +27,21 @@ rust_library {
         "libserde",
     ],
 }
+
+rust_library {
+    name: "libbroker_ipc",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "broker_ipc",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libanyhow",
+        "libbase_rust",
+        "libcrash_report",
+        "libmetrics",
+        "libserde",
+    ],
+}

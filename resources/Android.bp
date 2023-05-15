@@ -28,6 +28,24 @@ rust_library {
     proc_macros: ["libremain"],
 }
 
+rust_library {
+    name: "libresources",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "resources",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libbase_rust",
+        "liblibc",
+        "libserde",
+        "libthiserror",
+    ],
+    proc_macros: ["libremain"],
+}
+
 rust_test {
     name: "resources_test_src_lib",
     defaults: ["crosvm_inner_defaults"],

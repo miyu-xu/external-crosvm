@@ -264,3 +264,42 @@ rust_library {
         "//vendor:__subpackages__",
     ],
 }
+
+rust_library {
+    name: "libbase_rust",
+    defaults: ["crosvm_inner_defaults"],
+    stem: "libbase",
+    host_supported: true,
+    crate_name: "base",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libaudio_streams",
+        "libcfg_if",
+        "libchrono",
+        "libdata_model",
+        "libenv_logger",
+        "liblibc",
+        "liblog_rust",
+        "libminijail_rust",
+        "libonce_cell",
+        "libserde",
+        "libserde_json",
+        "libsmallvec",
+        "libsync_rust",
+        "libtempfile",
+        "libthiserror",
+        "libuuid",
+        "libzerocopy",
+    ],
+    proc_macros: [
+        "libbase_event_token_derive",
+        "libremain",
+    ],
+    visibility: [
+        "//packages/modules/Virtualization/virtualizationmanager",
+        "//vendor:__subpackages__",
+    ],
+}

@@ -54,3 +54,23 @@ rust_library {
         "libremain",
     ],
 }
+
+rust_library {
+    name: "libaudio_streams",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "audio_streams",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/audio_streams.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libfutures",
+        "libserde",
+        "libthiserror",
+    ],
+    proc_macros: [
+        "libasync_trait",
+        "libremain",
+    ],
+}

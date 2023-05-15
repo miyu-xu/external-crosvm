@@ -69,3 +69,33 @@ rust_library {
         "//packages/modules/Virtualization/zipfuse",
     ],
 }
+
+rust_library {
+    name: "libfuse_rust",
+    defaults: ["crosvm_inner_defaults"],
+    stem: "libfuse",
+    host_supported: true,
+    crate_name: "fuse",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libbase_rust",
+        "libbitflags",
+        "libcros_tracing",
+        "libcrossbeam_utils",
+        "libdata_model",
+        "liblibc",
+        "libthiserror",
+        "libzerocopy",
+    ],
+    proc_macros: [
+        "libenumn",
+        "libremain",
+    ],
+    visibility: [
+        "//packages/modules/Virtualization/authfs",
+        "//packages/modules/Virtualization/zipfuse",
+    ],
+}

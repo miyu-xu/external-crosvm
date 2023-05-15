@@ -31,6 +31,27 @@ rust_library {
     proc_macros: ["libremain"],
 }
 
+rust_library {
+    name: "libvhost",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "vhost",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libbase_rust",
+        "liblibc",
+        "libnet_util",
+        "libstatic_assertions",
+        "libthiserror",
+        "libvirtio_sys",
+        "libvm_memory",
+    ],
+    proc_macros: ["libremain"],
+}
+
 rust_test {
     name: "vhost_test_tests_unix",
     defaults: ["crosvm_inner_defaults"],

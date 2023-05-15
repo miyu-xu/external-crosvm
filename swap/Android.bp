@@ -37,3 +37,31 @@ rust_library {
     ],
     proc_macros: ["libremain"],
 }
+
+rust_library {
+    name: "libswap",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "swap",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libanyhow",
+        "libbase_rust",
+        "libcfg_if",
+        "libcros_tracing",
+        "libdata_model",
+        "libjail",
+        "liblibc",
+        "libnum_cpus",
+        "libonce_cell",
+        "libserde",
+        "libserde_json",
+        "libsync_rust",
+        "libthiserror",
+        "libvm_memory",
+    ],
+    proc_macros: ["libremain"],
+}

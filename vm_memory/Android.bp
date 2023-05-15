@@ -36,6 +36,32 @@ rust_library {
     visibility: ["//vendor:__subpackages__"],
 }
 
+rust_library {
+    name: "libvm_memory",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "vm_memory",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: [
+        "libanyhow",
+        "libbase_rust",
+        "libbitflags",
+        "libcfg_if",
+        "libcros_async",
+        "libdata_model",
+        "liblibc",
+        "libserde",
+        "libserde_json",
+        "libthiserror",
+        "libzerocopy",
+    ],
+    proc_macros: ["libremain"],
+    visibility: ["//vendor:__subpackages__"],
+}
+
 rust_test {
     name: "vm_memory_test_src_lib",
     defaults: ["crosvm_inner_defaults"],

@@ -69,6 +69,35 @@ rust_library {
     proc_macros: ["libremain"],
 }
 
+rust_library {
+    name: "libvmm_vhost",
+    defaults: ["crosvm_inner_defaults"],
+    host_supported: true,
+    crate_name: "vmm_vhost",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    features: [
+        "default",
+        "device",
+        "vfio-device",
+        "vmm",
+    ],
+    rustlibs: [
+        "libanyhow",
+        "libbase_rust",
+        "libbitflags",
+        "libcfg_if",
+        "libdata_model",
+        "liblibc",
+        "libtempfile",
+        "libthiserror",
+        "libzerocopy",
+    ],
+    proc_macros: ["libremain"],
+}
+
 rust_test {
     name: "vmm_vhost_test_src_lib",
     defaults: ["crosvm_inner_defaults"],
