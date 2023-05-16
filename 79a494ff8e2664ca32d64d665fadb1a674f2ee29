@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "87f76584_7a230b76",
+        "filename": "cros_tracing_types/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-16T00:07:36Z",
+      "side": 1,
+      "message": "add license",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "79a494ff8e2664ca32d64d665fadb1a674f2ee29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
