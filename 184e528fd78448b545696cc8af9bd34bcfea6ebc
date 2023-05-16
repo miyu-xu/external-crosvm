@@ -16,6 +16,24 @@
       "message": "What release is this targetting?\n\nAlso - can you split off new projects into separate bugs (if they are V-facing)",
       "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7314f11e_4e971186",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-16T23:45:21Z",
+      "side": 1,
+      "message": "Do you need this because of the PCI BAR reprogramming that was added recently?",
+      "parentUuid": "c054623d_e95fc463",
+      "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
