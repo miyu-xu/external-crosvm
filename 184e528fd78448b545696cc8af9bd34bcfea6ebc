@@ -52,6 +52,24 @@
       "parentUuid": "7314f11e_4e971186",
       "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8e32c413_84cfcb5f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-16T23:51:52Z",
+      "side": 1,
+      "message": "Not sure if it still works, but I had a patch to disable the PCI BAR reprogramming that you might be able to use as a quick test https://r.android.com/2525802\n\nIf that is the reason, then I\u0027d guess this needs to target Android U because we reverted that CL before the branch was cut.",
+      "parentUuid": "84b4db8f_0271e9ed",
+      "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
