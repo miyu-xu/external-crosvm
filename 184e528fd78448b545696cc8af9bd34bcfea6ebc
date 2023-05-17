@@ -70,6 +70,24 @@
       "parentUuid": "84b4db8f_0271e9ed",
       "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fa56fb68_c871841d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-17T19:43:45Z",
+      "side": 1,
+      "message": "Either way this CL LGTM though. We just need to know soon whether this change needs to be backported.",
+      "parentUuid": "8e32c413_84cfcb5f",
+      "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
