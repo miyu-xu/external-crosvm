@@ -88,6 +88,24 @@
       "parentUuid": "8e32c413_84cfcb5f",
       "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4460d2a1_cd0e141a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2023-05-18T19:24:19Z",
+      "side": 1,
+      "message": "I wasn\u0027t able to repro the issue that Vatsa had reported, even if I reverted https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4500898 . Any concerns to pick the change on U so we don\u0027t scramble to fix if/when the issue manifests again? I\u0027ll raise new issue for the tracking.",
+      "parentUuid": "fa56fb68_c871841d",
+      "revId": "184e528fd78448b545696cc8af9bd34bcfea6ebc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
