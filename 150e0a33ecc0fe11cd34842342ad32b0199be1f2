@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a3ee26b7_b9017062",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-19T18:22:56Z",
+      "side": 1,
+      "message": "can you coordinate getting the +Qualcomm-Review?",
+      "revId": "150e0a33ecc0fe11cd34842342ad32b0199be1f2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
