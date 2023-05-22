@@ -20,6 +20,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "51b0fef6_03eb06c7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2023-05-22T09:03:39Z",
+      "side": 1,
+      "message": "Could this patch be upstreamed to crosvm, instead of AOSP? It\u0027s too late to get it into Android U anyway.",
+      "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d43dff13_93239e00",
         "filename": "aarch64/src/fdt.rs",
         "patchSetId": 2
@@ -55,6 +72,30 @@
       "side": 1,
       "message": "I think alignment and size go together. So if we are not adding size, we should omit alignment also. However that will need a change in pvmfw as it expects alignment to be mandatorily present.\n\n@ptosi will submit a fix for it separately after the current set gets merged. Pls let me know.",
       "parentUuid": "d43dff13_93239e00",
+      "range": {
+        "startLine": 105,
+        "startChar": 0,
+        "endLine": 105,
+        "endChar": 2
+      },
+      "revId": "0bc20c56ac731ea63c2f11fda3f3f724e3acac42",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "63a43045_d845b8cd",
+        "filename": "aarch64/src/fdt.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 105,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2023-05-22T09:03:39Z",
+      "side": 1,
+      "message": "\u003e I think alignment and size go together.\n\nMakes sense although I don\u0027t find the docs to be very clear on this point; anyway, that\u0027s what we\u0027re following in aosp/2595128.",
+      "parentUuid": "5754f29d_a4cad910",
       "range": {
         "startLine": 105,
         "startChar": 0,
