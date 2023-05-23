@@ -52,6 +52,24 @@
       "parentUuid": "a80d9d1c_2ff52fb3",
       "revId": "8e31db8c010afd10268d5224faadb74cc41c852e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cff716ed_8ea24a40",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-05-23T16:12:00Z",
+      "side": 1,
+      "message": "Ack.  I merged the crosvm upstream side.  I\u0027ll abandon this change for now, but the vulkan-cereal side needs to be in the same topic as the crosvm update.",
+      "parentUuid": "6f041537_ac94693a",
+      "revId": "8e31db8c010afd10268d5224faadb74cc41c852e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
