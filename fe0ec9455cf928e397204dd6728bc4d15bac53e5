@@ -1,6 +1,23 @@
 {
   "comments": [
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a0013299_0be7dee2",
+        "filename": "cros_async/src/sys/unix/fd_executor.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 269,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-24T18:26:00Z",
+      "side": 0,
+      "message": "NOTE (partly for myself): this conflict comes from a cherry-pick https://r.android.com/2592065, there wasn\u0027t an AOSP edit hiding in this",
+      "revId": "fe0ec9455cf928e397204dd6728bc4d15bac53e5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "25f22813_65242dc3",
@@ -62,6 +79,30 @@
       "side": 0,
       "message": "Got it, and this final version we have is from: https://b.corp.google.com/issues/170256643\n\nThanks!",
       "parentUuid": "54cb0daf_a89aba32",
+      "range": {
+        "startLine": 11,
+        "startChar": 38,
+        "endLine": 11,
+        "endChar": 82
+      },
+      "revId": "fe0ec9455cf928e397204dd6728bc4d15bac53e5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ffb0317e_3d81235d",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-24T18:26:00Z",
+      "side": 0,
+      "message": "FYI: `0344ff Merge \"Revert \"Revert \"Update bitflags dependency to 2.2.1.\"` is just the `aosp/master` `HEAD` commit that is being merged from. In general, it isn\u0027t necessarily the commit responsible for the merge conflict.",
+      "parentUuid": "edf295ef_5cfe7ab6",
       "range": {
         "startLine": 11,
         "startChar": 38,

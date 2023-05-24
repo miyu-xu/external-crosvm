@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e3727bc7_20dc081d",
+        "filename": "protos/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-05-24T18:26:00Z",
+      "side": 1,
+      "message": "not a blocker: we probably don\u0027t need registered_events, so you could revert some of these changes. i doubt there is much harm though, so up to you",
+      "revId": "91f5702caea085c6a2591d8ede6759c718aff508",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
