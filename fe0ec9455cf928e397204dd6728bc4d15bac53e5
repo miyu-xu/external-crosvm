@@ -22,6 +22,30 @@
       },
       "revId": "fe0ec9455cf928e397204dd6728bc4d15bac53e5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "54cb0daf_a89aba32",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-05-24T16:01:53Z",
+      "side": 0,
+      "message": "I believe this was discussed in b/143953733, with the change located at aosp/1412815",
+      "parentUuid": "25f22813_65242dc3",
+      "range": {
+        "startLine": 11,
+        "startChar": 38,
+        "endLine": 11,
+        "endChar": 82
+      },
+      "revId": "fe0ec9455cf928e397204dd6728bc4d15bac53e5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
