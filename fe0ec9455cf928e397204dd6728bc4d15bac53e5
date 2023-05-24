@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "25f22813_65242dc3",
+        "filename": "protos/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 11,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-05-24T15:56:10Z",
+      "side": 0,
+      "message": "I\u0027m having a hard time finding this commit that would touch this file. Is this from the proto change that doesn\u0027t work with Android? We can\u0027t use these `generated` types?",
+      "range": {
+        "startLine": 11,
+        "startChar": 38,
+        "endLine": 11,
+        "endChar": 82
+      },
+      "revId": "fe0ec9455cf928e397204dd6728bc4d15bac53e5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
