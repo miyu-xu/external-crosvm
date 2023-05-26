@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fea8ca8e_c036f1b8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2023-05-26T21:17:00Z",
+      "side": 1,
+      "message": "LGTM",
+      "revId": "98bf9ceef4a19bc9235fc124d63ca832a1056d04",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "eac2cccd_8a25f1a6",
+        "filename": "devices/src/virtio/input/defaults.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 70,
+      "author": {
+        "id": 1110304
+      },
+      "writtenOn": "2023-05-26T21:17:00Z",
+      "side": 1,
+      "message": "collection? is it not just one?",
+      "range": {
+        "startLine": 70,
+        "startChar": 81,
+        "endLine": 70,
+        "endChar": 91
+      },
+      "revId": "98bf9ceef4a19bc9235fc124d63ca832a1056d04",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
