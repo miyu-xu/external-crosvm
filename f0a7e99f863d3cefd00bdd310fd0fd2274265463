@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1cebbceb_d3095865",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2023-05-26T19:33:01Z",
+      "side": 1,
+      "message": "Staged at https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4571175",
+      "revId": "f0a7e99f863d3cefd00bdd310fd0fd2274265463",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
