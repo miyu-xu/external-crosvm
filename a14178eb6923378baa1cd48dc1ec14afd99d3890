@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "033074dc_0481d335",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-05-30T19:25:56Z",
+      "side": 1,
+      "message": "simplest merge ever? no merge conflicts, cargo_embargo writes the same .bp files",
+      "revId": "a14178eb6923378baa1cd48dc1ec14afd99d3890",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
