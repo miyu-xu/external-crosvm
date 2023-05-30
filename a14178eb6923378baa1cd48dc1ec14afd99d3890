@@ -34,6 +34,23 @@
       "parentUuid": "033074dc_0481d335",
       "revId": "a14178eb6923378baa1cd48dc1ec14afd99d3890",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a3718925_31b615f5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1088076
+      },
+      "writtenOn": "2023-05-30T20:40:29Z",
+      "side": 1,
+      "message": "let me do an abtd run to confirm the device stability",
+      "revId": "a14178eb6923378baa1cd48dc1ec14afd99d3890",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
