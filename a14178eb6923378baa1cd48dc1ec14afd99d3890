@@ -51,6 +51,24 @@
       "message": "let me do an abtd run to confirm the device stability",
       "revId": "a14178eb6923378baa1cd48dc1ec14afd99d3890",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "766fd477_ecc8d481",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1088076
+      },
+      "writtenOn": "2023-05-30T22:48:51Z",
+      "side": 1,
+      "message": "ran 40 repeating powerwash tests, all passed.",
+      "parentUuid": "a3718925_31b615f5",
+      "revId": "a14178eb6923378baa1cd48dc1ec14afd99d3890",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
