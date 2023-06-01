@@ -352,7 +352,7 @@ impl Serial {
     }
 
     fn handle_write(&mut self, offset: u8, v: u8) -> Result<()> {
-        match offset as u8 {
+        match offset {
             DLAB_LOW if self.is_dlab_set() => {
                 self.baud_divisor = (self.baud_divisor & 0xff00) | v as u16
             }
@@ -533,7 +533,7 @@ impl Suspendable for Serial {
             last_write_was_newline: self.last_write_was_newline,
         };
 
-        let serialized = serde_json::to_value(&snap).context("error serializing")?;
+        let serialized = serde_json::to_value(snap).context("error serializing")?;
         Ok(serialized)
     }
 

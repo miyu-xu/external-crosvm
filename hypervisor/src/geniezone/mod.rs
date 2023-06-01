@@ -3,19 +3,16 @@
 // found in the LICENSE file.
 
 pub mod geniezone_sys;
-use std::cell::RefCell;
+
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::convert::TryFrom;
 use std::ffi::CString;
-use std::mem::ManuallyDrop;
-use std::os::raw::c_int;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use base::errno_result;
@@ -24,7 +21,6 @@ use base::ioctl;
 use base::ioctl_with_ref;
 use base::ioctl_with_val;
 use base::pagesize;
-use base::sys::BlockedSignal;
 use base::AsRawDescriptor;
 use base::Error;
 use base::Event;
@@ -46,7 +42,6 @@ use gdbstub_arch::aarch64::reg::id::AArch64RegId;
 use gdbstub_arch::aarch64::AArch64 as GdbArch;
 pub use geniezone_sys::*;
 use libc::open;
-use libc::EBUSY;
 use libc::EFAULT;
 use libc::EINVAL;
 use libc::EIO;
@@ -61,6 +56,7 @@ use sync::Mutex;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::MemoryRegionInformation;
+use vm_memory::MemoryRegionPurpose;
 
 use crate::ClockState;
 use crate::Config;
@@ -79,7 +75,8 @@ use crate::VcpuAArch64;
 use crate::VcpuExit;
 use crate::VcpuFeature;
 use crate::VcpuRegAArch64;
-use crate::VcpuRunHandle;
+use crate::VcpuSignalHandle;
+use crate::VcpuSignalHandleInner;
 use crate::Vm;
 use crate::VmAArch64;
 use crate::VmCap;
@@ -196,10 +193,19 @@ impl VmAArch64 for GeniezoneVm {
     fn init_arch(
         &self,
         _payload_entry_address: GuestAddress,
-        _fdt_address: GuestAddress,
-        _fdt_size: usize,
+        fdt_address: GuestAddress,
+        fdt_size: usize,
     ) -> Result<()> {
-        Ok(())
+        let dtb_config = gzvm_dtb_config {
+            dtb_addr: fdt_address.offset(),
+            dtb_size: fdt_size.try_into().unwrap(),
+        };
+        let ret = unsafe { ioctl_with_ref(self, GZVM_SET_DTB_CONFIG(), &dtb_config) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
     }
 }
 
@@ -497,8 +503,8 @@ unsafe fn set_user_memory_region(
     guest_addr: u64,
     memory_size: u64,
     userspace_addr: *mut u8,
+    flags: u32,
 ) -> Result<()> {
-    let flags = 0;
     let region = gzvm_userspace_memory_region {
         slot,
         flags,
@@ -558,7 +564,7 @@ impl Geniezone {
     /// Gets the size of the mmap required to use vcpu's `gzvm_vcpu_run` structure.
     pub fn get_vcpu_mmap_size(&self) -> Result<usize> {
         // We don't use mmap, return sizeof(gzvm_vcpu_run) directly
-        let res = std::mem::size_of::<gzvm_vcpu_run>() as usize;
+        let res = std::mem::size_of::<gzvm_vcpu_run>();
         Ok(res)
     }
 }
@@ -577,10 +583,14 @@ impl Hypervisor for Geniezone {
     }
 
     fn check_capability(&self, cap: HypervisorCap) -> bool {
-        matches!(
-            cap,
-            HypervisorCap::UserMemory | HypervisorCap::ImmediateExit
-        )
+        match cap {
+            HypervisorCap::UserMemory => true,
+            HypervisorCap::ArmPmuV3 => false,
+            HypervisorCap::ImmediateExit => true,
+            HypervisorCap::StaticSwiotlbAllocationRequired => true,
+            HypervisorCap::HypervisorInitializedBootContext => false,
+            HypervisorCap::S390UserSigp | HypervisorCap::TscDeadlineTimer => false,
+        }
     }
 }
 
@@ -611,8 +621,14 @@ impl GeniezoneVm {
                  guest_addr,
                  size,
                  host_addr,
+                 options,
                  ..
              }| {
+                let flags = match options.purpose {
+                    MemoryRegionPurpose::GuestMemoryRegion => GZVM_USER_MEM_REGION_GUEST_MEM,
+                    MemoryRegionPurpose::ProtectedFirmwareRegion => GZVM_USER_MEM_REGION_PROTECT_FW,
+                    MemoryRegionPurpose::StaticSwiotlbRegion => GZVM_USER_MEM_REGION_STATIC_SWIOTLB,
+                };
                 unsafe {
                     // Safe because the guest regions are guaranteed not to overlap.
                     set_user_memory_region(
@@ -623,6 +639,7 @@ impl GeniezoneVm {
                         guest_addr.offset(),
                         size as u64,
                         host_addr as *mut u8,
+                        flags,
                     )
                 }
             },
@@ -660,12 +677,18 @@ impl GeniezoneVm {
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
+        let signal_handle = Arc::new(GeniezoneVcpuSignalHandle {
+            // SAFETY: `run_mmap` is known to be a valid pointer to a `gzvm_vcpu_run` structure from
+            // the allocation above.
+            run: unsafe { &mut *(run_mmap.as_ptr() as *mut gzvm_vcpu_run) },
+        });
+
         Ok(GeniezoneVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             id,
             run_mmap,
-            vcpu_run_handle_fingerprint: Default::default(),
+            signal_handle,
         })
     }
 
@@ -771,7 +794,7 @@ impl GeniezoneVm {
                 None => (false, 0, 4),
             },
             Datamatch::U64(v) => match v {
-                Some(u) => (true, u as u64, 8),
+                Some(u) => (true, u, 8),
                 None => (false, 0, 8),
             },
         };
@@ -789,7 +812,7 @@ impl GeniezoneVm {
             datamatch: datamatch_value,
             len: datamatch_len,
             addr: match addr {
-                IoEventAddress::Pio(p) => p as u64,
+                IoEventAddress::Pio(p) => p,
                 IoEventAddress::Mmio(m) => m,
             },
             fd: evt.as_raw_descriptor(),
@@ -910,6 +933,7 @@ impl Vm for GeniezoneVm {
             Some(gap) => gap.0,
             None => (regions.len() + self.guest_mem.num_regions() as usize) as MemSlot,
         };
+        let flags = 0;
 
         // Safe because we check that the given guest address is valid and has no overlaps. We also
         // know that the pointer and size are correct because the MemoryMapping interface ensures
@@ -921,9 +945,10 @@ impl Vm for GeniezoneVm {
                 slot,
                 read_only,
                 log_dirty_pages,
-                guest_addr.offset() as u64,
+                guest_addr.offset(),
                 size,
                 mem.as_ptr(),
+                flags,
             )
         };
 
@@ -954,7 +979,7 @@ impl Vm for GeniezoneVm {
         }
         // Safe because the slot is checked against the list of memory slots.
         unsafe {
-            set_user_memory_region(&self.vm, slot, false, false, 0, 0, std::ptr::null_mut())?;
+            set_user_memory_region(&self.vm, slot, false, false, 0, 0, std::ptr::null_mut(), 0)?;
         }
         self.mem_slot_gaps.lock().push(Reverse(slot));
         // This remove will always succeed because of the contains_key check above.
@@ -1051,21 +1076,30 @@ impl AsRawDescriptor for GeniezoneVm {
     }
 }
 
+struct GeniezoneVcpuSignalHandle {
+    run: *mut gzvm_vcpu_run,
+}
+
+// It is safe to write to the `immediate_exit` field from any thread.
+unsafe impl Send for GeniezoneVcpuSignalHandle {}
+unsafe impl Sync for GeniezoneVcpuSignalHandle {}
+
+impl VcpuSignalHandleInner for GeniezoneVcpuSignalHandle {
+    // The caller must ensure that the VCPU lifetime is at least as long as the
+    // VcpuSignalHandleInner lifetime.
+    unsafe fn signal_immediate_exit(&self) {
+        (*(self.run)).immediate_exit = 1;
+    }
+}
+
 /// A wrapper around using a Geniezone Vcpu.
 pub struct GeniezoneVcpu {
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     id: usize,
     run_mmap: MemoryMapping,
-    vcpu_run_handle_fingerprint: Arc<AtomicU64>,
+    signal_handle: Arc<GeniezoneVcpuSignalHandle>,
 }
-
-pub(super) struct VcpuThread {
-    run: *mut gzvm_vcpu_run,
-    signal_num: Option<c_int>,
-}
-
-thread_local!(static VCPU_THREAD: RefCell<Option<VcpuThread>> = RefCell::new(None));
 
 impl Vcpu for GeniezoneVcpu {
     fn try_clone(&self) -> Result<Self> {
@@ -1075,75 +1109,17 @@ impl Vcpu for GeniezoneVcpu {
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
-        let vcpu_run_handle_fingerprint = self.vcpu_run_handle_fingerprint.clone();
-
         Ok(GeniezoneVcpu {
             vm,
             vcpu,
             id: self.id,
             run_mmap,
-            vcpu_run_handle_fingerprint,
+            signal_handle: self.signal_handle.clone(),
         })
     }
 
     fn as_vcpu(&self) -> &dyn Vcpu {
         self
-    }
-
-    #[allow(clippy::cast_ptr_alignment)]
-    fn take_run_handle(&self, signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
-        fn vcpu_run_handle_drop() {
-            VCPU_THREAD.with(|v| {
-                // This assumes that a failure in `BlockedSignal::new` means the signal is already
-                // blocked and there it should not be unblocked on exit.
-                let _blocked_signal = &(*v.borrow())
-                    .as_ref()
-                    .and_then(|state| state.signal_num)
-                    .map(BlockedSignal::new);
-
-                *v.borrow_mut() = None;
-            });
-        }
-
-        // Prevent `vcpu_run_handle_drop` from being called until we actually setup the signal
-        // blocking. The handle needs to be made now so that we can use the fingerprint.
-        let vcpu_run_handle = ManuallyDrop::new(VcpuRunHandle::new(vcpu_run_handle_drop));
-
-        // AcqRel ordering is sufficient to ensure only one thread gets to set its fingerprint to
-        // this Vcpu and subsequent `run` calls will see the fingerprint.
-        if self
-            .vcpu_run_handle_fingerprint
-            .compare_exchange(
-                0,
-                vcpu_run_handle.fingerprint().as_u64(),
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return Err(Error::new(EBUSY));
-        }
-
-        // Block signal while we add -- if a signal fires (very unlikely,
-        // as this means something is trying to pause the vcpu before it has
-        // even started) it'll try to grab the read lock while this write
-        // lock is grabbed and cause a deadlock.
-        // Assuming that a failure to block means it's already blocked.
-        let _blocked_signal = signal_num.map(BlockedSignal::new);
-
-        VCPU_THREAD.with(|v| {
-            if v.borrow().is_none() {
-                *v.borrow_mut() = Some(VcpuThread {
-                    run: self.run_mmap.as_ptr() as *mut gzvm_vcpu_run,
-                    signal_num,
-                });
-                Ok(())
-            } else {
-                Err(Error::new(EBUSY))
-            }
-        })?;
-
-        Ok(ManuallyDrop::into_inner(vcpu_run_handle))
     }
 
     fn id(&self) -> usize {
@@ -1156,28 +1132,13 @@ impl Vcpu for GeniezoneVcpu {
         run.immediate_exit = exit as u8;
     }
 
-    fn set_local_immediate_exit(exit: bool) {
-        VCPU_THREAD.with(|v| {
-            if let Some(state) = &(*v.borrow()) {
-                unsafe {
-                    (*state.run).immediate_exit = exit as u8;
-                };
-            }
-        });
-    }
-
-    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
-        extern "C" fn f() {
-            GeniezoneVcpu::set_local_immediate_exit(true);
+    fn signal_handle(&self) -> VcpuSignalHandle {
+        VcpuSignalHandle {
+            inner: Arc::downgrade(&self.signal_handle) as _,
         }
-        f
     }
 
     fn pvclock_ctrl(&self) -> Result<()> {
-        Err(Error::new(libc::ENXIO))
-    }
-
-    fn set_signal_mask(&self, _signals: &[c_int]) -> Result<()> {
         Err(Error::new(libc::ENXIO))
     }
 
@@ -1188,16 +1149,7 @@ impl Vcpu for GeniezoneVcpu {
     #[allow(clippy::cast_ptr_alignment)]
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
-    fn run(&mut self, run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
-        // Acquire is used to ensure this check is ordered after the `compare_exchange` in `run`.
-        if self
-            .vcpu_run_handle_fingerprint
-            .load(std::sync::atomic::Ordering::Acquire)
-            != run_handle.fingerprint().as_u64()
-        {
-            panic!("invalid VcpuRunHandle used to run Vcpu");
-        }
-
+    fn run(&mut self) -> Result<VcpuExit> {
         // Safe because we know that our file is a VCPU fd and we verify the return result.
         let ret = unsafe { ioctl_with_val(self, GZVM_RUN(), self.run_mmap.as_ptr() as u64) };
         if ret != 0 {
@@ -1232,7 +1184,6 @@ impl Vcpu for GeniezoneVcpu {
                     GZVM_SYSTEM_EVENT_SHUTDOWN => Ok(VcpuExit::SystemEventShutdown),
                     GZVM_SYSTEM_EVENT_RESET => Ok(VcpuExit::SystemEventReset),
                     GZVM_SYSTEM_EVENT_CRASH => Ok(VcpuExit::SystemEventCrash),
-                    GZVM_SYSTEM_EVENT_S2IDLE => Ok(VcpuExit::SystemEventS2Idle),
                     _ => {
                         error!("Unknown GZVM system event {}", event_type);
                         Err(Error::new(EINVAL))

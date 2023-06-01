@@ -7,7 +7,9 @@ use std::thread::JoinHandle;
 
 use anyhow::Result;
 use arch::RunnableLinuxVm;
+use arch::VcpuArch;
 use arch::VirtioDeviceStub;
+use arch::VmArch;
 use base::AsRawDescriptor;
 use base::Event;
 use base::EventToken;
@@ -34,8 +36,6 @@ use devices::virtio::DisplayBackend;
 use devices::virtio::EventDevice;
 use devices::virtio::Gpu;
 use devices::virtio::GpuParameters;
-use hypervisor::VcpuX86_64 as VcpuArch;
-use hypervisor::VmX86_64 as VmArch;
 pub(crate) use metrics::log_descriptor;
 pub(crate) use metrics::MetricEventType;
 use sync::Mutex;
@@ -75,6 +75,7 @@ impl TaggedControlTube {
 pub(super) enum Token {
     VmEvent,
     BrokerShutdown,
+    VmControlServer,
     VmControl { index: usize },
 }
 
@@ -103,7 +104,7 @@ pub(super) fn handle_pvclock_request(tube: &Option<Tube>, command: PvClockComman
 
 // Run ime thread.
 pub(super) fn run_ime_thread(
-    product_args: RunControlArgs,
+    product_args: &mut RunControlArgs,
     exit_evt: &Event,
 ) -> Result<Option<JoinHandle<Result<()>>>> {
     Ok(None)
@@ -200,10 +201,8 @@ pub(super) fn create_gpu(
         gpu_parameters,
         None,
         event_devices,
-        /* external_blob= */ false,
-        /* system_blob= */ false,
         features,
-        BTreeMap::new(),
+        &BTreeMap::new(),
         wndproc_thread,
     ))
 }

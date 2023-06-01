@@ -5,6 +5,9 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use anyhow::Context;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 
 cfg_if::cfg_if! {
@@ -543,6 +546,11 @@ impl IrqChip for WhpxSplitIrqChip {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct WhpxSplitIrqChipSnapshot {
+    routes: Vec<IrqRoute>,
+}
+
 impl IrqChipX86_64 for WhpxSplitIrqChip {
     fn try_box_clone(&self) -> Result<Box<dyn IrqChipX86_64>> {
         Ok(Box::new(self.try_clone()?))
@@ -607,5 +615,19 @@ impl IrqChipX86_64 for WhpxSplitIrqChip {
     /// devices::Pit uses 0x61.
     fn pit_uses_speaker_port(&self) -> bool {
         true
+    }
+
+    fn snapshot_chip_specific(&self) -> anyhow::Result<serde_json::Value> {
+        serde_json::to_value(&WhpxSplitIrqChipSnapshot {
+            routes: self.routes.lock().get_routes(),
+        })
+        .context("failed to snapshot WhpxSplitIrqChip")
+    }
+
+    fn restore_chip_specific(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let mut deser: WhpxSplitIrqChipSnapshot =
+            serde_json::from_value(data).context("failed to deserialize WhpxSplitIrqChip")?;
+        self.set_irq_routes(deser.routes.as_slice())?;
+        Ok(())
     }
 }

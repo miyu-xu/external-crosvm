@@ -20,7 +20,7 @@ use audio_streams::PlaybackBufferStream;
 use audio_streams::SampleFormat;
 use base::error;
 use base::info;
-use base::set_audio_thread_priorities;
+use base::set_audio_thread_priority;
 use base::set_thread_priority;
 use base::warn;
 use base::Event;
@@ -251,7 +251,7 @@ impl Ac97BusMaster {
                     thread::Builder::new()
                         .name("Ac97BusMaster playback thread".to_string())
                         .spawn(move || {
-                            let thread_priority_result = set_audio_thread_priorities();
+                            let thread_priority_result = set_audio_thread_priority();
                             if thread_priority_result.is_err() {
                                 warn!("Failed to set audio thread to PRO AUDIO.");
                             }
@@ -493,7 +493,7 @@ fn capture_buffer(
     let func_regs = regs.func_regs_mut(Ac97Function::Input);
     if let Some(buffer) = next_guest_buffer(func_regs, mem)? {
         in_buffer
-            .copy_cb(buffer.size() as usize, |inb| buffer.copy_from(inb))
+            .copy_cb(buffer.size(), |inb| buffer.copy_from(inb))
             .map_err(AudioError::CaptureCopyFailure)?;
     }
     Ok(())

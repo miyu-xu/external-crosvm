@@ -24,6 +24,10 @@ use base::ioctl_with_val;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::FromRawDescriptor;
+use base::MappedRegion;
+use base::MemoryMapping;
+use base::MemoryMappingBuilder;
+use base::MemoryMappingUnix;
 use base::RawDescriptor;
 use thiserror::Error as ThisError;
 use userfaultfd::Error as UffdError;
@@ -32,6 +36,8 @@ use userfaultfd::FeatureFlags;
 use userfaultfd::IoctlFlags;
 use userfaultfd::Uffd;
 use userfaultfd::UffdBuilder;
+
+use crate::pagesize::pages_to_bytes;
 
 const DEV_USERFAULTFD_PATH: &str = "/dev/userfaultfd";
 const USERFAULTFD_IOC: u32 = 0xAA;
@@ -61,13 +67,18 @@ pub enum Error {
     #[error("the uffd in the corresponding process is already closed")]
     /// The corresponding process is already dead or has run exec(2).
     UffdClosed,
+    #[error("clone error: {0:?}")]
+    /// Failed to clone userfaultfd.
+    Clone(base::Error),
 }
 
 impl From<UffdError> for Error {
     fn from(e: UffdError) -> Self {
         match e {
             UffdError::PartiallyCopied(copied) => Self::PartiallyCopied(copied),
+            UffdError::CopyFailed(errno) if errno as i32 == libc::ESRCH => Self::UffdClosed,
             UffdError::ZeropageFailed(errno) if errno as i32 == libc::EEXIST => Self::PageExist,
+            UffdError::ZeropageFailed(errno) if errno as i32 == libc::ESRCH => Self::UffdClosed,
             other => Self::Userfaultfd(other),
         }
     }
@@ -144,6 +155,12 @@ pub struct Factory {
     dev_file: Option<File>,
 }
 
+impl Default for Factory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Factory {
     /// Create [Factory] and try open `/dev/userfaultfd`.
     ///
@@ -201,6 +218,12 @@ impl Factory {
             Userfaultfd::new().context("create userfaultfd")
         }
     }
+
+    /// Create a new [Factory] object.
+    pub fn try_clone(&self) -> anyhow::Result<Self> {
+        let dev_file = self.dev_file.as_ref().map(File::try_clone).transpose()?;
+        Ok(Self { dev_file })
+    }
 }
 
 impl AsRawDescriptors for Factory {
@@ -239,6 +262,7 @@ impl AsRawDescriptors for Factory {
 ///
 /// Filling the (2) pages potentially may break the memory used by Rust. But the safety should be
 /// examined at `MADV_REMOVE` and `UFFDIO_REGISTER` timing.
+#[derive(Debug)]
 pub struct Userfaultfd {
     uffd: Uffd,
 }
@@ -359,6 +383,14 @@ impl Userfaultfd {
     pub fn read_event(&self) -> Result<Option<UffdEvent>> {
         Ok(self.uffd.read_event()?)
     }
+
+    /// Try to clone [Userfaultfd]
+    pub fn try_clone(&self) -> Result<Self> {
+        let dup_desc = base::clone_descriptor(self).map_err(Error::Clone)?;
+        // SAFETY: no one owns dup_desc.
+        let uffd = unsafe { Self::from_raw_descriptor(dup_desc) };
+        Ok(uffd)
+    }
 }
 
 impl From<Uffd> for Userfaultfd {
@@ -376,5 +408,58 @@ impl FromRawDescriptor for Userfaultfd {
 impl AsRawDescriptor for Userfaultfd {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.uffd.as_raw_fd()
+    }
+}
+
+/// Check whether the process for the [Userfaultfd] is dead or not.
+pub trait DeadUffdChecker {
+    /// Register the [Userfaultfd]
+    fn register(&self, uffd: &Userfaultfd) -> anyhow::Result<()>;
+    /// Check whether the [Userfaultfd] is dead or not.
+    fn is_dead(&self, uffd: &Userfaultfd) -> bool;
+    /// Free the internal state.
+    fn reset(&self) -> anyhow::Result<()>;
+}
+
+/// Check whether the process for the [Userfaultfd] is dead or not.
+///
+/// [DeadUffdCheckerImpl] uses `UFFD_ZERO` on a dummy mmap page to check the liveness.
+///
+/// This must keep alive on the main process to make the dummy mmap present in all descendant processes.
+pub struct DeadUffdCheckerImpl {
+    dummy_mmap: MemoryMapping,
+}
+
+impl DeadUffdCheckerImpl {
+    /// Creates [DeadUffdCheckerImpl].
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(Self {
+            dummy_mmap: MemoryMappingBuilder::new(pages_to_bytes(1))
+                .build()
+                .context("create dummy mmap")?,
+        })
+    }
+}
+
+impl DeadUffdChecker for DeadUffdCheckerImpl {
+    fn register(&self, uffd: &Userfaultfd) -> anyhow::Result<()> {
+        // SAFETY: no one except DeadUffdCheckerImpl access dummy_mmap.
+        unsafe { uffd.register(self.dummy_mmap.as_ptr() as usize, pages_to_bytes(1)) }
+            .map(|_| ())
+            .context("register to dummy mmap")
+    }
+
+    fn is_dead(&self, uffd: &Userfaultfd) -> bool {
+        // UFFDIO_ZEROPAGE returns ESRCH for dead uffd.
+        matches!(
+            uffd.zero(self.dummy_mmap.as_ptr() as usize, pages_to_bytes(1), false),
+            Err(Error::UffdClosed)
+        )
+    }
+
+    fn reset(&self) -> anyhow::Result<()> {
+        self.dummy_mmap
+            .remove_range(0, pages_to_bytes(1))
+            .context("free dummy mmap")
     }
 }

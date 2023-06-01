@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::fmt;
 use std::io;
 use std::io::Write;
 use std::mem;
 use std::net::Ipv4Addr;
 use std::os::raw::c_uint;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use base::error;
@@ -29,6 +31,7 @@ use net_util::TapT;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
+use sync::Mutex;
 use thiserror::Error as ThisError;
 use virtio_sys::virtio_net;
 use virtio_sys::virtio_net::virtio_net_hdr_v1;
@@ -43,14 +46,12 @@ use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 
 use super::copy_config;
-use super::DescriptorError;
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
 use super::Reader;
 use super::SignalableInterrupt;
 use super::VirtioDevice;
-use super::Writer;
 use crate::Suspendable;
 
 /// The maximum buffer size when segmentation offload is enabled. This
@@ -75,15 +76,15 @@ pub enum NetError {
     /// Creating WaitContext failed.
     #[error("failed to create wait context: {0}")]
     CreateWaitContext(SysError),
-    /// Descriptor chain was invalid.
-    #[error("failed to valildate descriptor chain: {0}")]
-    DescriptorChain(DescriptorError),
     /// Adding the tap descriptor back to the event context failed.
     #[error("failed to add tap trigger to event context: {0}")]
     EventAddTap(SysError),
     /// Removing the tap descriptor from the event context failed.
     #[error("failed to remove tap trigger from event context: {0}")]
     EventRemoveTap(SysError),
+    /// Invalid control command
+    #[error("invalid control command")]
+    InvalidCmd,
     /// Error reading data from control queue.
     #[error("failed to read control message data: {0}")]
     ReadCtrlData(io::Error),
@@ -116,6 +117,9 @@ pub enum NetError {
     /// Setting tap netmask failed.
     #[error("failed to set tap netmask: {0}")]
     TapSetNetmask(TapError),
+    /// Setting tap offload failed.
+    #[error("failed to set tap offload: {0}")]
+    TapSetOffload(TapError),
     /// Setting vnet header size failed.
     #[error("failed to set vnet header size: {0}")]
     TapSetVnetHdrSize(TapError),
@@ -216,74 +220,83 @@ pub struct VirtioNetConfig {
     mtu: Le16,
 }
 
+fn process_ctrl_request<T: TapT>(
+    reader: &mut Reader,
+    tap: &mut T,
+    acked_features: u64,
+    vq_pairs: u16,
+) -> Result<(), NetError> {
+    let ctrl_hdr: virtio_net_ctrl_hdr = reader.read_obj().map_err(NetError::ReadCtrlHeader)?;
+
+    match ctrl_hdr.class as c_uint {
+        VIRTIO_NET_CTRL_GUEST_OFFLOADS => {
+            if ctrl_hdr.cmd != VIRTIO_NET_CTRL_GUEST_OFFLOADS_SET as u8 {
+                error!(
+                    "invalid cmd for VIRTIO_NET_CTRL_GUEST_OFFLOADS: {}",
+                    ctrl_hdr.cmd
+                );
+                return Err(NetError::InvalidCmd);
+            }
+            let offloads: Le64 = reader.read_obj().map_err(NetError::ReadCtrlData)?;
+            let tap_offloads = virtio_features_to_tap_offload(offloads.into());
+            tap.set_offload(tap_offloads)
+                .map_err(NetError::TapSetOffload)?;
+        }
+        VIRTIO_NET_CTRL_MQ => {
+            if ctrl_hdr.cmd == VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET as u8 {
+                let pairs: Le16 = reader.read_obj().map_err(NetError::ReadCtrlData)?;
+                // Simple handle it now
+                if acked_features & 1 << virtio_net::VIRTIO_NET_F_MQ == 0
+                    || pairs.to_native() != vq_pairs
+                {
+                    error!(
+                        "Invalid VQ_PAIRS_SET cmd, driver request pairs: {}, device vq pairs: {}",
+                        pairs.to_native(),
+                        vq_pairs
+                    );
+                    return Err(NetError::InvalidCmd);
+                }
+            }
+        }
+        _ => {
+            warn!(
+                "unimplemented class for VIRTIO_NET_CTRL_GUEST_OFFLOADS: {}",
+                ctrl_hdr.class
+            );
+            return Err(NetError::InvalidCmd);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn process_ctrl<I: SignalableInterrupt, T: TapT>(
     interrupt: &I,
-    ctrl_queue: &mut Queue,
+    ctrl_queue: &Arc<Mutex<Queue>>,
     mem: &GuestMemory,
     tap: &mut T,
     acked_features: u64,
     vq_pairs: u16,
 ) -> Result<(), NetError> {
-    while let Some(desc_chain) = ctrl_queue.pop(mem) {
-        let index = desc_chain.index;
-
-        let mut reader =
-            Reader::new(mem.clone(), desc_chain.clone()).map_err(NetError::DescriptorChain)?;
-        let mut writer = Writer::new(mem.clone(), desc_chain).map_err(NetError::DescriptorChain)?;
-        let ctrl_hdr: virtio_net_ctrl_hdr = reader.read_obj().map_err(NetError::ReadCtrlHeader)?;
-
-        let mut write_error = || {
-            writer
+    let mut ctrl_queue = ctrl_queue
+        .try_lock()
+        .expect("Lock should not be unavailable");
+    while let Some(mut desc_chain) = ctrl_queue.pop(mem) {
+        if let Err(e) = process_ctrl_request(&mut desc_chain.reader, tap, acked_features, vq_pairs)
+        {
+            error!("process_ctrl_request failed: {}", e);
+            desc_chain
+                .writer
                 .write_all(&[VIRTIO_NET_ERR as u8])
                 .map_err(NetError::WriteAck)?;
-            ctrl_queue.add_used(mem, index, writer.bytes_written() as u32);
-            Ok(())
-        };
-
-        match ctrl_hdr.class as c_uint {
-            VIRTIO_NET_CTRL_GUEST_OFFLOADS => {
-                if ctrl_hdr.cmd != VIRTIO_NET_CTRL_GUEST_OFFLOADS_SET as u8 {
-                    error!(
-                        "invalid cmd for VIRTIO_NET_CTRL_GUEST_OFFLOADS: {}",
-                        ctrl_hdr.cmd
-                    );
-                    write_error()?;
-                    continue;
-                }
-                let offloads: Le64 = reader.read_obj().map_err(NetError::ReadCtrlData)?;
-                let tap_offloads = virtio_features_to_tap_offload(offloads.into());
-                if let Err(e) = tap.set_offload(tap_offloads) {
-                    error!("Failed to set tap itnerface offload flags: {}", e);
-                    write_error()?;
-                    continue;
-                }
-
-                let ack = VIRTIO_NET_OK as u8;
-                writer.write_all(&[ack]).map_err(NetError::WriteAck)?;
-            }
-            VIRTIO_NET_CTRL_MQ => {
-                if ctrl_hdr.cmd == VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET as u8 {
-                    let pairs: Le16 = reader.read_obj().map_err(NetError::ReadCtrlData)?;
-                    // Simple handle it now
-                    if acked_features & 1 << virtio_net::VIRTIO_NET_F_MQ == 0
-                        || pairs.to_native() != vq_pairs
-                    {
-                        error!("Invalid VQ_PAIRS_SET cmd, driver request pairs: {}, device vq pairs: {}",
-                                   pairs.to_native(), vq_pairs);
-                        write_error()?;
-                        continue;
-                    }
-                    let ack = VIRTIO_NET_OK as u8;
-                    writer.write_all(&[ack]).map_err(NetError::WriteAck)?;
-                }
-            }
-            _ => warn!(
-                "unimplemented class for VIRTIO_NET_CTRL_GUEST_OFFLOADS: {}",
-                ctrl_hdr.class
-            ),
+        } else {
+            desc_chain
+                .writer
+                .write_all(&[VIRTIO_NET_OK as u8])
+                .map_err(NetError::WriteAck)?;
         }
-
-        ctrl_queue.add_used(mem, index, writer.bytes_written() as u32);
+        let len = desc_chain.writer.bytes_written() as u32;
+        ctrl_queue.add_used(mem, desc_chain, len);
     }
 
     ctrl_queue.trigger_interrupt(mem, interrupt);
@@ -309,9 +322,9 @@ pub enum Token {
 pub(super) struct Worker<T: TapT> {
     pub(super) interrupt: Interrupt,
     pub(super) mem: GuestMemory,
-    pub(super) rx_queue: Queue,
-    pub(super) tx_queue: Queue,
-    pub(super) ctrl_queue: Option<Queue>,
+    pub(super) rx_queue: Arc<Mutex<Queue>>,
+    pub(super) tx_queue: Arc<Mutex<Queue>>,
+    pub(super) ctrl_queue: Option<Arc<Mutex<Queue>>>,
     pub(super) tap: T,
     #[cfg(windows)]
     pub(super) overlapped_wrapper: OverlappedWrapper,
@@ -332,12 +345,7 @@ where
     T: TapT + ReadNotifier,
 {
     fn process_tx(&mut self) {
-        process_tx(
-            &self.interrupt,
-            &mut self.tx_queue,
-            &self.mem,
-            &mut self.tap,
-        )
+        process_tx(&self.interrupt, &self.tx_queue, &self.mem, &mut self.tap)
     }
 
     fn process_ctrl(&mut self) -> Result<(), NetError> {
@@ -401,10 +409,12 @@ where
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::RxTap => {
+                        let _trace = cros_tracing::trace_event!(VirtioNet, "handle RxTap event");
                         self.handle_rx_token(&wait_ctx)?;
                         tap_polling_enabled = false;
                     }
                     Token::RxQueue => {
+                        let _trace = cros_tracing::trace_event!(VirtioNet, "handle RxQueue event");
                         if let Err(e) = rx_queue_evt.wait() {
                             error!("net: error reading rx queue Event: {}", e);
                             break 'wait;
@@ -413,6 +423,7 @@ where
                         tap_polling_enabled = true;
                     }
                     Token::TxQueue => {
+                        let _trace = cros_tracing::trace_event!(VirtioNet, "handle TxQueue event");
                         if let Err(e) = tx_queue_evt.wait() {
                             error!("net: error reading tx queue Event: {}", e);
                             break 'wait;
@@ -420,6 +431,8 @@ where
                         self.process_tx();
                     }
                     Token::CtrlQueue => {
+                        let _trace =
+                            cros_tracing::trace_event!(VirtioNet, "handle CtrlQueue event");
                         if let Some(ctrl_evt) = &ctrl_queue_evt {
                             if let Err(e) = ctrl_evt.wait() {
                                 error!("net: error reading ctrl queue Event: {}", e);
@@ -434,6 +447,8 @@ where
                         }
                     }
                     Token::InterruptResample => {
+                        let _trace =
+                            cros_tracing::trace_event!(VirtioNet, "handle InterruptResample event");
                         // We can unwrap safely because interrupt must have the event.
                         let _ = self.interrupt.get_resample_evt().unwrap().wait();
                         self.interrupt.do_interrupt_resample();
@@ -538,9 +553,9 @@ where
         mac_addr: Option<MacAddress>,
         #[cfg(windows)] slirp_kill_evt: Option<Event>,
     ) -> Result<Self, NetError> {
-        Ok(Self {
+        let net = Self {
             guest_mac: mac_addr.map(|mac| mac.octets()),
-            queue_sizes: vec![QUEUE_SIZE; (taps.len() * 2 + 1) as usize].into_boxed_slice(),
+            queue_sizes: vec![QUEUE_SIZE; taps.len() * 2 + 1].into_boxed_slice(),
             worker_threads: Vec::new(),
             taps,
             avail_features,
@@ -548,7 +563,9 @@ where
             mtu,
             #[cfg(windows)]
             slirp_kill_evt: None,
-        })
+        };
+        cros_tracing::trace_simple_print!("New Net device created: {:?}", net);
+        Ok(net)
     }
 
     /// Returns the maximum number of receive/transmit queue pairs for this device.
@@ -714,7 +731,7 @@ where
             let (tx_queue, tx_queue_evt) = queues.remove(0);
             let (ctrl_queue, ctrl_queue_evt) = if first_queue && ctrl_vq_enabled {
                 let (queue, evt) = queues.remove(queues.len() - 1);
-                (Some(queue), Some(evt))
+                (Some(Arc::new(Mutex::new(queue))), Some(evt))
             } else {
                 (None, None)
             };
@@ -728,8 +745,8 @@ where
                     let mut worker = Worker {
                         interrupt,
                         mem: memory,
-                        rx_queue,
-                        tx_queue,
+                        rx_queue: Arc::new(Mutex::new(rx_queue)),
+                        tx_queue: Arc::new(Mutex::new(tx_queue)),
                         ctrl_queue,
                         tap,
                         #[cfg(windows)]
@@ -756,6 +773,7 @@ where
                     worker
                 }));
         }
+        cros_tracing::trace_simple_print!("Net device activated: {:?}", self);
         Ok(())
     }
 
@@ -770,6 +788,23 @@ where
 }
 
 impl<T> Suspendable for Net<T> where T: 'static + TapT + ReadNotifier {}
+
+impl<T> std::fmt::Debug for Net<T>
+where
+    T: TapT + ReadNotifier,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Net")
+            .field("guest_mac", &self.guest_mac)
+            .field("queue_sizes", &self.queue_sizes)
+            .field("worker_threads_size", &self.worker_threads.len())
+            .field("taps_size", &self.taps.len())
+            .field("avail_features", &self.avail_features)
+            .field("acked_features", &self.acked_features)
+            .field("mtu", &self.mtu)
+            .finish()
+    }
+}
 
 #[cfg(test)]
 mod tests {
