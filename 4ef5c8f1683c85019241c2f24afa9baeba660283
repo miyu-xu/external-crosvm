@@ -35,6 +35,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ca3eabfb_6f682bd0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-01T10:45:57Z",
+      "side": 1,
+      "message": "Sorry, it took some time to resolve the ioctl concern. So the patchset#6 addresses this comment by avoiding the need to have a new ioctl completely.\n\nIn addition the remaining changes are mostly adapted to the latest croscm tip code.\nRequest you to review the latest patchset.",
+      "parentUuid": "2ca63904_06b22800",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "662a7c85_bab64b57",
@@ -83,6 +101,24 @@
       "writtenOn": "2023-01-05T02:46:22Z",
       "side": 1,
       "message": "discussing in the bug, but this ioctl number is already claimed by `VHOST_VDPA_GET_GROUP_NUM` IIUC",
+      "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e1ccde9_d8bcb473",
+        "filename": "virtio_sys/src/lib.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 78,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-01T10:45:57Z",
+      "side": 1,
+      "message": "Sorry, it took some time to resolve the ioctl concern. So the patchset#6 addresses this comment by avoiding the need to have a new ioctl completely.",
+      "parentUuid": "90c3e224_25f557cd",
       "revId": "4ef5c8f1683c85019241c2f24afa9baeba660283",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
