@@ -1,0 +1,72 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a35266d2_3cd54325",
+        "filename": "devices/src/virtio/mod.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 138,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-06-01T22:40:32Z",
+      "side": 1,
+      "message": "nit: please sort this in the same order as the numeric IDs (between Mac80211HwSim and VideoEnc)",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "20f2271c_3ddad86f",
+        "filename": "devices/src/virtio/vhost/mod.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 101,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-06-01T22:40:32Z",
+      "side": 1,
+      "message": "nit: `Error::VhostScmiStart` doesn\u0027t seem to be used anywhere and can probably be dropped",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4fbfb4d7_ec0d37e7",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 2147,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-06-01T22:40:32Z",
+      "side": 1,
+      "message": "The command line option should probably also have the same `#[cfg()]` checks as elsewhere (unix + arm/aarch64) so it does not show up in `--help` on unsupported platforms.",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "03234a90_114693aa",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 2150,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-06-01T22:40:32Z",
+      "side": 1,
+      "message": "Please use `Option\u003cbool\u003e` here (see reasoning in this patch: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4414502)",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
