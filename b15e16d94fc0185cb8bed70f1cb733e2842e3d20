@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "67b99867_fd7494aa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:16:36Z",
+      "side": 1,
+      "message": "Addressed all the open comments from https://android-review.googlesource.com/c/platform/external/crosvm/+/2299838",
+      "revId": "b15e16d94fc0185cb8bed70f1cb733e2842e3d20",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
