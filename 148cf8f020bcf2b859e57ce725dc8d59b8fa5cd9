@@ -35,6 +35,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "513ca278_9c45caa3",
+        "filename": "devices/src/virtio/mod.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 138,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:11:07Z",
+      "side": 1,
+      "message": "I think it should be after VIRTIO_ID_VIDEO_DECODER whose id is 31. I will update it.",
+      "parentUuid": "a35266d2_3cd54325",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "20f2271c_3ddad86f",
@@ -48,6 +66,24 @@
       "writtenOn": "2023-06-01T22:40:32Z",
       "side": 1,
       "message": "nit: `Error::VhostScmiStart` doesn\u0027t seem to be used anywhere and can probably be dropped",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e0c8f4c4_db974f9a",
+        "filename": "devices/src/virtio/vhost/mod.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 101,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "20f2271c_3ddad86f",
       "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -69,6 +105,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "39cefe5d_c73421ff",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 2147,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4fbfb4d7_ec0d37e7",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "03234a90_114693aa",
@@ -82,6 +136,24 @@
       "writtenOn": "2023-06-01T22:40:32Z",
       "side": 1,
       "message": "Please use `Option\u003cbool\u003e` here (see reasoning in this patch: https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4414502)",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a3649f5d_0e156751",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 7
+      },
+      "lineNbr": 2150,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:11:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "03234a90_114693aa",
       "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
