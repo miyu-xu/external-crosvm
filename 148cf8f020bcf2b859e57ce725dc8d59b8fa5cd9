@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3af0e660_f07cedaa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 7
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-02T05:17:24Z",
+      "side": 1,
+      "message": "Done. It is uploaded - https://android-review.googlesource.com/c/platform/external/crosvm/+/2612949",
+      "parentUuid": "18768670_80318c9d",
+      "revId": "148cf8f020bcf2b859e57ce725dc8d59b8fa5cd9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a35266d2_3cd54325",
