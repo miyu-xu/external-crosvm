@@ -93,12 +93,14 @@ pub fn set_vcpu_thread_scheduling(
         }
     }
 
+    /*
     if !enable_per_vm_core_scheduling {
         // Do per-vCPU core scheduling by setting a unique cookie to each vCPU.
         if let Err(e) = enable_core_scheduling() {
             error!("Failed to enable core scheduling: {}", e);
         }
     }
+    */
 
     // Move vcpu thread to cgroup
     if let Some(mut f) = vcpu_cgroup_tasks_file {
