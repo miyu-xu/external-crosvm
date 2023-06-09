@@ -1038,6 +1038,10 @@ mod serde_serial_params {
     }
 }
 
+fn bool_default_true() -> bool {
+    true
+}
+
 /// Aggregate of all configurable options for a running VM.
 #[derive(Serialize, Deserialize)]
 #[remain::sorted]
@@ -1116,6 +1120,8 @@ pub struct Config {
     #[cfg(windows)]
     pub host_guid: Option<String>,
     pub hugepages: bool,
+    #[serde(default = "bool_default_true")]
+    pub hyperthread_protection: bool,
     pub hypervisor: Option<HypervisorKind>,
     pub init_memory: Option<u64>,
     pub initrd_path: Option<PathBuf>,
@@ -1329,6 +1335,7 @@ impl Default for Config {
             #[cfg(windows)]
             product_channel: None,
             hugepages: false,
+            hyperthread_protection: true,
             hypervisor: None,
             init_memory: None,
             initrd_path: None,
