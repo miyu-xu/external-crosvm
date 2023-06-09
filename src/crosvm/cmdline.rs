@@ -1354,6 +1354,11 @@ pub struct RunCommand {
     /// advise the kernel to use Huge Pages for guest memory mappings
     pub hugepages: Option<bool>,
 
+    #[argh(option, default = "true")]
+    #[merge(strategy = overwrite)]
+    /// protect VM threads from hyperthreading-based attacks by scheduling them on different cores
+    pub hyperthread_protection: bool,
+
     /// hypervisor backend
     #[argh(option)]
     #[merge(strategy = overwrite_option)]
@@ -2405,6 +2410,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         cfg.params.extend(cmd.params);
 
         cfg.per_vm_core_scheduling = cmd.per_vm_core_scheduling.unwrap_or_default();
+
+        cfg.hyperthread_protection = cmd.hyperthread_protection;
 
         // `--cpu` parameters.
         {
