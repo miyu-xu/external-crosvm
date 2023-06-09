@@ -779,6 +779,10 @@ fn overwrite<T>(left: &mut T, right: T) {
     let _ = std::mem::replace(left, right);
 }
 
+fn bool_default_true() -> bool {
+    true
+}
+
 /// User-specified configuration for the `crosvm run` command.
 ///
 /// All fields of this structure MUST be either an `Option` or a `Vec` of their type. Arguments of
@@ -1173,6 +1177,13 @@ pub struct RunCommand {
     /// pass power modeling param from to guest OS; scalar coefficient used in conjuction with
     /// voltage and frequency for calculating power; in units of uW/MHz/^2
     pub dynamic_power_coefficient: Option<BTreeMap<usize, u32>>,
+
+    #[argh(option, default = "true")]
+    #[merge(strategy = overwrite)]
+    #[serde(default = "bool_default_true")]
+    /// protect VM threads from hyperthreading-based attacks by scheduling them on different cores.
+    /// Enabled by default, and required for per_vm_core_scheduling.
+    pub enable_core_scheduling: bool,
 
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
@@ -2407,6 +2418,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.params.extend(cmd.params);
 
+        cfg.enable_core_scheduling = cmd.enable_core_scheduling;
         cfg.per_vm_core_scheduling = cmd.per_vm_core_scheduling.unwrap_or_default();
 
         // `--cpu` parameters.
