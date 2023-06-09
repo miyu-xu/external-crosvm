@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "babf750d_a3bd65b6",
+        "filename": "jail/seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-06-09T22:56:38Z",
+      "side": 1,
+      "message": "Any reason why net is added at this specific line?\nDoes it make any difference if it\u0027s added at the end? Could it incur less changes in other files?\nI see there\u0027s some number changes in `policy-inliner.sh`, simply wondering if it\u0027s necessary.",
+      "range": {
+        "startLine": 66,
+        "startChar": 0,
+        "endLine": 66,
+        "endChar": 26
+      },
+      "revId": "8c554d8d402e0969b07248e75cf47ec23003c2a3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
