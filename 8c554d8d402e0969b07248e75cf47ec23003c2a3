@@ -22,6 +22,30 @@
       },
       "revId": "8c554d8d402e0969b07248e75cf47ec23003c2a3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "25937f10_b16a3147",
+        "filename": "jail/seccomp/gen_android.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-06-09T23:45:47Z",
+      "side": 1,
+      "message": "Some of the `policy-inliner.sh` arguments are optional because they are only present for x86. `net.policy` is available on x86 and arm64, so I can make it required. Since it is required, I thought it was neatest to sort it next to the other required arguments and so I put it after `serial.policy` (the last required arg).\n\nFor this `--hide` list, there is no good reason except to make it consistent with the `policy-inliner.sh` list, but that is minor.",
+      "parentUuid": "babf750d_a3bd65b6",
+      "range": {
+        "startLine": 66,
+        "startChar": 0,
+        "endLine": 66,
+        "endChar": 26
+      },
+      "revId": "8c554d8d402e0969b07248e75cf47ec23003c2a3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
