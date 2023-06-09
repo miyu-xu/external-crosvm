@@ -1116,6 +1116,7 @@ pub struct Config {
     #[cfg(windows)]
     pub host_guid: Option<String>,
     pub hugepages: bool,
+    pub hyperthread_protection: bool,
     pub hypervisor: Option<HypervisorKind>,
     pub init_memory: Option<u64>,
     pub initrd_path: Option<PathBuf>,
@@ -1329,6 +1330,7 @@ impl Default for Config {
             #[cfg(windows)]
             product_channel: None,
             hugepages: false,
+            hyperthread_protection: true,
             hypervisor: None,
             init_memory: None,
             initrd_path: None,
