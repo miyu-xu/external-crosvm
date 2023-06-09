@@ -24,7 +24,7 @@ use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
 /// Worker that takes care of running the vhost device.
 pub struct Worker<T: Vhost> {
     interrupt: Interrupt,
-    queues: Vec<(Queue, Event)>,
+    pub queues: Vec<(Queue, Event)>,
     pub vhost_handle: T,
     pub vhost_interrupt: Vec<Event>,
     acked_features: u64,
@@ -58,6 +58,7 @@ impl<T: Vhost> Worker<T> {
         mem: GuestMemory,
         queue_sizes: &[u16],
         activate_vqs: F1,
+        queue_vrings_base: Option<Vec<(usize, u16)>>,
     ) -> Result<()>
     where
         F1: FnOnce(&T) -> Result<()>,
@@ -106,9 +107,21 @@ impl<T: Vhost> Worker<T> {
                     None,
                 )
                 .map_err(Error::VhostSetVringAddr)?;
-            self.vhost_handle
-                .set_vring_base(queue_index, 0)
-                .map_err(Error::VhostSetVringBase)?;
+            if let Some(vrings_base) = &queue_vrings_base {
+                let base = if let Some((pos, base)) = vrings_base.get(queue_index) {
+                    assert_eq!(*pos, queue_index);
+                    base
+                } else {
+                    return Err(Error::VringBaseMissing);
+                };
+                self.vhost_handle
+                    .set_vring_base(queue_index, *base)
+                    .map_err(Error::VhostSetVringBase)?;
+            } else {
+                self.vhost_handle
+                    .set_vring_base(queue_index, 0)
+                    .map_err(Error::VhostSetVringBase)?;
+            }
             self.set_vring_call_for_entry(queue_index, queue.vector() as usize)?;
             self.vhost_handle
                 .set_vring_kick(queue_index, queue_evt)
