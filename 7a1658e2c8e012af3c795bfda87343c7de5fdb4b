@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0a7e2316_3bef80ef",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-14T14:19:45Z",
+      "side": 1,
+      "message": "Trivial rebase to resolve merge conflicts reported by presubmit",
+      "revId": "7a1658e2c8e012af3c795bfda87343c7de5fdb4b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
