@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# DO NOT MODIFY DIRECTLY, ALL CHANGES WILL BE OVERWRITTEN BY gen_android.sh
-
 PRODUCT_PACKAGES += \
     9p_device.policy \
     balloon_device.policy \
@@ -35,8 +33,6 @@ PRODUCT_PACKAGES += \
     pmem_device.policy \
     rng_device.policy \
     serial_device.policy \
-    serial_device_vhost_user.policy \
-    serial_device_vvu.policy \
     snd_cras_device.policy \
     snd_null_device.policy \
     tpm_device.policy \
@@ -70,8 +66,6 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     system/etc/seccomp_policy/crosvm/pmem_device.policy \
     system/etc/seccomp_policy/crosvm/rng_device.policy \
     system/etc/seccomp_policy/crosvm/serial_device.policy \
-    system/etc/seccomp_policy/crosvm/serial_device_vhost_user.policy \
-    system/etc/seccomp_policy/crosvm/serial_device_vvu.policy \
     system/etc/seccomp_policy/crosvm/snd_cras_device.policy \
     system/etc/seccomp_policy/crosvm/snd_null_device.policy \
     system/etc/seccomp_policy/crosvm/tpm_device.policy \
