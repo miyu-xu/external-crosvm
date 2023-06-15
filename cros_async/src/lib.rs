@@ -66,8 +66,6 @@ mod queue;
 mod select;
 pub mod sync;
 pub mod sys;
-#[cfg(unix)]
-pub use sys::unix::uring_executor::is_uring_stable;
 pub use sys::Executor;
 pub use sys::ExecutorKind;
 pub use sys::TaskHandle;

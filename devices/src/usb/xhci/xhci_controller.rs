@@ -288,15 +288,15 @@ impl PciDevice for XhciController {
         self.config_regs.write_reg(reg_idx, offset, data)
     }
 
-    fn read_bar(&mut self, bar_index: usize, offset: u64, data: &mut [u8]) {
-        if bar_index != 0 {
+    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
+        let bar0 = self.config_regs.get_bar_addr(0);
+        if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-
         match &self.state {
             XhciControllerState::Initialized { mmio, .. } => {
                 // Read bar would still work even if it's already failed.
-                mmio.read(offset, data);
+                mmio.read(addr - bar0, data);
             }
             _ => {
                 error!("xhci controller is in a wrong state");
@@ -304,17 +304,17 @@ impl PciDevice for XhciController {
         }
     }
 
-    fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
-        if bar_index != 0 {
+    fn write_bar(&mut self, addr: u64, data: &[u8]) {
+        let bar0 = self.config_regs.get_bar_addr(0);
+        if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-
         match &self.state {
             XhciControllerState::Initialized {
                 mmio, fail_handle, ..
             } => {
                 if !fail_handle.failed() {
-                    mmio.write(offset, data);
+                    mmio.write(addr - bar0, data);
                 }
             }
             _ => {

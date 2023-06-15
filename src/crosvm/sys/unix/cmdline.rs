@@ -11,7 +11,6 @@ use devices::virtio::block::DiskOption;
 use devices::virtio::vhost::user::device;
 use devices::virtio::vhost::user::VhostUserParams;
 use devices::virtio::vsock::VsockConfig;
-use devices::virtio::NetParameters;
 use devices::SerialParameters;
 use jail::JailConfig;
 
@@ -36,7 +35,7 @@ fn parse_vu_serial_options(s: &str) -> Result<VhostUserParams<SerialParameters>,
 }
 
 #[argh_helpers::pad_description_for_argh]
-#[derive(FromArgs, Debug)]
+#[derive(FromArgs)]
 #[argh(subcommand, name = "devices")]
 /// Start one or several jailed device processes.
 pub struct DevicesCommand {
@@ -67,7 +66,8 @@ pub struct DevicesCommand {
         arg_name = "vhost=PATH,type=TYPE,[hardware=HW,num=NUM,path=PATH,input=PATH,console,earlycon,stdin]",
         from_str_fn(parse_vu_serial_options)
     )]
-    /// start a serial device.
+    /// comma separated key=value pairs for setting up serial
+    /// devices. Can be given more than once.
     /// Possible key values:
     ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
     ///        This parameter must be given in first position.
@@ -91,8 +91,10 @@ pub struct DevicesCommand {
     ///        port if not provided.
     pub serial: Vec<VhostUserParams<SerialParameters>>,
 
-    #[argh(option, arg_name = "vhost=PATH[, block options]")]
+    #[argh(option, arg_name = "block options")]
     /// start a block device.
+    /// The value must be a comma separated key-value pairs in the
+    /// form of `vhost=PATH[,block options]`.
     /// Possible key values:
     ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
     ///        This parameter must be given in first position.
@@ -100,24 +102,14 @@ pub struct DevicesCommand {
     ///        See help from `crosvm run` command.
     pub block: Vec<VhostUserParams<DiskOption>>,
 
-    #[argh(option, arg_name = "vhost=PATH,cid=CID[,device=VHOST_DEVICE]")]
+    #[argh(option, arg_name = "cid=CID[,device=VHOST_DEVICE]")]
     /// start a vsock device.
-    /// Possible key values:
     ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
     ///        This parameter must be given in first position.
     ///     cid=CID - CID to use for the device.
     ///     device=VHOST_DEVICE - path to the vhost-vsock device to
     ///         use (Linux only). Defaults to /dev/vhost-vsock.
     pub vsock: Vec<VhostUserParams<VsockConfig>>,
-
-    #[argh(option, arg_name = "block options")]
-    /// start a network device.
-    /// Possible key values:
-    ///     vhost=PATH - Path to a vhost-user endpoint to listen to.
-    ///        This parameter must be given in first position.
-    ///     network options:
-    ///         See help from the `crosvm run` command.
-    pub net: Vec<VhostUserParams<NetParameters>>,
 
     #[argh(option, short = 's', arg_name = "PATH")]
     /// path to put the control socket.

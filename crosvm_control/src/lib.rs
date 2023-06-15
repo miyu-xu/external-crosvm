@@ -36,8 +36,6 @@ use vm_control::VmRequest;
 use vm_control::VmResponse;
 use vm_control::WSSBucket;
 use vm_control::USB_CONTROL_MAX_PORTS;
-pub const VIRTIO_BALLOON_WS_MAX_NUM_BINS: usize = 16;
-pub const VIRTIO_BALLOON_WS_MAX_NUM_INTERVALS: usize = 15;
 
 fn validate_socket_path(socket_path: *const c_char) -> Option<PathBuf> {
     if !socket_path.is_null() {
@@ -631,37 +629,25 @@ impl From<WSSBucket> for WSSBucketFfi {
 #[repr(C)]
 #[derive(Debug)]
 pub struct BalloonWSSFfi {
-    wss: [WSSBucketFfi; VIRTIO_BALLOON_WS_MAX_NUM_BINS],
-    num_bins: u8,
-    _reserved: [u8; 7],
+    wss: [WSSBucketFfi; 4],
 }
 
-impl TryFrom<&BalloonWSS> for BalloonWSSFfi {
-    type Error = &'static str;
-
-    fn try_from(value: &BalloonWSS) -> Result<Self, Self::Error> {
-        if value.wss.len() > VIRTIO_BALLOON_WS_MAX_NUM_BINS {
-            return Err("too many WSS buckets in source object.");
-        }
-
+impl From<&BalloonWSS> for BalloonWSSFfi {
+    fn from(other: &BalloonWSS) -> Self {
         let mut ffi = Self {
-            wss: [WSSBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
-            num_bins: value.wss.len() as u8,
-            ..Default::default()
+            wss: [WSSBucketFfi::new(); 4],
         };
-        for (ffi_wss, other_wss) in ffi.wss.iter_mut().zip(value.wss.iter()) {
-            *ffi_wss = (*other_wss).into();
+        for (ffi_wss, other_wss) in ffi.wss.iter_mut().zip(other.wss) {
+            *ffi_wss = other_wss.into();
         }
-        Ok(ffi)
+        ffi
     }
 }
 
 impl BalloonWSSFfi {
     pub fn new() -> Self {
         Self {
-            wss: [WSSBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
-            num_bins: 0,
-            _reserved: [0; 7],
+            wss: [WSSBucketFfi::new(); 4],
         }
     }
 }
@@ -670,14 +656,6 @@ impl Default for BalloonWSSFfi {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub struct BalloonWssConfigFfi {
-    intervals: [u64; VIRTIO_BALLOON_WS_MAX_NUM_INTERVALS],
-    num_intervals: u8,
-    _reserved: [u8; 7],
-    refresh_threshold: u64,
-    report_threshold: u64,
 }
 
 /// Returns balloon working set size of the crosvm instance whose control socket is listening on socket_path.
@@ -706,10 +684,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_wss(
                 if !wss.is_null() {
                     // SAFETY: just checked that `wss` is not null.
                     unsafe {
-                        *wss = match balloon_wss.try_into() {
-                            Ok(result) => result,
-                            Err(_) => return false,
-                        };
+                        *wss = balloon_wss.into();
                     }
                 }
 
@@ -878,25 +853,16 @@ pub unsafe extern "C" fn crosvm_client_unregister_listener(
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_balloon_wss_config(
     socket_path: *const c_char,
-    config: *const BalloonWssConfigFfi,
+    config: *const [u64; 5],
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
             if !config.is_null() {
                 // SAFETY: just checked that `config` is not null.
                 unsafe {
-                    if (*config).num_intervals > VIRTIO_BALLOON_WS_MAX_NUM_INTERVALS as u8 {
-                        return false;
-                    }
-                    let mut actual_bins = vec![];
-                    for idx in 0..(*config).num_intervals {
-                        actual_bins.push((*config).intervals[idx as usize]);
-                    }
                     let request =
                         VmRequest::BalloonCommand(BalloonControlCommand::WorkingSetSizeConfig {
-                            bins: actual_bins,
-                            refresh_threshold: (*config).refresh_threshold,
-                            report_threshold: (*config).report_threshold,
+                            config: *config,
                         });
                     vms_request(&request, socket_path).is_ok()
                 }

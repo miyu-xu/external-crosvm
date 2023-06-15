@@ -677,11 +677,18 @@ impl GeniezoneVm {
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
+        let signal_handle = Arc::new(GeniezoneVcpuSignalHandle {
+            // SAFETY: `run_mmap` is known to be a valid pointer to a `gzvm_vcpu_run` structure from
+            // the allocation above.
+            run: unsafe { &mut *(run_mmap.as_ptr() as *mut gzvm_vcpu_run) },
+        });
+
         Ok(GeniezoneVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             id,
-            run_mmap: Arc::new(run_mmap),
+            run_mmap,
+            signal_handle,
         })
     }
 
@@ -1070,17 +1077,18 @@ impl AsRawDescriptor for GeniezoneVm {
 }
 
 struct GeniezoneVcpuSignalHandle {
-    run_mmap: Arc<MemoryMapping>,
+    run: *mut gzvm_vcpu_run,
 }
 
+// It is safe to write to the `immediate_exit` field from any thread.
+unsafe impl Send for GeniezoneVcpuSignalHandle {}
+unsafe impl Sync for GeniezoneVcpuSignalHandle {}
+
 impl VcpuSignalHandleInner for GeniezoneVcpuSignalHandle {
-    fn signal_immediate_exit(&self) {
-        // SAFETY: we ensure `run_mmap` is a valid mapping of `kvm_run` at creation time, and the
-        // `Arc` ensures the mapping still exists while we hold a reference to it.
-        unsafe {
-            let run = self.run_mmap.as_ptr() as *mut gzvm_vcpu_run;
-            (*run).immediate_exit = 1;
-        }
+    // The caller must ensure that the VCPU lifetime is at least as long as the
+    // VcpuSignalHandleInner lifetime.
+    unsafe fn signal_immediate_exit(&self) {
+        (*(self.run)).immediate_exit = 1;
     }
 }
 
@@ -1089,19 +1097,24 @@ pub struct GeniezoneVcpu {
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     id: usize,
-    run_mmap: Arc<MemoryMapping>,
+    run_mmap: MemoryMapping,
+    signal_handle: Arc<GeniezoneVcpuSignalHandle>,
 }
 
 impl Vcpu for GeniezoneVcpu {
     fn try_clone(&self) -> Result<Self> {
         let vm = self.vm.try_clone()?;
         let vcpu = self.vcpu.try_clone()?;
+        let run_mmap = MemoryMappingBuilder::new(self.run_mmap.size())
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
 
         Ok(GeniezoneVcpu {
             vm,
             vcpu,
             id: self.id,
-            run_mmap: self.run_mmap.clone(),
+            run_mmap,
+            signal_handle: self.signal_handle.clone(),
         })
     }
 
@@ -1121,9 +1134,7 @@ impl Vcpu for GeniezoneVcpu {
 
     fn signal_handle(&self) -> VcpuSignalHandle {
         VcpuSignalHandle {
-            inner: Box::new(GeniezoneVcpuSignalHandle {
-                run_mmap: self.run_mmap.clone(),
-            }),
+            inner: Arc::downgrade(&self.signal_handle) as _,
         }
     }
 

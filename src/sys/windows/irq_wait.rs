@@ -189,11 +189,7 @@ impl IrqWaitWorker {
                                     notify_control_on_iteration_end = true;
                                 }
                                 IrqHandlerRequest::RefreshIrqEventTokens => {
-                                    // TODO(b/282755619): when we want to restore different shaped
-                                    // VMs, we'll have to implement this. For now, we'll just ack
-                                    // the message and not actually do the refresh.
-                                    self.irq_handler_control.send(&IrqHandlerResponse::IrqEventTokenRefreshComplete)
-                                        .context("failed to send reply to irq event token refresh request")?;
+                                    todo!("not implemented yet");
                                 }
                             },
                             Err(e) => {
@@ -471,8 +467,6 @@ impl IrqWaitWorkerChild {
                                     notify_control_on_iteration_end = true;
                                 }
                                 IrqHandlerRequest::RefreshIrqEventTokens => {
-                                    // TODO(b/282755619): when we want to restore different shaped
-                                    // VMs, we'll have to implement this.
                                     todo!("not implemented yet");
                                 }
                             },

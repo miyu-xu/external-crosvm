@@ -299,11 +299,18 @@ impl GunyahVm {
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
+        let signal_handle = Arc::new(GunyahVcpuSignalHandle {
+            // SAFETY: `run_mmap` is known to be a valid pointer to a `gh_vcpu_run` structure from
+            // the allocation above.
+            run: unsafe { &mut *(run_mmap.as_ptr() as *mut gh_vcpu_run) },
+        });
+
         Ok(GunyahVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             id,
-            run_mmap: Arc::new(run_mmap),
+            run_mmap,
+            signal_handle,
         })
     }
 
@@ -670,21 +677,23 @@ pub struct GunyahVcpu {
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     id: usize,
-    run_mmap: Arc<MemoryMapping>,
+    run_mmap: MemoryMapping,
+    signal_handle: Arc<GunyahVcpuSignalHandle>,
 }
 
 struct GunyahVcpuSignalHandle {
-    run_mmap: Arc<MemoryMapping>,
+    run: *mut gh_vcpu_run,
 }
 
+// It is safe to write to the `immediate_exit` field from any thread.
+unsafe impl Send for GunyahVcpuSignalHandle {}
+unsafe impl Sync for GunyahVcpuSignalHandle {}
+
 impl VcpuSignalHandleInner for GunyahVcpuSignalHandle {
-    fn signal_immediate_exit(&self) {
-        // SAFETY: we ensure `run_mmap` is a valid mapping of `kvm_run` at creation time, and the
-        // `Arc` ensures the mapping still exists while we hold a reference to it.
-        unsafe {
-            let run = self.run_mmap.as_ptr() as *mut gh_vcpu_run;
-            (*run).immediate_exit = 1;
-        }
+    // The caller must ensure that the VCPU lifetime is at least as long as the
+    // VcpuSignalHandleInner lifetime.
+    unsafe fn signal_immediate_exit(&self) {
+        (*(self.run)).immediate_exit = 1;
     }
 }
 
@@ -700,12 +709,16 @@ impl Vcpu for GunyahVcpu {
         Self: Sized,
     {
         let vcpu = self.vcpu.try_clone()?;
-
+        let run_mmap = MemoryMappingBuilder::new(self.run_mmap.size())
+            .from_descriptor(&vcpu)
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
         Ok(GunyahVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             id: self.id,
-            run_mmap: self.run_mmap.clone(),
+            run_mmap,
+            signal_handle: self.signal_handle.clone(),
         })
     }
 
@@ -776,9 +789,7 @@ impl Vcpu for GunyahVcpu {
 
     fn signal_handle(&self) -> VcpuSignalHandle {
         VcpuSignalHandle {
-            inner: Box::new(GunyahVcpuSignalHandle {
-                run_mmap: self.run_mmap.clone(),
-            }),
+            inner: Arc::downgrade(&self.signal_handle) as _,
         }
     }
 

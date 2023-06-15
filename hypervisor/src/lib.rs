@@ -232,7 +232,7 @@ pub struct IoParams {
 /// Handle to a virtual CPU that may be used to request a VM exit from within a signal handler.
 #[cfg(unix)]
 pub struct VcpuSignalHandle {
-    inner: Box<dyn VcpuSignalHandleInner>,
+    inner: std::sync::Weak<dyn VcpuSignalHandleInner>,
 }
 
 #[cfg(unix)]
@@ -241,7 +241,12 @@ impl VcpuSignalHandle {
     ///
     /// This function is safe to call from a signal handler.
     pub fn signal_immediate_exit(&self) {
-        self.inner.signal_immediate_exit()
+        if let Some(inner) = self.inner.upgrade() {
+            // SAFETY: The `Vcpu` owns the strong reference to this `Arc`, so it must still exist.
+            unsafe {
+                inner.signal_immediate_exit();
+            }
+        }
     }
 }
 
@@ -256,7 +261,9 @@ pub(crate) trait VcpuSignalHandleInner {
     ///
     /// The implementation of this function must be async signal safe.
     /// <https://man7.org/linux/man-pages/man7/signal-safety.7.html>
-    fn signal_immediate_exit(&self);
+    ///
+    /// The caller must ensure the VCPU referenced by `self` still exists.
+    unsafe fn signal_immediate_exit(&self);
 }
 
 /// A virtual CPU holding a virtualized hardware thread's state, such as registers and interrupt

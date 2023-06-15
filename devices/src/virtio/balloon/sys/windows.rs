@@ -4,17 +4,29 @@
 
 use base::warn;
 use base::Tube;
-use vm_control::api::VmMemoryClient;
+use vm_control::VmMemoryRequest;
+use vm_control::VmMemoryResponse;
 use vm_memory::GuestAddress;
 
 pub(in crate::virtio::balloon) fn free_memory(
     guest_address: &GuestAddress,
     len: u64,
-    vm_memory_client: &VmMemoryClient,
+    dynamic_mapping_tube: &Tube,
 ) {
-    if let Err(e) = vm_memory_client.dynamically_free_memory_range(*guest_address, len) {
+    let request = VmMemoryRequest::DynamicallyFreeMemoryRange {
+        guest_address: *guest_address,
+        size: len,
+    };
+    if let Err(e) = dynamic_mapping_tube.send(&request) {
         warn!(
-            "Failed to dynamically free memory range. Marking pages unused failed: {}, addr={}",
+            "Failed to send free memory request. Marking pages unused failed: {}, addr={}",
+            e, guest_address
+        );
+        return;
+    }
+    if let Err(e) = dynamic_mapping_tube.recv::<VmMemoryResponse>() {
+        warn!(
+            "Failed to receive free memory response. Marking pages unused failed: {}, addr={}",
             e, guest_address
         );
     }
@@ -23,11 +35,22 @@ pub(in crate::virtio::balloon) fn free_memory(
 pub(in crate::virtio::balloon) fn reclaim_memory(
     guest_address: &GuestAddress,
     len: u64,
-    vm_memory_client: &VmMemoryClient,
+    dynamic_mapping_tube: &Tube,
 ) {
-    if let Err(e) = vm_memory_client.dynamically_reclaim_memory_range(*guest_address, len) {
+    let request = VmMemoryRequest::DynamicallyReclaimMemoryRange {
+        guest_address: *guest_address,
+        size: len,
+    };
+    if let Err(e) = dynamic_mapping_tube.send(&request) {
         warn!(
-            "Failed to dynamically reclaim memory. Marking pages used failed: {}, addr={}",
+            "Failed to send reclaim memory request. Marking pages used failed: {}, addr={}",
+            e, guest_address
+        );
+        return;
+    }
+    if let Err(e) = dynamic_mapping_tube.recv::<VmMemoryResponse>() {
+        warn!(
+            "Failed to receive reclaim memory request. Marking pages used failed: {}, addr={}",
             e, guest_address
         );
     }

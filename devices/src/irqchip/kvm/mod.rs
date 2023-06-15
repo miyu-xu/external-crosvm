@@ -217,7 +217,6 @@ impl IrqChip for KvmKernelIrqChip {
                 .get_hypervisor()
                 .check_capability(HypervisorCap::TscDeadlineTimer),
             IrqChipCap::X2Apic => true,
-            IrqChipCap::MpStateGetSet => true,
         }
     }
 }

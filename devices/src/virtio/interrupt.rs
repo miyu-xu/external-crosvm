@@ -2,14 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use anyhow::Context;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use base::Event;
-use serde::Deserialize;
-use serde::Serialize;
 use sync::Mutex;
 
 use super::INTERRUPT_STATUS_CONFIG_CHANGED;
@@ -59,11 +56,6 @@ struct InterruptInner {
 #[derive(Clone)]
 pub struct Interrupt {
     inner: Arc<InterruptInner>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct InterruptSnapshot {
-    interrupt_status: usize,
 }
 
 impl SignalableInterrupt for Interrupt {
@@ -203,12 +195,5 @@ impl Interrupt {
         self.inner
             .interrupt_status
             .fetch_and(!(mask as usize), Ordering::SeqCst);
-    }
-
-    pub fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
-        serde_json::to_value(InterruptSnapshot {
-            interrupt_status: self.inner.interrupt_status.load(Ordering::SeqCst),
-        })
-        .context("failed to serialize InterruptSnapshot")
     }
 }

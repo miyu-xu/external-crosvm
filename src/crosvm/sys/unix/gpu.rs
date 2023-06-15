@@ -129,11 +129,7 @@ pub fn create_gpu_device(
         // Allow changes made externally take effect immediately to allow shaders to be dynamically
         // added by external processes.
         config.remount_mode = Some(libc::MS_SLAVE);
-        let mut jail = create_gpu_minijail(
-            &jail_config.pivot_root,
-            &config,
-            /* render_node_only= */ false,
-        )?;
+        let mut jail = create_gpu_minijail(&jail_config.pivot_root, &config)?;
 
         // Prepare GPU shader disk cache directory.
         let cache_info = get_gpu_cache_info(
@@ -232,11 +228,7 @@ pub fn start_gpu_render_server(
         // Run as root in the jail to keep capabilities after execve, which is needed for
         // mounting to work.  All capabilities will be dropped afterwards.
         config.run_as = RunAsUser::Root;
-        let mut jail = create_gpu_minijail(
-            &jail_config.pivot_root,
-            &config,
-            /* render_node_only= */ true,
-        )?;
+        let mut jail = create_gpu_minijail(&jail_config.pivot_root, &config)?;
 
         let cache_info = get_gpu_cache_info(
             render_server_parameters.cache_path.as_ref(),

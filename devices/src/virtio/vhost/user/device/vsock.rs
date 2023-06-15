@@ -468,11 +468,6 @@ impl VhostUserSlaveReqHandlerMut for VsockBackend {
         base::warn!("Sleep not implemented for vsock.");
         Ok(())
     }
-
-    fn wake(&mut self) -> Result<()> {
-        base::warn!("wake not implemented for vsock.");
-        Ok(())
-    }
 }
 
 #[derive(FromArgs)]

@@ -825,7 +825,6 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
         match c {
             IrqChipCap::TscDeadlineTimer => false,
             IrqChipCap::X2Apic => false,
-            IrqChipCap::MpStateGetSet => true,
         }
     }
 }

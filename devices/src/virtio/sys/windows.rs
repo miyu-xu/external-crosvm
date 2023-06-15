@@ -8,3 +8,5 @@
 compile_error!("Net device without slirp not supported on windows");
 
 pub(crate) mod net;
+
+pub use net::NetExt;

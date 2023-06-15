@@ -3,4 +3,9 @@
 # found in the LICENSE file.
 
 @include /usr/share/policy/crosvm/common_device.policy
-@include /usr/share/policy/crosvm/net.policy
+
+# TUNSETOFFLOAD
+ioctl: arg1 == 0x400454d0
+openat: return ENOENT
+
+prctl: arg0 == PR_SET_NAME
