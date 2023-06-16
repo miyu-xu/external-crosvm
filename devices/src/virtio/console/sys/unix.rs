@@ -94,22 +94,14 @@ pub(in crate::virtio::console) fn spawn_input_thread(
                     return;
                 }
             };
-            for event in events {
+            for event in events.iter() {
                 match event.token {
                     Token::Kill => {
-                        // on kill, read all remaining data.
-                        loop {
-                            match rx.read(&mut rx_buf) {
-                                Ok(size) => {
-                                    buffer.lock().extend(&rx_buf[0..size]);
-                                }
-                                Err(e) => {
-                                    if e.kind() == io::ErrorKind::WouldBlock {
-                                        break 'wait;
-                                    }
-                                    error!("failed to read remaining data on exit: {:?}", e);
-                                }
-                            }
+                        // Ignore the kill event until there are no other events to process so that
+                        // we drain `rx` as much as possible. The next `wait_ctx.wait()` call will
+                        // immediately re-entry this case since we don't call `kill_evt.wait()`.
+                        if events.iter().all(|e| matches!(e.token, Token::Kill)) {
+                            break 'wait;
                         }
                     }
                     Token::ConsoleEvent => {
@@ -126,7 +118,7 @@ pub(in crate::virtio::console) fn spawn_input_thread(
                                         "failed to read for bytes to queue into console device: {}",
                                         e
                                     );
-                                    break;
+                                    break 'wait;
                                 }
                             }
                         }
