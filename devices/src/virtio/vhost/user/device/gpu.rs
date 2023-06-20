@@ -68,6 +68,7 @@ async fn run_ctrl_queue(
     kick_evt: EventAsync,
     state: Rc<RefCell<gpu::Frontend>>,
 ) {
+    base::error!("jasonjason {:?} gpu run_ctrl_queue()", std::time::SystemTime::now());
     loop {
         if let Err(e) = kick_evt.next_val().await {
             error!("Failed to read kick event for ctrl queue: {}", e);
@@ -150,6 +151,8 @@ impl VhostUserBackend for GpuBackend {
         doorbell: Doorbell,
         kick_evt: Event,
     ) -> anyhow::Result<()> {
+        base::error!("jasonjason {:?} GpuBackend::start_queue()", std::time::SystemTime::now());
+
         if self.queue_workers[idx].is_some() {
             warn!("Starting new queue handler without stopping old handler");
             self.stop_queue(idx)?;
@@ -189,12 +192,14 @@ impl VhostUserBackend for GpuBackend {
                 }
             };
 
+            base::error!("jasonjason {:?} GpuBackend::start_queue() - initialize_frontend()", std::time::SystemTime::now());
             let state = Rc::new(RefCell::new(
                 self.gpu
                     .borrow_mut()
                     .initialize_frontend(self.fence_state.clone(), fence_handler, mapper)
                     .ok_or_else(|| anyhow!("failed to initialize gpu frontend"))?,
             ));
+            base::error!("jasonjason {:?} GpuBackend::start_queue() - initialize_frontend() - done", std::time::SystemTime::now());
             self.state = Some(state.clone());
             state
         };
