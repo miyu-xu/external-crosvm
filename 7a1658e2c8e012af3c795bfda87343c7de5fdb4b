@@ -16,6 +16,23 @@
       "message": "Trivial rebase to resolve merge conflicts reported by presubmit",
       "revId": "7a1658e2c8e012af3c795bfda87343c7de5fdb4b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7841a446_a9520f38",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-06-20T02:38:47Z",
+      "side": 1,
+      "message": "Hi Mayle,\n\nWe have both core review +2 and QC review +1 now.\nCan you pls help to merge this change?\nPls let me know if there is there anything else needed here to merge?\n\nThanks,\nSahitya.",
+      "revId": "7a1658e2c8e012af3c795bfda87343c7de5fdb4b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
