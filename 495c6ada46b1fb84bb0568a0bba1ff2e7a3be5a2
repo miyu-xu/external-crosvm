@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3ae93bb2_a11979b9",
+        "filename": "vendor/generic/broker_ipc/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 14,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-06-20T21:35:49Z",
+      "side": 1,
+      "message": "add new tests to TEST_MAPPING?",
+      "range": {
+        "startLine": 14,
+        "startChar": 11,
+        "endLine": 14,
+        "endChar": 42
+      },
+      "revId": "495c6ada46b1fb84bb0568a0bba1ff2e7a3be5a2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
