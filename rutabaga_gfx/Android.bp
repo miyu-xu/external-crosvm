@@ -25,6 +25,7 @@ rust_library {
     ],
     rustlibs: [
         "libcfg_if",
+        "libbase_rust",
         "libdata_model",
         "liblibc",
         "liblog_rust",

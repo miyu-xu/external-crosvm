@@ -269,12 +269,14 @@ impl Gfxstream {
             },
         ];
 
+        base::error!("jasonjason {:?} Gfxstream::init()", std::time::SystemTime::now());
         unsafe {
             ret_to_res(stream_renderer_init(
                 stream_renderer_params.as_mut_ptr(),
                 stream_renderer_params.len() as u64,
             ))?;
         }
+        base::error!("jasonjason {:?} Gfxstream::init() - done", std::time::SystemTime::now());
 
         Ok(Box::new(Gfxstream {}))
     }
