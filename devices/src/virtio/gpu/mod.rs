@@ -217,6 +217,8 @@ fn build(
     fence_handler: RutabagaFenceHandler,
     rutabaga_server_descriptor: Option<SafeDescriptor>,
 ) -> Option<VirtioGpu> {
+    base::error!("jasonjason {:?} VirtioGpu::build()", std::time::SystemTime::now());
+
     let mut display_opt = None;
     for display_backend in display_backends {
         match display_backend.build(
@@ -364,6 +366,8 @@ impl Frontend {
         cmd: GpuCommand,
         reader: &mut Reader,
     ) -> VirtioGpuResult {
+        base::error!("jasonjason {:?} process_gpu_command()", std::time::SystemTime::now());
+
         self.virtio_gpu.force_ctx_0();
 
         match cmd {
@@ -450,12 +454,28 @@ impl Frontend {
                 let resource_id = info.resource_id.to_native();
                 self.virtio_gpu.resource_assign_uuid(resource_id)
             }
-            GpuCommand::GetCapsetInfo(info) => self
+            GpuCommand::GetCapsetInfo(info) => {
+                base::error!("jasonjason {:?} VirtioGpu GetCapsetInfo cmd", std::time::SystemTime::now());
+
+                let resp = self
+                    .virtio_gpu
+                    .get_capset_info(info.capset_index.to_native());
+
+                base::error!("jasonjason {:?} VirtioGpu GetCapsetInfo cmd - done", std::time::SystemTime::now());
+
+                resp
+            }
+            GpuCommand::GetCapset(info) => {
+                base::error!("jasonjason {:?} VirtioGpu GetCapset cmd", std::time::SystemTime::now());
+
+                let resp = self
                 .virtio_gpu
-                .get_capset_info(info.capset_index.to_native()),
-            GpuCommand::GetCapset(info) => self
-                .virtio_gpu
-                .get_capset(info.capset_id.to_native(), info.capset_version.to_native()),
+                .get_capset(info.capset_id.to_native(), info.capset_version.to_native());
+
+                base::error!("jasonjason {:?} VirtioGpu GetCapset cmd - done", std::time::SystemTime::now());
+
+                resp
+            }
             GpuCommand::CtxCreate(info) => {
                 let context_name: Option<String> = String::from_utf8(info.debug_name.to_vec()).ok();
                 self.virtio_gpu.create_context(
@@ -634,12 +654,16 @@ impl Frontend {
 
     /// Processes virtio messages on `queue`.
     pub fn process_queue(&mut self, mem: &GuestMemory, queue: &dyn QueueReader) -> bool {
+        base::error!("jasonjason {:?} VirtioGpu process_queue()", std::time::SystemTime::now());
+
         let mut signal_used = false;
         while let Some(desc) = queue.pop(mem) {
+            base::error!("jasonjason {:?} VirtioGpu process_queue() - item", std::time::SystemTime::now());
             if let Some(ret_desc) = self.process_descriptor(mem, desc) {
                 queue.add_used(mem, ret_desc.desc_chain, ret_desc.len);
                 signal_used = true;
             }
+            base::error!("jasonjason {:?} VirtioGpu process_queue() - item done", std::time::SystemTime::now());
         }
 
         signal_used
@@ -816,6 +840,10 @@ struct Worker {
 
 impl Worker {
     fn run(&mut self) {
+        // jasonjason
+
+        base::error!("jasonjason {:?} VirtioGpu Worker::run()", std::time::SystemTime::now());
+
         let display_desc =
             match SafeDescriptor::try_from(&*self.state.display().borrow() as &dyn AsRawDescriptor)
             {
@@ -870,6 +898,8 @@ impl Worker {
         // racyiness is that control queue descriptors that are issued after cursors descriptors
         // might be handled first instead of the other way around.  In practice, the cursor queue
         // isn't used so this isn't a huge issue.
+
+        base::error!("jasonjason {:?} VirtioGpu Worker::run() starting loop", std::time::SystemTime::now());
 
         'wait: loop {
             let events = match event_manager.wait_ctx.wait() {
@@ -970,9 +1000,13 @@ impl Worker {
                 };
             }
 
+            base::error!("jasonjason {:?} VirtioGpu Worker::run() doing process_queue", std::time::SystemTime::now());
+
             if ctrl_available && self.state.process_queue(&self.mem, &self.ctrl_queue) {
                 signal_used_ctrl = true;
             }
+
+            base::error!("jasonjason {:?} VirtioGpu Worker::run() doing process_queue - done", std::time::SystemTime::now());
 
             // Process the entire control queue before the resource bridge in case a resource is
             // created or destroyed by the control queue. Processing the resource bridge first may
@@ -1083,6 +1117,8 @@ impl Gpu {
         #[cfg(windows)] wndproc_thread: WindowProcedureThread,
         #[cfg(unix)] gpu_cgroup_path: Option<&PathBuf>,
     ) -> Gpu {
+        base::error!("jasonjason {:?} Gpu::new()", std::time::SystemTime::now());
+
         let mut display_params = gpu_parameters.display_params.clone();
         if display_params.is_empty() {
             display_params.push(Default::default());
