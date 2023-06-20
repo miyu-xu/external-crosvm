@@ -25,6 +25,7 @@ rust_library {
     ],
     rustlibs: [
         "libcfg_if",
+        "libbase_rust",
         "libdata_model",
         "liblibc",
         "liblog_rust",
@@ -75,6 +76,7 @@ rust_test {
         "virgl_renderer_next",
     ],
     rustlibs: [
+        "libbase_rust",
         "libcfg_if",
         "libdata_model",
         "liblibc",
