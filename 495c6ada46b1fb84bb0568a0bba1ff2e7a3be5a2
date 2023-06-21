@@ -22,6 +22,30 @@
       },
       "revId": "495c6ada46b1fb84bb0568a0bba1ff2e7a3be5a2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ca1d607d_3992878b",
+        "filename": "vendor/generic/broker_ipc/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 14,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-06-21T23:30:57Z",
+      "side": 1,
+      "message": "I\u0027m going to batch this with http://b/242733327.\n\nBut also, this crate doesn\u0027t actually have any tests. Probably a cargo_embargo bug I need to investigate.",
+      "parentUuid": "3ae93bb2_a11979b9",
+      "range": {
+        "startLine": 14,
+        "startChar": 11,
+        "endLine": 14,
+        "endChar": 42
+      },
+      "revId": "495c6ada46b1fb84bb0568a0bba1ff2e7a3be5a2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
