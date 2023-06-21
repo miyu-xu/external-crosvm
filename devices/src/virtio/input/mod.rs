@@ -605,14 +605,11 @@ where
         false
     }
 
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Vec<Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
             let worker = worker_thread.stop();
             self.source = Some(worker.event_source);
-            let queues = vec![
-                /* 0 */ worker.event_queue,
-                /* 1 */ worker.status_queue,
-            ];
+            let queues = BTreeMap::from([(0, worker.event_queue), (1, worker.status_queue)]);
             Ok(Some(queues))
         } else {
             Ok(None)

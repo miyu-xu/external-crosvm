@@ -68,6 +68,11 @@ pub(in crate::virtio::console) fn spawn_input_thread(
         .expect("failed to clone in_avail_evt");
 
     let res = WorkerThread::start("v_console_input", move |kill_evt| {
+        // If there is already data, signal immediately.
+        if !buffer.lock().is_empty() {
+            thread_in_avail_evt.signal().unwrap();
+        }
+
         #[derive(EventToken)]
         enum Token {
             ConsoleEvent,

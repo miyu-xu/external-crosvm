@@ -101,18 +101,21 @@ pub(in crate::virtio::console) fn spawn_input_thread(
     let buffer_max_size = 1 << 12;
     let mut rx_buf = Vec::with_capacity(buffer_max_size);
     let res = WorkerThread::start("v_console_input", move |kill_evt| {
+        // If there is already data, signal immediately.
+        if !buffer.lock().is_empty() {
+            thread_in_avail_evt.signal().unwrap();
+        }
+
         let mut read_overlapped =
             named_pipes::OverlappedWrapper::new(true).expect("failed to create OverlappedWrapper");
         loop {
             let size = rx
                 .get_available_byte_count()
                 .expect("failed to get available byte count") as usize;
-
-            if size < buffer_max_size {
-                rx_buf.resize(size, Default::default());
-            } else {
-                rx_buf.resize(buffer_max_size, Default::default());
-            };
+            // Clamp to [1, buffer capacity]. Need to read at least one byte so that the read call
+            // blocks until data is available.
+            let size = std::cmp::min(std::cmp::max(size, 1), buffer_max_size);
+            rx_buf.resize(size, Default::default());
             let res = rx.read_overlapped_blocking(&mut rx_buf, &mut read_overlapped, &kill_evt);
 
             match res {

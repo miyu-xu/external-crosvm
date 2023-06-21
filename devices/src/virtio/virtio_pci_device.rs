@@ -311,7 +311,8 @@ enum SleepState {
     // Asleep and device has been activated by the guest.
     Active {
         /// The queues returned from `VirtioDevice::virtio_sleep`.
-        activated_queues: Vec<Queue>,
+        /// Map is from queue index -> Queue.
+        activated_queues: BTreeMap<usize, Queue>,
     },
 }
 
@@ -327,7 +328,7 @@ struct VirtioPciDeviceSnapshot {
     common_config: VirtioPciCommonConfig,
 
     queues: Vec<serde_json::Value>,
-    activated_queues: Option<Vec<serde_json::Value>>,
+    activated_queues: Option<Vec<(usize, serde_json::Value)>>,
 }
 
 impl VirtioPciDevice {
@@ -976,6 +977,14 @@ impl Suspendable for VirtioPciDevice {
         if self.sleep_state.is_some() {
             return Ok(());
         }
+
+        // Don't call `self.device.virtio_sleep()` for vhost user devices if the device is not
+        // activated yet, since it will always return an empty Vec.
+        if !self.device_activated && self.device.is_vhost_user() {
+            // This will need to be set, so that a cold restore will work.
+            self.sleep_state = Some(SleepState::Inactive);
+            return Ok(());
+        }
         if let Some(queues) = self.device.virtio_sleep()? {
             anyhow::ensure!(
                 self.device_activated,
@@ -995,6 +1004,11 @@ impl Suspendable for VirtioPciDevice {
     }
 
     fn wake(&mut self) -> anyhow::Result<()> {
+        // A vhost user device that isn't activated doesn't need to be woken up.
+        if !self.device_activated && self.device.is_vhost_user() {
+            self.sleep_state = None;
+            return Ok(());
+        }
         match self.sleep_state.take() {
             None => {
                 // If the device is already awake, we should not request it to wake again.
@@ -1005,30 +1019,28 @@ impl Suspendable for VirtioPciDevice {
                     .expect("virtio_wake failed, can't recover");
             }
             Some(SleepState::Active { activated_queues }) => {
-                // Note that the length of `self.queues` and `self.queue_evts` might not be the same
-                // length as `activated_queues`. We need to filter to ready queues first.
-                let queue_evts = self
-                    .queues
-                    .iter()
-                    .zip(self.queue_evts.iter())
-                    .filter_map(|(q, e)| {
-                        if q.ready() {
-                            Some(e.event.try_clone().expect("failed to clone event"))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                if !self.device.is_vhost_user() {
-                    assert_eq!(queue_evts.len(), activated_queues.len());
+                let mut queues_to_wake = BTreeMap::new();
+
+                for (index, queue) in activated_queues.into_iter() {
+                    queues_to_wake.insert(
+                        index,
+                        (
+                            queue,
+                            self.queue_evts[index]
+                                .event
+                                .try_clone()
+                                .expect("failed to clone event"),
+                        ),
+                    );
                 }
+
                 self.device
                     .virtio_wake(Some((
                         self.mem.clone(),
                         self.interrupt
                             .clone()
                             .expect("interrupt missing for already active queues"),
-                        activated_queues.into_iter().zip(queue_evts).collect(),
+                        queues_to_wake,
                     )))
                     .expect("virtio_wake failed, can't recover");
             }
@@ -1040,6 +1052,7 @@ impl Suspendable for VirtioPciDevice {
         if self.iommu.is_some() {
             return Err(anyhow!("Cannot snapshot if iommu is present."));
         }
+
         serde_json::to_value(VirtioPciDeviceSnapshot {
             config_regs: self.config_regs.clone(),
             inner_device: self.device.virtio_snapshot()?,
@@ -1057,12 +1070,13 @@ impl Suspendable for VirtioPciDevice {
                     anyhow::bail!("tried snapshotting while awake")
                 }
                 Some(SleepState::Inactive) => None,
-                Some(SleepState::Active { activated_queues }) => Some(
-                    activated_queues
-                        .iter()
-                        .map(|q| q.snapshot())
-                        .collect::<anyhow::Result<Vec<_>>>()?,
-                ),
+                Some(SleepState::Active { activated_queues }) => {
+                    let mut serialized_queues = Vec::new();
+                    for (index, queue) in activated_queues.iter() {
+                        serialized_queues.push((*index, queue.snapshot()?));
+                    }
+                    Some(serialized_queues)
+                }
             },
         })
         .context("failed to serialize VirtioPciDeviceSnapshot")
@@ -1086,7 +1100,11 @@ impl Suspendable for VirtioPciDevice {
         self.msix_config.lock().restore(deser.msix_config)?;
         self.common_config = deser.common_config;
 
-        assert_eq!(self.queues.len(), deser.queues.len());
+        assert_eq!(
+            self.queues.len(),
+            deser.queues.len(),
+            "device must have the same number of queues"
+        );
         for (q, s) in self.queues.iter_mut().zip(deser.queues.into_iter()) {
             *q = Queue::restore(s)?;
         }
@@ -1103,13 +1121,13 @@ impl Suspendable for VirtioPciDevice {
         };
         // Restore `sleep_state`.
         if let Some(activated_queues_snapshot) = deser.activated_queues {
+            let mut activated_queues = BTreeMap::new();
+            for (index, queue_snapshot) in activated_queues_snapshot {
+                activated_queues.insert(index, Queue::restore(queue_snapshot)?);
+            }
+
             // Restore the activated queues.
-            self.sleep_state = Some(SleepState::Active {
-                activated_queues: activated_queues_snapshot
-                    .into_iter()
-                    .map(Queue::restore)
-                    .collect::<anyhow::Result<Vec<_>>>()?,
-            });
+            self.sleep_state = Some(SleepState::Active { activated_queues });
         } else {
             self.sleep_state = Some(SleepState::Inactive);
         }

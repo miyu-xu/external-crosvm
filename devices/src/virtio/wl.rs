@@ -2063,10 +2063,10 @@ impl VirtioDevice for Wl {
         self.mapper = Some(mapper);
     }
 
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Vec<Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
             let queues = worker_thread.stop()?;
-            return Ok(Some(queues));
+            return Ok(Some(Map::from_iter(queues.into_iter().enumerate())));
         }
         Ok(None)
     }
