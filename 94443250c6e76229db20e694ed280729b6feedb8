@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aae51feb_b1ab378b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 8
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-06-22T18:23:58Z",
+      "side": 1,
+      "message": "-2 since we shouldn\u0027t submit anything to this branch. we will submit https://r.android.com/2612949 instead",
+      "revId": "94443250c6e76229db20e694ed280729b6feedb8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
