@@ -69,6 +69,24 @@
       "parentUuid": "8b06c202_aeb7e470",
       "revId": "7a1658e2c8e012af3c795bfda87343c7de5fdb4b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3fb1bb32_46cc2e79",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-06-22T18:22:30Z",
+      "side": 1,
+      "message": "OK that is done and I rebased this CL. Just waiting for a good presubmit run now",
+      "parentUuid": "8daf9119_f037591e",
+      "revId": "7a1658e2c8e012af3c795bfda87343c7de5fdb4b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
