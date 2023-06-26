@@ -1,3 +1,10 @@
+<<<<<<< HEAD   (7119c7 crosvm: Add vhost scmi support)
+=======
+// Copyright 2023 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+>>>>>>> BRANCH (b7db69 devices: Retain device status after snapshot/restore.)
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs::{File, OpenOptions},

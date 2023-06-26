@@ -80,6 +80,10 @@ cfg_if::cfg_if! {
         use crate::crosvm::sys::GpuRenderServerParameters;
         use libc::{getegid, geteuid};
 
+<<<<<<< HEAD   (7119c7 crosvm: Add vhost scmi support)
+=======
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+>>>>>>> BRANCH (b7db69 devices: Retain device status after snapshot/restore.)
         static VHOST_SCMI_PATH: &str = "/dev/vhost-scmi";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
@@ -1221,6 +1225,10 @@ pub struct Config {
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi: bool,
     #[cfg(unix)]
+<<<<<<< HEAD   (7119c7 crosvm: Add vhost scmi support)
+=======
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+>>>>>>> BRANCH (b7db69 devices: Retain device status after snapshot/restore.)
     pub vhost_scmi_device: PathBuf,
     pub vhost_user_blk: Vec<VhostUserOption>,
     pub vhost_user_console: Vec<VhostUserOption>,
@@ -1436,6 +1444,10 @@ impl Default for Config {
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi: false,
             #[cfg(unix)]
+<<<<<<< HEAD   (7119c7 crosvm: Add vhost scmi support)
+=======
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+>>>>>>> BRANCH (b7db69 devices: Retain device status after snapshot/restore.)
             vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user_blk: Vec::new(),
             vhost_user_console: Vec::new(),

@@ -1,6 +1,16 @@
+<<<<<<< HEAD   (7119c7 crosvm: Add vhost scmi support)
 @include /usr/share/policy/crosvm/common_device.policy
 
 # Whitelist vhost_scmi ioctls only.
+=======
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+@include /usr/share/policy/crosvm/common_device.policy
+
+# Allow vhost_scmi ioctls only.
+>>>>>>> BRANCH (b7db69 devices: Retain device status after snapshot/restore.)
 # arg1 == VHOST_GET_FEATURES ||
 # arg1 == VHOST_SET_FEATURES ||
 # arg1 == VHOST_SET_OWNER ||
