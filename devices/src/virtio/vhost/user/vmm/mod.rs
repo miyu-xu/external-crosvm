@@ -80,6 +80,12 @@ pub enum Error {
     /// Failed to reset owner.
     #[error("failed to reset owner: {0}")]
     ResetOwner(VhostError),
+    /// Failed to restore.
+    #[error("failed to restore: {0}")]
+    Restore(VhostError),
+    /// Failed to convert serde Value to a slice.
+    #[error("failed to convert a serde Value to slice {0}")]
+    SerdeValueToSlice(serde_json::Error),
     /// Failed to set config.
     #[error("failed to set config: {0}")]
     SetConfig(VhostError),
@@ -122,6 +128,12 @@ pub enum Error {
     /// Failed to sleep the device.
     #[error("failed to sleep the device {0}")]
     Sleep(VhostError),
+    /// Failed to convert a slice to a serde Value.
+    #[error("Failed to convert a slice to a serde Value: {0}")]
+    SliceToSerdeValue(serde_json::Error),
+    /// Failed to snapshot.
+    #[error("failed to snapshot: {0}")]
+    Snapshot(VhostError),
     /// Failed to connect socket.
     #[error("failed to connect socket: {0}")]
     SocketConnect(std::io::Error),
@@ -137,6 +149,12 @@ pub enum Error {
     /// Too many shmem regions.
     #[error("too many shmem regions: {0} > 1")]
     TooManyShmemRegions(usize),
+    /// failed to wake the vhost user device.
+    #[error("failed to wake the vhost user device.")]
+    Wake(VhostError),
+    /// failed to wake the worker.
+    #[error("failed to wake the worker.")]
+    WakeWorker,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
