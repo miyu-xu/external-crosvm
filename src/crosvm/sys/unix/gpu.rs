@@ -90,6 +90,8 @@ pub fn create_gpu_device(
     render_server_fd: Option<SafeDescriptor>,
     event_devices: Vec<EventDevice>,
 ) -> DeviceResult {
+    base::error!("creating GPU device");
+
     let is_sandboxed = cfg.jail_config.is_some();
     let mut gpu_params = cfg.gpu_parameters.clone().unwrap();
     gpu_params.external_blob = is_sandboxed;
@@ -170,6 +172,8 @@ pub fn create_gpu_device(
     } else {
         None
     };
+
+    base::error!("creating GPU device - done");
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),

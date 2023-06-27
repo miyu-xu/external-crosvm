@@ -1333,6 +1333,8 @@ impl VirtioDevice for Gpu {
         interrupt: Interrupt,
         mut queues: Vec<(Queue, Event)>,
     ) -> anyhow::Result<()> {
+        base::error!("jasonjason {:?} virtio::Gpu::activate()", std::time::SystemTime::now());
+
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
                 "expected {} queues, got {}",
@@ -1383,6 +1385,8 @@ impl VirtioDevice for Gpu {
             .context("missing rutabaga_builder")?;
 
         self.worker_thread = Some(WorkerThread::start("v_gpu", move |kill_evt| {
+            base::error!("jasonjason {:?} virtio::Gpu worker thread running...", std::time::SystemTime::now());
+
             #[cfg(unix)]
             if let Some(cgroup_path) = gpu_cgroup_path {
                 move_task_to_cgroup(cgroup_path, base::gettid())
@@ -1392,6 +1396,7 @@ impl VirtioDevice for Gpu {
             let fence_handler =
                 create_fence_handler(mem.clone(), ctrl_queue.clone(), fence_state.clone());
 
+            base::error!("jasonjason {:?} virtio::Gpu worker thread starting build() (which does gfxstream init)...", std::time::SystemTime::now());
             let virtio_gpu = match build(
                 &display_backends,
                 display_params,
@@ -1409,6 +1414,7 @@ impl VirtioDevice for Gpu {
                 Some(backend) => backend,
                 None => return,
             };
+            base::error!("jasonjason {:?} virtio::Gpu worker thread finished build() (which did gfxstream init)", std::time::SystemTime::now());
 
             Worker {
                 interrupt,
