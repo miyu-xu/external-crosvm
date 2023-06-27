@@ -7,6 +7,7 @@ use std::sync::atomic::fence;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
@@ -14,6 +15,11 @@ use base::error;
 use base::warn;
 use cros_async::AsyncError;
 use cros_async::EventAsync;
+use futures::channel::oneshot;
+use futures::select_biased;
+use futures::FutureExt;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use virtio_sys::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::GuestAddress;
@@ -76,6 +82,22 @@ pub struct Queue {
     exported_desc_table: Option<ExportedRegion>,
     exported_avail_ring: Option<ExportedRegion>,
     exported_used_ring: Option<ExportedRegion>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct QueueSnapshot {
+    activated: bool,
+    max_size: u16,
+    size: u16,
+    ready: bool,
+    vector: u16,
+    desc_table: GuestAddress,
+    avail_ring: GuestAddress,
+    used_ring: GuestAddress,
+    next_avail: Wrapping<u16>,
+    next_used: Wrapping<u16>,
+    features: u64,
+    last_used: Wrapping<u16>,
 }
 
 macro_rules! accessors {
@@ -460,6 +482,22 @@ impl Queue {
         }
     }
 
+    /// Returns `None` if stop_rx receives a value; otherwise returns the result
+    /// of waiting for the next descriptor.
+    pub async fn next_async_interruptable(
+        &mut self,
+        mem: &GuestMemory,
+        queue_event: &mut EventAsync,
+        mut stop_rx: &mut oneshot::Receiver<()>,
+    ) -> std::result::Result<Option<DescriptorChain>, AsyncError> {
+        select_biased! {
+            avail_desc_res = self.next_async(mem, queue_event).fuse() => {
+                Ok(Some(avail_desc_res?))
+            }
+            _ = stop_rx => Ok(None),
+        }
+    }
+
     /// Puts an available descriptor head into the used ring for use by the guest.
     pub fn add_used(&mut self, mem: &GuestMemory, desc_chain: DescriptorChain, len: u32) {
         let desc_index = desc_chain.index();
@@ -649,6 +687,50 @@ impl Queue {
 
     pub fn set_iommu(&mut self, iommu: Arc<Mutex<IpcMemoryMapper>>) {
         self.iommu = Some(iommu);
+    }
+
+    pub fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        if self.iommu.is_some() {
+            return Err(anyhow!("Cannot snapshot if iommu is present."));
+        }
+
+        serde_json::to_value(QueueSnapshot {
+            activated: self.activated,
+            max_size: self.max_size,
+            size: self.size,
+            ready: self.ready,
+            vector: self.vector,
+            desc_table: self.desc_table,
+            avail_ring: self.avail_ring,
+            used_ring: self.used_ring,
+            next_avail: self.next_avail,
+            next_used: self.next_used,
+            features: self.features,
+            last_used: self.last_used,
+        })
+        .context("failed to serialize MsixConfigSnapshot")
+    }
+
+    pub fn restore(queue_value: serde_json::Value) -> anyhow::Result<Self> {
+        let s: QueueSnapshot = serde_json::from_value(queue_value)?;
+        Ok(Queue {
+            activated: s.activated,
+            max_size: s.max_size,
+            size: s.size,
+            ready: s.ready,
+            vector: s.vector,
+            desc_table: s.desc_table,
+            avail_ring: s.avail_ring,
+            used_ring: s.used_ring,
+            next_avail: s.next_avail,
+            next_used: s.next_used,
+            features: s.features,
+            last_used: s.last_used,
+            iommu: None,
+            exported_desc_table: None,
+            exported_avail_ring: None,
+            exported_used_ring: None,
+        })
     }
 }
 

@@ -7,6 +7,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use base::Event;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 
 use super::INTERRUPT_STATUS_CONFIG_CHANGED;
@@ -56,6 +58,11 @@ struct InterruptInner {
 #[derive(Clone)]
 pub struct Interrupt {
     inner: Arc<InterruptInner>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InterruptSnapshot {
+    interrupt_status: usize,
 }
 
 impl SignalableInterrupt for Interrupt {
@@ -143,6 +150,30 @@ impl Interrupt {
         }
     }
 
+    /// Create a new `Interrupt`, restoring internal state to match `snapshot`.
+    ///
+    /// The other arguments are assumed to be snapshot'd and restore'd elsewhere.
+    pub fn new_from_snapshot(
+        irq_evt_lvl: IrqLevelEvent,
+        msix_config: Option<Arc<Mutex<MsixConfig>>>,
+        config_msix_vector: u16,
+        snapshot: InterruptSnapshot,
+    ) -> Interrupt {
+        Interrupt {
+            inner: Arc::new(InterruptInner {
+                interrupt_status: AtomicUsize::new(snapshot.interrupt_status),
+                async_intr_status: false,
+                transport: Transport::Pci {
+                    pci: TransportPci {
+                        irq_evt_lvl,
+                        msix_config,
+                        config_msix_vector,
+                    },
+                },
+            }),
+        }
+    }
+
     pub fn new_mmio(irq_evt_edge: IrqEdgeEvent, async_intr_status: bool) -> Interrupt {
         Interrupt {
             inner: Arc::new(InterruptInner {
@@ -195,5 +226,12 @@ impl Interrupt {
         self.inner
             .interrupt_status
             .fetch_and(!(mask as usize), Ordering::SeqCst);
+    }
+
+    /// Snapshot internal state. Can be restored with with `Interrupt::new_from_snapshot`.
+    pub fn snapshot(&self) -> InterruptSnapshot {
+        InterruptSnapshot {
+            interrupt_status: self.inner.interrupt_status.load(Ordering::SeqCst),
+        }
     }
 }
