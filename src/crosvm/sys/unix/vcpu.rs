@@ -83,6 +83,7 @@ fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
 /// This function will be called from each VCPU thread at startup.
 pub fn set_vcpu_thread_scheduling(
     vcpu_affinity: CpuSet,
+    core_scheduling: bool,
     enable_per_vm_core_scheduling: bool,
     vcpu_cgroup_tasks_file: Option<File>,
     run_rt: bool,
@@ -93,7 +94,7 @@ pub fn set_vcpu_thread_scheduling(
         }
     }
 
-    if !enable_per_vm_core_scheduling {
+    if core_scheduling && !enable_per_vm_core_scheduling {
         // Do per-vCPU core scheduling by setting a unique cookie to each vCPU.
         if let Err(e) = enable_core_scheduling() {
             error!("Failed to enable core scheduling: {}", e);
@@ -194,7 +195,10 @@ fn set_vcpu_thread_local(vcpu: Option<&dyn VcpuArch>, signal_num: c_int) {
 pub fn setup_vcpu_signal_handler() -> Result<()> {
     unsafe {
         extern "C" fn handle_signal(_: c_int) {
-            VCPU_THREAD.with(|v| {
+            // Use LocalKey::try_with() so we don't panic if a signal happens while the destructor
+            // is running, and ignore any errors (the assumption being that the thread is exiting
+            // anyway in that case).
+            let _result = VCPU_THREAD.try_with(|v| {
                 if let Some(vcpu_signal_handle) = &(*v.borrow()) {
                     vcpu_signal_handle.signal_immediate_exit();
                 }
@@ -488,6 +492,7 @@ pub fn run_vcpu<V>(
     requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     #[cfg(feature = "gdb")] to_gdb_tube: Option<mpsc::Sender<VcpuDebugStatusMessage>>,
+    enable_core_scheduling: bool,
     enable_per_vm_core_scheduling: bool,
     cpu_config: Option<CpuConfigArch>,
     vcpu_cgroup_tasks_file: Option<File>,
@@ -509,6 +514,7 @@ where
             let vcpu_fn = || -> ExitState {
                 if let Err(e) = set_vcpu_thread_scheduling(
                     vcpu_affinity,
+                    enable_core_scheduling,
                     enable_per_vm_core_scheduling,
                     vcpu_cgroup_tasks_file,
                     run_rt && !delay_rt,

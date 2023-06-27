@@ -174,6 +174,15 @@ pub trait VhostBackend: std::marker::Sized {
 
     /// Put the device to sleep.
     fn sleep(&self) -> Result<()>;
+
+    /// Wake the device up.
+    fn wake(&self) -> Result<()>;
+
+    /// Snapshot the device and receive serialized state of the device.
+    fn snapshot(&self) -> Result<Vec<u8>>;
+
+    /// Restore the device.
+    fn restore(&self, data_bytes: &[u8], queue_evts: Option<Vec<Event>>) -> Result<()>;
 }
 
 /// An interface for setting up vhost-based backend drivers.
@@ -263,6 +272,15 @@ pub trait VhostBackendMut: std::marker::Sized {
 
     /// Put the device to sleep.
     fn sleep(&mut self) -> Result<()>;
+
+    /// Wake the device up.
+    fn wake(&mut self) -> Result<()>;
+
+    /// Snapshot the device and receive serialized state of the device.
+    fn snapshot(&mut self) -> Result<Vec<u8>>;
+
+    /// Restore the device.
+    fn restore(&mut self, data_bytes: &[u8], queue_evts: Option<Vec<Event>>) -> Result<()>;
 }
 
 impl<T: VhostBackendMut> VhostBackend for RwLock<T> {
@@ -327,6 +345,18 @@ impl<T: VhostBackendMut> VhostBackend for RwLock<T> {
     fn sleep(&self) -> Result<()> {
         self.write().unwrap().sleep()
     }
+
+    fn wake(&self) -> Result<()> {
+        self.write().unwrap().wake()
+    }
+
+    fn snapshot(&self) -> Result<Vec<u8>> {
+        self.write().unwrap().snapshot()
+    }
+
+    fn restore(&self, data_bytes: &[u8], queue_evts: Option<Vec<Event>>) -> Result<()> {
+        self.write().unwrap().restore(data_bytes, queue_evts)
+    }
 }
 
 impl<T: VhostBackendMut> VhostBackend for RefCell<T> {
@@ -388,6 +418,18 @@ impl<T: VhostBackendMut> VhostBackend for RefCell<T> {
 
     fn sleep(&self) -> Result<()> {
         self.borrow_mut().sleep()
+    }
+
+    fn wake(&self) -> Result<()> {
+        self.borrow_mut().wake()
+    }
+
+    fn snapshot(&self) -> Result<Vec<u8>> {
+        self.borrow_mut().snapshot()
+    }
+
+    fn restore(&self, data_bytes: &[u8], queue_evts: Option<Vec<Event>>) -> Result<()> {
+        self.borrow_mut().restore(data_bytes, queue_evts)
     }
 }
 #[cfg(test)]
@@ -475,6 +517,18 @@ mod tests {
         }
 
         fn sleep(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn wake(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn snapshot(&mut self) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn restore(&mut self, _data_bytes: &[u8], _queue_evts: Option<Vec<Event>>) -> Result<()> {
             Ok(())
         }
     }

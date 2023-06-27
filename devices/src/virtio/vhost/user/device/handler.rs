@@ -70,6 +70,8 @@ use base::SharedMemory;
 use cros_async::TaskHandle;
 use futures::future::AbortHandle;
 use futures::future::Aborted;
+use serde::Deserialize;
+use serde::Serialize;
 use sys::Doorbell;
 use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
@@ -224,12 +226,34 @@ pub trait VhostUserBackend {
     fn set_backend_req_connection(&mut self, _conn: VhostBackendReqConnection) {
         error!("set_backend_req_connection is not implemented");
     }
+
+    /// Used to stop non queue workers that `VhostUserBackend::stop_queue` can't stop.
+    fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
+        error!("sleep not implemented for device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(())
+    }
 }
 
 /// A virtio ring entry.
 struct Vring {
+    // The queue config. This doesn't get mutated by the queue workers.
     queue: Queue,
     doorbell: Option<Doorbell>,
+    enabled: bool,
+    // Active queue that is only `Some` when the device is sleeping.
+    paused_queue: Option<Queue>,
+    // This queue kick_evt is saved so that the queues handlers can start back up with the
+    // same events when it is woken up.
+    kick_evt: Option<Event>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VringSnapshot {
+    // Snapshot of queue config.
+    queue: serde_json::Value,
+    // Snapshot of the activated queue state.
+    paused_queue: Option<serde_json::Value>,
     enabled: bool,
 }
 
@@ -239,6 +263,8 @@ impl Vring {
             queue: Queue::new(max_size),
             doorbell: None,
             enabled: false,
+            paused_queue: None,
+            kick_evt: None,
         }
     }
 
@@ -246,6 +272,30 @@ impl Vring {
         self.queue.reset();
         self.doorbell = None;
         self.enabled = false;
+        self.paused_queue = None;
+        self.kick_evt = None;
+    }
+
+    fn snapshot(&self) -> anyhow::Result<VringSnapshot> {
+        Ok(VringSnapshot {
+            queue: self.queue.snapshot()?,
+            enabled: self.enabled,
+            paused_queue: self
+                .paused_queue
+                .as_ref()
+                .map(Queue::snapshot)
+                .transpose()?,
+        })
+    }
+
+    fn restore(&mut self, vring_snapshot: VringSnapshot) -> anyhow::Result<()> {
+        self.queue = Queue::restore(vring_snapshot.queue)?;
+        self.enabled = vring_snapshot.enabled;
+        self.paused_queue = vring_snapshot
+            .paused_queue
+            .map(Queue::restore)
+            .transpose()?;
+        Ok(())
     }
 }
 
@@ -374,8 +424,12 @@ pub struct DeviceRequestHandler {
     mem: Option<GuestMemory>,
     backend: Box<dyn VhostUserBackend>,
     ops: Box<dyn VhostUserPlatformOps>,
-    // Active queues that are sleeping.
-    paused_queues: Vec<Option<Queue>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DeviceRequestHandlerSnapshot {
+    vrings: Vec<VringSnapshot>,
+    // TODO(rizhang): Add VhostUserBackend snapshot.
 }
 
 impl DeviceRequestHandler {
@@ -390,8 +444,6 @@ impl DeviceRequestHandler {
             vrings.push(Vring::new(MAX_VRING_LEN));
         }
 
-        let mut paused_queues = Vec::new();
-        paused_queues.resize_with(backend.max_queue_num(), Default::default);
         DeviceRequestHandler {
             vrings,
             owned: false,
@@ -399,7 +451,6 @@ impl DeviceRequestHandler {
             mem: None,
             backend,
             ops,
-            paused_queues,
         }
     }
 }
@@ -567,6 +618,8 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         }
 
         let kick_evt = self.ops.set_vring_kick(index, file)?;
+        // Save kick_evts so they can be re-used when waking up the device.
+        vring.kick_evt = Some(kick_evt.try_clone().expect("Failed to clone kick_evt"));
 
         // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
         vring.queue.ack_features(self.backend.acked_features());
@@ -701,15 +754,93 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn sleep(&mut self) -> VhostResult<()> {
-        for (idx, _) in self.vrings.iter().enumerate() {
-            match self.backend.stop_queue(idx) {
-                Ok(queue) => self.paused_queues[idx] = Some(queue),
-                Err(e) => {
-                    error!("Failed to stop queue: {}", e);
-                    self.paused_queues[idx] = None;
+        for (index, vring) in self.vrings.iter_mut().enumerate() {
+            match self.backend.stop_queue(index) {
+                Ok(queue) => vring.paused_queue = Some(queue),
+                Err(e) => return Err(VhostError::StopQueueError(e)),
+            }
+        }
+        self.backend
+            .stop_non_queue_workers()
+            .map_err(VhostError::SleepError)
+    }
+
+    fn wake(&mut self) -> VhostResult<()> {
+        for (index, vring) in self.vrings.iter_mut().enumerate() {
+            if let Some(queue) = vring.paused_queue.take() {
+                let mem = self.mem.clone().ok_or(VhostError::SlaveInternalError)?;
+                let doorbell = vring.doorbell.clone().expect("Failed to clone doorbell");
+                let kick_evt = vring
+                    .kick_evt
+                    .as_ref()
+                    .ok_or(VhostError::SlaveInternalError)?
+                    .try_clone()
+                    .expect("Failed to clone kick_evt");
+
+                if let Err(e) = self
+                    .backend
+                    .start_queue(index, queue, mem, doorbell, kick_evt)
+                {
+                    error!("Failed to start queue {}: {}", index, e);
+                    return Err(VhostError::SlaveInternalError);
                 }
             }
         }
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> VhostResult<Vec<u8>> {
+        match serde_json::to_vec(&DeviceRequestHandlerSnapshot {
+            vrings: self
+                .vrings
+                .iter()
+                .map(|vring| vring.snapshot())
+                .collect::<anyhow::Result<Vec<VringSnapshot>>>()
+                .map_err(VhostError::SnapshotError)?,
+        }) {
+            Ok(serialized_json) => Ok(serialized_json),
+            Err(e) => {
+                error!("Failed to serialize DeviceRequestHandlerSnapshot: {}", e);
+                Err(VhostError::SerializationFailed)
+            }
+        }
+    }
+
+    fn restore(&mut self, data_bytes: &[u8], queue_evts: Option<Vec<File>>) -> VhostResult<()> {
+        let device_request_handler_snapshot: DeviceRequestHandlerSnapshot =
+            serde_json::from_slice(data_bytes).map_err(|e| {
+                error!("Failed to deserialize DeviceRequestHandlerSnapshot: {}", e);
+                VhostError::DeserializationFailed
+            })?;
+
+        let snapshotted_vrings = device_request_handler_snapshot.vrings;
+        assert_eq!(snapshotted_vrings.len(), self.vrings.len());
+        for (vring, snapshotted_vring) in self.vrings.iter_mut().zip(snapshotted_vrings.into_iter())
+        {
+            vring
+                .restore(snapshotted_vring)
+                .map_err(VhostError::RestoreError)?;
+        }
+
+        // `queue_evts` should only be `Some` if the snapshotted device is already activated.
+        // This wire up the doorbell events.
+        if let Some(queue_evts) = queue_evts {
+            // TODO(b/288596005): It is assumed that the index of `queue_evts` should map to the
+            // index of `self.vrings`. However, this assumption may break in the future, so a Map
+            // of indexes to queue_evt should be used to support sparse activated queues.
+            for (index, queue_evt_fd) in queue_evts.into_iter().enumerate() {
+                if let Some(vring) = self.vrings.get_mut(index) {
+                    let kick_evt = self.ops.set_vring_kick(index as u8, Some(queue_evt_fd))?;
+                    // Save kick_evts so they can be re-used when waking up the device.
+                    vring.kick_evt = Some(kick_evt);
+                } else {
+                    return Err(VhostError::VringIndexNotFound(index));
+                }
+            }
+        }
+
+        // TODO(rizhang): Restore self.backend.
+
         Ok(())
     }
 }
@@ -786,7 +917,8 @@ impl SharedMemoryMapper for VhostShmemMapper {
                     descriptor,
                     handle_type,
                     memory_idx,
-                    device_id,
+                    device_uuid,
+                    driver_uuid,
                     size,
                 } => {
                     let msg = VhostUserGpuMapMsg::new(
@@ -795,8 +927,8 @@ impl SharedMemoryMapper for VhostShmemMapper {
                         size,
                         memory_idx,
                         handle_type,
-                        device_id.device_uuid,
-                        device_id.driver_uuid,
+                        device_uuid,
+                        driver_uuid,
                     );
                     self.conn
                         .gpu_map(&msg, &descriptor)
@@ -896,16 +1028,20 @@ mod tests {
         avail_features: u64,
         acked_features: u64,
         acked_protocol_features: VhostUserProtocolFeatures,
+        active_queues: Vec<Option<Queue>>,
     }
 
     impl FakeBackend {
         const MAX_QUEUE_NUM: usize = 16;
 
         pub(super) fn new() -> Self {
+            let mut active_queues = Vec::new();
+            active_queues.resize_with(Self::MAX_QUEUE_NUM, Default::default);
             Self {
                 avail_features: VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits(),
                 acked_features: 0,
                 acked_protocol_features: VhostUserProtocolFeatures::empty(),
+                active_queues,
             }
         }
     }
@@ -961,18 +1097,20 @@ mod tests {
 
         fn start_queue(
             &mut self,
-            _idx: usize,
-            _queue: Queue,
+            idx: usize,
+            queue: Queue,
             _mem: GuestMemory,
             _doorbell: Doorbell,
             _kick_evt: Event,
         ) -> anyhow::Result<()> {
+            self.active_queues[idx] = Some(queue);
             Ok(())
         }
 
-        fn stop_queue(&mut self, _idx: usize) -> anyhow::Result<Queue> {
-            // TODO(280607609): Return a `Queue`.
-            Err(anyhow!("Missing queue"))
+        fn stop_queue(&mut self, idx: usize) -> anyhow::Result<Queue> {
+            Ok(self.active_queues[idx]
+                .take()
+                .ok_or(Error::WorkerNotFound)?)
         }
     }
 
@@ -1040,6 +1178,10 @@ mod tests {
                     .unwrap();
             }
 
+            vmm_handler.sleep().unwrap();
+
+            vmm_handler.wake().unwrap();
+
             // The VMM side is supposed to stop before the device side.
             drop(vmm_handler);
 
@@ -1080,6 +1222,12 @@ mod tests {
             handle_request(&mut listener).expect("set_vring_kick");
             handle_request(&mut listener).expect("set_vring_enable");
         }
+
+        // sleep
+        handle_request(&mut listener).expect("sleep");
+
+        // wake
+        handle_request(&mut listener).expect("wake");
 
         dev_bar.wait();
 
