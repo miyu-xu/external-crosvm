@@ -142,9 +142,6 @@ use crate::virtio::device_constants::wl::QUEUE_SIZES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_SEND_FENCES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_TRANS_FLAGS;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
-use crate::virtio::virtio_device::Error as VirtioError;
-use crate::virtio::VirtioDeviceSaved;
-use crate::Suspendable;
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -1480,6 +1477,11 @@ impl WlState {
                     .add(wait_descriptor, self.next_vfd_id)
                     .map_err(WlError::WaitContextAdd)?;
             }
+            // Only necessary if we somehow wrap the id counter. The try_insert
+            // API would be nicer, but that's currently experimental.
+            while self.vfds.contains_key(&self.next_vfd_id) {
+                self.next_vfd_id += 1;
+            }
             self.vfds.insert(self.next_vfd_id, vfd);
             self.in_queue.push_back((
                 vfd_id,
@@ -1807,7 +1809,7 @@ impl Worker {
         }
     }
 
-    fn run(mut self, kill_evt: Event) -> anyhow::Result<VirtioDeviceSaved> {
+    fn run(mut self, kill_evt: Event) -> anyhow::Result<Vec<Queue>> {
         #[derive(EventToken)]
         enum Token {
             InQueue,
@@ -1890,7 +1892,6 @@ impl Worker {
                 }
             }
         }
-
         let in_queue = match Rc::try_unwrap(self.in_queue) {
             Ok(queue_cell) => queue_cell.into_inner(),
             Err(_) => panic!("failed to recover queue from worker"),
@@ -1901,14 +1902,12 @@ impl Worker {
             Err(_) => panic!("failed to recover queue from worker"),
         };
 
-        Ok(VirtioDeviceSaved {
-            queues: vec![in_queue, out_queue],
-        })
+        Ok(vec![in_queue, out_queue])
     }
 }
 
 pub struct Wl {
-    worker_thread: Option<WorkerThread<anyhow::Result<VirtioDeviceSaved>>>,
+    worker_thread: Option<WorkerThread<anyhow::Result<Vec<Queue>>>>,
     wayland_paths: Map<String, PathBuf>,
     mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridge: Option<Tube>,
@@ -2064,13 +2063,11 @@ impl VirtioDevice for Wl {
         self.mapper = Some(mapper);
     }
 
-    fn stop(&mut self) -> std::result::Result<Option<VirtioDeviceSaved>, VirtioError> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            let state = worker_thread.stop().map_err(VirtioError::InThreadFailure)?;
-            return Ok(Some(state));
+            let queues = worker_thread.stop()?;
+            return Ok(Some(Map::from_iter(queues.into_iter().enumerate())));
         }
         Ok(None)
     }
 }
-
-impl Suspendable for Wl {}
