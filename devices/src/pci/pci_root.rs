@@ -30,6 +30,7 @@ use crate::pci::pci_device::Error;
 use crate::pci::pci_device::PciBus;
 use crate::pci::pci_device::PciDevice;
 use crate::pci::PciAddress;
+use crate::pci::PciBarIndex;
 use crate::pci::PciId;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::Bus;
@@ -68,9 +69,9 @@ impl PciDevice for PciRootConfiguration {
         self.config.write_reg(reg_idx, offset, data)
     }
 
-    fn read_bar(&mut self, _addr: u64, _data: &mut [u8]) {}
+    fn read_bar(&mut self, _bar_index: PciBarIndex, _offset: u64, _data: &mut [u8]) {}
 
-    fn write_bar(&mut self, _addr: u64, _data: &[u8]) {}
+    fn write_bar(&mut self, _bar_index: PciBarIndex, _offset: u64, _data: &[u8]) {}
 
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
         self.config.get_bar_configuration(bar_num)
@@ -205,21 +206,21 @@ impl PciRoot {
     }
 
     /// Add a `device` to this root PCI bus.
-    pub fn add_device(&mut self, address: PciAddress, device: Arc<Mutex<dyn BusDevice>>) {
+    pub fn add_device(
+        &mut self,
+        address: PciAddress,
+        device: Arc<Mutex<dyn BusDevice>>,
+    ) -> Result<(), Error> {
         // Ignore attempt to replace PCI Root host bridge.
         if !address.is_root() {
             self.devices.insert(address, device);
         }
 
-        if let Err(e) = self.root_bus.lock().add_child_device(address) {
-            error!("add device error: {}", e);
-        }
+        self.root_bus.lock().add_child_device(address)
     }
 
-    pub fn add_bridge(&mut self, bridge_bus: Arc<Mutex<PciBus>>) {
-        if let Err(e) = self.root_bus.lock().add_child_bus(bridge_bus) {
-            error!("add bridge error: {}", e);
-        }
+    pub fn add_bridge(&mut self, bridge_bus: Arc<Mutex<PciBus>>) -> Result<(), Error> {
+        self.root_bus.lock().add_child_bus(bridge_bus)
     }
 
     pub fn remove_device(&mut self, address: PciAddress) {
