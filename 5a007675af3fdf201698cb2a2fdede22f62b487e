@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "09d4337f_0a068a1d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1942270
+      },
+      "writtenOn": "2023-06-28T10:40:31Z",
+      "side": 1,
+      "message": "Hey Andrei thanks for pushing this to light.\nI think we should update it and push it to https://chromium-review.googlesource.com/q/project:crosvm/crosvm because this is just a mirror of the previously mentioned one.\n\nThanks, let me know if you want me to take this over.",
+      "revId": "5a007675af3fdf201698cb2a2fdede22f62b487e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
