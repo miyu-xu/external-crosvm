@@ -1207,6 +1207,8 @@ pub struct Config {
     #[cfg(unix)]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+    pub use_fixed_memory: bool,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub userspace_msr: BTreeMap<u32, MsrConfig>,
     pub vcpu_affinity: Option<VcpuAffinity>,
@@ -1250,6 +1252,8 @@ pub struct Config {
     pub virtio_snds: Vec<SndParameters>,
     pub virtio_switches: Vec<PathBuf>,
     pub virtio_trackpad: Vec<TouchDeviceOption>,
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+    pub vm_id: u32,
     pub vsock: Option<VsockConfig>,
     #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
     pub vtpm_proxy: bool,
@@ -1422,6 +1426,8 @@ impl Default for Config {
             task_profiles: Vec::new(),
             #[cfg(unix)]
             unmap_guest_memory_on_fork: false,
+            #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+            use_fixed_memory: false,
             usb: true,
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             userspace_msr: BTreeMap::new(),
@@ -1466,6 +1472,8 @@ impl Default for Config {
             virtio_snds: Vec::new(),
             virtio_switches: Vec::new(),
             virtio_trackpad: Vec::new(),
+            #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+            vm_id: 0,
             #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
             vtpm_proxy: false,
             vvu_proxy: Vec::new(),

@@ -351,8 +351,12 @@ pub struct VmComponents {
     pub pvm_fw: Option<File>,
     pub rt_cpus: CpuSet,
     pub swiotlb: Option<u64>,
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64")))]
+    pub use_fixed_memory: bool,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64")))]
+    pub vm_id: u32,
     pub vm_image: VmImage,
 }
 

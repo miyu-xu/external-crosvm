@@ -184,6 +184,7 @@ impl MemoryRegion {
         guest_base: GuestAddress,
         offset: u64,
         file: Arc<File>,
+        options: MemoryRegionOptions,
     ) -> Result<Self> {
         let mapping = MemoryMappingBuilder::new(size as usize)
             .from_file(&file)
@@ -195,7 +196,7 @@ impl MemoryRegion {
             guest_base,
             shared_obj: BackingObject::File(file),
             obj_offset: offset,
-            options: Default::default(),
+            options,
         })
     }
 

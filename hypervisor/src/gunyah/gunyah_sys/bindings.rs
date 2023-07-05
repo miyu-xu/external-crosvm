@@ -88,6 +88,14 @@ pub struct gh_vm_exit_info {
     pub reason_size: u32,
     pub reason: [u8; 8usize],
 }
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct gh_auth_vm_memory_params {
+    pub label: u32,
+    pub size: u64,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct gh_vcpu_run {

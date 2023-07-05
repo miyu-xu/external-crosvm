@@ -15,6 +15,7 @@ use base::SafeDescriptor;
 use cros_async::AsyncWrapper;
 use cros_async::Executor;
 use vm_memory::GuestMemory;
+use vm_memory::MemoryRegionOptions;
 use vmm_vhost::connection::Endpoint;
 use vmm_vhost::message::MasterReq;
 use vmm_vhost::message::VhostUserMemoryRegion;
@@ -135,11 +136,13 @@ impl VhostUserPlatformOps for VvuOps {
                 error!("failed to clone vfio device file: {}", e);
                 VhostError::InvalidOperation
             })?;
+            let options = MemoryRegionOptions::new();
             let region = MemoryRegion::new_from_file(
                 region.memory_size,
                 GuestAddress(region.guest_phys_addr),
                 file_offset + region.mmap_offset,
                 Arc::new(cloned_file),
+                options,
             )
             .map_err(|e| {
                 error!("failed to create a memory region: {}", e);

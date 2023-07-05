@@ -26,6 +26,7 @@ use std::mem::size_of;
 use crate::*;
 
 use base::errno_result;
+use base::error;
 use base::info;
 use base::ioctl;
 use base::ioctl_with_ref;
@@ -51,7 +52,15 @@ use libc::O_CLOEXEC;
 use libc::O_RDWR;
 use sync::Mutex;
 use vm_memory::MemoryRegionInformation;
+use vm_memory::MemoryRegionOptions;
 use vm_memory::MemoryRegionPurpose;
+
+use base::ioctl_with_mut_ref;
+use std::fs::File;
+use std::os::unix::io::FromRawFd;
+use vm_memory::MemoryRegion;
+
+const PAGE_SHIFT_4K: u64 = 12;
 
 pub struct Gunyah {
     gunyah: SafeDescriptor,
@@ -178,6 +187,52 @@ pub struct GunyahIrqRoute {
     level: bool,
 }
 
+fn map_gunyah_guest_mem_from_file(
+    layout: &[(GuestAddress, u64, MemoryRegionOptions)],
+    file: File,
+) -> Result<GuestMemory> {
+    let mut offset = 0;
+    let mut memory_region = Vec::<MemoryRegion>::new();
+
+    for (slot, range) in layout.iter().enumerate() {
+        let guest_base = range.0;
+        let mut size = range.1;
+        let cloned_file = file.try_clone().map_err(|e| {
+            error!("failed to clone device file: {}", e);
+            Error::new(EINVAL)
+        })?;
+
+        if size % pagesize() as u64 != 0 {
+            error!("size {} is not page aligned", size);
+            return Err(Error::new(EINVAL));
+        }
+
+        offset = slot << PAGE_SHIFT_4K;
+        let region = MemoryRegion::new_from_file(
+            size,
+            guest_base,
+            offset.try_into().unwrap(),
+            Arc::new(cloned_file),
+            range.2,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to create mem region, addr:{}, size:{}, Err: {}",
+                guest_base, size, e
+            )
+        });
+        memory_region.push(region);
+    }
+
+    let guest_mem = GuestMemory::from_regions(memory_region).unwrap_or_else(|e| {
+        panic!(
+            "failed to create GuestMemory from the regions provided {}",
+            e
+        )
+    });
+    Ok(guest_mem)
+}
+
 pub struct GunyahVm {
     gh: Gunyah,
     vm: SafeDescriptor,
@@ -256,6 +311,115 @@ impl GunyahVm {
 
         Ok(GunyahVm {
             gh: gh.try_clone()?,
+            vm: vm_descriptor,
+            guest_mem,
+            mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
+            mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
+            routes: Arc::new(Mutex::new(HashSet::new())),
+            hv_cfg: cfg,
+        })
+    }
+
+    pub fn get_guestmem_params_with_fixed_memory(
+        gunyah: &Gunyah,
+        nr_slots: usize,
+        vm_id: u32,
+    ) -> Result<(SafeDescriptor, Vec<u64>)> {
+        // Safe because we know descriptor is a real gunyah descriptor as this module is the only
+        // one that can make Gunyah objects.
+        let ret = unsafe { ioctl_with_val(gunyah, GH_CREATE_VM(), vm_id as c_ulong) };
+
+        if ret < 0 {
+            return errno_result();
+        }
+        // Safe because we verify that ret is valid and we own the fd.
+        let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
+
+        let mut size_params = Vec::new();
+        for slot in 0..nr_slots {
+            let mut mem: gh_auth_vm_memory_params = unsafe { std::mem::zeroed() };
+            mem.label = slot as u32;
+            let ret = unsafe {
+                ioctl_with_mut_ref(&vm_descriptor, GH_AUTH_VM_GET_MEM_PARAMS(), &mut mem)
+            };
+            if ret < 0 {
+                return errno_result();
+            }
+            size_params.push(mem.size);
+        }
+        Ok((vm_descriptor, size_params))
+    }
+
+    pub fn new_gunyahvm_with_fixed_memory(
+        gunyah: &Gunyah,
+        vm_descriptor: SafeDescriptor,
+        guest_mem_layout: &mut [(GuestAddress, u64, MemoryRegionOptions)],
+        cfg: Config,
+    ) -> Result<GunyahVm> {
+        let file: File = vm_descriptor
+            .try_clone()
+            .map_err(|e| {
+                error!("failed to clone device file: {}", e);
+            })
+            .unwrap()
+            .into();
+
+        let guest_mem = map_gunyah_guest_mem_from_file(&guest_mem_layout, file).map_err(|e| {
+            error!("failed to mmap the guest memory");
+            Error::new(EINVAL)
+        })?;
+
+        guest_mem.with_regions(
+            |MemoryRegionInformation {
+                 index,
+                 guest_addr,
+                 size,
+                 host_addr,
+                 options,
+                 ..
+             }| {
+                let mut lend = if cfg.protection_type.isolates_memory() {
+                    match options.purpose {
+                        MemoryRegionPurpose::GuestMemoryRegion => true,
+                        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+                        MemoryRegionPurpose::ProtectedFirmwareRegion => true,
+                        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+                        MemoryRegionPurpose::StaticSwiotlbRegion => false,
+                    }
+                } else {
+                    false
+                };
+
+                if lend {
+                    unsafe {
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        android_lend_user_memory_region(
+                            &vm_descriptor,
+                            index as MemSlot,
+                            false,
+                            guest_addr.offset(),
+                            size.try_into().unwrap(),
+                            host_addr as *mut u8,
+                        )
+                    }
+                } else {
+                    unsafe {
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        set_user_memory_region(
+                            &vm_descriptor,
+                            index as MemSlot,
+                            false,
+                            guest_addr.offset(),
+                            size.try_into().unwrap(),
+                            host_addr as *mut u8,
+                        )
+                    }
+                }
+            },
+        )?;
+
+        Ok(GunyahVm {
+            gh: gunyah.try_clone()?,
             vm: vm_descriptor,
             guest_mem,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),

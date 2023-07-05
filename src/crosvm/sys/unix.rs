@@ -1248,6 +1248,10 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         pci_low_start: cfg.pci_low_start,
         dynamic_power_coefficient: cfg.dynamic_power_coefficient.clone(),
+        #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+        use_fixed_memory: cfg.use_fixed_memory,
+        #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+        vm_id: cfg.vm_id,
     })
 }
 
@@ -1489,6 +1493,63 @@ fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) ->
 }
 
 #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+fn run_gunyah_with_fixed_memory(
+    device_path: Option<&Path>,
+    cfg: Config,
+    mut components: VmComponents,
+) -> Result<ExitState> {
+    use devices::GunyahIrqChip;
+    use hypervisor::gunyah::{Gunyah, GunyahVcpu, GunyahVm};
+
+    let device_path = device_path.unwrap_or(Path::new(GUNYAH_PATH));
+    let gunyah = Gunyah::new_with_path(device_path)
+        .with_context(|| format!("failed to open Gunyah device {}", device_path.display()))?;
+
+    let vm_id = components.vm_id;
+
+    let nr_slots = if components.swiotlb.is_some() { 2 } else { 1 };
+
+    let ((vm_desc, mem_params)) =
+        GunyahVm::get_guestmem_params_with_fixed_memory(&gunyah, nr_slots, vm_id)?;
+    components.memory_size = mem_params[0];
+    if components.swiotlb.is_some() {
+        components.swiotlb = Some(mem_params[1]);
+    }
+
+    let mut guest_mem_layout = Arch::guest_memory_layout(&components, &gunyah)
+        .context("failed to create guest memory layout")?;
+
+    assert_eq!(guest_mem_layout.len(), nr_slots);
+    let vm = GunyahVm::new_gunyahvm_with_fixed_memory(
+        &gunyah,
+        vm_desc,
+        &mut guest_mem_layout,
+        components.hv_cfg,
+    )
+    .context("failed to create vm")?;
+    // Check that the VM was actually created in protected mode as expected.
+    if matches!(
+        cfg.protection_type,
+        ProtectionType::Protected | ProtectionType::ProtectedWithoutFirmware
+    ) && !vm.check_capability(VmCap::Protected)
+    {
+        bail!("Failed to create protected VM");
+    }
+
+    let vm_clone = vm.try_clone()?;
+
+    run_vm::<GunyahVcpu, GunyahVm>(
+        cfg,
+        components,
+        vm,
+        &mut GunyahIrqChip::new(vm_clone)?,
+        None,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    )
+}
+
+#[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
 fn run_gunyah(
     device_path: Option<&Path>,
     cfg: Config,
@@ -1596,7 +1657,13 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
             any(target_arch = "arm", target_arch = "aarch64"),
             feature = "gunyah"
         ))]
-        HypervisorKind::Gunyah { device } => run_gunyah(device.as_deref(), cfg, components),
+        HypervisorKind::Gunyah { device } => {
+            if components.use_fixed_memory {
+                return run_gunyah_with_fixed_memory(device.as_deref(), cfg, components);
+            } else {
+                return run_gunyah(device.as_deref(), cfg, components);
+            }
+        }
     }
 }
 

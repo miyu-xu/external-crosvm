@@ -2102,6 +2102,14 @@ pub struct RunCommand {
     /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
     pub unprotected_vm_with_firmware: Option<PathBuf>,
 
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+    #[argh(switch)]
+    #[serde(skip)] // TODO(b/255223604)
+    #[merge(strategy = overwrite_option)]
+    /// if this option is specified, it indicates that guest VM memory should use carveout/CMA
+    /// memory.
+    pub use_fixed_memory: Option<bool>,
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[argh(
         option,
@@ -2307,6 +2315,13 @@ pub struct RunCommand {
     ///         per device.
     pub virtio_snd: Vec<SndParameters>,
 
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+    #[argh(option, arg_name = "N")]
+    #[serde(skip)] // TODO(b/255223604)
+    #[merge(strategy = overwrite_option)]
+    /// vmid of the trusted Virtual Machines supported by Gunyah on Qualcomm platforms
+    pub vm_id: Option<u32>,
+
     #[argh(option, arg_name = "cid=CID[,device=VHOST_DEVICE]")]
     #[serde(default)]
     #[merge(strategy = overwrite_option)]
@@ -2492,9 +2507,6 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.delay_rt = cmd.delay_rt.unwrap_or_default();
-
-        let mem = cmd.mem.unwrap_or_default();
-        cfg.memory = mem.size;
 
         #[cfg(target_arch = "aarch64")]
         {
@@ -3182,6 +3194,27 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vfio.extend(cmd.vfio_platform);
             cfg.vfio_isolate_hotplug = cmd.vfio_isolate_hotplug.unwrap_or_default();
         }
+
+        #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
+        {
+            if cmd.use_fixed_memory.is_some() {
+                if cmd.mem.is_some() || cmd.swiotlb.is_some() {
+                    return Err(
+                        "Memory/swiotlb is not configurable for VMs using fixed memory".to_string(),
+                    );
+                }
+                if cmd.vm_id.is_none() {
+                    return Err("vmid is required for VMs using fixed memory".to_string());
+                }
+                if cfg.pvm_fw.is_some() {
+                    return Err("pvmfw is not required for VMs using fixed memory".to_string());
+                }
+            }
+            cfg.vm_id = cmd.vm_id.unwrap_or_default();
+            cfg.use_fixed_memory = cmd.use_fixed_memory.unwrap_or_default();
+        }
+        let mem = cmd.mem.unwrap_or_default();
+        cfg.memory = mem.size;
 
         // `--disable-sandbox` has the effect of disabling sandboxing altogether, so make sure
         // to handle it after other sandboxing options since they implicitly enable it.
