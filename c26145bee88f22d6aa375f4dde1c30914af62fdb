@@ -16,6 +16,29 @@
       "message": "This change was previously reviewed on upstream-main branch here - https://android-review.googlesource.com/c/platform/external/crosvm/+/2314107",
       "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cba13247_bb593273",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 355,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-07-06T19:35:31Z",
+      "side": 1,
+      "message": "do we need these flags? I thought it would be the default behavior of gunyah (or contingent on whether balloon is used)",
+      "range": {
+        "startLine": 354,
+        "startChar": 0,
+        "endLine": 355,
+        "endChar": 31
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
