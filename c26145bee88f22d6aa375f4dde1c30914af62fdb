@@ -39,6 +39,108 @@
       },
       "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8454b0f1_0ca328fa",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 358,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "It looks like there\u0027s an extra \"all\" in there (it\u0027s only wrapping a single \"any\" so it has no effect) - or maybe it\u0027s missing another check?\n\n(same issue on `use_fixed_memory` above)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2e74e04b_36202524",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "nit: these should be sorted like the existing imports (std in one block, other crates in the following block, then self/super imports in another block)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "858b439a_fe0964e2",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "This is checking `pagesize()` above but then using a hard-coded 4-kilobyte page shift - should this be `slot * pagesize()` or something equivalent instead, or will this not work with any other page size than 4K? (or maybe slot is always in units of 4K even if page size is larger?)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0d3a1d2c_672cef5e",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 323,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "Please add a doc string (`///`-style comment) for pub functions. Especially in this case, the meaning of the return value is not clear since it is a nameless tuple, so it should be explained in the docs.",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ae997a68_171b79e7",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 353,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "nit: Maybe call this just `new_with_fixed_memory()` for consistency with `new()`\n\n(also add docs)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cf60d137_747afbb6",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 2111,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2023-07-06T23:05:16Z",
+      "side": 1,
+      "message": "Could `use_fixed_memory` be a field in `config::MemOptions` instead? Then all of the memory-related configuration is combined in a single place.",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
