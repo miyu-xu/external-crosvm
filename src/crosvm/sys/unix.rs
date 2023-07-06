@@ -3654,7 +3654,8 @@ fn irq_handler_thread(
                         }
                         Err(e) => {
                             if let TubeError::Disconnected = e {
-                                panic!("irq handler control tube disconnected.");
+                                error!("irq handler control tube disconnected.");
+                                return Ok(());
                             } else {
                                 error!("failed to recv IrqHandlerRequest: {}", e);
                             }
@@ -3844,7 +3845,8 @@ fn vm_memory_handler_thread(
                     },
                     Err(e) => {
                         if let TubeError::Disconnected = e {
-                            panic!("vm memory control tube disconnected.");
+                            error!("vm memory control tube disconnected.");
+                            return Ok(());
                         } else {
                             error!("failed to recv VmMemoryHandlerRequest: {}", e);
                         }

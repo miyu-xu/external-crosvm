@@ -43,6 +43,10 @@ pub struct Vsock {
     avail_features: u64,
     acked_features: u64,
     vrings_base: Option<Vec<(usize, u16)>>,
+
+    mem: Option<GuestMemory>,
+    interrupt: Option<Interrupt>,
+    event_queue: Option<Queue>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,6 +91,9 @@ impl Vsock {
             avail_features,
             acked_features: 0,
             vrings_base: None,
+            mem: None,
+            interrupt: None,
+            event_queue: None,
         })
     }
 
@@ -99,6 +106,9 @@ impl Vsock {
             avail_features: features,
             acked_features: 0,
             vrings_base: None,
+            mem: None,
+            interrupt: None,
+            event_queue: None,
         }
     }
 
@@ -169,13 +179,16 @@ impl VirtioDevice for Vsock {
             ));
         }
 
+        self.mem = Some(mem.clone());
+        self.interrupt = Some(interrupt.clone());
+
         let vhost_handle = self.vhost_handle.take().context("missing vhost_handle")?;
         let interrupts = self.interrupts.take().context("missing interrupts")?;
         let acked_features = self.acked_features;
         let cid = self.cid;
         // The third vq is an event-only vq that is not handled by the vhost
         // subsystem (but still needs to exist).  Split it off here.
-        let _event_queue = queues.remove(2);
+        self.event_queue = Some(queues.remove(2).0);
         let mut worker = Worker::new(
             queues,
             vhost_handle,
@@ -227,7 +240,7 @@ impl VirtioDevice for Vsock {
                 .stop()
                 .context("failed to stop vrings")?;
             self.vhost_handle = Some(worker.vhost_handle);
-            let queues: Vec<(usize, Queue)> = worker
+            let mut queues: Vec<(usize, Queue)> = worker
                 .queues
                 .into_iter()
                 .map(|(queue, _)| queue)
@@ -241,6 +254,25 @@ impl VirtioDevice for Vsock {
                 }
             }
             self.vrings_base = Some(vrings_base);
+
+            // Send the TRANSPORT_RESET event.
+            // TODO: maybe do this on restore instead? shouldn't need to break the
+            // connections on sleep
+            let mut event_queue = self.event_queue.take().unwrap();
+            const VIRTIO_VSOCK_EVENT_TRANSPORT_RESET: u32 = 0;
+            let mut avail_desc = event_queue
+                .pop(self.mem.as_ref().unwrap())
+                .expect("event queue is empty, can't send transport reset event");
+            avail_desc
+                .writer
+                .write_obj(VIRTIO_VSOCK_EVENT_TRANSPORT_RESET)
+                .expect("failed to write transport reset event");
+            let len = avail_desc.writer.bytes_written() as u32;
+            event_queue.add_used(self.mem.as_ref().unwrap(), avail_desc, len);
+            event_queue
+                .trigger_interrupt(self.mem.as_ref().unwrap(), self.interrupt.as_ref().unwrap());
+
+            queues.push((2, event_queue));
             return Ok(Some(Map::from_iter(queues)));
         }
         Ok(None)
@@ -259,13 +291,8 @@ impl VirtioDevice for Vsock {
                 let mut queues = vec![
                     queues_map.remove(&0).expect("missing rx queue"),
                     queues_map.remove(&1).expect("missing tx queue"),
+                    queues_map.remove(&2).expect("missing event queue"),
                 ];
-                // On wake, the event queue is missing. The event queue is not used, however it it
-                // necessary for it to exist before activate is called. Create an empty queue.
-                queues.push((
-                    Queue::new(1),
-                    Event::new().context("failed to create event")?,
-                ));
                 self.activate(mem, interrupt, queues)?;
                 Ok(())
             }
