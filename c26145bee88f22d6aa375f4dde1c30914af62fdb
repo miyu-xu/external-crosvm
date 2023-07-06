@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "beb960c5_d748129a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-06T10:07:02Z",
+      "side": 1,
+      "message": "This change was previously reviewed on upstream-main branch here - https://android-review.googlesource.com/c/platform/external/crosvm/+/2314107",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
