@@ -43,6 +43,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "0e3e10cd_8895a5fa",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 355,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-11T22:18:58Z",
+      "side": 1,
+      "message": "based on the bug details, i think these flags will only be used for non-AVF VMs",
+      "parentUuid": "cba13247_bb593273",
+      "range": {
+        "startLine": 354,
+        "startChar": 0,
+        "endLine": 355,
+        "endChar": 31
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "8454b0f1_0ca328fa",
         "filename": "arch/src/lib.rs",
         "patchSetId": 1
