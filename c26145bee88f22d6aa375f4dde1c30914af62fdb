@@ -200,6 +200,52 @@
       },
       "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2659e935_1c8e6027",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1496,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-11T22:16:08Z",
+      "side": 1,
+      "message": "do we need to duplicate this whole function? it looks like only some of the middle has changed. you\u0027ve already got a bug where this diverged from run_gunyah",
+      "range": {
+        "startLine": 1496,
+        "startChar": 3,
+        "endLine": 1496,
+        "endChar": 31
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "032911cb_29b7687c",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1534,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-11T22:16:08Z",
+      "side": 1,
+      "message": "replace with `cfg.protection_type.isolates_memory()`",
+      "range": {
+        "startLine": 1531,
+        "startChar": 7,
+        "endLine": 1534,
+        "endChar": 5
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
