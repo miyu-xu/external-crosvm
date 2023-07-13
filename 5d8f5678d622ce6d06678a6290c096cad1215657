@@ -16,6 +16,24 @@
       "message": "let me know if this is ready for review, i\u0027m assuming the lint bot just jumped the gun\n\nalso, i\u0027m curious if there is context, the bug seems unrelated. are we trying to use crosvm on riscv already?",
       "revId": "5d8f5678d622ce6d06678a6290c096cad1215657",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "34062cb9_f534b88c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1259311
+      },
+      "writtenOn": "2023-07-13T16:34:40Z",
+      "side": 1,
+      "message": "Good catch, that was indeed the wrong bug -- fixed in the latest patchset\n\nI\u0027m just trying to get the general-tests targets building, which happen to include some crosvm tests, hence the need for this change",
+      "parentUuid": "7d02aa9d_5c7d182c",
+      "revId": "5d8f5678d622ce6d06678a6290c096cad1215657",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
