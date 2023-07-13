@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0dbaf21f_d182677d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-13T17:23:00Z",
+      "side": 1,
+      "message": "thanks for making the changes work with the cargo_embargo config",
+      "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "222709b1_496cbbcc",
+        "filename": "riscv64/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-13T17:23:00Z",
+      "side": 1,
+      "message": "looks like we need this big diff because the riscv Cargo.toml makes all the deps conditional with the `[target.\u0027cfg(target_arch \u003d \"riscv64\")\u0027.dependencies]` line. maybe we can change it upstream to match the aarch64 crate and then the diff will be smaller",
+      "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
