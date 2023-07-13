@@ -69,6 +69,24 @@
       "parentUuid": "73622c39_2402d0eb",
       "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "efad145d_5b7473f0",
+        "filename": "riscv64/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1259311
+      },
+      "writtenOn": "2023-07-13T22:47:50Z",
+      "side": 1,
+      "message": "Ack -- will submit this and take a look at the minijail cfg. Thanks for the reviews!",
+      "parentUuid": "7cce1aff_b215e68a",
+      "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
