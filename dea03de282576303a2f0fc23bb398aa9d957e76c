@@ -51,6 +51,24 @@
       "parentUuid": "222709b1_496cbbcc",
       "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7cce1aff_b215e68a",
+        "filename": "riscv64/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-13T22:39:56Z",
+      "side": 1,
+      "message": "the build failure looks minijail related and `aarch64` uses a `cfg(unix)` just for minijail: https://chromium.googlesource.com/crosvm/crosvm/+/refs/changes/73/4684773/1/aarch64/Cargo.toml#34, maybe that would work instead\n\nnot a blocker for this CL, just writing down some cleanup ideas for later",
+      "parentUuid": "73622c39_2402d0eb",
+      "revId": "dea03de282576303a2f0fc23bb398aa9d957e76c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
