@@ -18,6 +18,23 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c13992f0_b09a4bad",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "Thanks for the review and comments.",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cba13247_bb593273",
@@ -65,6 +82,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "419ccf4e_02318319",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 355,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "Yes, it is for supporting Qcom trusted VMs and not required for AVF VMs. Hence, these flags would be needed.",
+      "parentUuid": "0e3e10cd_8895a5fa",
+      "range": {
+        "startLine": 354,
+        "startChar": 0,
+        "endLine": 355,
+        "endChar": 31
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "8454b0f1_0ca328fa",
@@ -82,6 +123,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "987233c1_534874d0",
+        "filename": "arch/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 358,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "I will update it.",
+      "parentUuid": "8454b0f1_0ca328fa",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2e74e04b_36202524",
@@ -95,6 +154,24 @@
       "writtenOn": "2023-07-06T23:05:16Z",
       "side": 1,
       "message": "nit: these should be sorted like the existing imports (std in one block, other crates in the following block, then self/super imports in another block)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aa80328d_e716e209",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "Will do",
+      "parentUuid": "2e74e04b_36202524",
       "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -134,6 +211,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d3f40f1d_407b4971",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 210,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "It should be as per page size. I will update it.",
+      "parentUuid": "1feea3f2_c87a519f",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "0d3a1d2c_672cef5e",
@@ -151,6 +246,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3df29921_6359be0c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 323,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "will do",
+      "parentUuid": "0d3a1d2c_672cef5e",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ae997a68_171b79e7",
@@ -164,6 +277,24 @@
       "writtenOn": "2023-07-06T23:05:16Z",
       "side": 1,
       "message": "nit: Maybe call this just `new_with_fixed_memory()` for consistency with `new()`\n\n(also add docs)",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "34ee840e_216944c8",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 353,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "will do",
+      "parentUuid": "ae997a68_171b79e7",
       "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -205,6 +336,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "89abb91b_d4929ca4",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 2111,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "Would like to keep this option as in future versions, for QC trusted vms we might move away from using fixed memory but will continue to use vm_id. Is it okay?\n\nI will try to accommodate it in config::MemOptions.",
+      "parentUuid": "7a0046b2_7fd667b0",
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "b7f332e9_80648016",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 1
@@ -216,6 +365,30 @@
       "writtenOn": "2023-07-11T22:11:09Z",
       "side": 1,
       "message": "if it is meant to be this specific, then it should have a more specific name, like `gunyah_vm_id`",
+      "range": {
+        "startLine": 2322,
+        "startChar": 58,
+        "endLine": 2322,
+        "endChar": 86
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a0f43224_8a4e9b79",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 2322,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "will update",
+      "parentUuid": "b7f332e9_80648016",
       "range": {
         "startLine": 2322,
         "startChar": 58,
@@ -249,6 +422,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "afc0f422_9b729119",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1496,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "Agree, i will try to put this delta within run_gunyah itself so that common part can be leveraged and avoids duplication.",
+      "parentUuid": "2659e935_1c8e6027",
+      "range": {
+        "startLine": 1496,
+        "startChar": 3,
+        "endLine": 1496,
+        "endChar": 31
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "032911cb_29b7687c",
@@ -262,6 +459,30 @@
       "writtenOn": "2023-07-11T22:16:08Z",
       "side": 1,
       "message": "replace with `cfg.protection_type.isolates_memory()`",
+      "range": {
+        "startLine": 1531,
+        "startChar": 7,
+        "endLine": 1534,
+        "endChar": 5
+      },
+      "revId": "c26145bee88f22d6aa375f4dde1c30914af62fdb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b0b62972_e8870372",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1534,
+      "author": {
+        "id": 1860498
+      },
+      "writtenOn": "2023-07-14T05:57:27Z",
+      "side": 1,
+      "message": "will do",
+      "parentUuid": "032911cb_29b7687c",
       "range": {
         "startLine": 1531,
         "startChar": 7,
