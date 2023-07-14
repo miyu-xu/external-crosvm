@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5909c059_fcedd95b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-14T22:53:50Z",
+      "side": 1,
+      "message": "i\u0027m doing this slightly early so we can get the vsock snapshot-restore code in AOSP. won\u0027t submit until monday though\n\nno build system changes, so it is easy",
+      "revId": "10fe699d53a4011786f3bd364d4accbc429c5b1a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
