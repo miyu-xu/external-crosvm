@@ -58,6 +58,7 @@ use vm_memory::GuestMemory;
 use vm_memory::MemoryRegionInformation;
 use vm_memory::MemoryRegionPurpose;
 
+use crate::BalloonEvent;
 use crate::ClockState;
 use crate::Config;
 use crate::Datamatch;
@@ -677,18 +678,11 @@ impl GeniezoneVm {
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
-        let signal_handle = Arc::new(GeniezoneVcpuSignalHandle {
-            // SAFETY: `run_mmap` is known to be a valid pointer to a `gzvm_vcpu_run` structure from
-            // the allocation above.
-            run: unsafe { &mut *(run_mmap.as_ptr() as *mut gzvm_vcpu_run) },
-        });
-
         Ok(GeniezoneVcpu {
             vm: self.vm.try_clone()?,
             vcpu,
             id,
-            run_mmap,
-            signal_handle,
+            run_mmap: Arc::new(run_mmap),
         })
     }
 
@@ -875,6 +869,19 @@ impl GeniezoneVm {
             errno_result()
         }
     }
+
+    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
+        match self.guest_mem.remove_range(guest_address, size) {
+            Ok(_) => Ok(()),
+            Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
+            Err(_) => Err(Error::new(EIO)),
+        }
+    }
+
+    fn handle_deflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
+        // No-op, when the guest attempts to access the pages again, Linux/GZVM will provide them.
+        Ok(())
+    }
 }
 
 impl Vm for GeniezoneVm {
@@ -1056,17 +1063,12 @@ impl Vm for GeniezoneVm {
         }
     }
 
-    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        match self.guest_mem.remove_range(guest_address, size) {
-            Ok(_) => Ok(()),
-            Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
-            Err(_) => Err(Error::new(EIO)),
+    fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()> {
+        match event {
+            BalloonEvent::Inflate(m) => self.handle_inflate(m.guest_address, m.size),
+            BalloonEvent::Deflate(m) => self.handle_deflate(m.guest_address, m.size),
+            BalloonEvent::BalloonTargetReached(_) => Ok(()),
         }
-    }
-
-    fn handle_deflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
-        // No-op, when the guest attempts to access the pages again, Linux/GZVM will provide them.
-        Ok(())
     }
 }
 
@@ -1077,18 +1079,17 @@ impl AsRawDescriptor for GeniezoneVm {
 }
 
 struct GeniezoneVcpuSignalHandle {
-    run: *mut gzvm_vcpu_run,
+    run_mmap: Arc<MemoryMapping>,
 }
 
-// It is safe to write to the `immediate_exit` field from any thread.
-unsafe impl Send for GeniezoneVcpuSignalHandle {}
-unsafe impl Sync for GeniezoneVcpuSignalHandle {}
-
 impl VcpuSignalHandleInner for GeniezoneVcpuSignalHandle {
-    // The caller must ensure that the VCPU lifetime is at least as long as the
-    // VcpuSignalHandleInner lifetime.
-    unsafe fn signal_immediate_exit(&self) {
-        (*(self.run)).immediate_exit = 1;
+    fn signal_immediate_exit(&self) {
+        // SAFETY: we ensure `run_mmap` is a valid mapping of `kvm_run` at creation time, and the
+        // `Arc` ensures the mapping still exists while we hold a reference to it.
+        unsafe {
+            let run = self.run_mmap.as_ptr() as *mut gzvm_vcpu_run;
+            (*run).immediate_exit = 1;
+        }
     }
 }
 
@@ -1097,24 +1098,19 @@ pub struct GeniezoneVcpu {
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     id: usize,
-    run_mmap: MemoryMapping,
-    signal_handle: Arc<GeniezoneVcpuSignalHandle>,
+    run_mmap: Arc<MemoryMapping>,
 }
 
 impl Vcpu for GeniezoneVcpu {
     fn try_clone(&self) -> Result<Self> {
         let vm = self.vm.try_clone()?;
         let vcpu = self.vcpu.try_clone()?;
-        let run_mmap = MemoryMappingBuilder::new(self.run_mmap.size())
-            .build()
-            .map_err(|_| Error::new(ENOSPC))?;
 
         Ok(GeniezoneVcpu {
             vm,
             vcpu,
             id: self.id,
-            run_mmap,
-            signal_handle: self.signal_handle.clone(),
+            run_mmap: self.run_mmap.clone(),
         })
     }
 
@@ -1134,7 +1130,9 @@ impl Vcpu for GeniezoneVcpu {
 
     fn signal_handle(&self) -> VcpuSignalHandle {
         VcpuSignalHandle {
-            inner: Arc::downgrade(&self.signal_handle) as _,
+            inner: Box::new(GeniezoneVcpuSignalHandle {
+                run_mmap: self.run_mmap.clone(),
+            }),
         }
     }
 

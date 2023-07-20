@@ -8,7 +8,6 @@ use std::sync::Arc;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::Context;
 use base::error;
 use base::trace;
@@ -34,11 +33,9 @@ use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER_OK;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FAILED;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FEATURES_OK;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_NEEDS_RESET;
-use vm_control::IoEventUpdateRequest;
+use vm_control::api::VmMemoryClient;
 use vm_control::VmMemoryDestination;
 use vm_control::VmMemoryRegionId;
-use vm_control::VmMemoryRequest;
-use vm_control::VmMemoryResponse;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
@@ -290,71 +287,48 @@ pub struct VirtioPciDevice {
     queues: Vec<Queue>,
     queue_evts: Vec<QueueEvent>,
     mem: GuestMemory,
-    settings_bar: u8,
+    settings_bar: PciBarIndex,
     msix_config: Arc<Mutex<MsixConfig>>,
     msix_cap_reg_idx: Option<usize>,
     common_config: VirtioPciCommonConfig,
 
     iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
 
-    // A tube that is present if the device has shared memory regions, and
+    // API client that is present if the device has shared memory regions, and
     // is used to map/unmap files into the shared memory region.
-    shared_memory_tube: Option<Tube>,
+    shared_memory_vm_memory_client: Option<VmMemoryClient>,
 
-    // Tube for request registeration of ioevents when PCI BAR reprogramming is detected.
-    ioevent_tube: Tube,
+    // API client for registration of ioevents when PCI BAR reprogramming is detected.
+    ioevent_vm_memory_client: VmMemoryClient,
+
+    // State only present while asleep.
+    sleep_state: Option<SleepState>,
 }
 
-fn ioevent_request(ioevent_tube: &Tube, request: IoEventUpdateRequest) -> anyhow::Result<()> {
-    ioevent_tube
-        .send(&VmMemoryRequest::IoEventRaw(request))
-        .context("ioevent_tube.send()")?;
-    match ioevent_tube
-        .recv::<VmMemoryResponse>()
-        .context("ioevent_tube.recv()")?
-    {
-        VmMemoryResponse::Ok => Ok(()),
-        VmMemoryResponse::Err(e) => Err(e).context("VmMemoryRequest::IoEventRaw"),
-        other => Err(anyhow!("unexpected VmMemoryResponse {:?}", other)),
-    }
+enum SleepState {
+    // Asleep and device hasn't been activated yet by the guest.
+    Inactive,
+    // Asleep and device has been activated by the guest.
+    Active {
+        /// The queues returned from `VirtioDevice::virtio_sleep`.
+        /// Map is from queue index -> Queue.
+        activated_queues: BTreeMap<usize, Queue>,
+    },
 }
 
-fn register_ioevent(
-    ioevent_tube: &Tube,
-    event: &Event,
-    addr: u64,
-    datamatch: Datamatch,
-) -> anyhow::Result<()> {
-    ioevent_request(
-        ioevent_tube,
-        IoEventUpdateRequest {
-            event: event
-                .try_clone()
-                .context("failed to clone event for ioevent_request")?,
-            addr,
-            datamatch,
-            register: true,
-        },
-    )
-}
+#[derive(Serialize, Deserialize)]
+struct VirtioPciDeviceSnapshot {
+    config_regs: PciConfiguration,
 
-fn unregister_ioevent(
-    ioevent_tube: &Tube,
-    event: &Event,
-    addr: u64,
-    datamatch: Datamatch,
-) -> anyhow::Result<()> {
-    ioevent_request(
-        ioevent_tube,
-        IoEventUpdateRequest {
-            event: event
-                .try_clone()
-                .context("failed to clone event for ioevent_request")?,
-            addr,
-            datamatch,
-            register: false,
-        },
-    )
+    inner_device: serde_json::Value,
+    device_activated: bool,
+
+    interrupt: Option<InterruptSnapshot>,
+    msix_config: serde_json::Value,
+    common_config: VirtioPciCommonConfig,
+
+    queues: Vec<serde_json::Value>,
+    activated_queues: Option<Vec<(usize, serde_json::Value)>>,
 }
 
 impl VirtioPciDevice {
@@ -364,13 +338,13 @@ impl VirtioPciDevice {
         device: Box<dyn VirtioDevice>,
         msi_device_tube: Tube,
         disable_intx: bool,
-        shared_memory_tube: Option<Tube>,
-        ioevent_tube: Tube,
+        shared_memory_vm_memory_client: Option<VmMemoryClient>,
+        ioevent_vm_memory_client: VmMemoryClient,
     ) -> Result<Self> {
-        // shared_memory_tube is required if there are shared memory regions.
+        // shared_memory_vm_memory_client is required if there are shared memory regions.
         assert_eq!(
             device.get_shared_memory_region().is_none(),
-            shared_memory_tube.is_none()
+            shared_memory_vm_memory_client.is_none()
         );
 
         let mut queue_evts = Vec::new();
@@ -446,8 +420,9 @@ impl VirtioPciDevice {
                 msix_config: VIRTIO_MSI_NO_VECTOR,
             },
             iommu: None,
-            shared_memory_tube,
-            ioevent_tube,
+            shared_memory_vm_memory_client,
+            ioevent_vm_memory_client,
+            sleep_state: None,
         })
     }
 
@@ -531,29 +506,24 @@ impl VirtioPciDevice {
             .map_err(PciDeviceError::CapabilitiesSetup)?;
         self.msix_cap_reg_idx = Some(msix_offset / 4);
 
-        self.settings_bar = settings_bar;
+        self.settings_bar = settings_bar as PciBarIndex;
         Ok(())
     }
 
     /// Activates the underlying `VirtioDevice`. `assign_irq` has to be called first.
     fn activate(&mut self) -> anyhow::Result<()> {
-        let interrupt_evt = if let Some(ref evt) = self.interrupt_evt {
-            evt.try_clone()
-                .with_context(|| format!("{} failed to clone interrupt_evt", self.debug_label()))?
-        } else {
-            return Err(anyhow!("{} interrupt_evt is none", self.debug_label()));
-        };
-
-        let mem = self.mem.clone();
-
         let interrupt = Interrupt::new(
-            interrupt_evt,
+            self.interrupt_evt
+                .as_ref()
+                .ok_or_else(|| anyhow!("{} interrupt_evt is none", self.debug_label()))?
+                .try_clone()
+                .with_context(|| format!("{} failed to clone interrupt_evt", self.debug_label()))?,
             Some(self.msix_config.clone()),
             self.common_config.msix_config,
         );
         self.interrupt = Some(interrupt.clone());
 
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
 
         // Use ready queues and their events.
@@ -565,13 +535,13 @@ impl VirtioPciDevice {
             .filter(|((_, q), _)| q.ready())
             .map(|((queue_index, queue), evt)| {
                 if !evt.ioevent_registered {
-                    register_ioevent(
-                        &self.ioevent_tube,
-                        &evt.event,
-                        notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
-                        Datamatch::AnyLength,
-                    )
-                    .context("failed to register ioevent")?;
+                    self.ioevent_vm_memory_client
+                        .register_io_event(
+                            evt.event.try_clone().context("failed to clone Event")?,
+                            notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
+                            Datamatch::AnyLength,
+                        )
+                        .context("failed to register ioevent")?;
                     evt.ioevent_registered = true;
                 }
                 Ok((
@@ -585,7 +555,7 @@ impl VirtioPciDevice {
             self.device.set_iommu(iommu);
         }
 
-        if let Err(e) = self.device.activate(mem, interrupt, queues) {
+        if let Err(e) = self.device.activate(self.mem.clone(), interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
             self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
         } else {
@@ -596,18 +566,18 @@ impl VirtioPciDevice {
     }
 
     fn unregister_ioevents(&mut self) -> anyhow::Result<()> {
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar as usize);
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
 
         for (queue_index, evt) in self.queue_evts.iter_mut().enumerate() {
             if evt.ioevent_registered {
-                unregister_ioevent(
-                    &self.ioevent_tube,
-                    &evt.event,
-                    notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
-                    Datamatch::AnyLength,
-                )
-                .context("failed to unregister ioevent")?;
+                self.ioevent_vm_memory_client
+                    .unregister_io_event(
+                        evt.event.try_clone().context("failed to clone Event")?,
+                        notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
+                        Datamatch::AnyLength,
+                    )
+                    .context("failed to unregister ioevent")?;
                 evt.ioevent_registered = false;
             }
         }
@@ -676,7 +646,7 @@ impl PciDevice for VirtioPciDevice {
         if let Some(iommu) = &self.iommu {
             rds.append(&mut iommu.lock().as_raw_descriptors());
         }
-        rds.push(self.ioevent_tube.as_raw_descriptor());
+        rds.push(self.ioevent_vm_memory_client.as_raw_descriptor());
         rds
     }
 
@@ -771,7 +741,7 @@ impl PciDevice for VirtioPciDevice {
 
             self.device
                 .set_shared_memory_mapper(Box::new(VmRequester::new(
-                    self.shared_memory_tube
+                    self.shared_memory_vm_memory_client
                         .take()
                         .expect("missing shared_memory_tube"),
                     alloc,
@@ -816,6 +786,12 @@ impl PciDevice for VirtioPciDevice {
         }
 
         Ok(ranges)
+    }
+
+    fn destroy_device(&mut self) {
+        if let Err(e) = self.unregister_ioevents() {
+            error!("error destroying {}: {:?}", &self.debug_label(), &e);
+        }
     }
 
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {
@@ -865,18 +841,8 @@ impl PciDevice for VirtioPciDevice {
         self.config_regs.write_reg(reg_idx, offset, data)
     }
 
-    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        let bar = match self
-            .config_regs
-            .get_bars()
-            .find(|bar| bar.address_range().contains(&addr))
-        {
-            Some(bar) => bar,
-            None => return,
-        };
-
-        if bar.bar_index() == self.settings_bar as PciBarIndex {
-            let offset = addr - bar.address();
+    fn read_bar(&mut self, bar_index: usize, offset: u64, data: &mut [u8]) {
+        if bar_index == self.settings_bar {
             match offset {
                 COMMON_CONFIG_BAR_OFFSET..=COMMON_CONFIG_LAST => self.common_config.read(
                     offset - COMMON_CONFIG_BAR_OFFSET,
@@ -914,23 +880,12 @@ impl PciDevice for VirtioPciDevice {
                 _ => (),
             }
         } else {
-            self.device
-                .read_bar(bar.bar_index(), addr - bar.address(), data);
+            self.device.read_bar(bar_index, offset, data);
         }
     }
 
-    fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let bar = match self
-            .config_regs
-            .get_bars()
-            .find(|bar| bar.address_range().contains(&addr))
-        {
-            Some(bar) => bar,
-            None => return,
-        };
-
-        if bar.bar_index() == self.settings_bar as PciBarIndex {
-            let offset = addr - bar.address();
+    fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
+        if bar_index == self.settings_bar {
             match offset {
                 COMMON_CONFIG_BAR_OFFSET..=COMMON_CONFIG_LAST => self.common_config.write(
                     offset - COMMON_CONFIG_BAR_OFFSET,
@@ -978,8 +933,7 @@ impl PciDevice for VirtioPciDevice {
                 _ => (),
             }
         } else {
-            self.device
-                .write_bar(bar.bar_index(), addr - bar.address(), data);
+            self.device.write_bar(bar_index, offset, data);
         }
 
         if !self.device_activated && self.is_driver_ready() {
@@ -1023,53 +977,259 @@ impl PciDevice for VirtioPciDevice {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct VirtioPciDeviceSnapshot {
-    inner_device: serde_json::Value,
-    msix_config: serde_json::Value,
-}
-
 impl Suspendable for VirtioPciDevice {
     fn sleep(&mut self) -> anyhow::Result<()> {
-        if let Some(state) = self.device.stop()? {
-            self.queues = state.queues;
+        // If the device is already asleep, we should not request it to sleep again.
+        if self.sleep_state.is_some() {
+            return Ok(());
+        }
+
+        // Don't call `self.device.virtio_sleep()` for vhost user devices if the device is not
+        // activated yet, since it will always return an empty Vec.
+        if !self.device_activated && self.device.is_vhost_user() {
+            // This will need to be set, so that a cold restore will work.
+            self.sleep_state = Some(SleepState::Inactive);
+            return Ok(());
+        }
+        if let Some(queues) = self.device.virtio_sleep()? {
+            anyhow::ensure!(
+                self.device_activated,
+                "unactivated device returned queues on sleep"
+            );
+            self.sleep_state = Some(SleepState::Active {
+                activated_queues: queues,
+            });
+        } else {
+            anyhow::ensure!(
+                !self.device_activated,
+                "activated device didn't return queues on sleep"
+            );
+            self.sleep_state = Some(SleepState::Inactive);
         }
         Ok(())
     }
 
     fn wake(&mut self) -> anyhow::Result<()> {
-        if self.device_activated {
-            self.activate()?;
+        // A vhost user device that isn't activated doesn't need to be woken up.
+        if !self.device_activated && self.device.is_vhost_user() {
+            self.sleep_state = None;
+            return Ok(());
         }
+        match self.sleep_state.take() {
+            None => {
+                // If the device is already awake, we should not request it to wake again.
+            }
+            Some(SleepState::Inactive) => {
+                self.device
+                    .virtio_wake(None)
+                    .expect("virtio_wake failed, can't recover");
+            }
+            Some(SleepState::Active { activated_queues }) => {
+                let mut queues_to_wake = BTreeMap::new();
+
+                for (index, queue) in activated_queues.into_iter() {
+                    queues_to_wake.insert(
+                        index,
+                        (
+                            queue,
+                            self.queue_evts[index]
+                                .event
+                                .try_clone()
+                                .expect("failed to clone event"),
+                        ),
+                    );
+                }
+
+                self.device
+                    .virtio_wake(Some((
+                        self.mem.clone(),
+                        self.interrupt
+                            .clone()
+                            .expect("interrupt missing for already active queues"),
+                        queues_to_wake,
+                    )))
+                    .expect("virtio_wake failed, can't recover");
+            }
+        };
         Ok(())
     }
 
     fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        if self.iommu.is_some() {
+            return Err(anyhow!("Cannot snapshot if iommu is present."));
+        }
+
         serde_json::to_value(VirtioPciDeviceSnapshot {
-            inner_device: self.device.snapshot()?,
+            config_regs: self.config_regs.clone(),
+            inner_device: self.device.virtio_snapshot()?,
+            device_activated: self.device_activated,
+            interrupt: self.interrupt.as_ref().map(|i| i.snapshot()),
             msix_config: self.msix_config.lock().snapshot()?,
+            common_config: self.common_config,
+            queues: self
+                .queues
+                .iter()
+                .map(|q| q.snapshot())
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            activated_queues: match &self.sleep_state {
+                None => {
+                    anyhow::bail!("tried snapshotting while awake")
+                }
+                Some(SleepState::Inactive) => None,
+                Some(SleepState::Active { activated_queues }) => {
+                    let mut serialized_queues = Vec::new();
+                    for (index, queue) in activated_queues.iter() {
+                        serialized_queues.push((*index, queue.snapshot()?));
+                    }
+                    Some(serialized_queues)
+                }
+            },
         })
         .context("failed to serialize VirtioPciDeviceSnapshot")
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        // Restoring from an activated state is more complex and low priority, so just fail for
+        // now. We'll need to reset the device before restoring, e.g. must call
+        // self.unregister_ioevents().
+        anyhow::ensure!(
+            !self.device_activated,
+            "tried to restore after virtio device activated. not supported yet"
+        );
+
         let deser: VirtioPciDeviceSnapshot = serde_json::from_value(data)?;
+
+        self.config_regs = deser.config_regs;
+        self.device_activated = deser.device_activated;
+
         self.msix_config.lock().restore(deser.msix_config)?;
-        self.device.restore(deser.inner_device)
+        self.common_config = deser.common_config;
+
+        assert_eq!(
+            self.queues.len(),
+            deser.queues.len(),
+            "device must have the same number of queues"
+        );
+        for (q, s) in self.queues.iter_mut().zip(deser.queues.into_iter()) {
+            *q = Queue::restore(s)?;
+        }
+
+        // Verify we are asleep and inactive.
+        match &self.sleep_state {
+            None => {
+                anyhow::bail!("tried restoring while awake")
+            }
+            Some(SleepState::Inactive) => {}
+            Some(SleepState::Active { .. }) => {
+                anyhow::bail!("tried to restore after virtio device activated. not supported yet")
+            }
+        };
+        // Restore `sleep_state`.
+        if let Some(activated_queues_snapshot) = deser.activated_queues {
+            let mut activated_queues = BTreeMap::new();
+            for (index, queue_snapshot) in activated_queues_snapshot {
+                activated_queues.insert(index, Queue::restore(queue_snapshot)?);
+            }
+
+            // Restore the activated queues.
+            self.sleep_state = Some(SleepState::Active { activated_queues });
+        } else {
+            self.sleep_state = Some(SleepState::Inactive);
+        }
+
+        // Also replicate the other work in activate: initialize the interrupt and queues
+        // events. This could just as easily be done in `wake` instead.
+        // NOTE: Needs to be done last in `restore` because it relies on the other VirtioPciDevice
+        // fields.
+        if let Some(deser_interrupt) = deser.interrupt {
+            self.interrupt = Some(Interrupt::new_from_snapshot(
+                self.interrupt_evt
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("{} interrupt_evt is none", self.debug_label()))?
+                    .try_clone()
+                    .with_context(|| {
+                        format!("{} failed to clone interrupt_evt", self.debug_label())
+                    })?,
+                Some(self.msix_config.clone()),
+                self.common_config.msix_config,
+                deser_interrupt,
+            ));
+        }
+
+        // Call register_io_events for the activated queue events.
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
+        let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
+        self.queues
+            .iter()
+            .enumerate()
+            .zip(self.queue_evts.iter_mut())
+            .filter(|((_, q), _)| q.ready())
+            .try_for_each(|((queue_index, _queue), evt)| {
+                if !evt.ioevent_registered {
+                    self.ioevent_vm_memory_client
+                        .register_io_event(
+                            evt.event.try_clone().context("failed to clone Event")?,
+                            notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
+                            Datamatch::AnyLength,
+                        )
+                        .context("failed to register ioevent")?;
+                    evt.ioevent_registered = true;
+                }
+                Ok::<(), anyhow::Error>(())
+            })?;
+
+        if self.device.is_vhost_user() {
+            let (queue_evts, interrupt) = if self.device_activated {
+                (
+                    Some(
+                        self.queue_evts
+                            .iter()
+                            .map(|queue_evt| {
+                                queue_evt
+                                    .event
+                                    .try_clone()
+                                    .context("Failed to clone queue_evt")
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?,
+                    ),
+                    Some(
+                        self.interrupt
+                            .as_ref()
+                            .expect("Interrupt should not be empty if device was activated.")
+                            .clone(),
+                    ),
+                )
+            } else {
+                (None, None)
+            };
+            self.device.vhost_user_restore(
+                deser.inner_device,
+                &self.queues,
+                queue_evts,
+                interrupt,
+                self.mem.clone(),
+                &self.msix_config,
+                self.device_activated,
+            )?;
+        } else {
+            self.device.virtio_restore(deser.inner_device)?;
+        }
+
+        Ok(())
     }
 }
 
 struct VmRequester {
-    tube: Tube,
+    vm_memory_client: VmMemoryClient,
     alloc: Alloc,
     mappings: BTreeMap<u64, VmMemoryRegionId>,
     needs_prepare: bool,
 }
 
 impl VmRequester {
-    fn new(tube: Tube, alloc: Alloc, do_prepare: bool) -> Self {
+    fn new(vm_memory_client: VmMemoryClient, alloc: Alloc, do_prepare: bool) -> Self {
         Self {
-            tube,
+            vm_memory_client,
             alloc,
             mappings: BTreeMap::new(),
             needs_prepare: do_prepare,
@@ -1085,57 +1245,36 @@ impl SharedMemoryMapper for VmRequester {
         prot: Protection,
     ) -> anyhow::Result<()> {
         if self.needs_prepare {
-            self.tube
-                .send(&VmMemoryRequest::PrepareSharedMemoryRegion { alloc: self.alloc })
-                .context("failed to send request")?;
-            match self
-                .tube
-                .recv()
-                .context("failed to recieve request response")?
-            {
-                VmMemoryResponse::Ok => (),
-                e => bail!("unexpected response {:?}", e),
-            };
+            self.vm_memory_client
+                .prepare_shared_memory_region(self.alloc)
+                .context("prepare_shared_memory_region failed")?;
             self.needs_prepare = false;
         }
-        let request = VmMemoryRequest::RegisterMemory {
-            source,
-            dest: VmMemoryDestination::ExistingAllocation {
-                allocation: self.alloc,
-                offset,
-            },
-            prot,
-        };
-        self.tube.send(&request).context("failed to send request")?;
-        match self
-            .tube
-            .recv()
-            .context("failed to recieve request response")?
-        {
-            VmMemoryResponse::RegisterMemory(id) => {
-                self.mappings.insert(offset, id);
-                Ok(())
-            }
-            e => Err(anyhow!("unexpected response {:?}", e)),
-        }
+
+        let id = self
+            .vm_memory_client
+            .register_memory(
+                source,
+                VmMemoryDestination::ExistingAllocation {
+                    allocation: self.alloc,
+                    offset,
+                },
+                prot,
+            )
+            .context("register_memory failed")?;
+
+        self.mappings.insert(offset, id);
+        Ok(())
     }
 
     fn remove_mapping(&mut self, offset: u64) -> anyhow::Result<()> {
         let id = self.mappings.remove(&offset).context("invalid offset")?;
-        self.tube
-            .send(&VmMemoryRequest::UnregisterMemory(id))
-            .context("failed to send request")?;
-        match self
-            .tube
-            .recv()
-            .context("failed to recieve request response")?
-        {
-            VmMemoryResponse::Ok => Ok(()),
-            e => Err(anyhow!(format!("unexpected response {:?}", e))),
-        }
+        self.vm_memory_client
+            .unregister_memory(id)
+            .context("unregister_memory failed")
     }
 
     fn as_raw_descriptor(&self) -> Option<RawDescriptor> {
-        Some(self.tube.as_raw_descriptor())
+        Some(self.vm_memory_client.as_raw_descriptor())
     }
 }
