@@ -16,6 +16,24 @@
       "message": "crosvm side here:\n\ncrrev.com/c/4697702\n\nI think the crosvm side and AOSP sides should land roughly at the same time.  The reason is because if we land the crosvm side without AOSP side, other workflows might be worken:\n\nhttps://gitlab.com/qemu-project/qemu/-/issues/1611",
       "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "56d2f218_47932d10",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-21T20:28:04Z",
+      "side": 1,
+      "message": "I\u0027m not sure what the link is about. We need AOSP crosvm and upstream crosvm to be exactly in sync, otherwise some upstream qemu workflow is going to be broken? Sound unsupported to me. Maybe we can chat more to understand what your need is.\n\nUpstream crosvm changes land in AOSP generally within a week. I\u0027d think that would be good enough.\n\nThis is up in the air still, but, in the trunk stable world, we might decide to freeze crosvm imports occasionally for weeks. If we do that, we aren\u0027t going want to make an exception for just rutabaga_gfx changes.",
+      "parentUuid": "a3bd193f_a267a9a9",
+      "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
