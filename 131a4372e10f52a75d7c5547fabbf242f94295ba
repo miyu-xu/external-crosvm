@@ -52,6 +52,24 @@
       "parentUuid": "56d2f218_47932d10",
       "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "92038cc5_744e727b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-21T21:50:41Z",
+      "side": 1,
+      "message": "I still don\u0027t get why you think they need to be in sync. The QEMU folks could just grab a compatible crosvm commit or use the AOSP crosvm repo instead.\n\nAnyways, I don\u0027t have a blocking concern, just wanted to communicate that we might have to push back more in the future. If the API breakages are going settle down soon, them I\u0027m happy :)",
+      "parentUuid": "e741afc6_b9a2ddac",
+      "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
