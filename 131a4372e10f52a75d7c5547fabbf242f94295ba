@@ -34,6 +34,24 @@
       "parentUuid": "a3bd193f_a267a9a9",
       "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e741afc6_b9a2ddac",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-07-21T21:26:44Z",
+      "side": 1,
+      "message": "\u003e We need AOSP crosvm and upstream crosvm to be exactly in sync, otherwise some upstream qemu workflow is going to be broken?\n\nI agree with you there.  the upstream side has already been reviewed, as is ready to merge.  It\u0027s the AOSP merges which typically take more time:\n\nhttps://chromium-review.googlesource.com/c/crosvm/crosvm/+/4697702\n\nBut gfxstream upstream is AOSP, so this needs to land along with that.  \n\nSoonish (\u003c 1 month), the gfxstream API will be stabilized  and an official release (hence QEMU workflow) so it won\u0027t be a recurring problem.\n\nBut gfxstream interface needs to be cleaned up before we could issue an issue release.",
+      "parentUuid": "56d2f218_47932d10",
+      "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
