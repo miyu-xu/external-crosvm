@@ -10,8 +10,6 @@
 //! implementation (referred to as `device backend` in this module) in the
 //! device VM.
 
-#![allow(deprecated)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
@@ -40,7 +38,6 @@ use base::SafeDescriptor;
 use base::ScmSocket;
 use base::WaitContext;
 use base::WorkerThread;
-use data_model::zerocopy_from_slice;
 use data_model::DataInit;
 use data_model::Le32;
 use hypervisor::Datamatch;
@@ -92,6 +89,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::PciCapabilityType;
 use crate::virtio::Queue;
+use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::virtio::VirtioPciCap;
 use crate::virtio::VIRTIO_F_ACCESS_PLATFORM;
@@ -161,6 +159,9 @@ struct VirtioVhostUserConfig {
     max_vhost_queues: Le32,
     uuid: [u8; CONFIG_UUID_SIZE],
 }
+
+// Safe because it only has data and has no implicit padding.
+unsafe impl DataInit for VirtioVhostUserConfig {}
 
 impl Default for VirtioVhostUserConfig {
     fn default() -> Self {
@@ -746,7 +747,7 @@ impl Worker {
             bail!("payload size {} lesser than minimum required", payload_size);
         }
         let (msg_slice, regions_slice) = payload.split_at(std::mem::size_of::<VhostUserMemory>());
-        let msg = zerocopy_from_slice::<VhostUserMemory>(msg_slice).ok_or(anyhow!(
+        let msg = VhostUserMemory::from_slice(msg_slice).ok_or(anyhow!(
             "failed to convert SET_MEM_TABLE message to VhostUserMemory"
         ))?;
         if !msg.is_valid() {
@@ -763,7 +764,7 @@ impl Worker {
 
         let regions: Vec<&VhostUserMemoryRegion> = regions_slice
             .chunks(std::mem::size_of::<VhostUserMemoryRegion>())
-            .map(zerocopy_from_slice::<VhostUserMemoryRegion>)
+            .map(VhostUserMemoryRegion::from_slice)
             .collect::<Option<_>>()
             .context("failed to construct VhostUserMemoryRegion array")?;
 
@@ -978,7 +979,7 @@ impl Worker {
     }
 
     fn handle_unmap_reply(&mut self, payload: &[u8]) -> Result<()> {
-        let ack = zerocopy_from_slice::<VhostUserU64>(payload)
+        let ack = VhostUserU64::from_slice(payload)
             .context("failed to parse ack")?
             .value;
         if ack != 0 {
@@ -1009,7 +1010,8 @@ impl Worker {
 
         let fd = match hdr.get_code() {
             SlaveReq::SHMEM_MAP => {
-                let msg = vhost_body_from_message_bytes(&mut msg).context("incomplete message")?;
+                let mut msg =
+                    vhost_body_from_message_bytes(&mut msg).context("incomplete message")?;
                 let fd = self
                     .handle_map_message(msg)
                     .context("failed to handle map message")?;
@@ -1679,7 +1681,7 @@ impl VirtioDevice for VirtioVhostUser {
 
     fn write_config(&mut self, offset: u64, data: &[u8]) {
         copy_config(
-            self.config.as_bytes_mut(),
+            self.config.as_mut_slice(),
             offset,
             data,
             0, /* src_offset */

@@ -479,6 +479,9 @@ bitflags! {
     }
 }
 
+// Message definitions follow.  It is safe to implement DataInit for all of these
+// because they are POD types.
+
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, AsBytes, FromBytes)]
 pub struct Attr {

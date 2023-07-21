@@ -49,13 +49,15 @@ use crate::virtio::vhost::user::device::handler::VhostUserPlatformOps;
 use crate::virtio::vhost::user::VhostUserDevice;
 use crate::virtio::vhost::user::VhostUserListener;
 use crate::virtio::vhost::user::VhostUserListenerTrait;
-use crate::virtio::QueueConfig;
+use crate::virtio::Queue;
+use crate::virtio::QueueType::Split;
+use crate::virtio::SignalableInterrupt;
 
 const MAX_VRING_LEN: u16 = QUEUE_SIZE;
 const EVENT_QUEUE: usize = NUM_QUEUES - 1;
 
 struct VsockBackend {
-    queues: [QueueConfig; NUM_QUEUES],
+    queues: [Queue; NUM_QUEUES],
     vmm_maps: Option<Vec<MappingInfo>>,
     mem: Option<GuestMemory>,
     ops: Box<dyn VhostUserPlatformOps>,
@@ -110,9 +112,9 @@ impl VhostUserDevice for VhostUserVsockDevice {
     ) -> anyhow::Result<Box<dyn vmm_vhost::VhostUserSlaveReqHandler>> {
         let backend = VsockBackend {
             queues: [
-                QueueConfig::new(MAX_VRING_LEN, 0),
-                QueueConfig::new(MAX_VRING_LEN, 0),
-                QueueConfig::new(MAX_VRING_LEN, 0),
+                Queue::new(Split, MAX_VRING_LEN),
+                Queue::new(Split, MAX_VRING_LEN),
+                Queue::new(Split, MAX_VRING_LEN),
             ],
             vmm_maps: None,
             mem: None,

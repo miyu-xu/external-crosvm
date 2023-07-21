@@ -888,7 +888,7 @@ impl AvFrameBuilder {
         BI: IntoIterator<Item = AvBuffer>,
         PI: IntoIterator<Item = PlaneDescriptor>,
     >(
-        self,
+        mut self,
         buffers: BI,
         planes: PI,
     ) -> Result<AvFrame, AvFrameError> {

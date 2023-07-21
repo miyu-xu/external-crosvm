@@ -39,21 +39,21 @@ use crate::virtio::video::response::Response;
 use crate::virtio::video::Error;
 use crate::virtio::video::Result;
 use crate::virtio::DescriptorChain;
-use crate::virtio::Interrupt;
 use crate::virtio::Queue;
+use crate::virtio::SignalableInterrupt;
 
 /// Worker that takes care of running the virtio video device.
-pub struct Worker {
+pub struct Worker<I: SignalableInterrupt> {
     /// Memory region of the guest VM
     mem: GuestMemory,
     /// VirtIO queue for Command queue
     cmd_queue: Queue,
     /// Device-to-driver notification for command queue
-    cmd_queue_interrupt: Interrupt,
+    cmd_queue_interrupt: I,
     /// VirtIO queue for Event queue
     event_queue: Queue,
     /// Device-to-driver notification for the event queue.
-    event_queue_interrupt: Interrupt,
+    event_queue_interrupt: I,
     /// Stores descriptor chains in which responses for asynchronous commands will be written
     desc_map: AsyncCmdDescMap,
 }
@@ -61,13 +61,13 @@ pub struct Worker {
 /// Pair of a descriptor chain and a response to be written.
 type WritableResp = (DescriptorChain, response::CmdResponse);
 
-impl Worker {
+impl<I: SignalableInterrupt> Worker<I> {
     pub fn new(
         mem: GuestMemory,
         cmd_queue: Queue,
-        cmd_queue_interrupt: Interrupt,
+        cmd_queue_interrupt: I,
         event_queue: Queue,
-        event_queue_interrupt: Interrupt,
+        event_queue_interrupt: I,
     ) -> Self {
         Self {
             mem,

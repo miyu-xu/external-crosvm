@@ -68,6 +68,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::virtio::Writer;
@@ -579,11 +580,11 @@ impl State {
     }
 }
 
-async fn request_queue(
+async fn request_queue<I: SignalableInterrupt>(
     state: &Rc<RefCell<State>>,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: Interrupt,
+    interrupt: I,
 ) -> Result<()> {
     loop {
         let mem = state.borrow().mem.clone();

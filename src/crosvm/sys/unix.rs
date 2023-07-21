@@ -1337,7 +1337,8 @@ fn create_guest_memory(
     Ok(guest_mem)
 }
 
-#[cfg(all(target_arch = "aarch64", feature = "geniezone"))]
+#[cfg(any(target_arch = "aarch64"))]
+#[cfg(feature = "geniezone")]
 fn run_gz(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> Result<ExitState> {
     let device_path = device_path.unwrap_or(Path::new(GENIEZONE_PATH));
     let gzvm = Geniezone::new_with_path(device_path)

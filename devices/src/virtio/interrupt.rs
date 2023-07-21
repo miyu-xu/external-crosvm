@@ -19,6 +19,26 @@ use crate::irq_event::IrqEdgeEvent;
 use crate::irq_event::IrqLevelEvent;
 use crate::pci::MsixConfig;
 
+pub trait SignalableInterrupt: Clone {
+    /// Writes to the irqfd to VMM to deliver virtual interrupt to the guest.
+    fn signal(&self, vector: u16, interrupt_status_mask: u32);
+
+    /// Notify the driver that buffers have been placed in the used queue.
+    fn signal_used_queue(&self, vector: u16) {
+        self.signal(vector, INTERRUPT_STATUS_USED_RING)
+    }
+
+    /// Notify the driver that the device configuration has changed.
+    fn signal_config_changed(&self);
+
+    /// Get the event to signal resampling is needed if it exists.
+    fn get_resample_evt(&self) -> Option<&Event>;
+
+    /// Reads the status and writes to the interrupt event. Doesn't read the resample event, it
+    /// assumes the resample has been requested.
+    fn do_interrupt_resample(&self);
+}
+
 struct TransportPci {
     irq_evt_lvl: IrqLevelEvent,
     msix_config: Option<Arc<Mutex<MsixConfig>>>,
@@ -73,12 +93,12 @@ pub struct InterruptSnapshot {
     interrupt_status: usize,
 }
 
-impl Interrupt {
-    /// Writes to the irqfd to VMM to deliver virtual interrupt to the guest.
+impl SignalableInterrupt for Interrupt {
+    /// Virtqueue Interrupts From The Device
     ///
     /// If MSI-X is enabled in this device, MSI-X interrupt is preferred.
     /// Write to the irqfd to VMM to deliver virtual interrupt to the guest
-    pub fn signal(&self, vector: u16, interrupt_status_mask: u32) {
+    fn signal(&self, vector: u16, interrupt_status_mask: u32) {
         match &self.inner.transport {
             Transport::Pci { pci } => {
                 // Don't need to set ISR for MSI-X interrupts
@@ -117,13 +137,7 @@ impl Interrupt {
         }
     }
 
-    /// Notify the driver that buffers have been placed in the used queue.
-    pub fn signal_used_queue(&self, vector: u16) {
-        self.signal(vector, INTERRUPT_STATUS_USED_RING)
-    }
-
-    /// Notify the driver that the device configuration has changed.
-    pub fn signal_config_changed(&self) {
+    fn signal_config_changed(&self) {
         let vector = match &self.inner.as_ref().transport {
             Transport::Pci { pci } => pci.config_msix_vector,
             _ => VIRTIO_MSI_NO_VECTOR,
@@ -131,17 +145,14 @@ impl Interrupt {
         self.signal(vector, INTERRUPT_STATUS_CONFIG_CHANGED)
     }
 
-    /// Get the event to signal resampling is needed if it exists.
-    pub fn get_resample_evt(&self) -> Option<&Event> {
+    fn get_resample_evt(&self) -> Option<&Event> {
         match &self.inner.as_ref().transport {
             Transport::Pci { pci } => Some(pci.irq_evt_lvl.get_resample()),
             _ => None,
         }
     }
 
-    /// Reads the status and writes to the interrupt event. Doesn't read the resample event, it
-    /// assumes the resample has been requested.
-    pub fn do_interrupt_resample(&self) {
+    fn do_interrupt_resample(&self) {
         if self.inner.interrupt_status.load(Ordering::SeqCst) != 0 {
             match &self.inner.as_ref().transport {
                 Transport::Pci { pci } => pci.irq_evt_lvl.trigger().unwrap(),

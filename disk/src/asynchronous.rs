@@ -70,16 +70,10 @@ impl<T: DiskFile + Send> AsRawDescriptors for AsyncDiskFileWrapper<T> {
     }
 }
 
-pub trait DiskFlush {
-    /// Flush intermediary buffers and/or dirty state to file. fsync not required.
-    fn flush(&mut self) -> io::Result<()>;
-}
-
 #[async_trait(?Send)]
 impl<
         T: 'static
             + DiskFile
-            + DiskFlush
             + Send
             + FileAllocate
             + FileSetLen
@@ -94,16 +88,6 @@ impl<
             .expect("AsyncDiskFile pool shutdown failed");
         let mtx: Mutex<T> = Arc::try_unwrap(self.inner).expect("AsyncDiskFile arc unwrap failed");
         Box::new(mtx.into_inner())
-    }
-
-    async fn flush(&self) -> Result<()> {
-        let inner_clone = self.inner.clone();
-        self.blocking_pool
-            .spawn(move || {
-                let mut disk_file = inner_clone.lock();
-                disk_file.flush().map_err(Error::IoFlush)
-            })
-            .await
     }
 
     async fn fsync(&self) -> Result<()> {

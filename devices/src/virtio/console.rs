@@ -48,6 +48,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
+use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 
 pub(crate) const QUEUE_SIZE: u16 = 256;
@@ -78,12 +79,12 @@ pub struct virtio_console_config {
 /// # Arguments
 ///
 /// * `mem` - The GuestMemory to write the data into
-/// * `interrupt` - Interrupt used to signal that the queue has been used
+/// * `interrupt` - SignalableInterrupt used to signal that the queue has been used
 /// * `buffer` - Ring buffer providing data to put into the guest
 /// * `receive_queue` - The receive virtio Queue
-fn handle_input(
+fn handle_input<I: SignalableInterrupt>(
     mem: &GuestMemory,
-    interrupt: &Interrupt,
+    interrupt: &I,
     buffer: &mut VecDeque<u8>,
     receive_queue: &Arc<Mutex<Queue>>,
 ) -> result::Result<(), ConsoleError> {
@@ -141,12 +142,12 @@ fn process_transmit_request(reader: &mut Reader, output: &mut dyn io::Write) -> 
 /// # Arguments
 ///
 /// * `mem` - The GuestMemory to take the data from
-/// * `interrupt` - Interrupt used to signal (if required) that the queue has been used
+/// * `interrupt` - SignalableInterrupt used to signal (if required) that the queue has been used
 /// * `transmit_queue` - The transmit virtio Queue
 /// * `output` - The output sink we are going to write the data into
-fn process_transmit_queue(
+fn process_transmit_queue<I: SignalableInterrupt>(
     mem: &GuestMemory,
-    interrupt: &Interrupt,
+    interrupt: &I,
     transmit_queue: &Arc<Mutex<Queue>>,
     output: &mut dyn io::Write,
 ) {
@@ -454,7 +455,7 @@ impl VirtioDevice for Console {
     }
 
     fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
-        serde_json::to_value(ConsoleSnapshot {
+        serde_json::to_value(&ConsoleSnapshot {
             // Snapshot base_features as a safeguard when restoring the console device. Saving this
             // info allows us to validate that the proper config was used for the console.
             base_features: self.base_features,

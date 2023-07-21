@@ -88,7 +88,9 @@ use base::WaitContext;
 use base::WorkerThread;
 use data_model::*;
 #[cfg(feature = "minigbm")]
-use libc::{EBADF, EINVAL};
+use libc::EBADF;
+#[cfg(feature = "minigbm")]
+use libc::EINVAL;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
 use resources::AddressRange;
@@ -133,6 +135,7 @@ use super::Queue;
 use super::Reader;
 use super::SharedMemoryMapper;
 use super::SharedMemoryRegion;
+use super::SignalableInterrupt;
 use super::VirtioDevice;
 use super::Writer;
 use crate::virtio::device_constants::wl::QUEUE_SIZES;
@@ -535,19 +538,6 @@ impl VmRequester {
     fn register_memory(&self, descriptor: SafeDescriptor, size: u64) -> WlResult<u64> {
         let mut state = self.state.borrow_mut();
         let size = round_up_to_page_size(size as usize) as u64;
-
-        let prot = match FileFlags::from_file(&descriptor) {
-            Ok(FileFlags::Read) => Protection::read(),
-            Ok(FileFlags::Write) => Protection::write(),
-            Ok(FileFlags::ReadWrite) => Protection::read_write(),
-            Err(e) => {
-                return Err(WlError::ShmemMapperError(anyhow!(
-                    "failed to get file descriptor flags with error: {:?}",
-                    e
-                )))
-            }
-        };
-
         let source = VmMemorySource::Descriptor {
             descriptor,
             offset: 0,
@@ -561,7 +551,10 @@ impl VmRequester {
             .context("failed to allocate offset")
             .map_err(WlError::ShmemMapperError)?;
 
-        match state.mapper.add_mapping(source, offset, prot) {
+        match state
+            .mapper
+            .add_mapping(source, offset, Protection::read_write())
+        {
             Ok(()) => {
                 state.allocs.insert(offset, alloc);
                 Ok(offset)
@@ -1688,8 +1681,8 @@ impl WlState {
 pub struct DescriptorsExhausted;
 
 /// Handle incoming events and forward them to the VM over the input queue.
-pub fn process_in_queue(
-    interrupt: &Interrupt,
+pub fn process_in_queue<I: SignalableInterrupt>(
+    interrupt: &I,
     in_queue: &Rc<RefCell<Queue>>,
     mem: &GuestMemory,
     state: &mut WlState,
@@ -1741,8 +1734,8 @@ pub fn process_in_queue(
 }
 
 /// Handle messages from the output queue and forward them to the display sever, if necessary.
-pub fn process_out_queue(
-    interrupt: &Interrupt,
+pub fn process_out_queue<I: SignalableInterrupt>(
+    interrupt: &I,
     out_queue: &Rc<RefCell<Queue>>,
     mem: &GuestMemory,
     state: &mut WlState,

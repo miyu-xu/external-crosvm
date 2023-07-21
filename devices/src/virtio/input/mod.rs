@@ -46,6 +46,7 @@ use super::DescriptorChain;
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
+use super::SignalableInterrupt;
 use super::VirtioDevice;
 
 const EVENT_QUEUE_SIZE: u16 = 64;

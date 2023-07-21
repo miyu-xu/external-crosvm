@@ -9,7 +9,7 @@ use std::sync::MutexGuard;
 
 use base::AsRawDescriptor;
 use base::RawDescriptor;
-use zerocopy::AsBytes;
+use data_model::DataInit;
 
 use crate::connection::Endpoint;
 use crate::connection::EndpointExt;
@@ -39,7 +39,7 @@ impl SlaveInternal {
         fds: Option<&[RawDescriptor]>,
     ) -> Result<u64>
     where
-        T: AsBytes,
+        T: DataInit,
     {
         let len = mem::size_of::<T>();
         let mut hdr = VhostUserMsgHeader::new(request, 0, len as u32);
@@ -109,7 +109,7 @@ impl Slave {
         fds: Option<&[RawDescriptor]>,
     ) -> io::Result<u64>
     where
-        T: AsBytes,
+        T: DataInit,
     {
         self.node()
             .send_message(request, msg, fds)
@@ -153,7 +153,11 @@ impl VhostUserMasterReqHandler for Slave {
 
     /// Handle config change requests.
     fn handle_config_change(&self) -> HandlerResult<u64> {
-        self.send_message(SlaveReq::CONFIG_CHANGE_MSG, &VhostUserEmptyMessage, None)
+        self.send_message(
+            SlaveReq::CONFIG_CHANGE_MSG,
+            &VhostUserEmptyMessage::default(),
+            None,
+        )
     }
 
     /// Forward vhost-user-fs map file requests to the slave.

@@ -47,6 +47,7 @@ use super::copy_config;
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
+use super::SignalableInterrupt;
 use super::VirtioDevice;
 
 // Pvclock has one virtio queue: set_pvclock_page
