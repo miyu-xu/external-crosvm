@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a3bd193f_a267a9a9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2023-07-21T16:51:25Z",
+      "side": 1,
+      "message": "crosvm side here:\n\ncrrev.com/c/4697702\n\nI think the crosvm side and AOSP sides should land roughly at the same time.  The reason is because if we land the crosvm side without AOSP side, other workflows might be worken:\n\nhttps://gitlab.com/qemu-project/qemu/-/issues/1611",
+      "revId": "131a4372e10f52a75d7c5547fabbf242f94295ba",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
