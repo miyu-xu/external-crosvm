@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "be2fecf6_b3626bb7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-07-25T21:32:47Z",
+      "side": 1,
+      "message": "Running AVF presubmits here: https://android-build.googleplex.com/builds/abtd/run/L47300000962210379",
+      "revId": "1ccbd33b3e741ef022084356308447ea3ac31125",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6d8789b1_9ba97374",
+        "filename": "third_party/perfetto",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-07-25T21:32:47Z",
+      "side": 1,
+      "message": "Just noticed this. This was deleted in the next commit, and can probably just stay here for now.",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 14
+      },
+      "revId": "1ccbd33b3e741ef022084356308447ea3ac31125",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
