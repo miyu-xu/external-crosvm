@@ -39,6 +39,24 @@
       "message": "Running AVF presubmits here: https://android-build.googleplex.com/builds/abtd/run/L47300000962210379",
       "revId": "4d2ed7f9a7a5d52db2fa5ed08f7848aab2b11130",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2c4fa750_d2bdff91",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-07-26T23:08:12Z",
+      "side": 1,
+      "message": "It passed and I ran atest --test-mapping $ANDROID_BUILD_TOP/external/crosvm:all\non a Pixel device that supported avf and all of the tests passed there as well.",
+      "parentUuid": "9d2d4077_c8cb2e1d",
+      "revId": "4d2ed7f9a7a5d52db2fa5ed08f7848aab2b11130",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
