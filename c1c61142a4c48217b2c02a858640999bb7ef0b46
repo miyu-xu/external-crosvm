@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "da1e5aaa_03647df2",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-07-27T16:11:40Z",
+      "side": 1,
+      "message": "So the test name was change upstream and brought in with the merge. `cargo_embargo` updated the Android.bp file but not the TEST_MAPPING file.\n\nHow did the merge CL pass presubmits with this undefined test name `base_event_token_derive_test_event_token_derive` still there?\nI see `[Test] v2/android-virtual-infra/test_mapping/presubmit-avd` ran and passed on the CL.\n\nIt would be good to either have `cargo_embargo` smart enough to catch this, or for this to be caught in presubmits.",
+      "range": {
+        "startLine": 10,
+        "startChar": 14,
+        "endLine": 10,
+        "endChar": 50
+      },
+      "revId": "c1c61142a4c48217b2c02a858640999bb7ef0b46",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
