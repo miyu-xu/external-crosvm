@@ -46,6 +46,30 @@
       },
       "revId": "c1c61142a4c48217b2c02a858640999bb7ef0b46",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ce889d81_1d943797",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-07-27T18:24:59Z",
+      "side": 1,
+      "message": "I\u0027d like a feature where we can just say \"include every test in this directory tree\" in the TEST_MAPPING instead of manually listing them.",
+      "parentUuid": "c88bc677_1a7ce17f",
+      "range": {
+        "startLine": 10,
+        "startChar": 14,
+        "endLine": 10,
+        "endChar": 50
+      },
+      "revId": "c1c61142a4c48217b2c02a858640999bb7ef0b46",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
