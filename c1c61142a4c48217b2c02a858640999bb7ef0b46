@@ -22,6 +22,30 @@
       },
       "revId": "c1c61142a4c48217b2c02a858640999bb7ef0b46",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c88bc677_1a7ce17f",
+        "filename": "TEST_MAPPING",
+        "patchSetId": 2
+      },
+      "lineNbr": 10,
+      "author": {
+        "id": 1741317
+      },
+      "writtenOn": "2023-07-27T16:16:47Z",
+      "side": 1,
+      "message": "The test mapping suite just runs the test if finds for a given repo while running in treehugger. We have a differrent test to check whether all test_mapping files are validated or not(check the bug). IIRc, there was a plan to move that test to presubmit too in order to catch issues like these.",
+      "parentUuid": "da1e5aaa_03647df2",
+      "range": {
+        "startLine": 10,
+        "startChar": 14,
+        "endLine": 10,
+        "endChar": 50
+      },
+      "revId": "c1c61142a4c48217b2c02a858640999bb7ef0b46",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
