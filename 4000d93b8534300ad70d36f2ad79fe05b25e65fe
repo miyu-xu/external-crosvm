@@ -16,6 +16,24 @@
       "message": "this is manually tested on pKVM device?",
       "revId": "4000d93b8534300ad70d36f2ad79fe05b25e65fe",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3b1289d6_530fc550",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-07-31T20:05:59Z",
+      "side": 1,
+      "message": "oh wait, nvm, I see we do it automatically this week! nice.",
+      "parentUuid": "ebefe538_40f2d953",
+      "revId": "4000d93b8534300ad70d36f2ad79fe05b25e65fe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
