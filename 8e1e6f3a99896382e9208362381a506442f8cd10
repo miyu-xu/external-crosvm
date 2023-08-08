@@ -33,6 +33,41 @@
       "message": "do or should we do similar on the guest?",
       "revId": "8e1e6f3a99896382e9208362381a506442f8cd10",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "70ac299c_32620e79",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2023-08-08T23:21:01Z",
+      "side": 1,
+      "message": "Thanks for reviewing!",
+      "revId": "8e1e6f3a99896382e9208362381a506442f8cd10",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1d79d1fa_0de322a2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2023-08-08T23:21:01Z",
+      "side": 1,
+      "message": "As @fmayle@google.com mentioned, go/Android.bp [says for the `strip` section](https://cs.android.com/android/platform/superproject/main/+/main:build/soong/cc/strip.go;l\u003d27;drc\u003d8cf32365192c3d0ec4e13d0b1ff649e7dae157b7):\n\n\u003e Device modules default to stripping enabled leaving mini debuginfo. Host modules default to stripping disabled, but can be enabled by setting any other strip boolean property.",
+      "parentUuid": "1e5899a4_8f203fc3",
+      "revId": "8e1e6f3a99896382e9208362381a506442f8cd10",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
