@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "47881bce_13575ce2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-08-08T18:13:33Z",
+      "side": 1,
+      "message": "Huh, I thought this was a the default, but according to go/androidbp we only strip device binaries by default.",
+      "revId": "8e1e6f3a99896382e9208362381a506442f8cd10",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
