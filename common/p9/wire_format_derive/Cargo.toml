@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (b23f0d ANDROID: fetch less from git during merge setup)
 [package]
 name = "wire_format_derive"
 version = "0.1.0"
@@ -10,3 +11,5 @@ proc-macro2 = "^1"
 
 [lib]
 proc-macro = true
+=======
+>>>>>>> BRANCH (befcb6 e2e_tests: Allow rootfs to be compressed and/or rw)
