@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "54b00d8a_97f8e5b5",
+        "filename": "common/p9/wire_format_derive/Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-08-16T20:08:00Z",
+      "side": 1,
+      "message": "It looks like the upstream version of this file that was deleted in the merge is using `\"^2\"`. Should we be using that here too?\n\nhttps://android-review.git.corp.google.com/c/platform/external/crosvm/+/2708832/2/common/p9/wire_format_derive/Cargo.toml",
+      "range": {
+        "startLine": 7,
+        "startChar": 6,
+        "endLine": 7,
+        "endChar": 10
+      },
+      "revId": "91976dd21123c40ffa2eba3ca16542389cec6b03",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
