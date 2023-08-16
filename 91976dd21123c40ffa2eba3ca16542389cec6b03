@@ -22,6 +22,30 @@
       },
       "revId": "91976dd21123c40ffa2eba3ca16542389cec6b03",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1cc722ef_a71812e9",
+        "filename": "common/p9/wire_format_derive/Cargo.toml",
+        "patchSetId": 2
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-08-16T21:17:47Z",
+      "side": 1,
+      "message": "Nice catch! Looks like corresponding upstream change never got merged https://crrev.com/c/4367478\n\nFixed",
+      "parentUuid": "54b00d8a_97f8e5b5",
+      "range": {
+        "startLine": 7,
+        "startChar": 6,
+        "endLine": 7,
+        "endChar": 10
+      },
+      "revId": "91976dd21123c40ffa2eba3ca16542389cec6b03",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
