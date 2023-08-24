@@ -876,6 +876,7 @@ impl Vcpu for KvmVcpu {
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
     fn run(&mut self) -> Result<VcpuExit> {
+        error!("running instructions");
         // Safe because we know that our file is a VCPU fd and we verify the return result.
         let ret = unsafe { ioctl(self, KVM_RUN()) };
         if ret != 0 {

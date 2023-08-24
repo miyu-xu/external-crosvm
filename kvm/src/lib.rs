@@ -27,6 +27,8 @@ use std::path::PathBuf;
 use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 
+use base::error;
+
 #[allow(unused_imports)]
 use base::ioctl;
 #[allow(unused_imports)]
@@ -1565,6 +1567,7 @@ impl RunnableVcpu {
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
     pub fn run(&self) -> Result<VcpuExit> {
+        error!("running instructions");
         // Safe because we know that our file is a VCPU fd and we verify the return result.
         let ret = unsafe { ioctl(self, KVM_RUN()) };
         if ret == 0 {
