@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "63704c11_a6b81243",
+        "filename": "disk/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 93,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-08-29T18:27:56Z",
+      "side": 1,
+      "message": "Can we remove the \"//packages/modules/Virtualization/virtualizationmanager\" entry shortly after this CL?\n\n`libdisk` isn\u0027t meant to be exposed and used outside of crosvm, so I\u0027d rather us not expand its usage, but if you are just moving existing code around it is fine.",
+      "revId": "ee2cc33990e1752e2e9dccb97e26b6758b71ff12",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
