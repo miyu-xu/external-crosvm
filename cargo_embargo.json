@@ -130,6 +130,7 @@
     ],
     "libdisk": [
       "//packages/modules/Virtualization/virtualizationmanager",
+      "//packages/modules/Virtualization/libs/vsutil",
       // For QCOM's crosvm fork.
       "//vendor:__subpackages__"
     ],

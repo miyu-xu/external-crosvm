@@ -91,6 +91,7 @@ rust_library {
     ],
     visibility: [
         "//packages/modules/Virtualization/virtualizationmanager",
+        "//packages/modules/Virtualization/libs/vsutil",
         "//vendor:__subpackages__",
     ],
 }
