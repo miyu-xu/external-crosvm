@@ -1,6 +1,23 @@
 {
   "comments": [
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b1cbcdaa_207331ff",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1958315
+      },
+      "writtenOn": "2023-08-30T07:32:26Z",
+      "side": 1,
+      "message": "Hey, sorry I forgot to abandon this cl in the topic. I don\u0027t need it actually.",
+      "revId": "ee2cc33990e1752e2e9dccb97e26b6758b71ff12",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "63704c11_a6b81243",
