@@ -34,6 +34,24 @@
       "parentUuid": "3cd7fc6b_f1c9abb6",
       "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cb03817e_b1dabfdd",
+        "filename": "jail/seccomp/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 365,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-08-30T17:17:35Z",
+      "side": 1,
+      "message": "I think you need to put the `enabled: false` at the top level, outside the `target`, but yes, something like that seems better to me.",
+      "parentUuid": "a81f0dd3_bd0aa19e",
+      "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
