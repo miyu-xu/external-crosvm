@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3cd7fc6b_f1c9abb6",
+        "filename": "jail/seccomp/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 365,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-08-30T09:06:37Z",
+      "side": 1,
+      "message": "Why are these all disabled by target, but the src is set by arch? What about combinations that are enabled but don\u0027t have any src?",
+      "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
