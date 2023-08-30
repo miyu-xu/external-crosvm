@@ -52,6 +52,24 @@
       "parentUuid": "a81f0dd3_bd0aa19e",
       "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5c65eac7_123570e5",
+        "filename": "jail/seccomp/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 365,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-08-30T20:39:54Z",
+      "side": 1,
+      "message": "Ack - I\u0027ll merge for now.\nIf we are to do it that way, I\u0027d rather investigate a way to do it through the gen_android.sh file, otherwise it will require manual modification every time.\nTracking in b/298247196",
+      "parentUuid": "cb03817e_b1dabfdd",
+      "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
