@@ -70,6 +70,24 @@
       "parentUuid": "cb03817e_b1dabfdd",
       "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5eda8c27_209ab270",
+        "filename": "jail/seccomp/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 365,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-08-30T20:41:49Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "5c65eac7_123570e5",
+      "revId": "ec7d5d3e355d021324c7e7c9ee92aa047337184f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
