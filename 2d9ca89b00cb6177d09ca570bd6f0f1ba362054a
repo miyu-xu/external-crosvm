@@ -16,6 +16,24 @@
       "message": "no cargo.toml change this week",
       "revId": "2d9ca89b00cb6177d09ca570bd6f0f1ba362054a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f9fd7893_a036f2bf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-09-12T22:32:11Z",
+      "side": 1,
+      "message": "🎉",
+      "parentUuid": "5a47697e_388ff62e",
+      "revId": "2d9ca89b00cb6177d09ca570bd6f0f1ba362054a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
