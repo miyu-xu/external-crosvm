@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9fac34e3_c2a5d42b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-09-14T19:51:56Z",
+      "side": 1,
+      "message": "extra merge to get the gpu snapshotting support",
+      "revId": "02f077f8638a3bfaa4406391a12951a19d06d343",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
