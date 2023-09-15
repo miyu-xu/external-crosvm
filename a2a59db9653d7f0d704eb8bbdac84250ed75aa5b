@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fa9957e7_32e3339e",
+        "filename": "devices/src/virtio/wl.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 2066,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-09-15T21:29:55Z",
+      "side": 1,
+      "message": "delete since it isn\u0027t accurate (i think)",
+      "range": {
+        "startLine": 2065,
+        "startChar": 0,
+        "endLine": 2066,
+        "endChar": 37
+      },
+      "revId": "a2a59db9653d7f0d704eb8bbdac84250ed75aa5b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
