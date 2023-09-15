@@ -2056,4 +2056,23 @@ impl VirtioDevice for Wl {
             }
         }
     }
+
+    // ANDROID: Add empty implementations for successful snapshot taking. Change to full
+    // implementation as part of b/266514618
+    // virtio-wl is not used, but is created. As such, virtio_snapshot/restore will be called when
+    // cuttlefish attempts to take a snapshot.
+    fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        // `virtio_sleep` ensures there is no pending state, except for the `Queue`s, which are
+        // handled at a higher layer.
+        Ok(serde_json::Value::Null)
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data == serde_json::Value::Null,
+            "unexpected snapshot data: should be null, got {}",
+            data,
+        );
+        Ok(())
+    }
 }
