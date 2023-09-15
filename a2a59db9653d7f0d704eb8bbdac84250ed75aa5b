@@ -22,6 +22,30 @@
       },
       "revId": "a2a59db9653d7f0d704eb8bbdac84250ed75aa5b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "38557104_f807fcad",
+        "filename": "devices/src/virtio/wl.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 2066,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-09-15T21:32:01Z",
+      "side": 1,
+      "message": "guilty of a copy - Done",
+      "parentUuid": "fa9957e7_32e3339e",
+      "range": {
+        "startLine": 2065,
+        "startChar": 0,
+        "endLine": 2066,
+        "endChar": 37
+      },
+      "revId": "a2a59db9653d7f0d704eb8bbdac84250ed75aa5b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
