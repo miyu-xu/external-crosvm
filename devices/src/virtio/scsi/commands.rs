@@ -8,6 +8,7 @@ use std::io::Write;
 use base::warn;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::virtio::scsi::constants::INQUIRY;
 use crate::virtio::scsi::constants::REPORT_LUNS;
@@ -53,7 +54,7 @@ impl Command {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct TestUnitReady {
     opcode: u8,
@@ -61,7 +62,7 @@ pub struct TestUnitReady {
     control: u8,
 }
 
-#[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct Inquiry {
     opcode: u8,
@@ -191,7 +192,7 @@ impl Inquiry {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct ReportLuns {
     opcode: u8,

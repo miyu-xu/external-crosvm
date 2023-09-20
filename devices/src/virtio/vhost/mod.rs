@@ -19,7 +19,7 @@ use vmm_vhost::message::Req;
 use vmm_vhost::message::VhostUserMsgHeader;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::Ref;
 
 mod control_socket;
 pub mod user;
@@ -157,7 +157,7 @@ pub fn vhost_header_from_bytes<R: Req>(bytes: &[u8]) -> Option<&VhostUserMsgHead
     }
     // This can't fail because we already checked the size and because packed alignment is 1.
     Some(
-        LayoutVerified::<_, VhostUserMsgHeader<R>>::new(&bytes[0..HEADER_LEN])
+        Ref::<_, VhostUserMsgHeader<R>>::new(&bytes[0..HEADER_LEN])
             .unwrap()
             .into_ref(),
     )
