@@ -31,13 +31,14 @@ bindgen_generate \
 VIRTIO_FS_EXTRA="// Added by virtio_sys/bindgen.sh
 use data_model::Le32;
 use zerocopy::AsBytes;
-use zerocopy::FromBytes;"
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;"
 
 bindgen_generate \
     --raw-line "${VIRTIO_FS_EXTRA}" \
     --allowlist-var='VIRTIO_FS_.*' \
     --allowlist-type='virtio_fs_.*' \
-    --with-derive-custom "virtio_fs_config=FromBytes,AsBytes" \
+    --with-derive-custom "virtio_fs_config=FromZeroes,FromBytes,AsBytes" \
     "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_fs.h" \
     -- \
     -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
@@ -67,15 +68,16 @@ bindgen_generate \
 
 VIRTIO_NET_EXTRA="// Added by virtio_sys/bindgen.sh
 use zerocopy::AsBytes;
-use zerocopy::FromBytes;"
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;"
 
 bindgen_generate \
     --raw-line "${VIRTIO_NET_EXTRA}" \
     --allowlist-var='VIRTIO_NET_.*' \
     --allowlist-type='virtio_net_.*' \
     --blocklist-type='virtio_net_ctrl_mac' \
-    --with-derive-custom "virtio_net_hdr=FromBytes,AsBytes" \
-    --with-derive-custom "virtio_net_hdr_mrg_rxbuf=FromBytes,AsBytes" \
+    --with-derive-custom "virtio_net_hdr=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_net_hdr_mrg_rxbuf=FromZeroes,FromBytes,AsBytes" \
     "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_net.h" \
     -- \
     -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
