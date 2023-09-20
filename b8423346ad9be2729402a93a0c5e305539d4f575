@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "351f36d0_118e7ef0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-09-20T16:29:16Z",
+      "side": 1,
+      "message": "Unrelated build errors. b/301170757 says they are fixed.",
+      "revId": "b8423346ad9be2729402a93a0c5e305539d4f575",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
