@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7848b65b_88be02a8",
+        "filename": "e2e_tests/guest_under_test/rootfs/delegate/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-09-25T19:23:58Z",
+      "side": 1,
+      "message": "not sure why this suddenly showed up. can you add `delegate` to the `workspace_excludes` list? https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/cargo_embargo.json;l\u003d24;drc\u003db8423346ad9be2729402a93a0c5e305539d4f575",
+      "revId": "627809c572116fea4648a9df02e2f422db8c0220",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
