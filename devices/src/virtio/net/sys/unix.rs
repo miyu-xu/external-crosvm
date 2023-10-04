@@ -4,7 +4,6 @@
 
 use std::io;
 use std::result;
-use std::sync::Arc;
 
 use base::error;
 use base::warn;
@@ -12,28 +11,24 @@ use base::EventType;
 use base::ReadNotifier;
 use base::WaitContext;
 use net_util::TapT;
-use sync::Mutex;
-use vm_memory::GuestMemory;
 
 use super::super::super::net::NetError;
 use super::super::super::net::Token;
 use super::super::super::net::Worker;
+use super::super::super::Interrupt;
 use super::super::super::Queue;
-use super::super::super::SignalableInterrupt;
 
-pub fn process_rx<I: SignalableInterrupt, T: TapT>(
-    interrupt: &I,
-    rx_queue: &Arc<Mutex<Queue>>,
-    mem: &GuestMemory,
+pub fn process_rx<T: TapT>(
+    interrupt: &Interrupt,
+    rx_queue: &mut Queue,
     mut tap: &mut T,
 ) -> result::Result<(), NetError> {
     let mut needs_interrupt = false;
     let mut exhausted_queue = false;
 
-    let mut rx_queue = rx_queue.try_lock().expect("Lock should not be unavailable");
     // Read as many frames as possible.
     loop {
-        let mut desc_chain = match rx_queue.peek(mem) {
+        let mut desc_chain = match rx_queue.peek() {
             Some(desc) => desc,
             None => {
                 exhausted_queue = true;
@@ -63,14 +58,14 @@ pub fn process_rx<I: SignalableInterrupt, T: TapT>(
         cros_tracing::trace_simple_print!("{bytes_written} bytes read from tap");
 
         if bytes_written > 0 {
-            rx_queue.pop_peeked(mem);
-            rx_queue.add_used(mem, desc_chain, bytes_written);
+            rx_queue.pop_peeked();
+            rx_queue.add_used(desc_chain, bytes_written);
             needs_interrupt = true;
         }
     }
 
     if needs_interrupt {
-        rx_queue.trigger_interrupt(mem, interrupt);
+        rx_queue.trigger_interrupt(interrupt);
     }
 
     if exhausted_queue {
@@ -80,14 +75,8 @@ pub fn process_rx<I: SignalableInterrupt, T: TapT>(
     }
 }
 
-pub fn process_tx<I: SignalableInterrupt, T: TapT>(
-    interrupt: &I,
-    tx_queue: &Arc<Mutex<Queue>>,
-    mem: &GuestMemory,
-    mut tap: &mut T,
-) {
-    let mut tx_queue = tx_queue.try_lock().expect("Lock should not be unavailable");
-    while let Some(mut desc_chain) = tx_queue.pop(mem) {
+pub fn process_tx<T: TapT>(interrupt: &Interrupt, tx_queue: &mut Queue, mut tap: &mut T) {
+    while let Some(mut desc_chain) = tx_queue.pop() {
         let reader = &mut desc_chain.reader;
         let expected_count = reader.available_bytes();
         match reader.read_to(&mut tap, expected_count) {
@@ -105,10 +94,10 @@ pub fn process_tx<I: SignalableInterrupt, T: TapT>(
             Err(e) => error!("net: tx: failed to write frame to tap: {}", e),
         }
 
-        tx_queue.add_used(mem, desc_chain, 0);
+        tx_queue.add_used(desc_chain, 0);
     }
 
-    tx_queue.trigger_interrupt(mem, interrupt);
+    tx_queue.trigger_interrupt(interrupt);
 }
 
 impl<T> Worker<T>
@@ -143,6 +132,6 @@ where
         Ok(())
     }
     pub(super) fn process_rx(&mut self) -> result::Result<(), NetError> {
-        process_rx(&self.interrupt, &self.rx_queue, &self.mem, &mut self.tap)
+        process_rx(&self.interrupt, &mut self.rx_queue, &mut self.tap)
     }
 }

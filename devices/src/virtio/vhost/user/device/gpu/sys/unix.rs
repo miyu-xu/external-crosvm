@@ -20,8 +20,6 @@ use base::UnlinkUnixSeqpacketListener;
 use cros_async::AsyncWrapper;
 use cros_async::Executor;
 use cros_async::IoSource;
-use futures::future::AbortHandle;
-use futures::future::Abortable;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 
@@ -29,7 +27,6 @@ use crate::virtio;
 use crate::virtio::gpu;
 use crate::virtio::gpu::ProcessDisplayResult;
 use crate::virtio::vhost::user::device::gpu::GpuBackend;
-use crate::virtio::vhost::user::device::gpu::MAX_QUEUE_NUM;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::wl::parse_wayland_sock;
@@ -92,14 +89,10 @@ impl GpuBackend {
                 .ex
                 .async_from(bridge)
                 .context("failed to create async tube")?;
-            let (handle, registration) = AbortHandle::new_pair();
-            self.ex
-                .spawn_local(Abortable::new(
-                    run_resource_bridge(tube, state.clone()),
-                    registration,
-                ))
-                .detach();
-            self.platform_workers.borrow_mut().push(handle);
+            let task = self
+                .ex
+                .spawn_local(run_resource_bridge(tube, state.clone()));
+            self.platform_workers.borrow_mut().push(task);
         }
 
         // Start handling the display.
@@ -115,11 +108,8 @@ impl GpuBackend {
                     .context("failed to create async WaitContext")
             })?;
 
-        let (handle, registration) = AbortHandle::new_pair();
-        self.ex
-            .spawn_local(Abortable::new(run_display(display, state), registration))
-            .detach();
-        self.platform_workers.borrow_mut().push(handle);
+        let task = self.ex.spawn_local(run_display(display, state));
+        self.platform_workers.borrow_mut().push(task);
 
         Ok(())
     }
@@ -134,10 +124,7 @@ fn gpu_parameters_from_str(input: &str) -> Result<GpuParameters, String> {
 pub struct Options {
     #[argh(option, arg_name = "PATH")]
     /// path to bind a listening vhost-user socket
-    socket: Option<String>,
-    #[argh(option, arg_name = "STRING")]
-    /// VFIO-PCI device name (e.g. '0000:00:07.0')
-    vfio: Option<String>,
+    socket: String,
     #[argh(option, from_str_fn(parse_wayland_sock), arg_name = "PATH[,name=NAME]")]
     /// path to one or more Wayland sockets. The unnamed socket is
     /// used for displaying virtual screens while the named ones are used for IPC
@@ -165,7 +152,6 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         params: mut gpu_parameters,
         resource_bridge,
         socket,
-        vfio,
         wayland_sock,
     } = opts;
 
@@ -235,16 +221,9 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     // These are only used when there is an input device.
     let event_devices = Vec::new();
 
-    // The regular gpu device sets this to true when sandboxing is enabled. Assume that we
-    // are always sandboxed.
-    gpu_parameters.external_blob = true;
-
-    // Fallback for when external_blob is not available on the machine. Currently always off.
-    gpu_parameters.system_blob = false;
-
     let base_features = virtio::base_features(ProtectionType::Unprotected);
 
-    let listener = VhostUserListener::new_from_socket_or_vfio(&socket, &vfio, MAX_QUEUE_NUM, None)?;
+    let listener = VhostUserListener::new_socket(&socket, None)?;
 
     let gpu = Rc::new(RefCell::new(Gpu::new(
         exit_evt_wrtube,

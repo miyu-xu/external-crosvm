@@ -74,7 +74,7 @@ Change-Id: I47651060c2ce3a7e9f850b7ed9af8bd035f82de6
 To make changes to crosvm, start your work on a new branch tracking `origin/main`.
 
 ```bash
-git checkout --branch myfeature --track origin/main
+git checkout -b myfeature --track origin/main
 ```
 
 After making the necessary changes, and testing them via
@@ -94,6 +94,11 @@ git commit --amend
 ```
 
 This will create a new version of the same change in gerrit.
+
+If the branch contains multiple commits, each one will be uploaded as a separate review, and they
+will be linked in Gerrit as [related changes]. You may revise any commit in a branch using tools
+like `git rebase` and then re-upload the whole series with `./tools/cl upload` when `HEAD` is
+pointing to the tip of the branch.
 
 > Note: We don't accept any pull requests on the [GitHub mirror].
 
@@ -116,6 +121,12 @@ Gerrit will show any test failures. Refer to
 [Building Crosvm](https://crosvm.dev/book/building_crosvm.html) for information on how to run the
 same tests locally.
 
+Each individual change in a patch series must build and pass the tests. If you are working on a
+series of related changes, ensure that each incremental commit does not cause test regressions or
+break the build if it is merged without the later changes in the series. For example, an
+intermediate change must not trigger any unused code warnings or cause test failures that are fixed
+by later changes in the series.
+
 When all tests pass, your change is merged into `origin/main`.
 
 ## Contributing to the documentation
@@ -134,9 +145,12 @@ mdbook build
 
 Output is found at `docs/book/book/html/`.
 
+To format markdown files, run `./tools/fmt` in the `dev_container`.
+
 [crosvm owners]: https://chromium.googlesource.com/crosvm/crosvm/+/HEAD/OWNERS
 [github mirror]: https://github.com/google/crosvm
 [google markdown style guide]: https://github.com/google/styleguide/blob/gh-pages/docguide/style.md
 [mdbook]: https://rust-lang.github.io/mdBook/
 [mdbook-mermaid]: https://github.com/badboy/mdbook-mermaid
+[related changes]: https://gerrit-review.googlesource.com/Documentation/user-review-ui.html#related-changes
 [the book of crosvm]: https://crosvm.dev/book/

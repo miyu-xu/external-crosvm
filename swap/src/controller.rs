@@ -26,6 +26,7 @@ use base::info;
 use base::syslog;
 use base::unix::process::fork_process;
 use base::unix::process::Child;
+use base::unix::FileDataIterator;
 use base::warn;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
@@ -45,14 +46,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vm_memory::MemoryRegionInformation;
 
+use crate::file_truncator::FileTruncator;
 #[cfg(feature = "log_page_fault")]
 use crate::logger::PageFaultEventLogger;
 use crate::page_handler::Error as PageHandlerError;
 use crate::page_handler::MoveToStaging;
 use crate::page_handler::PageHandler;
 use crate::page_handler::MLOCK_BUDGET;
+use crate::pagesize::bytes_to_pages;
 use crate::pagesize::THP_SIZE;
 use crate::processes::freeze_child_processes;
 use crate::processes::ProcessesGuard;
@@ -77,6 +79,25 @@ const MAX_SWAP_CHUNK_SIZE: usize = 2 * 1024 * 1024; // = 2MB
 /// The max pages to trim at once.
 const MAX_TRIM_PAGES: usize = 1024;
 
+/// Returns count of pages active on the guest memory.
+fn count_resident_pages(guest_memory: &GuestMemory) -> usize {
+    let mut pages = 0;
+    for region in guest_memory.regions() {
+        let file_data = FileDataIterator::new(region.shm, region.shm_offset, region.size as u64);
+        let resident_bytes: u64 = file_data.map(|range| range.end - range.start).sum();
+        let resident_bytes = match resident_bytes.try_into() {
+            Ok(n) => n,
+            Err(e) => {
+                error!("failed to load resident pages count: {:?}", e);
+                return 0;
+            }
+        };
+
+        pages += bytes_to_pages(resident_bytes);
+    }
+    pages
+}
+
 /// Commands used in vmm-swap feature internally sent to the monitor process from the main and other
 /// processes.
 ///
@@ -86,7 +107,9 @@ enum Command {
     Enable,
     Trim,
     SwapOut,
-    Disable,
+    Disable {
+        slow_file_cleanup: bool,
+    },
     Exit,
     Status,
     ProcessForked {
@@ -290,9 +313,9 @@ impl SwapController {
     /// Swap in all the guest memory and disable monitoring page faults.
     ///
     /// This returns as soon as it succeeds to send request to the monitor process.
-    pub fn disable(&self) -> anyhow::Result<()> {
+    pub fn disable(&self, slow_file_cleanup: bool) -> anyhow::Result<()> {
         self.command_tube
-            .send(&Command::Disable)
+            .send(&Command::Disable { slow_file_cleanup })
             .context("send swap disable request")?;
         Ok(())
     }
@@ -477,18 +500,10 @@ impl UffdListToken for Token {
 }
 
 fn regions_from_guest_memory(guest_memory: &GuestMemory) -> Vec<Range<usize>> {
-    let mut regions = Vec::new();
     guest_memory
-        .with_regions::<_, ()>(
-            |MemoryRegionInformation {
-                 size, host_addr, ..
-             }| {
-                regions.push(host_addr..(host_addr + size));
-                Ok(())
-            },
-        )
-        .unwrap(); // the callback never return error.
-    regions
+        .regions()
+        .map(|region| region.host_addr..(region.host_addr + region.size))
+        .collect()
 }
 
 /// The main thread of the monitor process.
@@ -511,6 +526,9 @@ fn monitor_process(
         ),
     ])
     .context("create wait context")?;
+
+    let mut swap_file_opt = Some(swap_file);
+    let mut truncate_worker: Option<FileTruncator> = None;
 
     let n_worker = num_cpus::get();
     info!("start {} workers for staging memory move", n_worker);
@@ -582,6 +600,14 @@ fn monitor_process(
 
                         let regions = regions_from_guest_memory(&guest_memory);
 
+                        let swap_file = match (swap_file_opt.take(), truncate_worker.take()) {
+                            (Some(file), None) => file,
+                            (None, Some(worker)) => {
+                                worker.take_file().context("failed to get truncated swap")?
+                            }
+                            _ => bail!("Missing swap file"),
+                        };
+
                         let page_handler = match PageHandler::create(
                             &swap_file,
                             &staging_shmem,
@@ -609,8 +635,8 @@ fn monitor_process(
                         let mutex_transition = Mutex::new(state_transition);
 
                         bg_job_control.reset()?;
-                        let exit = std::thread::scope(|scope| {
-                            let exit = handle_vmm_swap(
+                        let swap_result = std::thread::scope(|scope| {
+                            let result = handle_vmm_swap(
                                 scope,
                                 &wait_ctx,
                                 &page_handler,
@@ -627,9 +653,9 @@ fn monitor_process(
                             // Abort background jobs to unblock ScopedJoinHandle eariler on a
                             // failure.
                             bg_job_control.abort();
-                            exit
+                            result
                         })?;
-                        if exit {
+                        if swap_result.should_exit {
                             return Ok(());
                         }
                         state_transition = mutex_transition.into_inner();
@@ -638,9 +664,17 @@ fn monitor_process(
                             .context("unregister regions")?;
 
                         // Truncate the swap file to hold minimum resources while disabled.
-                        if let Err(e) = swap_file.set_len(0) {
-                            error!("failed to clear swap file: {:?}", e);
-                        };
+                        if swap_result.slow_file_cleanup {
+                            truncate_worker = Some(
+                                FileTruncator::new(swap_file)
+                                    .context("failed to start truncating")?,
+                            );
+                        } else {
+                            if let Err(e) = swap_file.set_len(0) {
+                                error!("failed to clear swap file: {:?}", e);
+                            };
+                            swap_file_opt = Some(swap_file);
+                        }
 
                         info!("vmm-swap is disabled");
                         // events are obsolete. Run `WaitContext::wait()` again
@@ -652,16 +686,25 @@ fn monitor_process(
                     Command::SwapOut => {
                         warn!("swap out while disabled");
                     }
-                    Command::Disable => {
-                        warn!("swap is already disabled");
+                    Command::Disable { slow_file_cleanup } => {
+                        if !slow_file_cleanup {
+                            if let Some(worker) = truncate_worker.take() {
+                                swap_file_opt =
+                                    Some(worker.take_file().context("failed to truncate swap")?);
+                            }
+                        }
                     }
                     Command::Exit => {
                         return Ok(());
                     }
                     Command::Status => {
+                        let metrics = SwapMetrics {
+                            resident_pages: count_resident_pages(&guest_memory) as u64,
+                            ..Default::default()
+                        };
                         let status = SwapStatus {
                             state: SwapState::Ready,
-                            metrics: SwapMetrics::default(),
+                            metrics,
                             state_transition,
                         };
                         command_tube.send(&status).context("send status response")?;
@@ -684,9 +727,14 @@ fn monitor_process(
 enum State<'scope> {
     SwapOutPending,
     Trim(ScopedJoinHandle<'scope, anyhow::Result<()>>),
-    SwapOutInProgress { started_time: Instant },
+    SwapOutInProgress {
+        started_time: Instant,
+    },
     SwapOutCompleted,
-    SwapInInProgress(ScopedJoinHandle<'scope, anyhow::Result<()>>),
+    SwapInInProgress {
+        join_handle: ScopedJoinHandle<'scope, anyhow::Result<()>>,
+        slow_file_cleanup: bool,
+    },
     Failed,
 }
 
@@ -697,7 +745,7 @@ impl From<&State<'_>> for SwapState {
             State::Trim(_) => SwapState::TrimInProgress,
             State::SwapOutInProgress { .. } => SwapState::SwapOutInProgress,
             State::SwapOutCompleted => SwapState::Active,
-            State::SwapInInProgress(_) => SwapState::SwapInInProgress,
+            State::SwapInInProgress { .. } => SwapState::SwapInInProgress,
             State::Failed => SwapState::Failed,
         }
     }
@@ -712,7 +760,7 @@ fn handle_enable_command<'scope>(
     state_transition: &Mutex<SwapStateTransition>,
 ) -> anyhow::Result<State<'scope>> {
     match state {
-        State::SwapInInProgress(join_handle) => {
+        State::SwapInInProgress { join_handle, .. } => {
             info!("abort swap-in");
             abort_background_job(join_handle, bg_job_control).context("abort swap-in")?;
         }
@@ -750,31 +798,27 @@ fn move_guest_to_staging(
 
     let mut pages = 0;
 
-    let result = guest_memory.with_regions::<_, anyhow::Error>(
-        |MemoryRegionInformation {
-             host_addr,
-             shm,
-             shm_offset,
-             ..
-         }| {
-            // safe because:
-            // * all the regions are registered to all userfaultfd
-            // * no process access the guest memory
-            // * page fault events are handled by PageHandler
-            // * wait for all the copy completed within _processes_guard
-            pages += unsafe { page_handler.move_to_staging(host_addr, shm, shm_offset) }
-                .context("move to staging")? as u64;
-            Ok(())
-        },
-    );
+    let result = guest_memory.regions().try_for_each(|region| {
+        // safe because:
+        // * all the regions are registered to all userfaultfd
+        // * no process access the guest memory
+        // * page fault events are handled by PageHandler
+        // * wait for all the copy completed within _processes_guard
+        pages += unsafe {
+            page_handler.move_to_staging(region.host_addr, region.shm, region.shm_offset)
+        }
+        .context("move to staging")? as u64;
+        Ok(())
+    });
     worker.channel.wait_complete();
 
     match result {
         Ok(()) => {
-            if page_handler.compute_resident_pages() > 0 {
+            let resident_pages = count_resident_pages(guest_memory);
+            if resident_pages > 0 {
                 error!(
                     "active page is not zero just after swap out but {} pages",
-                    page_handler.compute_resident_pages()
+                    resident_pages
                 );
             }
             let time_ms = start_time.elapsed().as_millis().try_into()?;
@@ -797,6 +841,11 @@ fn abort_background_job<T>(
     result.context("failure on background job thread")
 }
 
+struct VmmSwapResult {
+    should_exit: bool,
+    slow_file_cleanup: bool,
+}
+
 fn handle_vmm_swap<'scope, 'env>(
     scope: &'scope Scope<'scope, 'env>,
     wait_ctx: &WaitContext<Token>,
@@ -809,7 +858,7 @@ fn handle_vmm_swap<'scope, 'env>(
     state_transition: &'env Mutex<SwapStateTransition>,
     bg_job_control: &'env BackgroundJobControl,
     #[cfg(feature = "log_page_fault")] page_fault_logger: &mut PageFaultEventLogger,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<VmmSwapResult> {
     let mut state = match move_guest_to_staging(page_handler, guest_memory, worker) {
         Ok(transition) => {
             info!(
@@ -1010,7 +1059,7 @@ fn handle_vmm_swap<'scope, 'env>(
                             warn!("swap out is not ready. state: {:?}", SwapState::from(state));
                         }
                     },
-                    Command::Disable => {
+                    Command::Disable { slow_file_cleanup } => {
                         match state {
                             State::Trim(join_handle) => {
                                 info!("abort trim");
@@ -1020,8 +1069,12 @@ fn handle_vmm_swap<'scope, 'env>(
                             State::SwapOutInProgress { .. } => {
                                 info!("swap out is aborted");
                             }
-                            State::SwapInInProgress(_) => {
+                            State::SwapInInProgress { join_handle, .. } => {
                                 info!("swap in is in progress");
+                                state = State::SwapInInProgress {
+                                    join_handle,
+                                    slow_file_cleanup,
+                                };
                                 continue;
                             }
                             _ => {}
@@ -1054,18 +1107,24 @@ fn handle_vmm_swap<'scope, 'env>(
                             }
                             Ok(())
                         });
-                        state = State::SwapInInProgress(join_handle);
+                        state = State::SwapInInProgress {
+                            join_handle,
+                            slow_file_cleanup,
+                        };
 
                         info!("start swapping in");
                     }
                     Command::Exit => {
                         match state {
-                            State::SwapInInProgress(join_handle) => {
+                            State::SwapInInProgress { join_handle, .. } => {
                                 // Wait until swap-in finishes.
                                 if let Err(e) = join_handle.join() {
                                     bail!("failed to join swap in thread: {:?}", e);
                                 }
-                                return Ok(true);
+                                return Ok(VmmSwapResult {
+                                    should_exit: true,
+                                    slow_file_cleanup: false,
+                                });
                             }
                             State::Trim(join_handle) => {
                                 abort_background_job(join_handle, bg_job_control)
@@ -1080,12 +1139,20 @@ fn handle_vmm_swap<'scope, 'env>(
                             .context("swap in")?
                             > 0
                         {}
-                        return Ok(true);
+                        return Ok(VmmSwapResult {
+                            should_exit: true,
+                            slow_file_cleanup: false,
+                        });
                     }
                     Command::Status => {
+                        let mut metrics = SwapMetrics {
+                            resident_pages: count_resident_pages(guest_memory) as u64,
+                            ..Default::default()
+                        };
+                        page_handler.load_metrics(&mut metrics);
                         let status = SwapStatus {
                             state: (&state).into(),
-                            metrics: page_handler.compute_metrics(),
+                            metrics,
                             state_transition: *state_transition.lock(),
                         };
                         command_tube.send(&status).context("send status response")?;
@@ -1104,7 +1171,10 @@ fn handle_vmm_swap<'scope, 'env>(
                         continue;
                     }
                     match state {
-                        State::SwapInInProgress(join_handle) => {
+                        State::SwapInInProgress {
+                            join_handle,
+                            slow_file_cleanup,
+                        } => {
                             join_handle
                                 .join()
                                 .expect("panic on the background job thread")
@@ -1114,7 +1184,10 @@ fn handle_vmm_swap<'scope, 'env>(
                                 "swap in all {} pages in {} ms.",
                                 state_transition.pages, state_transition.time_ms
                             );
-                            return Ok(false);
+                            return Ok(VmmSwapResult {
+                                should_exit: false,
+                                slow_file_cleanup,
+                            });
                         }
                         State::Trim(join_handle) => {
                             join_handle

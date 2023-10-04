@@ -9,7 +9,7 @@ use std::sync::MutexGuard;
 
 use base::AsRawDescriptor;
 use base::RawDescriptor;
-use data_model::DataInit;
+use zerocopy::AsBytes;
 
 use crate::connection::Endpoint;
 use crate::connection::EndpointExt;
@@ -39,7 +39,7 @@ impl SlaveInternal {
         fds: Option<&[RawDescriptor]>,
     ) -> Result<u64>
     where
-        T: DataInit,
+        T: AsBytes,
     {
         let len = mem::size_of::<T>();
         let mut hdr = VhostUserMsgHeader::new(request, 0, len as u32);
@@ -52,9 +52,10 @@ impl SlaveInternal {
     }
 
     fn wait_for_reply(&mut self, hdr: &VhostUserMsgHeader<SlaveReq>) -> Result<u64> {
-        if hdr.get_code() != SlaveReq::SHMEM_MAP
-            && hdr.get_code() != SlaveReq::SHMEM_UNMAP
-            && hdr.get_code() != SlaveReq::GPU_MAP
+        let code = hdr.get_code().map_err(|_| Error::InvalidMessage)?;
+        if code != SlaveReq::SHMEM_MAP
+            && code != SlaveReq::SHMEM_UNMAP
+            && code != SlaveReq::GPU_MAP
             && !self.reply_ack_negotiated
         {
             return Ok(0);
@@ -109,7 +110,7 @@ impl Slave {
         fds: Option<&[RawDescriptor]>,
     ) -> io::Result<u64>
     where
-        T: DataInit,
+        T: AsBytes,
     {
         self.node()
             .send_message(request, msg, fds)
@@ -153,11 +154,7 @@ impl VhostUserMasterReqHandler for Slave {
 
     /// Handle config change requests.
     fn handle_config_change(&self) -> HandlerResult<u64> {
-        self.send_message(
-            SlaveReq::CONFIG_CHANGE_MSG,
-            &VhostUserEmptyMessage::default(),
-            None,
-        )
+        self.send_message(SlaveReq::CONFIG_CHANGE_MSG, &VhostUserEmptyMessage, None)
     }
 
     /// Forward vhost-user-fs map file requests to the slave.

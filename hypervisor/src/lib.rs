@@ -21,7 +21,7 @@ pub mod kvm;
 pub mod riscv64;
 #[cfg(all(windows, feature = "whpx"))]
 pub mod whpx;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -44,7 +44,7 @@ pub use crate::aarch64::*;
 pub use crate::caps::*;
 #[cfg(target_arch = "riscv64")]
 pub use crate::riscv64::*;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub use crate::x86_64::*;
 
 /// An index in the list of guest-mapped memory regions.
@@ -332,9 +332,8 @@ pub trait Vcpu: downcast_rs::DowncastSync {
     /// and in the same thread as run.
     fn handle_wrmsr(&self);
 
-    /// Signals to the hypervisor that this guest is being paused by userspace.  Only works on Vms
-    /// that support `VmCap::PvClockSuspend`.
-    fn pvclock_ctrl(&self) -> Result<()>;
+    /// Signals to the hypervisor that this Vcpu is being paused by userspace.
+    fn on_suspend(&self) -> Result<()>;
 
     /// Enables a hypervisor-specific extension on this Vcpu.  `cap` is a constant defined by the
     /// hypervisor API (e.g., kvm.h).  `args` are the arguments for enabling the feature, if any.
@@ -423,7 +422,7 @@ pub enum VcpuExit {
     /// vcpu stopped due to an msr access.
     MsrAccess,
     /// vcpu stopped due to a cpuid request.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     Cpuid {
         entry: CpuIdEntry,
     },
@@ -477,7 +476,7 @@ pub enum DeviceKind {
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     ArmVgicV3,
     /// RiscV AIA in-kernel emulation
-    #[cfg(any(target_arch = "riscv64"))]
+    #[cfg(target_arch = "riscv64")]
     RiscvAia,
 }
 

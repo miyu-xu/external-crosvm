@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::thread;
 use std::thread::JoinHandle;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use std::time::Duration;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -24,6 +24,7 @@ use arch::LinuxArch;
 use arch::VcpuArch;
 use arch::VcpuInitArch;
 use arch::VmArch;
+use base::signal::clear_signal_handler;
 use base::signal::BlockedSignal;
 use base::*;
 use devices::Bus;
@@ -36,18 +37,16 @@ use hypervisor::VcpuSignalHandle;
 use libc::c_int;
 #[cfg(target_arch = "riscv64")]
 use riscv64::Riscv64 as Arch;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+#[cfg(all(target_arch = "x86_64", unix))]
 use sync::Mutex;
 use vm_control::*;
 #[cfg(feature = "gdb")]
 use vm_memory::GuestMemory;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::msr::MsrHandlers;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as Arch;
 
 use super::ExitState;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+#[cfg(all(target_arch = "x86_64", unix))]
 use crate::crosvm::ratelimit::Ratelimit;
 
 fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
@@ -128,7 +127,6 @@ pub fn runnable_vcpu<V>(
     vm: impl VmArch,
     irq_chip: &mut dyn IrqChipArch,
     vcpu_count: usize,
-    has_bios: bool,
     cpu_config: Option<CpuConfigArch>,
 ) -> Result<V>
 where
@@ -162,7 +160,6 @@ where
         vcpu_init,
         cpu_id,
         vcpu_count,
-        has_bios,
         cpu_config,
     )
     .context("failed to configure vcpu")?;
@@ -211,6 +208,10 @@ pub fn setup_vcpu_signal_handler() -> Result<()> {
     Ok(())
 }
 
+pub fn remove_vcpu_signal_handler() -> Result<()> {
+    clear_signal_handler(SIGRTMIN() + 0).context("error unregistering signal handler")
+}
+
 fn vcpu_loop<V>(
     mut run_mode: VmRunMode,
     cpu_id: usize,
@@ -220,13 +221,10 @@ fn vcpu_loop<V>(
     delay_rt: bool,
     io_bus: Bus,
     mmio_bus: Bus,
-    requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     #[cfg(feature = "gdb")] to_gdb_tube: Option<mpsc::Sender<VcpuDebugStatusMessage>>,
     #[cfg(feature = "gdb")] guest_mem: GuestMemory,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] msr_handlers: MsrHandlers,
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
-    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+    #[cfg(all(target_arch = "x86_64", unix))] bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
 ) -> ExitState
 where
     V: VcpuArch,
@@ -272,21 +270,13 @@ where
                         VcpuControl::RunState(new_mode) => {
                             run_mode = new_mode;
                             match run_mode {
-                                VmRunMode::Running => break 'state_loop,
+                                VmRunMode::Running => {}
                                 VmRunMode::Suspending => {
-                                    // On KVM implementations that use a paravirtualized
-                                    // clock (e.g. x86), a flag must be set to indicate to
-                                    // the guest kernel that a vCPU was suspended. The guest
-                                    // kernel will use this flag to prevent the soft lockup
-                                    // detection from triggering when this vCPU resumes,
-                                    // which could happen days later in realtime.
-                                    if requires_pvclock_ctrl {
-                                        if let Err(e) = vcpu.pvclock_ctrl() {
-                                            error!(
-                                                "failed to tell hypervisor vcpu {} is suspending: {}",
-                                                cpu_id, e
-                                            );
-                                        }
+                                    if let Err(e) = vcpu.on_suspend() {
+                                        error!(
+                                            "failed to tell hypervisor vcpu {} is suspending: {}",
+                                            cpu_id, e
+                                        );
                                     }
                                 }
                                 VmRunMode::Breakpoint => {}
@@ -341,6 +331,9 @@ where
                         }
                     }
                 }
+                if run_mode == VmRunMode::Running {
+                    break 'state_loop;
+                }
             }
         }
 
@@ -371,18 +364,6 @@ where
                 Ok(VcpuExit::Mmio) => {
                     if let Err(e) = vcpu.handle_mmio(&mut bus_io_handler(&mmio_bus)) {
                         error!("failed to handle mmio: {}", e);
-                    }
-                }
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                Ok(VcpuExit::RdMsr { index }) => {
-                    if let Some(data) = msr_handlers.read(index) {
-                        let _ = vcpu.handle_rdmsr(data);
-                    }
-                }
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                Ok(VcpuExit::WrMsr { index, data }) => {
-                    if msr_handlers.write(index, data).is_some() {
-                        vcpu.handle_wrmsr();
                     }
                 }
                 Ok(VcpuExit::IoapicEoi { vector }) => {
@@ -425,7 +406,7 @@ where
 
                     run_mode = VmRunMode::Breakpoint;
                 }
-                #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+                #[cfg(all(target_arch = "x86_64", unix))]
                 Ok(VcpuExit::BusLock) => {
                     let delay_ns: u64 = bus_lock_ratelimit_ctrl.lock().ratelimit_calculate_delay(1);
                     thread::sleep(Duration::from_nanos(delay_ns));
@@ -485,21 +466,16 @@ pub fn run_vcpu<V>(
     vcpu_affinity: CpuSet,
     delay_rt: bool,
     start_barrier: Arc<Barrier>,
-    has_bios: bool,
     mut io_bus: Bus,
     mut mmio_bus: Bus,
     vm_evt_wrtube: SendTube,
-    requires_pvclock_ctrl: bool,
     from_main_tube: mpsc::Receiver<VcpuControl>,
     #[cfg(feature = "gdb")] to_gdb_tube: Option<mpsc::Sender<VcpuDebugStatusMessage>>,
     enable_core_scheduling: bool,
     enable_per_vm_core_scheduling: bool,
     cpu_config: Option<CpuConfigArch>,
     vcpu_cgroup_tasks_file: Option<File>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    userspace_msr: std::collections::BTreeMap<u32, arch::MsrConfig>,
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
-    bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
+    #[cfg(all(target_arch = "x86_64", unix))] bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
     run_mode: VmRunMode,
 ) -> Result<JoinHandle<()>>
 where
@@ -534,23 +510,8 @@ where
                     vm,
                     irq_chip.as_mut(),
                     vcpu_count,
-                    has_bios,
                     cpu_config,
                 );
-
-                // Add MSR handlers after CPU affinity setting.
-                // This avoids redundant MSR file fd creation.
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                let mut msr_handlers = MsrHandlers::new();
-                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                if !userspace_msr.is_empty() {
-                    userspace_msr.iter().for_each(|(index, msr_config)| {
-                        if let Err(e) = msr_handlers.add_handler(*index, msr_config.clone(), cpu_id)
-                        {
-                            error!("failed to add msr handler {}: {:#}", cpu_id, e);
-                        };
-                    });
-                }
 
                 start_barrier.wait();
 
@@ -576,18 +537,17 @@ where
                     delay_rt,
                     io_bus,
                     mmio_bus,
-                    requires_pvclock_ctrl,
                     from_main_tube,
                     #[cfg(feature = "gdb")]
                     to_gdb_tube,
                     #[cfg(feature = "gdb")]
                     guest_mem,
-                    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                    msr_handlers,
-                    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+                    #[cfg(all(target_arch = "x86_64", unix))]
                     bus_lock_ratelimit_ctrl,
                 );
 
+                // We don't want any more VCPU signals from now until the thread exits.
+                let _ = block_signal(SIGRTMIN() + 0);
                 set_vcpu_thread_local(None, SIGRTMIN() + 0);
 
                 vcpu_exit_state

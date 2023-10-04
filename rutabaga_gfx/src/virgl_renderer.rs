@@ -10,9 +10,11 @@
 use std::cmp::min;
 use std::convert::TryFrom;
 use std::io::Error as SysError;
+use std::io::IoSliceMut;
 use std::mem::size_of;
 use std::mem::transmute;
 use std::os::raw::c_char;
+use std::os::raw::c_int;
 use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::panic::catch_unwind;
@@ -22,7 +24,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use data_model::VolatileSlice;
 use log::debug;
 use log::error;
 use log::warn;
@@ -86,7 +87,10 @@ fn import_resource(resource: &mut RutabagaResource) -> RutabagaResult<()> {
 }
 
 impl RutabagaContext for VirglRendererContext {
-    fn submit_cmd(&mut self, commands: &mut [u8]) -> RutabagaResult<()> {
+    fn submit_cmd(&mut self, commands: &mut [u8], fence_ids: &[u64]) -> RutabagaResult<()> {
+        if !fence_ids.is_empty() {
+            return Err(RutabagaError::Unsupported);
+        }
         if commands.len() % size_of::<u32>() != 0 {
             return Err(RutabagaError::InvalidCommandSize(commands.len()));
         }
@@ -161,7 +165,12 @@ extern "C" fn debug_callback(fmt: *const ::std::os::raw::c_char, ap: stdio::va_l
 
     let printed_len = unsafe {
         let ptr = v.as_mut_ptr() as *mut ::std::os::raw::c_char;
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
+        #[cfg(any(
+            target_arch = "x86",
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        ))]
         let size = BUF_LEN as ::std::os::raw::c_ulong;
         #[cfg(target_arch = "arm")]
         let size = BUF_LEN as ::std::os::raw::c_uint;
@@ -188,7 +197,7 @@ extern "C" fn debug_callback(fmt: *const ::std::os::raw::c_char, ap: stdio::va_l
 extern "C" fn write_context_fence(cookie: *mut c_void, ctx_id: u32, ring_idx: u64, fence_id: u64) {
     catch_unwind(|| {
         assert!(!cookie.is_null());
-        let cookie = unsafe { &*(cookie as *mut VirglCookie) };
+        let cookie = unsafe { &*(cookie as *mut RutabagaCookie) };
 
         // Call fence completion callback
         if let Some(handler) = &cookie.fence_handler {
@@ -199,6 +208,44 @@ extern "C" fn write_context_fence(cookie: *mut c_void, ctx_id: u32, ring_idx: u6
                 ring_idx: ring_idx as u8,
             });
         }
+    })
+    .unwrap_or_else(|_| abort())
+}
+
+unsafe extern "C" fn write_fence(cookie: *mut c_void, fence: u32) {
+    catch_unwind(|| {
+        assert!(!cookie.is_null());
+        let cookie = &*(cookie as *mut RutabagaCookie);
+
+        // Call fence completion callback
+        if let Some(handler) = &cookie.fence_handler {
+            handler.call(RutabagaFence {
+                flags: RUTABAGA_FLAG_FENCE,
+                fence_id: fence as u64,
+                ctx_id: 0,
+                ring_idx: 0,
+            });
+        }
+    })
+    .unwrap_or_else(|_| abort())
+}
+
+#[cfg(feature = "virgl_renderer_next")]
+unsafe extern "C" fn get_server_fd(cookie: *mut c_void, version: u32) -> c_int {
+    catch_unwind(|| {
+        assert!(!cookie.is_null());
+        let cookie = &mut *(cookie as *mut RutabagaCookie);
+
+        if version != 0 {
+            return -1;
+        }
+
+        // Transfer the fd ownership to virglrenderer.
+        cookie
+            .render_server_fd
+            .take()
+            .map(SafeDescriptor::into_raw_descriptor)
+            .unwrap_or(-1)
     })
     .unwrap_or_else(|_| abort())
 }
@@ -274,9 +321,10 @@ impl VirglRenderer {
         // Otherwise, Resource and Context would become invalid because their lifetime is not tied
         // to the Renderer instance. Doing so greatly simplifies the ownership for users of this
         // library.
-        let cookie = Box::into_raw(Box::new(VirglCookie {
+        let cookie = Box::into_raw(Box::new(RutabagaCookie {
             render_server_fd,
             fence_handler: Some(fence_handler),
+            debug_handler: None,
         }));
 
         // Safe because a valid cookie and set of callbacks is used and the result is checked for
@@ -301,7 +349,7 @@ impl VirglRenderer {
             let ret = unsafe { virgl_renderer_resource_get_map_info(resource_id, &mut map_info) };
             ret_to_res(ret)?;
 
-            Ok(map_info)
+            Ok(map_info | RUTABAGA_MAP_ACCESS_RW)
         }
         #[cfg(not(feature = "virgl_renderer_next"))]
         Err(RutabagaError::Unsupported)
@@ -321,6 +369,7 @@ impl VirglRenderer {
             strides: query.out_strides,
             offsets: query.out_offsets,
             modifier: query.out_modifier,
+            guest_cpu_mappable: false,
         })
     }
 
@@ -531,7 +580,7 @@ impl RutabagaComponent for VirglRenderer {
         ctx_id: u32,
         resource: &mut RutabagaResource,
         transfer: Transfer3D,
-        buf: Option<VolatileSlice>,
+        buf: Option<IoSliceMut>,
     ) -> RutabagaResult<()> {
         if transfer.is_empty() {
             return Ok(());
@@ -552,9 +601,9 @@ impl RutabagaComponent for VirglRenderer {
         };
 
         let (iovecs, num_iovecs) = match buf {
-            Some(buf) => {
-                iov.base = buf.as_ptr() as *mut c_void;
-                iov.len = buf.size();
+            Some(mut buf) => {
+                iov.base = buf.as_mut_ptr() as *mut c_void;
+                iov.len = buf.len();
                 (&mut iov as *mut RutabagaIovec as *mut iovec, 1)
             }
             None => (null_mut(), 0),

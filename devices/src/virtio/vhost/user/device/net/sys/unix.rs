@@ -4,7 +4,6 @@
 
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::thread;
 
 use anyhow::anyhow;
@@ -15,38 +14,36 @@ use base::error;
 use base::info;
 use base::validate_raw_descriptor;
 use base::warn;
-use base::Event;
 use base::RawDescriptor;
 use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::IntoAsync;
 use cros_async::IoSource;
-use futures::future::AbortHandle;
-use futures::future::Abortable;
+use futures::channel::oneshot;
+use futures::select_biased;
+use futures::FutureExt;
 use hypervisor::ProtectionType;
 use net_util::sys::unix::Tap;
 use net_util::MacAddress;
 use net_util::TapT;
-use sync::Mutex;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
 use crate::virtio;
 use crate::virtio::net::process_rx;
 use crate::virtio::net::validate_and_configure_tap;
 use crate::virtio::net::NetError;
-use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::VhostUserBackend;
-use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::net::run_ctrl_queue;
 use crate::virtio::vhost::user::device::net::run_tx_queue;
 use crate::virtio::vhost::user::device::net::NetBackend;
 use crate::virtio::vhost::user::device::net::NET_EXECUTOR;
-use crate::PciAddress;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
 
 struct TapConfig {
     host_ip: Ipv4Addr,
@@ -122,7 +119,7 @@ where
             | 1 << virtio_net::VIRTIO_NET_F_HOST_TSO4
             | 1 << virtio_net::VIRTIO_NET_F_HOST_UFO
             | 1 << virtio_net::VIRTIO_NET_F_MTU
-            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+            | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
 
         let mtu = tap.mtu()?;
 
@@ -131,25 +128,37 @@ where
             avail_features,
             acked_features: 0,
             acked_protocol_features: VhostUserProtocolFeatures::empty(),
-            workers: Default::default(),
             mtu,
+            workers: Default::default(),
         })
     }
 }
 
 async fn run_rx_queue<T: TapT>(
-    queue: Arc<Mutex<virtio::Queue>>,
-    mem: GuestMemory,
+    mut queue: Queue,
     mut tap: IoSource<T>,
-    doorbell: Doorbell,
+    doorbell: Interrupt,
     kick_evt: EventAsync,
-) {
+    mut stop_rx: oneshot::Receiver<()>,
+) -> Queue {
     loop {
-        if let Err(e) = tap.wait_readable().await {
-            error!("Failed to wait for tap device to become readable: {}", e);
-            break;
+        select_biased! {
+            // `tap.wait_readable()` requires an immutable reference to `tap`, but `process_rx`
+            // requires a mutable reference to `tap`, so this future needs to be recreated on
+            // every iteration. If more arms are added that doesn't break out of the loop, then
+            // this future could be recreated too many times.
+            rx = tap.wait_readable().fuse() => {
+                if let Err(e) = rx {
+                    error!("Failed to wait for tap device to become readable: {}", e);
+                    break;
+                }
+            }
+            _ = stop_rx => {
+                break;
+            }
         }
-        match process_rx(&doorbell, &queue, &mem, tap.as_source_mut()) {
+
+        match process_rx(&doorbell, &mut queue, tap.as_source_mut()) {
             Ok(()) => {}
             Err(NetError::RxDescriptorsExhausted) => {
                 if let Err(e) = kick_evt.next_val().await {
@@ -163,6 +172,7 @@ async fn run_rx_queue<T: TapT>(
             }
         }
     }
+    queue
 }
 
 /// Platform specific impl of VhostUserBackend::start_queue.
@@ -170,9 +180,8 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
     backend: &mut NetBackend<T>,
     idx: usize,
     queue: virtio::Queue,
-    mem: GuestMemory,
-    doorbell: Doorbell,
-    kick_evt: Event,
+    _mem: GuestMemory,
+    doorbell: Interrupt,
 ) -> anyhow::Result<()> {
     if backend.workers[idx].is_some() {
         warn!("Starting new queue handler without stopping old handler");
@@ -183,51 +192,54 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
         // Safe because the executor is initialized in main() below.
         let ex = ex.get().expect("Executor not initialized");
 
+        let kick_evt = queue
+            .event()
+            .try_clone()
+            .context("failed to clone queue event")?;
         let kick_evt =
             EventAsync::new(kick_evt, ex).context("failed to create EventAsync for kick_evt")?;
         let tap = backend
             .tap
             .try_clone()
             .context("failed to clone tap device")?;
-        let (handle, registration) = AbortHandle::new_pair();
-        let queue = Arc::new(Mutex::new(queue));
-        let queue_task = match idx {
+        let worker_tuple = match idx {
             0 => {
                 let tap = ex
                     .async_from(tap)
                     .context("failed to create async tap device")?;
 
-                ex.spawn_local(Abortable::new(
-                    run_rx_queue(queue.clone(), mem, tap, doorbell, kick_evt),
-                    registration,
-                ))
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_rx_queue(queue, tap, doorbell, kick_evt, stop_rx)),
+                    stop_tx,
+                )
             }
-            1 => ex.spawn_local(Abortable::new(
-                run_tx_queue(queue.clone(), mem, tap, doorbell, kick_evt),
-                registration,
-            )),
+            1 => {
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_tx_queue(queue, tap, doorbell, kick_evt, stop_rx)),
+                    stop_tx,
+                )
+            }
             2 => {
-                ex.spawn_local(Abortable::new(
-                    run_ctrl_queue(
-                        queue.clone(),
-                        mem,
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_ctrl_queue(
+                        queue,
                         tap,
                         doorbell,
                         kick_evt,
                         backend.acked_features,
                         1, /* vq_pairs */
-                    ),
-                    registration,
-                ))
+                        stop_rx,
+                    )),
+                    stop_tx,
+                )
             }
             _ => bail!("attempted to start unknown queue: {}", idx),
         };
 
-        backend.workers[idx] = Some(WorkerState {
-            abort_handle: handle,
-            queue_task,
-            queue,
-        });
+        backend.workers[idx] = Some(worker_tuple);
         Ok(())
     })
 }
@@ -242,18 +254,10 @@ pub struct Options {
     #[argh(option, arg_name = "SOCKET_PATH,TAP_FD")]
     /// TAP FD with a socket path"
     tap_fd: Vec<String>,
-    #[argh(option, arg_name = "DEVICE,IP_ADDR,NET_MASK,MAC_ADDR")]
-    /// TAP device config for virtio-vhost-user.
-    /// (e.g. "0000:00:07.0,10.0.2.2,255.255.255.0,12:34:56:78:9a:bc")
-    vvu_device: Vec<String>,
-    #[argh(option, arg_name = "DEVICE,TAP_FD")]
-    /// TAP FD with a vfio device name for virtio-vhost-user
-    vvu_tap_fd: Vec<String>,
 }
 
 enum Connection {
     Socket(String),
-    Vfio(String),
 }
 
 fn new_backend_from_device_arg(arg: &str) -> anyhow::Result<(String, NetBackend<Tap>)> {
@@ -291,8 +295,7 @@ fn new_backend_from_tapfd_arg(arg: &str) -> anyhow::Result<(String, NetBackend<T
 /// Starts a vhost-user net device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn start_device(opts: Options) -> anyhow::Result<()> {
-    let num_devices =
-        opts.device.len() + opts.tap_fd.len() + opts.vvu_device.len() + opts.vvu_tap_fd.len();
+    let num_devices = opts.device.len() + opts.tap_fd.len();
 
     if num_devices == 0 {
         bail!("no device option was passed");
@@ -313,18 +316,6 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         );
     }
 
-    // virtio-vhost-user
-    for arg in opts.vvu_device.iter() {
-        devices.push(
-            new_backend_from_device_arg(arg).map(|(s, backend)| (Connection::Vfio(s), backend))?,
-        );
-    }
-    for arg in opts.vvu_tap_fd.iter() {
-        devices.push(
-            new_backend_from_tapfd_arg(arg).map(|(s, backend)| (Connection::Vfio(s), backend))?,
-        );
-    }
-
     let mut threads = Vec::with_capacity(num_devices);
 
     for (conn, backend) in devices {
@@ -337,21 +328,6 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
                         let _ = thread_ex.set(ex.clone());
                     });
                     let listener = VhostUserListener::new_socket(&socket, None)?;
-                    // run_until() returns an Result<Result<..>> which the ? operator lets us
-                    // flatten.
-                    ex.run_until(listener.run_backend(Box::new(backend), &ex))?
-                }));
-            }
-            Connection::Vfio(device_name) => {
-                threads.push(thread::spawn(move || {
-                    NET_EXECUTOR.with(|thread_ex| {
-                        let _ = thread_ex.set(ex.clone());
-                    });
-                    let listener = VhostUserListener::new_vvu(
-                        PciAddress::from_str(&device_name)?,
-                        backend.max_queue_num(),
-                        None,
-                    )?;
                     // run_until() returns an Result<Result<..>> which the ? operator lets us
                     // flatten.
                     ex.run_until(listener.run_backend(Box::new(backend), &ex))?

@@ -12,6 +12,7 @@ use std::time::Instant;
 use anyhow::Context;
 use base::error;
 use base::warn;
+use base::Descriptor;
 use base::Error as SysError;
 use base::EventToken;
 use base::WaitContext;
@@ -34,7 +35,7 @@ cfg_if::cfg_if! {
         use base::Timer;
     }
 }
-
+use base::TimerTrait;
 use base::WorkerThread;
 
 use crate::bus::BusAccessInfo;
@@ -293,8 +294,9 @@ impl Pit {
     fn start(&mut self) -> PitResult<()> {
         let pit_counter = self.counters[0].clone();
         self.worker_thread = Some(WorkerThread::start("pit counter worker", move |kill_evt| {
+            let timer_descriptor = Descriptor(pit_counter.lock().timer.as_raw_descriptor());
             let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-                (&pit_counter.lock().timer, Token::TimerExpire),
+                (&timer_descriptor, Token::TimerExpire),
                 (&kill_evt, Token::Kill),
             ])
             .map_err(PitError::CreateWaitContext)?;
@@ -377,6 +379,18 @@ impl Suspendable for Pit {
         }
         Ok(())
     }
+
+    /// The PIT is only used in very early boot on x86_64, and snapshots are not
+    /// generally taken during that time, so we can safely skip the PIT for now.
+    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    /// The PIT is only used in very early boot on x86_64, and snapshots are not
+    /// generally taken during that time, so we can safely skip the PIT for now.
+    fn restore(&mut self, _data: serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 // Each instance of this represents one of the PIT counters. They are used to
@@ -419,7 +433,7 @@ struct PitCounter {
     // Indicates whether the current timer is valid.
     timer_valid: bool,
     // Timer to set and receive periodic notifications.
-    timer: Timer,
+    timer: Box<dyn TimerTrait>,
 }
 
 impl Drop for PitCounter {
@@ -474,7 +488,7 @@ impl PitCounter {
             // initialize it to max to prevent a misbehaving guest from triggering a divide by 0.
             count: MAX_TIMER_FREQ,
             timer_valid: false,
-            timer,
+            timer: Box::new(timer),
         })
     }
 

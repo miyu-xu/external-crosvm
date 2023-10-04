@@ -2,19 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::error;
+use base::warn;
+use base::AsRawDescriptor;
+use base::Event;
+use base::RawDescriptor;
 use base::WorkerThread;
-use base::{error, warn, AsRawDescriptor, Event, RawDescriptor};
 use vhost::Scmi as VhostScmiHandle;
 use vhost::Vhost;
 use vm_memory::GuestMemory;
 
 use super::worker::Worker;
-use super::{Error, Result};
-use crate::virtio::{DeviceType, Interrupt, Queue, VirtioDevice};
+use super::Error;
+use super::Result;
+use crate::virtio::DeviceType;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
+use crate::virtio::VirtioDevice;
 use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 128;
@@ -103,7 +112,7 @@ impl VirtioDevice for Scmi {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != NUM_QUEUES {
             return Err(anyhow!(
@@ -122,12 +131,11 @@ impl VirtioDevice for Scmi {
             interrupt,
             acked_features,
             None,
-            self.supports_iommu(),
         );
         let activate_vqs = |_handle: &VhostScmiHandle| -> Result<()> { Ok(()) };
 
         worker
-            .init(mem, QUEUE_SIZES, activate_vqs)
+            .init(mem, QUEUE_SIZES, activate_vqs, None)
             .context("vhost worker init exited with error")?;
 
         self.worker_thread = Some(WorkerThread::start("vhost_scmi", move |kill_evt| {

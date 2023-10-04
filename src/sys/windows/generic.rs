@@ -11,15 +11,18 @@ use arch::VcpuArch;
 use arch::VirtioDeviceStub;
 use arch::VmArch;
 use base::AsRawDescriptor;
+use base::CloseNotifier;
 use base::Event;
 use base::EventToken;
 use base::ProtoTube;
+use base::ReadNotifier;
 use base::SendTube;
 use base::Tube;
 use base::WaitContext;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use devices::virtio;
+#[cfg(feature = "gpu")]
 use devices::virtio::gpu::EventDevice;
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuBackendConfig as GpuBackendConfigProduct;
@@ -33,12 +36,17 @@ use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig a
 use devices::virtio::vhost::user::snd::sys::windows::product::SndVmmConfig as SndVmmConfigProduct;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::snd::sys::windows::SndVmmConfig;
+#[cfg(feature = "gpu")]
 use devices::virtio::DisplayBackend;
+#[cfg(feature = "gpu")]
 use devices::virtio::Gpu;
+#[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
 pub(crate) use metrics::log_descriptor;
 pub(crate) use metrics::MetricEventType;
 use sync::Mutex;
+#[cfg(feature = "balloon")]
+use vm_control::BalloonTube;
 use vm_control::PvClockCommand;
 
 use super::run_vcpu::VcpuRunMode;
@@ -62,8 +70,17 @@ pub(super) enum TaggedControlTube {
     Unused,
 }
 
-impl TaggedControlTube {
-    pub fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+impl ReadNotifier for TaggedControlTube {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        panic!(
+            "get_read_notifier called on generic tagged control: {:?}",
+            self
+        )
+    }
+}
+
+impl CloseNotifier for TaggedControlTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
         panic!(
             "get_read_notifier called on generic tagged control: {:?}",
             self
@@ -76,7 +93,8 @@ pub(super) enum Token {
     VmEvent,
     BrokerShutdown,
     VmControlServer,
-    VmControl { index: usize },
+    VmControl { id: usize },
+    BalloonTube,
 }
 
 pub(super) fn handle_hungup_event(token: &Token) {
@@ -133,7 +151,6 @@ pub(super) fn handle_tagged_control_tube_event(
     virtio_snd_host_mute_tube: &mut Option<Tube>,
     service_vm_state: &mut ServiceVmState,
     ipc_main_loop_tube: Option<&Tube>,
-    ac97_host_tubes: &[Tube],
 ) {
 }
 
@@ -152,10 +169,9 @@ pub(super) fn push_triggers<'a>(
 
 pub(super) fn handle_received_token<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     token: &Token,
-    _ac97_host_tubes: &[Tube],
     _anti_tamper_main_thread_tube: &Option<ProtoTube>,
-    _balloon_host_tube: &Option<Tube>,
-    _control_tubes: &[SharedTaggedControlTube],
+    #[cfg(feature = "balloon")] _balloon_tube: Option<&mut BalloonTube>,
+    _control_tubes: &BTreeMap<usize, SharedTaggedControlTube>,
     _guest_os: &mut RunnableLinuxVm<V, Vcpu>,
     _ipc_main_loop_tube: Option<&Tube>,
     _memory_size_mb: u64,
@@ -180,6 +196,7 @@ pub(super) fn create_service_vm_state(_memory_size_mb: u64) -> ServiceVmState {
     ServiceVmState {}
 }
 
+#[cfg(feature = "gpu")]
 pub(super) fn create_gpu(
     vm_evt_wrtube: &SendTube,
     resource_bridges: Vec<Tube>,
@@ -190,7 +207,7 @@ pub(super) fn create_gpu(
     _product_args: GpuBackendConfigProduct,
 ) -> Result<Gpu> {
     let wndproc_thread =
-        virtio::gpu::start_wndproc_thread(None).expect("Failed to start wndproc_thread!");
+        virtio::gpu::start_wndproc_thread().expect("Failed to start wndproc_thread!");
 
     Ok(Gpu::new(
         vm_evt_wrtube
@@ -262,7 +279,7 @@ pub(crate) fn setup_metrics_reporting() -> Result<()> {
 
 pub(super) fn push_mouse_device(
     cfg: &Config,
-    _gpu_vmm_config: &mut GpuVmmConfig,
+    #[cfg(feature = "gpu")] _gpu_vmm_config: &mut GpuVmmConfig,
     _devs: &mut [VirtioDeviceStub],
 ) -> Result<()> {
     Ok(())

@@ -55,7 +55,6 @@ use libc::O_RDWR;
 use sync::Mutex;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-use vm_memory::MemoryRegionInformation;
 use vm_memory::MemoryRegionPurpose;
 
 use crate::BalloonEvent;
@@ -211,11 +210,6 @@ impl VmAArch64 for GeniezoneVm {
 }
 
 impl GeniezoneVcpu {
-    /// Arch-specific implementation of `Vcpu::pvclock_ctrl`.  Always returns an error on AArch64.
-    pub fn pvclock_ctrl_arch(&self) -> Result<()> {
-        Err(Error::new(EINVAL))
-    }
-
     fn set_one_geniezone_reg_u64(
         &self,
         gzvm_reg_id: GeniezoneVcpuRegister,
@@ -616,35 +610,26 @@ impl GeniezoneVm {
         }
         // Safe because we verify that ret is valid and we own the fd.
         let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-        guest_mem.with_regions(
-            |MemoryRegionInformation {
-                 index,
-                 guest_addr,
-                 size,
-                 host_addr,
-                 options,
-                 ..
-             }| {
-                let flags = match options.purpose {
-                    MemoryRegionPurpose::GuestMemoryRegion => GZVM_USER_MEM_REGION_GUEST_MEM,
-                    MemoryRegionPurpose::ProtectedFirmwareRegion => GZVM_USER_MEM_REGION_PROTECT_FW,
-                    MemoryRegionPurpose::StaticSwiotlbRegion => GZVM_USER_MEM_REGION_STATIC_SWIOTLB,
-                };
-                unsafe {
-                    // Safe because the guest regions are guaranteed not to overlap.
-                    set_user_memory_region(
-                        &vm_descriptor,
-                        index as MemSlot,
-                        false,
-                        false,
-                        guest_addr.offset(),
-                        size as u64,
-                        host_addr as *mut u8,
-                        flags,
-                    )
-                }
-            },
-        )?;
+        for region in guest_mem.regions() {
+            let flags = match region.options.purpose {
+                MemoryRegionPurpose::GuestMemoryRegion => GZVM_USER_MEM_REGION_GUEST_MEM,
+                MemoryRegionPurpose::ProtectedFirmwareRegion => GZVM_USER_MEM_REGION_PROTECT_FW,
+                MemoryRegionPurpose::StaticSwiotlbRegion => GZVM_USER_MEM_REGION_STATIC_SWIOTLB,
+            };
+            unsafe {
+                // Safe because the guest regions are guaranteed not to overlap.
+                set_user_memory_region(
+                    &vm_descriptor,
+                    region.index as MemSlot,
+                    false,
+                    false,
+                    region.guest_addr.offset(),
+                    region.size as u64,
+                    region.host_addr as *mut u8,
+                    flags,
+                )
+            }?;
+        }
 
         let vm = GeniezoneVm {
             geniezone: geniezone.try_clone()?,
@@ -902,7 +887,6 @@ impl Vm for GeniezoneVm {
         match c {
             VmCap::DirtyLog => true,
             VmCap::PvClock => false,
-            VmCap::PvClockSuspend => false,
             VmCap::Protected => self.check_raw_capability(GeniezoneCap::ArmProtectedVm),
             VmCap::EarlyInitCpuid => false,
         }
@@ -1136,8 +1120,8 @@ impl Vcpu for GeniezoneVcpu {
         }
     }
 
-    fn pvclock_ctrl(&self) -> Result<()> {
-        Err(Error::new(libc::ENXIO))
+    fn on_suspend(&self) -> Result<()> {
+        Ok(())
     }
 
     unsafe fn enable_raw_capability(&self, _cap: u32, _args: &[u64; 4]) -> Result<()> {

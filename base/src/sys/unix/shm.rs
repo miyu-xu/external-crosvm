@@ -199,13 +199,11 @@ impl SharedMemory {
     /// Creates a SharedMemory instance from a SafeDescriptor owning a reference to a
     /// shared memory descriptor. Ownership of the underlying descriptor is transferred to the
     /// new SharedMemory object.
-    pub fn from_safe_descriptor(
-        descriptor: SafeDescriptor,
-        size: Option<u64>,
-    ) -> Result<SharedMemory> {
-        let mut file = unsafe { File::from_raw_descriptor(descriptor.into_raw_descriptor()) };
-        let size = size.unwrap_or(file.seek(SeekFrom::End(0))?);
-        Ok(SharedMemory { fd: file, size })
+    pub fn from_safe_descriptor(descriptor: SafeDescriptor, size: u64) -> Result<SharedMemory> {
+        Ok(SharedMemory {
+            fd: File::from(descriptor),
+            size,
+        })
     }
 
     /// Constructs a `SharedMemory` instance from a `File` that represents shared memory.
@@ -414,7 +412,7 @@ mod tests {
     fn new_sealed() {
         let mut shm = create_test_shmem();
         let mut seals = shm.get_seals().expect("failed to get seals");
-        assert_eq!(seals.bitmask(), 0);
+        assert!(!seals.seal_seal());
         seals.set_seal_seal();
         shm.add_seals(seals).expect("failed to add seals");
         seals = shm.get_seals().expect("failed to get seals");

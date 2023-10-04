@@ -49,7 +49,6 @@ pub(super) mod sys;
 
 use std::collections::BTreeMap;
 use std::convert::From;
-use std::convert::TryFrom;
 use std::fs::File;
 use std::num::Wrapping;
 #[cfg(unix)]
@@ -68,11 +67,8 @@ use base::Protection;
 use base::SafeDescriptor;
 use base::SharedMemory;
 use cros_async::TaskHandle;
-use futures::future::AbortHandle;
-use futures::future::Aborted;
 use serde::Deserialize;
 use serde::Serialize;
-use sys::Doorbell;
 use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
@@ -90,62 +86,20 @@ use vmm_vhost::message::VhostUserShmemMapMsg;
 use vmm_vhost::message::VhostUserShmemMapMsgFlags;
 use vmm_vhost::message::VhostUserShmemUnmapMsg;
 use vmm_vhost::message::VhostUserSingleMemoryRegion;
-use vmm_vhost::message::VhostUserVirtioFeatures;
 use vmm_vhost::message::VhostUserVringAddrFlags;
 use vmm_vhost::message::VhostUserVringState;
 use vmm_vhost::Error as VhostError;
-use vmm_vhost::Protocol;
 use vmm_vhost::Result as VhostResult;
 use vmm_vhost::Slave;
 use vmm_vhost::VhostUserMasterReqHandler;
 use vmm_vhost::VhostUserSlaveReqHandlerMut;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
+use crate::virtio::Interrupt;
 use crate::virtio::Queue;
+use crate::virtio::QueueConfig;
 use crate::virtio::SharedMemoryMapper;
 use crate::virtio::SharedMemoryRegion;
-use crate::virtio::SignalableInterrupt;
-
-/// Largest valid number of entries in a virtqueue.
-const MAX_VRING_LEN: u16 = 32768;
-
-/// An event to deliver an interrupt to the guest.
-///
-/// Unlike `devices::Interrupt`, this doesn't support interrupt status and signal resampling.
-// TODO(b/187487351): To avoid sending unnecessary events, we might want to support interrupt
-// status. For this purpose, we need a mechanism to share interrupt status between the vmm and the
-// device process.
-#[derive(Clone)]
-pub struct CallEvent(Arc<Event>);
-
-impl CallEvent {
-    #[cfg_attr(windows, allow(dead_code))]
-    pub fn into_inner(self) -> Event {
-        Arc::try_unwrap(self.0).unwrap()
-    }
-}
-
-impl SignalableInterrupt for CallEvent {
-    fn signal(&self, _vector: u16, _interrupt_status_mask: u32) {
-        self.0.signal().unwrap();
-    }
-
-    fn signal_config_changed(&self) {} // TODO(dgreid)
-
-    fn get_resample_evt(&self) -> Option<&Event> {
-        None
-    }
-
-    fn do_interrupt_resample(&self) {}
-}
-
-impl From<File> for CallEvent {
-    fn from(file: File) -> Self {
-        // Safe because we own the file.
-        CallEvent(Arc::new(unsafe {
-            Event::from_raw_descriptor(file.into_raw_descriptor())
-        }))
-    }
-}
 
 /// Keeps a mapping from the vmm's virtual addresses to guest addresses.
 /// used to translate messages from the vmm to guest offsets.
@@ -202,12 +156,12 @@ pub trait VhostUserBackend {
         idx: usize,
         queue: Queue,
         mem: GuestMemory,
-        doorbell: Doorbell,
-        kick_evt: Event,
+        doorbell: Interrupt,
     ) -> anyhow::Result<()>;
 
     /// Indicates that the backend should stop processing requests for virtio queue number `idx`.
     /// This method should return the queue passed to `start_queue` for the corresponding `idx`.
+    /// This method will only be called for queues that were previously started by `start_queue`.
     fn stop_queue(&mut self, idx: usize) -> anyhow::Result<Queue>;
 
     /// Resets the vhost-user backend.
@@ -229,7 +183,20 @@ pub trait VhostUserBackend {
 
     /// Used to stop non queue workers that `VhostUserBackend::stop_queue` can't stop.
     fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
-        error!("sleep not implemented for device");
+        error!("sleep not implemented for vhost user device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(())
+    }
+
+    /// Snapshot device and return serialized bytes.
+    fn snapshot(&self) -> anyhow::Result<Vec<u8>> {
+        error!("snapshot not implemented for vhost user device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(Vec::new())
+    }
+
+    fn restore(&mut self, _data: Vec<u8>) -> anyhow::Result<()> {
+        error!("restore not implemented for vhost user device");
         // TODO(rizhang): Return error once basic devices support this.
         Ok(())
     }
@@ -238,14 +205,11 @@ pub trait VhostUserBackend {
 /// A virtio ring entry.
 struct Vring {
     // The queue config. This doesn't get mutated by the queue workers.
-    queue: Queue,
-    doorbell: Option<Doorbell>,
+    queue: QueueConfig,
+    doorbell: Option<Interrupt>,
     enabled: bool,
     // Active queue that is only `Some` when the device is sleeping.
     paused_queue: Option<Queue>,
-    // This queue kick_evt is saved so that the queues handlers can start back up with the
-    // same events when it is woken up.
-    kick_evt: Option<Event>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -258,13 +222,12 @@ struct VringSnapshot {
 }
 
 impl Vring {
-    fn new(max_size: u16) -> Self {
+    fn new(max_size: u16, features: u64) -> Self {
         Self {
-            queue: Queue::new(max_size),
+            queue: QueueConfig::new(max_size, features),
             doorbell: None,
             enabled: false,
             paused_queue: None,
-            kick_evt: None,
         }
     }
 
@@ -273,7 +236,6 @@ impl Vring {
         self.doorbell = None;
         self.enabled = false;
         self.paused_queue = None;
-        self.kick_evt = None;
     }
 
     fn snapshot(&self) -> anyhow::Result<VringSnapshot> {
@@ -288,12 +250,24 @@ impl Vring {
         })
     }
 
-    fn restore(&mut self, vring_snapshot: VringSnapshot) -> anyhow::Result<()> {
-        self.queue = Queue::restore(vring_snapshot.queue)?;
+    fn restore(
+        &mut self,
+        vring_snapshot: VringSnapshot,
+        mem: &GuestMemory,
+        event: Option<Event>,
+    ) -> anyhow::Result<()> {
+        self.queue.restore(vring_snapshot.queue)?;
         self.enabled = vring_snapshot.enabled;
         self.paused_queue = vring_snapshot
             .paused_queue
-            .map(Queue::restore)
+            .map(|value| {
+                Queue::restore(
+                    &self.queue,
+                    value,
+                    mem,
+                    event.context("missing queue event")?,
+                )
+            })
             .transpose()?;
         Ok(())
     }
@@ -301,8 +275,6 @@ impl Vring {
 
 /// Trait for defining vhost-user ops that are platform-dependent.
 pub trait VhostUserPlatformOps {
-    /// Returns the protocol implemented by these platform ops.
-    fn protocol(&self) -> Protocol;
     /// Create the guest memory for the backend.
     ///
     /// `contexts` and `files` must be the same size, and provide a description of the memory
@@ -325,23 +297,19 @@ pub trait VhostUserPlatformOps {
     /// provided by `file`. For other protocols, `file` will be `None`.
     fn set_vring_kick(&mut self, index: u8, file: Option<File>) -> VhostResult<Event>;
 
-    /// Return a `Doorbell` that the backend will signal whenever it puts used buffers for vring
+    /// Return an `Interrupt` that the backend will signal whenever it puts used buffers for vring
     /// `index`.
     ///
     /// For protocols that support listening to a file descriptor (`Regular`), `file` provides a
-    /// file descriptor from which the `Doorbell` should be built. For other protocols, it will be
+    /// file descriptor from which the `Interrupt` should be built. For other protocols, it will be
     /// `None`.
-    fn set_vring_call(&mut self, index: u8, file: Option<File>) -> VhostResult<Doorbell>;
+    fn set_vring_call(&mut self, index: u8, file: Option<File>) -> VhostResult<Interrupt>;
 }
 
 /// Ops for running vhost-user over a stream (i.e. regular protocol).
 pub(super) struct VhostUserRegularOps;
 
 impl VhostUserPlatformOps for VhostUserRegularOps {
-    fn protocol(&self) -> Protocol {
-        Protocol::Regular
-    }
-
     fn set_mem_table(
         &mut self,
         contexts: &[VhostUserMemoryRegion],
@@ -360,7 +328,7 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
                 Arc::new(
                     SharedMemory::from_safe_descriptor(
                         SafeDescriptor::from(file),
-                        Some(region.memory_size),
+                        region.memory_size,
                     )
                     .unwrap(),
                 ),
@@ -402,17 +370,12 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
         Ok(unsafe { Event::from_raw_descriptor(file.into_raw_descriptor()) })
     }
 
-    fn set_vring_call(&mut self, _index: u8, file: Option<File>) -> VhostResult<Doorbell> {
+    fn set_vring_call(&mut self, _index: u8, file: Option<File>) -> VhostResult<Interrupt> {
         let file = file.ok_or(VhostError::InvalidParam)?;
-        Ok(
-            // `Doorbell` is defined as `CallEvent` on Windows, prevent clippy from giving us a
-            // warning about the unneeded conversion.
-            #[allow(clippy::useless_conversion)]
-            Doorbell::from(CallEvent::try_from(file).map_err(|_| {
-                error!("failed to convert callfd to CallSignal");
-                VhostError::InvalidParam
-            })?),
-        )
+
+        // Safe because we own the file.
+        let call_evt = unsafe { Event::from_raw_descriptor(file.into_raw_descriptor()) };
+        Ok(Interrupt::new_vhost_user(call_evt))
     }
 }
 
@@ -429,7 +392,7 @@ pub struct DeviceRequestHandler {
 #[derive(Serialize, Deserialize)]
 pub struct DeviceRequestHandlerSnapshot {
     vrings: Vec<VringSnapshot>,
-    // TODO(rizhang): Add VhostUserBackend snapshot.
+    backend: Vec<u8>,
 }
 
 impl DeviceRequestHandler {
@@ -441,7 +404,7 @@ impl DeviceRequestHandler {
     ) -> Self {
         let mut vrings = Vec::with_capacity(backend.max_queue_num());
         for _ in 0..backend.max_queue_num() {
-            vrings.push(Vring::new(MAX_VRING_LEN));
+            vrings.push(Vring::new(Queue::MAX_SIZE, backend.features()));
         }
 
         DeviceRequestHandler {
@@ -456,10 +419,6 @@ impl DeviceRequestHandler {
 }
 
 impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
-    fn protocol(&self) -> Protocol {
-        self.ops.protocol()
-    }
-
     fn set_owner(&mut self) -> VhostResult<()> {
         if self.owned {
             return Err(VhostError::InvalidOperation);
@@ -501,7 +460,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         // VHOST_USER_SET_VRING_ENABLE with parameter 1, or after it has been disabled by
         // VHOST_USER_SET_VRING_ENABLE with parameter 0.
         let acked_features = self.backend.acked_features();
-        let vring_enabled = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits() & acked_features != 0;
+        let vring_enabled = acked_features & 1 << VHOST_USER_F_PROTOCOL_FEATURES != 0;
         for v in &mut self.vrings {
             v.enabled = vring_enabled;
         }
@@ -537,7 +496,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn set_vring_num(&mut self, index: u32, num: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len() || num == 0 || num > MAX_VRING_LEN.into() {
+        if index as usize >= self.vrings.len() || num == 0 || num > Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
         self.vrings[index as usize].queue.set_size(num as u16);
@@ -572,37 +531,38 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn set_vring_base(&mut self, index: u32, base: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len() || base >= MAX_VRING_LEN.into() {
+        if index as usize >= self.vrings.len() || base >= Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
 
         let vring = &mut self.vrings[index as usize];
-        vring.queue.next_avail = Wrapping(base as u16);
-        vring.queue.next_used = Wrapping(base as u16);
+        vring.queue.set_next_avail(Wrapping(base as u16));
+        vring.queue.set_next_used(Wrapping(base as u16));
 
         Ok(())
     }
 
     fn get_vring_base(&mut self, index: u32) -> VhostResult<VhostUserVringState> {
-        if index as usize >= self.vrings.len() {
-            return Err(VhostError::InvalidParam);
-        }
+        let vring = self
+            .vrings
+            .get_mut(index as usize)
+            .ok_or(VhostError::InvalidParam)?;
 
         // Quotation from vhost-user spec:
-        // Client must start ring upon receiving a kick (that is, detecting
-        // that file descriptor is readable) on the descriptor specified by
-        // VHOST_USER_SET_VRING_KICK, and stop ring upon receiving
-        // VHOST_USER_GET_VRING_BASE.
-        if let Err(e) = self.backend.stop_queue(index as usize) {
-            error!("Failed to stop queue in get_vring_base: {}", e);
-        }
+        // "The back-end must [...] stop ring upon receiving VHOST_USER_GET_VRING_BASE."
+        // We only call `queue.set_ready()` when starting the queue, so if the queue is ready, that
+        // means it is started and should be stopped.
+        if vring.queue.ready() {
+            if let Err(e) = self.backend.stop_queue(index as usize) {
+                error!("Failed to stop queue in get_vring_base: {:#}", e);
+            }
 
-        let vring = &mut self.vrings[index as usize];
-        vring.reset();
+            vring.reset();
+        }
 
         Ok(VhostUserVringState::new(
             index,
-            vring.queue.next_avail.0 as u32,
+            vring.queue.next_avail().0 as u32,
         ))
     }
 
@@ -618,14 +578,18 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         }
 
         let kick_evt = self.ops.set_vring_kick(index, file)?;
-        // Save kick_evts so they can be re-used when waking up the device.
-        vring.kick_evt = Some(kick_evt.try_clone().expect("Failed to clone kick_evt"));
 
         // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
         vring.queue.ack_features(self.backend.acked_features());
         vring.queue.set_ready(true);
 
-        let queue = match vring.queue.activate() {
+        let mem = self
+            .mem
+            .as_ref()
+            .cloned()
+            .ok_or(VhostError::InvalidOperation)?;
+
+        let queue = match vring.queue.activate(&mem, kick_evt) {
             Ok(queue) => queue,
             Err(e) => {
                 error!("failed to activate vring: {:#}", e);
@@ -634,15 +598,10 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         };
 
         let doorbell = vring.doorbell.clone().ok_or(VhostError::InvalidOperation)?;
-        let mem = self
-            .mem
-            .as_ref()
-            .cloned()
-            .ok_or(VhostError::InvalidOperation)?;
 
         if let Err(e) = self
             .backend
-            .start_queue(index as usize, queue, mem, doorbell, kick_evt)
+            .start_queue(index as usize, queue, mem, doorbell)
         {
             error!("Failed to start queue {}: {}", index, e);
             return Err(VhostError::SlaveInternalError);
@@ -673,7 +632,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
 
         // This request should be handled only when VHOST_USER_F_PROTOCOL_FEATURES
         // has been negotiated.
-        if self.backend.acked_features() & VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits() == 0 {
+        if self.backend.acked_features() & 1 << VHOST_USER_F_PROTOCOL_FEATURES == 0 {
             return Err(VhostError::InvalidOperation);
         }
 
@@ -754,7 +713,12 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn sleep(&mut self) -> VhostResult<()> {
-        for (index, vring) in self.vrings.iter_mut().enumerate() {
+        for (index, vring) in self
+            .vrings
+            .iter_mut()
+            .enumerate()
+            .filter(|(_index, vring)| vring.queue.ready())
+        {
             match self.backend.stop_queue(index) {
                 Ok(queue) => vring.paused_queue = Some(queue),
                 Err(e) => return Err(VhostError::StopQueueError(e)),
@@ -770,17 +734,8 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
             if let Some(queue) = vring.paused_queue.take() {
                 let mem = self.mem.clone().ok_or(VhostError::SlaveInternalError)?;
                 let doorbell = vring.doorbell.clone().expect("Failed to clone doorbell");
-                let kick_evt = vring
-                    .kick_evt
-                    .as_ref()
-                    .ok_or(VhostError::SlaveInternalError)?
-                    .try_clone()
-                    .expect("Failed to clone kick_evt");
 
-                if let Err(e) = self
-                    .backend
-                    .start_queue(index, queue, mem, doorbell, kick_evt)
-                {
+                if let Err(e) = self.backend.start_queue(index, queue, mem, doorbell) {
                     error!("Failed to start queue {}: {}", index, e);
                     return Err(VhostError::SlaveInternalError);
                 }
@@ -797,6 +752,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
                 .map(|vring| vring.snapshot())
                 .collect::<anyhow::Result<Vec<VringSnapshot>>>()
                 .map_err(VhostError::SnapshotError)?,
+            backend: self.backend.snapshot().map_err(VhostError::SnapshotError)?,
         }) {
             Ok(serialized_json) => Ok(serialized_json),
             Err(e) => {
@@ -813,33 +769,39 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
                 VhostError::DeserializationFailed
             })?;
 
+        let mem = self.mem.as_ref().ok_or(VhostError::InvalidOperation)?;
+
         let snapshotted_vrings = device_request_handler_snapshot.vrings;
         assert_eq!(snapshotted_vrings.len(), self.vrings.len());
-        for (vring, snapshotted_vring) in self.vrings.iter_mut().zip(snapshotted_vrings.into_iter())
+
+        let mut queue_evts_iter = queue_evts.map(Vec::into_iter);
+
+        for (index, (vring, snapshotted_vring)) in self
+            .vrings
+            .iter_mut()
+            .zip(snapshotted_vrings.into_iter())
+            .enumerate()
         {
+            let queue_evt = if let Some(queue_evts_iter) = &mut queue_evts_iter {
+                // TODO(b/288596005): It is assumed that the index of `queue_evts` should map to the
+                // index of `self.vrings`. However, this assumption may break in the future, so a
+                // Map of indexes to queue_evt should be used to support sparse activated queues.
+                let queue_evt_file = queue_evts_iter
+                    .next()
+                    .ok_or(VhostError::VringIndexNotFound(index))?;
+                Some(self.ops.set_vring_kick(index as u8, Some(queue_evt_file))?)
+            } else {
+                None
+            };
+
             vring
-                .restore(snapshotted_vring)
+                .restore(snapshotted_vring, mem, queue_evt)
                 .map_err(VhostError::RestoreError)?;
         }
 
-        // `queue_evts` should only be `Some` if the snapshotted device is already activated.
-        // This wire up the doorbell events.
-        if let Some(queue_evts) = queue_evts {
-            // TODO(b/288596005): It is assumed that the index of `queue_evts` should map to the
-            // index of `self.vrings`. However, this assumption may break in the future, so a Map
-            // of indexes to queue_evt should be used to support sparse activated queues.
-            for (index, queue_evt_fd) in queue_evts.into_iter().enumerate() {
-                if let Some(vring) = self.vrings.get_mut(index) {
-                    let kick_evt = self.ops.set_vring_kick(index as u8, Some(queue_evt_fd))?;
-                    // Save kick_evts so they can be re-used when waking up the device.
-                    vring.kick_evt = Some(kick_evt);
-                } else {
-                    return Err(VhostError::VringIndexNotFound(index));
-                }
-            }
-        }
-
-        // TODO(rizhang): Restore self.backend.
+        self.backend
+            .restore(device_request_handler_snapshot.backend)
+            .map_err(VhostError::RestoreError)?;
 
         Ok(())
     }
@@ -981,8 +943,7 @@ impl SharedMemoryMapper for VhostShmemMapper {
 }
 
 pub(crate) struct WorkerState<T, U> {
-    pub(crate) abort_handle: AbortHandle,
-    pub(crate) queue_task: TaskHandle<std::result::Result<U, Aborted>>,
+    pub(crate) queue_task: TaskHandle<U>,
     pub(crate) queue: T,
 }
 
@@ -995,23 +956,20 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use std::sync::mpsc::channel;
-    #[cfg(unix)]
     use std::sync::Barrier;
+    use std::sync::Mutex;
 
     use anyhow::anyhow;
     use anyhow::bail;
-    #[cfg(unix)]
-    use tempfile::Builder;
-    #[cfg(unix)]
-    use tempfile::TempDir;
+    use base::Event;
     use vmm_vhost::message::MasterReq;
     use vmm_vhost::SlaveReqHandler;
     use vmm_vhost::VhostUserSlaveReqHandler;
     use zerocopy::AsBytes;
     use zerocopy::FromBytes;
 
+    use super::sys::test_helpers;
     use super::*;
     use crate::virtio::vhost::user::vmm::VhostUserHandler;
 
@@ -1038,7 +996,7 @@ mod tests {
             let mut active_queues = Vec::new();
             active_queues.resize_with(Self::MAX_QUEUE_NUM, Default::default);
             Self {
-                avail_features: VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits(),
+                avail_features: 1 << VHOST_USER_F_PROTOCOL_FEATURES,
                 acked_features: 0,
                 acked_protocol_features: VhostUserProtocolFeatures::empty(),
                 active_queues,
@@ -1100,8 +1058,7 @@ mod tests {
             idx: usize,
             queue: Queue,
             _mem: GuestMemory,
-            _doorbell: Doorbell,
-            _kick_evt: Event,
+            _doorbell: Interrupt,
         ) -> anyhow::Result<()> {
             self.active_queues[idx] = Some(queue);
             Ok(())
@@ -1114,25 +1071,11 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    fn temp_dir() -> TempDir {
-        Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
-    }
-
-    #[cfg(unix)]
     #[test]
     fn test_vhost_user_activate() {
-        use std::os::unix::net::UnixStream;
-
-        use vmm_vhost::connection::socket::Listener as SocketListener;
-        use vmm_vhost::SlaveListener;
-
         const QUEUES_NUM: usize = 2;
 
-        let dir = temp_dir();
-        let mut path = dir.path().to_owned();
-        path.push("sock");
-        let listener = SocketListener::new(&path, true).unwrap();
+        let (dev, vmm) = test_helpers::setup();
 
         let vmm_bar = Arc::new(Barrier::new(2));
         let dev_bar = vmm_bar.clone();
@@ -1143,18 +1086,12 @@ mod tests {
             // VMM side
             rx.recv().unwrap(); // Ensure the device is ready.
 
-            let allow_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-            let init_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+            let allow_features = 1 << VHOST_USER_F_PROTOCOL_FEATURES;
             let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
-            let connection = UnixStream::connect(&path).unwrap();
-            let mut vmm_handler = VhostUserHandler::new_from_connection(
-                connection,
-                QUEUES_NUM as u64,
-                allow_features,
-                init_features,
-                allow_protocol_features,
-            )
-            .unwrap();
+            let connection = test_helpers::connect(vmm);
+
+            let mut vmm_handler =
+                VhostUserHandler::new(connection, allow_features, allow_protocol_features).unwrap();
 
             println!("read_config");
             let mut buf = vec![0; std::mem::size_of::<FakeConfig>()];
@@ -1169,12 +1106,15 @@ mod tests {
 
             for idx in 0..QUEUES_NUM {
                 println!("activate_mem_table: queue_index={}", idx);
-                let queue = Queue::new(0x10);
-                let queue_evt = Event::new().unwrap();
+                let mut queue = QueueConfig::new(0x10, 0);
+                queue.set_ready(true);
+                let queue = queue
+                    .activate(&mem, Event::new().unwrap())
+                    .expect("QueueConfig::activate");
                 let irqfd = Event::new().unwrap();
 
                 vmm_handler
-                    .activate_vring(&mem, idx, &queue, &queue_evt, &irqfd)
+                    .activate_vring(&mem, idx, &queue, &irqfd)
                     .unwrap();
             }
 
@@ -1189,75 +1129,50 @@ mod tests {
         });
 
         // Device side
-        let handler = std::sync::Mutex::new(DeviceRequestHandler::new(
+        let handler = Mutex::new(DeviceRequestHandler::new(
             Box::new(FakeBackend::new()),
             Box::new(VhostUserRegularOps),
         ));
-        let mut listener = SlaveListener::<SocketListener, _>::new(listener, handler).unwrap();
 
         // Notify listener is ready.
         tx.send(()).unwrap();
 
-        let mut listener = listener.accept().unwrap().unwrap();
+        let mut req_handler = test_helpers::listen(dev, handler);
 
         // VhostUserHandler::new()
-        handle_request(&mut listener).expect("set_owner");
-        handle_request(&mut listener).expect("get_features");
-        handle_request(&mut listener).expect("set_features");
-        handle_request(&mut listener).expect("get_protocol_features");
-        handle_request(&mut listener).expect("set_protocol_features");
+        handle_request(&mut req_handler).expect("set_owner");
+        handle_request(&mut req_handler).expect("get_features");
+        handle_request(&mut req_handler).expect("set_features");
+        handle_request(&mut req_handler).expect("get_protocol_features");
+        handle_request(&mut req_handler).expect("set_protocol_features");
 
         // VhostUserHandler::read_config()
-        handle_request(&mut listener).expect("get_config");
+        handle_request(&mut req_handler).expect("get_config");
 
         // VhostUserHandler::set_mem_table()
-        handle_request(&mut listener).expect("set_mem_table");
+        handle_request(&mut req_handler).expect("set_mem_table");
 
         for _ in 0..QUEUES_NUM {
             // VhostUserHandler::activate_vring()
-            handle_request(&mut listener).expect("set_vring_num");
-            handle_request(&mut listener).expect("set_vring_addr");
-            handle_request(&mut listener).expect("set_vring_base");
-            handle_request(&mut listener).expect("set_vring_call");
-            handle_request(&mut listener).expect("set_vring_kick");
-            handle_request(&mut listener).expect("set_vring_enable");
+            handle_request(&mut req_handler).expect("set_vring_num");
+            handle_request(&mut req_handler).expect("set_vring_addr");
+            handle_request(&mut req_handler).expect("set_vring_base");
+            handle_request(&mut req_handler).expect("set_vring_call");
+            handle_request(&mut req_handler).expect("set_vring_kick");
+            handle_request(&mut req_handler).expect("set_vring_enable");
         }
 
         // sleep
-        handle_request(&mut listener).expect("sleep");
+        handle_request(&mut req_handler).expect("sleep");
 
         // wake
-        handle_request(&mut listener).expect("wake");
+        handle_request(&mut req_handler).expect("wake");
 
         dev_bar.wait();
 
-        match handle_request(&mut listener) {
+        match handle_request(&mut req_handler) {
             Err(VhostError::ClientExit) => (),
-            r => panic!("Err(ClientExit) was expected but {:?}", r),
-        }
-    }
-
-    pub(super) fn vmm_handler_send_requests(vmm_handler: &mut VhostUserHandler, queues_num: usize) {
-        println!("read_config");
-        let mut buf = vec![0; std::mem::size_of::<FakeConfig>()];
-        vmm_handler.read_config(0, &mut buf).unwrap();
-        // Check if the obtained config data is correct.
-        let config = FakeConfig::read_from(buf.as_bytes()).unwrap();
-        assert_eq!(config, FAKE_CONFIG_DATA);
-
-        println!("set_mem_table");
-        let mem = GuestMemory::new(&[(GuestAddress(0x0), 0x10000)]).unwrap();
-        vmm_handler.set_mem_table(&mem).unwrap();
-
-        for idx in 0..queues_num {
-            println!("activate_mem_table: queue_index={}", idx);
-            let queue = Queue::new(0x10);
-            let queue_evt = Event::new().unwrap();
-            let irqfd = Event::new().unwrap();
-
-            vmm_handler
-                .activate_vring(&mem, idx, &queue, &queue_evt, &irqfd)
-                .unwrap();
+            r => panic!("expected Err(ClientExit) but got {:?}", r),
         }
     }
 
@@ -1266,33 +1181,5 @@ mod tests {
     ) -> Result<(), VhostError> {
         let (hdr, files) = handler.recv_header()?;
         handler.process_message(hdr, files)
-    }
-
-    pub(super) fn test_handle_requests<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>>(
-        req_handler: &mut SlaveReqHandler<S, E>,
-        queues_num: usize,
-    ) {
-        // VhostUserHandler::new()
-        handle_request(req_handler).expect("set_owner");
-        handle_request(req_handler).expect("get_features");
-        handle_request(req_handler).expect("set_features");
-        handle_request(req_handler).expect("get_protocol_features");
-        handle_request(req_handler).expect("set_protocol_features");
-
-        // VhostUserHandler::read_config()
-        handle_request(req_handler).expect("get_config");
-
-        // VhostUserHandler::set_mem_table()
-        handle_request(req_handler).expect("set_mem_table");
-
-        for _ in 0..queues_num {
-            // VhostUserHandler::activate_vring()
-            handle_request(req_handler).expect("set_vring_num");
-            handle_request(req_handler).expect("set_vring_addr");
-            handle_request(req_handler).expect("set_vring_base");
-            handle_request(req_handler).expect("set_vring_call");
-            handle_request(req_handler).expect("set_vring_kick");
-            handle_request(req_handler).expect("set_vring_enable");
-        }
     }
 }

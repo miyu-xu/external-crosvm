@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::collections::BTreeMap as Map;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::Result;
 use base::Event;
@@ -17,12 +17,13 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 use super::*;
+use crate::pci::MsixConfig;
+use crate::pci::MsixStatus;
 use crate::pci::PciAddress;
 use crate::pci::PciBarConfiguration;
 use crate::pci::PciBarIndex;
 use crate::pci::PciCapability;
-use crate::pci::{MsixConfig, MsixStatus};
-use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
+use crate::virtio::queue::QueueConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtioTransportType {
@@ -79,11 +80,6 @@ pub trait VirtioDevice: Send {
         self.queue_max_sizes().len()
     }
 
-    /// Whether this device supports a virtio-iommu.
-    fn supports_iommu(&self) -> bool {
-        false
-    }
-
     /// The set of feature bits that this device supports in addition to the base features.
     fn features(&self) -> u64 {
         0
@@ -106,18 +102,12 @@ pub trait VirtioDevice: Send {
         let _ = data;
     }
 
-    /// If the device is translated by an IOMMU, called before
-    /// |activate| with the IOMMU's mapper.
-    fn set_iommu(&mut self, iommu: &Arc<Mutex<IpcMemoryMapper>>) {
-        let _ = iommu;
-    }
-
     /// Activates this device for real usage.
     fn activate(
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> Result<()>;
 
     /// Optionally deactivates this device. If the reset method is
@@ -143,7 +133,7 @@ pub trait VirtioDevice: Send {
 
     fn control_notify(&self, _behavior: MsixStatus) {}
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(
         &mut self,
         _pci_address: &Option<PciAddress>,
@@ -210,7 +200,7 @@ pub trait VirtioDevice: Send {
     ///
     /// Unlike `Suspendable::sleep`, this is not idempotent. Attempting to sleep while already
     /// asleep is an error.
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         anyhow::bail!("virtio_sleep not implemented for {}", self.debug_label());
     }
 
@@ -222,7 +212,7 @@ pub trait VirtioDevice: Send {
     /// is an error.
     fn virtio_wake(
         &mut self,
-        _queues_state: Option<(GuestMemory, Interrupt, Map<usize, (Queue, Event)>)>,
+        _queues_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
     ) -> anyhow::Result<()> {
         anyhow::bail!("virtio_wake not implemented for {}", self.debug_label());
     }
@@ -249,7 +239,7 @@ pub trait VirtioDevice: Send {
     fn vhost_user_restore(
         &mut self,
         _data: serde_json::Value,
-        _queue_configs: &[Queue],
+        _queue_configs: &[QueueConfig],
         _queue_evts: Option<Vec<Event>>,
         _interrupt: Option<Interrupt>,
         _mem: GuestMemory,
@@ -261,4 +251,157 @@ pub trait VirtioDevice: Send {
             self.debug_label()
         );
     }
+
+    // Returns a tuple consisting of the non-arch specific part of the OpenFirmware path,
+    // represented as bytes, and the boot index of a device. The non-arch specific part of path for
+    // a virtio-blk device, for example, would consist of everything after the first '/' below:
+    // pci@i0cf8/scsi@6[,3]/disk@0,0
+    //    ^           ^  ^       ^ ^
+    //    |           |  |       fixed
+    //    |           | (PCI function related to disk (optional))
+    // (x86 specf  (PCI slot holding disk)
+    //  root at sys
+    //  bus port)
+    fn bootorder_fw_cfg(&self, _pci_address: u8) -> Option<(Vec<u8>, usize)> {
+        None
+    }
+}
+
+// General tests that should pass on all suspendables.
+// Do implement device-specific tests to validate the functionality of the device.
+// Those tests are not a replacement for regular tests. Only an extension specific to the trait's
+// basic functionality.
+/// `name` is the name of the test grouping. Can be anything unique within the same crate.
+/// `dev` is a block that returns a created virtio device.
+/// ``num_queues` is the number of queues to be created.
+/// `modfun` is the function name of the function that would modify the device. The function call
+/// should modify the device so that a snapshot taken after the function call would be different
+/// from a snapshot taken before the function call.
+#[macro_export]
+macro_rules! suspendable_virtio_tests {
+    ($name:ident, $dev: expr, $num_queues:literal, $modfun:expr) => {
+        mod $name {
+            use super::*;
+            use $crate::virtio::QueueConfig;
+            use $crate::virtio::VIRTIO_MSI_NO_VECTOR;
+            use $crate::IrqLevelEvent;
+
+            fn memory() -> GuestMemory {
+                GuestMemory::new(&[(GuestAddress(0u64), 4 * 1024 * 1024)])
+                    .expect("Creating guest memory failed.")
+            }
+
+            fn interrupt() -> Interrupt {
+                Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR)
+            }
+
+            fn create_queues(
+                num_queues: usize,
+                queue_size: u16,
+                mem: &GuestMemory,
+            ) -> BTreeMap<usize, Queue> {
+                let mut queues = BTreeMap::new();
+                for i in 0..num_queues {
+                    // activate with queues of an arbitrary size.
+                    let mut queue = QueueConfig::new(queue_size, 0);
+                    queue.set_ready(true);
+                    let queue = queue
+                        .activate(mem, Event::new().unwrap())
+                        .expect("QueueConfig::activate");
+                    queues.insert(i, queue);
+                }
+                queues
+            }
+
+            #[test]
+            fn test_sleep_snapshot() {
+                let (_ctx, device) = &mut $dev();
+                let mem = memory();
+                let interrupt = interrupt();
+                let queues = create_queues(
+                    $num_queues,
+                    device
+                        .queue_max_sizes()
+                        .first()
+                        .cloned()
+                        .expect("missing queue size"),
+                    &mem,
+                );
+                device
+                    .activate(mem.clone(), interrupt.clone(), queues)
+                    .expect("failed to activate");
+                device
+                    .virtio_sleep()
+                    .expect("failed to sleep")
+                    .expect("missing queues while sleeping");
+                device.virtio_snapshot().expect("failed to snapshot");
+            }
+
+            #[test]
+            fn test_sleep_snapshot_wake() {
+                let (_ctx, device) = &mut $dev();
+                let mem = memory();
+                let interrupt = interrupt();
+                let queues = create_queues(
+                    $num_queues,
+                    device
+                        .queue_max_sizes()
+                        .first()
+                        .cloned()
+                        .expect("missing queue size"),
+                    &mem,
+                );
+                device
+                    .activate(mem.clone(), interrupt.clone(), queues)
+                    .expect("failed to activate");
+                let sleep_result = device
+                    .virtio_sleep()
+                    .expect("failed to sleep")
+                    .expect("missing queues while sleeping");
+                device.virtio_snapshot().expect("failed to snapshot");
+                device
+                    .virtio_wake(Some((mem.clone(), interrupt.clone(), sleep_result)))
+                    .expect("failed to wake");
+            }
+
+            #[test]
+            fn test_suspend_mod_restore() {
+                let (context, device) = &mut $dev();
+                let mem = memory();
+                let interrupt = interrupt();
+                let queues = create_queues(
+                    $num_queues,
+                    device
+                        .queue_max_sizes()
+                        .first()
+                        .cloned()
+                        .expect("missing queue size"),
+                    &mem,
+                );
+                device
+                    .activate(mem.clone(), interrupt.clone(), queues)
+                    .expect("failed to activate");
+                let sleep_result = device
+                    .virtio_sleep()
+                    .expect("failed to sleep")
+                    .expect("missing queues while sleeping");
+                // Modify device before snapshotting.
+                $modfun(context, device);
+                let snap = device
+                    .virtio_snapshot()
+                    .expect("failed to take initial snapshot");
+                device
+                    .virtio_wake(Some((mem.clone(), interrupt.clone(), sleep_result)))
+                    .expect("failed to wake");
+                let (_, device) = &mut $dev();
+                device
+                    .virtio_restore(snap.clone())
+                    .expect("failed to restore");
+                let snap2 = device
+                    .virtio_snapshot()
+                    .expect("failed to take snapshot after mod");
+                assert_eq!(snap, snap2);
+            }
+        }
+    };
 }

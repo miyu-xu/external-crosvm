@@ -30,8 +30,8 @@
 
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap as Map;
-use std::collections::BTreeSet as Set;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::convert::From;
 use std::error::Error as StdError;
@@ -135,13 +135,14 @@ use super::Queue;
 use super::Reader;
 use super::SharedMemoryMapper;
 use super::SharedMemoryRegion;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
 use super::Writer;
-use crate::virtio::device_constants::wl::QUEUE_SIZES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_SEND_FENCES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_TRANS_FLAGS;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
+
+const QUEUE_SIZE: u16 = 256;
+const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -425,7 +426,7 @@ struct VmRequesterState {
     address_allocator: AddressAllocator,
 
     // Map of existing mappings in the shm address space
-    allocs: Map<u64 /* offset */, Alloc>,
+    allocs: BTreeMap<u64 /* offset */, Alloc>,
 
     // The id for the next shmem allocation
     next_alloc: usize,
@@ -459,7 +460,7 @@ impl VmRequester {
                     None,
                 )
                 .expect("failed to create allocator"),
-                allocs: Map::new(),
+                allocs: BTreeMap::new(),
                 next_alloc: 0,
             })),
         }
@@ -538,6 +539,19 @@ impl VmRequester {
     fn register_memory(&self, descriptor: SafeDescriptor, size: u64) -> WlResult<u64> {
         let mut state = self.state.borrow_mut();
         let size = round_up_to_page_size(size as usize) as u64;
+
+        let prot = match FileFlags::from_file(&descriptor) {
+            Ok(FileFlags::Read) => Protection::read(),
+            Ok(FileFlags::Write) => Protection::write(),
+            Ok(FileFlags::ReadWrite) => Protection::read_write(),
+            Err(e) => {
+                return Err(WlError::ShmemMapperError(anyhow!(
+                    "failed to get file descriptor flags with error: {:?}",
+                    e
+                )))
+            }
+        };
+
         let source = VmMemorySource::Descriptor {
             descriptor,
             offset: 0,
@@ -551,10 +565,7 @@ impl VmRequester {
             .context("failed to allocate offset")
             .map_err(WlError::ShmemMapperError)?;
 
-        match state
-            .mapper
-            .add_mapping(source, offset, Protection::read_write())
-        {
+        match state.mapper.add_mapping(source, offset, prot) {
             Ok(()) => {
                 state.allocs.insert(offset, alloc);
                 Ok(offset)
@@ -815,7 +826,7 @@ impl WlVfd {
         let (offset, desc, reqs) = vm.allocate_and_register_gpu_memory(width, height, format)?;
         let mut vfd = WlVfd::default();
         let vfd_shm =
-            SharedMemory::from_safe_descriptor(desc, Some(reqs.size)).map_err(WlError::NewAlloc)?;
+            SharedMemory::from_safe_descriptor(desc, reqs.size).map_err(WlError::NewAlloc)?;
 
         let mut desc = GpuMemoryDesc::default();
         for i in 0..3 {
@@ -1050,12 +1061,12 @@ enum WlRecv {
 }
 
 pub struct WlState {
-    wayland_paths: Map<String, PathBuf>,
+    wayland_paths: BTreeMap<String, PathBuf>,
     vm: VmRequester,
     resource_bridge: Option<Tube>,
     use_transition_flags: bool,
     wait_ctx: WaitContext<u32>,
-    vfds: Map<u32, WlVfd>,
+    vfds: BTreeMap<u32, WlVfd>,
     next_vfd_id: u32,
     in_file_queue: Vec<File>,
     in_queue: VecDeque<(u32 /* vfd_id */, WlRecv)>,
@@ -1070,7 +1081,7 @@ pub struct WlState {
 impl WlState {
     /// Create a new `WlState` instance for running a virtio-wl device.
     pub fn new(
-        wayland_paths: Map<String, PathBuf>,
+        wayland_paths: BTreeMap<String, PathBuf>,
         mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
@@ -1088,7 +1099,7 @@ impl WlState {
             resource_bridge,
             wait_ctx: WaitContext::new().expect("failed to create WaitContext"),
             use_transition_flags,
-            vfds: Map::new(),
+            vfds: BTreeMap::new(),
             next_vfd_id: NEXT_VFD_ID_BASE,
             in_file_queue: Vec::new(),
             in_queue: VecDeque::new(),
@@ -1275,7 +1286,7 @@ impl WlState {
     }
 
     fn close(&mut self, vfd_id: u32) -> WlResult<WlResp> {
-        let mut to_delete = Set::new();
+        let mut to_delete = BTreeSet::new();
         for (dest_vfd_id, q) in &self.in_queue {
             if *dest_vfd_id == vfd_id {
                 if let WlRecv::Vfd { id } = q {
@@ -1681,19 +1692,17 @@ impl WlState {
 pub struct DescriptorsExhausted;
 
 /// Handle incoming events and forward them to the VM over the input queue.
-pub fn process_in_queue<I: SignalableInterrupt>(
-    interrupt: &I,
-    in_queue: &Rc<RefCell<Queue>>,
-    mem: &GuestMemory,
+pub fn process_in_queue(
+    interrupt: &Interrupt,
+    in_queue: &mut Queue,
     state: &mut WlState,
 ) -> ::std::result::Result<(), DescriptorsExhausted> {
     state.process_wait_context();
 
     let mut needs_interrupt = false;
     let mut exhausted_queue = false;
-    let mut in_queue = in_queue.borrow_mut();
     loop {
-        let mut desc = if let Some(d) = in_queue.peek(mem) {
+        let mut desc = if let Some(d) = in_queue.peek() {
             d
         } else {
             exhausted_queue = true;
@@ -1712,8 +1721,8 @@ pub fn process_in_queue<I: SignalableInterrupt>(
             }
             let bytes_written = desc.writer.bytes_written() as u32;
             needs_interrupt = true;
-            in_queue.pop_peeked(mem);
-            in_queue.add_used(mem, desc, bytes_written);
+            in_queue.pop_peeked();
+            in_queue.add_used(desc, bytes_written);
         } else {
             break;
         }
@@ -1723,7 +1732,7 @@ pub fn process_in_queue<I: SignalableInterrupt>(
     }
 
     if needs_interrupt {
-        in_queue.trigger_interrupt(mem, interrupt);
+        in_queue.trigger_interrupt(interrupt);
     }
 
     if exhausted_queue {
@@ -1734,15 +1743,9 @@ pub fn process_in_queue<I: SignalableInterrupt>(
 }
 
 /// Handle messages from the output queue and forward them to the display sever, if necessary.
-pub fn process_out_queue<I: SignalableInterrupt>(
-    interrupt: &I,
-    out_queue: &Rc<RefCell<Queue>>,
-    mem: &GuestMemory,
-    state: &mut WlState,
-) {
+pub fn process_out_queue(interrupt: &Interrupt, out_queue: &mut Queue, state: &mut WlState) {
     let mut needs_interrupt = false;
-    let mut out_queue = out_queue.borrow_mut();
-    while let Some(mut desc) = out_queue.pop(mem) {
+    while let Some(mut desc) = out_queue.pop() {
         let resp = match state.execute(&mut desc.reader) {
             Ok(r) => r,
             Err(e) => WlResp::Err(Box::new(e)),
@@ -1756,32 +1759,28 @@ pub fn process_out_queue<I: SignalableInterrupt>(
         }
 
         let len = desc.writer.bytes_written() as u32;
-        out_queue.add_used(mem, desc, len);
+        out_queue.add_used(desc, len);
         needs_interrupt = true;
     }
 
     if needs_interrupt {
-        out_queue.trigger_interrupt(mem, interrupt);
+        out_queue.trigger_interrupt(interrupt);
     }
 }
 
 struct Worker {
     interrupt: Interrupt,
-    mem: GuestMemory,
-    in_queue: Rc<RefCell<Queue>>,
-    in_queue_evt: Event,
-    out_queue: Rc<RefCell<Queue>>,
-    out_queue_evt: Event,
+    in_queue: Queue,
+    out_queue: Queue,
     state: WlState,
 }
 
 impl Worker {
     fn new(
-        mem: GuestMemory,
         interrupt: Interrupt,
-        in_queue: (Queue, Event),
-        out_queue: (Queue, Event),
-        wayland_paths: Map<String, PathBuf>,
+        in_queue: Queue,
+        out_queue: Queue,
+        wayland_paths: BTreeMap<String, PathBuf>,
         mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
@@ -1791,11 +1790,8 @@ impl Worker {
     ) -> Worker {
         Worker {
             interrupt,
-            mem,
-            in_queue: Rc::new(RefCell::new(in_queue.0)),
-            in_queue_evt: in_queue.1,
-            out_queue: Rc::new(RefCell::new(out_queue.0)),
-            out_queue_evt: out_queue.1,
+            in_queue,
+            out_queue,
             state: WlState::new(
                 wayland_paths,
                 mapper,
@@ -1820,8 +1816,8 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.in_queue_evt, Token::InQueue),
-            (&self.out_queue_evt, Token::OutQueue),
+            (self.in_queue.event(), Token::InQueue),
+            (self.out_queue.event(), Token::OutQueue),
             (&kill_evt, Token::Kill),
             (&self.state.wait_ctx, Token::State),
         ])
@@ -1846,7 +1842,7 @@ impl Worker {
             for event in &events {
                 match event.token {
                     Token::InQueue => {
-                        let _ = self.in_queue_evt.wait();
+                        let _ = self.in_queue.event().wait();
                         if !watching_state_ctx {
                             if let Err(e) =
                                 wait_ctx.modify(&self.state.wait_ctx, EventType::Read, Token::State)
@@ -1858,22 +1854,14 @@ impl Worker {
                         }
                     }
                     Token::OutQueue => {
-                        let _ = self.out_queue_evt.wait();
-                        process_out_queue(
-                            &self.interrupt,
-                            &self.out_queue,
-                            &self.mem,
-                            &mut self.state,
-                        );
+                        let _ = self.out_queue.event().wait();
+                        process_out_queue(&self.interrupt, &mut self.out_queue, &mut self.state);
                     }
                     Token::Kill => break 'wait,
                     Token::State => {
-                        if let Err(DescriptorsExhausted) = process_in_queue(
-                            &self.interrupt,
-                            &self.in_queue,
-                            &self.mem,
-                            &mut self.state,
-                        ) {
+                        if let Err(DescriptorsExhausted) =
+                            process_in_queue(&self.interrupt, &mut self.in_queue, &mut self.state)
+                        {
                             if let Err(e) =
                                 wait_ctx.modify(&self.state.wait_ctx, EventType::None, Token::State)
                             {
@@ -1892,15 +1880,9 @@ impl Worker {
                 }
             }
         }
-        let in_queue = match Rc::try_unwrap(self.in_queue) {
-            Ok(queue_cell) => queue_cell.into_inner(),
-            Err(_) => panic!("failed to recover queue from worker"),
-        };
 
-        let out_queue = match Rc::try_unwrap(self.out_queue) {
-            Ok(queue_cell) => queue_cell.into_inner(),
-            Err(_) => panic!("failed to recover queue from worker"),
-        };
+        let in_queue = self.in_queue;
+        let out_queue = self.out_queue;
 
         Ok(vec![in_queue, out_queue])
     }
@@ -1908,13 +1890,11 @@ impl Worker {
 
 pub struct Wl {
     worker_thread: Option<WorkerThread<anyhow::Result<Vec<Queue>>>>,
-    wayland_paths: Map<String, PathBuf>,
+    wayland_paths: BTreeMap<String, PathBuf>,
     mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridge: Option<Tube>,
-    use_transition_flags: bool,
-    use_send_vfd_v2: bool,
-    use_shmem: bool,
     base_features: u64,
+    acked_features: u64,
     #[cfg(feature = "minigbm")]
     gralloc: Option<RutabagaGralloc>,
     address_offset: Option<u64>,
@@ -1923,7 +1903,7 @@ pub struct Wl {
 impl Wl {
     pub fn new(
         base_features: u64,
-        wayland_paths: Map<String, PathBuf>,
+        wayland_paths: BTreeMap<String, PathBuf>,
         resource_bridge: Option<Tube>,
     ) -> Result<Wl> {
         Ok(Wl {
@@ -1931,10 +1911,8 @@ impl Wl {
             wayland_paths,
             mapper: None,
             resource_bridge,
-            use_transition_flags: false,
-            use_send_vfd_v2: false,
-            use_shmem: false,
             base_features,
+            acked_features: 0,
             #[cfg(feature = "minigbm")]
             gralloc: None,
             address_offset: None,
@@ -1985,22 +1963,14 @@ impl VirtioDevice for Wl {
     }
 
     fn ack_features(&mut self, value: u64) {
-        if value & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0 {
-            self.use_transition_flags = true;
-        }
-        if value & (1 << VIRTIO_WL_F_SEND_FENCES) != 0 {
-            self.use_send_vfd_v2 = true;
-        }
-        if value & (1 << VIRTIO_WL_F_USE_SHMEM) != 0 {
-            self.use_shmem = true;
-        }
+        self.acked_features |= value;
     }
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
@@ -2013,15 +1983,16 @@ impl VirtioDevice for Wl {
         let mapper = self.mapper.take().context("missing mapper")?;
 
         let wayland_paths = self.wayland_paths.clone();
-        let use_transition_flags = self.use_transition_flags;
-        let use_send_vfd_v2 = self.use_send_vfd_v2;
+        let use_transition_flags = self.acked_features & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0;
+        let use_send_vfd_v2 = self.acked_features & (1 << VIRTIO_WL_F_SEND_FENCES) != 0;
+        let use_shmem = self.acked_features & (1 << VIRTIO_WL_F_USE_SHMEM) != 0;
         let resource_bridge = self.resource_bridge.take();
         #[cfg(feature = "minigbm")]
         let gralloc = self
             .gralloc
             .take()
             .expect("gralloc already passed to worker");
-        let address_offset = if !self.use_shmem {
+        let address_offset = if !use_shmem {
             self.address_offset
         } else {
             None
@@ -2029,10 +2000,9 @@ impl VirtioDevice for Wl {
 
         self.worker_thread = Some(WorkerThread::start("v_wl", move |kill_evt| {
             Worker::new(
-                mem,
                 interrupt,
-                queues.remove(0),
-                queues.remove(0),
+                queues.pop_first().unwrap().1,
+                queues.pop_first().unwrap().1,
                 wayland_paths,
                 mapper,
                 use_transition_flags,
@@ -2063,11 +2033,44 @@ impl VirtioDevice for Wl {
         self.mapper = Some(mapper);
     }
 
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
             let queues = worker_thread.stop()?;
-            return Ok(Some(Map::from_iter(queues.into_iter().enumerate())));
+            return Ok(Some(BTreeMap::from_iter(queues.into_iter().enumerate())));
         }
         Ok(None)
+    }
+
+    fn virtio_wake(
+        &mut self,
+        device_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
+    ) -> anyhow::Result<()> {
+        match device_state {
+            None => Ok(()),
+            Some((mem, interrupt, queues)) => {
+                // TODO: activate is just what we want at the moment, but we should probably move
+                // it into a "start workers" function to make it obvious that it isn't strictly
+                // used for activate events.
+                self.activate(mem, interrupt, queues)?;
+                Ok(())
+            }
+        }
+    }
+
+    // ANDROID: Add empty implementations for successful snapshot taking. Change to full
+    // implementation as part of b/266514618
+    // virtio-wl is not used, but is created. As such, virtio_snapshot/restore will be called when
+    // cuttlefish attempts to take a snapshot.
+    fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data == serde_json::Value::Null,
+            "unexpected snapshot data: should be null, got {}",
+            data,
+        );
+        Ok(())
     }
 }

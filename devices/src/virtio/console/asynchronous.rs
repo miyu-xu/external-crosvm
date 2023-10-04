@@ -4,6 +4,7 @@
 
 //! Asynchronous console device which implementation can be shared by VMM and vhost-user.
 
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use futures::FutureExt;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 use zerocopy::AsBytes;
 
 use super::handle_input;
@@ -43,7 +44,6 @@ use crate::virtio::copy_config;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::SerialDevice;
 
@@ -57,10 +57,9 @@ impl AsRawDescriptor for AsyncSerialInput {
 }
 impl IntoAsync for AsyncSerialInput {}
 
-async fn run_tx_queue<I: SignalableInterrupt>(
+async fn run_tx_queue(
     queue: &Arc<Mutex<virtio::Queue>>,
-    mem: GuestMemory,
-    doorbell: I,
+    doorbell: Interrupt,
     kick_evt: EventAsync,
     output: &mut Box<dyn io::Write + Send>,
 ) {
@@ -69,14 +68,13 @@ async fn run_tx_queue<I: SignalableInterrupt>(
             error!("Failed to read kick event for tx queue: {}", e);
             break;
         }
-        process_transmit_queue(&mem, &doorbell, queue, output.as_mut());
+        process_transmit_queue(&doorbell, queue, output.as_mut());
     }
 }
 
-async fn run_rx_queue<I: SignalableInterrupt>(
+async fn run_rx_queue(
     queue: &Arc<Mutex<virtio::Queue>>,
-    mem: GuestMemory,
-    doorbell: I,
+    doorbell: Interrupt,
     kick_evt: EventAsync,
     input: &IoSource<AsyncSerialInput>,
 ) {
@@ -101,7 +99,7 @@ async fn run_rx_queue<I: SignalableInterrupt>(
 
         // Submit all the data obtained during this read.
         while !in_buffer.is_empty() {
-            match handle_input(&mem, &doorbell, &mut in_buffer, queue) {
+            match handle_input(&doorbell, &mut in_buffer, queue) {
                 Ok(()) => {}
                 Err(ConsoleError::RxDescriptorsExhausted) => {
                     // Wait until a descriptor becomes available and try again.
@@ -126,19 +124,22 @@ impl ConsoleDevice {
         self.avail_features
     }
 
-    pub fn start_receive_queue<I: SignalableInterrupt + 'static>(
+    pub fn start_receive_queue(
         &mut self,
         ex: &Executor,
-        mem: GuestMemory,
         queue: Arc<Mutex<virtio::Queue>>,
-        doorbell: I,
-        kick_evt: Event,
+        doorbell: Interrupt,
     ) -> anyhow::Result<()> {
         let input_queue = match self.input.as_mut() {
             Some(input_queue) => input_queue,
             None => return Ok(()),
         };
 
+        let kick_evt = queue
+            .lock()
+            .event()
+            .try_clone()
+            .context("Failed to clone queue event")?;
         let kick_evt =
             EventAsync::new(kick_evt, ex).context("Failed to create EventAsync for kick_evt")?;
 
@@ -150,7 +151,7 @@ impl ConsoleDevice {
 
             Ok(async move {
                 select2(
-                    run_rx_queue(&queue, mem, doorbell, kick_evt, &async_input).boxed_local(),
+                    run_rx_queue(&queue, doorbell, kick_evt, &async_input).boxed_local(),
                     abort,
                 )
                 .await;
@@ -170,21 +171,24 @@ impl ConsoleDevice {
         }
     }
 
-    pub fn start_transmit_queue<I: SignalableInterrupt + 'static>(
+    pub fn start_transmit_queue(
         &mut self,
         ex: &Executor,
-        mem: GuestMemory,
         queue: Arc<Mutex<virtio::Queue>>,
-        doorbell: I,
-        kick_evt: Event,
+        doorbell: Interrupt,
     ) -> anyhow::Result<()> {
+        let kick_evt = queue
+            .lock()
+            .event()
+            .try_clone()
+            .context("Failed to clone queue event")?;
         let kick_evt =
             EventAsync::new(kick_evt, ex).context("Failed to create EventAsync for kick_evt")?;
 
         let tx_future = |mut output, abort| {
             Ok(async move {
                 select2(
-                    run_tx_queue(&queue, mem, doorbell, kick_evt, &mut output).boxed_local(),
+                    run_tx_queue(&queue, doorbell, kick_evt, &mut output).boxed_local(),
                     abort,
                 )
                 .await;
@@ -211,8 +215,8 @@ impl SerialDevice for ConsoleDevice {
         _out_timestamp: bool,
         _keep_rds: Vec<RawDescriptor>,
     ) -> ConsoleDevice {
-        let avail_features = virtio::base_features(protection_type)
-            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+        let avail_features =
+            virtio::base_features(protection_type) | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
         ConsoleDevice {
             input: input.map(AsyncSerialInput).map(AsyncQueueState::Stopped),
             output: AsyncQueueState::Stopped(output.unwrap_or_else(|| Box::new(io::sink()))),
@@ -287,9 +291,9 @@ impl VirtioDevice for AsyncConsole {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() < 2 {
             return Err(anyhow!("expected 2 queues, got {}", queues.len()));
@@ -312,8 +316,8 @@ impl VirtioDevice for AsyncConsole {
         };
 
         let ex = Executor::new().expect("failed to create an executor");
-        let (receive_queue, receive_evt) = queues.remove(0);
-        let (transmit_queue, transmit_evt) = queues.remove(0);
+        let receive_queue = queues.remove(&0).unwrap();
+        let transmit_queue = queues.remove(&1).unwrap();
 
         self.state =
             VirtioConsoleState::Running(WorkerThread::start("v_console", move |kill_evt| {
@@ -321,15 +325,9 @@ impl VirtioDevice for AsyncConsole {
                 let receive_queue = Arc::new(Mutex::new(receive_queue));
                 let transmit_queue = Arc::new(Mutex::new(transmit_queue));
 
-                console.start_receive_queue(
-                    &ex,
-                    mem.clone(),
-                    receive_queue,
-                    interrupt.clone(),
-                    receive_evt,
-                )?;
+                console.start_receive_queue(&ex, receive_queue, interrupt.clone())?;
 
-                console.start_transmit_queue(&ex, mem, transmit_queue, interrupt, transmit_evt)?;
+                console.start_transmit_queue(&ex, transmit_queue, interrupt)?;
 
                 // Run until the kill event is signaled and cancel all tasks.
                 ex.run_until(async {

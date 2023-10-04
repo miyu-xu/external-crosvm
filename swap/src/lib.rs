@@ -10,6 +10,7 @@ cfg_if::cfg_if! {
     if #[cfg(all(unix, feature = "enable"))] {
         mod controller;
         mod file;
+        mod file_truncator;
         mod logger;
         mod pagesize;
         mod present_list;
@@ -38,7 +39,7 @@ use serde::Serialize;
 /// This should not contain fields but be a plain enum because this will be displayed to user using
 /// `serde_json` crate.
 #[repr(C)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwapState {
     /// vmm-swap is ready. userfaultfd is disabled until vmm-swap is enabled.
     Ready = 0,

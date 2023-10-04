@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -23,7 +24,6 @@ use super::DescriptorChain;
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
 
 // A single queue of size 2. The guest kernel driver will enqueue a single
@@ -40,8 +40,6 @@ const TPM_BUFSIZE: usize = 4096;
 struct Worker {
     interrupt: Interrupt,
     queue: Queue,
-    mem: GuestMemory,
-    queue_evt: Event,
     backend: Box<dyn TpmBackend>,
 }
 
@@ -84,7 +82,7 @@ impl Worker {
 
     fn process_queue(&mut self) -> NeedsInterrupt {
         let mut needs_interrupt = NeedsInterrupt::No;
-        while let Some(mut avail_desc) = self.queue.pop(&self.mem) {
+        while let Some(mut avail_desc) = self.queue.pop() {
             let len = match self.perform_work(&mut avail_desc) {
                 Ok(len) => len,
                 Err(err) => {
@@ -93,7 +91,7 @@ impl Worker {
                 }
             };
 
-            self.queue.add_used(&self.mem, avail_desc, len);
+            self.queue.add_used(avail_desc, len);
             needs_interrupt = NeedsInterrupt::Yes;
         }
 
@@ -112,7 +110,7 @@ impl Worker {
         }
 
         let wait_ctx = match WaitContext::build_with(&[
-            (&self.queue_evt, Token::QueueAvailable),
+            (self.queue.event(), Token::QueueAvailable),
             (&kill_evt, Token::Kill),
         ])
         .and_then(|wc| {
@@ -141,7 +139,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        if let Err(e) = self.queue_evt.wait() {
+                        if let Err(e) = self.queue.event().wait() {
                             error!("vtpm failed reading queue Event: {}", e);
                             break 'wait;
                         }
@@ -154,7 +152,7 @@ impl Worker {
                 }
             }
             if needs_interrupt == NeedsInterrupt::Yes {
-                self.queue.trigger_interrupt(&self.mem, &self.interrupt);
+                self.queue.trigger_interrupt(&self.interrupt);
             }
         }
     }
@@ -196,22 +194,20 @@ impl VirtioDevice for Tpm {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != 1 {
             return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
-        let (queue, queue_evt) = queues.remove(0);
+        let queue = queues.pop_first().unwrap().1;
 
         let backend = self.backend.take().context("no backend in vtpm")?;
 
         let worker = Worker {
             interrupt,
             queue,
-            mem,
-            queue_evt,
             backend,
         };
 

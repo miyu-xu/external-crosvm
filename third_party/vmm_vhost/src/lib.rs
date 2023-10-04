@@ -30,10 +30,9 @@
 //! that shares its virtqueues. Slave is the consumer of the virtqueues. Master and slave can be
 //! either a client (i.e. connecting) or server (listening) in the socket communication.
 
-#![deny(missing_docs)]
-
 use std::fs::File;
 use std::io::Error as IOError;
+use std::num::TryFromIntError;
 
 use remain::sorted;
 use thiserror::Error as ThisError;
@@ -42,6 +41,7 @@ mod backend;
 pub use backend::*;
 
 pub mod message;
+pub use message::VHOST_USER_F_PROTOCOL_FEATURES;
 
 pub mod connection;
 
@@ -52,7 +52,7 @@ pub use sys::*;
 cfg_if::cfg_if! {
     if #[cfg(feature = "vmm")] {
         pub(crate) mod master;
-        pub use self::master::{Master, VhostUserMaster};
+        pub use self::master::Master;
         mod master_req_handler;
         pub use self::master_req_handler::{VhostUserMasterReqHandler,
                                     VhostUserMasterReqHandlerMut};
@@ -63,16 +63,10 @@ cfg_if::cfg_if! {
         mod slave_req_handler;
         mod slave_proxy;
         pub use self::slave_req_handler::{
-            Protocol, SlaveReqHandler, SlaveReqHelper, VhostUserSlaveReqHandler,
+            SlaveReqHandler, SlaveReqHelper, VhostUserSlaveReqHandler,
             VhostUserSlaveReqHandlerMut,
         };
         pub use self::slave_proxy::Slave;
-    }
-}
-cfg_if::cfg_if! {
-    if #[cfg(all(feature = "device", unix))] {
-        mod slave;
-        pub use self::slave::SlaveListener;
     }
 }
 cfg_if::cfg_if! {
@@ -101,6 +95,9 @@ pub enum Error {
     /// Fd array in question is too big or too small
     #[error("wrong number of attached fds")]
     IncorrectFds,
+    /// Invalid cast to int.
+    #[error("invalid cast to int: {0}")]
+    InvalidCastToInt(TryFromIntError),
     /// Invalid message format, flag or content.
     #[error("invalid message")]
     InvalidMessage,
@@ -173,7 +170,10 @@ pub enum Error {
 
 impl From<base::TubeError> for Error {
     fn from(err: base::TubeError) -> Self {
-        Error::TubeError(err)
+        match err {
+            base::TubeError::Disconnected => Error::Disconnect,
+            err => Error::TubeError(err),
+        }
     }
 }
 
@@ -252,7 +252,6 @@ mod tests {
     use tempfile::tempfile;
 
     use super::*;
-    use crate::backend::VhostBackend;
     use crate::connection::tests::*;
     use crate::dummy_slave::DummySlaveReqHandler;
     use crate::dummy_slave::VIRTIO_FEATURES;
@@ -478,7 +477,6 @@ mod tests {
         master.set_vring_num(0, 256).unwrap();
         master.set_vring_base(0, 0).unwrap();
         let config = VringConfigData {
-            queue_max_size: 256,
             queue_size: 128,
             flags: VhostUserVringAddrFlags::VHOST_VRING_F_LOG.bits(),
             desc_table_addr: 0x1000,

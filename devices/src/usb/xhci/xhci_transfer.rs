@@ -9,7 +9,10 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use base::debug;
 use base::error;
+use base::info;
+use base::warn;
 use base::Error as SysError;
 use base::Event;
 use bit_field::Error as BitFieldError;
@@ -18,10 +21,10 @@ use sync::Mutex;
 use thiserror::Error;
 use usb_util::TransferStatus;
 use usb_util::UsbRequestSetup;
-use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 
+use super::device_slot::DeviceSlot;
 use super::interrupter::Error as InterrupterError;
 use super::interrupter::Interrupter;
 use super::scatter_gather_buffer::Error as BufferError;
@@ -29,9 +32,6 @@ use super::scatter_gather_buffer::ScatterGatherBuffer;
 use super::usb_hub::Error as HubError;
 use super::usb_hub::UsbPort;
 use super::xhci_abi::AddressedTrb;
-use super::xhci_abi::DequeuePtr;
-use super::xhci_abi::EndpointContext;
-use super::xhci_abi::EndpointState;
 use super::xhci_abi::Error as TrbError;
 use super::xhci_abi::EventDataTrb;
 use super::xhci_abi::SetupStageTrb;
@@ -52,6 +52,8 @@ pub enum Error {
     CreateBuffer(BufferError),
     #[error("cannot detach from port: {0}")]
     DetachPort(HubError),
+    #[error("failed to halt the endpoint: {0}")]
+    HaltEndpoint(u8),
     #[error("failed to read guest memory: {0}")]
     ReadGuestMemory(GuestMemoryError),
     #[error("cannot send interrupt: {0}")]
@@ -113,14 +115,14 @@ impl XhciTransferState {
 pub enum XhciTransferType {
     // Normal means bulk transfer or interrupt transfer, depending on endpoint type.
     // See spec 4.11.2.1.
-    Normal(ScatterGatherBuffer),
+    Normal,
     // See usb spec for setup stage, data stage and status stage,
     // see xHCI spec 4.11.2.2 for corresponding trbs.
-    SetupStage(UsbRequestSetup),
-    DataStage(ScatterGatherBuffer),
+    SetupStage,
+    DataStage,
     StatusStage,
     // See xHCI spec 4.11.2.3.
-    Isochronous(ScatterGatherBuffer),
+    Isochronous,
     // See xHCI spec 6.4.1.4.
     Noop,
 }
@@ -130,47 +132,12 @@ impl Display for XhciTransferType {
         use self::XhciTransferType::*;
 
         match self {
-            Normal(_) => write!(f, "Normal"),
-            SetupStage(_) => write!(f, "SetupStage"),
-            DataStage(_) => write!(f, "DataStage"),
+            Normal => write!(f, "Normal"),
+            SetupStage => write!(f, "SetupStage"),
+            DataStage => write!(f, "DataStage"),
             StatusStage => write!(f, "StatusStage"),
-            Isochronous(_) => write!(f, "Isochronous"),
+            Isochronous => write!(f, "Isochronous"),
             Noop => write!(f, "Noop"),
-        }
-    }
-}
-
-impl XhciTransferType {
-    /// Analyze transfer descriptor and return transfer type.
-    pub fn new(mem: GuestMemory, td: TransferDescriptor) -> Result<XhciTransferType> {
-        // We can figure out transfer type from the first trb.
-        // See transfer descriptor description in xhci spec for more details.
-        match td[0].trb.get_trb_type().map_err(Error::TrbType)? {
-            TrbType::Normal => {
-                let buffer = ScatterGatherBuffer::new(mem, td).map_err(Error::CreateBuffer)?;
-                Ok(XhciTransferType::Normal(buffer))
-            }
-            TrbType::SetupStage => {
-                let trb = td[0].trb.cast::<SetupStageTrb>().map_err(Error::CastTrb)?;
-                Ok(XhciTransferType::SetupStage(UsbRequestSetup::new(
-                    trb.get_request_type(),
-                    trb.get_request(),
-                    trb.get_value(),
-                    trb.get_index(),
-                    trb.get_length(),
-                )))
-            }
-            TrbType::DataStage => {
-                let buffer = ScatterGatherBuffer::new(mem, td).map_err(Error::CreateBuffer)?;
-                Ok(XhciTransferType::DataStage(buffer))
-            }
-            TrbType::StatusStage => Ok(XhciTransferType::StatusStage),
-            TrbType::Isoch => {
-                let buffer = ScatterGatherBuffer::new(mem, td).map_err(Error::CreateBuffer)?;
-                Ok(XhciTransferType::Isochronous(buffer))
-            }
-            TrbType::Noop => Ok(XhciTransferType::Noop),
-            t => Err(Error::BadTrbType(t)),
         }
     }
 }
@@ -180,13 +147,15 @@ impl XhciTransferType {
 #[derive(Clone)]
 pub struct XhciTransferManager {
     transfers: Arc<Mutex<Vec<Weak<Mutex<XhciTransferState>>>>>,
+    device_slot: Weak<DeviceSlot>,
 }
 
 impl XhciTransferManager {
     /// Create a new manager.
-    pub fn new() -> XhciTransferManager {
+    pub fn new(device_slot: Weak<DeviceSlot>) -> XhciTransferManager {
         XhciTransferManager {
             transfers: Arc::new(Mutex::new(Vec::new())),
+            device_slot,
         }
     }
 
@@ -200,7 +169,7 @@ impl XhciTransferManager {
         endpoint_id: u8,
         transfer_trbs: TransferDescriptor,
         completion_event: Event,
-        endpoint_context_addr: GuestAddress,
+        stream_id: Option<u16>,
     ) -> XhciTransfer {
         assert!(!transfer_trbs.is_empty());
         let transfer_dir = {
@@ -223,7 +192,8 @@ impl XhciTransferManager {
             endpoint_id,
             transfer_dir,
             transfer_trbs,
-            endpoint_context_addr,
+            device_slot: self.device_slot.clone(),
+            stream_id,
         };
         self.transfers.lock().push(Arc::downgrade(&t.state));
         t
@@ -259,7 +229,7 @@ impl XhciTransferManager {
 
 impl Default for XhciTransferManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(Weak::new())
     }
 }
 
@@ -277,7 +247,8 @@ pub struct XhciTransfer {
     transfer_dir: TransferDirection,
     transfer_trbs: TransferDescriptor,
     transfer_completion_event: Event,
-    endpoint_context_addr: GuestAddress,
+    device_slot: Weak<DeviceSlot>,
+    stream_id: Option<u16>,
 }
 
 impl Drop for XhciTransfer {
@@ -304,7 +275,42 @@ impl XhciTransfer {
 
     /// Get transfer type.
     pub fn get_transfer_type(&self) -> Result<XhciTransferType> {
-        XhciTransferType::new(self.mem.clone(), self.transfer_trbs.clone())
+        // We can figure out transfer type from the first trb.
+        // See transfer descriptor description in xhci spec for more details.
+        match self.transfer_trbs[0]
+            .trb
+            .get_trb_type()
+            .map_err(Error::TrbType)?
+        {
+            TrbType::Normal => Ok(XhciTransferType::Normal),
+            TrbType::SetupStage => Ok(XhciTransferType::SetupStage),
+            TrbType::DataStage => Ok(XhciTransferType::DataStage),
+            TrbType::StatusStage => Ok(XhciTransferType::StatusStage),
+            TrbType::Isoch => Ok(XhciTransferType::Isochronous),
+            TrbType::Noop => Ok(XhciTransferType::Noop),
+            t => Err(Error::BadTrbType(t)),
+        }
+    }
+
+    /// Create a scatter gather buffer for the given xhci transfer
+    pub fn create_buffer(&self) -> Result<ScatterGatherBuffer> {
+        ScatterGatherBuffer::new(self.mem.clone(), self.transfer_trbs.clone())
+            .map_err(Error::CreateBuffer)
+    }
+
+    /// Create a usb request setup for the control transfer buffer
+    pub fn create_usb_request_setup(&self) -> Result<UsbRequestSetup> {
+        let trb = self.transfer_trbs[0]
+            .trb
+            .checked_cast::<SetupStageTrb>()
+            .map_err(Error::CastTrb)?;
+        Ok(UsbRequestSetup::new(
+            trb.get_request_type(),
+            trb.get_request(),
+            trb.get_value(),
+            trb.get_index(),
+            trb.get_length(),
+        ))
     }
 
     /// Get endpoint number.
@@ -318,6 +324,11 @@ impl XhciTransfer {
         self.transfer_dir
     }
 
+    /// get stream id.
+    pub fn get_stream_id(&self) -> Option<u16> {
+        self.stream_id
+    }
+
     /// This functions should be invoked when transfer is completed (or failed).
     pub fn on_transfer_complete(
         &self,
@@ -326,7 +337,7 @@ impl XhciTransfer {
     ) -> Result<()> {
         match status {
             TransferStatus::NoDevice => {
-                usb_debug!("device disconnected, detaching from port");
+                info!("xhci: device disconnected, detaching from port");
                 // If the device is gone, we don't need to send transfer completion event, cause we
                 // are going to destroy everything related to this device anyway.
                 return match self.port.detach() {
@@ -351,18 +362,12 @@ impl XhciTransfer {
                     .map_err(Error::WriteCompletionEvent)?;
             }
             TransferStatus::Stalled => {
-                let mut context = self.get_endpoint_context()?;
-                let dequeue_pointer = match self.transfer_trbs.last() {
-                    Some(atrb) => atrb.gpa,
-                    None => context.get_tr_dequeue_pointer().get_gpa().0,
-                };
-                usb_debug!(
-                    "endpoint is stalled. set state to Halted and dequeue pointer to {:#x}",
-                    dequeue_pointer
-                );
-                context.set_endpoint_state(EndpointState::Halted);
-                context.set_tr_dequeue_pointer(DequeuePtr::new(GuestAddress(dequeue_pointer)));
-                self.set_endpoint_context(context)?;
+                warn!("xhci: endpoint is stalled. set state to Halted");
+                if let Some(device_slot) = self.device_slot.upgrade() {
+                    device_slot
+                        .halt_endpoint(self.endpoint_id)
+                        .map_err(|_| Error::HaltEndpoint(self.endpoint_id))?;
+                }
                 self.transfer_completion_event
                     .signal()
                     .map_err(Error::WriteCompletionEvent)?;
@@ -407,7 +412,7 @@ impl XhciTransfer {
                         )
                         .map_err(Error::SendInterrupt)?;
                 } else if *status == TransferStatus::Stalled {
-                    usb_debug!("on transfer complete stalled");
+                    debug!("xhci: on transfer complete stalled");
                     let residual_transfer_length = edtla - bytes_transferred;
                     self.interrupter
                         .lock()
@@ -423,7 +428,7 @@ impl XhciTransfer {
                 } else {
                     // For Short Transfer details, see xHCI spec 4.10.1.1.
                     if edtla > bytes_transferred {
-                        usb_debug!("on transfer complete short packet");
+                        debug!("xhci: on transfer complete short packet");
                         let residual_transfer_length = edtla - bytes_transferred;
                         self.interrupter
                             .lock()
@@ -437,7 +442,7 @@ impl XhciTransfer {
                             )
                             .map_err(Error::SendInterrupt)?;
                     } else {
-                        usb_debug!("on transfer complete success");
+                        debug!("xhci: on transfer complete success");
                         self.interrupter
                             .lock()
                             .send_transfer_event_trb(
@@ -461,7 +466,7 @@ impl XhciTransfer {
         if self.validate_transfer()? {
             // Backend should invoke on transfer complete when transfer is completed.
             let port = self.port.clone();
-            let mut backend = port.get_backend_device();
+            let mut backend = port.backend_device();
             match &mut *backend {
                 Some(backend) => backend
                     .submit_transfer(self)
@@ -503,20 +508,6 @@ impl XhciTransfer {
             }
         }
         Ok(valid)
-    }
-
-    fn get_endpoint_context(&self) -> Result<EndpointContext> {
-        let ctx = self
-            .mem
-            .read_obj_from_addr(self.endpoint_context_addr)
-            .map_err(Error::ReadGuestMemory)?;
-        Ok(ctx)
-    }
-
-    fn set_endpoint_context(&self, endpoint_context: EndpointContext) -> Result<()> {
-        self.mem
-            .write_obj_at_addr(endpoint_context, self.endpoint_context_addr)
-            .map_err(Error::WriteGuestMemory)
     }
 }
 

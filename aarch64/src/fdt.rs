@@ -33,9 +33,6 @@ use crate::AARCH64_GIC_DIST_SIZE;
 use crate::AARCH64_GIC_REDIST_SIZE;
 use crate::AARCH64_PMU_IRQ;
 use crate::AARCH64_PROTECTED_VM_FW_START;
-use crate::AARCH64_VIRTFREQ_BASE;
-use crate::AARCH64_VIRTFREQ_SIZE;
-
 // These are RTC related constants
 use crate::AARCH64_RTC_ADDR;
 use crate::AARCH64_RTC_IRQ;
@@ -45,6 +42,8 @@ use crate::AARCH64_SERIAL_1_3_IRQ;
 use crate::AARCH64_SERIAL_2_4_IRQ;
 use crate::AARCH64_SERIAL_SIZE;
 use crate::AARCH64_SERIAL_SPEED;
+use crate::AARCH64_VIRTFREQ_BASE;
+use crate::AARCH64_VIRTFREQ_SIZE;
 
 // This is an arbitrary number to specify the node for the GIC.
 // If we had a more complex interrupt architecture, then we'd need an enum for
@@ -116,11 +115,12 @@ fn create_resv_memory_node(
         fdt.property_array_u64("reg", &[resv_addr.0, resv_size])?;
         node
     } else {
-        fdt.begin_node("restricted_dma_reserved")?
+        let node = fdt.begin_node("restricted_dma_reserved")?;
+        fdt.property_u64("size", resv_size)?;
+        node
     };
     fdt.property_u32("phandle", PHANDLE_RESTRICTED_DMA_POOL)?;
     fdt.property_string("compatible", "restricted-dma-pool")?;
-    fdt.property_u64("size", resv_size)?;
     fdt.property_u64("alignment", base::pagesize() as u64)?;
     fdt.end_node(restricted_dma_pool)?;
 

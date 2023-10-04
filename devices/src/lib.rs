@@ -13,12 +13,9 @@ mod bus;
 #[cfg(feature = "stats")]
 mod bus_stats;
 pub mod cmos;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 mod debugcon;
-#[cfg(feature = "direct")]
-pub mod direct_io;
-#[cfg(feature = "direct")]
-pub mod direct_irq;
+mod fw_cfg;
 mod i8042;
 mod irq_event;
 pub mod irqchip;
@@ -34,11 +31,11 @@ mod suspendable;
 mod sys;
 mod virtcpufreq;
 pub mod virtio;
-#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+#[cfg(feature = "vtpm")]
 mod vtpm_proxy;
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
+    if #[cfg(target_arch = "x86_64")] {
         mod pit;
         pub use self::pit::{Pit, PitError};
         pub mod tsc;
@@ -76,34 +73,36 @@ pub use self::bus::BusRange;
 pub use self::bus::BusResumeDevice;
 pub use self::bus::BusType;
 pub use self::bus::Error as BusError;
-pub use self::bus::HostHotPlugKey;
 pub use self::bus::HotPlugBus;
+pub use self::bus::HotPlugKey;
 #[cfg(feature = "stats")]
 pub use self::bus_stats::BusStatistics;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub use self::debugcon::Debugcon;
-#[cfg(feature = "direct")]
-pub use self::direct_io::DirectIo;
-#[cfg(feature = "direct")]
-pub use self::direct_io::DirectMmio;
-#[cfg(feature = "direct")]
-pub use self::direct_irq::DirectIrq;
-#[cfg(feature = "direct")]
-pub use self::direct_irq::DirectIrqError;
+pub use self::fw_cfg::Error as FwCfgError;
+pub use self::fw_cfg::FwCfgDevice;
+pub use self::fw_cfg::FwCfgItemType;
+pub use self::fw_cfg::FwCfgParameters;
+pub use self::fw_cfg::FW_CFG_BASE_PORT;
+pub use self::fw_cfg::FW_CFG_MAX_FILE_SLOTS;
+pub use self::fw_cfg::FW_CFG_WIDTH;
 pub use self::i8042::I8042Device;
 pub use self::irq_event::IrqEdgeEvent;
 pub use self::irq_event::IrqLevelEvent;
 pub use self::irqchip::*;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Backend;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Dev;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Parameters;
 pub use self::pci::BarRange;
 pub use self::pci::CrosvmDeviceId;
+pub use self::pci::GpeScope;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::HotPluggable;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::IntxParameter;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::NetResourceCarrier;
 pub use self::pci::PciAddress;
 pub use self::pci::PciAddressError;
+pub use self::pci::PciBarConfiguration;
+pub use self::pci::PciBarIndex;
 pub use self::pci::PciBus;
 pub use self::pci::PciClassCode;
 pub use self::pci::PciConfigIo;
@@ -115,6 +114,8 @@ pub use self::pci::PciRoot;
 pub use self::pci::PciRootCommand;
 pub use self::pci::PciVirtualConfigMmio;
 pub use self::pci::PreferredIrq;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::ResourceCarrier;
 pub use self::pci::StubPciDevice;
 pub use self::pci::StubPciParameters;
 pub use self::pflash::Pflash;
@@ -133,7 +134,7 @@ pub use self::suspendable::Suspendable;
 pub use self::virtcpufreq::VirtCpufreq;
 pub use self::virtio::VirtioMmioDevice;
 pub use self::virtio::VirtioPciDevice;
-#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+#[cfg(feature = "vtpm")]
 pub use self::vtpm_proxy::VtpmProxy;
 
 cfg_if::cfg_if! {
@@ -158,10 +159,11 @@ cfg_if::cfg_if! {
         pub use self::platform::VfioPlatformDevice;
         pub use self::ac_adapter::AcAdapter;
         pub use self::pmc_virt::VirtualPmc;
+        pub use self::proxy::ChildProcIntf;
         pub use self::proxy::Error as ProxyError;
         pub use self::proxy::ProxyDevice;
         #[cfg(feature = "usb")]
-        pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+        pub use self::usb::backend::device_provider::DeviceProvider;
         #[cfg(feature = "usb")]
         pub use self::usb::xhci::xhci_controller::XhciController;
         pub use self::vfio::VfioContainer;
@@ -320,7 +322,7 @@ fn restore_devices(
         }
         Err(e) => {
             // If restore fails, wake devices and return error
-            error!("failed to restore devices: {}", e);
+            error!("failed to restore devices: {:#}", e);
             Err(e)
         }
     }
@@ -388,8 +390,6 @@ async fn restore_handler(
     }
 
     {
-        let _sleep_guard = SleepGuard::new(buses)?;
-
         guest_memory.restore(snapshot_root.guest_memory_metadata, &mut mem_file)?;
 
         for bus in buses {
@@ -428,6 +428,7 @@ async fn handle_command_tube(
                                 .context("failed to reply to sleep command")?;
                         }
                         Err(e) => {
+                            error!("failed to sleep: {:#}", e);
                             command_tube
                                 .send(VmResponse::ErrString(e.to_string()))
                                 .await
@@ -450,7 +451,7 @@ async fn handle_command_tube(
                         );
                         if let Err(e) = snapshot_handler(path.as_path(), &guest_memory, buses).await
                         {
-                            error!("failed to snapshot: {}", e);
+                            error!("failed to snapshot: {:#}", e);
                             command_tube
                                 .send(VmResponse::ErrString(e.to_string()))
                                 .await
@@ -463,11 +464,15 @@ async fn handle_command_tube(
                             .context("Failed to send response")?;
                     }
                     DeviceControlCommand::RestoreDevices { restore_path: path } => {
+                        assert!(
+                            _sleep_guard.is_some(),
+                            "devices must be sleeping to restore"
+                        );
                         if let Err(e) =
                             restore_handler(path.as_path(), &guest_memory, &[&*io_bus, &*mmio_bus])
                                 .await
                         {
-                            error!("failed to restore: {}", e);
+                            error!("failed to restore: {:#}", e);
                             command_tube
                                 .send(VmResponse::ErrString(e.to_string()))
                                 .await

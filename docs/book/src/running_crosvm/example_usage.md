@@ -34,6 +34,24 @@ The kernel binary is going to be saved in the same directory.
 Note: Most distributions use an init ramdisk, which is extracted at the same time and needs to be
 passed to crosvm as well.
 
+### Add the user to the kvm group
+
+To run crosvm without `sudo`, the user should be added to the `kvm` group in order to obtain the
+access to the `/dev/kvm` file. If the user is already in the kvm group, skip this part. Otherwise,
+execute the command below.
+
+```bash
+{{#include ../../../../tools/examples/example_simple:kvm}}
+```
+
+You can check if the user is in the kvm group or not with the following command:
+
+```bash
+groups | grep kvm
+```
+
+After executing the `adduser` command above, please logout and log back in to reflect the kvm group.
+
 ### Launch the VM
 
 With all the files in place, crosvm can be run:
@@ -47,6 +65,9 @@ The full source for this example can be executed directly:
 ```bash
 ./tools/examples/example_simple
 ```
+
+The login username will be the username on the host, and it will prompt to decide the password on
+the first login in the VM.
 
 ## Add Networking Support
 
@@ -68,11 +89,20 @@ With the `crosvm_tap` in place we can use it when running crosvm:
 To use the network device in the guest, we need to assign it a static IP address. In our example
 guest this can be done via a netplan config:
 
+First, create a guest directory and the netplan config:
+
+```bash
+mkdir guest/
+touch guest/01-netcfg.yaml
+```
+
+Then edit guest/01-netcfg.yaml and add the following contents:
+
 ```yaml
 {{#include ../../../../tools/examples/guest/01-netcfg.yaml:5:}}
 ```
 
-Which can be installed when building the VM image:
+The netplan config can be installed when building the VM image:
 
 ```bash
 {{#include ../../../../tools/examples/example_network:build}}
@@ -84,6 +114,12 @@ password:
 
 ```bash
 ssh 192.168.10.2
+```
+
+WARNING: If you are on a gLinux machine, then you will need to disable Corp SSH Helper:
+
+```bash
+ssh -oProxyCommand=none 192.168.10.2
 ```
 
 The full source for this example can be executed directly:

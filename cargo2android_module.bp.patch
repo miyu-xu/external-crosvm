@@ -5,6 +5,9 @@ arch: {
     arm64: {
         rustlibs: ["libaarch64"],
     },
+    riscv64: {
+        rustlibs: ["libriscv64"],
+    },
 },
 target: {
     host: {
@@ -13,6 +16,9 @@ target: {
             "gpu",
             "virgl_renderer_next",
         ],
+        strip: {
+            keep_symbols_and_debug_frame: true,
+        },
     },
     android: {
         shared_libs: [

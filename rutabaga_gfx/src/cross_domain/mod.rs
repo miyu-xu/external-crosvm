@@ -5,18 +5,17 @@
 //! The cross-domain component type, specialized for allocating and sharing resources across domain
 //! boundaries.
 
+use std::cmp::max;
 use std::collections::BTreeMap as Map;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fs::File;
 use std::mem::size_of;
-use std::ptr::copy_nonoverlapping;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::thread;
 
-use data_model::VolatileSlice;
 use log::error;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
@@ -79,6 +78,7 @@ pub(crate) enum CrossDomainJob {
     HandleFence(RutabagaFence),
     #[allow(dead_code)] // `AddReadPipe` is never constructed on Windows.
     AddReadPipe(u32),
+    Finish,
 }
 
 enum RingWrite<'a, T> {
@@ -99,12 +99,14 @@ pub(crate) struct CrossDomainResource {
 pub(crate) struct CrossDomainItems {
     descriptor_id: u32,
     requirements_blob_id: u32,
+    read_pipe_id: u32,
     table: Map<u32, CrossDomainItem>,
 }
 
 pub(crate) struct CrossDomainState {
     context_resources: CrossDomainResources,
-    ring_id: u32,
+    query_ring_id: u32,
+    channel_ring_id: u32,
     #[allow(dead_code)] // `connection` is never used on Windows.
     pub(crate) connection: Option<SystemStream>,
     jobs: CrossDomainJobs,
@@ -136,6 +138,7 @@ pub(crate) struct CrossDomainContext {
 pub struct CrossDomain {
     channels: Option<Vec<RutabagaChannel>>,
     gralloc: Arc<Mutex<RutabagaGralloc>>,
+    fence_handler: RutabagaFenceHandler,
 }
 
 // TODO(gurchetansingh): optimize the item tracker.  Each requirements blob is long-lived and can
@@ -148,6 +151,10 @@ pub(crate) fn add_item(item_state: &CrossDomainItemState, item: CrossDomainItem)
         CrossDomainItem::ImageRequirements(_) => {
             items.requirements_blob_id += 2;
             items.requirements_blob_id
+        }
+        CrossDomainItem::WaylandReadPipe(_) => {
+            items.read_pipe_id += 1;
+            max(items.read_pipe_id, CROSS_DOMAIN_PIPE_READ_START)
         }
         _ => {
             items.descriptor_id += 2;
@@ -166,6 +173,7 @@ impl Default for CrossDomainItems {
         CrossDomainItems {
             descriptor_id: 1,
             requirements_blob_id: 2,
+            read_pipe_id: CROSS_DOMAIN_PIPE_READ_START,
             table: Default::default(),
         }
     }
@@ -173,12 +181,14 @@ impl Default for CrossDomainItems {
 
 impl CrossDomainState {
     fn new(
-        ring_id: u32,
+        query_ring_id: u32,
+        channel_ring_id: u32,
         context_resources: CrossDomainResources,
         connection: Option<SystemStream>,
     ) -> CrossDomainState {
         CrossDomainState {
-            ring_id,
+            query_ring_id,
+            channel_ring_id,
             context_resources,
             connection,
             jobs: Mutex::new(Some(VecDeque::new())),
@@ -194,13 +204,6 @@ impl CrossDomainState {
         }
     }
 
-    fn end_jobs(&self) {
-        let mut jobs = self.jobs.lock().unwrap();
-        *jobs = None;
-        // Only one worker thread in the current implementation.
-        self.jobs_cvar.notify_one();
-    }
-
     fn wait_for_job(&self) -> Option<CrossDomainJob> {
         let mut jobs = self.jobs.lock().unwrap();
         loop {
@@ -211,7 +214,7 @@ impl CrossDomainState {
         }
     }
 
-    fn write_to_ring<T>(&self, mut ring_write: RingWrite<T>) -> RutabagaResult<usize>
+    fn write_to_ring<T>(&self, mut ring_write: RingWrite<T>, ring_id: u32) -> RutabagaResult<usize>
     where
         T: FromBytes + AsBytes,
     {
@@ -219,7 +222,7 @@ impl CrossDomainState {
         let mut bytes_read: usize = 0;
 
         let resource = context_resources
-            .get_mut(&self.ring_id)
+            .get_mut(&ring_id)
             .ok_or(RutabagaError::InvalidResourceId)?;
 
         let iovecs = resource
@@ -229,32 +232,31 @@ impl CrossDomainState {
 
         // Safe because we've verified the iovecs are attached and owned only by this context.
         let slice =
-            unsafe { VolatileSlice::from_raw_parts(iovecs[0].base as *mut u8, iovecs[0].len) };
+            unsafe { std::slice::from_raw_parts_mut(iovecs[0].base as *mut u8, iovecs[0].len) };
 
         match ring_write {
             RingWrite::Write(cmd, opaque_data_opt) => {
-                slice.copy_from(&[cmd]);
+                if slice.len() < size_of::<T>() {
+                    return Err(RutabagaError::InvalidIovec);
+                }
+                let (cmd_slice, opaque_data_slice) = slice.split_at_mut(size_of::<T>());
+                cmd_slice.copy_from_slice(cmd.as_bytes());
                 if let Some(opaque_data) = opaque_data_opt {
-                    let offset = size_of::<T>();
-                    let sub_slice = slice.sub_slice(offset, opaque_data.len())?;
-                    let dst_ptr = sub_slice.as_mut_ptr();
-                    let src_ptr = opaque_data.as_ptr();
-
-                    // Safe because:
-                    //
-                    // (1) The volatile slice has atleast `opaque_data.len()' bytes.
-                    // (2) The both the destination and source are non-overlapping.
-                    unsafe {
-                        copy_nonoverlapping(src_ptr, dst_ptr, opaque_data.len());
+                    if opaque_data_slice.len() < opaque_data.len() {
+                        return Err(RutabagaError::InvalidIovec);
                     }
+                    opaque_data_slice[..opaque_data.len()].copy_from_slice(opaque_data);
                 }
             }
             RingWrite::WriteFromFile(mut cmd_read, ref mut file, readable) => {
-                let offset = size_of::<CrossDomainReadWrite>();
-                let sub_slice = slice.offset(offset)?;
+                if slice.len() < size_of::<CrossDomainReadWrite>() {
+                    return Err(RutabagaError::InvalidIovec);
+                }
+                let (cmd_slice, opaque_data_slice) =
+                    slice.split_at_mut(size_of::<CrossDomainReadWrite>());
 
                 if readable {
-                    bytes_read = read_volatile(file, sub_slice)?;
+                    bytes_read = read_volatile(file, opaque_data_slice)?;
                 }
 
                 if bytes_read == 0 {
@@ -262,7 +264,7 @@ impl CrossDomainState {
                 }
 
                 cmd_read.opaque_data_size = bytes_read.try_into()?;
-                slice.copy_from(&[cmd_read]);
+                cmd_slice.copy_from_slice(cmd_read.as_bytes());
             }
         }
 
@@ -292,11 +294,25 @@ impl CrossDomainWorker {
         fence: RutabagaFence,
         thread_resample_evt: &Receiver,
         receive_buf: &mut [u8],
-    ) -> RutabagaResult<bool> {
+    ) -> RutabagaResult<()> {
         let events = self.wait_ctx.wait()?;
-        let mut stop_thread = false;
 
-        for event in &events {
+        // The worker thread must:
+        //
+        // (1) Poll the ContextChannel (usually Wayland)
+        // (2) Poll a number of WaylandReadPipes
+        // (3) handle jobs from the virtio-gpu thread.
+        //
+        // We can only process one event at a time, because each `handle_fence` call is associated
+        // with a guest virtio-gpu fence.  Signaling the fence means it's okay for the guest to
+        // access ring data.  If two events are available at the same time (say a ContextChannel
+        // event and a WaylandReadPipe event), and we write responses for both using the same guest
+        // fence data, that will break the expected order of events.  We need the guest to generate
+        // a new fence before we can resume polling.
+        //
+        // The CrossDomainJob queue gurantees a new fence has been generated before polling is
+        // resumed.
+        if let Some(event) = events.first() {
             match event.token {
                 CrossDomainToken::ContextChannel => {
                     let (len, files) = self.state.receive_msg(receive_buf)?;
@@ -333,10 +349,10 @@ impl CrossDomainWorker {
                             };
                         }
 
-                        self.state.write_to_ring(RingWrite::Write(
-                            cmd_receive,
-                            Some(&receive_buf[0..len]),
-                        ))?;
+                        self.state.write_to_ring(
+                            RingWrite::Write(cmd_receive, Some(&receive_buf[0..len])),
+                            self.state.channel_ring_id,
+                        )?;
                         self.fence_handler.call(fence);
                     }
                 }
@@ -371,9 +387,10 @@ impl CrossDomainWorker {
                         CrossDomainItem::WaylandReadPipe(ref mut file) => {
                             let ring_write =
                                 RingWrite::WriteFromFile(cmd_read, file, event.readable);
-                            bytes_read = self
-                                .state
-                                .write_to_ring::<CrossDomainReadWrite>(ring_write)?;
+                            bytes_read = self.state.write_to_ring::<CrossDomainReadWrite>(
+                                ring_write,
+                                self.state.channel_ring_id,
+                            )?;
 
                             // Zero bytes read indicates end-of-file on POSIX.
                             if event.hung_up && bytes_read == 0 {
@@ -392,12 +409,11 @@ impl CrossDomainWorker {
                 }
                 CrossDomainToken::Kill => {
                     self.fence_handler.call(fence);
-                    stop_thread = true;
                 }
             }
         }
 
-        Ok(stop_thread)
+        Ok(())
     }
 
     fn run(
@@ -415,8 +431,7 @@ impl CrossDomainWorker {
             match job {
                 CrossDomainJob::HandleFence(fence) => {
                     match self.handle_fence(fence, &thread_resample_evt, &mut receive_buf) {
-                        Ok(true) => return Ok(()),
-                        Ok(false) => (),
+                        Ok(()) => (),
                         Err(e) => {
                             error!("Worker halting due to: {}", e);
                             return Err(e);
@@ -437,6 +452,7 @@ impl CrossDomainWorker {
                         _ => return Err(RutabagaError::InvalidCrossDomainItemType),
                     }
                 }
+                CrossDomainJob::Finish => return Ok(()),
             }
         }
 
@@ -449,11 +465,13 @@ impl CrossDomain {
     /// initializing rutabaga gralloc.
     pub fn init(
         channels: Option<Vec<RutabagaChannel>>,
+        fence_handler: RutabagaFenceHandler,
     ) -> RutabagaResult<Box<dyn RutabagaComponent>> {
         let gralloc = RutabagaGralloc::new()?;
         Ok(Box::new(CrossDomain {
             channels,
             gralloc: Arc::new(Mutex::new(gralloc)),
+            fence_handler,
         }))
     }
 }
@@ -464,16 +482,26 @@ impl CrossDomainContext {
             .context_resources
             .lock()
             .unwrap()
-            .contains_key(&cmd_init.ring_id)
+            .contains_key(&cmd_init.query_ring_id)
         {
             return Err(RutabagaError::InvalidResourceId);
         }
 
-        let ring_id = cmd_init.ring_id;
+        let query_ring_id = cmd_init.query_ring_id;
+        let channel_ring_id = cmd_init.channel_ring_id;
         let context_resources = self.context_resources.clone();
 
         // Zero means no requested channel.
         if cmd_init.channel_type != 0 {
+            if !self
+                .context_resources
+                .lock()
+                .unwrap()
+                .contains_key(&cmd_init.channel_ring_id)
+            {
+                return Err(RutabagaError::InvalidResourceId);
+            }
+
             let connection = self.get_connection(cmd_init)?;
 
             let (kill_evt, thread_kill_evt) = channel()?;
@@ -488,7 +516,8 @@ impl CrossDomainContext {
             };
 
             let state = Arc::new(CrossDomainState::new(
-                ring_id,
+                query_ring_id,
+                channel_ring_id,
                 context_resources,
                 connection,
             ));
@@ -515,7 +544,8 @@ impl CrossDomainContext {
             self.kill_evt = Some(kill_evt);
         } else {
             self.state = Some(Arc::new(CrossDomainState::new(
-                ring_id,
+                query_ring_id,
+                channel_ring_id,
                 context_resources,
                 None,
             )));
@@ -561,18 +591,14 @@ impl CrossDomainContext {
 
         if let Some(state) = &self.state {
             response.blob_id = add_item(&self.item_state, CrossDomainItem::ImageRequirements(reqs));
-            state.write_to_ring(RingWrite::Write(response, None))?;
+            state.write_to_ring(RingWrite::Write(response, None), state.query_ring_id)?;
             Ok(())
         } else {
             Err(RutabagaError::InvalidCrossDomainState)
         }
     }
 
-    fn write(
-        &self,
-        cmd_write: &CrossDomainReadWrite,
-        opaque_data: VolatileSlice,
-    ) -> RutabagaResult<()> {
+    fn write(&self, cmd_write: &CrossDomainReadWrite, opaque_data: &[u8]) -> RutabagaResult<()> {
         let mut items = self.item_state.lock().unwrap();
 
         // Most of the time, hang-up and writing will be paired.  In lieu of this, remove the
@@ -607,17 +633,15 @@ impl CrossDomainContext {
 impl Drop for CrossDomainContext {
     fn drop(&mut self) {
         if let Some(state) = &self.state {
-            state.end_jobs();
+            state.add_job(CrossDomainJob::Finish);
         }
 
         if let Some(kill_evt) = self.kill_evt.take() {
-            // Don't join the the worker thread unless the write to `kill_evt` is successful.
-            // Otherwise, this may block indefinitely.
+            // Log the error, but still try to join the worker thread
             match channel_signal(&kill_evt) {
                 Ok(_) => (),
                 Err(e) => {
                     error!("failed to write cross domain kill event: {}", e);
-                    return;
                 }
             }
 
@@ -626,6 +650,14 @@ impl Drop for CrossDomainContext {
             }
         }
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+struct CrossDomainInitLegacy {
+    hdr: CrossDomainHeader,
+    query_ring_id: u32,
+    channel_type: u32,
 }
 
 impl RutabagaContext for CrossDomainContext {
@@ -669,6 +701,9 @@ impl RutabagaContext for CrossDomainContext {
                         strides: reqs.strides,
                         offsets: reqs.offsets,
                         modifier: reqs.modifier,
+                        guest_cpu_mappable: (resource_create_blob.blob_flags
+                            & RUTABAGA_BLOB_FLAG_USE_MAPPABLE)
+                            != 0,
                     };
 
                     Ok(RutabagaResource {
@@ -677,7 +712,7 @@ impl RutabagaContext for CrossDomainContext {
                         blob: true,
                         blob_mem: resource_create_blob.blob_mem,
                         blob_flags: resource_create_blob.blob_flags,
-                        map_info: Some(reqs.map_info),
+                        map_info: Some(reqs.map_info | RUTABAGA_MAP_ACCESS_RW),
                         info_2d: None,
                         info_3d: Some(info_3d),
                         vulkan_info: reqs.vulkan_info,
@@ -711,7 +746,7 @@ impl RutabagaContext for CrossDomainContext {
                         blob: true,
                         blob_mem: resource_create_blob.blob_mem,
                         blob_flags: resource_create_blob.blob_flags,
-                        map_info: Some(RUTABAGA_MAP_CACHE_CACHED),
+                        map_info: Some(RUTABAGA_MAP_CACHE_CACHED | RUTABAGA_MAP_ACCESS_READ),
                         info_2d: None,
                         info_3d: None,
                         vulkan_info: None,
@@ -726,15 +761,34 @@ impl RutabagaContext for CrossDomainContext {
         }
     }
 
-    fn submit_cmd(&mut self, mut commands: &mut [u8]) -> RutabagaResult<()> {
+    fn submit_cmd(&mut self, mut commands: &mut [u8], fence_ids: &[u64]) -> RutabagaResult<()> {
+        if !fence_ids.is_empty() {
+            return Err(RutabagaError::Unsupported);
+        }
+
         while !commands.is_empty() {
             let hdr = CrossDomainHeader::read_from_prefix(commands.as_bytes())
                 .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
             match hdr.cmd {
                 CROSS_DOMAIN_CMD_INIT => {
-                    let cmd_init = CrossDomainInit::read_from_prefix(commands.as_bytes())
-                        .ok_or(RutabagaError::InvalidCommandBuffer)?;
+                    let cmd_init = match CrossDomainInit::read_from_prefix(commands.as_bytes()) {
+                        Some(cmd_init) => cmd_init,
+                        None => {
+                            if let Some(cmd_init) =
+                                CrossDomainInitLegacy::read_from_prefix(commands.as_bytes())
+                            {
+                                CrossDomainInit {
+                                    hdr: cmd_init.hdr,
+                                    query_ring_id: cmd_init.query_ring_id,
+                                    channel_ring_id: cmd_init.query_ring_id,
+                                    channel_type: cmd_init.channel_type,
+                                }
+                            } else {
+                                return Err(RutabagaError::InvalidCommandBuffer);
+                            }
+                        }
+                    };
 
                     self.initialize(&cmd_init)?;
                 }
@@ -750,16 +804,14 @@ impl RutabagaContext for CrossDomainContext {
                     let cmd_send = CrossDomainSendReceive::read_from_prefix(commands.as_bytes())
                         .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
-                    let opaque_data = VolatileSlice::new(
-                        commands
-                            .get_mut(
-                                opaque_data_offset
-                                    ..opaque_data_offset + cmd_send.opaque_data_size as usize,
-                            )
-                            .ok_or(RutabagaError::InvalidCommandSize(
-                                cmd_send.opaque_data_size as usize,
-                            ))?,
-                    );
+                    let opaque_data = commands
+                        .get_mut(
+                            opaque_data_offset
+                                ..opaque_data_offset + cmd_send.opaque_data_size as usize,
+                        )
+                        .ok_or(RutabagaError::InvalidCommandSize(
+                            cmd_send.opaque_data_size as usize,
+                        ))?;
 
                     self.send(&cmd_send, opaque_data)?;
                 }
@@ -771,16 +823,14 @@ impl RutabagaContext for CrossDomainContext {
                     let cmd_write = CrossDomainReadWrite::read_from_prefix(commands.as_bytes())
                         .ok_or(RutabagaError::InvalidCommandBuffer)?;
 
-                    let opaque_data = VolatileSlice::new(
-                        commands
-                            .get_mut(
-                                opaque_data_offset
-                                    ..opaque_data_offset + cmd_write.opaque_data_size as usize,
-                            )
-                            .ok_or(RutabagaError::InvalidCommandSize(
-                                cmd_write.opaque_data_size as usize,
-                            ))?,
-                    );
+                    let opaque_data = commands
+                        .get_mut(
+                            opaque_data_offset
+                                ..opaque_data_offset + cmd_write.opaque_data_size as usize,
+                        )
+                        .ok_or(RutabagaError::InvalidCommandSize(
+                            cmd_write.opaque_data_size as usize,
+                        ))?;
 
                     self.write(&cmd_write, opaque_data)?;
                 }
@@ -918,5 +968,13 @@ impl RutabagaComponent for CrossDomain {
             resample_evt: None,
             kill_evt: None,
         }))
+    }
+
+    // With "drm/virtio: Conditionally allocate virtio_gpu_fence" in the kernel, global fences for
+    // cross-domain aren't created.  However, that change is projected to land in the v6.6 kernel.
+    // For older kernels, signal the fence immediately on creation.
+    fn create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
+        self.fence_handler.call(fence);
+        Ok(())
     }
 }

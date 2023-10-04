@@ -35,7 +35,6 @@ use libc::EOVERFLOW;
 use sync::Mutex;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-use vm_memory::MemoryRegionInformation;
 use winapi::shared::winerror::ERROR_BUSY;
 use winapi::shared::winerror::ERROR_SUCCESS;
 use winapi::um::memoryapi::OfferVirtualMemory;
@@ -219,28 +218,20 @@ impl WhpxVm {
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
             .map_err(WhpxError::SetupPartition)?;
 
-        guest_mem
-            .with_regions(
-                |MemoryRegionInformation {
-                     guest_addr,
-                     size,
-                     host_addr,
-                     ..
-                 }| {
-                    unsafe {
-                        // Safe because the guest regions are guaranteed not to overlap.
-                        set_user_memory_region(
-                            &partition,
-                            false, // read_only
-                            false, // track dirty pages
-                            guest_addr.offset(),
-                            size as u64,
-                            host_addr as *mut u8,
-                        )
-                    }
-                },
-            )
+        for region in guest_mem.regions() {
+            unsafe {
+                // Safe because the guest regions are guaranteed not to overlap.
+                set_user_memory_region(
+                    &partition,
+                    false, // read_only
+                    false, // track dirty pages
+                    region.guest_addr.offset(),
+                    region.size as u64,
+                    region.host_addr as *mut u8,
+                )
+            }
             .map_err(WhpxError::MapGpaRange)?;
+        }
 
         Ok(WhpxVm {
             whpx: whpx.clone(),
@@ -519,12 +510,10 @@ impl Vm for WhpxVm {
                 }),
             // there is a pvclock like thing already done w/ hyperv, but we can't get the state.
             VmCap::PvClock => false,
-            // TODO: this isn't in capability features, but only available in 19H1 windows.
-            VmCap::PvClockSuspend => true,
             VmCap::Protected => false,
             // whpx initializes cpuid early during VM creation.
             VmCap::EarlyInitCpuid => true,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VmCap::BusLockDetect => false,
         }
     }

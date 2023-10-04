@@ -3,10 +3,7 @@
 // found in the LICENSE file.
 
 // These tests are only implemented for kvm & gvm. Other hypervisors may be added in the future.
-#![cfg(all(
-    any(feature = "gvm", unix),
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
+#![cfg(all(any(feature = "gvm", unix), target_arch = "x86_64"))]
 
 mod sys;
 
@@ -16,6 +13,7 @@ use std::sync::Arc;
 use std::thread;
 
 use arch::LinuxArch;
+use arch::SmbiosOptions;
 use base::Event;
 use base::Tube;
 use devices::IrqChipX86_64;
@@ -129,7 +127,7 @@ where
 
     let devices = vec![];
 
-    let (pci, pci_irqs, _pid_debug_label_map, _amls) = arch::generate_pci_root(
+    let (pci, pci_irqs, _pid_debug_label_map, _amls, _gpe_scope_amls) = arch::generate_pci_root(
         devices,
         &mut irq_chip,
         mmio_bus.clone(),
@@ -208,10 +206,6 @@ where
             .try_clone()
             .expect("unable to clone exit_evt_wrtube"),
         Default::default(),
-        #[cfg(feature = "direct")]
-        &[], // direct_gpe
-        #[cfg(feature = "direct")]
-        &[], // direct_fixed_evts
         &mut irq_chip,
         X86_64_SCI_IRQ,
         (None, None),
@@ -223,6 +217,7 @@ where
         #[cfg(unix)]
         false,
         Default::default(),
+        &pci_irqs,
     )
     .unwrap();
 
@@ -239,7 +234,7 @@ where
 
     // Note that this puts the mptable at 0x9FC00 in guest physical memory.
     mptable::setup_mptable(&guest_mem, 1, &pci_irqs).expect("failed to setup mptable");
-    smbios::setup_smbios(&guest_mem, &Vec::new()).expect("failed to setup smbios");
+    smbios::setup_smbios(&guest_mem, &SmbiosOptions::default(), 0).expect("failed to setup smbios");
 
     let mut apic_ids = Vec::new();
     acpi::create_acpi_tables(
@@ -273,7 +268,7 @@ where
                 .add_vcpu(0, &vcpu)
                 .expect("failed to add vcpu to irqchip");
 
-            let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, false, None);
+            let cpu_config = CpuConfigX86_64::new(false, false, false, false, false, None);
             if !vm.check_capability(VmCap::EarlyInitCpuid) {
                 setup_cpuid(&hyp, &irq_chip, &vcpu, 0, 1, cpu_config).unwrap();
             }

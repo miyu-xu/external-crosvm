@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::mem;
 use std::path::Path;
 
@@ -17,6 +18,7 @@ use base::WorkerThread;
 use net_util::MacAddress;
 use net_util::TapT;
 use vhost::NetT as VhostNetT;
+use virtio_sys::virtio_config::VIRTIO_F_RING_PACKED;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
@@ -61,6 +63,7 @@ where
         base_features: u64,
         tap: T,
         mac_addr: Option<MacAddress>,
+        use_packed_queue: bool,
     ) -> Result<Net<T, U>> {
         // Set offload flags to match the virtio features below.
         tap.set_offload(
@@ -83,6 +86,10 @@ where
             | 1 << virtio_net::VIRTIO_NET_F_HOST_TSO4
             | 1 << virtio_net::VIRTIO_NET_F_HOST_UFO
             | 1 << virtio_net::VIRTIO_NET_F_MRG_RXBUF;
+
+        if use_packed_queue {
+            avail_features |= 1 << VIRTIO_F_RING_PACKED;
+        }
 
         if mac_addr.is_some() {
             avail_features |= 1 << virtio_net::VIRTIO_NET_F_MAC;
@@ -177,7 +184,7 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != NUM_QUEUES {
             return Err(anyhow!(
@@ -209,7 +216,6 @@ where
             interrupt,
             acked_features,
             socket,
-            self.supports_iommu(),
         );
         let activate_vqs = |handle: &U| -> Result<()> {
             for idx in 0..NUM_QUEUES {
@@ -220,7 +226,7 @@ where
             Ok(())
         };
         worker
-            .init(mem, QUEUE_SIZES, activate_vqs)
+            .init(mem, QUEUE_SIZES, activate_vqs, None)
             .context("net worker init exited with error")?;
         self.worker_thread = Some(WorkerThread::start("vhost_net", move |kill_evt| {
             let cleanup_vqs = |handle: &U| -> Result<()> {
@@ -330,6 +336,7 @@ pub mod tests {
 
     use super::*;
     use crate::virtio::base_features;
+    use crate::virtio::QueueConfig;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
     use crate::IrqLevelEvent;
 
@@ -352,7 +359,8 @@ pub mod tests {
         tap.enable().unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        Net::<FakeTap, FakeNet<FakeTap>>::new(&PathBuf::from(""), features, tap, Some(mac)).unwrap()
+        Net::<FakeTap, FakeNet<FakeTap>>::new(&PathBuf::from(""), features, tap, Some(mac), false)
+            .unwrap()
     }
 
     #[test]
@@ -398,14 +406,24 @@ pub mod tests {
     fn activate() {
         let mut net = create_net_common();
         let guest_memory = create_guest_memory().unwrap();
+
+        let mut q0 = QueueConfig::new(1, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&guest_memory, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(1, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&guest_memory, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         // Just testing that we don't panic, for now
         let _ = net.activate(
             guest_memory,
             Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(1), Event::new().unwrap()),
-                (Queue::new(1), Event::new().unwrap()),
-            ],
+            BTreeMap::from([(0, q0), (1, q1)]),
         );
     }
 }

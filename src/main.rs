@@ -29,6 +29,7 @@ use crosvm::config::Config;
 use devices::virtio::vhost::user::device::run_block_device;
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::device::run_gpu_device;
+#[cfg(feature = "net")]
 use devices::virtio::vhost::user::device::run_net_device;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::device::run_snd_device;
@@ -57,6 +58,10 @@ use vm_control::client::do_gpu_display_list;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_remove;
 use vm_control::client::do_modify_battery;
+#[cfg(feature = "pci-hotplug")]
+use vm_control::client::do_net_add;
+#[cfg(feature = "pci-hotplug")]
+use vm_control::client::do_net_remove;
 use vm_control::client::do_swap_status;
 use vm_control::client::do_usb_attach;
 use vm_control::client::do_usb_detach;
@@ -174,7 +179,11 @@ fn stop_vms(cmd: cmdline::StopCommand) -> std::result::Result<(), ()> {
 }
 
 fn suspend_vms(cmd: cmdline::SuspendCommand) -> std::result::Result<(), ()> {
-    vms_request(&VmRequest::Suspend, cmd.socket_path)
+    if cmd.full {
+        vms_request(&VmRequest::SuspendVm, cmd.socket_path)
+    } else {
+        vms_request(&VmRequest::SuspendVcpus, cmd.socket_path)
+    }
 }
 
 fn swap_vms(cmd: cmdline::SwapCommand) -> std::result::Result<(), ()> {
@@ -183,7 +192,12 @@ fn swap_vms(cmd: cmdline::SwapCommand) -> std::result::Result<(), ()> {
         Enable(params) => (VmRequest::Swap(SwapCommand::Enable), &params.socket_path),
         Trim(params) => (VmRequest::Swap(SwapCommand::Trim), &params.socket_path),
         SwapOut(params) => (VmRequest::Swap(SwapCommand::SwapOut), &params.socket_path),
-        Disable(params) => (VmRequest::Swap(SwapCommand::Disable), &params.socket_path),
+        Disable(params) => (
+            VmRequest::Swap(SwapCommand::Disable {
+                slow_file_cleanup: params.slow_file_cleanup,
+            }),
+            &params.socket_path,
+        ),
         Status(params) => (VmRequest::Swap(SwapCommand::Status), &params.socket_path),
     };
     if let VmRequest::Swap(SwapCommand::Status) = req {
@@ -194,7 +208,11 @@ fn swap_vms(cmd: cmdline::SwapCommand) -> std::result::Result<(), ()> {
 }
 
 fn resume_vms(cmd: cmdline::ResumeCommand) -> std::result::Result<(), ()> {
-    vms_request(&VmRequest::Resume, cmd.socket_path)
+    if cmd.full {
+        vms_request(&VmRequest::ResumeVm, cmd.socket_path)
+    } else {
+        vms_request(&VmRequest::ResumeVcpus, cmd.socket_path)
+    }
 }
 
 fn powerbtn_vms(cmd: cmdline::PowerbtnCommand) -> std::result::Result<(), ()> {
@@ -213,6 +231,7 @@ fn inject_gpe(cmd: cmdline::GpeCommand) -> std::result::Result<(), ()> {
 fn balloon_vms(cmd: cmdline::BalloonCommand) -> std::result::Result<(), ()> {
     let command = BalloonControlCommand::Adjust {
         num_bytes: cmd.num_bytes,
+        wait_for_success: false,
     };
     vms_request(&VmRequest::BalloonCommand(command), cmd.socket_path)
 }
@@ -236,8 +255,8 @@ fn balloon_stats(cmd: cmdline::BalloonStatsCommand) -> std::result::Result<(), (
 }
 
 #[cfg(feature = "balloon")]
-fn balloon_wss(cmd: cmdline::BalloonWssCommand) -> std::result::Result<(), ()> {
-    let command = BalloonControlCommand::WorkingSetSize {};
+fn balloon_ws(cmd: cmdline::BalloonWsCommand) -> std::result::Result<(), ()> {
+    let command = BalloonControlCommand::WorkingSet {};
     let request = &VmRequest::BalloonCommand(command);
     let response = handle_request(request, cmd.socket_path)?;
     match serde_json::to_string_pretty(&response) {
@@ -248,7 +267,7 @@ fn balloon_wss(cmd: cmdline::BalloonWssCommand) -> std::result::Result<(), ()> {
         }
     }
     match response {
-        VmResponse::BalloonWSS { .. } => Ok(()),
+        VmResponse::BalloonWS { .. } => Ok(()),
         _ => Err(()),
     }
 }
@@ -265,7 +284,7 @@ fn modify_battery(cmd: cmdline::BatteryCommand) -> std::result::Result<(), ()> {
 fn modify_vfio(cmd: cmdline::VfioCrosvmCommand) -> std::result::Result<(), ()> {
     let (request, socket_path, vfio_path) = match cmd.command {
         cmdline::VfioSubCommand::Add(c) => {
-            let request = VmRequest::HotPlugCommand {
+            let request = VmRequest::HotPlugVfioCommand {
                 device: HotPlugDeviceInfo {
                     device_type: HotPlugDeviceType::EndPoint,
                     path: c.vfio_path.clone(),
@@ -276,7 +295,7 @@ fn modify_vfio(cmd: cmdline::VfioCrosvmCommand) -> std::result::Result<(), ()> {
             (request, c.socket_path, c.vfio_path)
         }
         cmdline::VfioSubCommand::Remove(c) => {
-            let request = VmRequest::HotPlugCommand {
+            let request = VmRequest::HotPlugVfioCommand {
                 device: HotPlugDeviceInfo {
                     device_type: HotPlugDeviceType::EndPoint,
                     path: c.vfio_path.clone(),
@@ -293,6 +312,26 @@ fn modify_vfio(cmd: cmdline::VfioCrosvmCommand) -> std::result::Result<(), ()> {
     }
 
     vms_request(&request, socket_path)?;
+    Ok(())
+}
+
+#[cfg(feature = "pci-hotplug")]
+fn modify_virtio_net(cmd: cmdline::VirtioNetCommand) -> std::result::Result<(), ()> {
+    match cmd.command {
+        cmdline::VirtioNetSubCommand::AddTap(c) => {
+            let bus_num = do_net_add(&c.tap_name, c.socket_path).map_err(|e| {
+                error!("{}", &e);
+            })?;
+            info!("Tap device {} plugged to PCI bus {}", &c.tap_name, bus_num);
+        }
+        cmdline::VirtioNetSubCommand::RemoveTap(c) => {
+            do_net_remove(c.bus, &c.socket_path).map_err(|e| {
+                error!("Tap device remove failed: {:?}", &e);
+            })?;
+            info!("Tap device removed from PCI bus {}", &c.bus);
+        }
+    };
+
     Ok(())
 }
 
@@ -451,6 +490,7 @@ fn start_device(opts: cmdline::DeviceCommand) -> std::result::Result<(), ()> {
             CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
             #[cfg(feature = "gpu")]
             CrossPlatformDevicesCommands::Gpu(cfg) => run_gpu_device(cfg),
+            #[cfg(feature = "net")]
             CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
             #[cfg(feature = "audio")]
             CrossPlatformDevicesCommands::Snd(cfg) => run_snd_device(cfg),
@@ -696,8 +736,13 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                         balloon_stats(cmd).map_err(|_| anyhow!("balloon_stats subcommand failed"))
                     }
                     #[cfg(feature = "balloon")]
+                    CrossPlatformCommands::BalloonWs(cmd) => {
+                        balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
+                    }
+                    // TODO(b/288432539): remove once concierge is migrated
+                    #[cfg(feature = "balloon")]
                     CrossPlatformCommands::BalloonWss(cmd) => {
-                        balloon_wss(cmd).map_err(|_| anyhow!("balloon_wss subcommand failed"))
+                        balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
                     }
                     CrossPlatformCommands::Battery(cmd) => {
                         modify_battery(cmd).map_err(|_| anyhow!("battery subcommand failed"))
@@ -750,6 +795,10 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     }
                     CrossPlatformCommands::Vfio(cmd) => {
                         modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
+                    }
+                    #[cfg(feature = "pci-hotplug")]
+                    CrossPlatformCommands::VirtioNet(cmd) => {
+                        modify_virtio_net(cmd).map_err(|_| anyhow!("virtio subcommand failed"))
                     }
                     CrossPlatformCommands::Snapshot(cmd) => {
                         snapshot_vm(cmd).map_err(|_| anyhow!("snapshot subcommand failed"))

@@ -4,7 +4,6 @@
 
 pub mod ipc_memory_mapper;
 pub mod memory_mapper;
-pub mod memory_util;
 pub mod protocol;
 pub(crate) mod sys;
 
@@ -19,14 +18,14 @@ use std::rc::Rc;
 use std::result;
 use std::sync::Arc;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
 use anyhow::Context;
 use base::debug;
 use base::error;
 use base::pagesize;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -56,11 +55,10 @@ use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use crate::pci::PciAddress;
 use crate::virtio::async_utils;
 use crate::virtio::copy_config;
-use crate::virtio::iommu::ipc_memory_mapper::*;
 use crate::virtio::iommu::memory_mapper::*;
 use crate::virtio::iommu::protocol::*;
 use crate::virtio::DescriptorChain;
@@ -68,9 +66,8 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use crate::virtio::Writer;
 
 const QUEUE_SIZE: u16 = 256;
@@ -78,12 +75,12 @@ const NUM_QUEUES: usize = 2;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 
 // Size of struct virtio_iommu_probe_property
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const IOMMU_PROBE_SIZE: usize = size_of::<virtio_iommu_probe_resv_mem>();
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const VIRTIO_IOMMU_VIOT_NODE_PCI_RANGE: u8 = 1;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const VIRTIO_IOMMU_VIOT_NODE_VIRTIO_IOMMU_PCI: u8 = 3;
 
 #[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
@@ -478,7 +475,7 @@ impl State {
         Ok((0, fault_resolved_event))
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn process_probe_request(
         &mut self,
         reader: &mut Reader,
@@ -565,7 +562,7 @@ impl State {
             VIRTIO_IOMMU_T_DETACH => self.process_detach_request(reader, &mut tail)?,
             VIRTIO_IOMMU_T_MAP => (self.process_dma_map_request(reader, &mut tail)?, None),
             VIRTIO_IOMMU_T_UNMAP => self.process_dma_unmap_request(reader, &mut tail)?,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VIRTIO_IOMMU_T_PROBE => (self.process_probe_request(reader, writer, &mut tail)?, None),
             _ => return Err(IommuError::UnexpectedDescriptor),
         };
@@ -580,16 +577,15 @@ impl State {
     }
 }
 
-async fn request_queue<I: SignalableInterrupt>(
+async fn request_queue(
     state: &Rc<RefCell<State>>,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: I,
+    interrupt: Interrupt,
 ) -> Result<()> {
     loop {
-        let mem = state.borrow().mem.clone();
         let mut avail_desc = queue
-            .next_async(&mem, &mut queue_event)
+            .next_async(&mut queue_event)
             .await
             .map_err(IommuError::ReadAsyncDesc)?;
 
@@ -614,15 +610,15 @@ async fn request_queue<I: SignalableInterrupt>(
             debug!("iommu fault resolved");
         }
 
-        queue.add_used(&mem, avail_desc, len as u32);
-        queue.trigger_interrupt(&mem, &interrupt);
+        queue.add_used(avail_desc, len as u32);
+        queue.trigger_interrupt(&interrupt);
     }
 }
 
 fn run(
     state: State,
     iommu_device_tube: Tube,
-    mut queues: Vec<(Queue, Event)>,
+    mut queues: BTreeMap<usize, Queue>,
     kill_evt: Event,
     interrupt: Interrupt,
     translate_response_senders: Option<BTreeMap<u32, Tube>>,
@@ -631,7 +627,11 @@ fn run(
     let state = Rc::new(RefCell::new(state));
     let ex = Executor::new().expect("Failed to create an executor");
 
-    let (req_queue, req_evt) = queues.remove(0);
+    let req_queue = queues.remove(&0).unwrap();
+    let req_evt = req_queue
+        .event()
+        .try_clone()
+        .expect("Failed to clone queue event");
     let req_evt = EventAsync::new(req_evt, &ex).expect("Failed to create async event for queue");
 
     let f_resample = async_utils::handle_irq_resample(&ex, interrupt.clone());
@@ -726,7 +726,7 @@ impl Iommu {
         let config = virtio_iommu_config {
             page_size_mask: page_size_mask.into(),
             input_range,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             probe_size: (IOMMU_PROBE_SIZE as u32).into(),
             ..Default::default()
         };
@@ -736,7 +736,7 @@ impl Iommu {
             | 1 << VIRTIO_IOMMU_F_INPUT_RANGE
             | 1 << VIRTIO_IOMMU_F_MMIO;
 
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+        if cfg!(target_arch = "x86_64") {
             avail_features |= 1 << VIRTIO_IOMMU_F_PROBE;
         }
 
@@ -798,7 +798,7 @@ impl VirtioDevice for Iommu {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
@@ -848,7 +848,7 @@ impl VirtioDevice for Iommu {
         Ok(())
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(
         &mut self,
         pci_address: &Option<PciAddress>,

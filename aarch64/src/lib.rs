@@ -547,19 +547,20 @@ impl arch::LinuxArch for AArch64 {
             .into_iter()
             .map(|(dev, jail_orig)| (dev.into_pci_device().unwrap(), jail_orig))
             .collect();
-        let (pci, pci_irqs, mut pid_debug_label_map, _amls) = arch::generate_pci_root(
-            pci_devices,
-            irq_chip.as_irq_chip_mut(),
-            mmio_bus.clone(),
-            io_bus.clone(),
-            system_allocator,
-            &mut vm,
-            (devices::AARCH64_GIC_NR_SPIS - AARCH64_IRQ_BASE) as usize,
-            None,
-            #[cfg(feature = "swap")]
-            swap_controller,
-        )
-        .map_err(Error::CreatePciRoot)?;
+        let (pci, pci_irqs, mut pid_debug_label_map, _amls, _gpe_scope_amls) =
+            arch::generate_pci_root(
+                pci_devices,
+                irq_chip.as_irq_chip_mut(),
+                mmio_bus.clone(),
+                io_bus.clone(),
+                system_allocator,
+                &mut vm,
+                (devices::AARCH64_GIC_NR_SPIS - AARCH64_IRQ_BASE) as usize,
+                None,
+                #[cfg(feature = "swap")]
+                swap_controller,
+            )
+            .map_err(Error::CreatePciRoot)?;
 
         let pci_root = Arc::new(Mutex::new(pci));
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci_root.clone(), 8)));
@@ -761,7 +762,6 @@ impl arch::LinuxArch for AArch64 {
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
-            has_bios,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -789,7 +789,6 @@ impl arch::LinuxArch for AArch64 {
         vcpu_init: VcpuInitAArch64,
         _vcpu_id: usize,
         _num_cpus: usize,
-        _has_bios: bool,
         _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         for (reg, value) in vcpu_init.regs.iter() {

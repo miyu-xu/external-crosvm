@@ -10,10 +10,10 @@ audio = []
 audio_cras = ["libcras"]
 balloon = []
 chromeos = ["dbus", "protobuf", "system_api"]
-direct = []
 gpu = ["gpu_display"]
 gunyah = []
 libvda-stub = ["libvda/libvda-stub"]
+net = []
 geniezone = []
 tpm = ["tpm2"]
 usb = []
@@ -32,6 +32,7 @@ stats = []
 seccomp_trace = []
 swap = ["swap/enable"]
 whpx = []
+pci-hotplug = []
 
 [dependencies]
 argh = "0.1.7"
@@ -45,10 +46,10 @@ balloon_control = { path = "../common/balloon_control" }
 base = { path = "../base" }
 bit_field = { path = "../bit_field" }
 cfg-if = "1.0.0"
-chrono = { version = "*", features = [ "serde" ] }
+chrono = { version = "0.4.19", features = [ "serde" ] }
 crc32fast = { version = "1.2.1", optional = true }
 cros_async = { path = "../cros_async" }
-cros-codecs = { version = "0.0.2", optional = true }
+cros-codecs = { version = "0.0.4", optional = true }
 crosvm_cli = { path = "../crosvm_cli" }
 data_model = { path = "../common/data_model" }
 dbus = { version = "0.9", optional = true }
@@ -84,12 +85,11 @@ thiserror = "1.0.20"
 tpm2 = { path = "../tpm2", optional = true }
 cros_tracing = { path = "../cros_tracing" }
 swap = { path = "../swap" }
-uuid = { version = "1", features = [ "serde" ] }
-vmm_vhost = { path = "../third_party/vmm_vhost", features = ["vmm", "device", "vfio-device"] }
+vmm_vhost = { path = "../third_party/vmm_vhost", features = ["vmm", "device"] }
 virtio_sys = { path = "../virtio_sys" }
 vm_control = { path = "../vm_control" }
 vm_memory = { path = "../vm_memory" }
-zerocopy = "*"
+zerocopy = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 fuse = {path = "../fuse" }

@@ -95,7 +95,7 @@ impl Tube {
     }
 
     pub fn recv<T: DeserializeOwned>(&self) -> Result<T> {
-        let msg_size = self.socket.peek_size().map_err(Error::Recv)?;
+        let msg_size = handle_eintr!(self.socket.peek_size()).map_err(Error::Recv)?;
         // This buffer is the right size, as the size received in peek_size() represents the size
         // of only the message itself and not the file descriptors. The descriptors are stored
         // separately in msghdr::msg_control.
@@ -154,7 +154,7 @@ impl Tube {
 
     #[cfg(feature = "proto_tube")]
     fn recv_proto<M: protobuf::Message>(&self) -> Result<M> {
-        let msg_size = self.socket.peek_size().map_err(Error::Recv)?;
+        let msg_size = handle_eintr!(self.socket.peek_size()).map_err(Error::Recv)?;
         let mut msg_bytes = vec![0u8; msg_size];
         let mut msg_descriptors_full = [0; TUBE_MAX_FDS];
 
@@ -229,9 +229,10 @@ impl ProtoTube {
 #[cfg(all(feature = "proto_tube", test))]
 #[allow(unused_variables)]
 mod tests {
-    use super::*;
     // not testing this proto specifically, just need an existing one to test the ProtoTube.
     use protos::cdisk_spec::ComponentDisk;
+
+    use super::*;
 
     #[test]
     fn tube_serializes_and_deserializes() {

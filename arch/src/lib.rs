@@ -38,6 +38,8 @@ use devices::BusDevice;
 use devices::BusDeviceObj;
 use devices::BusError;
 use devices::BusResumeDevice;
+use devices::FwCfgParameters;
+use devices::GpeScope;
 use devices::HotPlugBus;
 use devices::IrqChip;
 use devices::IrqEventSource;
@@ -63,7 +65,7 @@ use jail::FakeMinijailStub as Minijail;
 #[cfg(unix)]
 use minijail::Minijail;
 use remain::sorted;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
@@ -107,7 +109,7 @@ cfg_if::cfg_if! {
         pub use hypervisor::VcpuInitRiscv64 as VcpuInitArch;
         pub use hypervisor::VcpuRiscv64 as VcpuArch;
         pub use hypervisor::VmRiscv64 as VmArch;
-    } else if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
+    } else if #[cfg(target_arch = "x86_64")] {
         pub use devices::IrqChipX86_64 as IrqChipArch;
         #[cfg(feature = "gdb")]
         pub use gdbstub_arch::x86::X86_64_SSE as GdbArch;
@@ -310,22 +312,21 @@ pub enum VcpuAffinity {
 /// create a `RunnableLinuxVm`.
 #[sorted]
 pub struct VmComponents {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
     pub acpi_sdts: Vec<SDT>,
     pub android_fstab: Option<File>,
+    pub bootorder_fw_cfg_blob: Vec<u8>,
     pub cpu_capacity: BTreeMap<usize, u32>,
     pub cpu_clusters: Vec<CpuSet>,
     pub cpu_frequencies: BTreeMap<usize, Vec<u32>>,
     pub delay_rt: bool,
-    #[cfg(feature = "direct")]
-    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
-    #[cfg(feature = "direct")]
-    pub direct_gpe: Vec<u32>,
     pub dynamic_power_coefficient: BTreeMap<usize, u32>,
     pub extra_kernel_params: Vec<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub force_s2idle: bool,
+    pub fw_cfg_enable: bool,
+    pub fw_cfg_parameters: Vec<FwCfgParameters>,
     #[cfg(feature = "gdb")]
     pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub host_cpu_topology: bool,
@@ -337,11 +338,9 @@ pub struct VmComponents {
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    pub oem_strings: Vec<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pci_low_start: Option<u64>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pcie_ecam: Option<AddressRange>,
     pub pflash_block_size: u32,
     pub pflash_image: Option<File>,
@@ -350,6 +349,8 @@ pub struct VmComponents {
     /// `hv_cfg.protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<File>,
     pub rt_cpus: CpuSet,
+    #[cfg(target_arch = "x86_64")]
+    pub smbios: SmbiosOptions,
     pub swiotlb: Option<u64>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
@@ -364,7 +365,6 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub devices_thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(feature = "gdb")]
     pub gdb: Option<(u32, Tube)>,
-    pub has_bios: bool,
     pub hotplug_bus: BTreeMap<u8, Arc<Mutex<dyn HotPlugBus>>>,
     pub io_bus: Arc<Bus>,
     pub irq_chip: Box<dyn IrqChipArch>,
@@ -440,6 +440,7 @@ pub trait LinuxArch {
     /// * `irq_chip` - The IRQ chip implemention for the VM.
     /// * `debugcon_jail` - Jail used for debugcon devices created here.
     /// * `pflash_jail` - Jail used for pflash device created here.
+    /// * `fw_cfg_jail` - Jail used for fw_cfg device created here.
     fn build_vm<V, Vcpu>(
         components: VmComponents,
         vm_evt_wrtube: &SendTube,
@@ -454,7 +455,8 @@ pub trait LinuxArch {
         vcpu_ids: &mut Vec<usize>,
         dump_device_tree_blob: Option<PathBuf>,
         debugcon_jail: Option<Minijail>,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] pflash_jail: Option<Minijail>,
+        #[cfg(target_arch = "x86_64")] pflash_jail: Option<Minijail>,
+        #[cfg(target_arch = "x86_64")] fw_cfg_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
         #[cfg(unix)] guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
@@ -473,7 +475,6 @@ pub trait LinuxArch {
     /// * `vcpu_init` - The data required to initialize VCPU registers and other state.
     /// * `vcpu_id` - The id of the given `vcpu`.
     /// * `num_cpus` - Number of virtual CPUs the guest will have.
-    /// * `has_bios` - Whether the `VmImage` is a `Bios` image
     /// * `cpu_config` - CPU feature configurations.
     fn configure_vcpu<V: Vm>(
         vm: &V,
@@ -483,7 +484,6 @@ pub trait LinuxArch {
         vcpu_init: VcpuInitArch,
         vcpu_id: usize,
         num_cpus: usize,
-        has_bios: bool,
         cpu_config: Option<CpuConfigArch>,
     ) -> Result<(), Self::Error>;
 
@@ -763,7 +763,7 @@ pub fn generate_virtio_mmio_bus(
     let mut pid_labels = BTreeMap::new();
 
     // sdts can be updated only on x86 platforms.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     let mut sdts = sdts;
     for dev_value in devices.into_iter() {
         #[cfg(unix)]
@@ -796,7 +796,7 @@ pub fn generate_virtio_mmio_bus(
             keep_rds.push(event.as_raw_descriptor());
         }
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         {
             sdts = device
                 .generate_acpi(sdts)
@@ -959,6 +959,7 @@ pub fn generate_pci_root(
         Vec<(PciAddress, u32, PciInterruptPin)>,
         BTreeMap<u32, String>,
         BTreeMap<PciAddress, Vec<u8>>,
+        BTreeMap<PciAddress, Vec<u8>>,
     ),
     DeviceRegistrationError,
 > {
@@ -1083,6 +1084,7 @@ pub fn generate_pci_root(
     };
 
     let mut amls = BTreeMap::new();
+    let mut gpe_scope_amls = BTreeMap::new();
     for (dev_idx, dev_value) in devices {
         #[cfg(unix)]
         let (mut device, jail) = dev_value;
@@ -1115,6 +1117,7 @@ pub fn generate_pci_root(
                 );
             }
         }
+        let gpe_nr = device.set_gpe(resources);
 
         #[cfg(unix)]
         let arced_dev: Arc<Mutex<dyn BusDevice>> = if let Some(jail) = jail {
@@ -1150,9 +1153,24 @@ pub fn generate_pci_root(
                 .insert(arced_dev.clone(), range.addr, range.size)
                 .map_err(DeviceRegistrationError::MmioInsert)?;
         }
+
+        if let Some(gpe_nr) = gpe_nr {
+            if let Some(acpi_path) = root.acpi_path(&address) {
+                let mut gpe_aml = Vec::new();
+
+                GpeScope {}.cast_to_aml_bytes(
+                    &mut gpe_aml,
+                    gpe_nr,
+                    format!("\\{}", acpi_path).as_str(),
+                );
+                if !gpe_aml.is_empty() {
+                    gpe_scope_amls.insert(address, gpe_aml);
+                }
+            }
+        }
     }
 
-    Ok((root, pci_irqs, pid_labels, amls))
+    Ok((root, pci_irqs, pid_labels, amls, gpe_scope_amls))
 }
 
 /// Errors for image loading.
@@ -1259,80 +1277,28 @@ where
     Ok((guest_addr, size))
 }
 
-/// Read and write permissions setting
-///
-/// Wrap read_allow and write_allow to store them in MsrHandlers level.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrRWType {
-    #[serde(rename = "r")]
-    ReadOnly,
-    #[serde(rename = "w")]
-    WriteOnly,
-    #[serde(rename = "rw", alias = "wr")]
-    ReadWrite,
-}
+/// SMBIOS table configuration
+#[derive(Clone, Debug, Default, Serialize, Deserialize, FromKeyValues, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SmbiosOptions {
+    /// BIOS vendor name.
+    pub bios_vendor: Option<String>,
 
-/// Handler types for userspace-msr
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrAction {
-    /// Read and write from host directly, and the control of MSR will
-    /// take effect on host.
-    #[serde(rename = "pass")]
-    MsrPassthrough,
-    /// Store the dummy value for msr (copy from host or custom values),
-    /// and the control(WRMSR) of MSR won't take effect on host.
-    #[serde(rename = "emu")]
-    MsrEmulate,
-}
+    /// BIOS version number (free-form string).
+    pub bios_version: Option<String>,
 
-/// Source CPU of MSR value
-///
-/// Indicate which CPU that user get/set MSRs from/to.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrValueFrom {
-    /// Read/write MSR value from/into CPU 0.
-    /// The MSR source CPU always be CPU 0.
-    #[serde(rename = "cpu0")]
-    RWFromCPU0,
-    /// Read/write MSR value from/into the running CPU.
-    /// If vCPU migrates to another pcpu, the MSR source CPU will also change.
-    #[serde(skip)]
-    RWFromRunningCPU,
-}
+    /// System manufacturer name.
+    pub manufacturer: Option<String>,
 
-/// Whether to force KVM-filtered MSRs.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrFilter {
-    /// Leave it to hypervisor (KVM) default.
-    #[serde(rename = "no")]
-    Default,
-    /// Don't let KVM do the default thing and use our userspace MSR
-    /// implementation.
-    #[serde(rename = "yes")]
-    Override,
-}
+    /// System product name.
+    pub product_name: Option<String>,
 
-/// Config option for userspace-msr handing
-///
-/// MsrConfig will be collected with its corresponding MSR's index.
-/// eg, (msr_index, msr_config)
-#[derive(Clone, Serialize, Deserialize)]
-pub struct MsrConfig {
-    /// If support RDMSR/WRMSR emulation in crosvm?
-    pub rw_type: MsrRWType,
-    /// Handlers should be used to handling MSR.
-    pub action: MsrAction,
-    /// MSR source CPU.
-    pub from: MsrValueFrom,
-    /// Whether to override KVM MSR emulation.
-    pub filter: MsrFilter,
-}
+    /// System serial number (free-form string).
+    pub serial_number: Option<String>,
 
-#[sorted]
-#[derive(Error, Debug)]
-pub enum MsrExitHandlerError {
-    #[error("Fail to create MSR handler")]
-    HandlerCreateFailed,
+    /// Additional OEM strings to add to SMBIOS table.
+    #[serde(default)]
+    pub oem_strings: Vec<String>,
 }
 
 #[cfg(test)]

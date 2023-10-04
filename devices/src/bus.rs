@@ -10,6 +10,7 @@ use std::cmp::PartialEq;
 use std::cmp::PartialOrd;
 use std::collections::btree_map::BTreeMap;
 use std::collections::hash_map::HashMap;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::fmt;
 use std::result;
@@ -75,7 +76,7 @@ pub struct ConfigWriteResult {
     pub removed_pci_devices: Vec<PciAddress>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum BusType {
     Mmio,
     Io,
@@ -182,11 +183,12 @@ pub trait BusResumeDevice: Send {
 /// The key to identify hotplug device from host view.
 /// like host sysfs path for vfio pci device, host disk file
 /// path for virtio block device
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum HostHotPlugKey {
-    UpstreamPort { host_addr: PciAddress },
-    DownstreamPort { host_addr: PciAddress },
-    Vfio { host_addr: PciAddress },
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+pub enum HotPlugKey {
+    HostUpstreamPort { host_addr: PciAddress },
+    HostDownstreamPort { host_addr: PciAddress },
+    HostVfio { host_addr: PciAddress },
+    GuestDevice { guest_addr: PciAddress },
 }
 
 /// Trait for devices that notify hotplug event into guest
@@ -202,16 +204,18 @@ pub trait HotPlugBus {
     /// - 'None': hotplug bus isn't match with host pci device
     /// - 'Some(bus_num)': hotplug bus is match and put the device at bus_num
     fn is_match(&self, host_addr: PciAddress) -> Option<u8>;
+    /// Gets the secondary bus number of this bus
+    fn get_secondary_bus_number(&self) -> Option<u8>;
     /// Add hotplug device into this bus
-    /// * 'host_key' - the key to identify hotplug device from host view
+    /// * 'hotplug_key' - the key to identify hotplug device from host view
     /// * 'guest_addr' - the guest pci address for hotplug device
-    fn add_hotplug_device(&mut self, host_key: HostHotPlugKey, guest_addr: PciAddress);
-    /// get guest pci address from the specified host_key
-    fn get_hotplug_device(&self, host_key: HostHotPlugKey) -> Option<PciAddress>;
+    fn add_hotplug_device(&mut self, hotplug_key: HotPlugKey, guest_addr: PciAddress);
+    /// get guest pci address from the specified hotplug_key
+    fn get_hotplug_device(&self, hotplug_key: HotPlugKey) -> Option<PciAddress>;
     /// Check whether this hotplug bus is empty
     fn is_empty(&self) -> bool;
     /// Get hotplug key of this hotplug bus
-    fn get_hotplug_key(&self) -> Option<HostHotPlugKey>;
+    fn get_hotplug_key(&self) -> Option<HotPlugKey>;
 }
 
 /// Trait for generic device abstraction, that is, all devices that reside on BusDevice and want
@@ -360,8 +364,7 @@ impl Bus {
         let devices = self.devices.lock();
         let (range, entry) = devices
             .range(..=BusRange { base: addr, len: 1 })
-            .rev()
-            .next()?;
+            .next_back()?;
         Some((*range, entry.clone()))
     }
 
@@ -375,20 +378,35 @@ impl Bus {
         None
     }
 
+    /// There is no unique ID for device instances. For now we use the Arc pointers to dedup them.
+    ///
+    /// See virtio-gpu for an example of a single device instance with multiple bus entries.
+    ///
+    /// TODO: Add a unique ID to BusDevice and use that instead of pointers.
+    fn unique_devices(&self) -> Vec<BusDeviceEntry> {
+        let mut seen_ptrs = BTreeSet::new();
+        self.devices
+            .lock()
+            .iter()
+            .map(|(_, bus_entry)| bus_entry.device.clone())
+            .filter(|dev| match dev {
+                BusDeviceEntry::OuterSync(dev) => seen_ptrs.insert(Arc::as_ptr(dev) as *const u8),
+                BusDeviceEntry::InnerSync(dev) => seen_ptrs.insert(Arc::as_ptr(dev) as *const u8),
+            })
+            .collect()
+    }
+
     pub fn sleep_devices(&self) -> anyhow::Result<()> {
-        let devices_lock = &(self.devices).lock();
-        for (_, device_entry) in devices_lock.iter() {
-            match &(device_entry.device) {
+        for device_entry in self.unique_devices() {
+            match device_entry {
                 BusDeviceEntry::OuterSync(dev) => {
-                    let mut device_lock = (*dev).lock();
-                    if let Err(e) = device_lock.sleep() {
-                        //TODO: Enable this line when b/232437513 is done
-                        // return Err(anyhow!("Failed to sleep {}.", (*device_lock).debug_label()));
-                        error!("Failed to sleep {}: {}", (*device_lock).debug_label(), e);
-                    }
+                    let mut dev = (*dev).lock();
+                    dev.sleep()
+                        .with_context(|| format!("failed to sleep {}", dev.debug_label()))?;
                 }
                 BusDeviceEntry::InnerSync(dev) => {
-                    (**dev).sleep_sync().context("failed to sleep device")?;
+                    dev.sleep_sync()
+                        .with_context(|| format!("failed to sleep {}", dev.debug_label()))?;
                 }
             }
         }
@@ -396,19 +414,16 @@ impl Bus {
     }
 
     pub fn wake_devices(&self) -> anyhow::Result<()> {
-        let devices_lock = &(self.devices).lock();
-        for (_, device_entry) in devices_lock.iter() {
-            match &(device_entry.device) {
+        for device_entry in self.unique_devices() {
+            match device_entry {
                 BusDeviceEntry::OuterSync(dev) => {
-                    let mut device_lock = (*dev).lock();
-                    if let Err(e) = device_lock.wake() {
-                        //TODO: Enable this line when b/232437513 is done
-                        // return Err(anyhow!("Failed to wake {}.", (*device_lock).debug_label()));
-                        error!("Failed to wake {}: {}", (*device_lock).debug_label(), e);
-                    };
+                    let mut dev = dev.lock();
+                    dev.wake()
+                        .with_context(|| format!("failed to wake {}", dev.debug_label()))?;
                 }
                 BusDeviceEntry::InnerSync(dev) => {
-                    (**dev).wake_sync().context("failed to wake device")?;
+                    dev.wake_sync()
+                        .with_context(|| format!("failed to wake {}", dev.debug_label()))?;
                 }
             }
         }
@@ -419,32 +434,21 @@ impl Bus {
         &self,
         mut add_snapshot: impl FnMut(u32, serde_json::Value),
     ) -> anyhow::Result<()> {
-        let devices_lock = &(self.devices).lock();
-        for (_, device_entry) in devices_lock.iter() {
-            let (device_id, serialized_device, device_label) = match &(device_entry.device) {
+        for device_entry in self.unique_devices() {
+            match device_entry {
                 BusDeviceEntry::OuterSync(dev) => {
-                    let device_lock = (*dev).lock();
-                    (
-                        u32::from(device_lock.device_id()),
-                        (*device_lock).snapshot(),
-                        (*device_lock).debug_label(),
+                    let dev = dev.lock();
+                    add_snapshot(
+                        u32::from(dev.device_id()),
+                        dev.snapshot()
+                            .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
                     )
                 }
-                BusDeviceEntry::InnerSync(dev) => (
-                    u32::from((dev).device_id()),
-                    (**dev).snapshot_sync(),
-                    (**dev).debug_label(),
+                BusDeviceEntry::InnerSync(dev) => add_snapshot(
+                    u32::from(dev.device_id()),
+                    dev.snapshot_sync()
+                        .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
                 ),
-            };
-            match serialized_device {
-                Ok(snapshot) => {
-                    add_snapshot(device_id, snapshot);
-                }
-                Err(e) => {
-                    //TODO: Enable this line when b/232437513 is done
-                    // return Err(anyhow!("Failed to snapshot {}.", (*device_lock).debug_label()));
-                    error!("Failed to snapshot {}: {}.", device_label, e);
-                }
             }
         }
         Ok(())
@@ -454,43 +458,29 @@ impl Bus {
         &self,
         devices_map: &mut HashMap<u32, VecDeque<serde_json::Value>>,
     ) -> anyhow::Result<()> {
-        let devices_lock = &(self.devices).lock();
-        for (_, device_entry) in devices_lock.iter() {
-            match &(device_entry.device) {
+        let mut pop_snapshot = |device_id| {
+            devices_map
+                .get_mut(&u32::from(device_id))
+                .and_then(|dq| dq.pop_front())
+        };
+        for device_entry in self.unique_devices() {
+            match device_entry {
                 BusDeviceEntry::OuterSync(dev) => {
-                    let mut device_lock = (*dev).lock();
-                    let device_id = u32::from(device_lock.device_id());
-                    let device_data = devices_map.get_mut(&device_id);
-                    match device_data {
-                        Some(dev_dq) => {
-                            match dev_dq.pop_front() {
-                                Some(dev_data) => {
-                                    let restore_res = (*device_lock).restore(dev_data);
-                                    if let Err(e) = &restore_res {
-                                        error!("restore failed with error: {}", e);
-                                    }
-                                    restore_res.context("device failed to restore snapshot")?;
-                                }
-                                None => base::info!("no data found in snapshot for {}", device_lock.debug_label()),
-                            }
-                        },
-                        None => base::info!("device {} does not have stored data in the snapshot. Device data will not change.", (*device_lock).debug_label()),
-                    }
+                    let mut dev = dev.lock();
+                    let snapshot = pop_snapshot(dev.device_id()).ok_or_else(|| {
+                        anyhow!("missing snapshot for device {:?}", dev.debug_label())
+                    })?;
+                    dev.restore(snapshot).with_context(|| {
+                        format!("restore failed for device {:?}", dev.debug_label())
+                    })?;
                 }
                 BusDeviceEntry::InnerSync(dev) => {
-                    let device_id = u32::from(dev.device_id());
-                    let device_data = devices_map.get_mut(&device_id);
-                    match device_data {
-                        Some(dev_dq) => {
-                            match dev_dq.pop_front() {
-                                Some(dev_data) => {
-                                    (**dev).restore_sync(dev_data).context("device failed to restore snapshot")?;
-                                }
-                                None => base::info!("no data found in snapshot for {}", (**dev).debug_label()),
-                            }
-                        },
-                        None => base::info!("device {} does not have stored data in the snapshot. Device data will not change.", dev.debug_label()),
-                    }
+                    let snapshot = pop_snapshot(dev.device_id()).ok_or_else(|| {
+                        anyhow!("missing snapshot for device {:?}", dev.debug_label())
+                    })?;
+                    dev.restore_sync(snapshot).with_context(|| {
+                        format!("restore failed for device {:?}", dev.debug_label())
+                    })?;
                 }
             }
         }

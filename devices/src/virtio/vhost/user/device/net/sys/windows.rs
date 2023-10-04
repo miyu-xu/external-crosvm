@@ -20,8 +20,12 @@ use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::IntoAsync;
 use cros_async::IoSource;
+use futures::channel::oneshot;
 use futures::future::AbortHandle;
 use futures::future::Abortable;
+use futures::pin_mut;
+use futures::select_biased;
+use futures::FutureExt;
 use hypervisor::ProtectionType;
 #[cfg(feature = "slirp")]
 use net_util::Slirp;
@@ -35,7 +39,7 @@ use tube_transporter::TubeToken;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
 use crate::virtio;
 use crate::virtio::base_features;
@@ -45,7 +49,6 @@ use crate::virtio::net::NetError;
 use crate::virtio::net::MAX_BUFFER_SIZE;
 use crate::virtio::vhost::user::device::handler::sys::windows::read_from_tube_transporter;
 use crate::virtio::vhost::user::device::handler::sys::windows::run_handler;
-use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
 use crate::virtio::vhost::user::device::handler::VhostUserBackend;
 use crate::virtio::vhost::user::device::handler::VhostUserRegularOps;
@@ -54,8 +57,8 @@ use crate::virtio::vhost::user::device::net::run_ctrl_queue;
 use crate::virtio::vhost::user::device::net::run_tx_queue;
 use crate::virtio::vhost::user::device::net::NetBackend;
 use crate::virtio::vhost::user::device::net::NET_EXECUTOR;
+use crate::virtio::Interrupt;
 use crate::virtio::Queue;
-use crate::virtio::SignalableInterrupt;
 
 impl<T: 'static> NetBackend<T>
 where
@@ -68,7 +71,7 @@ where
     ) -> anyhow::Result<NetBackend<Slirp>> {
         let avail_features = base_features(ProtectionType::Unprotected)
             | 1 << virtio_net::VIRTIO_NET_F_CTRL_VQ
-            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+            | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
         let slirp = Slirp::new_for_multi_process(guest_pipe).map_err(NetError::SlirpCreateError)?;
 
         Ok(NetBackend::<Slirp> {
@@ -76,22 +79,22 @@ where
             avail_features,
             acked_features: 0,
             acked_protocol_features: VhostUserProtocolFeatures::empty(),
-            workers: Default::default(),
             mtu: 1500,
             slirp_kill_event,
+            workers: Default::default(),
         })
     }
 }
 
 async fn run_rx_queue<T: TapT>(
-    mut queue: Arc<Mutex<virtio::Queue>>,
-    mem: GuestMemory,
+    mut queue: Queue,
     mut tap: IoSource<T>,
-    call_evt: Doorbell,
+    call_evt: Interrupt,
     kick_evt: EventAsync,
     read_notifier: EventAsync,
     mut overlapped_wrapper: OverlappedWrapper,
-) {
+    mut stop_rx: oneshot::Receiver<()>,
+) -> Queue {
     let mut rx_buf = [0u8; MAX_BUFFER_SIZE];
     let mut rx_count = 0;
     let mut deferred_rx = false;
@@ -104,10 +107,27 @@ async fn run_rx_queue<T: TapT>(
             .read_overlapped(&mut rx_buf, &mut overlapped_wrapper)
             .expect("read_overlapped failed")
     };
-    // let queue = queue.try_lock().expect("Lock should not be unavailable");
+
+    let read_notifier_future = read_notifier.next_val().fuse();
+    pin_mut!(read_notifier_future);
+    let kick_evt_future = kick_evt.next_val().fuse();
+    pin_mut!(kick_evt_future);
+
     loop {
         // If we already have a packet from deferred RX, we don't need to wait for the slirp device.
         if !deferred_rx {
+            select_biased! {
+                read_notifier_res = read_notifier_future => {
+                    read_notifier_future.set(read_notifier.next_val().fuse());
+                    if let Err(e) = read_notifier_res {
+                        error!("Failed to wait for tap device to become readable: {}", e);
+                        break;
+                    }
+                }
+                _ = stop_rx => {
+                    break;
+                }
+            }
             if let Err(e) = read_notifier.next_val().await {
                 error!("Failed to wait for tap device to become readable: {}", e);
                 break;
@@ -116,8 +136,7 @@ async fn run_rx_queue<T: TapT>(
 
         let needs_interrupt = process_rx(
             &call_evt,
-            &queue,
-            &mem,
+            &mut queue,
             tap.as_source_mut(),
             &mut rx_buf,
             &mut deferred_rx,
@@ -125,23 +144,28 @@ async fn run_rx_queue<T: TapT>(
             &mut overlapped_wrapper,
         );
         if needs_interrupt {
-            call_evt.signal_used_queue(
-                queue
-                    .try_lock()
-                    .expect("Lock should not be unavailable")
-                    .vector(),
-            );
+            call_evt.signal_used_queue(queue.vector());
         }
 
         // There aren't any RX descriptors available for us to write packets to. Wait for the guest
         // to consume some packets and make more descriptors available to us.
         if deferred_rx {
-            if let Err(e) = kick_evt.next_val().await {
-                error!("Failed to read kick event for rx queue: {}", e);
-                break;
+            select_biased! {
+                kick = kick_evt_future => {
+                    kick_evt_future.set(kick_evt.next_val().fuse());
+                    if let Err(e) = kick {
+                        error!("Failed to read kick event for rx queue: {}", e);
+                        break;
+                    }
+                }
+                _ = stop_rx => {
+                    break;
+                }
             }
         }
     }
+
+    queue
 }
 
 /// Platform specific impl of VhostUserBackend::start_queue.
@@ -149,9 +173,8 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
     backend: &mut NetBackend<T>,
     idx: usize,
     queue: virtio::Queue,
-    mem: GuestMemory,
-    doorbell: Doorbell,
-    kick_evt: Event,
+    _mem: GuestMemory,
+    doorbell: Interrupt,
 ) -> anyhow::Result<()> {
     if backend.workers.get(idx).is_some() {
         warn!("Starting new queue handler without stopping old handler");
@@ -165,15 +188,17 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
         // Safe because the executor is initialized in main() below.
         let ex = ex.get().expect("Executor not initialized");
 
+        let kick_evt = queue
+            .event()
+            .try_clone()
+            .context("failed to clone queue event")?;
         let kick_evt =
             EventAsync::new(kick_evt, ex).context("failed to create EventAsync for kick_evt")?;
         let tap = backend
             .tap
             .try_clone()
             .context("failed to clone tap device")?;
-        let (handle, registration) = AbortHandle::new_pair();
-        let queue = Arc::new(Mutex::new(queue));
-        let queue_task = match idx {
+        let worker_tuple = match idx {
             0 => {
                 let tap = ex
                     .async_from(tap)
@@ -186,45 +211,46 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
                 let read_notifier = EventAsync::new_without_reset(read_notifier, ex)
                     .context("failed to create async read notifier")?;
 
-                ex.spawn_local(Abortable::new(
-                    run_rx_queue(
-                        queue.clone(),
-                        mem,
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_rx_queue(
+                        queue,
                         tap,
                         doorbell,
                         kick_evt,
                         read_notifier,
                         overlapped_wrapper,
-                    ),
-                    registration,
-                ))
+                        stop_rx,
+                    )),
+                    stop_tx,
+                )
             }
-            1 => ex.spawn_local(Abortable::new(
-                run_tx_queue(queue.clone(), mem, tap, doorbell, kick_evt),
-                registration,
-            )),
+            1 => {
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_tx_queue(queue, tap, doorbell, kick_evt, stop_rx)),
+                    stop_tx,
+                )
+            }
             2 => {
-                ex.spawn_local(Abortable::new(
-                    run_ctrl_queue(
-                        queue.clone(),
-                        mem,
+                let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+                (
+                    ex.spawn_local(run_ctrl_queue(
+                        queue,
                         tap,
                         doorbell,
                         kick_evt,
                         backend.acked_features,
                         1, /* vq_pairs */
-                    ),
-                    registration,
-                ))
+                        stop_rx,
+                    )),
+                    stop_tx,
+                )
             }
             _ => bail!("attempted to start unknown queue: {}", idx),
         };
 
-        backend.workers[idx] = Some(WorkerState {
-            abort_handle: handle,
-            queue_task,
-            queue,
-        });
+        backend.workers[idx] = Some(worker_tuple);
         Ok(())
     })
 }

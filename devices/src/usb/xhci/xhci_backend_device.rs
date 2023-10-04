@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::xhci_transfer::XhciTransfer;
-use crate::usb::host_backend::error::Result;
 use usb_util::DeviceSpeed;
+
+use super::xhci_transfer::XhciTransfer;
+use crate::usb::backend::error::Result;
 
 /// Address of this usb device, as in Set Address standard usb device request.
 pub type UsbDeviceAddress = u32;
@@ -32,4 +33,8 @@ pub trait XhciBackendDevice: Send {
     fn reset(&mut self) -> Result<()>;
     /// Get speed of this device.
     fn get_speed(&self) -> Option<DeviceSpeed>;
+    /// Allocate streams for the endpoint
+    fn alloc_streams(&self, ep: u8, num_streams: u16) -> Result<()>;
+    /// Free streams for the endpoint
+    fn free_streams(&self, ep: u8) -> Result<()>;
 }

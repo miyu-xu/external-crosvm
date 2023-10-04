@@ -530,12 +530,11 @@ impl Vcpu for WhpxVcpu {
         }
     }
 
-    /// Signals to the hypervisor that this guest is being paused by userspace.  Only works on Vms
-    /// that support `VmCapability::PvClockSuspend`. This suspends the entire VM, not just this VCPU.
-    /// NO virtual processor may be running when this is called.
-    fn pvclock_ctrl(&self) -> Result<()> {
-        // safe because we asssume the vm partition is still valid.
-        check_whpx!(unsafe { WHvSuspendPartitionTime(self.vm_partition.partition) })
+    /// Signals to the hypervisor that this guest is being paused by userspace. On some hypervisors,
+    /// this is used to control the pvclock. On WHPX, we handle it separately with virtio-pvclock.
+    /// So the correct implementation here is to do nothing.
+    fn on_suspend(&self) -> Result<()> {
+        Ok(())
     }
 
     /// Enables a hypervisor-specific extension on this Vcpu.  `cap` is a constant defined by the
@@ -1165,11 +1164,10 @@ impl VcpuX86_64 for WhpxVcpu {
         // WHvRegisterInterruptState because they are included in
         // get_interrupt_state.
         //
-        // We also exclude MSR_TSC, because on WHPX, we will use virtio-pvclock
-        // to restore the guest clocks. Note that this will be *guest aware*
-        // snapshotting. We may in the future add guest unaware snapshotting
-        // for Windows, in which case we will want to save/restore TSC such that
-        // the guest does not observe any change.
+        // We intentionally exclude MSR_TSC because in snapshotting it is
+        // handled by the generic x86_64 VCPU snapshot/restore. Non snapshot
+        // consumers should use get/set_tsc_adjust to access the adjust register
+        // if needed.
         let mut registers = vec![
             Register {
                 id: MSR_EFER,

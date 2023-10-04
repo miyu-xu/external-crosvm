@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap as Map;
 use std::collections::BTreeSet as Set;
+use std::io::IoSliceMut;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::result::Result;
@@ -12,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use anyhow::Context;
 use base::error;
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
@@ -23,19 +25,24 @@ use libc::c_void;
 use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
 use rutabaga_gfx::Rutabaga;
-use rutabaga_gfx::RutabagaBuilder;
 use rutabaga_gfx::RutabagaDescriptor;
 #[cfg(windows)]
 use rutabaga_gfx::RutabagaError;
 use rutabaga_gfx::RutabagaFence;
-use rutabaga_gfx::RutabagaFenceHandler;
 use rutabaga_gfx::RutabagaFromRawDescriptor;
 use rutabaga_gfx::RutabagaHandle;
 use rutabaga_gfx::RutabagaIntoRawDescriptor;
 use rutabaga_gfx::RutabagaIovec;
 use rutabaga_gfx::Transfer3D;
+use rutabaga_gfx::RUTABAGA_MAP_ACCESS_MASK;
+use rutabaga_gfx::RUTABAGA_MAP_ACCESS_READ;
+use rutabaga_gfx::RUTABAGA_MAP_ACCESS_RW;
+use rutabaga_gfx::RUTABAGA_MAP_ACCESS_WRITE;
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use vm_control::gpu::DisplayParameters;
 use vm_control::gpu::GpuControlCommand;
@@ -63,7 +70,7 @@ use crate::virtio::resource_bridge::ResourceInfo;
 use crate::virtio::resource_bridge::ResourceResponse;
 use crate::virtio::SharedMemoryMapper;
 
-fn to_rutabaga_descriptor(s: SafeDescriptor) -> RutabagaDescriptor {
+pub fn to_rutabaga_descriptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // Safe because we own the SafeDescriptor at this point.
     unsafe { RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor()) }
 }
@@ -82,6 +89,20 @@ struct VirtioGpuResource {
     scanout_data: Option<VirtioScanoutBlobData>,
     display_import: Option<u32>,
     rutabaga_external_mapping: bool,
+
+    // Only saved for snapshotting, so that we can re-attach backing iovecs with the correct new
+    // host addresses.
+    backing_iovecs: Option<Vec<(GuestAddress, usize)>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VirtioGpuResourceSnapshot {
+    resource_id: u32,
+    width: u32,
+    height: u32,
+    size: u64,
+
+    backing_iovecs: Option<Vec<(GuestAddress, usize)>>,
 }
 
 impl VirtioGpuResource {
@@ -97,15 +118,35 @@ impl VirtioGpuResource {
             scanout_data: None,
             display_import: None,
             rutabaga_external_mapping: false,
+            backing_iovecs: None,
         }
+    }
+
+    fn snapshot(&self) -> VirtioGpuResourceSnapshot {
+        // Only the 2D backend is support and it doesn't use these fields.
+        assert!(self.shmem_offset.is_none());
+        assert!(self.scanout_data.is_none());
+        assert!(self.display_import.is_none());
+        assert_eq!(self.rutabaga_external_mapping, false);
+        VirtioGpuResourceSnapshot {
+            resource_id: self.resource_id,
+            width: self.width,
+            height: self.height,
+            size: self.size,
+            backing_iovecs: self.backing_iovecs.clone(),
+        }
+    }
+
+    fn restore(s: VirtioGpuResourceSnapshot) -> Self {
+        let mut resource = VirtioGpuResource::new(s.resource_id, s.width, s.height, s.size);
+        resource.backing_iovecs = s.backing_iovecs;
+        resource
     }
 }
 
 struct VirtioGpuScanout {
     width: u32,
     height: u32,
-    surface_id: Option<u32>,
-    resource_id: Option<NonZeroU32>,
     scanout_type: SurfaceType,
     // If this scanout is a primary scanout, the scanout id.
     scanout_id: Option<u32>,
@@ -113,6 +154,30 @@ struct VirtioGpuScanout {
     display_params: Option<GpuDisplayParameters>,
     // If this scanout is a cursor scanout, the scanout that this is cursor is overlayed onto.
     parent_surface_id: Option<u32>,
+
+    surface_id: Option<u32>,
+    parent_scanout_id: Option<u32>,
+
+    resource_id: Option<NonZeroU32>,
+    position: Option<(u32, u32)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VirtioGpuScanoutSnapshot {
+    width: u32,
+    height: u32,
+    scanout_type: SurfaceType,
+    scanout_id: Option<u32>,
+    display_params: Option<GpuDisplayParameters>,
+
+    // The surface IDs aren't guest visible. Instead of storing them and then having to fix up
+    // `gpu_display` internals, we'll allocate new ones on restore. So, we just need to store
+    // whether a surface was allocated and the parent's scanout ID.
+    has_surface: bool,
+    parent_scanout_id: Option<u32>,
+
+    resource_id: Option<NonZeroU32>,
+    position: Option<(u32, u32)>,
 }
 
 impl VirtioGpuScanout {
@@ -124,9 +189,11 @@ impl VirtioGpuScanout {
             scanout_type: SurfaceType::Scanout,
             scanout_id: Some(scanout_id),
             display_params: Some(params),
-            surface_id: None,
-            resource_id: None,
             parent_surface_id: None,
+            surface_id: None,
+            parent_scanout_id: None,
+            resource_id: None,
+            position: None,
         }
     }
 
@@ -139,10 +206,54 @@ impl VirtioGpuScanout {
             scanout_type: SurfaceType::Cursor,
             scanout_id: None,
             display_params: None,
-            surface_id: None,
-            resource_id: None,
             parent_surface_id: None,
+            surface_id: None,
+            parent_scanout_id: None,
+            resource_id: None,
+            position: None,
         }
+    }
+
+    fn snapshot(&self) -> VirtioGpuScanoutSnapshot {
+        VirtioGpuScanoutSnapshot {
+            width: self.width,
+            height: self.height,
+            has_surface: self.surface_id.is_some(),
+            resource_id: self.resource_id,
+            scanout_type: self.scanout_type,
+            scanout_id: self.scanout_id,
+            display_params: self.display_params.clone(),
+            parent_scanout_id: self.parent_scanout_id,
+            position: self.position,
+        }
+    }
+
+    fn restore(
+        &mut self,
+        snapshot: VirtioGpuScanoutSnapshot,
+        parent_surface_id: Option<u32>,
+        display: &Rc<RefCell<GpuDisplay>>,
+    ) -> VirtioGpuResult {
+        // Scanouts are mainly controlled by the host, we just need to make sure it looks same,
+        // restore the resource_id association, and create a surface in the display.
+
+        assert_eq!(self.width, snapshot.width);
+        assert_eq!(self.height, snapshot.height);
+        assert_eq!(self.scanout_type, snapshot.scanout_type);
+        assert_eq!(self.scanout_id, snapshot.scanout_id);
+        assert_eq!(self.display_params, snapshot.display_params);
+
+        self.resource_id = snapshot.resource_id;
+        if snapshot.has_surface {
+            self.create_surface(display, parent_surface_id)?;
+        } else {
+            self.release_surface(display);
+        }
+        if let Some((x, y)) = snapshot.position {
+            self.set_position(display, x, y)?;
+        }
+
+        Ok(OkNoData)
     }
 
     fn create_surface(
@@ -193,9 +304,15 @@ impl VirtioGpuScanout {
         self.surface_id = None;
     }
 
-    fn set_position(&self, display: &Rc<RefCell<GpuDisplay>>, x: u32, y: u32) -> VirtioGpuResult {
+    fn set_position(
+        &mut self,
+        display: &Rc<RefCell<GpuDisplay>>,
+        x: u32,
+        y: u32,
+    ) -> VirtioGpuResult {
         if let Some(surface_id) = self.surface_id {
             display.borrow_mut().set_position(surface_id, x, y)?;
+            self.position = Some((x, y));
         }
         Ok(OkNoData)
     }
@@ -239,12 +356,11 @@ impl VirtioGpuScanout {
 
         let mut transfer = Transfer3D::new_2d(0, 0, self.width, self.height);
         transfer.stride = fb.stride();
-        rutabaga.transfer_read(
-            0,
-            resource.resource_id,
-            transfer,
-            Some(fb.as_volatile_slice()),
-        )?;
+        let fb_slice = fb.as_volatile_slice();
+        let buf = IoSliceMut::new(unsafe {
+            std::slice::from_raw_parts_mut(fb_slice.as_mut_ptr(), fb_slice.size())
+        });
+        rutabaga.transfer_read(0, resource.resource_id, transfer, Some(buf))?;
 
         display.flip(surface_id);
         Ok(OkNoData)
@@ -302,13 +418,44 @@ pub struct VirtioGpu {
     scanouts: Map<u32, VirtioGpuScanout>,
     scanouts_updated: Arc<AtomicBool>,
     cursor_scanout: VirtioGpuScanout,
-    // Maps event devices to scanout number.
-    event_devices: Map<u32, u32>,
     mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
     rutabaga: Rutabaga,
     resources: Map<u32, VirtioGpuResource>,
     external_blob: bool,
     udmabuf_driver: Option<UdmabufDriver>,
+}
+
+// Only the 2D mode is supported. Notes on `VirtioGpu` fields:
+//
+//   * display: re-initialized from scratch using the scanout snapshots
+//   * scanouts: snapshot'd
+//   * scanouts_updated: snapshot'd
+//   * cursor_scanout: snapshot'd
+//   * mapper: not needed for 2d mode
+//   * rutabaga: re-initialized from scatch using the resource snapshots
+//   * resources: snapshot'd
+//   * external_blob: not needed for 2d mode
+//   * udmabuf_driver: not needed for 2d mode
+#[derive(Serialize, Deserialize)]
+pub struct VirtioGpuSnapshot {
+    scanouts: Map<u32, VirtioGpuScanoutSnapshot>,
+    scanouts_updated: bool,
+    cursor_scanout: VirtioGpuScanoutSnapshot,
+    rutabaga: Vec<u8>,
+    resources: Map<u32, VirtioGpuResourceSnapshot>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RutabagaResourceSnapshotSerializable {
+    resource_id: u32,
+
+    width: u32,
+    height: u32,
+    host_mem_size: usize,
+
+    backing_iovecs: Option<Vec<(GuestAddress, usize)>>,
+    component_mask: u8,
+    size: u64,
 }
 
 fn sglist_to_rutabaga_iovecs(
@@ -345,21 +492,11 @@ impl VirtioGpu {
         display: GpuDisplay,
         display_params: Vec<GpuDisplayParameters>,
         display_event: Arc<AtomicBool>,
-        rutabaga_builder: RutabagaBuilder,
-        event_devices: Vec<EventDevice>,
+        rutabaga: Rutabaga,
         mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
         external_blob: bool,
         udmabuf: bool,
-        fence_handler: RutabagaFenceHandler,
-        rutabaga_server_descriptor: Option<SafeDescriptor>,
     ) -> Option<VirtioGpu> {
-        let server_descriptor = rutabaga_server_descriptor.map(to_rutabaga_descriptor);
-
-        let rutabaga = rutabaga_builder
-            .build(fence_handler, server_descriptor)
-            .map_err(|e| error!("failed to build rutabaga {}", e))
-            .ok()?;
-
         let mut udmabuf_driver = None;
         if udmabuf {
             udmabuf_driver = Some(
@@ -381,38 +518,23 @@ impl VirtioGpu {
             .collect::<Map<_, _>>();
         let cursor_scanout = VirtioGpuScanout::new_cursor();
 
-        let mut virtio_gpu = VirtioGpu {
+        Some(VirtioGpu {
             display: Rc::new(RefCell::new(display)),
             scanouts,
             scanouts_updated: display_event,
             cursor_scanout,
-            event_devices: Default::default(),
             mapper,
             rutabaga,
             resources: Default::default(),
             external_blob,
             udmabuf_driver,
-        };
-
-        for event_device in event_devices {
-            virtio_gpu
-                .import_event_device(event_device, 0)
-                .map_err(|e| error!("failed to import event device {}", e))
-                .ok()?;
-        }
-
-        Some(virtio_gpu)
+        })
     }
 
     /// Imports the event device
-    pub fn import_event_device(
-        &mut self,
-        event_device: EventDevice,
-        scanout_id: u32,
-    ) -> VirtioGpuResult {
+    pub fn import_event_device(&mut self, event_device: EventDevice) -> VirtioGpuResult {
         let mut display = self.display.borrow_mut();
-        let event_device_id = display.import_event_device(event_device)?;
-        self.event_devices.insert(event_device_id, scanout_id);
+        let _event_device_id = display.import_event_device(event_device)?;
         Ok(OkNoData)
     }
 
@@ -662,6 +784,7 @@ impl VirtioGpu {
                 },
             ],
             modifier: q.modifier,
+            guest_cpu_mappable: q.guest_cpu_mappable,
         }))
     }
 
@@ -744,14 +867,26 @@ impl VirtioGpu {
         mem: &GuestMemory,
         vecs: Vec<(GuestAddress, usize)>,
     ) -> VirtioGpuResult {
+        let resource = self
+            .resources
+            .get_mut(&resource_id)
+            .ok_or(ErrInvalidResourceId)?;
+
         let rutabaga_iovecs = sglist_to_rutabaga_iovecs(&vecs[..], mem).map_err(|_| ErrUnspec)?;
         self.rutabaga.attach_backing(resource_id, rutabaga_iovecs)?;
+        resource.backing_iovecs = Some(vecs);
         Ok(OkNoData)
     }
 
     /// Detaches any previously attached iovecs from the resource.
     pub fn detach_backing(&mut self, resource_id: u32) -> VirtioGpuResult {
+        let resource = self
+            .resources
+            .get_mut(&resource_id)
+            .ok_or(ErrInvalidResourceId)?;
+
         self.rutabaga.detach_backing(resource_id)?;
+        resource.backing_iovecs = None;
         Ok(OkNoData)
     }
 
@@ -794,6 +929,9 @@ impl VirtioGpu {
         transfer: Transfer3D,
         buf: Option<VolatileSlice>,
     ) -> VirtioGpuResult {
+        let buf = buf.map(|vs| {
+            IoSliceMut::new(unsafe { std::slice::from_raw_parts_mut(vs.as_mut_ptr(), vs.size()) })
+        });
         self.rutabaga
             .transfer_read(ctx_id, resource_id, transfer, buf)?;
         Ok(OkNoData)
@@ -888,15 +1026,25 @@ impl VirtioGpu {
             });
         };
 
+        let prot = match map_info & RUTABAGA_MAP_ACCESS_MASK {
+            RUTABAGA_MAP_ACCESS_READ => Protection::read(),
+            RUTABAGA_MAP_ACCESS_WRITE => Protection::write(),
+            RUTABAGA_MAP_ACCESS_RW => Protection::read_write(),
+            _ => return Err(ErrUnspec),
+        };
+
         self.mapper
             .lock()
             .as_mut()
             .expect("No backend request connection found")
-            .add_mapping(source.unwrap(), offset, Protection::read_write())
+            .add_mapping(source.unwrap(), offset, prot)
             .map_err(|_| ErrUnspec)?;
 
         resource.shmem_offset = Some(offset);
-        Ok(OkMapInfo { map_info })
+        // Access flags not a part of the virtio-gpu spec.
+        Ok(OkMapInfo {
+            map_info: map_info & RUTABAGA_MAP_CACHE_MASK,
+        })
     }
 
     /// Uses the hypervisor to unmap the blob resource.
@@ -968,8 +1116,13 @@ impl VirtioGpu {
     }
 
     /// Submits a command buffer to a rutabaga context.
-    pub fn submit_command(&mut self, ctx_id: u32, commands: &mut [u8]) -> VirtioGpuResult {
-        self.rutabaga.submit_command(ctx_id, commands)?;
+    pub fn submit_command(
+        &mut self,
+        ctx_id: u32,
+        commands: &mut [u8],
+        fence_ids: &[u64],
+    ) -> VirtioGpuResult {
+        self.rutabaga.submit_command(ctx_id, commands, fence_ids)?;
         Ok(OkNoData)
     }
 
@@ -1001,7 +1154,7 @@ impl VirtioGpu {
         scanout_data: Option<VirtioScanoutBlobData>,
         resource_id: u32,
     ) -> VirtioGpuResult {
-        let mut scanout: &mut VirtioGpuScanout;
+        let scanout: &mut VirtioGpuScanout;
         let mut scanout_parent_surface_id = None;
 
         match scanout_type {
@@ -1062,5 +1215,71 @@ impl VirtioGpu {
         scanout.resource_id = Some(resource_id);
 
         Ok(OkNoData)
+    }
+
+    pub fn snapshot(&self) -> anyhow::Result<VirtioGpuSnapshot> {
+        Ok(VirtioGpuSnapshot {
+            scanouts: self
+                .scanouts
+                .iter()
+                .map(|(i, s)| (*i, s.snapshot()))
+                .collect(),
+            scanouts_updated: self.scanouts_updated.load(Ordering::SeqCst),
+            cursor_scanout: self.cursor_scanout.snapshot(),
+            rutabaga: {
+                let mut buffer = std::io::Cursor::new(Vec::new());
+                self.rutabaga
+                    .snapshot(&mut buffer)
+                    .context("failed to snapshot rutabaga")?;
+                buffer.into_inner()
+            },
+            resources: self
+                .resources
+                .iter()
+                .map(|(i, r)| (*i, r.snapshot()))
+                .collect(),
+        })
+    }
+
+    pub fn restore(
+        &mut self,
+        snapshot: VirtioGpuSnapshot,
+        mem: &GuestMemory,
+    ) -> anyhow::Result<()> {
+        assert!(self.scanouts.keys().eq(snapshot.scanouts.keys()));
+        for (i, s) in snapshot.scanouts.into_iter() {
+            self.scanouts.get_mut(&i).unwrap().restore(
+                s,
+                // Only the cursor scanout can have a parent.
+                None,
+                &self.display,
+            )?;
+        }
+        self.scanouts_updated
+            .store(snapshot.scanouts_updated, Ordering::SeqCst);
+
+        let cursor_parent_surface_id = snapshot
+            .cursor_scanout
+            .parent_scanout_id
+            .and_then(|i| self.scanouts.get(&i).unwrap().surface_id);
+        self.cursor_scanout.restore(
+            snapshot.cursor_scanout,
+            cursor_parent_surface_id,
+            &self.display,
+        )?;
+
+        self.rutabaga
+            .restore(&mut &snapshot.rutabaga[..])
+            .context("failed to restore rutabaga")?;
+
+        for (id, s) in snapshot.resources.into_iter() {
+            let backing_iovecs = s.backing_iovecs.clone();
+            self.resources.insert(id, VirtioGpuResource::restore(s));
+            if let Some(backing_iovecs) = backing_iovecs {
+                self.attach_backing(id, mem, backing_iovecs)?;
+            }
+        }
+
+        Ok(())
     }
 }

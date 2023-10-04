@@ -17,15 +17,18 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use delegate::wire_format::DelegateMessage;
 use libc::O_DIRECT;
+use serde_json::StreamDeserializer;
 use tempfile::TempDir;
 
 use crate::utils::find_crosvm_binary;
-use crate::utils::run_with_timeout;
+use crate::utils::run_with_status_check;
 use crate::vm::local_path_from_url;
 use crate::vm::Config;
 
@@ -60,7 +63,15 @@ pub struct TestVmSys {
     /// Maintain ownership of test_dir until the vm is destroyed.
     #[allow(dead_code)]
     pub test_dir: TempDir,
-    pub from_guest_reader: Arc<Mutex<BufReader<File>>>,
+    pub from_guest_reader: Arc<
+        Mutex<
+            StreamDeserializer<
+                'static,
+                serde_json::de::IoRead<BufReader<std::fs::File>>,
+                DelegateMessage,
+            >,
+        >,
+    >,
     pub to_guest: Arc<Mutex<File>>,
     pub control_socket_path: PathBuf,
     pub process: Option<Child>, // Use `Option` to allow taking the ownership in `Drop::drop()`.
@@ -106,11 +117,12 @@ impl TestVmSys {
     }
 
     /// Configures the VM rootfs to load from the guest_under_test assets.
-    fn configure_rootfs(command: &mut Command, o_direct: bool, path: &Path) {
+    fn configure_rootfs(command: &mut Command, o_direct: bool, rw: bool, path: &Path) {
         let rootfs_and_option = format!(
-            "{}{},ro,root",
+            "{}{}{},root",
             path.as_os_str().to_str().unwrap(),
-            if o_direct { ",direct=true" } else { "" }
+            if o_direct { ",direct=true" } else { "" },
+            if rw { "" } else { ",ro" }
         );
         command
             .args(["--block", &rootfs_and_option])
@@ -172,19 +184,32 @@ impl TestVmSys {
         command.args(&cfg.extra_args);
 
         println!("$ {:?}", command);
-        let mut process = Some(command.spawn()?);
+        let mut process = command.spawn()?;
 
-        // Open pipes. Apply timeout to `from_guest` since it will block until crosvm opens the
-        // other end.
-        let to_guest = File::create(to_guest_pipe)?;
-        let from_guest = match run_with_timeout(
-            move || File::open(from_guest_pipe),
-            VM_COMMUNICATION_TIMEOUT,
+        // Open pipes. Apply timeout to `to_guest` and `from_guest` since it will block until crosvm
+        // opens the other end.
+        let start = Instant::now();
+        let (to_guest, from_guest) = match run_with_status_check(
+            move || (File::create(to_guest_pipe), File::open(from_guest_pipe)),
+            Duration::from_millis(200),
+            || {
+                if start.elapsed() > VM_COMMUNICATION_TIMEOUT {
+                    return false;
+                }
+                if let Some(wait_result) = process.try_wait().unwrap() {
+                    println!("crosvm unexpectedly exited: {:?}", wait_result);
+                    false
+                } else {
+                    true
+                }
+            },
         ) {
-            Ok(from_guest) => from_guest.with_context(|| "Cannot open from_guest pipe")?,
+            Ok((to_guest, from_guest)) => (
+                to_guest.context("Cannot open to_guest pipe")?,
+                from_guest.context("Cannot open from_guest pipe")?,
+            ),
             Err(error) => {
                 // Kill the crosvm process if we cannot connect in time.
-                let mut process = process.take().unwrap();
                 process.kill().unwrap();
                 process.wait().unwrap();
                 panic!("Cannot connect to VM: {}", error);
@@ -193,10 +218,12 @@ impl TestVmSys {
 
         Ok(TestVmSys {
             test_dir,
-            from_guest_reader: Arc::new(Mutex::new(BufReader::new(from_guest))),
+            from_guest_reader: Arc::new(Mutex::new(
+                serde_json::Deserializer::from_reader(BufReader::new(from_guest)).into_iter(),
+            )),
             to_guest: Arc::new(Mutex::new(to_guest)),
             control_socket_path,
-            process,
+            process: Some(process),
         })
     }
 
@@ -211,7 +238,36 @@ impl TestVmSys {
         command.args(["--socket", test_dir.join(CONTROL_PIPE).to_str().unwrap()]);
 
         if let Some(rootfs_url) = &cfg.rootfs_url {
-            TestVmSys::configure_rootfs(command, cfg.o_direct, &local_path_from_url(rootfs_url));
+            if cfg.rootfs_rw {
+                std::fs::copy(
+                    match cfg.rootfs_compressed {
+                        true => local_path_from_url(rootfs_url).with_extension("raw"),
+                        false => local_path_from_url(rootfs_url),
+                    },
+                    test_dir.join("rw_rootfs.img"),
+                )
+                .unwrap();
+                TestVmSys::configure_rootfs(
+                    command,
+                    cfg.o_direct,
+                    true,
+                    &test_dir.join("rw_rootfs.img"),
+                );
+            } else if cfg.rootfs_compressed {
+                TestVmSys::configure_rootfs(
+                    command,
+                    cfg.o_direct,
+                    false,
+                    &local_path_from_url(rootfs_url).with_extension("raw"),
+                );
+            } else {
+                TestVmSys::configure_rootfs(
+                    command,
+                    cfg.o_direct,
+                    false,
+                    &local_path_from_url(rootfs_url),
+                );
+            }
         };
 
         // Set initrd if being requested
@@ -304,7 +360,12 @@ impl TestVmSys {
         Ok(())
     }
 
-    pub fn crosvm_command(&self, command: &str, mut args: Vec<String>, sudo: bool) -> Result<()> {
+    pub fn crosvm_command(
+        &self,
+        command: &str,
+        mut args: Vec<String>,
+        sudo: bool,
+    ) -> Result<Vec<u8>> {
         args.push(self.control_socket_path.to_str().unwrap().to_string());
 
         println!("$ crosvm {} {:?}", command, &args.join(" "));
@@ -323,7 +384,7 @@ impl TestVmSys {
         if !output.status.success() {
             Err(anyhow!("Command failed with exit code {}", output.status))
         } else {
-            Ok(())
+            Ok(output.stdout)
         }
     }
 }

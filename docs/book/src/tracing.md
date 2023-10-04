@@ -15,7 +15,7 @@ The currently supported backends are:
 - [`trace_marker`](https://crosvm.dev/doc/cros_tracing/trace_marker/index.html):
   [ftrace](https://docs.kernel.org/trace/ftrace.html) backend to log trace events to the Linux
   kernel. Only supported on Linux systems. Enabled by compiling crosvm with the
-  `--features trace_marker` flag.
+  `--features trace_marker` flag. (On CrOS it is USE flag `crosvm-trace-marker`)
 
 ## cros_tracing Overview
 
@@ -45,6 +45,7 @@ The categories that are currently supported by cros_tracing are:
 
 - VirtioFs
 - VirtioNet
+- USB
 
 ### The trace_marker Backend
 
@@ -99,9 +100,9 @@ If you just need to add a simple one-off trace point, you can use `trace_simple_
 (taken from `devices/src/virtio/fs/worker.rs`):
 
 ```rust
-pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
+pub fn process_fs_queue<F: FileSystem + Sync>(
     mem: &GuestMemory,
-    interrupt: &I,
+    interrupt: &Interrupt,
     queue: &mut Queue,
     server: &Arc<fuse::Server<F>>,
     tube: &Arc<Mutex<Tube>>,
@@ -133,9 +134,9 @@ So far so good, but to get the most out of it you might want to record how long 
 to run and some extra parameters. In that case you want to use `trace_event!()` instead:
 
 ```rust
-pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
+pub fn process_fs_queue<F: FileSystem + Sync>(
     mem: &GuestMemory,
-    interrupt: &I,
+    interrupt: &Interrupt,
     queue: &mut Queue,
     server: &Arc<fuse::Server<F>>,
     tube: &Arc<Mutex<Tube>>,

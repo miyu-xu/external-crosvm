@@ -7,6 +7,7 @@ use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::rc::Rc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use audio_streams::capture::AsyncCaptureBuffer;
@@ -17,6 +18,7 @@ use cros_async::sync::Condvar;
 use cros_async::sync::RwLock as AsyncRwLock;
 use cros_async::EventAsync;
 use cros_async::Executor;
+use cros_async::TimerAsync;
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use futures::pin_mut;
@@ -25,7 +27,6 @@ use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
 use thiserror::Error as ThisError;
-use vm_memory::GuestMemory;
 #[cfg(windows)]
 use win_audio::AudioSharedFormat;
 use zerocopy::AsBytes;
@@ -41,9 +42,9 @@ use crate::virtio::snd::common_backend::PcmResponse;
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::layout::*;
 use crate::virtio::DescriptorChain;
+use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::Writer;
 
 // TODO(b/246601226): Remove once a generic audio_stream solution that can accpet
@@ -328,8 +329,19 @@ pub async fn start_pcm_worker(
     mut desc_receiver: mpsc::UnboundedReceiver<DescriptorChain>,
     status_mutex: Rc<AsyncRwLock<WorkerStatus>>,
     mut sender: mpsc::UnboundedSender<PcmResponse>,
+    period_dur: Duration,
+    release_signal: Rc<(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
-    let res = pcm_worker_loop(ex, dstream, &mut desc_receiver, &status_mutex, &mut sender).await;
+    let res = pcm_worker_loop(
+        ex,
+        dstream,
+        &mut desc_receiver,
+        &status_mutex,
+        &mut sender,
+        period_dur,
+        release_signal,
+    )
+    .await;
     *status_mutex.lock().await = WorkerStatus::Quit;
     if res.is_err() {
         error!(
@@ -349,14 +361,33 @@ async fn pcm_worker_loop(
     desc_receiver: &mut mpsc::UnboundedReceiver<DescriptorChain>,
     status_mutex: &Rc<AsyncRwLock<WorkerStatus>>,
     sender: &mut mpsc::UnboundedSender<PcmResponse>,
+    period_dur: Duration,
+    release_signal: Rc<(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
+    let on_release = async {
+        await_reset_signal(Some(&*release_signal)).await;
+        // After receiving release signal, wait for up to 2 periods,
+        // giving it a chance to respond to the last buffer.
+        if let Err(e) = TimerAsync::sleep(&ex, period_dur * 2).await {
+            error!("Error on sleep after receiving reset signal: {}", e)
+        }
+    }
+    .fuse();
+    pin_mut!(on_release);
+
     match dstream {
         #[allow(unused_mut)]
         DirectionalStream::Output(mut stream, mut buffer_writer) => loop {
-            let dst_buf = stream
-                .next_playback_buffer(&ex)
-                .await
-                .map_err(Error::FetchBuffer)?;
+            let next_buf = stream.next_playback_buffer(&ex).fuse();
+            pin_mut!(next_buf);
+
+            let dst_buf = select! {
+                _ = on_release => {
+                    drain_desc_receiver(desc_receiver, sender).await?;
+                    break Ok(());
+                },
+                buf = next_buf => buf.map_err(Error::FetchBuffer)?,
+            };
             let worker_status = status_mutex.lock().await;
             match *worker_status {
                 WorkerStatus::Quit => {
@@ -410,10 +441,16 @@ async fn pcm_worker_loop(
             }
         },
         DirectionalStream::Input(mut stream, period_bytes) => loop {
-            let src_buf = stream
-                .next_capture_buffer(&ex)
-                .await
-                .map_err(Error::FetchBuffer)?;
+            let next_buf = stream.next_capture_buffer(&ex).fuse();
+            pin_mut!(next_buf);
+
+            let src_buf = select! {
+                _ = on_release => {
+                    drain_desc_receiver(desc_receiver, sender).await?;
+                    break Ok(());
+                },
+                buf = next_buf => buf.map_err(Error::FetchBuffer)?,
+            };
 
             let worker_status = status_mutex.lock().await;
             match *worker_status {
@@ -472,11 +509,10 @@ async fn defer_pcm_response_to_worker(
         .map_err(Error::MpscSend)
 }
 
-fn send_pcm_response<I: SignalableInterrupt>(
+fn send_pcm_response(
     mut desc_chain: DescriptorChain,
-    mem: &GuestMemory,
     queue: &mut Queue,
-    interrupt: &I,
+    interrupt: &Interrupt,
     status: virtio_snd_pcm_status,
 ) -> Result<(), Error> {
     let writer = &mut desc_chain.writer;
@@ -488,8 +524,8 @@ fn send_pcm_response<I: SignalableInterrupt>(
     }
     writer.write_obj(status).map_err(Error::WriteResponse)?;
     let len = writer.bytes_written() as u32;
-    queue.add_used(mem, desc_chain, len);
-    queue.trigger_interrupt(mem, interrupt);
+    queue.add_used(desc_chain, len);
+    queue.trigger_interrupt(interrupt);
     Ok(())
 }
 
@@ -506,10 +542,9 @@ async fn await_reset_signal(reset_signal_option: Option<&(AsyncRwLock<bool>, Con
     };
 }
 
-pub async fn send_pcm_response_worker<I: SignalableInterrupt>(
-    mem: &GuestMemory,
+pub async fn send_pcm_response_worker(
     queue: Rc<AsyncRwLock<Queue>>,
-    interrupt: I,
+    interrupt: Interrupt,
     recv: &mut mpsc::UnboundedReceiver<PcmResponse>,
     reset_signal: Option<&(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
@@ -526,13 +561,7 @@ pub async fn send_pcm_response_worker<I: SignalableInterrupt>(
         };
 
         if let Some(r) = res {
-            send_pcm_response(
-                r.desc_chain,
-                mem,
-                &mut *queue.lock().await,
-                &interrupt,
-                r.status,
-            )?;
+            send_pcm_response(r.desc_chain, &mut *queue.lock().await, &interrupt, r.status)?;
 
             // Resume pcm_worker
             if let Some(done) = r.done {
@@ -549,7 +578,6 @@ pub async fn send_pcm_response_worker<I: SignalableInterrupt>(
 /// Handle messages from the tx or the rx queue. One invocation is needed for
 /// each queue.
 pub async fn handle_pcm_queue(
-    mem: &GuestMemory,
     streams: &Rc<AsyncRwLock<Vec<AsyncRwLock<StreamInfo>>>>,
     mut response_sender: mpsc::UnboundedSender<PcmResponse>,
     queue: Rc<AsyncRwLock<Queue>>,
@@ -564,7 +592,7 @@ pub async fn handle_pcm_queue(
         let next_async = async {
             loop {
                 // Check if there are more descriptors available.
-                if let Some(chain) = queue.lock().await.pop(mem) {
+                if let Some(chain) = queue.lock().await.pop() {
                     return Ok(chain);
                 }
                 queue_event.next_val().await?;
@@ -631,14 +659,13 @@ pub async fn handle_pcm_queue(
 }
 
 /// Handle all the control messages from the ctrl queue.
-pub async fn handle_ctrl_queue<I: SignalableInterrupt>(
+pub async fn handle_ctrl_queue(
     ex: &Executor,
-    mem: &GuestMemory,
     streams: &Rc<AsyncRwLock<Vec<AsyncRwLock<StreamInfo>>>>,
     snd_data: &SndData,
     queue: Rc<AsyncRwLock<Queue>>,
     queue_event: &mut EventAsync,
-    interrupt: I,
+    interrupt: Interrupt,
     tx_send: mpsc::UnboundedSender<PcmResponse>,
     rx_send: mpsc::UnboundedSender<PcmResponse>,
     reset_signal: Option<&(AsyncRwLock<bool>, Condvar)>,
@@ -649,7 +676,7 @@ pub async fn handle_ctrl_queue<I: SignalableInterrupt>(
     let mut queue = queue.lock().await;
     loop {
         let mut desc_chain = {
-            let next_async = queue.next_async(mem, queue_event).fuse();
+            let next_async = queue.next_async(queue_event).fuse();
             pin_mut!(next_async);
 
             select! {
@@ -871,27 +898,26 @@ pub async fn handle_ctrl_queue<I: SignalableInterrupt>(
 
         handle_ctrl_msg.await?;
         let len = writer.bytes_written() as u32;
-        queue.add_used(mem, desc_chain, len);
-        queue.trigger_interrupt(mem, &interrupt);
+        queue.add_used(desc_chain, len);
+        queue.trigger_interrupt(&interrupt);
     }
     Ok(())
 }
 
 /// Send events to the audio driver.
-pub async fn handle_event_queue<I: SignalableInterrupt>(
-    mem: &GuestMemory,
+pub async fn handle_event_queue(
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: I,
+    interrupt: Interrupt,
 ) -> Result<(), Error> {
     loop {
         let desc_chain = queue
-            .next_async(mem, &mut queue_event)
+            .next_async(&mut queue_event)
             .await
             .map_err(Error::Async)?;
 
         // TODO(woodychow): Poll and forward events from cras asynchronously (API to be added)
-        queue.add_used(mem, desc_chain, 0);
-        queue.trigger_interrupt(mem, &interrupt);
+        queue.add_used(desc_chain, 0);
+        queue.trigger_interrupt(&interrupt);
     }
 }

@@ -9,7 +9,7 @@
 pub mod asynchronous;
 mod sys;
 
-use std::collections::BTreeMap as Map;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
@@ -48,7 +48,6 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 
 pub(crate) const QUEUE_SIZE: u16 = 256;
@@ -78,13 +77,11 @@ pub struct virtio_console_config {
 ///
 /// # Arguments
 ///
-/// * `mem` - The GuestMemory to write the data into
-/// * `interrupt` - SignalableInterrupt used to signal that the queue has been used
+/// * `interrupt` - Interrupt used to signal that the queue has been used
 /// * `buffer` - Ring buffer providing data to put into the guest
 /// * `receive_queue` - The receive virtio Queue
-fn handle_input<I: SignalableInterrupt>(
-    mem: &GuestMemory,
-    interrupt: &I,
+fn handle_input(
+    interrupt: &Interrupt,
     buffer: &mut VecDeque<u8>,
     receive_queue: &Arc<Mutex<Queue>>,
 ) -> result::Result<(), ConsoleError> {
@@ -93,7 +90,7 @@ fn handle_input<I: SignalableInterrupt>(
         .expect("Lock should not be unavailable");
     loop {
         let mut desc = receive_queue
-            .peek(mem)
+            .peek()
             .ok_or(ConsoleError::RxDescriptorsExhausted)?;
 
         let writer = &mut desc.writer;
@@ -111,9 +108,9 @@ fn handle_input<I: SignalableInterrupt>(
         let bytes_written = writer.bytes_written() as u32;
 
         if bytes_written > 0 {
-            receive_queue.pop_peeked(mem);
-            receive_queue.add_used(mem, desc, bytes_written);
-            receive_queue.trigger_interrupt(mem, interrupt);
+            receive_queue.pop_peeked();
+            receive_queue.add_used(desc, bytes_written);
+            receive_queue.trigger_interrupt(interrupt);
         }
 
         if bytes_written == 0 {
@@ -141,13 +138,11 @@ fn process_transmit_request(reader: &mut Reader, output: &mut dyn io::Write) -> 
 ///
 /// # Arguments
 ///
-/// * `mem` - The GuestMemory to take the data from
-/// * `interrupt` - SignalableInterrupt used to signal (if required) that the queue has been used
+/// * `interrupt` - Interrupt used to signal (if required) that the queue has been used
 /// * `transmit_queue` - The transmit virtio Queue
 /// * `output` - The output sink we are going to write the data into
-fn process_transmit_queue<I: SignalableInterrupt>(
-    mem: &GuestMemory,
-    interrupt: &I,
+fn process_transmit_queue(
+    interrupt: &Interrupt,
     transmit_queue: &Arc<Mutex<Queue>>,
     output: &mut dyn io::Write,
 ) {
@@ -155,30 +150,27 @@ fn process_transmit_queue<I: SignalableInterrupt>(
     let mut transmit_queue = transmit_queue
         .try_lock()
         .expect("Lock should not be unavailable");
-    while let Some(mut avail_desc) = transmit_queue.pop(mem) {
+    while let Some(mut avail_desc) = transmit_queue.pop() {
         process_transmit_request(&mut avail_desc.reader, output)
             .unwrap_or_else(|e| error!("console: process_transmit_request failed: {}", e));
 
-        transmit_queue.add_used(mem, avail_desc, 0);
+        transmit_queue.add_used(avail_desc, 0);
         needs_interrupt = true;
     }
 
     if needs_interrupt {
-        transmit_queue.trigger_interrupt(mem, interrupt);
+        transmit_queue.trigger_interrupt(interrupt);
     }
 }
 
 struct Worker {
-    mem: GuestMemory,
     interrupt: Interrupt,
     input: Option<Arc<Mutex<VecDeque<u8>>>>,
     output: Box<dyn io::Write + Send>,
     kill_evt: Event,
     in_avail_evt: Event,
     receive_queue: Arc<Mutex<Queue>>,
-    receive_evt: Event,
     transmit_queue: Arc<Mutex<Queue>>,
-    transmit_evt: Event,
 }
 
 impl Worker {
@@ -193,8 +185,14 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.transmit_evt, Token::TransmitQueueAvailable),
-            (&self.receive_evt, Token::ReceiveQueueAvailable),
+            (
+                self.transmit_queue.lock().event(),
+                Token::TransmitQueueAvailable,
+            ),
+            (
+                self.receive_queue.lock().event(),
+                Token::ReceiveQueueAvailable,
+            ),
             (&self.in_avail_evt, Token::InputAvailable),
             (&self.kill_evt, Token::Kill),
         ])?;
@@ -209,23 +207,25 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::TransmitQueueAvailable => {
-                        self.transmit_evt
+                        self.transmit_queue
+                            .lock()
+                            .event()
                             .wait()
                             .context("failed reading transmit queue Event")?;
                         process_transmit_queue(
-                            &self.mem,
                             &self.interrupt,
                             &self.transmit_queue,
                             &mut self.output,
                         );
                     }
                     Token::ReceiveQueueAvailable => {
-                        self.receive_evt
+                        self.receive_queue
+                            .lock()
+                            .event()
                             .wait()
                             .context("failed reading receive queue Event")?;
                         if let Some(in_buf_ref) = self.input.as_ref() {
                             let _ = handle_input(
-                                &self.mem,
                                 &self.interrupt,
                                 in_buf_ref.lock().deref_mut(),
                                 &self.receive_queue,
@@ -238,7 +238,6 @@ impl Worker {
                             .context("failed reading in_avail_evt")?;
                         if let Some(in_buf_ref) = self.input.as_ref() {
                             let _ = handle_input(
-                                &self.mem,
                                 &self.interrupt,
                                 in_buf_ref.lock().deref_mut(),
                                 &self.receive_queue,
@@ -333,16 +332,16 @@ impl VirtioDevice for Console {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() < 2 {
             return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
-        let (receive_queue, receive_evt) = queues.remove(0);
-        let (transmit_queue, transmit_evt) = queues.remove(0);
+        let receive_queue = queues.remove(&0).unwrap();
+        let transmit_queue = queues.remove(&1).unwrap();
 
         if self.in_avail_evt.is_none() {
             self.in_avail_evt = Some(Event::new().context("failed creating Event")?);
@@ -376,7 +375,6 @@ impl VirtioDevice for Console {
 
         self.worker_thread = Some(WorkerThread::start("v_console", move |kill_evt| {
             let mut worker = Worker {
-                mem,
                 interrupt,
                 input,
                 output,
@@ -384,10 +382,8 @@ impl VirtioDevice for Console {
                 kill_evt,
                 // Device -> driver
                 receive_queue: Arc::new(Mutex::new(receive_queue)),
-                receive_evt,
                 // Driver -> device
                 transmit_queue: Arc::new(Mutex::new(transmit_queue)),
-                transmit_evt,
             };
             if let Err(e) = worker.run() {
                 error!("console run failure: {:?}", e);
@@ -407,7 +403,7 @@ impl VirtioDevice for Console {
         false
     }
 
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
             if let Some(input_thread) = self.input_thread.take() {
                 input_thread.stop();
@@ -428,23 +424,21 @@ impl VirtioDevice for Console {
                     ))
                 }
             };
-            return Ok(Some(Map::from([(0, receive_queue), (1, transmit_queue)])));
+            return Ok(Some(BTreeMap::from([
+                (0, receive_queue),
+                (1, transmit_queue),
+            ])));
         }
         Ok(None)
     }
 
     fn virtio_wake(
         &mut self,
-        queues_state: Option<(GuestMemory, Interrupt, Map<usize, (Queue, Event)>)>,
+        queues_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
     ) -> anyhow::Result<()> {
         match queues_state {
             None => Ok(()),
-            Some((mem, interrupt, mut queues)) => {
-                let queues = vec![
-                    queues.remove(&0).expect("rx queue must be present"),
-                    queues.remove(&1).expect("tx queue must be present"),
-                ];
-
+            Some((mem, interrupt, queues)) => {
                 // TODO(khei): activate is just what we want at the moment, but we should probably move
                 // it into a "start workers" function to make it obvious that it isn't strictly
                 // used for activate events.
@@ -455,7 +449,7 @@ impl VirtioDevice for Console {
     }
 
     fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
-        serde_json::to_value(&ConsoleSnapshot {
+        serde_json::to_value(ConsoleSnapshot {
             // Snapshot base_features as a safeguard when restoring the console device. Saving this
             // info allows us to validate that the proper config was used for the console.
             base_features: self.base_features,

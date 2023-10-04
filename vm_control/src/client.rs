@@ -6,13 +6,18 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 
-use base::open_file;
+#[cfg(feature = "pci-hotplug")]
+use anyhow::anyhow;
+use anyhow::Result as AnyHowResult;
+use base::open_file_or_duplicate;
 use remain::sorted;
 use thiserror::Error;
 
 #[cfg(feature = "gpu")]
 pub use crate::gpu::*;
 pub use crate::sys::handle_request;
+#[cfg(unix)]
+pub use crate::sys::handle_request_with_timeout;
 pub use crate::*;
 
 #[sorted]
@@ -53,11 +58,57 @@ pub fn vms_request<T: AsRef<Path> + std::fmt::Debug>(
     }
 }
 
+#[cfg(feature = "pci-hotplug")]
+/// Send a `VmRequest` for PCI hotplug that expects `VmResponse::PciResponse::AddOk(bus)`
+pub fn do_net_add<T: AsRef<Path> + std::fmt::Debug>(
+    tap_name: &str,
+    socket_path: T,
+) -> AnyHowResult<u8> {
+    let request = VmRequest::HotPlugNetCommand(NetControlCommand::AddTap(tap_name.to_owned()));
+    let response = handle_request(&request, socket_path).map_err(|()| anyhow!("socket error: "))?;
+    match response {
+        VmResponse::PciHotPlugResponse { bus } => Ok(bus),
+        e => Err(anyhow!("Unexpected response: {:#}", e)),
+    }
+}
+
+#[cfg(not(feature = "pci-hotplug"))]
+/// Send a `VmRequest` for PCI hotplug that expects `VmResponse::PciResponse::AddOk(bus)`
+pub fn do_net_add<T: AsRef<Path> + std::fmt::Debug>(
+    _tap_name: &str,
+    _socket_path: T,
+) -> AnyHowResult<u8> {
+    bail!("Unsupported: pci-hotplug feature disabled");
+}
+
+#[cfg(feature = "pci-hotplug")]
+/// Send a `VmRequest` for removing hotplugged PCI device that expects `VmResponse::Ok`
+pub fn do_net_remove<T: AsRef<Path> + std::fmt::Debug>(
+    bus_num: u8,
+    socket_path: T,
+) -> AnyHowResult<()> {
+    let request = VmRequest::HotPlugNetCommand(NetControlCommand::RemoveTap(bus_num));
+    let response = handle_request(&request, socket_path).map_err(|()| anyhow!("socket error: "))?;
+    match response {
+        VmResponse::Ok => Ok(()),
+        e => Err(anyhow!("Unexpected response: {:#}", e)),
+    }
+}
+
+#[cfg(not(feature = "pci-hotplug"))]
+/// Send a `VmRequest` for removing hotplugged PCI device that expects `VmResponse::Ok`
+pub fn do_net_remove<T: AsRef<Path> + std::fmt::Debug>(
+    _bus_num: u8,
+    _socket_path: T,
+) -> AnyHowResult<()> {
+    bail!("Unsupported: pci-hotplug feature disabled");
+}
+
 pub fn do_usb_attach<T: AsRef<Path> + std::fmt::Debug>(
     socket_path: T,
     dev_path: &Path,
 ) -> ModifyUsbResult<UsbControlResult> {
-    let usb_file = open_file(dev_path, OpenOptions::new().read(true).write(true))
+    let usb_file = open_file_or_duplicate(dev_path, OpenOptions::new().read(true).write(true))
         .map_err(|e| ModifyUsbError::FailedToOpenDevice(dev_path.into(), e))?;
 
     let request = VmRequest::UsbCommand(UsbControlCommand::AttachDevice { file: usb_file });

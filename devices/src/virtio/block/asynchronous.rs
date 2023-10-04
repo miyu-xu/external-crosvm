@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap as Map;
-
+use std::collections::BTreeMap;
 use std::io;
 use std::io::Write;
 use std::mem::size_of;
+#[cfg(windows)]
+use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::result;
@@ -18,6 +19,7 @@ use std::time::Duration;
 use std::u32;
 
 use anyhow::Context;
+use base::debug;
 use base::error;
 use base::info;
 use base::warn;
@@ -51,6 +53,7 @@ use futures::FutureExt;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error as ThisError;
+use virtio_sys::virtio_config::VIRTIO_F_RING_PACKED;
 use vm_control::DiskControlCommand;
 use vm_control::DiskControlResult;
 use vm_memory::GuestMemory;
@@ -58,6 +61,7 @@ use zerocopy::AsBytes;
 
 use crate::virtio::async_utils;
 use crate::virtio::block::sys::*;
+use crate::virtio::block::DiskOption;
 use crate::virtio::copy_config;
 use crate::virtio::device_constants::block::virtio_blk_config;
 use crate::virtio::device_constants::block::virtio_blk_discard_write_zeroes;
@@ -85,7 +89,6 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
 use crate::virtio::Writer;
 
@@ -150,6 +153,11 @@ pub enum ExecuteError {
     WriteStatus(io::Error),
 }
 
+enum LogLevel {
+    Debug,
+    Error,
+}
+
 impl ExecuteError {
     fn status(&self) -> u8 {
         match self {
@@ -167,6 +175,21 @@ impl ExecuteError {
             ExecuteError::WriteIo { .. } => VIRTIO_BLK_S_IOERR,
             ExecuteError::WriteStatus(_) => VIRTIO_BLK_S_IOERR,
             ExecuteError::Unsupported(_) => VIRTIO_BLK_S_UNSUPP,
+        }
+    }
+
+    fn log_level(&self) -> LogLevel {
+        match self {
+            // Since there is no feature bit for the guest to detect support for
+            // VIRTIO_BLK_T_GET_ID, the driver has to try executing the request to see if it works.
+            ExecuteError::Unsupported(VIRTIO_BLK_T_GET_ID) => LogLevel::Debug,
+            // Log disk I/O errors at debug level to avoid flooding the logs.
+            ExecuteError::ReadIo { .. }
+            | ExecuteError::WriteIo { .. }
+            | ExecuteError::Flush { .. }
+            | ExecuteError::DiscardWriteZeroes { .. } => LogLevel::Debug,
+            // Log all other failures as errors.
+            _ => LogLevel::Error,
         }
     }
 }
@@ -200,6 +223,7 @@ pub type BlockId = [u8; ID_LEN];
 pub struct DiskState {
     pub disk_image: Box<dyn AsyncDisk>,
     pub read_only: bool,
+    pub sparse: bool,
     pub id: Option<BlockId>,
     /// A DiskState is owned by each worker's executor and cannot be shared by workers, thus
     /// `worker_shared_state` holds the state shared by workers in Arc.
@@ -209,7 +233,6 @@ pub struct DiskState {
 /// Disk state which can be modified by other worker threads
 struct WorkerSharedState {
     disk_size: Arc<AtomicU64>,
-    sparse: bool,
 }
 
 impl DiskState {
@@ -224,11 +247,9 @@ impl DiskState {
         DiskState {
             disk_image,
             read_only,
+            sparse,
             id,
-            worker_shared_state: Arc::new(AsyncRwLock::new(WorkerSharedState {
-                disk_size,
-                sparse,
-            })),
+            worker_shared_state: Arc::new(AsyncRwLock::new(WorkerSharedState { disk_size })),
         }
     }
 }
@@ -236,7 +257,7 @@ impl DiskState {
 async fn process_one_request(
     avail_desc: &mut DescriptorChain,
     disk_state: &AsyncRwLock<DiskState>,
-    flush_timer: &RefCell<TimerAsync>,
+    flush_timer: &RefCell<TimerAsync<Timer>>,
     flush_timer_armed: &RefCell<bool>,
 ) -> result::Result<usize, ExecuteError> {
     let reader = &mut avail_desc.reader;
@@ -262,8 +283,9 @@ async fn process_one_request(
     {
         Ok(()) => VIRTIO_BLK_S_OK,
         Err(e) => {
-            if !matches!(e, ExecuteError::Unsupported(VIRTIO_BLK_T_GET_ID)) {
-                error!("failed executing disk request: {}", e);
+            match e.log_level() {
+                LogLevel::Debug => debug!("failed executing disk request: {:#}", e),
+                LogLevel::Error => error!("failed executing disk request: {:#}", e),
             }
             e.status()
         }
@@ -276,13 +298,12 @@ async fn process_one_request(
 }
 
 /// Process one descriptor chain asynchronously.
-pub async fn process_one_chain<I: SignalableInterrupt>(
+pub async fn process_one_chain(
     queue: &RefCell<Queue>,
     mut avail_desc: DescriptorChain,
     disk_state: &AsyncRwLock<DiskState>,
-    mem: &GuestMemory,
-    interrupt: &I,
-    flush_timer: &RefCell<TimerAsync>,
+    interrupt: &Interrupt,
+    flush_timer: &RefCell<TimerAsync<Timer>>,
     flush_timer_armed: &RefCell<bool>,
 ) {
     let len = match process_one_request(&mut avail_desc, disk_state, flush_timer, flush_timer_armed)
@@ -290,26 +311,25 @@ pub async fn process_one_chain<I: SignalableInterrupt>(
     {
         Ok(len) => len,
         Err(e) => {
-            error!("block: failed to handle request: {}", e);
+            error!("block: failed to handle request: {:#}", e);
             0
         }
     };
 
     let mut queue = queue.borrow_mut();
-    queue.add_used(mem, avail_desc, len as u32);
-    queue.trigger_interrupt(mem, interrupt);
+    queue.add_used(avail_desc, len as u32);
+    queue.trigger_interrupt(interrupt);
 }
 
 // There is one async task running `handle_queue` per virtio queue in use.
 // Receives messages from the guest and queues a task to complete the operations with the async
 // executor.
-async fn handle_queue<I: SignalableInterrupt + 'static>(
-    mem: GuestMemory,
+async fn handle_queue(
     disk_state: Rc<AsyncRwLock<DiskState>>,
     queue: Rc<RefCell<Queue>>,
     evt: EventAsync,
-    interrupt: I,
-    flush_timer: Rc<RefCell<TimerAsync>>,
+    interrupt: Interrupt,
+    flush_timer: Rc<RefCell<TimerAsync<Timer>>>,
     flush_timer_armed: Rc<RefCell<bool>>,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Rc<RefCell<Queue>> {
@@ -328,7 +348,7 @@ async fn handle_queue<I: SignalableInterrupt + 'static>(
             res = evt_future => {
                 evt_future.set(evt.next_val().fuse());
                 if let Err(e) = res {
-                    error!("Failed to read the next queue event: {}", e);
+                    error!("Failed to read the next queue event: {:#}", e);
                     continue;
                 }
             }
@@ -339,12 +359,11 @@ async fn handle_queue<I: SignalableInterrupt + 'static>(
                 return queue;
             }
         };
-        while let Some(descriptor_chain) = queue.borrow_mut().pop(&mem) {
+        while let Some(descriptor_chain) = queue.borrow_mut().pop() {
             background_tasks.push(process_one_chain(
                 &queue,
                 descriptor_chain,
                 &disk_state,
-                &mem,
                 &interrupt,
                 &flush_timer,
                 &flush_timer_armed,
@@ -391,7 +410,7 @@ async fn handle_command_tube(
                             match &request.lock().deref() {
                                 VhostBackendReqConnectionState::Connected(frontend) => {
                                     if let Err(e) = frontend.send_config_changed() {
-                                        error!("Failed to notify config change: {}", e);
+                                        error!("Failed to notify config change: {:#}", e);
                                     }
                                 }
                                 VhostBackendReqConnectionState::NoConnection => {
@@ -413,7 +432,7 @@ async fn resize(disk_state: &AsyncRwLock<DiskState>, new_size: u64) -> DiskContr
     let mut disk_state = disk_state.lock().await;
     // Prevent any other worker threads won't be able to do IO.
     let worker_shared_state = Arc::clone(&disk_state.worker_shared_state);
-    let mut worker_shared_state = worker_shared_state.lock().await;
+    let worker_shared_state = worker_shared_state.lock().await;
 
     if disk_state.read_only {
         error!("Attempted to resize read-only block device");
@@ -423,17 +442,17 @@ async fn resize(disk_state: &AsyncRwLock<DiskState>, new_size: u64) -> DiskContr
     info!("Resizing block device to {} bytes", new_size);
 
     if let Err(e) = disk_state.disk_image.set_len(new_size) {
-        error!("Resizing disk failed! {}", e);
+        error!("Resizing disk failed! {:#}", e);
         return DiskControlResult::Err(SysError::new(libc::EIO));
     }
 
     // Allocate new space if the disk image is not sparse.
-    if let Err(e) = disk_state.disk_image.allocate(0, new_size) {
-        error!("Allocating disk space after resize failed! {}", e);
-        return DiskControlResult::Err(SysError::new(libc::EIO));
+    if !disk_state.sparse {
+        if let Err(e) = disk_state.disk_image.allocate(0, new_size) {
+            error!("Allocating disk space after resize failed! {:#}", e);
+            return DiskControlResult::Err(SysError::new(libc::EIO));
+        }
     }
-
-    worker_shared_state.sparse = false;
 
     if let Ok(new_disk_size) = disk_state.disk_image.get_len() {
         worker_shared_state
@@ -446,7 +465,7 @@ async fn resize(disk_state: &AsyncRwLock<DiskState>, new_size: u64) -> DiskContr
 /// Periodically flushes the disk when the given timer fires.
 async fn flush_disk(
     disk_state: Rc<AsyncRwLock<DiskState>>,
-    timer: TimerAsync,
+    timer: TimerAsync<Timer>,
     armed: Rc<RefCell<bool>>,
 ) -> Result<(), ControlError> {
     loop {
@@ -469,13 +488,11 @@ async fn flush_disk(
     }
 }
 
-pub enum WorkerCmd<I: SignalableInterrupt + 'static> {
+pub enum WorkerCmd {
     StartQueue {
         index: usize,
         queue: Queue,
-        kick_evt: Event,
-        interrupt: I,
-        mem: GuestMemory,
+        interrupt: Interrupt,
     },
     StopQueue {
         index: usize,
@@ -491,12 +508,12 @@ pub enum WorkerCmd<I: SignalableInterrupt + 'static> {
 // `disk_state` is wrapped by `AsyncRwLock`, which provides both shared and exclusive locks. It's
 // because the state can be read from the virtqueue task while the control task is processing a
 // resizing command.
-pub async fn run_worker<I: SignalableInterrupt + 'static>(
+pub async fn run_worker(
     ex: &Executor,
     signal: ConfigChangeSignal,
     disk_state: &Rc<AsyncRwLock<DiskState>>,
     control_tube: &Option<AsyncTube>,
-    mut worker_rx: mpsc::UnboundedReceiver<WorkerCmd<I>>,
+    mut worker_rx: mpsc::UnboundedReceiver<WorkerCmd>,
     kill_evt: Event,
     resample_future: impl std::future::Future<Output = anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
@@ -545,10 +562,10 @@ pub async fn run_worker<I: SignalableInterrupt + 'static>(
             worker_cmd = worker_rx.next() => {
                 match worker_cmd {
                     None => anyhow::bail!("worker control channel unexpectedly closed"),
-                    Some(WorkerCmd::StartQueue{index, queue, kick_evt, interrupt, mem}) => {
+                    Some(WorkerCmd::StartQueue{index, queue, interrupt}) => {
                         let (tx, rx) = oneshot::channel();
+                        let kick_evt = queue.event().try_clone().expect("Failed to clone queue event");
                         let (handle_queue_future, remote_handle) = handle_queue(
-                            mem,
                             Rc::clone(disk_state),
                             Rc::new(RefCell::new(queue)),
                             EventAsync::new(kick_evt, ex).expect("Failed to create async event for queue"),
@@ -612,6 +629,9 @@ pub async fn run_worker<I: SignalableInterrupt + 'static>(
 
 /// Virtio device for exposing block level read/write operations on a host file.
 pub struct BlockAsync {
+    // We need to make boot_index public bc the field is used by the main crate to determine boot
+    // order
+    pub boot_index: Option<usize>,
     // We keep these members crate-public as they are accessed by the vhost-user device.
     pub(crate) disk_image: Option<Box<dyn DiskFile>>,
     pub(crate) disk_size: Arc<AtomicU64>,
@@ -626,7 +646,7 @@ pub struct BlockAsync {
     pub(crate) executor_kind: ExecutorKind,
     worker_threads: Vec<(
         WorkerThread<(Box<dyn DiskFile>, Option<Tube>)>,
-        mpsc::UnboundedSender<WorkerCmd<Interrupt>>,
+        mpsc::UnboundedSender<WorkerCmd>,
     )>,
     // Whether to run worker threads in parallel for each queue
     worker_per_queue: bool,
@@ -639,16 +659,20 @@ impl BlockAsync {
     pub fn new(
         base_features: u64,
         disk_image: Box<dyn DiskFile>,
-        read_only: bool,
-        sparse: bool,
-        block_size: u32,
-        multiple_workers: bool,
-        id: Option<BlockId>,
+        disk_option: &DiskOption,
         control_tube: Option<Tube>,
         queue_size: Option<u16>,
-        executor_kind: Option<ExecutorKind>,
         num_queues: Option<u16>,
     ) -> SysResult<BlockAsync> {
+        let read_only = disk_option.read_only;
+        let sparse = disk_option.sparse;
+        let block_size = disk_option.block_size;
+        let packed_queue = disk_option.packed_queue;
+        let id = disk_option.id;
+        let multiple_workers = disk_option.multiple_workers;
+        let executor_kind = disk_option.async_executor;
+        let boot_index = disk_option.bootindex;
+
         if block_size % SECTOR_SIZE as u32 != 0 {
             error!(
                 "Block size {} is not a multiple of {}.",
@@ -678,7 +702,7 @@ impl BlockAsync {
         let queue_sizes = vec![q_size; num_queues as usize];
 
         let avail_features =
-            Self::build_avail_features(base_features, read_only, sparse, multi_queue);
+            Self::build_avail_features(base_features, read_only, sparse, multi_queue, packed_queue);
 
         let seg_max = get_seg_max(q_size);
         let executor_kind = executor_kind.unwrap_or_default();
@@ -698,6 +722,7 @@ impl BlockAsync {
             control_tube,
             executor_kind,
             num_activated_queues: None,
+            boot_index,
         })
     }
 
@@ -707,6 +732,7 @@ impl BlockAsync {
         read_only: bool,
         sparse: bool,
         multi_queue: bool,
+        packed_queue: bool,
     ) -> u64 {
         let mut avail_features = base_features;
         if read_only {
@@ -723,6 +749,9 @@ impl BlockAsync {
         if multi_queue {
             avail_features |= 1 << VIRTIO_BLK_F_MQ;
         }
+        if packed_queue {
+            avail_features |= 1 << VIRTIO_F_RING_PACKED;
+        }
         avail_features
     }
 
@@ -734,7 +763,7 @@ impl BlockAsync {
         reader: &mut Reader,
         writer: &mut Writer,
         disk_state: &AsyncRwLock<DiskState>,
-        flush_timer: &RefCell<TimerAsync>,
+        flush_timer: &RefCell<TimerAsync<Timer>>,
         flush_timer_armed: &RefCell<bool>,
     ) -> result::Result<(), ExecuteError> {
         // Acquire immutable access to prevent tasks from resizing disk.
@@ -821,7 +850,7 @@ impl BlockAsync {
                 }
             }
             VIRTIO_BLK_T_DISCARD | VIRTIO_BLK_T_WRITE_ZEROES => {
-                if req_type == VIRTIO_BLK_T_DISCARD && !worker_shared_state.sparse {
+                if req_type == VIRTIO_BLK_T_DISCARD && !disk_state.sparse {
                     // Discard is a hint; if this is a non-sparse disk, just ignore it.
                     return Ok(());
                 }
@@ -968,9 +997,9 @@ impl VirtioDevice for BlockAsync {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         assert!(self.num_activated_queues.is_none());
         self.num_activated_queues = Some(queues.len());
@@ -989,9 +1018,9 @@ impl VirtioDevice for BlockAsync {
             // 1 queue per 1 worker
             queues
                 .into_iter()
-                .map(|queue| {
+                .map(|entry| {
                     Ok((
-                        vec![queue],
+                        BTreeMap::from([entry]),
                         disk_image
                             .try_clone()
                             .context("Failed to clone a disk image")?,
@@ -1004,28 +1033,24 @@ impl VirtioDevice for BlockAsync {
 
         let shared_state = Arc::new(AsyncRwLock::new(WorkerSharedState {
             disk_size: self.disk_size.clone(),
-            sparse,
         }));
 
         let mut worker_threads = vec![];
         for (queues, disk_image) in queues_per_worker.into_iter() {
-            let mem = mem.clone();
             let shared_state = Arc::clone(&shared_state);
             let interrupt = interrupt.clone();
             let control_tube = self.control_tube.take();
 
             let (worker_tx, worker_rx) = mpsc::unbounded();
             // Add commands to start all the queues before starting the worker.
-            for (index, (queue, event)) in queues.into_iter().enumerate() {
+            for (index, queue) in queues.into_iter() {
                 worker_tx
                     .unbounded_send(WorkerCmd::StartQueue {
                         index,
                         queue,
-                        kick_evt: event,
                         interrupt: interrupt.clone(),
-                        mem: mem.clone(),
                     })
-                    .unwrap_or_else(|_| panic!("worker channel closed early"));
+                    .expect("worker channel closed early");
             }
 
             let worker_thread = WorkerThread::start("virtio_blk", move |kill_evt| {
@@ -1036,31 +1061,40 @@ impl VirtioDevice for BlockAsync {
                     .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
                 let async_image = match disk_image.to_async_disk(&ex) {
                     Ok(d) => d,
-                    Err(e) => panic!("Failed to create async disk {}", e),
+                    Err(e) => panic!("Failed to create async disk {:#}", e),
                 };
                 let disk_state = Rc::new(AsyncRwLock::new(DiskState {
                     disk_image: async_image,
                     read_only,
+                    sparse,
                     id,
                     worker_shared_state: shared_state,
                 }));
 
                 if let Err(err_string) = ex
-                    .run_until(run_worker(
-                        &ex,
-                        ConfigChangeSignal::Interrupt(interrupt.clone()),
-                        &disk_state,
-                        &async_control,
-                        worker_rx,
-                        kill_evt,
-                        async {
-                            // Process any requests to resample the irq value.
-                            async_utils::handle_irq_resample(&ex, interrupt.clone()).await
-                        },
-                    ))
+                    .run_until(async {
+                        let r = run_worker(
+                            &ex,
+                            ConfigChangeSignal::Interrupt(interrupt.clone()),
+                            &disk_state,
+                            &async_control,
+                            worker_rx,
+                            kill_evt,
+                            async {
+                                // Process any requests to resample the irq value.
+                                async_utils::handle_irq_resample(&ex, interrupt.clone()).await
+                            },
+                        )
+                        .await;
+                        // Flush any in-memory disk image state to file.
+                        if let Err(e) = disk_state.lock().await.disk_image.flush().await {
+                            error!("failed to flush disk image when stopping worker: {e:?}");
+                        }
+                        r
+                    })
                     .expect("run_until failed")
                 {
-                    error!("{}", err_string);
+                    error!("{:#}", err_string);
                 }
 
                 let disk_state = match Rc::try_unwrap(disk_state) {
@@ -1093,20 +1127,20 @@ impl VirtioDevice for BlockAsync {
         success
     }
 
-    fn virtio_sleep(&mut self) -> anyhow::Result<Option<Map<usize, Queue>>> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         let num_activated_queues = match self.num_activated_queues {
             Some(x) => x,
             None => return Ok(None), // Not activated.
         };
         // Reclaim the queues from workers.
-        let mut queues = Map::new();
+        let mut queues = BTreeMap::new();
         for index in 0..num_activated_queues {
             let worker_index = if self.worker_per_queue { index } else { 0 };
             let worker_tx = &self.worker_threads[worker_index].1;
             let (response_tx, response_rx) = oneshot::channel();
             worker_tx
                 .unbounded_send(WorkerCmd::StopQueue { index, response_tx })
-                .unwrap_or_else(|_| panic!("worker channel closed early"));
+                .expect("worker channel closed early");
             let queue = cros_async::block_on(async {
                 response_rx
                     .await
@@ -1128,26 +1162,14 @@ impl VirtioDevice for BlockAsync {
 
     fn virtio_wake(
         &mut self,
-        queues_state: Option<(GuestMemory, Interrupt, Map<usize, (Queue, Event)>)>,
+        queues_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
     ) -> anyhow::Result<()> {
         if let Some((mem, interrupt, queues)) = queues_state {
             // TODO: activate is just what we want at the moment, but we should probably move
             // it into a "start workers" function to make it obvious that it isn't strictly
             // used for activate events.
             self.num_activated_queues = None;
-
-            let mut queues_vec: Vec<Option<(Queue, Event)>> = Vec::with_capacity(queues.len());
-            queues_vec.resize_with(queues.len(), || None);
-            for (index, queue_and_event) in queues.into_iter() {
-                queues_vec[index] = Some(queue_and_event)
-            }
-            assert!(
-                !queues_vec.iter().any(|item| item.is_none()),
-                "block queue numbers must be contiguous."
-            );
-            let queues_vec = queues_vec.into_iter().flatten().collect();
-
-            self.activate(mem, interrupt, queues_vec)?;
+            self.activate(mem, interrupt, queues)?;
         }
         Ok(())
     }
@@ -1166,6 +1188,11 @@ impl VirtioDevice for BlockAsync {
         );
         Ok(())
     }
+
+    fn bootorder_fw_cfg(&self, pci_slot: u8) -> Option<(Vec<u8>, usize)> {
+        self.boot_index
+            .map(|s| (format!("scsi@{}/disk@0,0", pci_slot).as_bytes().to_vec(), s))
+    }
 }
 
 #[cfg(test)]
@@ -1183,9 +1210,11 @@ mod tests {
     use vm_memory::GuestAddress;
 
     use super::*;
+    use crate::suspendable_virtio_tests;
     use crate::virtio::base_features;
     use crate::virtio::descriptor_utils::create_descriptor_chain;
     use crate::virtio::descriptor_utils::DescriptorType;
+    use crate::virtio::QueueConfig;
     use crate::virtio::VIRTIO_MSI_NO_VECTOR;
     use crate::IrqLevelEvent;
 
@@ -1195,20 +1224,8 @@ mod tests {
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        let b = BlockAsync::new(
-            features,
-            Box::new(f),
-            true,
-            false,
-            512,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let disk_option = DiskOption::default();
+        let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
         let mut num_sectors = [0u8; 4];
         b.read_config(0, &mut num_sectors);
         // size is 0x1000, so num_sectors is 8 (4096/512).
@@ -1225,20 +1242,12 @@ mod tests {
         f.set_len(0x1000).unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        let b = BlockAsync::new(
-            features,
-            Box::new(f),
-            true,
-            false,
-            4096,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let disk_option = DiskOption {
+            block_size: 4096,
+            sparse: false,
+            ..Default::default()
+        };
+        let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
         let mut blk_size = [0u8; 4];
         b.read_config(20, &mut blk_size);
         // blk_size should be 4096 (0x1000).
@@ -1255,20 +1264,8 @@ mod tests {
         {
             let f = File::create(&path).unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = BlockAsync::new(
-                features,
-                Box::new(f),
-                false,
-                true,
-                512,
-                false,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let disk_option = DiskOption::default();
+            let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
             // writable device should set VIRTIO_BLK_F_FLUSH + VIRTIO_BLK_F_DISCARD
             // + VIRTIO_BLK_F_WRITE_ZEROES + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE
             // + VIRTIO_BLK_F_SEG_MAX + VIRTIO_BLK_F_MQ + VIRTIO_RING_F_EVENT_IDX
@@ -1279,20 +1276,11 @@ mod tests {
         {
             let f = File::create(&path).unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = BlockAsync::new(
-                features,
-                Box::new(f),
-                false,
-                false,
-                512,
-                false,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let disk_option = DiskOption {
+                sparse: false,
+                ..Default::default()
+            };
+            let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
             // writable device should set VIRTIO_F_FLUSH + VIRTIO_BLK_F_RO
             // + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE + VIRTIO_BLK_F_SEG_MAX
             // + VIRTIO_BLK_F_MQ + VIRTIO_RING_F_EVENT_IDX
@@ -1303,20 +1291,11 @@ mod tests {
         {
             let f = File::create(&path).unwrap();
             let features = base_features(ProtectionType::Unprotected);
-            let b = BlockAsync::new(
-                features,
-                Box::new(f),
-                true,
-                true,
-                512,
-                false,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let disk_option = DiskOption {
+                read_only: true,
+                ..Default::default()
+            };
+            let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
             // read-only device should set VIRTIO_BLK_F_RO
             // + VIRTIO_F_VERSION_1 + VIRTIO_BLK_F_BLK_SIZE + VIRTIO_BLK_F_SEG_MAX
             // + VIRTIO_BLK_F_MQ + VIRTIO_RING_F_EVENT_IDX
@@ -1333,20 +1312,8 @@ mod tests {
 
         // Default case
         let f = File::create(&path).unwrap();
-        let b = BlockAsync::new(
-            features,
-            Box::new(f),
-            false,
-            true,
-            512,
-            false,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let disk_option = DiskOption::default();
+        let b = BlockAsync::new(features, Box::new(f), &disk_option, None, None, None).unwrap();
         assert_eq!(
             [DEFAULT_QUEUE_SIZE; DEFAULT_NUM_QUEUES as usize],
             b.queue_max_sizes()
@@ -1354,17 +1321,13 @@ mod tests {
 
         // Single queue of size 128
         let f = File::create(&path).unwrap();
+        let disk_option = DiskOption::default();
         let b = BlockAsync::new(
             features,
             Box::new(f),
-            false,
-            false,
-            512,
-            false,
-            None,
+            &disk_option,
             None,
             Some(128),
-            None,
             Some(1),
         )
         .unwrap();
@@ -1420,10 +1383,10 @@ mod tests {
         let disk_state = Rc::new(AsyncRwLock::new(DiskState {
             disk_image: Box::new(af),
             read_only: false,
+            sparse: true,
             id: None,
             worker_shared_state: Arc::new(AsyncRwLock::new(WorkerSharedState {
                 disk_size: Arc::new(AtomicU64::new(disk_size)),
-                sparse: true,
             })),
         }));
 
@@ -1488,10 +1451,10 @@ mod tests {
         let disk_state = Rc::new(AsyncRwLock::new(DiskState {
             disk_image: Box::new(af),
             read_only: false,
+            sparse: true,
             id: None,
             worker_shared_state: Arc::new(AsyncRwLock::new(WorkerSharedState {
                 disk_size: Arc::new(AtomicU64::new(disk_size)),
-                sparse: true,
             })),
         }));
 
@@ -1558,10 +1521,10 @@ mod tests {
         let disk_state = Rc::new(AsyncRwLock::new(DiskState {
             disk_image: Box::new(af),
             read_only: false,
+            sparse: true,
             id: Some(*id),
             worker_shared_state: Arc::new(AsyncRwLock::new(WorkerSharedState {
                 disk_size: Arc::new(AtomicU64::new(disk_size)),
-                sparse: true,
             })),
         }));
 
@@ -1610,32 +1573,48 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(0u64), 4 * 1024 * 1024)])
             .expect("Creating guest memory failed.");
 
+        // Create a control tube.
+        // NOTE: We don't want to drop the vmm half of the tube. That would cause the worker thread
+        // will immediately fail, which isn't what we want to test in this case.
+        let (_control_tube, control_tube_device) = Tube::pair().unwrap();
+
         // Create a BlockAsync to test
         let features = base_features(ProtectionType::Unprotected);
         let id = b"Block serial number\0";
+        let disk_option = DiskOption {
+            read_only: true,
+            id: Some(*id),
+            sparse: false,
+            multiple_workers: enables_multiple_workers,
+            ..Default::default()
+        };
         let mut b = BlockAsync::new(
             features,
             disk_image.try_clone().unwrap(),
-            true,
-            false,
-            512,
-            enables_multiple_workers,
-            Some(*id),
-            Some(Tube::pair().unwrap().0),
-            None,
+            &disk_option,
+            Some(control_tube_device),
             None,
             None,
         )
         .unwrap();
 
         // activate with queues of an arbitrary size.
+        let mut q0 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         b.activate(
             mem.clone(),
             Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-            ],
+            BTreeMap::from([(0, q0), (1, q1)]),
         )
         .expect("activate should succeed");
         // assert resources are consumed
@@ -1661,13 +1640,22 @@ mod tests {
         assert_eq!(b.id, Some(*b"Block serial number\0"));
 
         // re-activate should succeed
+        let mut q0 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         b.activate(
             mem,
             Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-            ],
+            BTreeMap::from([(0, q0), (1, q1)]),
         )
         .expect("re-activate should succeed");
     }
@@ -1709,32 +1697,36 @@ mod tests {
 
         // Create a BlockAsync to test
         let features = base_features(ProtectionType::Unprotected);
+        let disk_option = DiskOption {
+            multiple_workers: enables_multiple_workers,
+            ..Default::default()
+        };
         let mut b = BlockAsync::new(
             features,
             disk_image.try_clone().unwrap(),
-            false,
-            false,
-            512,
-            enables_multiple_workers,
-            None,
+            &disk_option,
             Some(control_tube_device),
-            None,
             None,
             None,
         )
         .unwrap();
 
         // activate with queues of an arbitrary size.
+        let mut q0 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         let interrupt = Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR);
-        b.activate(
-            mem,
-            interrupt.clone(),
-            vec![
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-            ],
-        )
-        .expect("activate should succeed");
+        b.activate(mem, interrupt.clone(), BTreeMap::from([(0, q0), (1, q1)]))
+            .expect("activate should succeed");
 
         // assert the original size first
         assert_eq!(
@@ -1811,15 +1803,11 @@ mod tests {
 
         // Create a BlockAsync to test with single worker thread
         let features = base_features(ProtectionType::Unprotected);
+        let disk_option = DiskOption::default();
         let mut b = BlockAsync::new(
             features,
             disk_image.try_clone().unwrap(),
-            true,
-            false,
-            512,
-            false, // run with single worker thread
-            None,
-            None,
+            &disk_option,
             None,
             None,
             None,
@@ -1827,13 +1815,22 @@ mod tests {
         .unwrap();
 
         // activate with queues of an arbitrary size.
+        let mut q0 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         b.activate(
             mem.clone(),
             Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-            ],
+            BTreeMap::from([(0, q0), (1, q1)]),
         )
         .expect("activate should succeed");
 
@@ -1842,22 +1839,73 @@ mod tests {
 
         // Create a BlockAsync to test with multiple worker threads
         let features = base_features(ProtectionType::Unprotected);
-        let mut b = BlockAsync::new(
-            features, disk_image, true, false, 512, true, None, None, None, None, None,
-        )
-        .unwrap();
+        let disk_option = DiskOption {
+            read_only: true,
+            sparse: false,
+            multiple_workers: true,
+            ..DiskOption::default()
+        };
+        let mut b = BlockAsync::new(features, disk_image, &disk_option, None, None, None).unwrap();
 
         // activate should succeed
+        let mut q0 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(DEFAULT_QUEUE_SIZE, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&mem, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         b.activate(
             mem,
             Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-                (Queue::new(DEFAULT_QUEUE_SIZE), Event::new().unwrap()),
-            ],
+            BTreeMap::from([(0, q0), (1, q1)]),
         )
         .expect("activate should succeed");
 
         assert_eq!(b.worker_threads.len(), 2, "2 threads should be spawned.");
     }
+
+    struct BlockContext {}
+
+    fn modify_device(_block_context: &mut BlockContext, b: &mut BlockAsync) {
+        b.avail_features = !b.avail_features;
+    }
+
+    fn create_device() -> (BlockContext, BlockAsync) {
+        // Create an empty disk image
+        let f = tempfile().unwrap();
+        f.set_len(0x1000).unwrap();
+        let disk_image: Box<dyn DiskFile> = Box::new(f);
+
+        // Create a BlockAsync to test
+        let features = base_features(ProtectionType::Unprotected);
+        let id = b"Block serial number\0";
+        let disk_option = DiskOption {
+            read_only: true,
+            id: Some(*id),
+            sparse: false,
+            multiple_workers: true,
+            ..Default::default()
+        };
+        (
+            BlockContext {},
+            BlockAsync::new(
+                features,
+                disk_image.try_clone().unwrap(),
+                &disk_option,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[cfg(unix)]
+    suspendable_virtio_tests!(asyncblock, create_device, 2, modify_device);
 }

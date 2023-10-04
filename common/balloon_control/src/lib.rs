@@ -21,21 +21,15 @@ pub enum BalloonTubeCommand {
         // size.
         allow_failure: bool,
     },
-    // Fetch balloon stats. The ID can be used to discard stale states
-    // if any previous stats requests failed or timed out.
-    Stats {
-        id: u64,
-    },
-    // Fetch balloon wss. The ID can be used to discard stale states if any
-    // previous wss request failed or timed out.
-    WorkingSetSize {
-        id: u64,
-    },
-    // Send balloon wss config to guest.
-    WorkingSetSizeConfig {
-        bins: Vec<u64>,
-        refresh_threshold: u64,
-        report_threshold: u64,
+    // Fetch balloon stats.
+    Stats,
+    // Fetch balloon ws.
+    WorkingSet,
+    // Send balloon ws config to guest.
+    WorkingSetConfig {
+        bins: Vec<u32>,
+        refresh_threshold: u32,
+        report_threshold: u32,
     },
 }
 
@@ -59,23 +53,23 @@ pub struct BalloonStats {
 pub const VIRTIO_BALLOON_WS_MIN_NUM_BINS: usize = 2;
 pub const VIRTIO_BALLOON_WS_MAX_NUM_BINS: usize = 16;
 
-// WSSBucket stores information about a bucket (or bin) of the working set size.
+// WSBucket stores information about a bucket (or bin) of the working set.
 #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
-pub struct WSSBucket {
+pub struct WSBucket {
     pub age: u64,
     pub bytes: [u64; 2],
 }
 
-// BalloonWSS holds WSS returned from the wss_queue.
+// BalloonWS holds WS returned from the ws_queue.
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
-pub struct BalloonWSS {
-    /// working set size, separated per histogram bucket.
-    pub wss: Vec<WSSBucket>,
+pub struct BalloonWS {
+    /// working set, separated per histogram bucket.
+    pub ws: Vec<WSBucket>,
 }
 
-impl BalloonWSS {
+impl BalloonWS {
     pub fn new() -> Self {
-        BalloonWSS { wss: vec![] }
+        BalloonWS { ws: vec![] }
     }
 }
 
@@ -85,15 +79,13 @@ pub enum BalloonTubeResult {
     Stats {
         stats: BalloonStats,
         balloon_actual: u64,
-        id: u64,
     },
     Adjusted {
         num_bytes: u64,
     },
-    WorkingSetSize {
-        wss: BalloonWSS,
+    WorkingSet {
+        ws: BalloonWS,
         /// size of the balloon in bytes.
         balloon_actual: u64,
-        id: u64,
     },
 }

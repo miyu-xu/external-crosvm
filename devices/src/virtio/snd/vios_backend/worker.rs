@@ -14,7 +14,6 @@ use base::EventToken;
 use base::WaitContext;
 use data_model::Le32;
 use sync::Mutex;
-use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 
 use super::super::constants::*;
@@ -26,18 +25,16 @@ use super::*;
 use crate::virtio::DescriptorChain;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
-use crate::virtio::SignalableInterrupt;
 
 pub struct Worker {
     // Lock order: Must never hold more than one queue lock at the same time.
     interrupt: Interrupt,
-    control_queue: Arc<Mutex<Queue>>,
-    control_queue_evt: Event,
-    event_queue: Queue,
-    event_queue_evt: Event,
-    guest_memory: GuestMemory,
+    pub control_queue: Arc<Mutex<Queue>>,
+    pub event_queue: Option<Queue>,
     vios_client: Arc<VioSClient>,
     streams: Vec<StreamProxy>,
+    pub tx_queue: Arc<Mutex<Queue>>,
+    pub rx_queue: Arc<Mutex<Queue>>,
     io_thread: Option<thread::JoinHandle<Result<()>>>,
     io_kill: Event,
 }
@@ -47,15 +44,10 @@ impl Worker {
     pub fn try_new(
         vios_client: Arc<VioSClient>,
         interrupt: Interrupt,
-        guest_memory: GuestMemory,
         control_queue: Arc<Mutex<Queue>>,
-        control_queue_evt: Event,
         event_queue: Queue,
-        event_queue_evt: Event,
         tx_queue: Arc<Mutex<Queue>>,
-        tx_queue_evt: Event,
         rx_queue: Arc<Mutex<Queue>>,
-        rx_queue_evt: Event,
     ) -> Result<Worker> {
         let mut streams: Vec<StreamProxy> = Vec::with_capacity(vios_client.num_streams() as usize);
         {
@@ -68,7 +60,6 @@ impl Worker {
                 streams.push(Stream::try_new(
                     stream_id,
                     vios_client.clone(),
-                    guest_memory.clone(),
                     interrupt.clone(),
                     control_queue.clone(),
                     io_queue.clone(),
@@ -81,9 +72,10 @@ impl Worker {
             .map_err(SoundError::CreateEvent)?;
 
         let interrupt_clone = interrupt.clone();
-        let guest_memory_clone = guest_memory.clone();
         let senders: Vec<Sender<Box<StreamMsg>>> =
             streams.iter().map(|sp| sp.msg_sender().clone()).collect();
+        let tx_queue_thread = tx_queue.clone();
+        let rx_queue_thread = rx_queue.clone();
         let io_thread = thread::Builder::new()
             .name("v_snd_io".to_string())
             .spawn(move || {
@@ -91,11 +83,8 @@ impl Worker {
 
                 io_loop(
                     interrupt_clone,
-                    guest_memory_clone,
-                    tx_queue,
-                    tx_queue_evt,
-                    rx_queue,
-                    rx_queue_evt,
+                    tx_queue_thread,
+                    rx_queue_thread,
                     senders,
                     kill_io,
                 )
@@ -104,12 +93,11 @@ impl Worker {
         Ok(Worker {
             interrupt,
             control_queue,
-            control_queue_evt,
-            event_queue,
-            event_queue_evt,
-            guest_memory,
+            event_queue: Some(event_queue),
             vios_client,
             streams,
+            tx_queue,
+            rx_queue,
             io_thread: Some(io_thread),
             io_kill: self_kill_io,
         })
@@ -131,8 +119,11 @@ impl Worker {
             Kill,
         }
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.control_queue_evt, Token::ControlQAvailable),
-            (&self.event_queue_evt, Token::EventQAvailable),
+            (self.control_queue.lock().event(), Token::ControlQAvailable),
+            (
+                self.event_queue.as_ref().expect("queue missing").event(),
+                Token::EventQAvailable,
+            ),
             (&event_notifier, Token::EventTriggered),
             (&kill_evt, Token::Kill),
         ])
@@ -143,13 +134,16 @@ impl Worker {
                 .add(resample_evt, Token::InterruptResample)
                 .map_err(SoundError::WaitCtx)?;
         }
+        let mut event_queue = self.event_queue.take().expect("event_queue missing");
         'wait: loop {
             let wait_events = wait_ctx.wait().map_err(SoundError::WaitCtx)?;
 
             for wait_evt in wait_events.iter().filter(|e| e.is_readable) {
                 match wait_evt.token {
                     Token::ControlQAvailable => {
-                        self.control_queue_evt
+                        self.control_queue
+                            .lock()
+                            .event()
                             .wait()
                             .map_err(SoundError::QueueEvt)?;
                         self.process_controlq_buffers()?;
@@ -158,11 +152,11 @@ impl Worker {
                         // Just read from the event object to make sure the producer of such events
                         // never blocks. The buffers will only be used when actual virtio-snd
                         // events are triggered.
-                        self.event_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                        event_queue.event().wait().map_err(SoundError::QueueEvt)?;
                     }
                     Token::EventTriggered => {
                         event_notifier.wait().map_err(SoundError::QueueEvt)?;
-                        self.process_event_triggered()?;
+                        self.process_event_triggered(&mut event_queue)?;
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
@@ -174,6 +168,7 @@ impl Worker {
                 }
             }
         }
+        self.event_queue = Some(event_queue);
         Ok(())
     }
 
@@ -201,7 +196,7 @@ impl Worker {
     // Pops and handles all available ontrol queue buffers. Logs minor errors, but returns an
     // Err if it encounters an unrecoverable error.
     fn process_controlq_buffers(&mut self) -> Result<()> {
-        while let Some(mut avail_desc) = lock_pop_unlock(&self.control_queue, &self.guest_memory) {
+        while let Some(mut avail_desc) = lock_pop_unlock(&self.control_queue) {
             let reader = &mut avail_desc.reader;
             let available_bytes = reader.available_bytes();
             if available_bytes < std::mem::size_of::<virtio_snd_hdr>() {
@@ -212,7 +207,6 @@ impl Worker {
                 return reply_control_op_status(
                     VIRTIO_SND_S_BAD_MSG,
                     avail_desc,
-                    &self.guest_memory,
                     &self.control_queue,
                     &self.interrupt,
                 );
@@ -284,8 +278,8 @@ impl Worker {
                     let len = writer.bytes_written() as u32;
                     {
                         let mut queue_lock = self.control_queue.lock();
-                        queue_lock.add_used(&self.guest_memory, avail_desc, len);
-                        queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+                        queue_lock.add_used(avail_desc, len);
+                        queue_lock.trigger_interrupt(&self.interrupt);
                     }
                 }
                 VIRTIO_SND_R_CHMAP_INFO => {
@@ -363,7 +357,6 @@ impl Worker {
                     reply_control_op_status(
                         VIRTIO_SND_S_NOT_SUPP,
                         avail_desc,
-                        &self.guest_memory,
                         &self.control_queue,
                         &self.interrupt,
                     )?;
@@ -373,15 +366,14 @@ impl Worker {
         Ok(())
     }
 
-    fn process_event_triggered(&mut self) -> Result<()> {
+    fn process_event_triggered(&mut self, event_queue: &mut Queue) -> Result<()> {
         while let Some(evt) = self.vios_client.pop_event() {
-            if let Some(mut desc) = self.event_queue.pop(&self.guest_memory) {
+            if let Some(mut desc) = event_queue.pop() {
                 let writer = &mut desc.writer;
                 writer.write_obj(evt).map_err(SoundError::QueueIO)?;
                 let len = writer.bytes_written() as u32;
-                self.event_queue.add_used(&self.guest_memory, desc, len);
-                self.event_queue
-                    .trigger_interrupt(&self.guest_memory, &self.interrupt);
+                event_queue.add_used(desc, len);
+                event_queue.trigger_interrupt(&self.interrupt);
             } else {
                 warn!("virtio-snd: Dropping event because there are no buffers in virtqueue");
             }
@@ -414,7 +406,6 @@ impl Worker {
             return reply_control_op_status(
                 VIRTIO_SND_S_BAD_MSG,
                 desc,
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             );
@@ -432,7 +423,6 @@ impl Worker {
             reply_control_op_status(
                 VIRTIO_SND_S_BAD_MSG,
                 desc,
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             )
@@ -455,7 +445,6 @@ impl Worker {
                     | StreamMsg::Release(d) => d,
                     _ => panic!("virtio-snd: Can't handle message. This is a BUG!!"),
                 },
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             );
@@ -479,7 +468,6 @@ impl Worker {
                     | StreamMsg::Release(d) => d,
                     _ => panic!("virtio-snd: Can't handle message. This is a BUG!!"),
                 },
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             )
@@ -504,8 +492,8 @@ impl Worker {
         let len = writer.bytes_written() as u32;
         {
             let mut queue_lock = self.control_queue.lock();
-            queue_lock.add_used(&self.guest_memory, desc, len);
-            queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+            queue_lock.add_used(desc, len);
+            queue_lock.trigger_interrupt(&self.interrupt);
         }
         Ok(())
     }
@@ -519,11 +507,8 @@ impl Drop for Worker {
 
 fn io_loop(
     interrupt: Interrupt,
-    guest_memory: GuestMemory,
     tx_queue: Arc<Mutex<Queue>>,
-    tx_queue_evt: Event,
     rx_queue: Arc<Mutex<Queue>>,
-    rx_queue_evt: Event,
     senders: Vec<Sender<Box<StreamMsg>>>,
     kill_evt: Event,
 ) -> Result<()> {
@@ -534,8 +519,8 @@ fn io_loop(
         Kill,
     }
     let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-        (&tx_queue_evt, Token::TxQAvailable),
-        (&rx_queue_evt, Token::RxQAvailable),
+        (tx_queue.lock().event(), Token::TxQAvailable),
+        (rx_queue.lock().event(), Token::RxQAvailable),
         (&kill_evt, Token::Kill),
     ])
     .map_err(SoundError::WaitCtx)?;
@@ -545,11 +530,19 @@ fn io_loop(
         for wait_evt in wait_events.iter().filter(|e| e.is_readable) {
             let queue = match wait_evt.token {
                 Token::TxQAvailable => {
-                    tx_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                    tx_queue
+                        .lock()
+                        .event()
+                        .wait()
+                        .map_err(SoundError::QueueEvt)?;
                     &tx_queue
                 }
                 Token::RxQAvailable => {
-                    rx_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                    rx_queue
+                        .lock()
+                        .event()
+                        .wait()
+                        .map_err(SoundError::QueueEvt)?;
                     &rx_queue
                 }
                 Token::Kill => {
@@ -557,7 +550,7 @@ fn io_loop(
                     break 'wait;
                 }
             };
-            while let Some(mut avail_desc) = lock_pop_unlock(queue, &guest_memory) {
+            while let Some(mut avail_desc) = lock_pop_unlock(queue) {
                 let reader = &mut avail_desc.reader;
                 let xfer: virtio_snd_pcm_xfer = reader.read_obj().map_err(SoundError::QueueIO)?;
                 let stream_id = xfer.stream_id.to_native();
@@ -566,14 +559,7 @@ fn io_loop(
                         "virtio-snd: Driver sent buffer for invalid stream: {}",
                         stream_id
                     );
-                    reply_pcm_buffer_status(
-                        VIRTIO_SND_S_IO_ERR,
-                        0,
-                        avail_desc,
-                        &guest_memory,
-                        queue,
-                        &interrupt,
-                    )?;
+                    reply_pcm_buffer_status(VIRTIO_SND_S_IO_ERR, 0, avail_desc, queue, &interrupt)?;
                 } else {
                     StreamProxy::send_msg(
                         &senders[stream_id as usize],
@@ -589,9 +575,6 @@ fn io_loop(
 // If queue.lock().pop() is used directly in the condition of a 'while' loop the lock is held over
 // the entire loop block. Encapsulating it in this fuction guarantees that the lock is dropped
 // immediately after pop() is called, which allows the code to remain somewhat simpler.
-fn lock_pop_unlock(
-    queue: &Arc<Mutex<Queue>>,
-    guest_memory: &GuestMemory,
-) -> Option<DescriptorChain> {
-    queue.lock().pop(guest_memory)
+fn lock_pop_unlock(queue: &Arc<Mutex<Queue>>) -> Option<DescriptorChain> {
+    queue.lock().pop()
 }

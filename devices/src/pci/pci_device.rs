@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::bail;
 use base::error;
@@ -44,10 +44,20 @@ use crate::BusDevice;
 use crate::DeviceId;
 use crate::IrqLevelEvent;
 use crate::Suspendable;
+use crate::VirtioPciDevice;
 
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Deactivation of ACPI notifications failed
+    #[error("failed to disable ACPI notifications")]
+    AcpiNotifyDeactivationFailed,
+    /// Setup of ACPI notifications failed
+    #[error("failed to enable ACPI notifications")]
+    AcpiNotifySetupFailed,
+    /// Simulating ACPI notifications hardware triggering failed
+    #[error("failed to test ACPI notifications")]
+    AcpiNotifyTestFailed,
     /// Added pci device's parent bus does not belong to this bus
     #[error("pci device {0}'s parent bus does not belong to bus {1}")]
     AddedDeviceBusNotExist(PciAddress, u8),
@@ -422,7 +432,7 @@ pub trait PciDevice: Send + Suspendable {
     /// Invoked when the device is sandboxed.
     fn on_device_sandboxed(&mut self) {}
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(&mut self, sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         Some(sdts)
     }
@@ -431,6 +441,10 @@ pub trait PciDevice: Send + Suspendable {
     /// shared memory
     fn generate_acpi_methods(&mut self) -> (Vec<u8>, Option<(u32, MemoryMapping)>) {
         (Vec::new(), None)
+    }
+
+    fn set_gpe(&mut self, _resources: &mut SystemAllocator) -> Option<u32> {
+        None
     }
 
     /// Invoked when the device is destroyed
@@ -466,6 +480,11 @@ pub trait PciDevice: Send + Suspendable {
     /// Sets the IOMMU for the device if `supports_iommu()`
     fn set_iommu(&mut self, _iommu: IpcMemoryMapper) -> anyhow::Result<()> {
         bail!("Iommu not supported.");
+    }
+
+    // Used for bootorder
+    fn as_virtio_pci_device(&self) -> Option<&VirtioPciDevice> {
+        None
     }
 }
 
@@ -757,13 +776,17 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
         (**self).on_device_sandboxed()
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(&mut self, sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         (**self).generate_acpi(sdts)
     }
 
     fn generate_acpi_methods(&mut self) -> (Vec<u8>, Option<(u32, MemoryMapping)>) {
         (**self).generate_acpi_methods()
+    }
+
+    fn set_gpe(&mut self, resources: &mut SystemAllocator) -> Option<u32> {
+        (**self).set_gpe(resources)
     }
 
     fn destroy_device(&mut self) {

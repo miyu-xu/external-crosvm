@@ -5,9 +5,11 @@
 use std::sync::Arc;
 use std::sync::MutexGuard;
 
+use base::info;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error;
+use usb_util::DeviceSpeed;
 
 use super::interrupter::Error as InterrupterError;
 use super::interrupter::Interrupter;
@@ -27,7 +29,6 @@ use super::xhci_regs::USB3_PORTS_END;
 use super::xhci_regs::USB3_PORTS_START;
 use super::xhci_regs::USB_STS_PORT_CHANGE_DETECT;
 use crate::register_space::Register;
-use usb_util::DeviceSpeed;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -94,11 +95,11 @@ impl UsbPort {
 
     /// Detach current connected backend. Returns false when there is no backend connected.
     pub fn detach(&self) -> Result<()> {
-        let mut locked = self.backend_device.lock();
+        let mut locked = self.backend_device();
         if locked.is_none() {
             return Err(Error::AlreadyDetached(self.port_id));
         }
-        usb_debug!("device detached from port {}", self.port_id);
+        info!("usb_hub: device detached from port {}", self.port_id);
         *locked = None;
         self.portsc.clear_bits(PORTSC_PORT_SPEED_MASK);
         self.send_device_disconnected_event()
@@ -109,12 +110,12 @@ impl UsbPort {
     }
 
     /// Get current connected backend.
-    pub fn get_backend_device(&self) -> MutexGuard<Option<Box<dyn XhciBackendDevice>>> {
+    pub fn backend_device(&self) -> MutexGuard<Option<Box<dyn XhciBackendDevice>>> {
         self.backend_device.lock()
     }
 
     fn is_attached(&self) -> bool {
-        self.backend_device.lock().is_some()
+        self.backend_device().is_some()
     }
 
     fn reset(&self) -> std::result::Result<(), InterrupterError> {
@@ -128,9 +129,9 @@ impl UsbPort {
         &self,
         device: Box<dyn XhciBackendDevice>,
     ) -> std::result::Result<(), InterrupterError> {
-        usb_debug!("A backend is connected to port {}", self.port_id);
+        info!("usb_hub: backend attached to port {}", self.port_id);
         let speed = device.get_speed();
-        let mut locked = self.backend_device.lock();
+        let mut locked = self.backend_device();
         assert!(locked.is_none());
         *locked = Some(device);
         self.portsc.clear_bits(PORTSC_PORT_SPEED_MASK);
@@ -212,7 +213,6 @@ impl UsbHub {
 
     /// Reset all ports.
     pub fn reset(&self) -> Result<()> {
-        usb_debug!("reseting usb hub");
         for p in &self.ports {
             p.reset().map_err(|reason| Error::Detach {
                 port_id: p.port_id(),
@@ -233,7 +233,6 @@ impl UsbHub {
 
     /// Connect backend to next empty port.
     pub fn connect_backend(&self, backend: Box<dyn XhciBackendDevice>) -> Result<u8> {
-        usb_debug!("Trying to connect backend to hub");
         for port in &self.ports {
             if port.is_attached() {
                 continue;

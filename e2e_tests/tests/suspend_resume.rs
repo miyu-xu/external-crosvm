@@ -4,6 +4,7 @@
 
 #![cfg(unix)]
 
+use std::io::Write;
 use std::path::Path;
 
 use base::test_utils::call_test_with_sudo;
@@ -22,24 +23,37 @@ use tempfile::NamedTempFile;
 // System-wide suspend/resume, snapshot/restore.
 // Tests below check for snapshot/restore functionality, and suspend/resume.
 
-#[ignore]
 #[test]
 fn suspend_snapshot_restore_resume() -> anyhow::Result<()> {
-    let mut vm = TestVm::new(Config::new()).unwrap();
-    suspend_resume_system(&mut vm)
+    suspend_resume_system(false)
 }
 
-#[ignore]
 #[test]
 fn suspend_snapshot_restore_resume_disable_sandbox() -> anyhow::Result<()> {
-    let mut vm = TestVm::new(Config::new().disable_sandbox()).unwrap();
-    suspend_resume_system(&mut vm)
+    suspend_resume_system(true)
 }
 
-fn suspend_resume_system(vm: &mut TestVm) -> anyhow::Result<()> {
-    // WARNING: Suspend/resume is only partially implemented, some aspects of these tests only work
-    // by chance. Still, the tests are useful to avoid backslide. If a seemingly unrelated change
-    // breaks this test, it is probably reasonable to disable the test.
+fn suspend_resume_system(disabled_sandbox: bool) -> anyhow::Result<()> {
+    let mut pmem_file = NamedTempFile::new().unwrap();
+    pmem_file.write_all(&[0; 4096]).unwrap();
+    pmem_file.as_file_mut().sync_all().unwrap();
+
+    let new_config = || {
+        let mut config = Config::new();
+        config = config.with_stdout_hardware("legacy-virtio-console");
+        config = config.extra_args(vec![
+            "--pmem-device".to_string(),
+            pmem_file.path().display().to_string(),
+        ]);
+        // TODO: Remove once USB has snapshot/restore support.
+        config = config.extra_args(vec!["--no-usb".to_string()]);
+        if disabled_sandbox {
+            config = config.disable_sandbox();
+        }
+        config
+    };
+
+    let mut vm = TestVm::new(new_config()).unwrap();
 
     // Verify RAM is saved and restored by interacting with a filesystem pinned in RAM (i.e. tmpfs
     // with swap disabled).
@@ -47,19 +61,26 @@ fn suspend_resume_system(vm: &mut TestVm) -> anyhow::Result<()> {
     vm.exec_in_guest("mount -t tmpfs none /tmp").unwrap();
 
     vm.exec_in_guest("echo foo > /tmp/foo").unwrap();
-    assert_eq!("foo", vm.exec_in_guest("cat /tmp/foo").unwrap().trim());
+    assert_eq!(
+        "foo",
+        vm.exec_in_guest("cat /tmp/foo").unwrap().stdout.trim()
+    );
 
+    vm.suspend_full().unwrap();
     // Take snapshot of original VM state
     println!("snapshotting VM - clean state");
     let dir = tempdir().unwrap();
     let snap1_path = dir.path().join("snapshot.bkp");
     vm.snapshot(&snap1_path).unwrap();
+    vm.resume_full().unwrap();
 
     vm.exec_in_guest("echo bar > /tmp/foo").unwrap();
-    assert_eq!("bar", vm.exec_in_guest("cat /tmp/foo").unwrap().trim());
+    assert_eq!(
+        "bar",
+        vm.exec_in_guest("cat /tmp/foo").unwrap().stdout.trim()
+    );
 
-    // suspend VM
-    vm.suspend().unwrap();
+    vm.suspend_full().unwrap();
     let snap2_path = dir.path().join("snapshot2.bkp");
 
     // Write command to VM
@@ -71,22 +92,31 @@ fn suspend_resume_system(vm: &mut TestVm) -> anyhow::Result<()> {
     println!("snapshotting VM - mod state");
     vm.snapshot(&snap2_path).unwrap();
 
-    vm.resume().unwrap();
-    assert_eq!("42", echo_cmd.wait(vm).unwrap());
+    vm.resume_full().unwrap();
+    assert_eq!("42", echo_cmd.wait_ok(&mut vm).unwrap().stdout.trim());
 
-    // suspend VM
-    vm.suspend().unwrap();
+    // shut down VM
     // restore VM
     println!("restoring VM - to clean state");
-    vm.restore(&snap1_path).unwrap();
+
+    // Start up VM with cold restore.
+    let mut vm = TestVm::new_cold_restore(new_config().extra_args(vec![
+        "--restore".to_string(),
+        snap1_path.to_str().unwrap().to_string(),
+        "--suspended".to_string(),
+    ]))
+    .unwrap();
 
     // snapshot VM after restore
     println!("snapshotting VM - clean state restored");
     let snap3_path = dir.path().join("snapshot3.bkp");
     vm.snapshot(&snap3_path).unwrap();
-    vm.resume().unwrap();
+    vm.resume_full().unwrap();
 
-    assert_eq!("foo", vm.exec_in_guest("cat /tmp/foo").unwrap().trim());
+    assert_eq!(
+        "foo",
+        vm.exec_in_guest("cat /tmp/foo").unwrap().stdout.trim()
+    );
 
     let snap1 = std::fs::read_to_string(&snap1_path).unwrap();
     let snap2 = std::fs::read_to_string(&snap2_path).unwrap();
@@ -96,7 +126,6 @@ fn suspend_resume_system(vm: &mut TestVm) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[ignore]
 #[test]
 fn snapshot_vhost_user_root() {
     call_test_with_sudo("snapshot_vhost_user")
@@ -129,37 +158,39 @@ fn snapshot_vhost_user() {
         (block_vu_device, net_vu_device, block_socket, net_socket)
     }
 
-    let (block_vu_device, net_vu_device, block_socket, net_socket) = spin_up_vhost_user_devices();
-
-    let mut config = Config::new();
-    config = config.extra_args(vec![
-        "--vhost-user-blk".to_string(),
-        block_socket.path().to_str().unwrap().to_string(),
-        "--vhost-user-net".to_string(),
-        net_socket.path().to_str().unwrap().to_string(),
-        "--no-usb".to_string(),
-        "--no-balloon".to_string(),
-        "--no-rng".to_string(),
-    ]);
-    let mut vm = TestVm::new(config).unwrap();
-
     let dir = tempdir().unwrap();
     let snap_path = dir.path().join("snapshot.bkp");
-    vm.snapshot(&snap_path).unwrap();
 
-    let snapshot_json = std::fs::read_to_string(&snap_path).unwrap();
+    {
+        let (_block_vu_device, _net_vu_device, block_socket, net_socket) =
+            spin_up_vhost_user_devices();
 
-    assert!(snapshot_json.contains("\"device_name\":\"virtio-block\""));
-    assert!(snapshot_json.contains("\"paused_queue\":{\"activated\":true,\"avail_ring\":"));
+        let mut config = Config::new();
+        config = config.with_stdout_hardware("legacy-virtio-console");
+        config = config.extra_args(vec![
+            "--vhost-user-blk".to_string(),
+            block_socket.path().to_str().unwrap().to_string(),
+            "--vhost-user-net".to_string(),
+            net_socket.path().to_str().unwrap().to_string(),
+            "--no-usb".to_string(),
+        ]);
+        let mut vm = TestVm::new(config).unwrap();
 
-    drop(vm);
-    drop(block_vu_device);
-    drop(net_vu_device);
+        // suspend VM
+        vm.suspend_full().unwrap();
+        vm.snapshot(&snap_path).unwrap();
+
+        let snapshot_json = std::fs::read_to_string(&snap_path).unwrap();
+
+        assert!(snapshot_json.contains("\"device_name\":\"virtio-block\""));
+        assert!(snapshot_json.contains("\"paused_queue\":{\"avail_ring\":"));
+    }
 
     let (_block_vu_device, _net_vu_device, block_socket, net_socket) = spin_up_vhost_user_devices();
 
     let mut config = Config::new();
     // Start up VM with cold restore.
+    config = config.with_stdout_hardware("legacy-virtio-console");
     config = config.extra_args(vec![
         "--vhost-user-blk".to_string(),
         block_socket.path().to_str().unwrap().to_string(),
@@ -168,8 +199,6 @@ fn snapshot_vhost_user() {
         "--restore".to_string(),
         snap_path.to_str().unwrap().to_string(),
         "--no-usb".to_string(),
-        "--no-balloon".to_string(),
-        "--no-rng".to_string(),
     ]);
     let _vm = TestVm::new_cold_restore(config).unwrap();
 }

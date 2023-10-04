@@ -18,15 +18,14 @@ use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
 use vmm_vhost::VhostUserSlaveReqHandler;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 use zerocopy::AsBytes;
 
 use crate::virtio;
 use crate::virtio::console::asynchronous::ConsoleDevice;
 use crate::virtio::console::virtio_console_config;
 use crate::virtio::copy_config;
-use crate::virtio::vhost::user::device::handler::sys::Doorbell;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
 use crate::virtio::vhost::user::device::handler::VhostUserBackend;
@@ -34,6 +33,7 @@ use crate::virtio::vhost::user::device::handler::VhostUserPlatformOps;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::VhostUserDevice;
+use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::SerialHardware;
 use crate::SerialParameters;
@@ -107,7 +107,7 @@ impl VhostUserBackend for ConsoleBackend {
     }
 
     fn features(&self) -> u64 {
-        self.device.console.avail_features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
+        self.device.console.avail_features() | 1 << VHOST_USER_F_PROTOCOL_FEATURES
     }
 
     fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
@@ -161,33 +161,26 @@ impl VhostUserBackend for ConsoleBackend {
         &mut self,
         idx: usize,
         queue: virtio::Queue,
-        mem: GuestMemory,
-        doorbell: Doorbell,
-        kick_evt: Event,
+        _mem: GuestMemory,
+        doorbell: Interrupt,
     ) -> anyhow::Result<()> {
         let queue = Arc::new(Mutex::new(queue));
         match idx {
             // ReceiveQueue
             0 => {
-                let res = self.device.console.start_receive_queue(
-                    &self.ex,
-                    mem,
-                    queue.clone(),
-                    doorbell,
-                    kick_evt,
-                );
+                let res =
+                    self.device
+                        .console
+                        .start_receive_queue(&self.ex, queue.clone(), doorbell);
                 self.active_in_queue = Some(queue);
                 res
             }
             // TransmitQueue
             1 => {
-                let res = self.device.console.start_transmit_queue(
-                    &self.ex,
-                    mem,
-                    queue.clone(),
-                    doorbell,
-                    kick_evt,
-                );
+                let res =
+                    self.device
+                        .console
+                        .start_transmit_queue(&self.ex, queue.clone(), doorbell);
                 self.active_out_queue = Some(queue);
                 res
             }
@@ -239,10 +232,7 @@ impl VhostUserBackend for ConsoleBackend {
 pub struct Options {
     #[argh(option, arg_name = "PATH")]
     /// path to a vhost-user socket
-    socket: Option<String>,
-    #[argh(option, arg_name = "STRING")]
-    /// VFIO-PCI device name (e.g. '0000:00:07.0')
-    vfio: Option<String>,
+    socket: String,
     #[argh(option, arg_name = "OUTFILE")]
     /// path to a file
     output_file: Option<PathBuf>,
@@ -312,12 +302,7 @@ pub fn run_console_device(opts: Options) -> anyhow::Result<()> {
     let device = Box::new(create_vu_console_device(&params, &mut Vec::new())?);
     let ex = Executor::new().context("Failed to create executor")?;
 
-    let listener = VhostUserListener::new_from_socket_or_vfio(
-        &opts.socket,
-        &opts.vfio,
-        device.max_queue_num(),
-        None,
-    )?;
+    let listener = VhostUserListener::new_socket(&opts.socket, None)?;
 
     listener.run_device(ex, device)
 }

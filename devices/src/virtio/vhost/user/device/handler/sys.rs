@@ -5,11 +5,11 @@
 cfg_if::cfg_if! {
     if #[cfg(unix)] {
         pub mod unix;
-        use unix as platform;
+        #[cfg(test)]
+        pub use unix::test_helpers;
     } else if #[cfg(windows)] {
         pub mod windows;
-        use windows as platform;
+        #[cfg(test)]
+        pub use windows::test_helpers;
     }
 }
-
-pub use platform::Doorbell;

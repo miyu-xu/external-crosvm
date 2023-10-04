@@ -226,19 +226,20 @@ impl arch::LinuxArch for Riscv64 {
             .into_iter()
             .map(|(dev, jail_orig)| (dev.into_pci_device().unwrap(), jail_orig))
             .collect();
-        let (pci, pci_irqs, mut pid_debug_label_map, _amls) = arch::generate_pci_root(
-            pci_devices,
-            irq_chip.as_irq_chip_mut(),
-            Arc::clone(&mmio_bus),
-            Arc::clone(&io_bus),
-            system_allocator,
-            &mut vm,
-            devices::IMSIC_MAX_INT_IDS as usize,
-            None,
-            #[cfg(feature = "swap")]
-            swap_controller,
-        )
-        .map_err(Error::CreatePciRoot)?;
+        let (pci, pci_irqs, mut pid_debug_label_map, _amls, _gpe_scope_amls) =
+            arch::generate_pci_root(
+                pci_devices,
+                irq_chip.as_irq_chip_mut(),
+                Arc::clone(&mmio_bus),
+                Arc::clone(&io_bus),
+                system_allocator,
+                &mut vm,
+                devices::IMSIC_MAX_INT_IDS as usize,
+                None,
+                #[cfg(feature = "swap")]
+                swap_controller,
+            )
+            .map_err(Error::CreatePciRoot)?;
 
         let pci_root = Arc::new(Mutex::new(pci));
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci_root.clone(), 8)));
@@ -391,7 +392,6 @@ impl arch::LinuxArch for Riscv64 {
             vcpu_affinity: components.vcpu_affinity,
             no_smt: false,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
-            has_bios: false,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -419,7 +419,6 @@ impl arch::LinuxArch for Riscv64 {
         _vcpu_init: VcpuInitRiscv64,
         vcpu_id: usize,
         _num_cpus: usize,
-        _has_bios: bool,
         cpu_config: Option<CpuConfigRiscv64>,
     ) -> std::result::Result<(), Self::Error> {
         vcpu.set_one_reg(VcpuRegister::Core(CoreRegister::Pc), get_kernel_addr().0)

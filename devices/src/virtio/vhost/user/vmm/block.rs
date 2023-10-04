@@ -4,7 +4,6 @@
 
 use vmm_vhost::message::VhostUserProtocolFeatures;
 
-use crate::virtio::block::asynchronous::DEFAULT_NUM_QUEUES;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_BLK_SIZE;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_DISCARD;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_FLUSH;
@@ -13,20 +12,17 @@ use crate::virtio::device_constants::block::VIRTIO_BLK_F_RO;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_SEG_MAX;
 use crate::virtio::device_constants::block::VIRTIO_BLK_F_WRITE_ZEROES;
 use crate::virtio::vhost::user::vmm::Connection;
-use crate::virtio::vhost::user::vmm::QueueSizes;
 use crate::virtio::vhost::user::vmm::Result;
 use crate::virtio::vhost::user::vmm::VhostUserVirtioDevice;
 use crate::virtio::DeviceType;
 
-const QUEUE_SIZE: u16 = 256;
-
 impl VhostUserVirtioDevice {
-    pub fn new_block(base_features: u64, connection: Connection) -> Result<VhostUserVirtioDevice> {
-        let queue_sizes = QueueSizes::AskDevice {
-            queue_size: QUEUE_SIZE,
-            default_queues: 1,
-        };
-        let max_queues = DEFAULT_NUM_QUEUES.into();
+    pub fn new_block(
+        base_features: u64,
+        connection: Connection,
+        max_queue_size: Option<u16>,
+    ) -> Result<VhostUserVirtioDevice> {
+        let default_queues = 1;
 
         let allow_features = 1 << VIRTIO_BLK_F_SEG_MAX
             | 1 << VIRTIO_BLK_F_RO
@@ -43,8 +39,8 @@ impl VhostUserVirtioDevice {
         VhostUserVirtioDevice::new(
             connection,
             DeviceType::Block,
-            queue_sizes,
-            max_queues,
+            default_queues,
+            max_queue_size,
             allow_features,
             allow_protocol_features,
             base_features,

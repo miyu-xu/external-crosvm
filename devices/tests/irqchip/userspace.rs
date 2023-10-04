@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(target_arch = "x86_64")]
 
 use std::sync::Arc;
 use std::thread;
@@ -689,7 +689,7 @@ impl Vcpu for FakeVcpu {
     fn handle_wrmsr(&self) {
         unimplemented!()
     }
-    fn pvclock_ctrl(&self) -> Result<()> {
+    fn on_suspend(&self) -> Result<()> {
         unimplemented!()
     }
     unsafe fn enable_raw_capability(&self, _cap: u32, _args: &[u64; 4]) -> Result<()> {

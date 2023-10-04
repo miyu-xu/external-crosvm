@@ -19,6 +19,8 @@ use std::ffi::CStr;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::time::Duration;
 
 use libc::c_char;
 use libc::ssize_t;
@@ -26,7 +28,7 @@ pub use swap::SwapStatus;
 use vm_control::client::*;
 use vm_control::BalloonControlCommand;
 use vm_control::BalloonStats;
-use vm_control::BalloonWSS;
+use vm_control::BalloonWS;
 use vm_control::DiskControlCommand;
 #[cfg(feature = "registered_events")]
 use vm_control::RegisteredEvent;
@@ -34,7 +36,7 @@ use vm_control::UsbControlAttachedDevice;
 use vm_control::UsbControlResult;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
-use vm_control::WSSBucket;
+use vm_control::WSBucket;
 use vm_control::USB_CONTROL_MAX_PORTS;
 
 pub const VIRTIO_BALLOON_WS_MAX_NUM_BINS: usize = 16;
@@ -84,7 +86,7 @@ pub unsafe extern "C" fn crosvm_client_stop_vm(socket_path: *const c_char) -> bo
 pub unsafe extern "C" fn crosvm_client_suspend_vm(socket_path: *const c_char) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
-            vms_request(&VmRequest::Suspend, socket_path).is_ok()
+            vms_request(&VmRequest::SuspendVcpus, socket_path).is_ok()
         } else {
             false
         }
@@ -105,7 +107,7 @@ pub unsafe extern "C" fn crosvm_client_suspend_vm(socket_path: *const c_char) ->
 pub unsafe extern "C" fn crosvm_client_resume_vm(socket_path: *const c_char) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
-            vms_request(&VmRequest::Resume, socket_path).is_ok()
+            vms_request(&VmRequest::ResumeVcpus, socket_path).is_ok()
         } else {
             false
         }
@@ -151,11 +153,43 @@ pub unsafe extern "C" fn crosvm_client_balloon_vms(
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
-            let command = BalloonControlCommand::Adjust { num_bytes };
+            let command = BalloonControlCommand::Adjust {
+                num_bytes,
+                wait_for_success: false,
+            };
             vms_request(&VmRequest::BalloonCommand(command), socket_path).is_ok()
         } else {
             false
         }
+    })
+    .unwrap_or(false)
+}
+
+/// See crosvm_client_balloon_vms.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_balloon_vms_wait_with_timeout(
+    socket_path: *const c_char,
+    num_bytes: u64,
+    timeout_ms: u64,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            let command = BalloonControlCommand::Adjust {
+                num_bytes,
+                wait_for_success: true,
+            };
+            let resp = handle_request_with_timeout(
+                &VmRequest::BalloonCommand(command),
+                socket_path,
+                Some(Duration::from_millis(timeout_ms)),
+            );
+            if matches!(resp, Ok(VmResponse::Ok)) {
+                return true;
+            }
+            println!("adjust failure: {:?}", resp);
+        }
+        false
     })
     .unwrap_or(false)
 }
@@ -203,7 +237,16 @@ pub unsafe extern "C" fn crosvm_client_swap_swapout_vm(socket_path: *const c_cha
     .unwrap_or(false)
 }
 
-/// Disable vmm swap for crosvm instance whose control socket is listening on `socket_path`.
+/// Arguments structure for crosvm_client_swap_disable_vm2.
+#[repr(C)]
+pub struct SwapDisableArgs {
+    /// The path of the control socket to target.
+    socket_path: *const c_char,
+    /// Whether or not the swap file should be cleaned up in the background.
+    slow_file_cleanup: bool,
+}
+
+/// Disable vmm swap according to `args`.
 ///
 /// The function returns true on success or false if an error occured.
 ///
@@ -213,13 +256,21 @@ pub unsafe extern "C" fn crosvm_client_swap_swapout_vm(socket_path: *const c_cha
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
 #[no_mangle]
-pub unsafe extern "C" fn crosvm_client_swap_disable_vm(socket_path: *const c_char) -> bool {
+pub unsafe extern "C" fn crosvm_client_swap_disable_vm(args: *mut SwapDisableArgs) -> bool {
     catch_unwind(|| {
-        if let Some(socket_path) = validate_socket_path(socket_path) {
-            vms_request(&VmRequest::Swap(SwapCommand::Disable), socket_path).is_ok()
-        } else {
-            false
+        if args.is_null() {
+            return false;
         }
+        let Some(socket_path) = validate_socket_path((*args).socket_path) else {
+            return false;
+        };
+        vms_request(
+            &VmRequest::Swap(SwapCommand::Disable {
+                slow_file_cleanup: (*args).slow_file_cleanup,
+            }),
+            socket_path,
+        )
+        .is_ok()
     })
     .unwrap_or(false)
 }
@@ -438,6 +489,84 @@ pub unsafe extern "C" fn crosvm_client_usb_detach(socket_path: *const c_char, po
     .unwrap_or(false)
 }
 
+/// Attaches a net tap device to the crosvm instance with control socket at `socket_path`.
+///
+/// # Arguments
+///
+/// * `socket_path` - Path to the crosvm control socket
+/// * `tap_name` - Name of the tap device
+/// * `out_bus_num` - guest bus number will be written here
+///
+/// The function returns true on success, false on failure.
+///
+/// # Safety
+///
+/// Function is unsafe due to raw pointer usage - socket_path and tap_name are assumed to point to a
+/// null-terminated CStr. Function checks that the pointers are not null, but caller need to check
+/// the validity of the pointer. out_bus_num is assumed to point to a u8 integer.
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_net_tap_attach(
+    socket_path: *const c_char,
+    tap_name: *const c_char,
+    out_bus_num: *mut u8,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            if tap_name.is_null() || out_bus_num.is_null() {
+                return false;
+            }
+            // SAFETY: just checked that `tap_name` is not null. Function caller guarantees it
+            // points to a valid CStr.
+            let tap_name = unsafe { CStr::from_ptr(tap_name) }.to_str().unwrap_or("");
+
+            match do_net_add(tap_name, socket_path) {
+                Ok(bus_num) => {
+                    // SAFETY: checked out_bus_num is not null. Function caller guarantees
+                    // validity of pointer.
+                    unsafe { *out_bus_num = bus_num };
+                    true
+                }
+                Err(_e) => false,
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// Detaches a hotplugged tap device from the crosvm instance with control socket at `socket_path`.
+///
+/// # Arguments
+///
+/// * `socket_path` - Path to the crosvm control socket
+/// * `bus_num` - Bus number of the tap device to be removed.
+///
+/// The function returns true on success, and false on failure.
+///
+/// # Safety
+///
+/// Function is unsafe due to raw pointer usage - socket_path is assumed to point to a
+/// null-terminated Cstr. Function checks that the pointers are not null, but caller need to check
+/// the validity of the pointer.
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_net_tap_detach(
+    socket_path: *const c_char,
+    bus_num: u8,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            match do_net_remove(bus_num, socket_path) {
+                Ok(()) => true,
+                Err(_e) => false,
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
 /// Modifies the battery status of crosvm instance whose control socket is listening on
 /// `socket_path`.
 ///
@@ -571,13 +700,49 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
     stats: *mut BalloonStatsFfi,
     actual: *mut u64,
 ) -> bool {
+    crosvm_client_balloon_stats_impl(
+        socket_path,
+        #[cfg(unix)]
+        None,
+        stats,
+        actual,
+    )
+}
+
+/// See crosvm_client_balloon_stats.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_balloon_stats_with_timeout(
+    socket_path: *const c_char,
+    timeout_ms: u64,
+    stats: *mut BalloonStatsFfi,
+    actual: *mut u64,
+) -> bool {
+    crosvm_client_balloon_stats_impl(
+        socket_path,
+        Some(Duration::from_millis(timeout_ms)),
+        stats,
+        actual,
+    )
+}
+
+fn crosvm_client_balloon_stats_impl(
+    socket_path: *const c_char,
+    #[cfg(unix)] timeout_ms: Option<Duration>,
+    stats: *mut BalloonStatsFfi,
+    actual: *mut u64,
+) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
             let request = &VmRequest::BalloonCommand(BalloonControlCommand::Stats {});
+            #[cfg(not(unix))]
+            let resp = handle_request(request, socket_path);
+            #[cfg(unix)]
+            let resp = handle_request_with_timeout(request, socket_path, timeout_ms);
             if let Ok(VmResponse::BalloonStats {
                 stats: ref balloon_stats,
                 balloon_actual,
-            }) = handle_request(request, socket_path)
+            }) = resp
             {
                 if !stats.is_null() {
                     // SAFETY: just checked that `stats` is not null.
@@ -603,15 +768,15 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
     .unwrap_or(false)
 }
 
-/// Externally exposed variant of BalloonWss/WSSBucket, used for FFI.
+/// Externally exposed variant of BalloonWS/WSBucket, used for FFI.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub struct WSSBucketFfi {
+pub struct WorkingSetBucketFfi {
     age: u64,
     bytes: [u64; 2],
 }
 
-impl WSSBucketFfi {
+impl WorkingSetBucketFfi {
     fn new() -> Self {
         Self {
             age: 0,
@@ -620,8 +785,8 @@ impl WSSBucketFfi {
     }
 }
 
-impl From<WSSBucket> for WSSBucketFfi {
-    fn from(other: WSSBucket) -> Self {
+impl From<WSBucket> for WorkingSetBucketFfi {
+    fn from(other: WSBucket) -> Self {
         Self {
             age: other.age,
             bytes: other.bytes,
@@ -631,50 +796,50 @@ impl From<WSSBucket> for WSSBucketFfi {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct BalloonWSSFfi {
-    wss: [WSSBucketFfi; VIRTIO_BALLOON_WS_MAX_NUM_BINS],
+pub struct BalloonWSFfi {
+    ws: [WorkingSetBucketFfi; VIRTIO_BALLOON_WS_MAX_NUM_BINS],
     num_bins: u8,
     _reserved: [u8; 7],
 }
 
-impl TryFrom<&BalloonWSS> for BalloonWSSFfi {
+impl TryFrom<&BalloonWS> for BalloonWSFfi {
     type Error = &'static str;
 
-    fn try_from(value: &BalloonWSS) -> Result<Self, Self::Error> {
-        if value.wss.len() > VIRTIO_BALLOON_WS_MAX_NUM_BINS {
-            return Err("too many WSS buckets in source object.");
+    fn try_from(value: &BalloonWS) -> Result<Self, Self::Error> {
+        if value.ws.len() > VIRTIO_BALLOON_WS_MAX_NUM_BINS {
+            return Err("too many WS buckets in source object.");
         }
 
         let mut ffi = Self {
-            wss: [WSSBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
-            num_bins: value.wss.len() as u8,
+            ws: [WorkingSetBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
+            num_bins: value.ws.len() as u8,
             ..Default::default()
         };
-        for (ffi_wss, other_wss) in ffi.wss.iter_mut().zip(value.wss.iter()) {
-            *ffi_wss = (*other_wss).into();
+        for (ffi_ws, other_ws) in ffi.ws.iter_mut().zip(value.ws.iter()) {
+            *ffi_ws = (*other_ws).into();
         }
         Ok(ffi)
     }
 }
 
-impl BalloonWSSFfi {
+impl BalloonWSFfi {
     pub fn new() -> Self {
         Self {
-            wss: [WSSBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
+            ws: [WorkingSetBucketFfi::new(); VIRTIO_BALLOON_WS_MAX_NUM_BINS],
             num_bins: 0,
             _reserved: [0; 7],
         }
     }
 }
 
-impl Default for BalloonWSSFfi {
+impl Default for BalloonWSFfi {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[repr(C)]
-pub struct BalloonWssConfigFfi {
+pub struct BalloonWSRConfigFfi {
     intervals: [u64; VIRTIO_BALLOON_WS_MAX_NUM_INTERVALS],
     num_intervals: u8,
     _reserved: [u8; 7],
@@ -682,7 +847,7 @@ pub struct BalloonWssConfigFfi {
     report_threshold: u64,
 }
 
-/// Returns balloon working set size of the crosvm instance whose control socket is listening on socket_path.
+/// Returns balloon working set of the crosvm instance whose control socket is listening on socket_path.
 ///
 /// The function returns true on success or false if an error occured.
 ///
@@ -692,23 +857,23 @@ pub struct BalloonWssConfigFfi {
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
 #[no_mangle]
-pub unsafe extern "C" fn crosvm_client_balloon_wss(
+pub unsafe extern "C" fn crosvm_client_balloon_working_set(
     socket_path: *const c_char,
-    wss: *mut BalloonWSSFfi,
+    ws: *mut BalloonWSFfi,
     actual: *mut u64,
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
-            let request = &VmRequest::BalloonCommand(BalloonControlCommand::WorkingSetSize);
-            if let Ok(VmResponse::BalloonWSS {
-                wss: ref balloon_wss,
+            let request = &VmRequest::BalloonCommand(BalloonControlCommand::WorkingSet);
+            if let Ok(VmResponse::BalloonWS {
+                ws: ref balloon_ws,
                 balloon_actual,
             }) = handle_request(request, socket_path)
             {
-                if !wss.is_null() {
-                    // SAFETY: just checked that `wss` is not null.
+                if !ws.is_null() {
+                    // SAFETY: just checked that `ws` is not null.
                     unsafe {
-                        *wss = match balloon_wss.try_into() {
+                        *ws = match balloon_ws.try_into() {
                             Ok(result) => result,
                             Err(_) => return false,
                         };
@@ -740,7 +905,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_wss(
 pub struct RegisteredEventFfi(u32);
 
 #[cfg(feature = "registered_events")]
-pub const REGISTERED_EVENT_VIRTIO_BALLOON_WSS_REPORT: RegisteredEventFfi = RegisteredEventFfi(0);
+pub const REGISTERED_EVENT_VIRTIO_BALLOON_WS_REPORT: RegisteredEventFfi = RegisteredEventFfi(0);
 #[cfg(feature = "registered_events")]
 pub const REGISTERED_EVENT_VIRTIO_BALLOON_RESIZE: RegisteredEventFfi = RegisteredEventFfi(1);
 #[cfg(feature = "registered_events")]
@@ -752,7 +917,7 @@ impl TryFrom<RegisteredEventFfi> for RegisteredEvent {
 
     fn try_from(value: RegisteredEventFfi) -> Result<Self, Self::Error> {
         match value.0 {
-            0 => Ok(RegisteredEvent::VirtioBalloonWssReport),
+            0 => Ok(RegisteredEvent::VirtioBalloonWsReport),
             1 => Ok(RegisteredEvent::VirtioBalloonResize),
             2 => Ok(RegisteredEvent::VirtioBalloonOOMDeflation),
             _ => Err("RegisteredEventFFi outside of known RegisteredEvent enum range"),
@@ -868,7 +1033,7 @@ pub unsafe extern "C" fn crosvm_client_unregister_listener(
     .unwrap_or(false)
 }
 
-/// Set Working Set Size config in guest.
+/// Set Working Set Reporting config in guest.
 ///
 /// The function returns true on success or false if an error occured.
 ///
@@ -878,9 +1043,9 @@ pub unsafe extern "C" fn crosvm_client_unregister_listener(
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
 #[no_mangle]
-pub unsafe extern "C" fn crosvm_client_balloon_wss_config(
+pub unsafe extern "C" fn crosvm_client_balloon_wsr_config(
     socket_path: *const c_char,
-    config: *const BalloonWssConfigFfi,
+    config: *const BalloonWSRConfigFfi,
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
@@ -894,11 +1059,22 @@ pub unsafe extern "C" fn crosvm_client_balloon_wss_config(
                     for idx in 0..(*config).num_intervals {
                         actual_bins.push((*config).intervals[idx as usize]);
                     }
+                    let refresh_threshold = match u32::try_from((*config).refresh_threshold) {
+                        Ok(r_t) => r_t,
+                        Err(_) => return false,
+                    };
+                    let report_threshold = match u32::try_from((*config).report_threshold) {
+                        Ok(r_p) => r_p,
+                        Err(_) => return false,
+                    };
                     let request =
-                        VmRequest::BalloonCommand(BalloonControlCommand::WorkingSetSizeConfig {
-                            bins: actual_bins,
-                            refresh_threshold: (*config).refresh_threshold,
-                            report_threshold: (*config).report_threshold,
+                        VmRequest::BalloonCommand(BalloonControlCommand::WorkingSetConfig {
+                            bins: actual_bins
+                                .iter()
+                                .map(|&b| u32::try_from(b).unwrap())
+                                .collect(),
+                            refresh_threshold,
+                            report_threshold,
                         });
                     vms_request(&request, socket_path).is_ok()
                 }
