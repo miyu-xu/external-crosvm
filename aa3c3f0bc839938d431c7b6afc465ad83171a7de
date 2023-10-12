@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "185218cf_2e7831b2",
+        "filename": "jail/seccomp/x86_64/jail_warden.policy",
+        "patchSetId": 2
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-10-12T23:48:50Z",
+      "side": 1,
+      "message": "do we have to leave all of these android changes in here? Do these all need bugs like the one at the end of `jail/seccomp/x86_64/common_device.policy`?",
+      "range": {
+        "startLine": 30,
+        "startChar": 0,
+        "endLine": 33,
+        "endChar": 49
+      },
+      "revId": "aa3c3f0bc839938d431c7b6afc465ad83171a7de",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
