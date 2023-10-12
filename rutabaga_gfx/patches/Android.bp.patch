@@ -1,68 +1,39 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index f2c450cb4..a32b9445d 100644
+index a9505616c..8dcf85f91 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -29,12 +29,26 @@ rust_library {
-         "libzerocopy",
+@@ -21,7 +21,6 @@ rust_library {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
      ],
-     proc_macros: ["libremain"],
--    shared_libs: [
--        "libdrm",
--        "libepoxy",
--        "libgbm",
--        "libvirglrenderer",
--    ],
-+    target: {
-+        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
-+        android: {
-+            shared_libs: [
-+                "libcutils",
-+                "libdrm",
-+            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
-+            ],
-+        },
-+    },
+     rustlibs: [
+@@ -37,7 +36,9 @@ rust_library {
+         "libdrm",
+         "libepoxy",
+         "libgbm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
++        // "libcutils", // TODO: needed?
+     ],
  }
  
- rust_test {
-@@ -61,10 +75,24 @@ rust_test {
-         "libzerocopy",
+@@ -57,7 +58,6 @@ rust_test {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
      ],
-     proc_macros: ["libremain"],
--    shared_libs: [
--        "libdrm",
--        "libepoxy",
--        "libgbm",
--        "libvirglrenderer",
--    ],
-+    target: {
-+        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
-+        android: {
-+            shared_libs: [
-+                "libcutils",
-+                "libdrm",
-+            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
-+            ],
-+        },
-+    },
+     rustlibs: [
+@@ -73,6 +73,8 @@ rust_test {
+         "libdrm",
+         "libepoxy",
+         "libgbm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
++        // "libcutils", // TODO: needed?
+     ],
  }
