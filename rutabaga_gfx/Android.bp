@@ -19,7 +19,10 @@ rust_library {
     cargo_pkg_version: "0.1.2",
     srcs: ["src/lib.rs"],
     edition: "2021",
-    features: ["virgl_renderer"],
+    features: [
+        "gfxstream",
+        "virgl_renderer",
+    ],
     rustlibs: [
         "libcfg_if",
         "liblibc",
@@ -29,26 +32,14 @@ rust_library {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
-    target: {
-        host: {
-            features: ["gfxstream"],
-            shared_libs: [
-                "libgfxstream_backend",
-                "libvirglrenderer",
-            ],
-        },
-        android: {
-            shared_libs: [
-                "libcutils",
-                "libdrm",
-            ],
-            static_libs: [
-                "libepoxy",
-                "libgbm",
-                "libvirglrenderer",
-            ],
-        },
-    },
+    shared_libs: [
+        "libdrm",
+        "libepoxy",
+        "libgbm",
+        "libgfxstream_backend",
+        "libvirglrenderer",
+        // "libcutils", // TODO: needed?
+    ],
 }
 
 rust_test {
@@ -65,7 +56,10 @@ rust_test {
         unit_test: true,
     },
     edition: "2021",
-    features: ["virgl_renderer"],
+    features: [
+        "gfxstream",
+        "virgl_renderer",
+    ],
     rustlibs: [
         "libcfg_if",
         "liblibc",
@@ -75,24 +69,12 @@ rust_test {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
-    target: {
-        host: {
-            features: ["gfxstream"],
-            shared_libs: [
-                "libgfxstream_backend",
-                "libvirglrenderer",
-            ],
-        },
-        android: {
-            shared_libs: [
-                "libcutils",
-                "libdrm",
-            ],
-            static_libs: [
-                "libepoxy",
-                "libgbm",
-                "libvirglrenderer",
-            ],
-        },
-    },
+    shared_libs: [
+        "libdrm",
+        "libepoxy",
+        "libgbm",
+        "libgfxstream_backend",
+        "libvirglrenderer",
+        // "libcutils", // TODO: needed?
+    ],
 }
