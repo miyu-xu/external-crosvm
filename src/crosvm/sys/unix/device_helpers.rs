@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (ced963 Merge remote-tracking branch 'aosp/upstream-main' into merge)
 // Copyright 2017 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -1590,3 +1591,5 @@ pub fn setup_virtio_access_platform(
         tube_pair.map(|(_request_tx, request_rx)| request_rx),
     ))
 }
+=======
+>>>>>>> BRANCH (11ca07 Roll recipe dependencies (trivial).)
