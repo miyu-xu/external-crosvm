@@ -11,13 +11,14 @@
     // "registered_events",
     "gdb",
     "geniezone",
+    "gfxstream",
+    "gfxstream_stub",
+    "gpu",
     "gunyah",
     "net",
     "qcow",
     "usb",
-    // TODO: Enable these in the root crate instead. May be difficult because of host-vs-device
-    // difference that are handled in patches in, e.g., the "devices" crate.
-    "rutabaga_gfx/virgl_renderer"
+    "virgl_renderer"
   ],
   "workspace": true,
   "workspace_excludes": [
