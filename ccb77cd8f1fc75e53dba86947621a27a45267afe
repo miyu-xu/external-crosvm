@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6041d5e0_3007156b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-12T22:58:39Z",
+      "side": 1,
+      "message": "FYI: all `unix` dirs got renamed to `linux`. and also the `tpm2` crates were deleted",
+      "revId": "ccb77cd8f1fc75e53dba86947621a27a45267afe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
