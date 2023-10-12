@@ -54,6 +54,7 @@ rust_binary {
         "gunyah",
         "qcow",
         "usb",
+        "composite-disk",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -131,6 +132,11 @@ rust_binary {
             },
         },
         android: {
+            features: [
+                "gfxstream",
+                "gpu",
+                "virgl_renderer_next",
+            ],
             shared_libs: [
                 "libprocessgroup",
             ],
@@ -265,6 +271,11 @@ rust_test {
         android: {
             shared_libs: [
                 "libprocessgroup",
+            ],
+            features: [
+                "gfxstream",
+                "gpu",
+                "virgl_renderer_next",
             ],
         },
         host_linux: {

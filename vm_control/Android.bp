@@ -55,6 +55,11 @@ rust_library {
                 "gpu",
             ],
         },
+        android: {
+            features: [
+                "gpu",
+            ],
+        },
     },
 
 }
