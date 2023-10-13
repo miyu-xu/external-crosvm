@@ -46,6 +46,30 @@
       },
       "revId": "aa3c3f0bc839938d431c7b6afc465ad83171a7de",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dab9626e_badef6a9",
+        "filename": "jail/seccomp/x86_64/jail_warden.policy",
+        "patchSetId": 2
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-13T00:39:31Z",
+      "side": 1,
+      "message": "s/accurately/precisely/",
+      "parentUuid": "0edf18c9_c10c2380",
+      "range": {
+        "startLine": 30,
+        "startChar": 0,
+        "endLine": 33,
+        "endChar": 49
+      },
+      "revId": "aa3c3f0bc839938d431c7b6afc465ad83171a7de",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
