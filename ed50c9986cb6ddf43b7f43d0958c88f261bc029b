@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "86387967_0fdae2d8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2023-10-16T16:10:55Z",
+      "side": 1,
+      "message": "Looks like this CL stopped being a merge commit with the revert.",
+      "revId": "ed50c9986cb6ddf43b7f43d0958c88f261bc029b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
