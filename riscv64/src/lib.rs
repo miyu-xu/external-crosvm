@@ -45,13 +45,13 @@ use hypervisor::Vm;
 use hypervisor::VmRiscv64;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use sync::Condvar;
 use sync::Mutex;
 use thiserror::Error;
@@ -188,7 +188,9 @@ impl arch::LinuxArch for Riscv64 {
         _dump_device_tree_blob: Option<PathBuf>,
         _debugcon_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
-        #[cfg(unix)] _guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] _guest_suspended_cvar: Option<
+            Arc<(Mutex<bool>, Condvar)>,
+        >,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmRiscv64,
@@ -252,7 +254,7 @@ impl arch::LinuxArch for Riscv64 {
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
         let (platform_devices, mut platform_pid_debug_label_map) =
-            arch::sys::unix::generate_platform_bus(
+            arch::sys::linux::generate_platform_bus(
                 platform_devices,
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,
@@ -392,7 +394,6 @@ impl arch::LinuxArch for Riscv64 {
             vcpu_affinity: components.vcpu_affinity,
             no_smt: false,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
-            has_bios: false,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -420,7 +421,6 @@ impl arch::LinuxArch for Riscv64 {
         _vcpu_init: VcpuInitRiscv64,
         vcpu_id: usize,
         _num_cpus: usize,
-        _has_bios: bool,
         cpu_config: Option<CpuConfigRiscv64>,
     ) -> std::result::Result<(), Self::Error> {
         vcpu.set_one_reg(VcpuRegister::Core(CoreRegister::Pc), get_kernel_addr().0)

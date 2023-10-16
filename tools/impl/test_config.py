@@ -15,8 +15,6 @@ BUILD_FEATURES: Dict[str, str] = {
 # Do not build these on riscv64. They don't yet have riscv64 support of the backing libraries in the
 # dev container.
 DO_NOT_BUILD_RISCV64 = [
-    "tpm2",
-    "tpm2-sys",
     "libvda",
     "libva",
     "ffmpeg",
@@ -35,6 +33,7 @@ DO_NOT_BUILD_RISCV64 = [
 # List of integration tests that will ask for root privileges.
 ROOT_TESTS = [
     "package(e2e_tests) & binary(pci_hotplug)",
+    "package(e2e_tests) & binary(swap)",
     "package(net_util) & binary(unix_tap)",
     "package(cros_tracing) & binary(trace_marker)",
 ]

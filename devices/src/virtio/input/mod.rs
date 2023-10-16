@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #[allow(dead_code)]
-mod constants;
 mod defaults;
 mod evdev;
 mod event_source;
@@ -27,6 +26,7 @@ use base::WaitContext;
 use base::WorkerThread;
 use data_model::Le16;
 use data_model::Le32;
+use linux_input_sys::constants::*;
 use linux_input_sys::virtio_input_event;
 use linux_input_sys::InputEventDecoder;
 use remain::sorted;
@@ -36,8 +36,8 @@ use thiserror::Error;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
-use self::constants::*;
 use self::event_source::EvdevEventSource;
 use self::event_source::EventSource;
 use self::event_source::SocketEventSource;
@@ -95,7 +95,7 @@ pub enum InputError {
 
 pub type Result<T> = std::result::Result<T, InputError>;
 
-#[derive(Copy, Clone, Default, Debug, AsBytes, FromBytes, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default, Debug, AsBytes, FromZeroes, FromBytes, Serialize, Deserialize)]
 #[repr(C)]
 pub struct virtio_input_device_ids {
     bustype: Le16,
@@ -115,7 +115,7 @@ impl virtio_input_device_ids {
     }
 }
 
-#[derive(Copy, Clone, Default, Debug, AsBytes, FromBytes, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default, Debug, AsBytes, FromZeroes, FromBytes, Serialize, Deserialize)]
 #[repr(C)]
 pub struct virtio_input_absinfo {
     min: Le32,
@@ -135,7 +135,7 @@ impl virtio_input_absinfo {
     }
 }
 
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 struct virtio_input_config {
     select: u8,
@@ -675,6 +675,7 @@ pub fn new_single_touch<T>(
     source: T,
     width: u32,
     height: u32,
+    name: Option<&str>,
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
@@ -682,7 +683,7 @@ where
 {
     Ok(Input {
         worker_thread: None,
-        config: defaults::new_single_touch_config(idx, width, height),
+        config: defaults::new_single_touch_config(idx, width, height, name),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
@@ -694,6 +695,7 @@ pub fn new_multi_touch<T>(
     source: T,
     width: u32,
     height: u32,
+    name: Option<&str>,
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
@@ -701,7 +703,7 @@ where
 {
     Ok(Input {
         worker_thread: None,
-        config: defaults::new_multi_touch_config(idx, width, height),
+        config: defaults::new_multi_touch_config(idx, width, height, name),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })
@@ -714,6 +716,7 @@ pub fn new_trackpad<T>(
     source: T,
     width: u32,
     height: u32,
+    name: Option<&str>,
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
@@ -721,7 +724,7 @@ where
 {
     Ok(Input {
         worker_thread: None,
-        config: defaults::new_trackpad_config(idx, width, height),
+        config: defaults::new_trackpad_config(idx, width, height, name),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })

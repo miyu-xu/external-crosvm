@@ -30,7 +30,7 @@ use crate::IoSource;
 /// represented on the POSIX side as an enum, rather than a trait. This leads to some code &
 /// interface duplication, but as far as we understand that is unavoidable.
 ///
-/// See https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/2571401/2..6/cros_async/src/executor.rs#b75
+/// See <https://chromium-review.googlesource.com/c/chromiumos/platform/crosvm/+/2571401/2..6/cros_async/src/executor.rs#b75>
 /// for further details.
 ///
 /// # Examples
@@ -82,7 +82,7 @@ use crate::IoSource;
 ///     Ok(len)
 /// }
 ///
-/// #[cfg(unix)]
+/// #[cfg(any(target_os = "android", target_os = "linux"))]
 /// # fn do_it() -> Result<(), Box<dyn Error>> {
 ///     let ex = Executor::new()?;
 ///
@@ -111,7 +111,7 @@ use crate::IoSource;
 ///
 /// #     Ok(())
 /// # }
-/// #[cfg(unix)]
+/// #[cfg(any(target_os = "android", target_os = "linux"))]
 /// # do_it().unwrap();
 /// ```
 

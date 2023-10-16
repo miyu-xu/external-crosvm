@@ -88,7 +88,9 @@ use base::WaitContext;
 use base::WorkerThread;
 use data_model::*;
 #[cfg(feature = "minigbm")]
-use libc::{EBADF, EINVAL};
+use libc::EBADF;
+#[cfg(feature = "minigbm")]
+use libc::EINVAL;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
 use resources::AddressRange;
@@ -116,6 +118,7 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 #[cfg(feature = "gpu")]
 use super::resource_bridge::get_resource_info;
@@ -135,10 +138,12 @@ use super::SharedMemoryMapper;
 use super::SharedMemoryRegion;
 use super::VirtioDevice;
 use super::Writer;
-use crate::virtio::device_constants::wl::QUEUE_SIZES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_SEND_FENCES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_TRANS_FLAGS;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
+
+const QUEUE_SIZE: u16 = 256;
+const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -579,14 +584,14 @@ impl VmRequester {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlHeader {
     type_: Le32,
     flags: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Default, FromZeroes, FromBytes, AsBytes)]
 struct CtrlVfdNew {
     hdr: CtrlHeader,
     id: Le32,
@@ -597,7 +602,7 @@ struct CtrlVfdNew {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromBytes)]
+#[derive(Copy, Clone, Default, FromZeroes, FromBytes)]
 struct CtrlVfdNewCtxNamed {
     hdr: CtrlHeader,
     id: Le32,
@@ -608,7 +613,7 @@ struct CtrlVfdNewCtxNamed {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[cfg(feature = "minigbm")]
 struct CtrlVfdNewDmabuf {
     hdr: CtrlHeader,
@@ -629,7 +634,7 @@ struct CtrlVfdNewDmabuf {
 
 #[cfg(feature = "minigbm")]
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[cfg(feature = "minigbm")]
 struct CtrlVfdDmabufSync {
     hdr: CtrlHeader,
@@ -638,7 +643,7 @@ struct CtrlVfdDmabufSync {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdRecv {
     hdr: CtrlHeader,
     id: Le32,
@@ -646,14 +651,14 @@ struct CtrlVfdRecv {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfd {
     hdr: CtrlHeader,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdSend {
     hdr: CtrlHeader,
     id: Le32,
@@ -662,21 +667,21 @@ struct CtrlVfdSend {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdSendVfd {
     kind: Le32,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromBytes)]
+#[derive(Copy, Clone, FromZeroes, FromBytes)]
 union CtrlVfdSendVfdV2Payload {
     id: Le32,
     seqno: Le64,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromBytes)]
+#[derive(Copy, Clone, FromZeroes, FromBytes)]
 struct CtrlVfdSendVfdV2 {
     kind: Le32,
     payload: CtrlVfdSendVfdV2Payload,
@@ -822,7 +827,7 @@ impl WlVfd {
         let (offset, desc, reqs) = vm.allocate_and_register_gpu_memory(width, height, format)?;
         let mut vfd = WlVfd::default();
         let vfd_shm =
-            SharedMemory::from_safe_descriptor(desc, Some(reqs.size)).map_err(WlError::NewAlloc)?;
+            SharedMemory::from_safe_descriptor(desc, reqs.size).map_err(WlError::NewAlloc)?;
 
         let mut desc = GpuMemoryDesc::default();
         for i in 0..3 {
@@ -2051,5 +2056,22 @@ impl VirtioDevice for Wl {
                 Ok(())
             }
         }
+    }
+
+    // ANDROID: Add empty implementations for successful snapshot taking. Change to full
+    // implementation as part of b/266514618
+    // virtio-wl is not used, but is created. As such, virtio_snapshot/restore will be called when
+    // cuttlefish attempts to take a snapshot.
+    fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data == serde_json::Value::Null,
+            "unexpected snapshot data: should be null, got {}",
+            data,
+        );
+        Ok(())
     }
 }

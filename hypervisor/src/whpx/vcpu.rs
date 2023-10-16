@@ -1164,11 +1164,10 @@ impl VcpuX86_64 for WhpxVcpu {
         // WHvRegisterInterruptState because they are included in
         // get_interrupt_state.
         //
-        // We also exclude MSR_TSC, because on WHPX, we will use virtio-pvclock
-        // to restore the guest clocks. Note that this will be *guest aware*
-        // snapshotting. We may in the future add guest unaware snapshotting
-        // for Windows, in which case we will want to save/restore TSC such that
-        // the guest does not observe any change.
+        // We intentionally exclude MSR_TSC because in snapshotting it is
+        // handled by the generic x86_64 VCPU snapshot/restore. Non snapshot
+        // consumers should use get/set_tsc_adjust to access the adjust register
+        // if needed.
         let mut registers = vec![
             Register {
                 id: MSR_EFER,

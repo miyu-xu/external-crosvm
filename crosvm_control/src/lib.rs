@@ -19,7 +19,7 @@ use std::ffi::CStr;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::time::Duration;
 
 use libc::c_char;
@@ -153,11 +153,43 @@ pub unsafe extern "C" fn crosvm_client_balloon_vms(
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
-            let command = BalloonControlCommand::Adjust { num_bytes };
+            let command = BalloonControlCommand::Adjust {
+                num_bytes,
+                wait_for_success: false,
+            };
             vms_request(&VmRequest::BalloonCommand(command), socket_path).is_ok()
         } else {
             false
         }
+    })
+    .unwrap_or(false)
+}
+
+/// See crosvm_client_balloon_vms.
+#[cfg(any(target_os = "android", target_os = "linux"))]
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_balloon_vms_wait_with_timeout(
+    socket_path: *const c_char,
+    num_bytes: u64,
+    timeout_ms: u64,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            let command = BalloonControlCommand::Adjust {
+                num_bytes,
+                wait_for_success: true,
+            };
+            let resp = handle_request_with_timeout(
+                &VmRequest::BalloonCommand(command),
+                socket_path,
+                Some(Duration::from_millis(timeout_ms)),
+            );
+            if matches!(resp, Ok(VmResponse::Ok)) {
+                return true;
+            }
+            println!("adjust failure: {:?}", resp);
+        }
+        false
     })
     .unwrap_or(false)
 }
@@ -457,6 +489,84 @@ pub unsafe extern "C" fn crosvm_client_usb_detach(socket_path: *const c_char, po
     .unwrap_or(false)
 }
 
+/// Attaches a net tap device to the crosvm instance with control socket at `socket_path`.
+///
+/// # Arguments
+///
+/// * `socket_path` - Path to the crosvm control socket
+/// * `tap_name` - Name of the tap device
+/// * `out_bus_num` - guest bus number will be written here
+///
+/// The function returns true on success, false on failure.
+///
+/// # Safety
+///
+/// Function is unsafe due to raw pointer usage - socket_path and tap_name are assumed to point to a
+/// null-terminated CStr. Function checks that the pointers are not null, but caller need to check
+/// the validity of the pointer. out_bus_num is assumed to point to a u8 integer.
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_net_tap_attach(
+    socket_path: *const c_char,
+    tap_name: *const c_char,
+    out_bus_num: *mut u8,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            if tap_name.is_null() || out_bus_num.is_null() {
+                return false;
+            }
+            // SAFETY: just checked that `tap_name` is not null. Function caller guarantees it
+            // points to a valid CStr.
+            let tap_name = unsafe { CStr::from_ptr(tap_name) }.to_str().unwrap_or("");
+
+            match do_net_add(tap_name, socket_path) {
+                Ok(bus_num) => {
+                    // SAFETY: checked out_bus_num is not null. Function caller guarantees
+                    // validity of pointer.
+                    unsafe { *out_bus_num = bus_num };
+                    true
+                }
+                Err(_e) => false,
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// Detaches a hotplugged tap device from the crosvm instance with control socket at `socket_path`.
+///
+/// # Arguments
+///
+/// * `socket_path` - Path to the crosvm control socket
+/// * `bus_num` - Bus number of the tap device to be removed.
+///
+/// The function returns true on success, and false on failure.
+///
+/// # Safety
+///
+/// Function is unsafe due to raw pointer usage - socket_path is assumed to point to a
+/// null-terminated Cstr. Function checks that the pointers are not null, but caller need to check
+/// the validity of the pointer.
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_net_tap_detach(
+    socket_path: *const c_char,
+    bus_num: u8,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            match do_net_remove(bus_num, socket_path) {
+                Ok(()) => true,
+                Err(_e) => false,
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
 /// Modifies the battery status of crosvm instance whose control socket is listening on
 /// `socket_path`.
 ///
@@ -592,7 +702,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
 ) -> bool {
     crosvm_client_balloon_stats_impl(
         socket_path,
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         None,
         stats,
         actual,
@@ -600,7 +710,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
 }
 
 /// See crosvm_client_balloon_stats.
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_balloon_stats_with_timeout(
     socket_path: *const c_char,
@@ -618,7 +728,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats_with_timeout(
 
 fn crosvm_client_balloon_stats_impl(
     socket_path: *const c_char,
-    #[cfg(unix)] timeout_ms: Option<Duration>,
+    #[cfg(any(target_os = "android", target_os = "linux"))] timeout_ms: Option<Duration>,
     stats: *mut BalloonStatsFfi,
     actual: *mut u64,
 ) -> bool {
@@ -627,7 +737,7 @@ fn crosvm_client_balloon_stats_impl(
             let request = &VmRequest::BalloonCommand(BalloonControlCommand::Stats {});
             #[cfg(not(unix))]
             let resp = handle_request(request, socket_path);
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             let resp = handle_request_with_timeout(request, socket_path, timeout_ms);
             if let Ok(VmResponse::BalloonStats {
                 stats: ref balloon_stats,

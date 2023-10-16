@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(unix)]
+#![cfg(any(target_os = "android", target_os = "linux"))]
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 mod aarch64;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 mod x86_64;
 
 use std::thread;
@@ -30,7 +30,7 @@ use hypervisor::Vm;
 use hypervisor::VmAArch64;
 #[cfg(target_arch = "riscv64")]
 use hypervisor::VmRiscv64;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use hypervisor::VmX86_64;
 use kvm::Cap;
 use vm_memory::GuestAddress;

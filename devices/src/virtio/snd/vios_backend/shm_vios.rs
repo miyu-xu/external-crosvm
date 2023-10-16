@@ -39,10 +39,13 @@ use data_model::VolatileMemory;
 use data_model::VolatileMemoryError;
 use data_model::VolatileSlice;
 use remain::sorted;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::layout::*;
@@ -146,6 +149,14 @@ pub struct VioSClient {
     rx_subscribers: Arc<Mutex<HashMap<usize, Sender<BufferReleaseMsg>>>>,
     recv_thread_state: Arc<Mutex<ThreadFlags>>,
     recv_thread: Mutex<Option<WorkerThread<Result<()>>>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VioSClientSnapshot {
+    config: VioSConfig,
+    jacks: Vec<virtio_snd_jack_info>,
+    streams: Vec<virtio_snd_pcm_info>,
+    chmaps: Vec<virtio_snd_chmap_info>,
 }
 
 impl VioSClient {
@@ -543,6 +554,45 @@ impl VioSClient {
         self.chmaps = self.request_info(VIRTIO_SND_R_CHMAP_INFO, num_chmaps)?;
         Ok(())
     }
+
+    pub fn snapshot(&self) -> VioSClientSnapshot {
+        VioSClientSnapshot {
+            config: self.config,
+            jacks: self.jacks.clone(),
+            streams: self.streams.clone(),
+            chmaps: self.chmaps.clone(),
+        }
+    }
+
+    // Function called `restore` to signify it will happen as part of the snapshot/restore flow. No
+    // data is actually restored in the case of VioSClient.
+    pub fn restore(&self, data: VioSClientSnapshot) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data.config == self.config,
+            "config doesn't match on restore: expected: {:?}, got: {:?}",
+            data.config,
+            self.config
+        );
+        anyhow::ensure!(
+            data.jacks == self.jacks,
+            "jacks doesn't match on restore: expected: {:?}, got: {:?}",
+            data.jacks,
+            self.jacks
+        );
+        anyhow::ensure!(
+            data.streams == self.streams,
+            "streams doesn't match on restore: expected: {:?}, got: {:?}",
+            data.streams,
+            self.streams
+        );
+        anyhow::ensure!(
+            data.chmaps == self.chmaps,
+            "chmaps doesn't match on restore: expected: {:?}, got: {:?}",
+            data.chmaps,
+            self.chmaps
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -805,7 +855,19 @@ fn seq_socket_send<T: AsBytes>(socket: &UnixSeqpacket, data: T) -> Result<()> {
 const VIOS_VERSION: u32 = 2;
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 struct VioSConfig {
     version: u32,
     jacks: u32,
@@ -820,7 +882,7 @@ struct BufferReleaseMsg {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 struct IoTransferMsg {
     io_xfer: virtio_snd_pcm_xfer,
     buffer_offset: u32,
@@ -840,7 +902,7 @@ impl IoTransferMsg {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct IoStatusMsg {
     status: virtio_snd_pcm_status,
     buffer_offset: u32,

@@ -8,9 +8,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::pci::MsixConfig;
 use anyhow::Context;
 use base::error;
+use base::trace;
 use base::Event;
 use base::RawDescriptor;
 use base::WorkerThread;
@@ -18,8 +18,9 @@ use serde_json::Value;
 use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
+use crate::pci::MsixConfig;
 use crate::virtio::copy_config;
 use crate::virtio::vhost::user::vmm::Connection;
 use crate::virtio::vhost::user::vmm::Result;
@@ -41,30 +42,16 @@ pub struct VhostUserVirtioDevice {
     expose_shmem_descriptors_with_viommu: bool,
 }
 
-/// Method for determining the number of queues and the size of each queue.
-///
-/// For device types that have a fixed number of queues defined in the specification, use
-/// `QueueSizes::Fixed` to specify a vector containing queue sizes with one element per queue.
-///
-/// Otherwise, use `QueueSizes::AskDevice`, which will query the backend using the vhost-user
-/// `VHOST_USER_GET_QUEUE_NUM` message if `VHOST_USER_PROTOCOL_F_MQ` has been negotiated. If the
-/// MQ feature is supported, the `queue_size` field will be used as the size of each queue up to
-/// the number indicated by the backend's `GET_QUEUE_NUM` response. If the MQ feature is not
-/// supported, `default_queues` will be used as the number of queues instead, and again
-/// `queue_size` will be used as the size of each of these queues.
-pub enum QueueSizes {
-    /// Use a fixed number of queues. Each element in the `Vec` represents the size of the
-    /// corresponding queue with the same index. The number of queues is determined by the length
-    /// of the `Vec`.
-    Fixed(Vec<u16>),
-    /// Query the backend device to determine how many queues it supports.
-    AskDevice {
-        /// Size of each queue (number of elements in each ring).
-        queue_size: u16,
-        /// Default number of queues to use if the backend does not support the
-        /// `VHOST_USER_PROTOCOL_F_MQ` feature.
-        default_queues: usize,
-    },
+// Returns the largest power of two that is less than or equal to `val`.
+fn power_of_two_le(val: u16) -> Option<u16> {
+    if val == 0 {
+        None
+    } else if val.is_power_of_two() {
+        Some(val)
+    } else {
+        val.checked_next_power_of_two()
+            .map(|next_pow_two| next_pow_two / 2)
+    }
 }
 
 impl VhostUserVirtioDevice {
@@ -74,7 +61,8 @@ impl VhostUserVirtioDevice {
     ///
     /// - `connection`: connection to the device backend
     /// - `device_type`: virtio device type
-    /// - `queue_sizes`: per-device queue size configuration
+    /// - `default_queues`: number of queues if the backend does not support the MQ feature
+    /// - `max_queue_size`: maximum number of entries in each queue (default: [`Queue::MAX_SIZE`])
     /// - `allow_features`: allowed virtio device features
     /// - `allow_protocol_features`: allowed vhost-user protocol features
     /// - `base_features`: base virtio device features (e.g. `VIRTIO_F_VERSION_1`)
@@ -83,31 +71,33 @@ impl VhostUserVirtioDevice {
     pub fn new(
         connection: Connection,
         device_type: DeviceType,
-        queue_sizes: QueueSizes,
+        default_queues: usize,
+        max_queue_size: Option<u16>,
         allow_features: u64,
         allow_protocol_features: VhostUserProtocolFeatures,
         base_features: u64,
         cfg: Option<&[u8]>,
         expose_shmem_descriptors_with_viommu: bool,
     ) -> Result<VhostUserVirtioDevice> {
-        let allow_features =
-            allow_features | base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-        let init_features = base_features | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+        let allow_features = allow_features | base_features | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
 
-        let mut handler = VhostUserHandler::new_from_connection(
-            connection,
-            allow_features,
-            init_features,
-            allow_protocol_features,
-        )?;
+        let handler = VhostUserHandler::new(connection, allow_features, allow_protocol_features)?;
 
-        let queue_sizes = match queue_sizes {
-            QueueSizes::Fixed(v) => v,
-            QueueSizes::AskDevice {
-                queue_size,
-                default_queues,
-            } => handler.queue_sizes(queue_size, default_queues)?,
-        };
+        // If the device supports VHOST_USER_PROTOCOL_F_MQ, use VHOST_USER_GET_QUEUE_NUM to
+        // determine the number of queues supported. Otherwise, use the `default_queues` value
+        // provided by the frontend.
+        let num_queues = handler.num_queues()?.unwrap_or(default_queues);
+
+        // Clamp the maximum queue size to the largest power of 2 <= max_queue_size.
+        let max_queue_size = max_queue_size
+            .and_then(power_of_two_le)
+            .unwrap_or(Queue::MAX_SIZE);
+
+        trace!(
+            "vhost-user {device_type} frontend with {num_queues} queues x {max_queue_size} entries"
+        );
+
+        let queue_sizes = vec![max_queue_size; num_queues];
 
         Ok(VhostUserVirtioDevice {
             device_type,
@@ -225,7 +215,10 @@ impl VirtioDevice for VhostUserVirtioDevice {
     }
 
     fn virtio_snapshot(&self) -> anyhow::Result<Value> {
-        Ok(self.handler.borrow_mut().snapshot()?)
+        self.handler
+            .borrow_mut()
+            .snapshot()
+            .context("failed to snapshot vu device")
     }
 
     fn virtio_restore(&mut self, _data: Value) -> anyhow::Result<()> {
@@ -246,6 +239,10 @@ impl VirtioDevice for VhostUserVirtioDevice {
         msix_config: &Arc<Mutex<MsixConfig>>,
         device_activated: bool,
     ) -> anyhow::Result<()> {
+        // Other aspects of the restore operation will depend on the mem table
+        // being set.
+        self.handler.borrow_mut().set_mem_table(&mem)?;
+
         if device_activated {
             let non_msix_evt = Event::new().context("Failed to create event")?;
             queue_configs

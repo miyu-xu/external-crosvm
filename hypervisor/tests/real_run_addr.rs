@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use hypervisor::*;
 use sync::Mutex;
@@ -12,7 +12,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_real_run_addr() {
     use hypervisor::kvm::*;
     test_real_run_addr(|guest_mem| {

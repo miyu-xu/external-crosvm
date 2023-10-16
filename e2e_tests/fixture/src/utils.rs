@@ -6,9 +6,10 @@
 
 use std::env;
 use std::io::ErrorKind;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Output;
@@ -125,7 +126,7 @@ impl CommandExt for Command {
             if let Some(code) = output.status.code() {
                 return Err(CommandError::ErrorCode(code));
             } else {
-                #[cfg(unix)]
+                #[cfg(any(target_os = "android", target_os = "linux"))]
                 if let Some(signal) = output.status.signal() {
                     return Err(CommandError::Signal(signal));
                 }

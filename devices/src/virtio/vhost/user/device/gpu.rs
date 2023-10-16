@@ -16,15 +16,15 @@ use base::warn;
 use base::Tube;
 use cros_async::EventAsync;
 use cros_async::Executor;
-use futures::future::AbortHandle;
-use futures::future::Abortable;
+use cros_async::TaskHandle;
 use sync::Mutex;
 pub use sys::run_gpu_device;
 pub use sys::Options;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
+use crate::virtio::device_constants::gpu::NUM_QUEUES;
 use crate::virtio::gpu;
 use crate::virtio::gpu::QueueReader;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
@@ -39,7 +39,7 @@ use crate::virtio::SharedMemoryMapper;
 use crate::virtio::SharedMemoryRegion;
 use crate::virtio::VirtioDevice;
 
-const MAX_QUEUE_NUM: usize = gpu::QUEUE_SIZES.len();
+const MAX_QUEUE_NUM: usize = NUM_QUEUES;
 
 #[derive(Clone)]
 struct SharedReader {
@@ -90,7 +90,7 @@ struct GpuBackend {
     state: Option<Rc<RefCell<gpu::Frontend>>>,
     fence_state: Arc<Mutex<gpu::FenceState>>,
     queue_workers: [Option<WorkerState<Arc<Mutex<Queue>>, ()>>; MAX_QUEUE_NUM],
-    platform_workers: Rc<RefCell<Vec<AbortHandle>>>,
+    platform_workers: Rc<RefCell<Vec<TaskHandle<()>>>>,
     shmem_mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
 }
 
@@ -100,7 +100,7 @@ impl VhostUserBackend for GpuBackend {
     }
 
     fn features(&self) -> u64 {
-        self.gpu.borrow().features() | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
+        self.gpu.borrow().features() | 1 << VHOST_USER_F_PROTOCOL_FEATURES
     }
 
     fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
@@ -203,26 +203,18 @@ impl VhostUserBackend for GpuBackend {
         self.start_platform_workers()?;
 
         // Start handling the control queue.
-        let (handle, registration) = AbortHandle::new_pair();
-        let queue_task = self.ex.spawn_local(Abortable::new(
-            run_ctrl_queue(reader, mem, kick_evt, state),
-            registration,
-        ));
+        let queue_task = self
+            .ex
+            .spawn_local(run_ctrl_queue(reader, mem, kick_evt, state));
 
-        self.queue_workers[idx] = Some(WorkerState {
-            abort_handle: handle,
-            queue_task,
-            queue,
-        });
+        self.queue_workers[idx] = Some(WorkerState { queue_task, queue });
         Ok(())
     }
 
     fn stop_queue(&mut self, idx: usize) -> anyhow::Result<Queue> {
         if let Some(worker) = self.queue_workers.get_mut(idx).and_then(Option::take) {
-            worker.abort_handle.abort();
-
             // Wait for queue_task to be aborted.
-            let _ = self.ex.run_until(worker.queue_task);
+            let _ = self.ex.run_until(worker.queue_task.cancel());
 
             // Valid as the GPU device has a single Queue, so clearing the state here is ok.
             self.state = None;
@@ -240,7 +232,7 @@ impl VhostUserBackend for GpuBackend {
 
     fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
         for handle in self.platform_workers.borrow_mut().drain(..) {
-            handle.abort();
+            let _ = self.ex.run_until(handle.cancel());
         }
         Ok(())
     }
@@ -280,10 +272,10 @@ impl VhostUserBackend for GpuBackend {
     }
 
     fn restore(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
-        let data =
-            serde_json::to_value(data).context("Failed to deserialize NULL in the GPU device")?;
+        let data: serde_json::Value = serde_json::from_slice(data.as_slice())
+            .context("Failed to deserialize NULL in the GPU device")?;
         anyhow::ensure!(
-            data == serde_json::Value::Null,
+            data.is_null(),
             "unexpected snapshot data: should be null, got {}",
             data
         );

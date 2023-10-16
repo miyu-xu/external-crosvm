@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::__cpuid;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::__cpuid_count;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -13,18 +13,8 @@ use std::str::FromStr;
 
 use arch::set_default_serial_parameters;
 use arch::CpuSet;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrAction;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrConfig;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrFilter;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrRWType;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrValueFrom;
 use arch::Pstore;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use arch::SmbiosOptions;
 use arch::VcpuAffinity;
 use base::debug;
@@ -37,6 +27,7 @@ use devices::virtio::block::DiskOption;
 use devices::virtio::device_constants::video::VideoDeviceConfig;
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::GpuParameters;
+use devices::virtio::scsi::ScsiOption;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 #[cfg(all(windows, feature = "gpu"))]
@@ -46,16 +37,12 @@ use devices::virtio::vhost::user::device::gpu::sys::windows::GpuVmmConfig;
 #[cfg(all(windows, feature = "audio"))]
 use devices::virtio::vhost::user::device::snd::sys::windows::SndSplitConfig;
 use devices::virtio::vsock::VsockConfig;
+#[cfg(feature = "net")]
 use devices::virtio::NetParameters;
-#[cfg(feature = "audio")]
-use devices::Ac97Backend;
-#[cfg(feature = "audio")]
-use devices::Ac97Parameters;
 use devices::FwCfgParameters;
-use devices::PciAddress;
 use devices::PflashParameters;
 use devices::StubPciParameters;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use hypervisor::CpuHybridType;
 use hypervisor::ProtectionType;
 use jail::JailConfig;
@@ -63,22 +50,18 @@ use resources::AddressRange;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_keyvalue::FromKeyValues;
-use uuid::Uuid;
 use vm_control::BatteryType;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::check_host_hybrid_support;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::set_enable_pnp_data_msr_config;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::CpuIdCall;
 
-#[cfg(unix)]
+pub(crate) use super::sys::HypervisorKind;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use crate::crosvm::sys::config::SharedDir;
 
-pub(crate) use super::sys::HypervisorKind;
-
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         #[cfg(feature = "gpu")]
         use crate::crosvm::sys::GpuRenderServerParameters;
 
@@ -89,12 +72,12 @@ cfg_if::cfg_if! {
     }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const ONE_MB: u64 = 1 << 20;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 // by default, if enabled, the balloon WS features will use 4 bins.
@@ -124,7 +107,7 @@ pub enum IrqChipKind {
 }
 
 /// The core types in hybrid architecture.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CpuCoreType {
@@ -144,7 +127,7 @@ pub struct CpuOptions {
     #[serde(default)]
     pub clusters: Vec<CpuSet>,
     /// Core Type of CPUs.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub core_types: Option<CpuCoreType>,
 }
 
@@ -156,29 +139,33 @@ pub struct MemOptions {
     pub size: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VhostUserOption {
     pub socket: PathBuf,
+
+    /// Maximum number of entries per queue (default: 32768)
+    pub max_queue_size: Option<u16>,
 }
 
-impl FromStr for VhostUserOption {
-    type Err = <PathBuf as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self { socket: s.parse()? })
-    }
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VhostUserFsOption {
     pub socket: PathBuf,
     pub tag: String,
+
+    /// Maximum number of entries per queue (default: 32768)
+    pub max_queue_size: Option<u16>,
 }
 
-impl FromStr for VhostUserFsOption {
-    type Err = &'static str;
-
-    fn from_str(param: &str) -> Result<Self, Self::Err> {
+pub fn parse_vhost_user_fs_option(param: &str) -> Result<VhostUserFsOption, String> {
+    // Allow the previous `--vhost-user-fs /path/to/socket:fs-tag` format for compatibility.
+    // This will unfortunately prevent parsing of valid comma-separated FromKeyValues options that
+    // contain a ":" character (e.g. in a socket filename), but those were not supported in the old
+    // format either, so we can live with it until the deprecated format is removed.
+    // TODO(b/218223240): Remove support for the deprecated format (and use `FromKeyValues`
+    // directly instead of `from_str_fn`) once enough time has passed.
+    if param.contains(':') {
         // (socket:tag)
         let mut components = param.split(':');
         let socket = PathBuf::from(
@@ -191,16 +178,21 @@ impl FromStr for VhostUserFsOption {
             .ok_or("missing tag for `vhost-user-fs`")?
             .to_owned();
 
-        Ok(Self { socket, tag })
-    }
-}
+        log::warn!(
+            "`--vhost-user-fs` with colon-separated options is deprecated; \
+            please use `--vhost-user-fs {},tag={}` instead",
+            socket.display(),
+            tag,
+        );
 
-/// Options for virtio-vhost-user proxy device.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, serde_keyvalue::FromKeyValues)]
-pub struct VvuOption {
-    pub socket: PathBuf,
-    pub addr: Option<PciAddress>,
-    pub uuid: Option<Uuid>,
+        Ok(VhostUserFsOption {
+            socket,
+            tag,
+            max_queue_size: None,
+        })
+    } else {
+        from_key_values::<VhostUserFsOption>(param)
+    }
 }
 
 /// A bind mount for directories in the plugin process.
@@ -327,6 +319,7 @@ pub struct TouchDeviceOption {
     path: PathBuf,
     width: Option<u32>,
     height: Option<u32>,
+    name: Option<String>,
     default_width: u32,
     default_height: u32,
 }
@@ -337,6 +330,7 @@ impl TouchDeviceOption {
             path,
             width: None,
             height: None,
+            name: None,
             default_width: DEFAULT_TOUCH_DEVICE_WIDTH,
             default_height: DEFAULT_TOUCH_DEVICE_HEIGHT,
         }
@@ -375,6 +369,16 @@ impl TouchDeviceOption {
             self.height.unwrap_or(self.default_height),
         )
     }
+
+    /// Setter for the input device's name specified by the user.
+    pub fn set_name(&mut self, name: String) {
+        self.name.replace(name);
+    }
+
+    /// Getter for the input device's name
+    pub fn get_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
 }
 
 impl FromStr for TouchDeviceOption {
@@ -388,6 +392,9 @@ impl FromStr for TouchDeviceOption {
         }
         if let Some(height) = it.next() {
             touch_spec.set_height(height.trim().parse().unwrap());
+        }
+        if let Some(name) = it.next() {
+            touch_spec.set_name(name.trim().to_string());
         }
         Ok(touch_spec)
     }
@@ -441,67 +448,6 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
             })
         })
         .collect()
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[derive(Deserialize, Serialize, serde_keyvalue::FromKeyValues)]
-#[serde(deny_unknown_fields)]
-struct UserspaceMsrOptions {
-    pub index: u32,
-    #[serde(rename = "type")]
-    pub rw_type: MsrRWType,
-    pub action: MsrAction,
-    #[serde(default = "default_msr_value_from")]
-    pub from: MsrValueFrom,
-    #[serde(default = "default_msr_filter")]
-    pub filter: MsrFilter,
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn default_msr_value_from() -> MsrValueFrom {
-    MsrValueFrom::RWFromRunningCPU
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn default_msr_filter() -> MsrFilter {
-    MsrFilter::Default
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
-    let options: UserspaceMsrOptions = from_key_values(value)?;
-
-    Ok((
-        options.index,
-        MsrConfig {
-            rw_type: options.rw_type,
-            action: options.action,
-            from: options.from,
-            filter: options.filter,
-        },
-    ))
-}
-
-pub fn validate_fw_cfg_parameters(params: &FwCfgParameters) -> Result<(), String> {
-    if params.name.is_none() && (params.string.is_some() || params.path.is_some()) {
-        return Err("Must give name of data to --fw-cfg".to_string());
-    }
-
-    if params.string.is_some() && params.path.is_some()
-        || params.name.is_some() && params.string.is_none() && params.path.is_none()
-    {
-        return Err("Provide exactly one of string or path args to --fw-cfg".to_string());
-    }
-
-    Ok(())
-}
-
-pub fn parse_fw_cfg_options(s: &str) -> Result<FwCfgParameters, String> {
-    let params: FwCfgParameters = from_key_values(s)?;
-
-    validate_fw_cfg_parameters(&params)?;
-
-    Ok(params)
 }
 
 pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
@@ -581,7 +527,7 @@ pub fn parse_plugin_mount_option(value: &str) -> Result<BindMount, String> {
     Ok(BindMount { src, dst, writable })
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub fn parse_memory_region(value: &str) -> Result<AddressRange, String> {
     let paras: Vec<&str> = value.split(',').collect();
     if paras.len() != 2 {
@@ -652,36 +598,6 @@ pub fn parse_bus_id_addr(v: &str) -> Result<(u8, u8, u16, u16), String> {
         }
         _ => Err(String::from("BUS_ID:ADDR:BUS_NUM:DEV_NUM")),
     }
-}
-
-#[cfg(feature = "audio")]
-pub fn parse_ac97_options(s: &str) -> Result<Ac97Parameters, String> {
-    let mut ac97_params: Ac97Parameters = Default::default();
-
-    let opts = s
-        .split(',')
-        .map(|frag| frag.split('='))
-        .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-    for (k, v) in opts {
-        match k {
-            "backend" => {
-                ac97_params.backend = v
-                    .parse::<Ac97Backend>()
-                    .map_err(|e| invalid_value_err(v, e))?;
-            }
-            "capture" => {
-                ac97_params.capture = v
-                    .parse::<bool>()
-                    .map_err(|e| format!("invalid capture option: {}", e))?;
-            }
-            _ => {
-                super::sys::config::parse_ac97_options(&mut ac97_params, k, v)?;
-            }
-        }
-    }
-
-    Ok(ac97_params)
 }
 
 pub fn invalid_value_err<T: AsRef<str>, S: ToString>(value: T, expected: S) -> String {
@@ -826,10 +742,8 @@ mod serde_serial_params {
 #[derive(Serialize, Deserialize)]
 #[remain::sorted]
 pub struct Config {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
-    #[cfg(feature = "audio")]
-    pub ac97_parameters: Vec<Ac97Parameters>,
     pub acpi_tables: Vec<PathBuf>,
     pub android_fstab: Option<PathBuf>,
     pub async_executor: Option<ExecutorKind>,
@@ -844,11 +758,13 @@ pub struct Config {
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
     pub block_vhost_user_tube: Vec<Tube>,
+    #[cfg(target_arch = "x86_64")]
+    pub break_linux_pci_config_io: bool,
     #[cfg(windows)]
     pub broker_shutdown_event: Option<Event>,
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(all(target_arch = "x86_64", unix))]
     pub bus_lock_ratelimit: u64,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub coiommu_param: Option<devices::CoIommuParameters>,
     pub core_scheduling: bool,
     pub cpu_capacity: BTreeMap<usize, u32>, // CPU index -> capacity
@@ -864,8 +780,8 @@ pub struct Config {
     pub display_window_mouse: bool,
     pub dump_device_tree_blob: Option<PathBuf>,
     pub dynamic_power_coefficient: BTreeMap<usize, u32>,
+    pub enable_fw_cfg: bool,
     pub enable_hwp: bool,
-    pub enable_pnp_data: bool,
     pub executable_path: Option<Executable>,
     #[cfg(windows)]
     pub exit_stats: bool,
@@ -899,7 +815,7 @@ pub struct Config {
     pub jail_config: Option<JailConfig>,
     #[cfg(windows)]
     pub kernel_log_file: Option<String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub lock_guest_memory: bool,
     #[cfg(windows)]
     pub log_file: Option<String>,
@@ -910,6 +826,7 @@ pub struct Config {
     pub mmio_address_ranges: Vec<AddressRange>,
     #[cfg(target_arch = "aarch64")]
     pub mte: bool,
+    #[cfg(feature = "net")]
     pub net: Vec<NetParameters>,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
@@ -919,9 +836,9 @@ pub struct Config {
     pub params: Vec<String>,
     #[cfg(feature = "pci-hotplug")]
     pub pci_hotplug_slots: Option<u8>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pci_low_start: Option<u64>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pcie_ecam: Option<AddressRange>,
     pub per_vm_core_scheduling: bool,
     pub pflash_parameters: Option<PflashParameters>,
@@ -949,22 +866,21 @@ pub struct Config {
     pub restore_path: Option<PathBuf>,
     pub rng: bool,
     pub rt_cpus: CpuSet,
+    pub scsis: Vec<ScsiOption>,
     #[serde(with = "serde_serial_params")]
     pub serial_parameters: BTreeMap<(SerialHardware, u8), SerialParameters>,
     #[cfg(windows)]
     pub service_pipe_name: Option<String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[serde(skip)]
     pub shared_dirs: Vec<SharedDir>,
-    #[cfg(feature = "slirp-ring-capture")]
+    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pub slirp_capture_file: Option<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub smbios: SmbiosOptions,
     #[cfg(all(windows, feature = "audio"))]
     pub snd_split_config: Option<SndSplitConfig>,
     pub socket_path: Option<PathBuf>,
-    #[cfg(feature = "tpm")]
-    pub software_tpm: bool,
     #[cfg(feature = "audio")]
     pub sound: Option<PathBuf>,
     pub strict_balloon: bool,
@@ -974,24 +890,22 @@ pub struct Config {
     pub swiotlb: Option<u64>,
     #[cfg(target_os = "android")]
     pub task_profiles: Vec<String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    pub userspace_msr: BTreeMap<u32, MsrConfig>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
     pub vcpu_count: Option<usize>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub vcpu_hybrid_type: BTreeMap<usize, CpuHybridType>, // CPU index -> hybrid type
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub vfio: Vec<super::sys::config::VfioOption>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub vfio_isolate_hotplug: bool,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi: bool,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi_device: PathBuf,
     pub vhost_user_blk: Vec<VhostUserOption>,
@@ -1021,9 +935,8 @@ pub struct Config {
     pub virtio_switches: Vec<PathBuf>,
     pub virtio_trackpad: Vec<TouchDeviceOption>,
     pub vsock: Option<VsockConfig>,
-    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+    #[cfg(feature = "vtpm")]
     pub vtpm_proxy: bool,
-    pub vvu_proxy: Vec<VvuOption>,
     pub wayland_socket_paths: BTreeMap<String, PathBuf>,
     pub x_display: Option<String>,
 }
@@ -1031,10 +944,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            #[cfg(all(target_arch = "x86_64", unix))]
             ac_adapter: false,
-            #[cfg(feature = "audio")]
-            ac97_parameters: Vec::new(),
             acpi_tables: Vec::new(),
             android_fstab: None,
             async_executor: None,
@@ -1049,11 +960,13 @@ impl Default for Config {
             block_control_tube: Vec::new(),
             #[cfg(windows)]
             block_vhost_user_tube: Vec::new(),
+            #[cfg(target_arch = "x86_64")]
+            break_linux_pci_config_io: false,
             #[cfg(windows)]
             broker_shutdown_event: None,
-            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            #[cfg(all(target_arch = "x86_64", unix))]
             bus_lock_ratelimit: 0,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             coiommu_param: None,
             core_scheduling: true,
             #[cfg(feature = "crash-report")]
@@ -1069,8 +982,8 @@ impl Default for Config {
             display_window_mouse: false,
             dump_device_tree_blob: None,
             dynamic_power_coefficient: BTreeMap::new(),
+            enable_fw_cfg: false,
             enable_hwp: false,
-            enable_pnp_data: false,
             executable_path: None,
             #[cfg(windows)]
             exit_stats: false,
@@ -1112,7 +1025,7 @@ impl Default for Config {
             },
             #[cfg(windows)]
             kernel_log_file: None,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             lock_guest_memory: false,
             #[cfg(windows)]
             log_file: None,
@@ -1123,6 +1036,7 @@ impl Default for Config {
             mmio_address_ranges: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             mte: false,
+            #[cfg(feature = "net")]
             net: Vec::new(),
             #[cfg(windows)]
             net_vhost_user_tube: None,
@@ -1132,9 +1046,9 @@ impl Default for Config {
             params: Vec::new(),
             #[cfg(feature = "pci-hotplug")]
             pci_hotplug_slots: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             pci_low_start: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             pcie_ecam: None,
             per_vm_core_scheduling: false,
             pflash_parameters: None,
@@ -1158,19 +1072,18 @@ impl Default for Config {
             rng: true,
             rt_cpus: Default::default(),
             serial_parameters: BTreeMap::new(),
+            scsis: Vec::new(),
             #[cfg(windows)]
             service_pipe_name: None,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             shared_dirs: Vec::new(),
-            #[cfg(feature = "slirp-ring-capture")]
+            #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             smbios: SmbiosOptions::default(),
             #[cfg(all(windows, feature = "audio"))]
             snd_split_config: None,
             socket_path: None,
-            #[cfg(feature = "tpm")]
-            software_tpm: false,
             #[cfg(feature = "audio")]
             sound: None,
             strict_balloon: false,
@@ -1180,24 +1093,22 @@ impl Default for Config {
             swiotlb: None,
             #[cfg(target_os = "android")]
             task_profiles: Vec::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             unmap_guest_memory_on_fork: false,
             usb: true,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            userspace_msr: BTreeMap::new(),
             vcpu_affinity: None,
             vcpu_cgroup_path: None,
             vcpu_count: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             vcpu_hybrid_type: BTreeMap::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             vfio: Vec::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             vfio_isolate_hotplug: false,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi: false,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user_blk: Vec::new(),
@@ -1226,9 +1137,8 @@ impl Default for Config {
             virtio_snds: Vec::new(),
             virtio_switches: Vec::new(),
             virtio_trackpad: Vec::new(),
-            #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+            #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
-            vvu_proxy: Vec::new(),
             wayland_socket_paths: BTreeMap::new(),
             x_display: None,
         }
@@ -1291,19 +1201,6 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
                 );
             }
         }
-    } else {
-        // TODO(b/215297064): Support generic cpuaffinity if there's a need.
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        if !cfg.userspace_msr.is_empty() {
-            for (_, msr_config) in cfg.userspace_msr.iter() {
-                if msr_config.from == MsrValueFrom::RWFromRunningCPU {
-                    return Err(
-                        "`userspace-msr` must set `cpu0` if `host-cpu-topology` is not set"
-                            .to_string(),
-                    );
-                }
-            }
-        }
     }
     if cfg.virt_cpufreq {
         if !cfg.host_cpu_topology && (cfg.vcpu_affinity.is_none() || cfg.cpu_capacity.is_empty()) {
@@ -1312,7 +1209,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
                 .to_string());
         }
     }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     if !cfg.vcpu_hybrid_type.is_empty() {
         if cfg.host_cpu_topology {
             return Err("`core-types` cannot be set with `host-cpu-topology`.".to_string());
@@ -1328,23 +1225,11 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
             }
         }
     }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     if cfg.enable_hwp && !cfg.host_cpu_topology {
         return Err("setting `enable-hwp` requires `host-cpu-topology` is set.".to_string());
     }
-    if cfg.enable_pnp_data {
-        if !cfg.host_cpu_topology {
-            return Err(
-                "setting `enable_pnp_data` must require `host-cpu-topology` is set previously."
-                    .to_string(),
-            );
-        }
-
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        set_enable_pnp_data_msr_config(&mut cfg.userspace_msr)
-            .map_err(|e| format!("MSR can't be passed through {}", e))?;
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     if cfg.itmt {
         use std::collections::BTreeSet;
         // ITMT only works on the case each vCPU is 1:1 mapping to a pCPU.
@@ -1392,7 +1277,7 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         return Err("'balloon_page_reporting' requires enabled balloon".to_string());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     if cfg.lock_guest_memory && cfg.jail_config.is_none() {
         return Err("'lock-guest-memory' and 'disable-sandbox' are mutually exclusive".to_string());
     }
@@ -1505,7 +1390,7 @@ mod tests {
             }
         );
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         {
             let res: CpuOptions = from_key_values("core-types=[atom=[1,3-7],core=[0,2]]").unwrap();
             assert_eq!(
@@ -1648,35 +1533,6 @@ mod tests {
 
         let res: MemOptions = from_key_values("size=0x4000").unwrap();
         assert_eq!(res.size, Some(16384));
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_vaild() {
-        parse_ac97_options("backend=cras").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_null_vaild() {
-        parse_ac97_options("backend=null").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_capture_vaild() {
-        parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_client_type() {
-        parse_ac97_options("backend=cras,capture=true,client_type=crosvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=arcvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=none")
-            .expect_err("parse should have failed");
     }
 
     #[test]
@@ -1961,33 +1817,37 @@ mod tests {
     }
 
     #[test]
-    fn parse_fw_cfg_valid_no_params() {
-        assert!(TryInto::<Config>::try_into(
-            crate::crosvm::cmdline::RunCommand::from_args(&[], &["--fw-cfg", "", "/dev/null"],)
-                .unwrap()
+    fn parse_fw_cfg_valid_path() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--fw-cfg", "name=bar,path=data.bin", "/dev/null"],
+            )
+            .unwrap(),
         )
-        .is_ok());
+        .unwrap();
+
+        assert_eq!(cfg.fw_cfg_parameters.len(), 1);
+        assert_eq!(cfg.fw_cfg_parameters[0].name, "bar".to_string());
+        assert_eq!(cfg.fw_cfg_parameters[0].string, None);
+        assert_eq!(cfg.fw_cfg_parameters[0].path, Some("data.bin".into()));
     }
 
     #[test]
     fn parse_fw_cfg_valid_string() {
-        assert!(TryInto::<Config>::try_into(
+        let cfg = TryInto::<Config>::try_into(
             crate::crosvm::cmdline::RunCommand::from_args(
                 &[],
                 &["--fw-cfg", "name=bar,string=foo", "/dev/null"],
             )
-            .unwrap()
+            .unwrap(),
         )
-        .is_ok());
-    }
+        .unwrap();
 
-    #[test]
-    fn parse_fw_cfg_invalid_both_string_and_path() {
-        assert!(crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &["--fw-cfg", "name=bar,string=foo,path=path/to/file",]
-        )
-        .is_err());
+        assert_eq!(cfg.fw_cfg_parameters.len(), 1);
+        assert_eq!(cfg.fw_cfg_parameters[0].name, "bar".to_string());
+        assert_eq!(cfg.fw_cfg_parameters[0].string, Some("foo".to_string()));
+        assert_eq!(cfg.fw_cfg_parameters[0].path, None);
     }
 
     #[test]
@@ -1996,46 +1856,6 @@ mod tests {
             crate::crosvm::cmdline::RunCommand::from_args(&[], &["--fw-cfg", "string=foo",])
                 .is_err()
         );
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[test]
-    fn parse_userspace_msr_options_test() {
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=w,action=pass,filter=yes").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::WriteOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Override);
-
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=r,action=pass,from=cpu0").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::ReadOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.from, MsrValueFrom::RWFromCPU0);
-
-        let (pass_cpus_index, pass_cpus_cfg) =
-            parse_userspace_msr_options("0x10,type=rw,action=pass").unwrap();
-        assert_eq!(pass_cpus_index, 0x10);
-        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
-        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
-
-        let (pass_cpus_index, pass_cpus_cfg) =
-            parse_userspace_msr_options("0x10,type=rw,action=emu").unwrap();
-        assert_eq!(pass_cpus_index, 0x10);
-        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
-        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrEmulate);
-        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
-
-        assert!(parse_userspace_msr_options("0x10,action=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,action=pass").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=rw").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=w,action=pass,from=f").is_err());
-        assert!(parse_userspace_msr_options("0x10").is_err());
-        assert!(parse_userspace_msr_options("hoge").is_err());
     }
 
     #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
@@ -2066,17 +1886,71 @@ mod tests {
     }
 
     #[test]
-    fn parse_vvu() {
-        assert_eq!(
-            from_key_values::<VvuOption>(
-                "/tmp/vvu-sock,addr=05:2.1,uuid=23546c3d-962d-4ebc-94d9-4acf50996944"
+    fn parse_vhost_user_option() {
+        let opt: VhostUserOption = from_key_values("/10mm").unwrap();
+        assert_eq!(opt.socket.to_str(), Some("/10mm"));
+        assert_eq!(opt.max_queue_size, None);
+
+        let opt: VhostUserOption = from_key_values("/10mm,max-queue-size=256").unwrap();
+        assert_eq!(opt.socket.to_str(), Some("/10mm"));
+        assert_eq!(opt.max_queue_size, Some(256));
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_deprecated() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--vhost-user-fs", "my_socket:my_tag", "/dev/null"],
             )
             .unwrap(),
-            VvuOption {
-                socket: PathBuf::from("/tmp/vvu-sock"),
-                addr: Some(PciAddress::new(0, 0x05, 0x02, 1).unwrap()),
-                uuid: Some(Uuid::parse_str("23546c3d-962d-4ebc-94d9-4acf50996944").unwrap()),
-            }
-        );
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, "my_tag");
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--vhost-user-fs", "my_socket,tag=my_tag", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, "my_tag");
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_max_queue_size() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--vhost-user-fs",
+                    "my_socket,tag=my_tag,max-queue-size=256",
+                    "/dev/null",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, "my_tag");
+        assert_eq!(fs.max_queue_size, Some(256));
     }
 }

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(target_arch = "x86_64")]
 
 use std::sync::Arc;
 use std::thread;
@@ -669,7 +669,7 @@ impl Vcpu for FakeVcpu {
 
     fn set_immediate_exit(&self, _exit: bool) {}
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn signal_handle(&self) -> hypervisor::VcpuSignalHandle {
         unimplemented!()
     }

@@ -14,11 +14,13 @@ pub mod device_constants;
 pub mod input;
 mod interrupt;
 mod iommu;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(feature = "net")]
+pub mod net;
+#[cfg(target_arch = "x86_64")]
 pub mod pvclock;
 mod queue;
 mod rng;
-#[cfg(any(feature = "tpm", feature = "vtpm"))]
+#[cfg(feature = "vtpm")]
 mod tpm;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 mod video;
@@ -32,6 +34,7 @@ pub mod console;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod resource_bridge;
+pub mod scsi;
 #[cfg(feature = "audio")]
 pub mod snd;
 pub mod vhost;
@@ -69,17 +72,25 @@ pub use self::interrupt::Interrupt;
 pub use self::interrupt::InterruptSnapshot;
 pub use self::iommu::ipc_memory_mapper;
 pub use self::iommu::memory_mapper;
-pub use self::iommu::memory_util;
 pub use self::iommu::Iommu;
 pub use self::iommu::IommuError;
+#[cfg(feature = "net")]
+pub use self::net::Net;
+#[cfg(feature = "net")]
+pub use self::net::NetError;
+#[cfg(feature = "net")]
+pub use self::net::NetParameters;
+#[cfg(feature = "net")]
+pub use self::net::NetParametersMode;
 pub use self::queue::split_descriptor_chain::Desc;
 pub use self::queue::split_descriptor_chain::SplitDescriptorChain;
 pub use self::queue::Queue;
 pub use self::queue::QueueConfig;
 pub use self::rng::Rng;
-#[cfg(any(feature = "tpm", feature = "vtpm"))]
+pub use self::scsi::Device as ScsiDevice;
+#[cfg(feature = "vtpm")]
 pub use self::tpm::Tpm;
-#[cfg(any(feature = "tpm", feature = "vtpm"))]
+#[cfg(feature = "vtpm")]
 pub use self::tpm::TpmBackend;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub use self::video::VideoDevice;
@@ -94,20 +105,17 @@ pub use self::virtio_pci_device::VirtioPciDevice;
 pub use self::virtio_pci_device::VirtioPciShmCap;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         mod p9;
         mod pmem;
 
         pub mod wl;
         pub mod fs;
-        pub mod net;
 
-        pub use self::iommu::sys::unix::vfio_wrapper;
-        pub use self::net::Net;
-        pub use self::net::NetError;
-        pub use self::net::NetParameters;
-        pub use self::net::NetParametersMode;
+        pub use self::iommu::sys::linux::vfio_wrapper;
+        #[cfg(feature = "net")]
         pub use self::net::VhostNetParameters;
+        #[cfg(feature = "net")]
         pub use self::net::VHOST_NET_DEFAULT_PATH;
         pub use self::p9::P9;
         pub use self::pmem::Pmem;
@@ -115,23 +123,16 @@ cfg_if::cfg_if! {
         pub use self::snd::new_sound;
         pub use self::wl::Wl;
     } else if #[cfg(windows)] {
-        #[cfg(feature = "slirp")]
-        pub mod net;
-
-        #[cfg(feature = "slirp")]
-        pub use self::net::Net;
-        #[cfg(feature = "slirp")]
-        pub use self::net::NetParameters;
         pub use self::vsock::Vsock;
     } else {
         compile_error!("Unsupported platform");
     }
 }
 
-use futures::channel::oneshot;
 use std::cmp;
 use std::convert::TryFrom;
 
+use futures::channel::oneshot;
 use hypervisor::ProtectionType;
 use virtio_sys::virtio_config::VIRTIO_F_ACCESS_PLATFORM;
 use virtio_sys::virtio_config::VIRTIO_F_VERSION_1;
@@ -153,15 +154,11 @@ pub enum DeviceType {
     Console = virtio_ids::VIRTIO_ID_CONSOLE,
     Rng = virtio_ids::VIRTIO_ID_RNG,
     Balloon = virtio_ids::VIRTIO_ID_BALLOON,
-    Rpmsg = virtio_ids::VIRTIO_ID_RPMSG,
     Scsi = virtio_ids::VIRTIO_ID_SCSI,
     P9 = virtio_ids::VIRTIO_ID_9P,
-    RprocSerial = virtio_ids::VIRTIO_ID_RPROC_SERIAL,
-    Caif = virtio_ids::VIRTIO_ID_CAIF,
     Gpu = virtio_ids::VIRTIO_ID_GPU,
     Input = virtio_ids::VIRTIO_ID_INPUT,
     Vsock = virtio_ids::VIRTIO_ID_VSOCK,
-    Crypto = virtio_ids::VIRTIO_ID_CRYPTO,
     Iommu = virtio_ids::VIRTIO_ID_IOMMU,
     Sound = virtio_ids::VIRTIO_ID_SOUND,
     Fs = virtio_ids::VIRTIO_ID_FS,
@@ -173,7 +170,6 @@ pub enum DeviceType {
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     Pvclock = virtio_ids::VIRTIO_ID_PVCLOCK,
-    VhostUser = virtio_ids::VIRTIO_ID_VHOST_USER,
 }
 
 /// Prints a string representation of the given virtio device type.
@@ -185,17 +181,12 @@ impl std::fmt::Display for DeviceType {
             DeviceType::Console => write!(f, "console"),
             DeviceType::Rng => write!(f, "rng"),
             DeviceType::Balloon => write!(f, "balloon"),
-            DeviceType::Rpmsg => write!(f, "rpmsg"),
             DeviceType::Scsi => write!(f, "scsi"),
             DeviceType::P9 => write!(f, "9p"),
-            DeviceType::RprocSerial => write!(f, "rproc-serial"),
-            DeviceType::Caif => write!(f, "caif"),
             DeviceType::Input => write!(f, "input"),
             DeviceType::Gpu => write!(f, "gpu"),
             DeviceType::Vsock => write!(f, "vsock"),
-            DeviceType::Crypto => write!(f, "crypto"),
             DeviceType::Iommu => write!(f, "iommu"),
-            DeviceType::VhostUser => write!(f, "vhost-user"),
             DeviceType::Sound => write!(f, "snd"),
             DeviceType::Fs => write!(f, "fs"),
             DeviceType::Pmem => write!(f, "pmem"),
@@ -254,8 +245,6 @@ pub enum VirtioDeviceType {
     Regular,
     /// Socket-backed vhost-user device.
     VhostUser,
-    /// Virtio-backed vhost-user device, aka virtio-vhost-user.
-    Vvu,
 }
 
 impl VirtioDeviceType {
@@ -265,7 +254,6 @@ impl VirtioDeviceType {
         match self {
             VirtioDeviceType::Regular => format!("{base}_device"),
             VirtioDeviceType::VhostUser => format!("{base}_device_vhost_user"),
-            VirtioDeviceType::Vvu => format!("{base}_device_vvu"),
         }
     }
 }

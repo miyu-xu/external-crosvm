@@ -216,7 +216,6 @@ where
             interrupt,
             acked_features,
             socket,
-            self.supports_iommu(),
         );
         let activate_vqs = |handle: &U| -> Result<()> {
             for idx in 0..NUM_QUEUES {
@@ -328,7 +327,7 @@ pub mod tests {
     use std::result;
 
     use hypervisor::ProtectionType;
-    use net_util::sys::unix::fakes::FakeTap;
+    use net_util::sys::linux::fakes::FakeTap;
     use net_util::TapTCommon;
     use vhost::net::fakes::FakeNet;
     use vm_memory::GuestAddress;

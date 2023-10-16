@@ -48,6 +48,7 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use super::copy_config;
 use super::DeviceType;
@@ -74,7 +75,7 @@ const VIRTIO_PVCLOCK_S_IOERR: u8 = 1;
 
 const VIRTIO_PVCLOCK_CLOCKSOURCE_RATING: u32 = 450;
 
-#[derive(Debug, Clone, Copy, Default, AsBytes, FromBytes)]
+#[derive(Debug, Clone, Copy, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 struct virtio_pvclock_config {
     // Number of nanoseconds the VM has been suspended without guest suspension.
@@ -84,7 +85,7 @@ struct virtio_pvclock_config {
     padding: u32,
 }
 
-#[derive(Debug, Clone, Copy, Default, FromBytes, AsBytes)]
+#[derive(Debug, Clone, Copy, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 struct virtio_pvclock_set_pvclock_page_req {
     // Physical address of pvclock page.
@@ -209,6 +210,7 @@ pub struct PvClock {
     /// by the PvClockWorker thread but read by PvClock from the mmio bus in the main thread.
     total_suspend_ns: Arc<AtomicU64>,
     features: u64,
+    acked_features: u64,
     worker_thread: Option<WorkerThread<WorkerReturn>>,
     /// If the device is sleeping, a [PvClockWorkerSnapshot] that can re-create the worker
     /// will be stored here. (We can't just store the worker itself as it contains an object
@@ -223,6 +225,7 @@ struct PvClockSnapshot {
     paused_worker: Option<PvClockWorkerSnapshot>,
     total_suspend_ns: u64,
     features: u64,
+    acked_features: u64,
 }
 
 impl PvClock {
@@ -235,6 +238,7 @@ impl PvClock {
                 | 1 << VIRTIO_PVCLOCK_F_TSC_STABLE
                 | 1 << VIRTIO_PVCLOCK_F_INJECT_SLEEP
                 | 1 << VIRTIO_PVCLOCK_F_CLOCKSOURCE_RATING,
+            acked_features: 0,
             worker_thread: None,
             paused_worker: None,
         }
@@ -704,11 +708,12 @@ impl VirtioDevice for PvClock {
         self.features
     }
 
-    // TODO(b/237300012): `self.features` should not be mutated here. Also need
-    // to check if `value` is subset of `self.features`.
-    // Example: https://source.chromium.org/chromium/chromiumos/platform/crosvm/+/main:devices/src/virtio/balloon.rs;l=690-693;drc=d2ca9e04c7e477c09a8e14eff392b2d90f52e295
-    fn ack_features(&mut self, value: u64) {
-        self.features &= value;
+    fn ack_features(&mut self, mut value: u64) {
+        if value & !self.features != 0 {
+            warn!("virtio-pvclock got unknown feature ack {:x}", value);
+            value &= self.features;
+        }
+        self.acked_features |= value;
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -780,6 +785,7 @@ impl VirtioDevice for PvClock {
     fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
         serde_json::to_value(PvClockSnapshot {
             features: self.features,
+            acked_features: self.acked_features,
             total_suspend_ns: self.total_suspend_ns.load(Ordering::SeqCst),
             tsc_frequency: self.tsc_frequency,
             paused_worker: self.paused_worker.clone(),
@@ -796,6 +802,7 @@ impl VirtioDevice for PvClock {
                 snap.features,
             );
         }
+        self.acked_features = snap.acked_features;
         self.total_suspend_ns
             .store(snap.total_suspend_ns, Ordering::SeqCst);
         self.paused_worker = snap.paused_worker;

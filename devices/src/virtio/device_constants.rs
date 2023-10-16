@@ -9,8 +9,11 @@
 use data_model::Le16;
 use data_model::Le32;
 use data_model::Le64;
+use serde::Deserialize;
+use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 pub mod block {
     use super::*;
@@ -34,7 +37,7 @@ pub mod block {
     pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
     pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 
-    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes)]
     #[repr(C)]
     pub struct virtio_blk_geometry {
         cylinders: Le16,
@@ -42,7 +45,7 @@ pub mod block {
         sectors: u8,
     }
 
-    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes)]
     #[repr(C)]
     pub struct virtio_blk_topology {
         physical_block_exp: u8,
@@ -51,7 +54,7 @@ pub mod block {
         opt_io_size: Le32,
     }
 
-    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes)]
     #[repr(C, packed)]
     pub struct virtio_blk_config {
         pub capacity: Le64,
@@ -72,7 +75,7 @@ pub mod block {
         pub unused1: [u8; 3],
     }
 
-    #[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+    #[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
     #[repr(C)]
     pub(crate) struct virtio_blk_req_header {
         pub req_type: Le32,
@@ -80,7 +83,7 @@ pub mod block {
         pub sector: Le64,
     }
 
-    #[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+    #[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
     #[repr(C)]
     pub(crate) struct virtio_blk_discard_write_zeroes {
         pub sector: Le64,
@@ -94,17 +97,12 @@ pub mod block {
 pub mod fs {
     /// The maximum allowable length of the tag used to identify a specific virtio-fs device.
     pub const FS_MAX_TAG_LEN: usize = 36;
-
-    // The fs device does not have a fixed number of queues.
-    pub const QUEUE_SIZE: u16 = 1024;
 }
 
 pub mod gpu {
     use super::*;
 
-    // First queue is for virtio gpu commands. Second queue is for cursor commands, which we expect
-    // there to be fewer of.
-    pub const QUEUE_SIZES: &[u16] = &[512, 16];
+    pub const NUM_QUEUES: usize = 2;
 
     pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
     pub const VIRTIO_GPU_F_EDID: u32 = 1;
@@ -112,12 +110,12 @@ pub mod gpu {
     pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
     pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
     /* The following capabilities are not upstreamed. */
-    pub const VIRTIO_GPU_F_RESOURCE_SYNC: u32 = 5;
+    pub const VIRTIO_GPU_F_FENCE_PASSING: u32 = 5;
     pub const VIRTIO_GPU_F_CREATE_GUEST_HANDLE: u32 = 6;
 
     pub const VIRTIO_GPU_SHM_ID_HOST_VISIBLE: u8 = 0x0001;
 
-    #[derive(Copy, Clone, Debug, Default, AsBytes, FromBytes)]
+    #[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes)]
     #[repr(C)]
     pub struct virtio_gpu_config {
         pub events_read: Le32,
@@ -130,7 +128,19 @@ pub mod gpu {
 pub mod snd {
     use super::*;
 
-    #[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+    #[derive(
+        Copy,
+        Clone,
+        Default,
+        AsBytes,
+        FromZeroes,
+        FromBytes,
+        Serialize,
+        Deserialize,
+        PartialEq,
+        Eq,
+        Debug,
+    )]
     #[repr(C, packed)]
     pub struct virtio_snd_config {
         pub jacks: Le32,
@@ -146,20 +156,11 @@ pub mod video {
     use serde_keyvalue::FromKeyValues;
     use zerocopy::AsBytes;
     use zerocopy::FromBytes;
+    use zerocopy::FromZeroes;
 
-    // CMD_QUEUE_SIZE = max number of command descriptors for input and output queues
-    // Experimentally, it appears a stream allocates 16 input and 26 output buffers = 42 total
-    // For 8 simultaneous streams, 2 descs per buffer * 42 buffers * 8 streams = 672 descs
-    // Allocate 1024 to give some headroom in case of extra streams/buffers
-    //
-    // TODO(b/204055006): Make cmd queue size dependent of
-    // (max buf cnt for input + max buf cnt for output) * max descs per buffer * max nb of streams
-    const CMD_QUEUE_SIZE: u16 = 1024;
     pub const CMD_QUEUE_INDEX: usize = 0;
-    // EVENT_QUEUE_SIZE = max number of event descriptors for stream events like resolution changes
-    const EVENT_QUEUE_SIZE: u16 = 256;
     pub const EVENT_QUEUE_INDEX: usize = 1;
-    pub const QUEUE_SIZES: &[u16] = &[CMD_QUEUE_SIZE, EVENT_QUEUE_SIZE];
+    pub const NUM_QUEUES: usize = 2;
 
     pub const VIRTIO_VIDEO_F_RESOURCE_GUEST_PAGES: u32 = 0;
     pub const VIRTIO_VIDEO_F_RESOURCE_NON_CONTIG: u32 = 1;
@@ -229,7 +230,7 @@ pub mod video {
     }
 
     #[repr(C)]
-    #[derive(Debug, Default, Copy, Clone, FromBytes, AsBytes)]
+    #[derive(Debug, Default, Copy, Clone, FromZeroes, FromBytes, AsBytes)]
     pub struct virtio_video_config {
         pub version: Le32,
         pub max_caps_length: Le32,
@@ -239,14 +240,11 @@ pub mod video {
 }
 
 pub mod vsock {
-    pub const QUEUE_SIZE: u16 = 256;
     pub const NUM_QUEUES: usize = 3;
-    pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 }
 
 pub mod wl {
-    pub const QUEUE_SIZE: u16 = 256;
-    pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
+    pub const NUM_QUEUES: usize = 2;
 
     pub const VIRTIO_WL_F_TRANS_FLAGS: u32 = 0x01;
     pub const VIRTIO_WL_F_SEND_FENCES: u32 = 0x02;

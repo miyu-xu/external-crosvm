@@ -21,7 +21,6 @@ use std::arch::x86_64::__cpuid;
 #[cfg(feature = "whpx")]
 use std::arch::x86_64::__cpuid_count;
 use std::cmp::Reverse;
-#[cfg(feature = "gpu")]
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::File;
@@ -104,14 +103,13 @@ use devices::virtio::vhost::user::device::gpu::sys::windows::GpuVmmConfig;
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuBackendConfig as GpuBackendConfigProduct;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig as SndBackendConfigProduct;
+#[cfg(feature = "balloon")]
 use devices::virtio::BalloonFeatures;
 #[cfg(feature = "balloon")]
 use devices::virtio::BalloonMode;
 use devices::virtio::Console;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
-#[cfg(feature = "audio")]
-use devices::Ac97Dev;
 use devices::BusDeviceObj;
 #[cfg(feature = "gvm")]
 use devices::GvmIrqChip;
@@ -182,6 +180,7 @@ use sync::Mutex;
 use tube_transporter::TubeToken;
 use tube_transporter::TubeTransporterReader;
 use vm_control::api::VmMemoryClient;
+#[cfg(feature = "balloon")]
 use vm_control::BalloonControlCommand;
 #[cfg(feature = "balloon")]
 use vm_control::BalloonTube;
@@ -201,11 +200,11 @@ use win_util::ProcessType;
 use x86_64::cpuid::adjust_cpuid;
 #[cfg(feature = "whpx")]
 use x86_64::cpuid::CpuIdContext;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "haxm"))]
+#[cfg(all(target_arch = "x86_64", feature = "haxm"))]
 use x86_64::get_cpu_manufacturer;
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "haxm"))]
+#[cfg(all(target_arch = "x86_64", feature = "haxm"))]
 use x86_64::CpuManufacturer;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as Arch;
 
 use crate::crosvm::config::Config;
@@ -271,12 +270,15 @@ type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 
 fn create_vhost_user_block_device(cfg: &Config, disk_device_tube: Tube) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev =
-        virtio::vhost::user::vmm::VhostUserVirtioDevice::new_block(features, disk_device_tube)
-            .exit_context(
-                Exit::VhostUserBlockDeviceNew,
-                "failed to set up vhost-user block device",
-            )?;
+    let dev = virtio::vhost::user::vmm::VhostUserVirtioDevice::new_block(
+        features,
+        disk_device_tube,
+        None,
+    )
+    .exit_context(
+        Exit::VhostUserBlockDeviceNew,
+        "failed to set up vhost-user block device",
+    )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -289,14 +291,8 @@ fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) 
     let dev = virtio::BlockAsync::new(
         features,
         disk.open()?,
-        disk.read_only,
-        disk.sparse,
-        disk.packed_queue,
-        disk.block_size,
-        false,
-        disk.id,
+        disk,
         Some(disk_device_tube),
-        None,
         None,
         None,
     )
@@ -310,12 +306,15 @@ fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) 
 
 #[cfg(feature = "gpu")]
 fn create_vhost_user_gpu_device(base_features: u64, vhost_user_tube: Tube) -> DeviceResult {
-    let dev =
-        virtio::vhost::user::vmm::VhostUserVirtioDevice::new_gpu(base_features, vhost_user_tube)
-            .exit_context(
-                Exit::VhostUserGpuDeviceNew,
-                "failed to set up vhost-user gpu device",
-            )?;
+    let dev = virtio::vhost::user::vmm::VhostUserVirtioDevice::new_gpu(
+        base_features,
+        vhost_user_tube,
+        None,
+    )
+    .exit_context(
+        Exit::VhostUserGpuDeviceNew,
+        "failed to set up vhost-user gpu device",
+    )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -370,12 +369,15 @@ fn create_snd_device(
 
 #[cfg(feature = "audio")]
 fn create_vhost_user_snd_device(base_features: u64, vhost_user_tube: Tube) -> DeviceResult {
-    let dev =
-        virtio::vhost::user::vmm::VhostUserVirtioDevice::new_snd(base_features, vhost_user_tube)
-            .exit_context(
-                Exit::VhostUserSndDeviceNew,
-                "failed to set up vhost-user snd device",
-            )?;
+    let dev = virtio::vhost::user::vmm::VhostUserVirtioDevice::new_snd(
+        base_features,
+        vhost_user_tube,
+        None,
+    )
+    .exit_context(
+        Exit::VhostUserSndDeviceNew,
+        "failed to set up vhost-user snd device",
+    )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -391,11 +393,13 @@ fn create_multi_touch_device(
     idx: u32,
 ) -> DeviceResult {
     let (width, height) = multi_touch_spec.get_size();
+    let name = multi_touch_spec.get_name();
     let dev = virtio::input::new_multi_touch(
         idx,
         event_pipe,
         width,
         height,
+        name,
         virtio::base_features(cfg.protection_type),
     )
     .exit_context(Exit::InputDeviceNew, "failed to set up input device")?;
@@ -418,11 +422,12 @@ fn create_mouse_device(cfg: &Config, event_pipe: StreamChannel, idx: u32) -> Dev
 #[cfg(feature = "slirp")]
 fn create_vhost_user_net_device(cfg: &Config, net_device_tube: Tube) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev = virtio::vhost::user::vmm::VhostUserVirtioDevice::new_net(features, net_device_tube)
-        .exit_context(
-        Exit::VhostUserNetDeviceNew,
-        "failed to set up vhost-user net device",
-    )?;
+    let dev =
+        virtio::vhost::user::vmm::VhostUserVirtioDevice::new_net(features, net_device_tube, None)
+            .exit_context(
+            Exit::VhostUserNetDeviceNew,
+            "failed to set up vhost-user net device",
+        )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -594,6 +599,7 @@ fn create_virtio_devices(
         devs.push(create_vhost_user_net_device(cfg, net_vhost_user_tube)?);
     }
 
+    #[cfg(feature = "balloon")]
     if let (Some(balloon_device_tube), Some(dynamic_mapping_device_tube)) =
         (balloon_device_tube, dynamic_mapping_device_tube)
     {
@@ -711,7 +717,6 @@ fn create_devices(
     dynamic_mapping_device_tube: Option<Tube>,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
-    #[allow(unused)] ac97_device_tubes: Vec<Tube>,
     tsc_frequency: u64,
     virtio_snd_state_device_tube: Option<Tube>,
     virtio_snd_control_device_tube: Option<Tube>,
@@ -765,27 +770,6 @@ fn create_devices(
         pci_devices.push((dev, stub.jail));
     }
 
-    #[cfg(feature = "audio")]
-    if !product::virtio_sound_enabled() {
-        if cfg.ac97_parameters.len() != ac97_device_tubes.len() {
-            panic!(
-                "{} Ac97 device(s) will be made, but only {} Ac97 device tubes are present.",
-                cfg.ac97_parameters.len(),
-                ac97_device_tubes.len()
-            );
-        }
-
-        for (ac97_param, ac97_device_tube) in cfg
-            .ac97_parameters
-            .iter()
-            .zip(ac97_device_tubes.into_iter())
-        {
-            let dev = Ac97Dev::try_new(mem.clone(), ac97_param.clone(), ac97_device_tube)
-                .exit_context(Exit::CreateAc97, "failed to create ac97 device")?;
-            pci_devices.push((Box::new(dev), None));
-        }
-    }
-
     Ok(pci_devices)
 }
 
@@ -797,7 +781,6 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     vm_control_ids_to_remove: &mut Vec<usize>,
     next_control_id: &mut usize,
     service_vm_state: &mut ServiceVmState,
-    ac97_host_tubes: &[Tube],
     disk_host_tubes: &[Tube],
     ipc_main_loop_tube: Option<&Tube>,
     vm_evt_rdtube: &RecvTube,
@@ -819,7 +802,56 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     wait_ctx: &WaitContext<Token>,
     force_s2idle: bool,
     vcpu_control_channels: &[mpsc::Sender<VcpuControl>],
-) -> Result<(bool, Option<ExitState>)> {
+) -> Result<Option<ExitState>> {
+    let execute_vm_request = |request: VmRequest, guest_os: &mut RunnableLinuxVm<V, Vcpu>| {
+        let mut run_mode_opt = None;
+        let vcpu_size = vcpu_boxes.lock().len();
+        let resp = request.execute(
+            &mut run_mode_opt,
+            disk_host_tubes,
+            &mut guest_os.pm,
+            #[cfg(feature = "gpu")]
+            None,
+            None,
+            &mut None,
+            |msg| {
+                kick_all_vcpus(
+                    run_mode_arc,
+                    vcpu_control_channels,
+                    vcpu_boxes,
+                    guest_os.irq_chip.as_ref(),
+                    pvclock_host_tube,
+                    msg,
+                );
+            },
+            |msg, index| {
+                kick_vcpu(
+                    run_mode_arc,
+                    vcpu_control_channels,
+                    vcpu_boxes,
+                    guest_os.irq_chip.as_ref(),
+                    pvclock_host_tube,
+                    index,
+                    msg,
+                );
+            },
+            force_s2idle,
+            #[cfg(feature = "swap")]
+            None,
+            device_ctrl_tube,
+            vcpu_size,
+            irq_handler_control,
+            || guest_os.irq_chip.as_ref().snapshot(vcpu_size),
+            |snapshot| {
+                guest_os
+                    .irq_chip
+                    .try_box_clone()?
+                    .restore(snapshot, vcpu_size)
+            },
+        );
+        (resp, run_mode_opt)
+    };
+
     match event.token {
         Token::VmEvent => match vm_evt_rdtube.recv::<VmEventType>() {
             Ok(vm_event) => {
@@ -845,7 +877,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         Some(ExitState::WatchdogReset)
                     }
                 };
-                return Ok((exit_state.is_some(), exit_state));
+                return Ok(exit_state);
             }
             Err(e) => {
                 warn!("failed to recv VmEvent: {}", e);
@@ -853,7 +885,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         },
         Token::BrokerShutdown => {
             info!("main loop got broker shutdown event");
-            return Ok((true, None));
+            return Ok(Some(ExitState::Stop));
         }
         Token::VmControlServer => {
             let server =
@@ -886,7 +918,6 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                             virtio_snd_host_mute_tube,
                             service_vm_state,
                             ipc_main_loop_tube,
-                            ac97_host_tubes,
                         )
                     }
                     TaggedControlTube::Vm(tube) => match tube.0.recv::<VmRequest>() {
@@ -913,59 +944,25 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                 #[cfg(feature = "balloon")]
                                 VmRequest::BalloonCommand(cmd) => {
                                     if let Some(balloon_tube) = balloon_tube {
-                                        balloon_tube.send_cmd(cmd, Some(id))
+                                        if let Some((r, key)) = balloon_tube.send_cmd(cmd, Some(id))
+                                        {
+                                            if key != id {
+                                                unimplemented!("not implemented on Windows");
+                                            }
+                                            Some(r)
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         error!("balloon not enabled");
                                         None
                                     }
                                 }
                                 _ => {
-                                    let vcpu_size = vcpu_boxes.lock().len();
-                                    let response = request.execute(
-                                        &mut run_mode_opt,
-                                        disk_host_tubes,
-                                        &mut guest_os.pm,
-                                        #[cfg(feature = "gpu")]
-                                        None,
-                                        None,
-                                        &mut None,
-                                        |msg| {
-                                            kick_all_vcpus(
-                                                run_mode_arc,
-                                                vcpu_control_channels,
-                                                vcpu_boxes,
-                                                guest_os.irq_chip.as_ref(),
-                                                pvclock_host_tube,
-                                                msg,
-                                            );
-                                        },
-                                        |msg, index| {
-                                            kick_vcpu(
-                                                run_mode_arc,
-                                                vcpu_control_channels,
-                                                vcpu_boxes,
-                                                guest_os.irq_chip.as_ref(),
-                                                pvclock_host_tube,
-                                                index,
-                                                msg,
-                                            );
-                                        },
-                                        force_s2idle,
-                                        #[cfg(feature = "swap")]
-                                        None,
-                                        device_ctrl_tube,
-                                        vcpu_size,
-                                        irq_handler_control,
-                                        || guest_os.irq_chip.as_ref().snapshot(vcpu_size),
-                                        |snapshot| {
-                                            guest_os
-                                                .irq_chip
-                                                .try_box_clone()?
-                                                .restore(snapshot, vcpu_size)
-                                        },
-                                    );
-
-                                    Some(response)
+                                    let (resp, run_mode_ret) =
+                                        execute_vm_request(request, guest_os);
+                                    run_mode_opt = run_mode_ret;
+                                    Some(resp)
                                 }
                             };
 
@@ -974,21 +971,10 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                     error!("failed to send VmResponse: {}", e);
                                 }
                             }
-
-                            if let Some(run_mode) = run_mode_opt {
-                                info!("control socket changed run mode to {}", run_mode);
-                                match run_mode {
-                                    VmRunMode::Exiting => {
-                                        unimplemented!("not implemented on Windows");
-                                    }
-                                    other => {
-                                        if other == VmRunMode::Running {
-                                            for dev in &guest_os.resume_notify_devices {
-                                                dev.lock().resume_imminent();
-                                            }
-                                        }
-                                    }
-                                }
+                            if let Some(exit_state) =
+                                handle_run_mode_change_for_vm_request(&run_mode_opt, guest_os)
+                            {
+                                return Ok(Some(exit_state));
                             }
                         }
                         Err(e) => {
@@ -1022,24 +1008,58 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         #[cfg(not(feature = "balloon"))]
         Token::BalloonTube => unreachable!("balloon tube not registered"),
         #[allow(unreachable_patterns)]
-        _ => product::handle_received_token(
-            &event.token,
-            ac97_host_tubes,
-            anti_tamper_main_thread_tube,
-            balloon_tube,
-            control_tubes,
-            guest_os,
-            ipc_main_loop_tube,
-            memory_size_mb,
-            proto_main_loop_tube,
-            pvclock_host_tube,
-            run_mode_arc,
-            service_vm_state,
-            vcpu_boxes,
-            virtio_snd_host_mute_tube,
-        ),
+        _ => {
+            let run_mode_opt = product::handle_received_token(
+                &event.token,
+                anti_tamper_main_thread_tube,
+                #[cfg(feature = "balloon")]
+                balloon_tube,
+                control_tubes,
+                guest_os,
+                ipc_main_loop_tube,
+                memory_size_mb,
+                proto_main_loop_tube,
+                pvclock_host_tube,
+                run_mode_arc,
+                service_vm_state,
+                vcpu_boxes,
+                virtio_snd_host_mute_tube,
+                execute_vm_request,
+            );
+            if let Some(exit_state) = handle_run_mode_change_for_vm_request(&run_mode_opt, guest_os)
+            {
+                return Ok(Some(exit_state));
+            }
+        }
     };
-    Ok((false, None))
+    Ok(None)
+}
+
+/// Handles a run mode change (if one occurred) if one is pending as a
+/// result a VmRequest. The parameter, run_mode_opt, is the run mode change
+/// proposed by the VmRequest's execution.
+///
+/// Returns the exit state, if it changed due to a run mode change.
+/// None otherwise.
+fn handle_run_mode_change_for_vm_request<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
+    run_mode_opt: &Option<VmRunMode>,
+    guest_os: &mut RunnableLinuxVm<V, Vcpu>,
+) -> Option<ExitState> {
+    if let Some(run_mode) = run_mode_opt {
+        info!("control socket changed run mode to {}", run_mode);
+        match run_mode {
+            VmRunMode::Exiting => return Some(ExitState::Stop),
+            other => {
+                if other == &VmRunMode::Running {
+                    for dev in &guest_os.resume_notify_devices {
+                        dev.lock().resume_imminent();
+                    }
+                }
+            }
+        }
+    }
+    // No exit state change.
+    None
 }
 
 /// Commands to control the VM Memory handler thread.
@@ -1181,7 +1201,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     gralloc: RutabagaGralloc,
     #[cfg(feature = "stats")] stats: Option<Arc<Mutex<StatisticsCollector>>>,
     service_pipe_name: Option<String>,
-    ac97_host_tubes: Vec<Tube>,
     memory_size_mb: u64,
     host_cpu_topology: bool,
     tsc_sync_mitigations: TscSyncMitigations,
@@ -1413,13 +1432,12 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 
         let mut vm_control_ids_to_remove = Vec::new();
         for event in events.iter().filter(|e| e.is_readable) {
-            let (break_poll, state) = handle_readable_event(
+            let state = handle_readable_event(
                 event,
                 &mut vm_control_ids_to_remove,
                 &mut next_control_id,
                 &mut service_vm_state,
                 disk_host_tubes.as_slice(),
-                &ac97_host_tubes,
                 ipc_main_loop_tube.as_ref(),
                 &vm_evt_rdtube,
                 &mut control_tubes,
@@ -1444,8 +1462,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             )?;
             if let Some(state) = state {
                 exit_state = state;
-            }
-            if break_poll {
                 break 'poll;
             }
         }
@@ -1773,7 +1789,7 @@ fn create_haxm_vm(
 }
 
 #[cfg(feature = "whpx")]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn create_whpx_vm(
     whpx: Whpx,
     mem: GuestMemory,
@@ -1787,7 +1803,6 @@ fn create_whpx_vm(
         force_calibrated_tsc_leaf,
         false, /* host_cpu_topology */
         false, /* enable_hwp */
-        false, /* enable_pnp_data */
         no_smt,
         false, /* itmt */
         None,  /* hybrid_type */
@@ -1833,7 +1848,7 @@ fn create_gvm_irq_chip(vm: &GvmVm, vcpu_count: usize) -> base::Result<GvmIrqChip
 }
 
 #[cfg(feature = "whpx")]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn create_whpx_split_irq_chip(
     vm: &WhpxVm,
     ioapic_device_tube: Tube,
@@ -1949,6 +1964,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .ok_or_else(|| anyhow!("requested memory size too large"))?,
         swiotlb,
         vcpu_count: cfg.vcpu_count.unwrap_or(1),
+        fw_cfg_enable: false,
+        bootorder_fw_cfg_blob: Vec::new(),
         vcpu_affinity: cfg.vcpu_affinity.clone(),
         cpu_clusters: cfg.cpu_clusters.clone(),
         cpu_capacity: cfg.cpu_capacity.clone(),
@@ -1987,18 +2004,20 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         no_i8042: cfg.no_i8042,
         no_rtc: cfg.no_rtc,
         host_cpu_topology: cfg.host_cpu_topology,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         force_s2idle: cfg.force_s2idle,
         fw_cfg_parameters: cfg.fw_cfg_parameters.clone(),
         itmt: false,
         pvm_fw: None,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         pci_low_start: cfg.pci_low_start,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         pcie_ecam: cfg.pcie_ecam,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         smbios: cfg.smbios.clone(),
         dynamic_power_coefficient: cfg.dynamic_power_coefficient.clone(),
+        #[cfg(target_arch = "x86_64")]
+        break_linux_pci_config_io: cfg.break_linux_pci_config_io,
     })
 }
 
@@ -2399,18 +2418,6 @@ where
     )
     .context("failed to create system allocator")?;
 
-    #[allow(unused_mut)]
-    let mut ac97_host_tubes = Vec::new();
-    #[allow(unused_mut)]
-    let mut ac97_device_tubes = Vec::new();
-    #[cfg(feature = "audio")]
-    for _ in &cfg.ac97_parameters {
-        let (ac97_host_tube, ac97_device_tube) =
-            Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
-        ac97_host_tubes.push(ac97_host_tube);
-        ac97_device_tubes.push(ac97_device_tube);
-    }
-
     // Allocate the ramoops region first.
     let ramoops_region = match &components.pstore {
         Some(pstore) => Some(
@@ -2469,7 +2476,6 @@ where
         dynamic_mapping_device_tube,
         /* inflate_tube= */ None,
         init_balloon_size,
-        ac97_host_tubes,
         tsc_state.frequency,
         virtio_snd_state_device_tube,
         virtio_snd_device_mute_tube,
@@ -2491,6 +2497,7 @@ where
         &mut vcpu_ids,
         cfg.dump_device_tree_blob.clone(),
         /*debugcon_jail=*/ None,
+        None,
         None,
     )
     .exit_context(Exit::BuildVm, "the architecture failed to build the vm")?;
@@ -2547,7 +2554,6 @@ where
         #[cfg(feature = "stats")]
         stats,
         cfg.service_pipe_name,
-        ac97_device_tubes,
         vm_memory_size_mb,
         cfg.host_cpu_topology,
         tsc_sync_mitigations,

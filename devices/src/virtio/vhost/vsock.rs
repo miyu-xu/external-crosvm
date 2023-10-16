@@ -29,12 +29,14 @@ use super::Error;
 use super::Result;
 use crate::virtio::copy_config;
 use crate::virtio::device_constants::vsock::NUM_QUEUES;
-use crate::virtio::device_constants::vsock::QUEUE_SIZES;
 use crate::virtio::vsock::VsockConfig;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
+
+const QUEUE_SIZE: u16 = 256;
+const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 
 pub struct Vsock {
     worker_thread: Option<WorkerThread<Worker<VhostVsockHandle>>>,
@@ -222,7 +224,6 @@ impl VirtioDevice for Vsock {
             interrupt,
             acked_features,
             None,
-            self.supports_iommu(),
         );
         let activate_vqs = |handle: &VhostVsockHandle| -> Result<()> {
             handle.set_cid(cid).map_err(Error::VhostVsockSetCid)?;

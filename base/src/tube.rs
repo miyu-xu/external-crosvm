@@ -3,16 +3,15 @@
 // found in the LICENSE file.
 
 use std::io;
-
-use remain::sorted;
-use thiserror::Error as ThisError;
-
 use std::time::Duration;
 
-pub use crate::sys::tube::*;
+use remain::sorted;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use thiserror::Error as ThisError;
+
+pub use crate::sys::tube::*;
 
 impl Tube {
     /// Given a Tube end, creates two new ends, one each for sending and receiving.
@@ -121,7 +120,7 @@ pub enum Error {
     #[cfg(windows)]
     #[error("failed to flush named pipe: {0}")]
     Flush(io::Error),
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("byte framing mode is not supported")]
     InvalidFramingMode,
     #[error("failed to serialize/deserialize json from packet: {0}")]

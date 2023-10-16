@@ -6,24 +6,18 @@
 mod aarch64;
 
 mod gunyah_sys;
-use gunyah_sys::*;
-
-use std::collections::HashSet;
-
 use std::cmp::min;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
+use std::collections::HashSet;
 use std::ffi::CString;
+use std::mem::size_of;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use std::mem::size_of;
-
-use crate::*;
 
 use base::errno_result;
 use base::info;
@@ -39,6 +33,7 @@ use base::MemoryMappingBuilder;
 use base::MemoryMappingBuilderUnix;
 use base::MmapError;
 use base::RawDescriptor;
+use gunyah_sys::*;
 use libc::open;
 use libc::EFAULT;
 use libc::EINVAL;
@@ -49,8 +44,9 @@ use libc::EOVERFLOW;
 use libc::O_CLOEXEC;
 use libc::O_RDWR;
 use sync::Mutex;
-use vm_memory::MemoryRegionInformation;
 use vm_memory::MemoryRegionPurpose;
+
+use crate::*;
 
 pub struct Gunyah {
     gunyah: SafeDescriptor,
@@ -99,7 +95,7 @@ impl Hypervisor for Gunyah {
             HypervisorCap::StaticSwiotlbAllocationRequired => true,
             HypervisorCap::HypervisorInitializedBootContext => true,
             HypervisorCap::S390UserSigp | HypervisorCap::TscDeadlineTimer => false,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             HypervisorCap::Xcrs | HypervisorCap::CalibratedTscLeafRequired => false,
         }
     }
@@ -205,53 +201,44 @@ impl GunyahVm {
 
         // Safe because we verify that ret is valid and we own the fd.
         let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-        guest_mem.with_regions(
-            |MemoryRegionInformation {
-                 index,
-                 guest_addr,
-                 size,
-                 host_addr,
-                 options,
-                 ..
-             }| {
-                let lend = if cfg.protection_type.isolates_memory() {
-                    match options.purpose {
-                        MemoryRegionPurpose::GuestMemoryRegion => true,
-                        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-                        MemoryRegionPurpose::ProtectedFirmwareRegion => true,
-                        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-                        MemoryRegionPurpose::StaticSwiotlbRegion => false,
-                    }
-                } else {
-                    false
-                };
-                if lend {
-                    unsafe {
-                        // Safe because the guest regions are guarnteed not to overlap.
-                        android_lend_user_memory_region(
-                            &vm_descriptor,
-                            index as MemSlot,
-                            false,
-                            guest_addr.offset(),
-                            size.try_into().unwrap(),
-                            host_addr as *mut u8,
-                        )
-                    }
-                } else {
-                    unsafe {
-                        // Safe because the guest regions are guarnteed not to overlap.
-                        set_user_memory_region(
-                            &vm_descriptor,
-                            index as MemSlot,
-                            false,
-                            guest_addr.offset(),
-                            size.try_into().unwrap(),
-                            host_addr as *mut u8,
-                        )
-                    }
+        for region in guest_mem.regions() {
+            let lend = if cfg.protection_type.isolates_memory() {
+                match region.options.purpose {
+                    MemoryRegionPurpose::GuestMemoryRegion => true,
+                    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+                    MemoryRegionPurpose::ProtectedFirmwareRegion => true,
+                    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+                    MemoryRegionPurpose::StaticSwiotlbRegion => false,
                 }
-            },
-        )?;
+            } else {
+                false
+            };
+            if lend {
+                unsafe {
+                    // Safe because the guest regions are guarnteed not to overlap.
+                    android_lend_user_memory_region(
+                        &vm_descriptor,
+                        region.index as MemSlot,
+                        false,
+                        region.guest_addr.offset(),
+                        region.size.try_into().unwrap(),
+                        region.host_addr as *mut u8,
+                    )?;
+                }
+            } else {
+                unsafe {
+                    // Safe because the guest regions are guarnteed not to overlap.
+                    set_user_memory_region(
+                        &vm_descriptor,
+                        region.index as MemSlot,
+                        false,
+                        region.guest_addr.offset(),
+                        region.size.try_into().unwrap(),
+                        region.host_addr as *mut u8,
+                    )?;
+                }
+            }
+        }
 
         Ok(GunyahVm {
             gh: gh.try_clone()?,
@@ -432,7 +419,7 @@ impl Vm for GunyahVm {
             VmCap::PvClock => false,
             VmCap::Protected => true,
             VmCap::EarlyInitCpuid => false,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VmCap::BusLockDetect => false,
         }
     }

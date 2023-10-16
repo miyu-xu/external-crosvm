@@ -22,6 +22,7 @@ use vm_control::VmIrqRequest;
 use vm_control::VmIrqResponse;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::pci::PciCapability;
 use crate::pci::PciCapabilityID;
@@ -719,7 +720,7 @@ impl AsRawDescriptor for MsixConfig {
 //   15:    Enable. Enable all MSI-X when set.
 // See <https://wiki.osdev.org/PCI#Enabling_MSI-X> for the details.
 #[bitfield]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 pub struct MsixCtrl {
     table_size: B10,
     reserved: B4,
@@ -729,7 +730,7 @@ pub struct MsixCtrl {
 
 #[allow(dead_code)]
 #[repr(C)]
-#[derive(Clone, Copy, Default, AsBytes, FromBytes)]
+#[derive(Clone, Copy, Default, AsBytes, FromZeroes, FromBytes)]
 /// MSI-X Capability Structure
 pub struct MsixCap {
     // To make add_capability() happy
@@ -785,11 +786,6 @@ impl MsixCap {
             table: (table_off & 0xffff_fff8u32) | u32::from(table_pci_bar & 0x7u8),
             pba: (pba_off & 0xffff_fff8u32) | u32::from(pba_pci_bar & 0x7u8),
         }
-    }
-
-    #[cfg(unix)]
-    pub fn msg_ctl(&self) -> MsixCtrl {
-        self.msg_ctl
     }
 }
 

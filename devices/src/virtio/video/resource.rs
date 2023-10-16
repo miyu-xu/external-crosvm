@@ -20,6 +20,7 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::virtio::resource_bridge;
 use crate::virtio::resource_bridge::ResourceBridgeError;
@@ -42,7 +43,7 @@ pub enum ResourceType {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromZeroes, FromBytes)]
 /// A guest resource entry which type is not decided yet.
 pub union UnresolvedResourceEntry {
     pub object: virtio_video_object_entry,
@@ -178,6 +179,9 @@ pub struct GuestResource {
     pub width: u32,
     pub height: u32,
     pub format: Format,
+    /// Whether the buffer can be accessed by the guest CPU. This means the host must ensure that
+    /// all operations on the buffer are completed before passing it to the guest.
+    pub guest_cpu_mappable: bool,
 }
 
 #[derive(Debug, ThisError)]
@@ -276,6 +280,7 @@ impl GuestResource {
             width: params.frame_width,
             height: params.frame_height,
             format: params.format.unwrap(),
+            guest_cpu_mappable: true,
         })
     }
 
@@ -346,6 +351,7 @@ impl GuestResource {
             width: params.frame_width,
             height: params.frame_height,
             format: params.format.unwrap(),
+            guest_cpu_mappable: buffer_info.guest_cpu_mappable,
         })
     }
 
@@ -357,6 +363,7 @@ impl GuestResource {
             width: self.width,
             height: self.height,
             format: self.format,
+            guest_cpu_mappable: self.guest_cpu_mappable,
         })
     }
 }

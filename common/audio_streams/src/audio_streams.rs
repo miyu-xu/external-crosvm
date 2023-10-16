@@ -48,7 +48,7 @@ use std::fmt::Display;
 use std::io;
 use std::io::Read;
 use std::io::Write;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::os::unix::io::RawFd as RawDescriptor;
 #[cfg(windows)]
 use std::os::windows::io::RawHandle as RawDescriptor;
@@ -65,7 +65,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SampleFormat {
     U8,
     S16LE,
@@ -532,26 +532,6 @@ impl<'a> PlaybackBuffer<'a> {
     /// before the current playback buffer will be played.
     pub fn latency_bytes(&self) -> u32 {
         self.drop.latency_bytes()
-    }
-
-    /// Writes up to `size` bytes directly to this buffer inside of the given callback function
-    /// with a buffer size error check.
-    ///
-    /// TODO(b/238933737): Investigate removing this method for Windows when
-    /// switching from Ac97 to Virtio-Snd
-    pub fn copy_cb_with_checks<F: FnOnce(&mut [u8])>(
-        &mut self,
-        size: usize,
-        cb: F,
-    ) -> Result<(), PlaybackBufferError> {
-        // only write complete frames.
-        let len = size / self.buffer.frame_size * self.buffer.frame_size;
-        if self.buffer.offset + len > self.buffer.buffer.len() {
-            return Err(PlaybackBufferError::SliceOutOfBounds);
-        }
-        cb(&mut self.buffer.buffer[self.buffer.offset..(self.buffer.offset + len)]);
-        self.buffer.offset += len;
-        Ok(())
     }
 
     /// Writes up to `size` bytes directly to this buffer inside of the given callback function.

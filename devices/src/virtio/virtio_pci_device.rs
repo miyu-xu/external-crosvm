@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
 use anyhow::Context;
@@ -41,6 +41,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use self::virtio_pci_common_config::VirtioPciCommonConfig;
 use super::*;
@@ -88,7 +89,7 @@ pub enum PciCapabilityType {
 
 #[allow(dead_code)]
 #[repr(C)]
-#[derive(Clone, Copy, FromBytes, AsBytes)]
+#[derive(Clone, Copy, FromZeroes, FromBytes, AsBytes)]
 pub struct VirtioPciCap {
     // cap_vndr and cap_next are autofilled based on id() in pci configuration
     pub cap_vndr: u8, // Generic PCI field: PCI_CAP_ID_VNDR
@@ -138,7 +139,7 @@ impl VirtioPciCap {
 
 #[allow(dead_code)]
 #[repr(C)]
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromZeroes, FromBytes)]
 pub struct VirtioPciNotifyCap {
     cap: VirtioPciCap,
     notify_off_multiplier: Le32,
@@ -184,7 +185,7 @@ impl VirtioPciNotifyCap {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromZeroes, FromBytes)]
 pub struct VirtioPciShmCap {
     cap: VirtioPciCap,
     offset_hi: Le32, // Most sig 32 bits of offset
@@ -321,7 +322,7 @@ enum SleepState {
 
 #[derive(Serialize, Deserialize)]
 struct VirtioPciDeviceSnapshot {
-    config_regs: PciConfiguration,
+    config_regs: serde_json::Value,
 
     inner_device: serde_json::Value,
     device_activated: bool,
@@ -561,10 +562,6 @@ impl VirtioPciDevice {
             })
             .collect::<anyhow::Result<BTreeMap<usize, Queue>>>()?;
 
-        if let Some(iommu) = &self.iommu {
-            self.device.set_iommu(iommu);
-        }
-
         if let Err(e) = self.device.activate(self.mem.clone(), interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
             self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
@@ -593,13 +590,17 @@ impl VirtioPciDevice {
         }
         Ok(())
     }
+
+    pub fn virtio_device(&self) -> &dyn VirtioDevice {
+        self.device.as_ref()
+    }
+
+    pub fn pci_address(&self) -> Option<PciAddress> {
+        self.pci_address
+    }
 }
 
 impl PciDevice for VirtioPciDevice {
-    fn supports_iommu(&self) -> bool {
-        self.device.supports_iommu()
-    }
-
     fn debug_label(&self) -> String {
         format!("pci{}", self.device.debug_label())
     }
@@ -856,12 +857,6 @@ impl PciDevice for VirtioPciDevice {
         }
 
         if !self.device_activated && self.is_driver_ready() {
-            if let Some(iommu) = &self.iommu {
-                for q in &mut self.queues {
-                    q.set_iommu(Arc::clone(iommu));
-                }
-            }
-
             if let Err(e) = self.activate() {
                 error!("failed to activate device: {:#}", e);
             }
@@ -884,15 +879,13 @@ impl PciDevice for VirtioPciDevice {
         self.device.on_device_sandboxed();
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(&mut self, sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         self.device.generate_acpi(&self.pci_address, sdts)
     }
 
-    fn set_iommu(&mut self, iommu: IpcMemoryMapper) -> anyhow::Result<()> {
-        assert!(self.supports_iommu());
-        self.iommu = Some(Arc::new(Mutex::new(iommu)));
-        Ok(())
+    fn as_virtio_pci_device(&self) -> Option<&VirtioPciDevice> {
+        Some(self)
     }
 }
 
@@ -1153,7 +1146,7 @@ impl Suspendable for VirtioPciDevice {
         }
 
         serde_json::to_value(VirtioPciDeviceSnapshot {
-            config_regs: self.config_regs.clone(),
+            config_regs: self.config_regs.snapshot()?,
             inner_device: self.device.virtio_snapshot()?,
             device_activated: self.device_activated,
             interrupt: self.interrupt.as_ref().map(|i| i.snapshot()),
@@ -1192,7 +1185,7 @@ impl Suspendable for VirtioPciDevice {
 
         let deser: VirtioPciDeviceSnapshot = serde_json::from_value(data)?;
 
-        self.config_regs = deser.config_regs;
+        self.config_regs.restore(deser.config_regs)?;
         self.device_activated = deser.device_activated;
 
         self.msix_config.lock().restore(deser.msix_config)?;

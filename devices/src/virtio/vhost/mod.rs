@@ -4,22 +4,13 @@
 
 //! Implements vhost-based virtio devices.
 
-use anyhow::anyhow;
-use anyhow::Context;
 use base::Error as SysError;
 use base::TubeError;
-use data_model::zerocopy_from_mut_slice;
 use net_util::Error as TapError;
 use remain::sorted;
 use thiserror::Error;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use vhost::Error as VhostError;
-use vmm_vhost::message::MasterReq;
-use vmm_vhost::message::Req;
-use vmm_vhost::message::VhostUserMsgHeader;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
 
 mod control_socket;
 pub mod user;
@@ -27,13 +18,15 @@ pub mod user;
 pub use self::control_socket::*;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
+        #[cfg(feature = "net")]
         mod net;
         pub mod vsock;
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
         pub mod scmi;
         mod worker;
 
+        #[cfg(feature = "net")]
         pub use self::net::Net;
         pub use self::vsock::Vsock;
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -78,7 +71,7 @@ pub enum Error {
     #[error("failed to set vnet header size: {0}")]
     TapSetVnetHdrSize(TapError),
     /// Get features failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to get features: {0}")]
     VhostGetFeatures(VhostError),
     /// Vhost IOTLB required but not supported.
@@ -91,51 +84,51 @@ pub enum Error {
     #[error("failed to read vhost event: {0}")]
     VhostIrqRead(SysError),
     /// Net set backend failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("net set backend failed: {0}")]
     VhostNetSetBackend(VhostError),
     /// Failed to open vhost device.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to open vhost device: {0}")]
     VhostOpen(VhostError),
     /// Set features failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set features: {0}")]
     VhostSetFeatures(VhostError),
     /// Set mem table failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set mem table: {0}")]
     VhostSetMemTable(VhostError),
     /// Set owner failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set owner: {0}")]
     VhostSetOwner(VhostError),
     /// Set vring addr failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set vring addr: {0}")]
     VhostSetVringAddr(VhostError),
     /// Set vring base failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set vring base: {0}")]
     VhostSetVringBase(VhostError),
     /// Set vring call failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set vring call: {0}")]
     VhostSetVringCall(VhostError),
     /// Set vring kick failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set vring kick: {0}")]
     VhostSetVringKick(VhostError),
     /// Set vring num failed.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set vring num: {0}")]
     VhostSetVringNum(VhostError),
     /// Failed to set CID for guest.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to set CID for guest: {0}")]
     VhostVsockSetCid(VhostError),
     /// Failed to start vhost-vsock driver.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to start vhost-vsock driver: {0}")]
     VhostVsockStart(VhostError),
     #[error("queue missing vring base")]
@@ -146,37 +139,3 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-pub const HEADER_LEN: usize = std::mem::size_of::<VhostUserMsgHeader<MasterReq>>();
-
-pub fn vhost_header_from_bytes<R: Req>(bytes: &[u8]) -> Option<&VhostUserMsgHeader<R>> {
-    if bytes.len() < HEADER_LEN {
-        return None;
-    }
-    // This can't fail because we already checked the size and because packed alignment is 1.
-    Some(
-        LayoutVerified::<_, VhostUserMsgHeader<R>>::new(&bytes[0..HEADER_LEN])
-            .unwrap()
-            .into_ref(),
-    )
-}
-
-pub fn vhost_body_from_message_bytes<T: FromBytes + AsBytes>(
-    bytes: &mut [u8],
-) -> anyhow::Result<&mut T> {
-    let body_len = std::mem::size_of::<T>();
-    let hdr = vhost_header_from_bytes::<MasterReq>(bytes).context("failed to parse header")?;
-
-    if body_len != hdr.get_size() as usize || bytes.len() != body_len + HEADER_LEN {
-        return Err(anyhow!(
-            "parse error: body_len={} hdr_size={} msg_size={}",
-            body_len,
-            hdr.get_size(),
-            bytes.len()
-        ));
-    }
-
-    // We already checked the size. This can only fail due to alignment, but all valid
-    // message types are packed (i.e. alignment=1).
-    Ok(zerocopy_from_mut_slice(&mut bytes[HEADER_LEN..]).expect("bad alignment"))
-}

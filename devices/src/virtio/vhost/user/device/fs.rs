@@ -22,15 +22,13 @@ use cros_async::EventAsync;
 use cros_async::Executor;
 use data_model::Le32;
 use fuse::Server;
-use futures::future::AbortHandle;
-use futures::future::Abortable;
 use hypervisor::ProtectionType;
 use sync::Mutex;
 pub use sys::start_device as run_fs_device;
 use virtio_sys::virtio_fs::virtio_fs_config;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::message::VhostUserVirtioFeatures;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 use zerocopy::AsBytes;
 
 use crate::virtio;
@@ -93,7 +91,7 @@ impl FsBackend {
         fs_tag[..tag.len()].copy_from_slice(tag.as_bytes());
 
         let avail_features = virtio::base_features(ProtectionType::Unprotected)
-            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
+            | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
 
         // Use default passthroughfs config
         let fs = PassthroughFs::new(tag, cfg.unwrap_or_default())?;
@@ -169,7 +167,7 @@ impl VhostUserBackend for FsBackend {
 
     fn reset(&mut self) {
         for worker in self.workers.iter_mut().filter_map(Option::take) {
-            worker.abort_handle.abort();
+            let _ = self.ex.run_until(worker.queue_task.cancel());
         }
     }
 
@@ -191,35 +189,25 @@ impl VhostUserBackend for FsBackend {
             .context("failed to clone queue event")?;
         let kick_evt = EventAsync::new(kick_evt, &self.ex)
             .context("failed to create EventAsync for kick_evt")?;
-        let (handle, registration) = AbortHandle::new_pair();
         let (_, fs_device_tube) = Tube::pair()?;
 
         let queue = Rc::new(RefCell::new(queue));
-        let queue_task = self.ex.spawn_local(Abortable::new(
-            handle_fs_queue(
-                queue.clone(),
-                doorbell,
-                kick_evt,
-                self.server.clone(),
-                Arc::new(Mutex::new(fs_device_tube)),
-            ),
-            registration,
+        let queue_task = self.ex.spawn_local(handle_fs_queue(
+            queue.clone(),
+            doorbell,
+            kick_evt,
+            self.server.clone(),
+            Arc::new(Mutex::new(fs_device_tube)),
         ));
 
-        self.workers[idx] = Some(WorkerState {
-            abort_handle: handle,
-            queue_task,
-            queue,
-        });
+        self.workers[idx] = Some(WorkerState { queue_task, queue });
         Ok(())
     }
 
     fn stop_queue(&mut self, idx: usize) -> anyhow::Result<virtio::Queue> {
         if let Some(worker) = self.workers.get_mut(idx).and_then(Option::take) {
-            worker.abort_handle.abort();
-
             // Wait for queue_task to be aborted.
-            let _ = self.ex.run_until(worker.queue_task);
+            let _ = self.ex.run_until(worker.queue_task.cancel());
 
             let queue = match Rc::try_unwrap(worker.queue) {
                 Ok(queue_cell) => queue_cell.into_inner(),
@@ -239,10 +227,7 @@ impl VhostUserBackend for FsBackend {
 pub struct Options {
     #[argh(option, arg_name = "PATH")]
     /// path to a vhost-user socket
-    socket: Option<String>,
-    #[argh(option, arg_name = "STRING")]
-    /// VFIO-PCI device name (e.g. '0000:00:07.0')
-    vfio: Option<String>,
+    socket: String,
     #[argh(option, arg_name = "TAG")]
     /// the virtio-fs tag
     tag: String,

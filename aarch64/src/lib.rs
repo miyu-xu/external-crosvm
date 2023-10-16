@@ -55,13 +55,13 @@ use hypervisor::VmAArch64;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use sync::Condvar;
 use sync::Mutex;
 use thiserror::Error;
@@ -392,7 +392,9 @@ impl arch::LinuxArch for AArch64 {
         dump_device_tree_blob: Option<PathBuf>,
         _debugcon_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
-        #[cfg(unix)] _guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] _guest_suspended_cvar: Option<
+            Arc<(Mutex<bool>, Condvar)>,
+        >,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmAArch64,
@@ -573,7 +575,7 @@ impl arch::LinuxArch for AArch64 {
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
         let (platform_devices, mut platform_pid_debug_label_map) =
-            arch::sys::unix::generate_platform_bus(
+            arch::sys::linux::generate_platform_bus(
                 platform_devices,
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,
@@ -686,7 +688,7 @@ impl arch::LinuxArch for AArch64 {
 
                 // a dummy AML buffer. Aarch64 crosvm doesn't use ACPI.
                 let mut amls = Vec::new();
-                let (control_tube, mmio_base) = arch::sys::unix::add_goldfish_battery(
+                let (control_tube, mmio_base) = arch::sys::linux::add_goldfish_battery(
                     &mut amls,
                     bat_jail,
                     &mmio_bus,
@@ -762,7 +764,6 @@ impl arch::LinuxArch for AArch64 {
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
-            has_bios,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -790,7 +791,6 @@ impl arch::LinuxArch for AArch64 {
         vcpu_init: VcpuInitAArch64,
         _vcpu_id: usize,
         _num_cpus: usize,
-        _has_bios: bool,
         _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         for (reg, value) in vcpu_init.regs.iter() {

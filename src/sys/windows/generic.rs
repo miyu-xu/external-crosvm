@@ -22,6 +22,7 @@ use base::WaitContext;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use devices::virtio;
+#[cfg(feature = "gpu")]
 use devices::virtio::gpu::EventDevice;
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuBackendConfig as GpuBackendConfigProduct;
@@ -35,14 +36,21 @@ use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig a
 use devices::virtio::vhost::user::snd::sys::windows::product::SndVmmConfig as SndVmmConfigProduct;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::snd::sys::windows::SndVmmConfig;
+#[cfg(feature = "gpu")]
 use devices::virtio::DisplayBackend;
+#[cfg(feature = "gpu")]
 use devices::virtio::Gpu;
+#[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
 pub(crate) use metrics::log_descriptor;
 pub(crate) use metrics::MetricEventType;
 use sync::Mutex;
+#[cfg(feature = "balloon")]
 use vm_control::BalloonTube;
 use vm_control::PvClockCommand;
+use vm_control::VmRequest;
+use vm_control::VmResponse;
+use vm_control::VmRunMode;
 
 use super::run_vcpu::VcpuRunMode;
 use crate::crosvm::config::Config;
@@ -146,7 +154,6 @@ pub(super) fn handle_tagged_control_tube_event(
     virtio_snd_host_mute_tube: &mut Option<Tube>,
     service_vm_state: &mut ServiceVmState,
     ipc_main_loop_tube: Option<&Tube>,
-    ac97_host_tubes: &[Tube],
 ) {
 }
 
@@ -163,11 +170,10 @@ pub(super) fn push_triggers<'a>(
     }
 }
 
-pub(super) fn handle_received_token<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
+pub(super) fn handle_received_token<'a, V: VmArch + 'static, Vcpu: VcpuArch + 'static, F>(
     token: &Token,
-    _ac97_host_tubes: &[Tube],
     _anti_tamper_main_thread_tube: &Option<ProtoTube>,
-    _balloon_tube: Option<&mut BalloonTube>,
+    #[cfg(feature = "balloon")] _balloon_tube: Option<&mut BalloonTube>,
     _control_tubes: &BTreeMap<usize, SharedTaggedControlTube>,
     _guest_os: &mut RunnableLinuxVm<V, Vcpu>,
     _ipc_main_loop_tube: Option<&Tube>,
@@ -178,7 +184,11 @@ pub(super) fn handle_received_token<V: VmArch + 'static, Vcpu: VcpuArch + 'stati
     _service_vm_state: &mut ServiceVmState,
     _vcpu_boxes: &Mutex<Vec<Box<dyn VcpuArch>>>,
     _virtio_snd_host_mute_tube: &mut Option<Tube>,
-) {
+    _execute_vm_request: F,
+) -> Option<VmRunMode>
+where
+    F: FnMut(VmRequest, &'a mut RunnableLinuxVm<V, Vcpu>) -> (VmResponse, Option<VmRunMode>),
+{
     panic!(
         "Received an unrecognized shared token to product specific handler: {:?}",
         token
@@ -193,6 +203,7 @@ pub(super) fn create_service_vm_state(_memory_size_mb: u64) -> ServiceVmState {
     ServiceVmState {}
 }
 
+#[cfg(feature = "gpu")]
 pub(super) fn create_gpu(
     vm_evt_wrtube: &SendTube,
     resource_bridges: Vec<Tube>,
@@ -203,7 +214,7 @@ pub(super) fn create_gpu(
     _product_args: GpuBackendConfigProduct,
 ) -> Result<Gpu> {
     let wndproc_thread =
-        virtio::gpu::start_wndproc_thread(None).expect("Failed to start wndproc_thread!");
+        virtio::gpu::start_wndproc_thread().expect("Failed to start wndproc_thread!");
 
     Ok(Gpu::new(
         vm_evt_wrtube
@@ -275,7 +286,7 @@ pub(crate) fn setup_metrics_reporting() -> Result<()> {
 
 pub(super) fn push_mouse_device(
     cfg: &Config,
-    _gpu_vmm_config: &mut GpuVmmConfig,
+    #[cfg(feature = "gpu")] _gpu_vmm_config: &mut GpuVmmConfig,
     _devs: &mut [VirtioDeviceStub],
 ) -> Result<()> {
     Ok(())

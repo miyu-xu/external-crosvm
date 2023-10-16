@@ -4,12 +4,13 @@
 
 //! Runs hardware devices in child processes.
 
+use std::fs;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use base::error;
 use base::info;
-use base::unix::process::fork_process;
+use base::linux::process::fork_process;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
 use base::AsRawDescriptors;
@@ -21,7 +22,6 @@ use minijail::Minijail;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
-use std::fs;
 use thiserror::Error;
 
 use crate::bus::ConfigWriteResult;
@@ -302,9 +302,9 @@ impl ChildProcIntf {
             unsafe { libc::exit(0) };
         })?;
 
-        // Suppress the no waiting warning from `base::sys::unix::process::Child` because crosvm
+        // Suppress the no waiting warning from `base::sys::linux::process::Child` because crosvm
         // does not wait for the processes from ProxyDevice explicitly. Instead it reaps all the
-        // child processes on its exit by `crosvm::sys::unix::main::wait_all_children()`.
+        // child processes on its exit by `crosvm::sys::linux::main::wait_all_children()`.
         let pid = child_process.into_pid();
 
         parent_tube.set_send_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))?;
