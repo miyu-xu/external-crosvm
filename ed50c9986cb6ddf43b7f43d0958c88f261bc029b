@@ -16,6 +16,24 @@
       "message": "Looks like this CL stopped being a merge commit with the revert.",
       "revId": "ed50c9986cb6ddf43b7f43d0958c88f261bc029b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f3cf8115_331b11b6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-16T18:08:02Z",
+      "side": 1,
+      "message": "I think that is the only way. The git repo already has a merge commit for all of this so we can\u0027t re-merge it.",
+      "parentUuid": "86387967_0fdae2d8",
+      "revId": "ed50c9986cb6ddf43b7f43d0958c88f261bc029b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
