@@ -16,6 +16,23 @@
       "message": "presubmit failure is unrelated\n\nneed another googler to +2",
       "revId": "0c7544f88efa526bedf71316421f03cd58c55486",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "49d7f677_4715a69d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1885735
+      },
+      "writtenOn": "2023-10-17T20:36:13Z",
+      "side": 1,
+      "message": "LGTM! I would not mind accepting this upstream too",
+      "revId": "0c7544f88efa526bedf71316421f03cd58c55486",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
