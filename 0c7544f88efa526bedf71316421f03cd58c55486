@@ -33,6 +33,24 @@
       "message": "LGTM! I would not mind accepting this upstream too",
       "revId": "0c7544f88efa526bedf71316421f03cd58c55486",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "32839150_da73013a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-17T21:25:44Z",
+      "side": 1,
+      "message": "thanks, i\u0027ll cherry pick it upstream",
+      "parentUuid": "49d7f677_4715a69d",
+      "revId": "0c7544f88efa526bedf71316421f03cd58c55486",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
