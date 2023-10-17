@@ -15,8 +15,6 @@ BUILD_FEATURES: Dict[str, str] = {
 # Do not build these on riscv64. They don't yet have riscv64 support of the backing libraries in the
 # dev container.
 DO_NOT_BUILD_RISCV64 = [
-    "tpm2",
-    "tpm2-sys",
     "libvda",
     "libva",
     "ffmpeg",
@@ -55,6 +53,16 @@ DO_NOT_RUN_AARCH64 = [
 # Do not run these tests for win64 builds
 DO_NOT_RUN_WIN64 = [
     "package(e2e_tests)",
+]
+
+# Do not run these tests for win64 build on linux with wine64 runner.
+DO_NOT_RUN_WINE64 = [
+    "package(crosvm) and test(sigterm_signals_exit_event)",
+    "package(crosvm) and test(test_forwarding_loops)",
+    "package(base) and test(get_allocated_ranges_for_empty_file)",
+    "package(base) and test(get_allocated_ranges_for_fully_allocated_file)",
+    "package(base) and test(get_allocated_ranges_for_file_with_one_hole)",
+    "package(base) and test(get_allocated_ranges_for_file_with_many_hole)",
 ]
 
 # Avoid e2e tests and benchmarks to be automatically included as unit tests

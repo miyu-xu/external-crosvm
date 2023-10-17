@@ -12,30 +12,28 @@ use std::slice::from_raw_parts_mut;
 
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 
-pub fn zerocopy_from_reader<R: io::Read, T: FromBytes>(mut read: R) -> io::Result<T> {
-    // Allocate on the stack via `MaybeUninit` to ensure proper alignment.
-    let mut out = MaybeUninit::zeroed();
-
-    // Safe because the pointer is valid and points to `size_of::<T>()` bytes of zeroes,
-    // which is a properly initialized value for `u8`.
-    let buf = unsafe { from_raw_parts_mut(out.as_mut_ptr() as *mut u8, size_of::<T>()) };
-    read.read_exact(buf)?;
-
-    // Safe because any bit pattern is considered a valid value for `T`.
-    Ok(unsafe { out.assume_init() })
+pub fn zerocopy_from_reader<R: io::Read, T: AsBytes + FromBytes + FromZeroes>(
+    mut read: R,
+) -> io::Result<T> {
+    let mut out = T::new_zeroed();
+    read.read_exact(out.as_bytes_mut())?;
+    Ok(out)
 }
 
 pub fn zerocopy_from_mut_slice<T: FromBytes + AsBytes>(data: &mut [u8]) -> Option<&mut T> {
-    let lv: LayoutVerified<&mut [u8], T> = LayoutVerified::new(data)?;
+    let lv: Ref<&mut [u8], T> = Ref::new(data)?;
     Some(lv.into_mut())
 }
 
 pub fn zerocopy_from_slice<T: FromBytes>(data: &[u8]) -> Option<&T> {
-    let lv: LayoutVerified<&[u8], T> = LayoutVerified::new(data)?;
+    let lv: Ref<&[u8], T> = Ref::new(data)?;
     Some(lv.into_ref())
 }
+
+// ANDROID(b/269356487): Delete this trait once android users are migrated to the zerocopy crate.
 
 /// Types for which it is safe to initialize from raw data.
 ///
