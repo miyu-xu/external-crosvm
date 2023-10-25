@@ -664,9 +664,27 @@ fn parse_sysfs_cpu_info_vec(cpu_id: usize, property: &str) -> Result<Vec<u32>> {
     res
 }
 
+fn populate_cpufreq_vec(cpu_id: usize) -> Result<Vec<u32>> {
+    let max_freq = parse_sysfs_cpu_info(cpu_id, "cpufreq/cpuinfo_max_freq")?;
+    let freq_step = max_freq / 20;
+    let mut cpufreq_vec = Vec::new();
+
+    for i in 0..19 {
+        cpufreq_vec.push(i * freq_step);
+    }
+
+    cpufreq_vec.push(max_freq);
+    Ok(cpufreq_vec)
+}
+
 /// Returns a list of supported frequencies in kHz for a given logical core.
 pub fn logical_core_frequencies_khz(cpu_id: usize) -> Result<Vec<u32>> {
-    parse_sysfs_cpu_info_vec(cpu_id, "cpufreq/scaling_available_frequencies")
+    let frequencies_path = Path::new("/sys/devices/system/cpu/cpu{cpu_id}/cpufreq/scaling_available_frequencies");
+    if frequencies_path.exists() {
+        parse_sysfs_cpu_info_vec(cpu_id, "cpufreq/scaling_available_frequencies")
+    } else {
+        populate_cpufreq_vec(cpu_id)
+    }
 }
 
 #[repr(C)]
