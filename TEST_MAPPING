@@ -3,7 +3,9 @@
   "postsubmit": [
     {"name": "base_test_tests_syslog"},
     {"name": "cros_async_test_tests_executor"},
-    {"name": "jail_test_src_lib"}
+    {"name": "jail_test_src_lib"},
+    {"name": "net_util_test_src_lib"},
+    {"name": "x86_64_test_src_lib"}
   ],
   "presubmit": [
     // Commented out tests entries have failures.
@@ -43,7 +45,6 @@
     // {"name": "kvm_test_tests_kvm_tests"},
     // {"name": "kvm_test_tests_read_only_memory"},
     // {"name": "kvm_test_tests_real_run_adder"},
-    // {"name": "net_util_test_src_lib"},
     // {"name": "net_util_test_tests_unix_tap"},
     {"name": "p9_test_src_lib"},
     {"name": "resources_test_src_lib"},
@@ -54,7 +55,6 @@
     {"name": "vm_control_test_src_lib"},
     {"name": "vm_memory_test_src_lib"}
     // {"name": "vmm_vhost_test_src_lib"},
-    // {"name": "x86_64_test_src_lib"},
     // {"name": "x86_64_test_tests_integration_main"},
     // {"name": "x86_64_test_tests_linux"},
   ],
