@@ -2,9 +2,13 @@
   // New tests are temporarily added to postsubmit first, see go/test-mapping-slo-guide.
   "postsubmit": [
     {"name": "base_test_tests_syslog"},
+    {"name": "bit_field_derive_test_bit_field_derive"},
     {"name": "cros_async_test_tests_executor"},
+    {"name": "hypervisor_test_src_lib"},
     {"name": "jail_test_src_lib"},
+    {"name": "metrics_test_src_lib"},
     {"name": "net_util_test_src_lib"},
+    {"name": "wire_format_derive_test_src_lib"},
     {"name": "x86_64_test_src_lib"}
   ],
   "presubmit": [
