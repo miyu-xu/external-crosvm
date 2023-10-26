@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "78b28b40_0e965c31",
+        "filename": "cros_tracing_types/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-10-26T22:46:39Z",
+      "side": 0,
+      "message": "unrelated to change but should this be handled?",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "ace74f04d7c01a4c7555b76bc7becb395a5e5e95",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
