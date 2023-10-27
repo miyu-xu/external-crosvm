@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "dba45def_c5acb2cf",
+        "filename": "android-test-mapping-entries.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-27T22:05:43Z",
+      "side": 1,
+      "message": "deleted",
+      "parentUuid": "6c28a198_b8538244",
+      "range": {
+        "startLine": 1,
+        "startChar": 0,
+        "endLine": 1,
+        "endChar": 11
+      },
+      "revId": "9feef109ced5e50e82f533a852181fba2f530bfe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "45815956_d785d528",
@@ -37,6 +61,30 @@
       "writtenOn": "2023-10-27T21:49:54Z",
       "side": 1,
       "message": "see also platform_testing/scripts/map_tests/map_tests.py ? can that work for this, or close?",
+      "range": {
+        "startLine": 3,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 35
+      },
+      "revId": "9feef109ced5e50e82f533a852181fba2f530bfe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "feea75a7_7073ddca",
+        "filename": "android-test-mapping-entries.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-10-27T22:05:43Z",
+      "side": 1,
+      "message": "trying to use that SGTM. deleted this script",
+      "parentUuid": "45815956_d785d528",
       "range": {
         "startLine": 3,
         "startChar": 0,
