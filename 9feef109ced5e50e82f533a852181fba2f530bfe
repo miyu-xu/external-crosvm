@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "45815956_d785d528",
+        "filename": "android-test-mapping-entries.sh",
+        "patchSetId": 2
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-10-27T21:49:54Z",
+      "side": 1,
+      "message": "see also platform_testing/scripts/map_tests/map_tests.py ? can that work for this, or close?",
+      "range": {
+        "startLine": 3,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 35
+      },
+      "revId": "9feef109ced5e50e82f533a852181fba2f530bfe",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
