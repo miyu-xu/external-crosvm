@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use arch::CpuSet;
 use arch::SERIAL_ADDR;
 use cros_fdt::Error;
-use cros_fdt::FdtWriter;
+use cros_fdt::Fdt;
 use cros_fdt::Result;
 // This is a Battery related constant
 use devices::bat::GOLDFISHBAT_MMIO_LEN;
@@ -66,7 +66,7 @@ const IRQ_TYPE_EDGE_RISING: u32 = 0x00000001;
 const IRQ_TYPE_LEVEL_HIGH: u32 = 0x00000004;
 const IRQ_TYPE_LEVEL_LOW: u32 = 0x00000008;
 
-fn create_memory_node(fdt: &mut FdtWriter, guest_mem: &GuestMemory) -> Result<()> {
+fn create_memory_node(fdt: &mut Fdt, guest_mem: &GuestMemory) -> Result<()> {
     let mut mem_reg_prop = Vec::new();
     let mut previous_memory_region_end = None;
     let mut regions = guest_mem.guest_memory_regions();
@@ -92,36 +92,36 @@ fn create_memory_node(fdt: &mut FdtWriter, guest_mem: &GuestMemory) -> Result<()
     }
 
     let memory_node = fdt.begin_node("memory")?;
-    fdt.property_string("device_type", "memory")?;
-    fdt.property_array_u64("reg", &mem_reg_prop)?;
+    fdt.set_prop("device_type", "memory")?;
+    fdt.set_prop("reg", mem_reg_prop)?;
     fdt.end_node(memory_node)?;
 
     Ok(())
 }
 
 fn create_resv_memory_node(
-    fdt: &mut FdtWriter,
+    fdt: &mut Fdt,
     resv_addr_and_size: (Option<GuestAddress>, u64),
 ) -> Result<u32> {
     let (resv_addr, resv_size) = resv_addr_and_size;
 
     let resv_memory_node = fdt.begin_node("reserved-memory")?;
-    fdt.property_u32("#address-cells", 0x2)?;
-    fdt.property_u32("#size-cells", 0x2)?;
-    fdt.property_null("ranges")?;
+    fdt.set_prop("#address-cells", 0x2u32)?;
+    fdt.set_prop("#size-cells", 0x2u32)?;
+    fdt.set_prop("ranges", ())?;
 
     let restricted_dma_pool = if let Some(resv_addr) = resv_addr {
         let node = fdt.begin_node(&format!("restricted_dma_reserved@{:x}", resv_addr.0))?;
-        fdt.property_array_u64("reg", &[resv_addr.0, resv_size])?;
+        fdt.set_prop("reg", &[resv_addr.0, resv_size])?;
         node
     } else {
         let node = fdt.begin_node("restricted_dma_reserved")?;
-        fdt.property_u64("size", resv_size)?;
+        fdt.set_prop("size", resv_size)?;
         node
     };
-    fdt.property_u32("phandle", PHANDLE_RESTRICTED_DMA_POOL)?;
-    fdt.property_string("compatible", "restricted-dma-pool")?;
-    fdt.property_u64("alignment", base::pagesize() as u64)?;
+    fdt.set_prop("phandle", PHANDLE_RESTRICTED_DMA_POOL)?;
+    fdt.set_prop("compatible", "restricted-dma-pool")?;
+    fdt.set_prop("alignment", base::pagesize() as u64)?;
     fdt.end_node(restricted_dma_pool)?;
 
     fdt.end_node(resv_memory_node)?;
@@ -129,7 +129,7 @@ fn create_resv_memory_node(
 }
 
 fn create_cpu_nodes(
-    fdt: &mut FdtWriter,
+    fdt: &mut Fdt,
     num_cpus: u32,
     cpu_clusters: Vec<CpuSet>,
     cpu_capacity: BTreeMap<usize, u32>,
@@ -137,29 +137,29 @@ fn create_cpu_nodes(
     cpu_frequencies: BTreeMap<usize, Vec<u32>>,
 ) -> Result<()> {
     let cpus_node = fdt.begin_node("cpus")?;
-    fdt.property_u32("#address-cells", 0x1)?;
-    fdt.property_u32("#size-cells", 0x0)?;
+    fdt.set_prop("#address-cells", 0x1u32)?;
+    fdt.set_prop("#size-cells", 0x0u32)?;
 
     for cpu_id in 0..num_cpus {
         let cpu_name = format!("cpu@{:x}", cpu_id);
         let cpu_node = fdt.begin_node(&cpu_name)?;
-        fdt.property_string("device_type", "cpu")?;
-        fdt.property_string("compatible", "arm,arm-v8")?;
+        fdt.set_prop("device_type", "cpu")?;
+        fdt.set_prop("compatible", "arm,arm-v8")?;
         if num_cpus > 1 {
-            fdt.property_string("enable-method", "psci")?;
+            fdt.set_prop("enable-method", "psci")?;
         }
-        fdt.property_u32("reg", cpu_id)?;
-        fdt.property_u32("phandle", PHANDLE_CPU0 + cpu_id)?;
+        fdt.set_prop("reg", cpu_id)?;
+        fdt.set_prop("phandle", PHANDLE_CPU0 + cpu_id)?;
 
         if let Some(pwr_coefficient) = dynamic_power_coefficient.get(&(cpu_id as usize)) {
-            fdt.property_u32("dynamic-power-coefficient", *pwr_coefficient)?;
+            fdt.set_prop("dynamic-power-coefficient", *pwr_coefficient)?;
         }
         if let Some(capacity) = cpu_capacity.get(&(cpu_id as usize)) {
-            fdt.property_u32("capacity-dmips-mhz", *capacity)?;
+            fdt.set_prop("capacity-dmips-mhz", *capacity)?;
         }
 
         if !cpu_frequencies.is_empty() {
-            fdt.property_u32("operating-points-v2", PHANDLE_OPP_DOMAIN_BASE + cpu_id)?;
+            fdt.set_prop("operating-points-v2", PHANDLE_OPP_DOMAIN_BASE + cpu_id)?;
         }
         fdt.end_node(cpu_node)?;
     }
@@ -170,7 +170,7 @@ fn create_cpu_nodes(
             let cluster_node = fdt.begin_node(&format!("cluster{}", cluster_idx))?;
             for (core_idx, cpu_id) in cpus.iter().enumerate() {
                 let core_node = fdt.begin_node(&format!("core{}", core_idx))?;
-                fdt.property_u32("cpu", PHANDLE_CPU0 + *cpu_id as u32)?;
+                fdt.set_prop("cpu", PHANDLE_CPU0 + *cpu_id as u32)?;
                 fdt.end_node(core_node)?;
             }
             fdt.end_node(cluster_node)?;
@@ -184,12 +184,12 @@ fn create_cpu_nodes(
         for cpu_id in 0..num_cpus {
             if let Some(frequencies) = cpu_frequencies.get(&(cpu_id as usize)) {
                 let opp_table_node = fdt.begin_node(&format!("opp_table{}", cpu_id))?;
-                fdt.property_u32("phandle", PHANDLE_OPP_DOMAIN_BASE + cpu_id)?;
-                fdt.property_string("compatible", "operating-points-v2")?;
+                fdt.set_prop("phandle", PHANDLE_OPP_DOMAIN_BASE + cpu_id)?;
+                fdt.set_prop("compatible", "operating-points-v2")?;
                 for freq in frequencies.iter() {
                     let opp_hz = (*freq) as u64 * 1000;
                     let opp_node = fdt.begin_node(&format!("opp{}", opp_hz))?;
-                    fdt.property_u64("opp-hz", opp_hz)?;
+                    fdt.set_prop("opp-hz", opp_hz)?;
                     fdt.end_node(opp_node)?;
                 }
                 fdt.end_node(opp_table_node)?;
@@ -200,31 +200,31 @@ fn create_cpu_nodes(
     Ok(())
 }
 
-fn create_gic_node(fdt: &mut FdtWriter, is_gicv3: bool, num_cpus: u64) -> Result<()> {
+fn create_gic_node(fdt: &mut Fdt, is_gicv3: bool, num_cpus: u64) -> Result<()> {
     let mut gic_reg_prop = [AARCH64_GIC_DIST_BASE, AARCH64_GIC_DIST_SIZE, 0, 0];
 
     let intc_node = fdt.begin_node("intc")?;
     if is_gicv3 {
-        fdt.property_string("compatible", "arm,gic-v3")?;
+        fdt.set_prop("compatible", "arm,gic-v3")?;
         gic_reg_prop[2] = AARCH64_GIC_DIST_BASE - (AARCH64_GIC_REDIST_SIZE * num_cpus);
         gic_reg_prop[3] = AARCH64_GIC_REDIST_SIZE * num_cpus;
     } else {
-        fdt.property_string("compatible", "arm,cortex-a15-gic")?;
+        fdt.set_prop("compatible", "arm,cortex-a15-gic")?;
         gic_reg_prop[2] = AARCH64_GIC_CPUI_BASE;
         gic_reg_prop[3] = AARCH64_GIC_CPUI_SIZE;
     }
-    fdt.property_u32("#interrupt-cells", GIC_FDT_IRQ_NUM_CELLS)?;
-    fdt.property_null("interrupt-controller")?;
-    fdt.property_array_u64("reg", &gic_reg_prop)?;
-    fdt.property_u32("phandle", PHANDLE_GIC)?;
-    fdt.property_u32("#address-cells", 2)?;
-    fdt.property_u32("#size-cells", 2)?;
+    fdt.set_prop("#interrupt-cells", GIC_FDT_IRQ_NUM_CELLS)?;
+    fdt.set_prop("interrupt-controller", ())?;
+    fdt.set_prop("reg", &gic_reg_prop)?;
+    fdt.set_prop("phandle", PHANDLE_GIC)?;
+    fdt.set_prop("#address-cells", 2u32)?;
+    fdt.set_prop("#size-cells", 2u32)?;
     fdt.end_node(intc_node)?;
 
     Ok(())
 }
 
-fn create_timer_node(fdt: &mut FdtWriter, num_cpus: u32) -> Result<()> {
+fn create_timer_node(fdt: &mut Fdt, num_cpus: u32) -> Result<()> {
     // These are fixed interrupt numbers for the timer device.
     let irqs = [13, 14, 11, 10];
     let compatible = "arm,armv8-timer";
@@ -239,26 +239,26 @@ fn create_timer_node(fdt: &mut FdtWriter, num_cpus: u32) -> Result<()> {
     }
 
     let timer_node = fdt.begin_node("timer")?;
-    fdt.property_string("compatible", compatible)?;
-    fdt.property_array_u32("interrupts", &timer_reg_cells)?;
-    fdt.property_null("always-on")?;
+    fdt.set_prop("compatible", compatible)?;
+    fdt.set_prop("interrupts", timer_reg_cells)?;
+    fdt.set_prop("always-on", ())?;
     fdt.end_node(timer_node)?;
 
     Ok(())
 }
 
-fn create_virt_cpufreq_node(fdt: &mut FdtWriter, num_cpus: u64) -> Result<()> {
+fn create_virt_cpufreq_node(fdt: &mut Fdt, num_cpus: u64) -> Result<()> {
     let compatible = "virtual,kvm-cpufreq";
     let vcf_node = fdt.begin_node("cpufreq")?;
     let reg = [AARCH64_VIRTFREQ_BASE, AARCH64_VIRTFREQ_SIZE * num_cpus];
 
-    fdt.property_string("compatible", compatible)?;
-    fdt.property_array_u64("reg", &reg)?;
+    fdt.set_prop("compatible", compatible)?;
+    fdt.set_prop("reg", &reg)?;
     fdt.end_node(vcf_node)?;
     Ok(())
 }
 
-fn create_pmu_node(fdt: &mut FdtWriter, num_cpus: u32) -> Result<()> {
+fn create_pmu_node(fdt: &mut Fdt, num_cpus: u32) -> Result<()> {
     let compatible = "arm,armv8-pmuv3";
     let cpu_mask: u32 =
         (((1 << num_cpus) - 1) << GIC_FDT_IRQ_PPI_CPU_SHIFT) & GIC_FDT_IRQ_PPI_CPU_MASK;
@@ -269,27 +269,27 @@ fn create_pmu_node(fdt: &mut FdtWriter, num_cpus: u32) -> Result<()> {
     ];
 
     let pmu_node = fdt.begin_node("pmu")?;
-    fdt.property_string("compatible", compatible)?;
-    fdt.property_array_u32("interrupts", &irq)?;
+    fdt.set_prop("compatible", compatible)?;
+    fdt.set_prop("interrupts", &irq)?;
     fdt.end_node(pmu_node)?;
     Ok(())
 }
 
-fn create_serial_node(fdt: &mut FdtWriter, addr: u64, irq: u32) -> Result<()> {
+fn create_serial_node(fdt: &mut Fdt, addr: u64, irq: u32) -> Result<()> {
     let serial_reg_prop = [addr, AARCH64_SERIAL_SIZE];
     let irq = [GIC_FDT_IRQ_TYPE_SPI, irq, IRQ_TYPE_EDGE_RISING];
 
     let serial_node = fdt.begin_node(&format!("U6_16550A@{:x}", addr))?;
-    fdt.property_string("compatible", "ns16550a")?;
-    fdt.property_array_u64("reg", &serial_reg_prop)?;
-    fdt.property_u32("clock-frequency", AARCH64_SERIAL_SPEED)?;
-    fdt.property_array_u32("interrupts", &irq)?;
+    fdt.set_prop("compatible", "ns16550a")?;
+    fdt.set_prop("reg", &serial_reg_prop)?;
+    fdt.set_prop("clock-frequency", AARCH64_SERIAL_SPEED)?;
+    fdt.set_prop("interrupts", &irq)?;
     fdt.end_node(serial_node)?;
 
     Ok(())
 }
 
-fn create_serial_nodes(fdt: &mut FdtWriter) -> Result<()> {
+fn create_serial_nodes(fdt: &mut Fdt) -> Result<()> {
     // Note that SERIAL_ADDR contains the I/O port addresses conventionally used
     // for serial ports on x86. This uses the same addresses (but on the MMIO bus)
     // to simplify the shared serial code.
@@ -320,67 +320,67 @@ fn psci_compatible(version: &PsciVersion) -> Vec<&str> {
     compatible
 }
 
-fn create_psci_node(fdt: &mut FdtWriter, version: &PsciVersion) -> Result<()> {
+fn create_psci_node(fdt: &mut Fdt, version: &PsciVersion) -> Result<()> {
     let compatible = psci_compatible(version);
     let psci_node = fdt.begin_node("psci")?;
-    fdt.property_string_list("compatible", &compatible)?;
+    fdt.set_prop("compatible", compatible.as_slice())?;
     // Only support aarch64 guest
-    fdt.property_string("method", "hvc")?;
+    fdt.set_prop("method", "hvc")?;
     fdt.end_node(psci_node)?;
 
     Ok(())
 }
 
 fn create_chosen_node(
-    fdt: &mut FdtWriter,
+    fdt: &mut Fdt,
     cmdline: &str,
     initrd: Option<(GuestAddress, usize)>,
 ) -> Result<()> {
     let chosen_node = fdt.begin_node("chosen")?;
-    fdt.property_u32("linux,pci-probe-only", 1)?;
-    fdt.property_string("bootargs", cmdline)?;
+    fdt.set_prop("linux,pci-probe-only", 1u32)?;
+    fdt.set_prop("bootargs", cmdline)?;
     // Used by android bootloader for boot console output
-    fdt.property_string("stdout-path", &format!("/U6_16550A@{:x}", SERIAL_ADDR[0]))?;
+    fdt.set_prop("stdout-path", format!("/U6_16550A@{:x}", SERIAL_ADDR[0]))?;
 
     let mut kaslr_seed_bytes = [0u8; 8];
     OsRng.fill_bytes(&mut kaslr_seed_bytes);
     let kaslr_seed = u64::from_le_bytes(kaslr_seed_bytes);
-    fdt.property_u64("kaslr-seed", kaslr_seed)?;
+    fdt.set_prop("kaslr-seed", kaslr_seed)?;
 
     let mut rng_seed_bytes = [0u8; 256];
     OsRng.fill_bytes(&mut rng_seed_bytes);
-    fdt.property("rng-seed", &rng_seed_bytes)?;
+    fdt.set_prop("rng-seed", &rng_seed_bytes)?;
 
     if let Some((initrd_addr, initrd_size)) = initrd {
         let initrd_start = initrd_addr.offset() as u32;
         let initrd_end = initrd_start + initrd_size as u32;
-        fdt.property_u32("linux,initrd-start", initrd_start)?;
-        fdt.property_u32("linux,initrd-end", initrd_end)?;
+        fdt.set_prop("linux,initrd-start", initrd_start)?;
+        fdt.set_prop("linux,initrd-end", initrd_end)?;
     }
     fdt.end_node(chosen_node)?;
 
     Ok(())
 }
 
-fn create_config_node(fdt: &mut FdtWriter, (addr, size): (GuestAddress, usize)) -> Result<()> {
-    let addr = addr
+fn create_config_node(fdt: &mut Fdt, (addr, size): (GuestAddress, usize)) -> Result<()> {
+    let addr: u32 = addr
         .offset()
         .try_into()
         .map_err(|_| Error::PropertyValueTooLarge)?;
-    let size = size.try_into().map_err(|_| Error::PropertyValueTooLarge)?;
+    let size: u32 = size.try_into().map_err(|_| Error::PropertyValueTooLarge)?;
 
     let config_node = fdt.begin_node("config")?;
-    fdt.property_u32("kernel-address", addr)?;
-    fdt.property_u32("kernel-size", size)?;
+    fdt.set_prop("kernel-address", addr)?;
+    fdt.set_prop("kernel-size", size)?;
     fdt.end_node(config_node)?;
 
     Ok(())
 }
 
-fn create_kvm_cpufreq_node(fdt: &mut FdtWriter) -> Result<()> {
+fn create_kvm_cpufreq_node(fdt: &mut Fdt) -> Result<()> {
     let vcf_node = fdt.begin_node("cpufreq")?;
 
-    fdt.property_string("compatible", "virtual,kvm-cpufreq")?;
+    fdt.set_prop("compatible", "virtual,kvm-cpufreq")?;
     fdt.end_node(vcf_node)?;
 
     Ok(())
@@ -439,7 +439,7 @@ pub struct VmWdtConfig {
 }
 
 fn create_pci_nodes(
-    fdt: &mut FdtWriter,
+    fdt: &mut Fdt,
     pci_irqs: Vec<(PciAddress, u32, PciInterruptPin)>,
     cfg: PciConfigRegion,
     ranges: &[PciRange],
@@ -468,7 +468,7 @@ fn create_pci_nodes(
         })
         .collect();
 
-    let bus_range = [0, 0]; // Only bus 0
+    let bus_range = [0u32, 0u32]; // Only bus 0
     let reg = [cfg.base, cfg.size];
 
     let mut interrupts: Vec<u32> = Vec::new();
@@ -503,36 +503,36 @@ fn create_pci_nodes(
     }
 
     let pci_node = fdt.begin_node("pci")?;
-    fdt.property_string("compatible", "pci-host-cam-generic")?;
-    fdt.property_string("device_type", "pci")?;
-    fdt.property_array_u32("ranges", &ranges)?;
-    fdt.property_array_u32("bus-range", &bus_range)?;
-    fdt.property_u32("#address-cells", 3)?;
-    fdt.property_u32("#size-cells", 2)?;
-    fdt.property_array_u64("reg", &reg)?;
-    fdt.property_u32("#interrupt-cells", 1)?;
-    fdt.property_array_u32("interrupt-map", &interrupts)?;
-    fdt.property_array_u32("interrupt-map-mask", &masks)?;
-    fdt.property_null("dma-coherent")?;
+    fdt.set_prop("compatible", "pci-host-cam-generic")?;
+    fdt.set_prop("device_type", "pci")?;
+    fdt.set_prop("ranges", ranges)?;
+    fdt.set_prop("bus-range", &bus_range)?;
+    fdt.set_prop("#address-cells", 3u32)?;
+    fdt.set_prop("#size-cells", 2u32)?;
+    fdt.set_prop("reg", &reg)?;
+    fdt.set_prop("#interrupt-cells", 1u32)?;
+    fdt.set_prop("interrupt-map", interrupts)?;
+    fdt.set_prop("interrupt-map-mask", masks)?;
+    fdt.set_prop("dma-coherent", ())?;
     if let Some(dma_pool_phandle) = dma_pool_phandle {
-        fdt.property_u32("memory-region", dma_pool_phandle)?;
+        fdt.set_prop("memory-region", dma_pool_phandle)?;
     }
     fdt.end_node(pci_node)?;
 
     Ok(())
 }
 
-fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
+fn create_rtc_node(fdt: &mut Fdt) -> Result<()> {
     // the kernel driver for pl030 really really wants a clock node
     // associated with an AMBA device or it will fail to probe, so we
     // need to make up a clock node to associate with the pl030 rtc
     // node and an associated handle with a unique phandle value.
     const CLK_PHANDLE: u32 = 24;
     let clock_node = fdt.begin_node("pclk@3M")?;
-    fdt.property_u32("#clock-cells", 0)?;
-    fdt.property_string("compatible", "fixed-clock")?;
-    fdt.property_u32("clock-frequency", 3141592)?;
-    fdt.property_u32("phandle", CLK_PHANDLE)?;
+    fdt.set_prop("#clock-cells", 0u32)?;
+    fdt.set_prop("compatible", "fixed-clock")?;
+    fdt.set_prop("clock-frequency", 3141592u32)?;
+    fdt.set_prop("phandle", CLK_PHANDLE)?;
     fdt.end_node(clock_node)?;
 
     let rtc_name = format!("rtc@{:x}", AARCH64_RTC_ADDR);
@@ -540,12 +540,12 @@ fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
     let irq = [GIC_FDT_IRQ_TYPE_SPI, AARCH64_RTC_IRQ, IRQ_TYPE_LEVEL_HIGH];
 
     let rtc_node = fdt.begin_node(&rtc_name)?;
-    fdt.property_string("compatible", "arm,primecell")?;
-    fdt.property_u32("arm,primecell-periphid", PL030_AMBA_ID)?;
-    fdt.property_array_u64("reg", &reg)?;
-    fdt.property_array_u32("interrupts", &irq)?;
-    fdt.property_u32("clocks", CLK_PHANDLE)?;
-    fdt.property_string("clock-names", "apb_pclk")?;
+    fdt.set_prop("compatible", "arm,primecell")?;
+    fdt.set_prop("arm,primecell-periphid", PL030_AMBA_ID)?;
+    fdt.set_prop("reg", &reg)?;
+    fdt.set_prop("interrupts", &irq)?;
+    fdt.set_prop("clocks", CLK_PHANDLE)?;
+    fdt.set_prop("clock-names", "apb_pclk")?;
     fdt.end_node(rtc_node)?;
     Ok(())
 }
@@ -554,28 +554,28 @@ fn create_rtc_node(fdt: &mut FdtWriter) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `fdt` - A FdtWriter in which the node is created
+/// * `fdt` - A Fdt in which the node is created
 /// * `mmio_base` - The MMIO base address of the battery
 /// * `irq` - The IRQ number of the battery
-fn create_battery_node(fdt: &mut FdtWriter, mmio_base: u64, irq: u32) -> Result<()> {
+fn create_battery_node(fdt: &mut Fdt, mmio_base: u64, irq: u32) -> Result<()> {
     let reg = [mmio_base, GOLDFISHBAT_MMIO_LEN];
     let irqs = [GIC_FDT_IRQ_TYPE_SPI, irq, IRQ_TYPE_LEVEL_HIGH];
     let bat_node = fdt.begin_node("goldfish_battery")?;
-    fdt.property_string("compatible", "google,goldfish-battery")?;
-    fdt.property_array_u64("reg", &reg)?;
-    fdt.property_array_u32("interrupts", &irqs)?;
+    fdt.set_prop("compatible", "google,goldfish-battery")?;
+    fdt.set_prop("reg", &reg)?;
+    fdt.set_prop("interrupts", &irqs)?;
     fdt.end_node(bat_node)?;
     Ok(())
 }
 
-fn create_vmwdt_node(fdt: &mut FdtWriter, vmwdt_cfg: VmWdtConfig) -> Result<()> {
+fn create_vmwdt_node(fdt: &mut Fdt, vmwdt_cfg: VmWdtConfig) -> Result<()> {
     let vmwdt_name = format!("vmwdt@{:x}", vmwdt_cfg.base);
     let reg = [vmwdt_cfg.base, vmwdt_cfg.size];
     let vmwdt_node = fdt.begin_node(&vmwdt_name)?;
-    fdt.property_string("compatible", "qemu,vcpu-stall-detector")?;
-    fdt.property_array_u64("reg", &reg)?;
-    fdt.property_u32("clock-frequency", vmwdt_cfg.clock_hz)?;
-    fdt.property_u32("timeout-sec", vmwdt_cfg.timeout_sec)?;
+    fdt.set_prop("compatible", "qemu,vcpu-stall-detector")?;
+    fdt.set_prop("reg", &reg)?;
+    fdt.set_prop("clock-frequency", vmwdt_cfg.clock_hz)?;
+    fdt.set_prop("timeout-sec", vmwdt_cfg.timeout_sec)?;
     fdt.end_node(vmwdt_node)?;
     Ok(())
 }
@@ -624,19 +624,19 @@ pub fn create_fdt(
     bat_mmio_base_and_irq: Option<(u64, u32)>,
     vmwdt_cfg: VmWdtConfig,
     dump_device_tree_blob: Option<PathBuf>,
-    vm_generator: &impl Fn(&mut FdtWriter, &BTreeMap<&str, u32>) -> cros_fdt::Result<()>,
+    vm_generator: &impl Fn(&mut Fdt, &BTreeMap<&str, u32>) -> cros_fdt::Result<()>,
     dynamic_power_coefficient: BTreeMap<usize, u32>,
 ) -> Result<()> {
-    let mut fdt = FdtWriter::new(&[]);
+    let mut fdt = Fdt::new(&[]);
     let mut phandles = BTreeMap::new();
 
     // The whole thing is put into one giant node with some top level properties
     let root_node = fdt.begin_node("")?;
-    fdt.property_u32("interrupt-parent", PHANDLE_GIC)?;
+    fdt.set_prop("interrupt-parent", PHANDLE_GIC)?;
     phandles.insert("intc", PHANDLE_GIC);
-    fdt.property_string("compatible", "linux,dummy-virt")?;
-    fdt.property_u32("#address-cells", 0x2)?;
-    fdt.property_u32("#size-cells", 0x2)?;
+    fdt.set_prop("compatible", "linux,dummy-virt")?;
+    fdt.set_prop("#address-cells", 0x2u32)?;
+    fdt.set_prop("#size-cells", 0x2u32)?;
     if let Some(android_fstab) = android_fstab {
         arch::android::create_android_fdt(&mut fdt, android_fstab)?;
     }
