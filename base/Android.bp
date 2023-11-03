@@ -263,4 +263,5 @@ rust_library {
         "//packages/modules/Virtualization/virtualizationmanager",
         "//vendor:__subpackages__",
     ],
+    vendor_available: true,
 }

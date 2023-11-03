@@ -68,4 +68,5 @@ rust_library {
         "//packages/modules/Virtualization/authfs",
         "//packages/modules/Virtualization/zipfuse",
     ],
+    vendor_available: true,
 }

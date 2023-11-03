@@ -25,4 +25,5 @@ rust_library {
         "libcfg_if",
         "libcros_tracing_types",
     ],
+    vendor_available: true,
 }

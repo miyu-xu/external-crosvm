@@ -127,4 +127,5 @@ rust_library {
         "libsync_rust",
         "libvm_memory",
     ],
+    vendor_available: true,
 }

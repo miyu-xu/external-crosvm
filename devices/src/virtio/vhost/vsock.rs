@@ -82,7 +82,7 @@ impl Vsock {
 
         let handle = VhostVsockHandle::new(device_file);
 
-        let avail_features = base_features;
+        let avail_features = base_features | 3;
 
         let mut interrupts = Vec::new();
         for _ in 0..NUM_QUEUES {

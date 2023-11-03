@@ -23,4 +23,5 @@ rust_library {
         "libbase_rust",
         "liblibc",
     ],
+    vendor_available: true,
 }

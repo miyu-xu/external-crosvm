@@ -67,6 +67,7 @@ if ! command -v rustup &>/dev/null; then
     ./rustup-init -y --no-modify-path --profile minimal --default-toolchain none
     source ${CARGO_HOME:-~/.cargo}/env
     rm rustup-init
+    rustup default stable
 fi
 
 # Install required rust components.

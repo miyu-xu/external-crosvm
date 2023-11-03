@@ -2,16 +2,32 @@ diff --git b/Android.bp a/Android.bp
 index d3d46248..bc1191a5 100644
 --- b/Android.bp
 +++ a/Android.bp
-@@ -36,6 +36,7 @@ rust_binary {
-     name: "crosvm",
-     defaults: ["crosvm_defaults"],
-     host_supported: true,
+@@ -32,10 +32,10 @@ license {
+     ],
+ }
+ 
+-rust_binary {
+-    name: "crosvm",
++rust_defaults {
++    name: "crosvm_binary_defaults",
+     defaults: ["crosvm_inner_defaults"],
+-    host_supported: true,
 +    prefer_rlib: true,
      crate_name: "crosvm",
      cargo_env_compat: true,
-     srcs: ["src/main.rs"],
-@@ -107,6 +108,18 @@ rust_binary {
-                 "libthiserror",
+     cargo_pkg_version: "0.1.0",
+@@ -125,9 +124,6 @@ rust_binary {
+                 "gpu",
+                 "virgl_renderer_next",
+             ],
+-            strip: {
+-                keep_symbols_and_debug_frame: true,
+-            },
+         },
+         android: {
+             shared_libs: [
+@@ -138,6 +139,18 @@ rust_binary {
+                 "libprocessgroup",
              ],
          },
 +        linux_bionic_arm64: {
@@ -29,3 +45,30 @@ index d3d46248..bc1191a5 100644
      },
      ld_flags: [
          "-Wl,--rpath,\\$$ORIGIN",
+@@ -146,6 +158,26 @@ rust_binary {
+ 
+ }
+ 
++rust_binary {
++    name: "crosvm",
++    host_supported: true,
++    defaults: ["crosvm_binary_defaults"],
++    target: {
++        host: {
++            strip: {
++                keep_symbols_and_debug_frame: true,
++            },
++        },
++    },
++}
++
++rust_binary {
++    name: "crosvm_vendor",
++    stem: "crosvm",
++    vendor: true,
++    defaults: ["crosvm_binary_defaults"],
++}
++
+ rust_test {
+     name: "crosvm_test_src_main",
+     defaults: ["crosvm_inner_defaults"],
