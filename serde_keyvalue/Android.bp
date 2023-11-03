@@ -35,6 +35,7 @@ rust_library {
         "libremain",
         "libserde_keyvalue_derive",
     ],
+    vendor_available: true,
 }
 
 rust_test {

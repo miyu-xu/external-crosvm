@@ -30,6 +30,7 @@ rust_ffi_shared {
     // doesn't actually exist.
     //
     // static_libs: ["libcrosvm_control_test"],
+    vendor_available: true,
 }
 
 rust_ffi_static {
@@ -52,4 +53,5 @@ rust_ffi_static {
     // doesn't actually exist.
     //
     // static_libs: ["libcrosvm_control_test"],
+    vendor_available: true,
 }

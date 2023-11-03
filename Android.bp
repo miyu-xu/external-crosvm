@@ -32,10 +32,9 @@ license {
     ],
 }
 
-rust_binary {
-    name: "crosvm",
+rust_defaults {
+    name: "crosvm_binary_defaults",
     defaults: ["crosvm_inner_defaults"],
-    host_supported: true,
     prefer_rlib: true,
     crate_name: "crosvm",
     cargo_env_compat: true,
@@ -127,9 +126,6 @@ rust_binary {
                 "gpu",
                 "virgl_renderer_next",
             ],
-            strip: {
-                keep_symbols_and_debug_frame: true,
-            },
         },
         android: {
             shared_libs: [
@@ -159,6 +155,26 @@ rust_binary {
         "-Wl,--rpath,\\$$ORIGIN/../../lib64",
     ],
 
+}
+
+rust_binary {
+    name: "crosvm",
+    host_supported: true,
+    defaults: ["crosvm_binary_defaults"],
+    target: {
+        host: {
+            strip: {
+                keep_symbols_and_debug_frame: true,
+            },
+        },
+    },
+}
+
+rust_binary {
+    name: "crosvm_vendor",
+    stem: "crosvm",
+    vendor: true,
+    defaults: ["crosvm_binary_defaults"],
 }
 
 rust_test {

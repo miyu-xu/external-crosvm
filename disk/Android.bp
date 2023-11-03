@@ -89,6 +89,7 @@ rust_library {
         "libasync_trait",
         "libremain",
     ],
+    vendor_available: true,
     visibility: [
         "//packages/modules/Virtualization/virtualizationmanager",
         "//vendor:__subpackages__",

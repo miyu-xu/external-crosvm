@@ -12,6 +12,7 @@ index 1bce61cdd..ea437fc59 100644
 +    // doesn't actually exist.
 +    //
 +    // static_libs: ["libcrosvm_control_test"],
+     vendor_available: true,
  }
  
  rust_ffi_static {
@@ -25,4 +26,5 @@ index 1bce61cdd..ea437fc59 100644
 +    // doesn't actually exist.
 +    //
 +    // static_libs: ["libcrosvm_control_test"],
+     vendor_available: true,
  }

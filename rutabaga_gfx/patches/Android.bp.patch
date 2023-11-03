@@ -34,6 +34,7 @@ index 05d589ae..77c154be 100644
 +            ],
 +        },
 +    },
+     vendor_available: true,
  }
 
 @@ -71,12 +95,24 @@ rust_test {

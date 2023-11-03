@@ -24,4 +24,5 @@ rust_library {
         "liblazy_static",
         "libsync_rust",
     ],
+    vendor_available: true,
 }

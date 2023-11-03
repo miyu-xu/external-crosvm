@@ -23,4 +23,5 @@ rust_library {
         "libanyhow",
         "libserde",
     ],
+    vendor_available: true,
 }

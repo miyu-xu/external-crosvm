@@ -26,4 +26,5 @@ rust_library {
         "libmetrics",
         "libserde",
     ],
+    vendor_available: true,
 }

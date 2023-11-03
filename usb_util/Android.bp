@@ -30,6 +30,7 @@ rust_library {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
+    vendor_available: true,
 }
 
 rust_test {

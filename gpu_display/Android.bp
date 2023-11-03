@@ -51,6 +51,7 @@ rust_library {
             ],
         },
     },
+    vendor_available: true,
 }
 
 cc_library_static {
@@ -86,6 +87,7 @@ cc_library_static {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    vendor_available: true,
 }
 
 // We could use the modules provided in //external/wayland-protocols, except

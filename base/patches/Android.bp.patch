@@ -95,8 +95,8 @@ index 734ab7c1..20f48f53 100644
 +        },
 +    },
 +    shared_libs: ["libcap"], // specified in src/linux/capabilities.rs
+     vendor_available: true,
      visibility: [
          "//packages/modules/Virtualization/virtualizationmanager",
          "//vendor:__subpackages__",
      ],
- }

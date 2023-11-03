@@ -16,6 +16,7 @@ index eed6fd361..929925ac3 100644
 +        "libprotobuf",
 +        "libregistered_events_proto",
 +    ],
+     vendor_available: true,
  }
  
  rust_protobuf {

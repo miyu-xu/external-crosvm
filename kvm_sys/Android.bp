@@ -48,4 +48,5 @@ rust_library {
         "liblibc",
         "libzerocopy",
     ],
+    vendor_available: true,
 }

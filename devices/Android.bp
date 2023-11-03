@@ -283,6 +283,7 @@ rust_library {
         "libenumn",
         "libremain",
     ],
+    vendor_available: true,
     visibility: ["//vendor:__subpackages__"],
     target: {
         host: {

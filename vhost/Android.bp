@@ -29,6 +29,7 @@ rust_library {
         "libvm_memory",
     ],
     proc_macros: ["libremain"],
+    vendor_available: true,
 }
 
 rust_test {

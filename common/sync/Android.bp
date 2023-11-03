@@ -19,5 +19,6 @@ rust_library {
     cargo_pkg_version: "0.1.99",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    vendor_available: true,
     visibility: ["//vendor:__subpackages__"],
 }

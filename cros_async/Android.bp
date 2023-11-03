@@ -130,4 +130,5 @@ rust_library {
         "libpaste",
         "libremain",
     ],
+    vendor_available: true,
 }

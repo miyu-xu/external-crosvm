@@ -53,7 +53,7 @@
   "global_defaults": "crosvm_inner_defaults",
   "apex_available": [],
   "product_available": false,
-  "vendor_available": false,
+  "vendor_available": true,
   "module_name_overrides": {
     "libbase": "libbase_rust",
     "libbase64": "libbase64_rust",

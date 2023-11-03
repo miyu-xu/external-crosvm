@@ -20,4 +20,5 @@ rust_library {
         "libthiserror",
     ],
     proc_macros: ["libasync_trait"],
+    vendor_available: true,
 }
