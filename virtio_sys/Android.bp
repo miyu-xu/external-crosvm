@@ -24,4 +24,5 @@ rust_library {
         "libdata_model",
         "libzerocopy",
     ],
+    vendor_available: true,
 }

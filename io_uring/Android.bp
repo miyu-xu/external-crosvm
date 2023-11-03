@@ -27,4 +27,5 @@ rust_library {
         "libthiserror",
     ],
     proc_macros: ["libremain"],
+    vendor_available: true,
 }

@@ -38,7 +38,6 @@ rust_library {
     ],
     proc_macros: ["libremain"],
     static_libs: ["libdisplay_wl"],
-
     // added manually
     target: {
         host: {
@@ -51,6 +50,7 @@ rust_library {
             ],
         },
     },
+    vendor_available: true,
 }
 
 cc_library_static {
@@ -86,6 +86,7 @@ cc_library_static {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    vendor_available: true,
 }
 
 // We could use the modules provided in //external/wayland-protocols, except

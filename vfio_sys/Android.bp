@@ -23,4 +23,5 @@ rust_library {
         "libbase_rust",
         "libzerocopy",
     ],
+    vendor_available: true,
 }

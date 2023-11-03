@@ -21,4 +21,5 @@ rust_library {
     srcs: ["src/lib.rs"],
     edition: "2021",
     visibility: ["//vendor:__subpackages__"],
+    vendor_available: true,
 }

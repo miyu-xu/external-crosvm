@@ -46,4 +46,5 @@ rust_library {
         "libdata_model",
         "liblibc",
     ],
+    vendor_available: true,
 }

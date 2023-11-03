@@ -53,4 +53,5 @@ rust_library {
         "libasync_trait",
         "libremain",
     ],
+    vendor_available: true,
 }

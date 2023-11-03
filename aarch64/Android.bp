@@ -49,6 +49,7 @@ rust_library {
     ],
     proc_macros: ["libremain"],
     visibility: ["//vendor:__subpackages__"],
+    vendor_available: true,
     target: {
         // It is necessary to disable this specifically as well as the arch below, because
         // crosvm_defaults enables it and the more specific target apparently takes precedence over

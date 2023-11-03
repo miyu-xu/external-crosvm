@@ -49,6 +49,7 @@ rust_library {
     ],
     proc_macros: ["libremain"],
     visibility: ["//packages/modules/Virtualization/virtualizationmanager"],
+    vendor_available: true,
     target: {
         host_linux: {
             features: [

@@ -43,4 +43,5 @@ rust_library {
         "libtempfile",
         "libzerocopy",
     ],
+    vendor_available: true,
 }

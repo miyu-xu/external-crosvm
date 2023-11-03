@@ -23,4 +23,5 @@ rust_library {
         "libaudio_streams",
         "libserde",
     ],
+    vendor_available: true,
 }

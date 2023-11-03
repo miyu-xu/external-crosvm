@@ -24,4 +24,5 @@ rust_library {
         "libbase_rust",
         "libserde",
     ],
+    vendor_available: true,
 }

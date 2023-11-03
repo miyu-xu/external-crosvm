@@ -28,6 +28,7 @@ rust_library {
         "libprotobuf",
         "libregistered_events_proto",
     ],
+    vendor_available: true,
 }
 
 rust_protobuf {
@@ -41,6 +42,7 @@ rust_protobuf {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    vendor_available: true,
 }
 
 rust_protobuf {
@@ -54,6 +56,7 @@ rust_protobuf {
         "//apex_available:platform",
         "com.android.virt",
     ],
+    vendor_available: true,
 }
 
 rust_protobuf {

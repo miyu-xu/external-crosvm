@@ -371,4 +371,5 @@ rust_library {
     ],
     proc_macros: ["libenumn"],
     visibility: ["//vendor:__subpackages__"],
+    vendor_available: true,
 }

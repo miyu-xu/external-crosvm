@@ -156,7 +156,133 @@ rust_binary {
         "-Wl,--rpath,\\$$ORIGIN",
         "-Wl,--rpath,\\$$ORIGIN/../../lib64",
     ],
+}
 
+rust_binary {
+    name: "crosvm_vendor",
+    stem: "crosvm",
+    defaults: ["crosvm_inner_defaults"],
+    prefer_rlib: true,
+    crate_name: "crosvm",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    srcs: ["src/main.rs"],
+    edition: "2021",
+    features: [
+        "android-sparse",
+        "audio",
+        "balloon",
+        "config-file",
+        "gdb",
+        "gdbstub",
+        "gdbstub_arch",
+        "geniezone",
+        "gunyah",
+        "qcow",
+        "usb",
+    ],
+    rustlibs: [
+        "libacpi_tables",
+        "libanyhow",
+        "libarch",
+        "libargh",
+        "libaudio_streams",
+        "libbase_rust",
+        "libbit_field",
+        "libbroker_ipc",
+        "libcfg_if",
+        "libcros_async",
+        "libcros_tracing",
+        "libcrosvm_cli",
+        "libdata_model",
+        "libdevices",
+        "libdisk",
+        "libgdbstub",
+        "libgdbstub_arch",
+        "libhypervisor",
+        "libjail",
+        "libkernel_cmdline",
+        "libkernel_loader",
+        "liblibc",
+        "liblibcras",
+        "liblog_rust",
+        "libmerge",
+        "libmetrics",
+        "libminijail_rust",
+        "libnet_util",
+        "libonce_cell",
+        "libp9",
+        "libresources",
+        "librutabaga_gfx",
+        "libserde",
+        "libserde_json",
+        "libserde_keyvalue",
+        "libsmallvec",
+        "libstatic_assertions",
+        "libswap",
+        "libsync_rust",
+        "libtempfile",
+        "libthiserror",
+        "libvhost",
+        "libvm_control",
+        "libvm_memory",
+    ],
+    proc_macros: [
+        "libargh_helpers",
+        "libenumn",
+        "libremain",
+    ],
+    visibility: ["//visibility:public"],
+    arch: {
+        x86_64: {
+            rustlibs: ["libx86_64_rust"],
+        },
+        arm64: {
+            rustlibs: ["libaarch64"],
+        },
+        riscv64: {
+            rustlibs: ["libriscv64"],
+        },
+    },
+    target: {
+        host: {
+            features: [
+                "gfxstream",
+                "gpu",
+                "virgl_renderer_next",
+            ],
+            strip: {
+                keep_symbols_and_debug_frame: true,
+            },
+        },
+        android: {
+            shared_libs: [
+                "libprocessgroup",
+            ],
+        },
+        host_linux: {
+            shared_libs: [
+                "libprocessgroup",
+            ],
+        },
+        linux_bionic_arm64: {
+            relative_install_path: "aarch64-linux-bionic",
+        },
+        linux_glibc_x86_64: {
+            relative_install_path: "x86_64-linux-gnu",
+        },
+        linux_musl_x86_64: {
+            relative_install_path: "x86_64-linux-musl",
+        },
+        linux_musl_arm64: {
+            relative_install_path: "aarch64-linux-musl",
+        },
+    },
+    ld_flags: [
+        "-Wl,--rpath,\\$$ORIGIN",
+        "-Wl,--rpath,\\$$ORIGIN/../../lib64",
+    ],
+    vendor: true,
 }
 
 rust_test {
