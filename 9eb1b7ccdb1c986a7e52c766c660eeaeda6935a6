@@ -38,6 +38,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "1de746ea_e55c973f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-11-14T06:48:48Z",
+      "side": 1,
+      "message": "I see - cargo_embargo.json is updated.\n\nLet me continue this other conversation on the bug.",
+      "parentUuid": "9c49d506_715e6e19",
+      "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "5d7ec1d9_21aaa33d",
         "filename": "patches/Android.bp.patch",
         "patchSetId": 3
