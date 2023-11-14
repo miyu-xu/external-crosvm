@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b5ad1eb5_0127547f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2023-11-14T01:22:10Z",
+      "side": 1,
+      "message": "hey, these build files are auto-generated, so we\u0027ll need to fix that.\n\nThat being said, I think we should meet and chat about this architecture with AVF team. Ideally we could delegate to AVF in order to run VMs - there are several considerations to take into account, such as how often and when crosvm code would need to be patches - there have been a few conversations with certain partners which concluded it\u0027s better to isolate it on the system partition, but we can revisit that.",
+      "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "5d7ec1d9_21aaa33d",
         "filename": "patches/Android.bp.patch",
         "patchSetId": 3
