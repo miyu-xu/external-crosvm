@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "9c49d506_715e6e19",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000205
+      },
+      "writtenOn": "2023-11-14T01:30:07Z",
+      "side": 1,
+      "message": "Regarding the auto-generated comment, most of the files changed here are the result of running external/crosvm/android-merge-2-cargo-embargo.sh with the updated cargo_embargo.json file. Some changes were needed to the .patch files as well.\n\nThe reason for making the crosvm available directly is twofold. 1. The version in the apex is not available to init scripts on the vendor partition. 2. The apex is not available early enough. The apex appears to need /data to be mounted since it uses that. Keymint needs to be available before /data can be mounted. If the keymint TA is in a vendor VM, then we have a circular dependency.",
+      "parentUuid": "b5ad1eb5_0127547f",
+      "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "5d7ec1d9_21aaa33d",
         "filename": "patches/Android.bp.patch",
         "patchSetId": 3
