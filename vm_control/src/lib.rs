@@ -2023,7 +2023,7 @@ fn do_snapshot(
             Ok(snap) => {
                 cpu_vec.push(snap);
             }
-            Err(e) => bail!("Failed to snapshot Vcpu, aborting snapshot: {}", e),
+            Err(e) => bail!("Failed to snapshot Vcpu, aborting snapshot: {:?}", e),
         }
     }
     serde_json::to_writer(cpu_file, &cpu_vec).expect("Failed to write Vcpu state");
