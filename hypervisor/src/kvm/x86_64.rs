@@ -12,6 +12,7 @@ use base::ioctl_with_mut_ref;
 use base::ioctl_with_ptr;
 use base::ioctl_with_ref;
 use base::ioctl_with_val;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Error;
 use base::IoctlNr;
@@ -610,6 +611,7 @@ impl VcpuX86_64 for KvmVcpu {
     fn get_regs(&self) -> Result<Regs> {
         // Safe because we know that our file is a VCPU fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
+        warn!("Getting regs");
         let mut regs: kvm_regs = Default::default();
         let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_REGS(), &mut regs) };
         if ret == 0 {
@@ -635,6 +637,7 @@ impl VcpuX86_64 for KvmVcpu {
         // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
         // correct amount of memory to our pointer, and we verify the return result.
         let mut regs: kvm_sregs = Default::default();
+        warn!("getting sregs");
         let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_SREGS(), &mut regs) };
         if ret == 0 {
             Ok(Sregs::from(&regs))
@@ -712,6 +715,7 @@ impl VcpuX86_64 for KvmVcpu {
         // kernel will only read correct amount of memory from our pointer, and
         // we verify the return result.
         // Get the size of Xsave in bytes. Values are of type u32.
+        warn!("Getting xsave");
         let size =
             unsafe { ioctl_with_val(&self.vm, KVM_CHECK_EXTENSION(), KVM_CAP_XSAVE2 as u64) };
         if size < 0 {
@@ -765,6 +769,7 @@ impl VcpuX86_64 for KvmVcpu {
 
     fn get_interrupt_state(&self) -> Result<serde_json::Value> {
         let mut vcpu_evts: kvm_vcpu_events = Default::default();
+        warn!("Getting interrupt state");
         let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_VCPU_EVENTS(), &mut vcpu_evts) };
         if ret == 0 {
             Ok(
@@ -796,6 +801,7 @@ impl VcpuX86_64 for KvmVcpu {
         // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
         // correct amount of memory to our pointer, and we verify the return result.
         let mut regs: kvm_debugregs = Default::default();
+        warn!("Getting debug regs");
         let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_DEBUGREGS(), &mut regs) };
         if ret == 0 {
             Ok(DebugRegs::from(&regs))
@@ -821,6 +827,7 @@ impl VcpuX86_64 for KvmVcpu {
         // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
         // correct amount of memory to our pointer, and we verify the return result.
         let mut regs: kvm_xcrs = Default::default();
+        warn!("Getting xcrs");
         let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_XCRS(), &mut regs) };
         if ret == 0 {
             Ok(from_kvm_xcrs(&regs))
@@ -844,6 +851,7 @@ impl VcpuX86_64 for KvmVcpu {
 
     fn get_msrs(&self, vec: &mut Vec<Register>) -> Result<()> {
         let msrs = to_kvm_msrs(vec);
+        warn!("Getting msrs");
         let ret = unsafe {
             // Here we trust the kernel not to read or write past the end of the kvm_msrs struct.
             ioctl_with_ref(self, KVM_GET_MSRS(), &msrs[0])
@@ -978,6 +986,7 @@ impl VcpuX86_64 for KvmVcpu {
 
     fn get_tsc_offset(&self) -> Result<u64> {
         // Use the default MSR-based implementation
+        warn!("Getting tsc offset");
         get_tsc_offset_from_msr(self)
     }
 
