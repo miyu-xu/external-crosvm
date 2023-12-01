@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "52988a45_ac991e4e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-12-01T17:17:02Z",
+      "side": 1,
+      "message": "Cherry-picking this patch from upstream into AOSP so that I can update nix.",
+      "revId": "0c0d5b20f40848f3f16ad384c4b879176aadd488",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
