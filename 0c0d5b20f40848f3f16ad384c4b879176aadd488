@@ -16,6 +16,23 @@
       "message": "Cherry-picking this patch from upstream into AOSP so that I can update nix.",
       "revId": "0c0d5b20f40848f3f16ad384c4b879176aadd488",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2fe7bb87_1eb717a3",
+        "filename": "Cargo.lock",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-01T19:14:44Z",
+      "side": 1,
+      "message": "is this a clean cherrypick? i\u0027m surprised if you didn\u0027t get conflicts in this file. i\u0027d suggest removing this file from the CL so that we don\u0027t get merge conflicts when we resume the merges\n\nthe rutabaga_gfx dir hasn\u0027t had anything changes since early august, so it is less of a problem",
+      "revId": "0c0d5b20f40848f3f16ad384c4b879176aadd488",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
