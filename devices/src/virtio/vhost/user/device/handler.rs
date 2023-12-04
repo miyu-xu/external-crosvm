@@ -975,7 +975,7 @@ mod tests {
     use crate::virtio::vhost::user::vmm::VhostUserHandler;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, AsBytes, FromZeroes, FromBytes)]
-    #[repr(C, packed(4))]
+    #[repr(C, packed)]
     struct FakeConfig {
         x: u32,
         y: u64,
