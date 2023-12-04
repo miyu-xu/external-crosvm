@@ -22,6 +22,30 @@
       },
       "revId": "f44f81223b8a128ca38bd2ed565bfc210fbc1e2b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "13c5d87b_d6031d80",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-12-04T23:59:56Z",
+      "side": 1,
+      "message": "No preference here. We recently had a few patches that had the tag CHERRYPICK, which is why I went with it",
+      "parentUuid": "e17245d6_c1ad46dc",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 10
+      },
+      "revId": "f44f81223b8a128ca38bd2ed565bfc210fbc1e2b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
