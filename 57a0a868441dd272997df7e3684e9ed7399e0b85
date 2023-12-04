@@ -16,6 +16,23 @@
       "message": "Is this a cherry-pick from upstream crosvm? If not, please submit it upstream first.",
       "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ce267bb7_99d12b8a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1416371
+      },
+      "writtenOn": "2023-12-04T20:45:52Z",
+      "side": 1,
+      "message": "https://github.com/google/zerocopy/pull/643 breaks this. It doesn\u0027t appear to have been the *intention* of the PR (they were mostly trying to implement KnownLayout, which meant they needed to start treating packed(N) and broke this by accident.\n\nWould you be fine taking this change here, or would you like it upstream, or is packed(4) meaningful for a reason I\u0027m not seeing?",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
