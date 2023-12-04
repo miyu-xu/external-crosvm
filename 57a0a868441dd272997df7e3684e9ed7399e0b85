@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7d52e19a_ce7306ea",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-12-04T19:05:46Z",
+      "side": 1,
+      "message": "Is this a cherry-pick from upstream crosvm? If not, please submit it upstream first.",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
