@@ -86,6 +86,24 @@
       "parentUuid": "15ef0f67_3a9552f2",
       "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "900787d3_3424cdb8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-05T05:36:05Z",
+      "side": 1,
+      "message": "thanks, that makes sense.\n\ni\u0027d guess it is fine to change this code, but since this is just a minor version bump and it has a known bug, i wonder if it makes more sense to either pick a slightly older minor version or to wait for the fix to land and get a newer one",
+      "parentUuid": "9c6d0715_44b34057",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
