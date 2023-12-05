@@ -68,6 +68,24 @@
       "parentUuid": "ce267bb7_99d12b8a",
       "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9c6d0715_44b34057",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1416371
+      },
+      "writtenOn": "2023-12-05T01:11:38Z",
+      "side": 1,
+      "message": "Natural alignment ( `#[repr(C)]` ) has padding, and so is not legal for `AsBytes`. `#[repr(C, packed)]` will work, as it removes alignment requirements, and so destroys padding. `#[repr(C, packed(4))]` is technically correct and *should* work, but is temporarily broken (until https://github.com/google/zerocopy/pull/672 lands upstream).",
+      "parentUuid": "15ef0f67_3a9552f2",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
