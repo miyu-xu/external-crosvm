@@ -50,6 +50,24 @@
       "message": "this is also getting added upstream to crosvm?\n\nif it hasn\u0027t yet, can you add \"ANDROID: \" in the commit message",
       "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "15ef0f67_3a9552f2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-05T01:08:32Z",
+      "side": 1,
+      "message": "it comes from https://crrev.com/c/4356907\n\n@zihanchen@google.com, do you know if there is a reason not to use the natural alignment?",
+      "parentUuid": "ce267bb7_99d12b8a",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
