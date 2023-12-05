@@ -104,6 +104,24 @@
       "parentUuid": "9c6d0715_44b34057",
       "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f4dd01ab_854be5b3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1047255
+      },
+      "writtenOn": "2023-12-05T19:10:56Z",
+      "side": 1,
+      "message": "The bugfix for this has been accepted upstream and a new version has been released.  I\u0027m going to abandon this in favor of updating to the new version.",
+      "parentUuid": "900787d3_3424cdb8",
+      "revId": "57a0a868441dd272997df7e3684e9ed7399e0b85",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
