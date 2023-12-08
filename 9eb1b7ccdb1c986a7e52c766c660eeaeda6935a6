@@ -69,6 +69,24 @@
       "message": "@qwandor@google.com this showed up here after updating the cargo_embargo tool, but it does not seem to have any effect on a rust_binary other than conflicting with `vendor: true`. Is there a better way to do this than adding all these patch lines?",
       "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fb8c3393_8be76a0d",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2023-12-08T15:05:48Z",
+      "side": 1,
+      "message": "You can set `\"vendor_available\": false` in `cargo_embargo.json` if you don\u0027t want it, it is true by default.",
+      "parentUuid": "5d7ec1d9_21aaa33d",
+      "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
