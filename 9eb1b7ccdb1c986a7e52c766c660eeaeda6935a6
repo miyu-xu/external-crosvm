@@ -87,6 +87,24 @@
       "parentUuid": "5d7ec1d9_21aaa33d",
       "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3ba164e7_756df1a0",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1000205
+      },
+      "writtenOn": "2023-12-08T18:25:08Z",
+      "side": 1,
+      "message": "I set vendor_available to true in the cargo_embargo.json file to get this flag set on the libraries. With an older cargo_embargo the rust_binary that was produced from the same cargo_embargo.json file ignored this flag as it does not really work for rust_binary. Instead we need to create two rust_binary blocks like I did manually on line 60. It might be useful to have the tool support that directly, but at the moment this CL is unlikely to get merged anyway, so this is not urgent unless it someone else needs it.",
+      "parentUuid": "fb8c3393_8be76a0d",
+      "revId": "9eb1b7ccdb1c986a7e52c766c660eeaeda6935a6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
