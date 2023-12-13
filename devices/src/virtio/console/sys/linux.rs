@@ -17,9 +17,9 @@ use base::WaitContext;
 use base::WorkerThread;
 use sync::Mutex;
 
-use crate::serial::sys::InStreamType;
 use crate::serial_device::SerialInput;
 use crate::virtio::console::Console;
+use crate::virtio::console::ConsoleInput;
 use crate::virtio::ProtectionType;
 use crate::SerialDevice;
 
@@ -34,7 +34,12 @@ impl SerialDevice for Console {
         _out_timestamp: bool,
         keep_rds: Vec<RawDescriptor>,
     ) -> Console {
-        Console::new(protection_type, input, out, keep_rds)
+        Console::new(
+            protection_type,
+            input.map(ConsoleInput::FromRead),
+            out,
+            keep_rds,
+        )
     }
 }
 
@@ -53,10 +58,10 @@ fn is_a_fatal_input_error(e: &io::Error) -> bool {
 /// * `rx` - Data source that the reader thread will wait on to send data back to the buffer
 /// * `in_avail_evt` - Event triggered by the thread when new input is available on the buffer
 pub(in crate::virtio::console) fn spawn_input_thread(
-    mut rx: InStreamType,
+    mut rx: crate::serial::sys::InStreamType,
     in_avail_evt: &Event,
     input_buffer: VecDeque<u8>,
-) -> (Arc<Mutex<VecDeque<u8>>>, WorkerThread<InStreamType>) {
+) -> (Arc<Mutex<VecDeque<u8>>>, WorkerThread<()>) {
     let buffer = Arc::new(Mutex::new(input_buffer));
     let buffer_cloned = buffer.clone();
 
@@ -83,7 +88,7 @@ pub(in crate::virtio::console) fn spawn_input_thread(
             Ok(ctx) => ctx,
             Err(e) => {
                 error!("failed creating WaitContext {:?}", e);
-                return rx;
+                return;
             }
         };
 
@@ -94,7 +99,7 @@ pub(in crate::virtio::console) fn spawn_input_thread(
                 Ok(events) => events,
                 Err(e) => {
                     error!("Failed to wait for events. {}", e);
-                    return rx;
+                    return;
                 }
             };
             for event in events.iter() {
@@ -144,7 +149,6 @@ pub(in crate::virtio::console) fn spawn_input_thread(
                 }
             }
         }
-        rx
     });
     (buffer_cloned, res)
 }
