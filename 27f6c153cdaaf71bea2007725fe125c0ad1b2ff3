@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d28748ef_12e379a7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-13T22:41:41Z",
+      "side": 1,
+      "message": "DO NOT SUBMIT until the release is cut",
+      "revId": "27f6c153cdaaf71bea2007725fe125c0ad1b2ff3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
