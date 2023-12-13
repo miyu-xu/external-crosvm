@@ -17,6 +17,7 @@ use base::Event;
 use base::Protection;
 use base::RawDescriptor;
 use base::Result;
+use base::SharedMemory;
 use base::Tube;
 use data_model::Le32;
 use hypervisor::Datamatch;
@@ -48,6 +49,7 @@ use super::*;
 use crate::pci::BarRange;
 use crate::pci::MsixCap;
 use crate::pci::MsixConfig;
+use crate::pci::MsixStatus;
 use crate::pci::PciAddress;
 use crate::pci::PciBarConfiguration;
 use crate::pci::PciBarIndex;
@@ -293,7 +295,6 @@ pub struct VirtioPciDevice {
     mem: GuestMemory,
     settings_bar: PciBarIndex,
     msix_config: Arc<Mutex<MsixConfig>>,
-    msix_cap_reg_idx: Option<usize>,
     common_config: VirtioPciCommonConfig,
 
     iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
@@ -418,7 +419,6 @@ impl VirtioPciDevice {
             mem,
             settings_bar: 0,
             msix_config,
-            msix_cap_reg_idx: None,
             common_config: VirtioPciCommonConfig {
                 driver_status: 0,
                 config_generation: 0,
@@ -460,7 +460,7 @@ impl VirtioPciDevice {
             COMMON_CONFIG_SIZE as u32,
         );
         self.config_regs
-            .add_capability(&common_cap)
+            .add_capability(&common_cap, None)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
         let isr_cap = VirtioPciCap::new(
@@ -470,7 +470,7 @@ impl VirtioPciDevice {
             ISR_CONFIG_SIZE as u32,
         );
         self.config_regs
-            .add_capability(&isr_cap)
+            .add_capability(&isr_cap, None)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
         // TODO(dgreid) - set based on device's configuration size?
@@ -481,7 +481,7 @@ impl VirtioPciDevice {
             DEVICE_CONFIG_SIZE as u32,
         );
         self.config_regs
-            .add_capability(&device_cap)
+            .add_capability(&device_cap, None)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
         let notify_cap = VirtioPciNotifyCap::new(
@@ -492,13 +492,13 @@ impl VirtioPciDevice {
             Le32::from(NOTIFY_OFF_MULTIPLIER),
         );
         self.config_regs
-            .add_capability(&notify_cap)
+            .add_capability(&notify_cap, None)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
         //TODO(dgreid) - How will the configuration_cap work?
         let configuration_cap = VirtioPciCap::new(PciCapabilityType::PciConfig, 0, 0, 0);
         self.config_regs
-            .add_capability(&configuration_cap)
+            .add_capability(&configuration_cap, None)
             .map_err(PciDeviceError::CapabilitiesSetup)?;
 
         let msix_cap = MsixCap::new(
@@ -508,11 +508,9 @@ impl VirtioPciDevice {
             settings_bar,
             MSIX_PBA_BAR_OFFSET as u32,
         );
-        let msix_offset = self
-            .config_regs
-            .add_capability(&msix_cap)
+        self.config_regs
+            .add_capability(&msix_cap, Some(Box::new(self.msix_config.clone())))
             .map_err(PciDeviceError::CapabilitiesSetup)?;
-        self.msix_cap_reg_idx = Some(msix_offset / 4);
 
         self.settings_bar = settings_bar as PciBarIndex;
         Ok(())
@@ -732,7 +730,7 @@ impl PciDevice for VirtioPciDevice {
 
         for cap in caps {
             self.config_regs
-                .add_capability(&*cap)
+                .add_capability(&*cap, None)
                 .map_err(PciDeviceError::CapabilitiesSetup)?;
         }
 
@@ -740,25 +738,27 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn read_config_register(&self, reg_idx: usize) -> u32 {
-        let mut data: u32 = self.config_regs.read_reg(reg_idx);
-        if let Some(msix_cap_reg_idx) = self.msix_cap_reg_idx {
-            if msix_cap_reg_idx == reg_idx {
-                data = self.msix_config.lock().read_msix_capability(data);
-            }
-        }
-
-        data
+        self.config_regs.read_reg(reg_idx)
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        if let Some(msix_cap_reg_idx) = self.msix_cap_reg_idx {
-            if msix_cap_reg_idx == reg_idx {
-                let behavior = self.msix_config.lock().write_msix_capability(offset, data);
-                self.device.control_notify(behavior);
+        if let Some(res) = self.config_regs.write_reg(reg_idx, offset, data) {
+            if let Some(msix_behavior) = res.downcast_ref::<MsixStatus>() {
+                self.device.control_notify(*msix_behavior);
             }
         }
+    }
 
-        self.config_regs.write_reg(reg_idx, offset, data)
+    fn setup_pci_config_mapping(
+        &mut self,
+        shmem: &SharedMemory,
+        base: usize,
+        len: usize,
+    ) -> std::result::Result<bool, PciDeviceError> {
+        self.config_regs
+            .setup_mapping(shmem, base, len)
+            .map(|_| true)
+            .map_err(PciDeviceError::MmioSetup)
     }
 
     fn read_bar(&mut self, bar_index: usize, offset: u64, data: &mut [u8]) {
@@ -1140,7 +1140,7 @@ impl Suspendable for VirtioPciDevice {
         Ok(())
     }
 
-    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         if self.iommu.is_some() {
             return Err(anyhow!("Cannot snapshot if iommu is present."));
         }

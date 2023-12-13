@@ -22,15 +22,21 @@ use base::StreamChannel;
 use base::Tube;
 use broker_ipc::common_child_setup;
 use broker_ipc::CommonChildStartupArgs;
+use cros_async::AsyncTube;
 use cros_async::AsyncWrapper;
 use cros_async::EventAsync;
 use cros_async::Executor;
+use futures::channel::oneshot;
 use gpu_display::EventDevice;
+use gpu_display::WindowProcedureThread;
+use gpu_display::WindowProcedureThreadBuilder;
 use hypervisor::ProtectionType;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
 use tube_transporter::TubeToken;
+use vm_control::gpu::GpuControlCommand;
+use vm_control::gpu::GpuControlResult;
 
 use crate::virtio;
 use crate::virtio::gpu;
@@ -39,8 +45,8 @@ use crate::virtio::vhost::user::device::gpu::GpuBackend;
 use crate::virtio::vhost::user::device::handler::sys::windows::read_from_tube_transporter;
 use crate::virtio::vhost::user::device::handler::sys::windows::run_handler;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
+use crate::virtio::vhost::user::device::handler::VhostBackendReqConnection;
 use crate::virtio::vhost::user::device::handler::VhostUserRegularOps;
-use crate::virtio::vhost::user::VhostBackendReqConnectionState;
 use crate::virtio::Gpu;
 use crate::virtio::GpuDisplayParameters;
 use crate::virtio::GpuParameters;
@@ -79,8 +85,50 @@ async fn run_display(
     }
 }
 
+async fn run_gpu_control_command_handler(
+    mut gpu_control_tube: AsyncTube,
+    state: Rc<RefCell<gpu::Frontend>>,
+    backend_req_conn_rx: oneshot::Receiver<VhostBackendReqConnection>,
+) {
+    let backend_req_conn = match backend_req_conn_rx.await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Backend request connection receiver closed early");
+            return;
+        }
+    };
+
+    'wait: loop {
+        let req = match gpu_control_tube.next::<GpuControlCommand>().await {
+            Ok(req) => req,
+            Err(e) => {
+                error!("GPU control socket failed to recv: {:?}", e);
+                break 'wait;
+            }
+        };
+
+        let resp = state.borrow_mut().process_gpu_control_command(req);
+
+        if let GpuControlResult::DisplaysUpdated = resp {
+            info!("Signaling display config change");
+            if let Err(e) = backend_req_conn.send_config_changed() {
+                error!("Error occurred: {:?}", e);
+                break 'wait;
+            }
+        }
+
+        if let Err(e) = gpu_control_tube.send(resp).await {
+            error!("Display control socket failed to send: {}", e);
+            break 'wait;
+        }
+    }
+}
+
 impl GpuBackend {
-    pub fn start_platform_workers(&mut self) -> anyhow::Result<()> {
+    pub fn start_platform_workers(
+        &mut self,
+        backend_req_conn_rx: Option<oneshot::Receiver<VhostBackendReqConnection>>,
+    ) -> anyhow::Result<()> {
         let state = self
             .state
             .as_ref()
@@ -96,7 +144,22 @@ impl GpuBackend {
 
         let task = self
             .ex
-            .spawn_local(run_display(display, state, self.gpu.clone()));
+            .spawn_local(run_display(display, state.clone(), self.gpu.clone()));
+        self.platform_workers.borrow_mut().push(task);
+
+        let task = self.ex.spawn_local(run_gpu_control_command_handler(
+            AsyncTube::new(
+                &self.ex,
+                self.gpu
+                    .borrow_mut()
+                    .gpu_control_tube
+                    .take()
+                    .expect("gpu control tube must exist"),
+            )
+            .expect("gpu control tube creation"),
+            state,
+            backend_req_conn_rx.expect("No backend request connection receiver"),
+        ));
         self.platform_workers.borrow_mut().push(task);
 
         Ok(())
@@ -115,15 +178,39 @@ pub struct Options {
     bootstrap: usize,
 }
 
+/// Main process end for input event devices.
+#[derive(Deserialize, Serialize)]
+pub struct InputEventVmmConfig {
+    // Pipes to receive input events on.
+    pub multi_touch_pipes: Vec<StreamChannel>,
+    pub mouse_pipes: Vec<StreamChannel>,
+    pub keyboard_pipes: Vec<StreamChannel>,
+}
+
+/// Backend process end for input event devices.
+#[derive(Deserialize, Serialize)]
+pub struct InputEventBackendConfig {
+    // Event devices to send input events to.
+    pub event_devices: Vec<EventDevice>,
+}
+
+/// Configuration for running input event devices, split by a part sent to the main VMM and a part
+/// sent to the window thread (either main process or a vhost-user process).
+#[derive(Deserialize, Serialize)]
+pub struct InputEventSplitConfig {
+    // Config sent to the backend.
+    pub backend_config: Option<InputEventBackendConfig>,
+    // Config sent to the main process.
+    pub vmm_config: InputEventVmmConfig,
+}
+
 /// Main process end for a GPU device.
 #[derive(Deserialize, Serialize)]
 pub struct GpuVmmConfig {
     // Tube for setting up the vhost-user connection. May not exist if not using vhost-user.
     pub main_vhost_user_tube: Option<Tube>,
-    // Pipes to receive input events on.
-    pub input_event_multi_touch_pipes: Vec<StreamChannel>,
-    pub input_event_mouse_pipes: Vec<StreamChannel>,
-    pub input_event_keyboard_pipes: Vec<StreamChannel>,
+    // A tube to forward GPU control commands in the main process.
+    pub gpu_control_host_tube: Option<Tube>,
     pub product_config: product::GpuVmmConfig,
 }
 
@@ -137,12 +224,25 @@ pub struct GpuBackendConfig {
     pub exit_event: Event,
     // A tube to send an exit request.
     pub exit_evt_wrtube: SendTube,
-    // Event devices to send input events to.
-    pub event_devices: Vec<EventDevice>,
+    // A tube to handle GPU control commands in the GPU device.
+    pub gpu_control_device_tube: Tube,
     // GPU parameters.
     pub params: GpuParameters,
     // Product related configurations.
     pub product_config: product::GpuBackendConfig,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct WindowProcedureThreadVmmConfig {
+    pub product_config: product::WindowProcedureThreadVmmConfig,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct WindowProcedureThreadSplitConfig {
+    // This is the config sent to the backend process.
+    pub wndproc_thread_builder: Option<WindowProcedureThreadBuilder>,
+    // Config sent to the main process.
+    pub vmm_config: WindowProcedureThreadVmmConfig,
 }
 
 pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
@@ -157,9 +257,16 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
     let startup_args: CommonChildStartupArgs = bootstrap_tube.recv::<CommonChildStartupArgs>()?;
     let _child_cleanup = common_child_setup(startup_args)?;
 
-    let mut config: GpuBackendConfig = bootstrap_tube
+    let (mut config, input_event_backend_config, wndproc_thread_builder): (
+        GpuBackendConfig,
+        InputEventBackendConfig,
+        WindowProcedureThreadBuilder,
+    ) = bootstrap_tube
         .recv()
         .context("failed to parse GPU backend config from bootstrap tube")?;
+    let wndproc_thread = wndproc_thread_builder
+        .start_thread()
+        .context("Failed to create window procedure thread for vhost GPU")?;
 
     let vhost_user_tube = config
         .device_vhost_user_tube
@@ -176,9 +283,6 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         (&config.params.display_params[0]).into(),
     )];
 
-    let wndproc_thread =
-        virtio::gpu::start_wndproc_thread().context("failed to start wndproc_thread")?;
-
     let mut gpu_params = config.params.clone();
 
     // Required to share memory across processes.
@@ -191,17 +295,20 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
 
     let gpu = Rc::new(RefCell::new(Gpu::new(
         config.exit_evt_wrtube,
+        config.gpu_control_device_tube,
         /*resource_bridges=*/ Vec::new(),
         display_backends,
         &gpu_params,
         /*render_server_descriptor*/ None,
-        config.event_devices,
+        input_event_backend_config.event_devices,
         base_features,
         /*channels=*/ &Default::default(),
         wndproc_thread,
     )));
 
     let ex = Executor::new().context("failed to create executor")?;
+
+    let (backend_req_conn_tx, backend_req_conn_rx) = oneshot::channel();
 
     let backend = Box::new(GpuBackend {
         ex: ex.clone(),
@@ -213,6 +320,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         queue_workers: Default::default(),
         platform_workers: Default::default(),
         shmem_mapper: Arc::new(Mutex::new(None)),
+        backend_req_conn_channels: (Some(backend_req_conn_tx), Some(backend_req_conn_rx)),
     });
 
     let handler = DeviceRequestHandler::new(backend, Box::new(VhostUserRegularOps));
@@ -229,7 +337,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
 
     // Run until the backend is finished.
     if let Err(e) = ex.run_until(run_handler(
-        Box::new(std::sync::Mutex::new(handler)),
+        Box::new(handler),
         vhost_user_tube,
         config.exit_event,
         &ex,
