@@ -306,6 +306,7 @@ pub async fn process_one_chain(
     flush_timer: &RefCell<TimerAsync<Timer>>,
     flush_timer_armed: &RefCell<bool>,
 ) {
+    let _trace = cros_tracing::trace_event!(VirtioBlk, "process_one_chain");
     let len = match process_one_request(&mut avail_desc, disk_state, flush_timer, flush_timer_armed)
         .await
     {
@@ -652,6 +653,8 @@ pub struct BlockAsync {
     worker_per_queue: bool,
     // Number of queues passed to `activate`. None if device not activated.
     num_activated_queues: Option<usize>,
+    #[cfg(windows)]
+    pub(crate) io_concurrency: u32,
 }
 
 impl BlockAsync {
@@ -672,6 +675,8 @@ impl BlockAsync {
         let multiple_workers = disk_option.multiple_workers;
         let executor_kind = disk_option.async_executor;
         let boot_index = disk_option.bootindex;
+        #[cfg(windows)]
+        let io_concurrency = disk_option.io_concurrency.get();
 
         if block_size % SECTOR_SIZE as u32 != 0 {
             error!(
@@ -723,6 +728,8 @@ impl BlockAsync {
             executor_kind,
             num_activated_queues: None,
             boot_index,
+            #[cfg(windows)]
+            io_concurrency,
         })
     }
 
@@ -809,6 +816,7 @@ impl BlockAsync {
                 let offset = sector
                     .checked_shl(u32::from(SECTOR_SHIFT))
                     .ok_or(ExecuteError::OutOfRange)?;
+                let _trace = cros_tracing::trace_event!(VirtioBlk, "in", offset, data_len);
                 check_range(offset, data_len as u64, disk_size)?;
                 let disk_image = &disk_state.disk_image;
                 writer
@@ -828,6 +836,7 @@ impl BlockAsync {
                 let offset = sector
                     .checked_shl(u32::from(SECTOR_SHIFT))
                     .ok_or(ExecuteError::OutOfRange)?;
+                let _trace = cros_tracing::trace_event!(VirtioBlk, "out", offset, data_len);
                 check_range(offset, data_len as u64, disk_size)?;
                 let disk_image = &disk_state.disk_image;
                 reader
@@ -850,6 +859,12 @@ impl BlockAsync {
                 }
             }
             VIRTIO_BLK_T_DISCARD | VIRTIO_BLK_T_WRITE_ZEROES => {
+                #[allow(clippy::if_same_then_else)]
+                let _trace = if req_type == VIRTIO_BLK_T_DISCARD {
+                    cros_tracing::trace_event!(VirtioBlk, "discard")
+                } else {
+                    cros_tracing::trace_event!(VirtioBlk, "write_zeroes")
+                };
                 if req_type == VIRTIO_BLK_T_DISCARD && !disk_state.sparse {
                     // Discard is a hint; if this is a non-sparse disk, just ignore it.
                     return Ok(());
@@ -905,6 +920,7 @@ impl BlockAsync {
                 }
             }
             VIRTIO_BLK_T_FLUSH => {
+                let _trace = cros_tracing::trace_event!(VirtioBlk, "flush");
                 disk_state
                     .disk_image
                     .fdatasync()
@@ -920,6 +936,7 @@ impl BlockAsync {
                 }
             }
             VIRTIO_BLK_T_GET_ID => {
+                let _trace = cros_tracing::trace_event!(VirtioBlk, "get_id");
                 if let Some(id) = disk_state.id {
                     writer.write_all(&id).map_err(ExecuteError::CopyId)?;
                 } else {
@@ -1007,7 +1024,6 @@ impl VirtioDevice for BlockAsync {
         let read_only = self.read_only;
         let sparse = self.sparse;
         let id = self.id;
-        let executor_kind = self.executor_kind;
         let disk_image = self
             .disk_image
             .take()
@@ -1040,6 +1056,7 @@ impl VirtioDevice for BlockAsync {
             let shared_state = Arc::clone(&shared_state);
             let interrupt = interrupt.clone();
             let control_tube = self.control_tube.take();
+            let ex = self.create_executor();
 
             let (worker_tx, worker_rx) = mpsc::unbounded();
             // Add commands to start all the queues before starting the worker.
@@ -1054,9 +1071,6 @@ impl VirtioDevice for BlockAsync {
             }
 
             let worker_thread = WorkerThread::start("virtio_blk", move |kill_evt| {
-                let ex = Executor::with_executor_kind(executor_kind)
-                    .expect("Failed to create an executor");
-
                 let async_control = control_tube
                     .map(|c| AsyncTube::new(&ex, c).expect("failed to create async tube"));
                 let async_image = match disk_image.to_async_disk(&ex) {
@@ -1174,7 +1188,7 @@ impl VirtioDevice for BlockAsync {
         Ok(())
     }
 
-    fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+    fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         // `virtio_sleep` ensures there is no pending state, except for the `Queue`s, which are
         // handled at a higher layer.
         Ok(serde_json::Value::Null)
