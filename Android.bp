@@ -98,9 +98,11 @@ rust_binary {
         "libsync_rust",
         "libtempfile",
         "libthiserror",
+        "libuuid",
         "libvhost",
         "libvm_control",
         "libvm_memory",
+        "libx86_64_rust",
         "libzerocopy",
     ],
     proc_macros: [
@@ -232,9 +234,11 @@ rust_test {
         "libsync_rust",
         "libtempfile",
         "libthiserror",
+        "libuuid",
         "libvhost",
         "libvm_control",
         "libvm_memory",
+        "libx86_64_rust",
         "libzerocopy",
     ],
     proc_macros: [
