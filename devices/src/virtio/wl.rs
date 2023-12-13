@@ -2055,7 +2055,7 @@ impl VirtioDevice for Wl {
     // implementation as part of b/266514618
     // virtio-wl is not used, but is created. As such, virtio_snapshot/restore will be called when
     // cuttlefish attempts to take a snapshot.
-    fn virtio_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+    fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::Value::Null)
     }
 

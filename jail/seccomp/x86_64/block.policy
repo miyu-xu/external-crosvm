@@ -7,7 +7,8 @@ fdatasync: 1
 fstat: 1
 fsync: 1
 # 0x1277 == BLKDISCARD.
-ioctl: arg1 == 0x1277
+# ANDROID(b/241306374): merged into entry in vhost_user.policy
+# ioctl: arg1 == 0x1277
 open: return ENOENT
 openat: return ENOENT
 newfstatat: 1
