@@ -210,6 +210,7 @@ fn create_virtio_devices(
     #[cfg_attr(not(feature = "gpu"), allow(unused_variables))] vm_evt_wrtube: &SendTube,
     #[cfg(feature = "balloon")] balloon_device_tube: Option<Tube>,
     #[cfg(feature = "balloon")] balloon_wss_device_tube: Option<Tube>,
+    #[cfg(feature = "balloon")] dynamic_mapping_device_tube: Option<Tube>,
     #[cfg(feature = "balloon")] balloon_inflate_tube: Option<Tube>,
     #[cfg(feature = "balloon")] init_balloon_size: u64,
     disk_device_tubes: &mut Vec<Tube>,
@@ -482,7 +483,8 @@ fn create_virtio_devices(
     }
 
     #[cfg(feature = "balloon")]
-    if let Some(balloon_device_tube) = balloon_device_tube {
+    if let (Some(balloon_device_tube), Some(dynamic_mapping_device_tube)) =
+        (balloon_device_tube, dynamic_mapping_device_tube) {
         let balloon_features = (cfg.balloon_page_reporting as u64)
             << BalloonFeatures::PageReporting as u64
             | (cfg.balloon_wss_reporting as u64) << BalloonFeatures::WSSReporting as u64;
@@ -496,6 +498,7 @@ fn create_virtio_devices(
             },
             balloon_device_tube,
             balloon_wss_device_tube,
+	    dynamic_mapping_device_tube,
             balloon_inflate_tube,
             init_balloon_size,
             balloon_features,
@@ -680,6 +683,7 @@ fn create_devices(
     control_tubes: &mut Vec<TaggedControlTube>,
     #[cfg(feature = "balloon")] balloon_device_tube: Option<Tube>,
     #[cfg(feature = "balloon")] balloon_wss_device_tube: Option<Tube>,
+    #[cfg(feature = "balloon")] dynamic_mapping_device_tube: Option<Tube>,
     #[cfg(feature = "balloon")] init_balloon_size: u64,
     disk_device_tubes: &mut Vec<Tube>,
     pmem_device_tubes: &mut Vec<Tube>,
@@ -810,6 +814,8 @@ fn create_devices(
         balloon_device_tube,
         #[cfg(feature = "balloon")]
         balloon_wss_device_tube,
+        #[cfg(feature = "balloon")]
+        dynamic_mapping_device_tube,
         #[cfg(feature = "balloon")]
         balloon_inflate_tube,
         #[cfg(feature = "balloon")]
@@ -1645,6 +1651,19 @@ where
     };
 
     #[cfg(feature = "balloon")]
+    let dynamic_mapping_device_tube = if cfg.balloon {
+        let (dynamic_mapping_host_tube, dynamic_mapping_device_tube) =
+            Tube::pair().context("failed to create dynamic tube")?;
+        control_tubes.push(TaggedControlTube::VmMemory {
+		tube: dynamic_mapping_host_tube,
+		expose_with_viommu: false,
+		});
+        Some(dynamic_mapping_device_tube)
+    } else {
+        None
+    };
+
+    #[cfg(feature = "balloon")]
     let (balloon_wss_host_tube, balloon_wss_device_tube) = if cfg.balloon_wss_reporting {
         let (host, device) = Tube::pair().context("failed to create tube")?;
         host.set_recv_timeout(Some(Duration::from_millis(100)))
@@ -1856,6 +1875,8 @@ where
         balloon_device_tube,
         #[cfg(feature = "balloon")]
         balloon_wss_device_tube,
+        #[cfg(feature = "balloon")]
+        dynamic_mapping_device_tube,
         #[cfg(feature = "balloon")]
         init_balloon_size,
         &mut disk_device_tubes,

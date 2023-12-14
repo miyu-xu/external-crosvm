@@ -881,7 +881,7 @@ fn run_worker(
     wss_queues: (Option<(Queue, Event)>, Option<(Queue, Event)>),
     command_tube: Tube,
     wss_op_tube: Option<Tube>,
-    #[cfg(windows)] dynamic_mapping_tube: Tube,
+    dynamic_mapping_tube: Tube,
     release_memory_tube: Option<Tube>,
     interrupt: Interrupt,
     kill_evt: Event,
@@ -910,10 +910,7 @@ fn run_worker(
                 sys::free_memory(
                     &guest_address,
                     len,
-                    #[cfg(windows)]
                     &dynamic_mapping_tube,
-                    #[cfg(unix)]
-                    &mem,
                 )
             },
         );
@@ -930,7 +927,6 @@ fn run_worker(
                 sys::reclaim_memory(
                     &guest_address,
                     len,
-                    #[cfg(windows)]
                     &dynamic_mapping_tube,
                 )
             },
@@ -970,10 +966,7 @@ fn run_worker(
                     sys::free_memory(
                         &guest_address,
                         len,
-                        #[cfg(windows)]
                         &dynamic_mapping_tube,
-                        #[cfg(unix)]
-                        &mem,
                     )
                 },
             )
@@ -1091,7 +1084,6 @@ fn run_worker(
 pub struct Balloon {
     command_tube: Option<Tube>,
     wss_op_tube: Option<Tube>,
-    #[cfg(windows)]
     dynamic_mapping_tube: Option<Tube>,
     release_memory_tube: Option<Tube>,
     pending_adjusted_response_event: Event,
@@ -1121,7 +1113,7 @@ impl Balloon {
         base_features: u64,
         command_tube: Tube,
         wss_op_tube: Option<Tube>,
-        #[cfg(windows)] dynamic_mapping_tube: Tube,
+        dynamic_mapping_tube: Tube,
         release_memory_tube: Option<Tube>,
         init_balloon_size: u64,
         mode: BalloonMode,
@@ -1142,7 +1134,6 @@ impl Balloon {
         Ok(Balloon {
             command_tube: Some(command_tube),
             wss_op_tube,
-            #[cfg(windows)]
             dynamic_mapping_tube: Some(dynamic_mapping_tube),
             release_memory_tube,
             pending_adjusted_response_event: Event::new().map_err(BalloonError::CreatingEvent)?,
@@ -1300,7 +1291,6 @@ impl VirtioDevice for Balloon {
 
         let wss_op_tube = self.wss_op_tube.take();
 
-        #[cfg(windows)]
         let mapping_tube = self.dynamic_mapping_tube.take().unwrap();
         let release_memory_tube = self.release_memory_tube.take();
         let registered_evt_q = self.registered_evt_q.take();
@@ -1319,7 +1309,6 @@ impl VirtioDevice for Balloon {
                 wss_queues,
                 command_tube,
                 wss_op_tube,
-                #[cfg(windows)]
                 mapping_tube,
                 release_memory_tube,
                 interrupt,
