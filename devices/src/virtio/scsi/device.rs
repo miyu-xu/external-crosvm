@@ -9,14 +9,12 @@ use std::collections::BTreeMap;
 use std::io;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Event;
 use base::WorkerThread;
-use cros_async::sync::RwLock;
 use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::ExecutorKind;
@@ -108,6 +106,10 @@ pub enum ExecuteError {
     },
     #[error("writing to a read only device")]
     ReadOnly,
+    #[error("saving parameters not supported")]
+    SavingParamNotSupported,
+    #[error("synchronization error")]
+    SynchronizationError,
     #[error("unsupported scsi command: {0}")]
     Unsupported(u8),
     #[error("failed to write message: {0}")]
@@ -167,6 +169,18 @@ impl ExecuteError {
                     ascq: 0x00,
                 }
             }
+            Self::SavingParamNotSupported => Sense {
+                // SAVING PARAMETERS NOT SUPPORTED
+                key: ILLEGAL_REQUEST,
+                asc: 0x39,
+                ascq: 0x00,
+            },
+            Self::SynchronizationError => Sense {
+                // SYNCHRONIZATION ERROR
+                key: MEDIUM_ERROR,
+                asc: 0x16,
+                ascq: 0x00,
+            },
             // Ignore these errors.
             Self::ReadIo { resid, desc_error } | Self::WriteIo { resid, desc_error } => {
                 warn!("error while performing I/O {}", desc_error);
@@ -272,7 +286,7 @@ pub struct Device {
     // LogicalUnit. That is, when user passes multiple --scsi-block options, we will have a single
     // instance of Device which has multiple LogicalUnit.
     #[allow(dead_code)]
-    target: Arc<RwLock<LogicalUnit>>,
+    target: LogicalUnit,
 }
 
 impl Device {
@@ -300,7 +314,7 @@ impl Device {
             cdb_size: VIRTIO_SCSI_CDB_DEFAULT_SIZE,
             executor_kind: ExecutorKind::default(),
             worker_threads: vec![],
-            target: Arc::new(RwLock::new(target)),
+            target,
         })
     }
 
@@ -326,7 +340,7 @@ impl Device {
         resp_writer: &mut Writer,
         data_writer: &mut Writer,
         disk_image: &dyn AsyncDisk,
-        dev: &Arc<RwLock<LogicalUnit>>,
+        dev: LogicalUnit,
     ) -> Result<usize, ExecuteError> {
         // TODO(b/301011017): Cope with the configurable cdb size. We would need to define
         // something like virtio_scsi_cmd_req_header.
@@ -335,10 +349,7 @@ impl Device {
             .map_err(ExecuteError::Read)?;
         let resp = if Self::is_lun0(req_header.lun) {
             let command = Command::new(&req_header.cdb)?;
-            match command
-                .execute(reader, data_writer, Arc::clone(dev), disk_image)
-                .await
-            {
+            match command.execute(reader, data_writer, dev, disk_image).await {
                 Ok(()) => virtio_scsi_cmd_resp {
                     sense_len: 0,
                     resid: 0,
@@ -417,7 +428,7 @@ impl VirtioDevice for Device {
         queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         let executor_kind = self.executor_kind;
-        let dev = Arc::clone(&self.target);
+        let dev = self.target;
         let disk_image = self
             .disk_image
             .take()
@@ -449,7 +460,7 @@ async fn run_worker(
     mut queues: BTreeMap<usize, Queue>,
     kill_evt: Event,
     disk_image: Box<dyn AsyncDisk>,
-    dev: Arc<RwLock<LogicalUnit>>,
+    dev: LogicalUnit,
 ) -> anyhow::Result<()> {
     let kill = async_utils::await_and_exit(ex, kill_evt).fuse();
     pin_mut!(kill);
@@ -486,7 +497,7 @@ async fn handle_queue(
     evt: EventAsync,
     interrupt: Interrupt,
     disk_image: Box<dyn AsyncDisk>,
-    dev: Arc<RwLock<LogicalUnit>>,
+    dev: LogicalUnit,
 ) {
     let mut background_tasks = FuturesUnordered::new();
     let evt_future = evt.next_val().fuse();
@@ -508,7 +519,7 @@ async fn handle_queue(
                 chain,
                 &interrupt,
                 &*disk_image,
-                &dev,
+                dev,
             ));
         }
     }
@@ -519,7 +530,7 @@ async fn process_one_chain(
     mut avail_desc: DescriptorChain,
     interrupt: &Interrupt,
     disk_image: &dyn AsyncDisk,
-    dev: &Arc<RwLock<LogicalUnit>>,
+    dev: LogicalUnit,
 ) {
     let len = process_one_request(&mut avail_desc, disk_image, dev).await;
     let mut queue = queue.borrow_mut();
@@ -530,7 +541,7 @@ async fn process_one_chain(
 async fn process_one_request(
     avail_desc: &mut DescriptorChain,
     disk_image: &dyn AsyncDisk,
-    dev: &Arc<RwLock<LogicalUnit>>,
+    dev: LogicalUnit,
 ) -> usize {
     let reader = &mut avail_desc.reader;
     let resp_writer = &mut avail_desc.writer;
@@ -639,12 +650,12 @@ mod tests {
 
         let mut avail_desc = setup_desciptor_chain(0, xfer_blocks, block_size, &mem);
 
-        let logical_unit = Arc::new(RwLock::new(LogicalUnit {
+        let logical_unit = LogicalUnit {
             max_lba: 0x1000,
             block_size,
             read_only: false,
-        }));
-        ex.run_until(process_one_request(&mut avail_desc, af, &logical_unit))
+        };
+        ex.run_until(process_one_request(&mut avail_desc, af, logical_unit))
             .expect("running executor failed");
         let resp_offset = GuestAddress((0x1000 + size_of::<virtio_scsi_cmd_resp>()) as u64);
         let resp = mem
