@@ -50,7 +50,6 @@ pub mod tube;
 pub mod vsock;
 mod write_zeroes;
 
-use std::ffi::CStr;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -68,6 +67,7 @@ use std::process::ExitStatus;
 use std::ptr;
 use std::time::Duration;
 
+pub use crate::sys::unix::descriptor::*;
 pub use acpi_event::*;
 pub use capabilities::drop_capabilities;
 pub use descriptor::*;
@@ -127,6 +127,7 @@ pub use crate::descriptor_reflection::SerializeDescriptors;
 pub use crate::errno::Error;
 pub use crate::errno::Result;
 pub use crate::errno::*;
+use crate::round_up_to_page_size;
 
 /// Re-export libc types that are part of the API.
 pub type Pid = libc::pid_t;
@@ -157,13 +158,6 @@ pub fn pagesize() -> usize {
 pub fn iov_max() -> usize {
     // Trivially safe
     unsafe { sysconf(_SC_IOV_MAX) as usize }
-}
-
-/// Uses the system's page size in bytes to round the given value up to the nearest page boundary.
-#[inline(always)]
-pub fn round_up_to_page_size(v: usize) -> usize {
-    let page_mask = pagesize() - 1;
-    (v + page_mask) & !page_mask
 }
 
 /// This bypasses `libc`'s caching `getpid(2)` wrapper which can be invalid if a raw clone was used
@@ -211,27 +205,6 @@ pub fn geteuid() -> Uid {
 pub fn getegid() -> Gid {
     // trivially safe
     unsafe { libc::getegid() }
-}
-
-/// Safe wrapper for chown(2).
-#[inline(always)]
-pub fn chown(path: &CStr, uid: Uid, gid: Gid) -> Result<()> {
-    // Safe since we pass in a valid string pointer and check the return value.
-    syscall!(unsafe { libc::chown(path.as_ptr(), uid, gid) }).map(|_| ())
-}
-
-/// Safe wrapper for fchmod(2).
-#[inline(always)]
-pub fn fchmod<A: AsRawFd>(fd: &A, mode: Mode) -> Result<()> {
-    // Safe since the function does not operate on pointers and check the return value.
-    syscall!(unsafe { libc::fchmod(fd.as_raw_fd(), mode) }).map(|_| ())
-}
-
-/// Safe wrapper for fchown(2).
-#[inline(always)]
-pub fn fchown<A: AsRawFd>(fd: &A, uid: Uid, gid: Gid) -> Result<()> {
-    // Safe since the function does not operate on pointers and check the return value.
-    syscall!(unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) }).map(|_| ())
 }
 
 /// The operation to perform with `flock`.
@@ -614,7 +587,7 @@ pub fn open_file_or_duplicate<P: AsRef<Path>>(path: P, options: &OpenOptions) ->
 }
 
 /// Get the max number of open files allowed by the environment.
-pub fn get_max_open_files() -> Result<u64> {
+pub fn max_open_files() -> Result<u64> {
     let mut buf = mem::MaybeUninit::<libc::rlimit64>::zeroed();
 
     // Safe because this will only modify `buf` and we check the return value.

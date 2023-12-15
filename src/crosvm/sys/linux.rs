@@ -117,6 +117,8 @@ use devices::PciAddress;
 use devices::PciBridge;
 use devices::PciDevice;
 #[cfg(target_arch = "x86_64")]
+use devices::PciMmioMapper;
+#[cfg(target_arch = "x86_64")]
 use devices::PciRoot;
 #[cfg(target_arch = "x86_64")]
 use devices::PciRootCommand;
@@ -188,7 +190,7 @@ use crate::crosvm::config::IrqChipKind;
 use crate::crosvm::gdb::gdb_thread;
 #[cfg(feature = "gdb")]
 use crate::crosvm::gdb::GdbStub;
-#[cfg(all(target_arch = "x86_64", unix))]
+#[cfg(target_arch = "x86_64")]
 use crate::crosvm::ratelimit::Ratelimit;
 use crate::crosvm::sys::cmdline::DevicesCommand;
 use crate::crosvm::sys::config::SharedDir;
@@ -355,8 +357,11 @@ fn create_virtio_devices(
         );
     }
 
-    for scsi in &cfg.scsis {
-        devs.push(scsi.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?);
+    if !cfg.scsis.is_empty() {
+        let scsi_config = ScsiConfig(&cfg.scsis);
+        devs.push(
+            scsi_config.create_virtio_device_and_jail(cfg.protection_type, &cfg.jail_config)?,
+        );
     }
 
     for blk in &cfg.vhost_user_blk {
@@ -1828,7 +1833,7 @@ where
             .fold(Vec::new(), |a, b| {
                 a.into_iter()
                     .chain("/pci@i0cf8/".as_bytes().iter().copied())
-                    .chain(b.0.into_iter())
+                    .chain(b.0)
                     .chain("\n".as_bytes().iter().copied())
                     .collect()
             });
@@ -1975,10 +1980,17 @@ where
             }
         }
 
+        let (hp_vm_mem_host_tube, hp_vm_mem_worker_tube) =
+            Tube::pair().context("failed to create tube")?;
+        vm_memory_control_tubes.push(VmMemoryTube {
+            tube: hp_vm_mem_host_tube,
+            expose_with_viommu: false,
+        });
+
         let pci_root = linux.root_config.clone();
         std::thread::Builder::new()
             .name("pci_root".to_string())
-            .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube))?
+            .spawn(move || start_pci_root_worker(pci_root, hp_worker_tube, hp_vm_mem_worker_tube))?
     };
 
     let gralloc = RutabagaGralloc::new().context("failed to create gralloc")?;
@@ -2030,12 +2042,49 @@ where
 fn start_pci_root_worker(
     pci_root: Arc<Mutex<PciRoot>>,
     hp_device_tube: mpsc::Receiver<PciRootCommand>,
+    vm_control_tube: Tube,
 ) {
+    struct PciMmioMapperTube {
+        vm_control_tube: Tube,
+        registered_regions: BTreeMap<u32, VmMemoryRegionId>,
+        next_id: u32,
+    }
+
+    impl PciMmioMapper for PciMmioMapperTube {
+        fn add_mapping(&mut self, addr: GuestAddress, shmem: &SharedMemory) -> anyhow::Result<u32> {
+            let shmem = shmem
+                .try_clone()
+                .context("failed to create new SharedMemory")?;
+            self.vm_control_tube
+                .send(&VmMemoryRequest::RegisterMemory {
+                    source: VmMemorySource::SharedMemory(shmem),
+                    dest: VmMemoryDestination::GuestPhysicalAddress(addr.0),
+                    prot: Protection::read(),
+                })
+                .context("failed to send request")?;
+            match self.vm_control_tube.recv::<VmMemoryResponse>() {
+                Ok(VmMemoryResponse::RegisterMemory(slot)) => {
+                    let cur_id = self.next_id;
+                    self.registered_regions.insert(cur_id, slot);
+                    self.next_id += 1;
+                    Ok(cur_id)
+                }
+                res => bail!("Bad response: {:?}", res),
+            }
+        }
+    }
+
+    let mut mapper = PciMmioMapperTube {
+        vm_control_tube,
+        registered_regions: BTreeMap::new(),
+        next_id: 0,
+    };
+
     loop {
         match hp_device_tube.recv() {
             Ok(cmd) => match cmd {
                 PciRootCommand::Add(addr, device) => {
-                    if let Err(e) = pci_root.lock().add_device(addr, device) {
+                    if let Err(e) = pci_root.lock().add_device(addr, device, &mut mapper) {
                         error!("failed to add hotplugged device to PCI root port: {}", e);
                     }
                 }
@@ -2769,9 +2818,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             Some(f)
         }
     };
-    #[cfg(all(target_arch = "x86_64", unix))]
+    #[cfg(target_arch = "x86_64")]
     let bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>> = Arc::new(Mutex::new(Ratelimit::new()));
-    #[cfg(all(target_arch = "x86_64", unix))]
+    #[cfg(target_arch = "x86_64")]
     if cfg.bus_lock_ratelimit > 0 {
         let bus_lock_ratelimit = cfg.bus_lock_ratelimit;
         if linux.vm.check_capability(VmCap::BusLockDetect) {
@@ -2849,7 +2898,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             cfg.itmt,
             vcpu_hybrid_type,
         ));
-        #[cfg(all(target_arch = "x86_64", unix))]
+        #[cfg(target_arch = "x86_64")]
         let bus_lock_ratelimit_ctrl = Arc::clone(&bus_lock_ratelimit_ctrl);
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -2891,7 +2940,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         .context("failed to clone vcpu cgroup tasks file")?,
                 ),
             },
-            #[cfg(all(target_arch = "x86_64", unix))]
+            #[cfg(target_arch = "x86_64")]
             bus_lock_ratelimit_ctrl,
             run_mode,
         )?;

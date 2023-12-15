@@ -1008,7 +1008,7 @@ pub struct RunCommand {
     /// ratelimit enforced on detected bus locks in guest.
     /// The default value of the bus_lock_ratelimit is 0 per second,
     /// which means no limitation on the guest's bus locks.
-    #[cfg(all(target_arch = "x86_64", unix))]
+    #[cfg(target_arch = "x86_64")]
     #[argh(option)]
     pub bus_lock_ratelimit: Option<u64>,
 
@@ -2436,7 +2436,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.async_executor = cmd.async_executor;
 
-        #[cfg(all(target_arch = "x86_64", unix))]
+        #[cfg(target_arch = "x86_64")]
         if let Some(p) = cmd.bus_lock_ratelimit {
             cfg.bus_lock_ratelimit = p;
         }
@@ -2631,7 +2631,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                 d.disk_option.root = false;
                 d
             }))
-            .chain(cmd.block.into_iter())
+            .chain(cmd.block)
             .collect::<Vec<_>>();
 
         // Sort all our disks by index.
@@ -2660,15 +2660,11 @@ impl TryFrom<RunCommand> for super::config::Config {
         // Pass the sorted disks to the VM config.
         cfg.disks = disks.into_iter().map(|d| d.disk_option).collect();
 
-        // TODO(b/300586438): Support multiple scsi options.
-        if cmd.scsi_block.len() > 1 {
-            return Err("multiple --scsi-block options are not supported yet".to_string());
-        }
-
         // If we have a root scsi disk, add the corresponding command-line parameters.
-        if let Some(s) = cmd.scsi_block.iter().find(|s| s.root) {
+        if let Some((i, s)) = cmd.scsi_block.iter().enumerate().find(|(_, s)| s.root) {
             cfg.params.push(format!(
-                "root=/dev/sda {}",
+                "root=/dev/sd{} {}",
+                char::from(b'a' + i as u8),
                 if s.read_only { "ro" } else { "rw" }
             ));
         }

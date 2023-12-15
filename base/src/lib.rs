@@ -92,7 +92,7 @@ cfg_if::cfg_if! {
         };
 
         pub use linux::{
-            chown, drop_capabilities, iov_max, pipe, read_raw_stdin
+            drop_capabilities, iov_max, pipe, read_raw_stdin
         };
         pub use linux::{enable_core_scheduling, set_rt_prio_limit, set_rt_round_robin};
         pub use linux::{flock, FlockOperation};
@@ -103,6 +103,7 @@ cfg_if::cfg_if! {
             ScmSocket, UnlinkUnixListener, SCM_SOCKET_MAX_FD_COUNT,
         };
         pub use linux::EventExt;
+    } else if #[cfg(target_os = "macos")] {
     } else if #[cfg(windows)] {
         pub use sys::windows;
 
@@ -146,7 +147,6 @@ pub use platform::number_of_logical_cores;
 pub use platform::open_file_or_duplicate;
 pub use platform::pagesize;
 pub use platform::platform_timer_resolution::enable_high_res_timers;
-pub use platform::round_up_to_page_size;
 pub use platform::sched_setattr;
 pub use platform::set_cpu_affinity;
 pub use platform::with_as_descriptor;
@@ -193,4 +193,11 @@ pub enum VmEventType {
     Crash,
     Panic(u8),
     WatchdogReset,
+}
+
+/// Uses the system's page size in bytes to round the given value up to the nearest page boundary.
+#[inline(always)]
+pub fn round_up_to_page_size(v: usize) -> usize {
+    let page_mask = pagesize() - 1;
+    (v + page_mask) & !page_mask
 }
