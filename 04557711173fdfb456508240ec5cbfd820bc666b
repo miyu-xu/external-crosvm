@@ -16,6 +16,24 @@
       "message": "i\u0027m finding various issues with the big merge, so i\u0027m sending small chunks like this",
       "revId": "04557711173fdfb456508240ec5cbfd820bc666b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "eb18817a_3f78a10c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-16T01:19:40Z",
+      "side": 1,
+      "message": "this one has some successful AVF test runs https://android-build.corp.google.com/test_investigate/?invocationId\u003dI35200010227868713\u0026testResultId\u003dTR07929093584244609. i also manually booted a pVM successfully",
+      "parentUuid": "cf71708a_06996dbf",
+      "revId": "04557711173fdfb456508240ec5cbfd820bc666b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
