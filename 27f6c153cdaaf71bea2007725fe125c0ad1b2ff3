@@ -16,6 +16,24 @@
       "message": "DO NOT SUBMIT until the release is cut",
       "revId": "27f6c153cdaaf71bea2007725fe125c0ad1b2ff3",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "360c3267_4d2cfbf6",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-19T18:55:08Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d28748ef_12e379a7",
+      "revId": "27f6c153cdaaf71bea2007725fe125c0ad1b2ff3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
