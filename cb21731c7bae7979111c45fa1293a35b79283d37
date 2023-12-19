@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "331f71a0_ddafdeab",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-19T02:57:10Z",
+      "side": 1,
+      "message": "can you send this to the upstream gerrit? https://crosvm.dev/book/contributing/contributing.html",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
