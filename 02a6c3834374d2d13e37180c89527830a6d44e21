@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4748a167_27785141",
+        "filename": "devices/src/pci/pci_root.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 502,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2023-12-19T04:52:13Z",
+      "side": 1,
+      "message": "could we then modify this to `not(target_arch \u003d \"x86_64\")`?",
+      "range": {
+        "startLine": 502,
+        "startChar": 16,
+        "endLine": 502,
+        "endChar": 71
+      },
+      "revId": "02a6c3834374d2d13e37180c89527830a6d44e21",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
