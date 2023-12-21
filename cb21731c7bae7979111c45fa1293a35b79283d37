@@ -16,6 +16,23 @@
       "message": "can you send this to the upstream gerrit? https://crosvm.dev/book/contributing/contributing.html",
       "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "892f61f8_4dd859c5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2023-12-21T19:13:11Z",
+      "side": 1,
+      "message": "upstream CL at https://crrev.com/c/5146447\n\nupstream might be delayed while chromeos imports the update. if this is urgent, we can submit here early, but you\u0027ll need to add the Cargo.toml changes here, otherwise cargo_embargo will fail",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
