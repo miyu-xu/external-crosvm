@@ -51,6 +51,24 @@
       "parentUuid": "331f71a0_ddafdeab",
       "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "28694fae_33dc4114",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1939360
+      },
+      "writtenOn": "2023-12-21T22:03:27Z",
+      "side": 1,
+      "message": "Thanks! no, it can wait. I\u0027ll remove this commit from the topic.",
+      "parentUuid": "892f61f8_4dd859c5",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
