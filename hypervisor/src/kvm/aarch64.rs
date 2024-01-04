@@ -111,6 +111,10 @@ impl KvmVm {
         Ok(())
     }
 
+    pub fn is_pkvm(&self) -> bool {
+        self.get_protected_vm_info().is_ok()
+    }
+
     /// Checks if a particular `VmCap` is available, or returns None if arch-independent
     /// Vm.check_capability() should handle the check.
     pub fn check_capability_arch(&self, _c: VmCap) -> Option<bool> {

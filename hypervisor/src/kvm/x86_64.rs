@@ -151,6 +151,10 @@ pub fn get_cpuid_with_initial_capacity<T: AsRawDescriptor>(
 }
 
 impl Kvm {
+    pub fn is_pkvm(&self) -> bool {
+        false
+    }
+
     pub fn get_cpuid(&self, kind: IoctlNr) -> Result<CpuId> {
         const KVM_MAX_ENTRIES: usize = 256;
         get_cpuid_with_initial_capacity(self, kind, KVM_MAX_ENTRIES)
