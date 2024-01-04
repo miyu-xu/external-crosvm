@@ -69,6 +69,24 @@
       "parentUuid": "892f61f8_4dd859c5",
       "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a4e76e59_1250ca44",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1939360
+      },
+      "writtenOn": "2024-01-04T13:44:41Z",
+      "side": 1,
+      "message": "Hi Frederick, https://crrev.com/c/5146447 is now merged. Do you know how I can import into AOSP ? external_updater doesn\u0027t work on it. Should I manually copy the files ? thanks",
+      "parentUuid": "28694fae_33dc4114",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
