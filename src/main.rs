@@ -138,6 +138,12 @@ impl From<sys::ExitState> for CommandStatus {
 }
 
 fn run_vm(cmd: RunCommand, log_config: LogConfig) -> Result<CommandStatus> {
+    error!(
+        "FMAYLE FMAYLE: max files: soft={:?} hard={:?}",
+        base::linux::max_open_files_soft(),
+        base::linux::max_open_files()
+    );
+
     let cfg = match TryInto::<Config>::try_into(cmd) {
         Ok(cfg) => cfg,
         Err(e) => {
