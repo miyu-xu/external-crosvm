@@ -87,6 +87,24 @@
       "parentUuid": "28694fae_33dc4114",
       "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4ad578b3_2cbb5c5e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-04T18:33:37Z",
+      "side": 1,
+      "message": "Thanks! Since it is upstream now, I\u0027m less concerned about the Cargo.toml being out of sync, it should get fixed automatically during the next weekly merge, so we can just submit this now.",
+      "parentUuid": "a4e76e59_1250ca44",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
