@@ -29,17 +29,29 @@ fn redirect_stderr() -> Option<(File, File)> {
     unsafe {
         let old_stderr = dup(STDERR_FILENO);
         if old_stderr == -1 {
+            error!(
+                "failed to dup STDERR during panic: {:?}",
+                std::io::Error::last_os_error()
+            );
             return None;
         }
         // Safe because pipe2 will only ever write two integers to our array and we check output.
         let mut ret = pipe2(fds.as_mut_ptr(), O_NONBLOCK);
         if ret != 0 {
+            error!(
+                "failed to create pipe during panic: {:?}",
+                std::io::Error::last_os_error()
+            );
             // Leaks FDs, but not important right before abort.
             return None;
         }
         // Safe because the FD we are duplicating is owned by us.
         ret = dup2(fds[1], STDERR_FILENO);
         if ret == -1 {
+            error!(
+                "failed to dup2 pipe to STDERR during panic: {:?}",
+                std::io::Error::last_os_error()
+            );
             // Leaks FDs, but not important right before abort.
             return None;
         }
