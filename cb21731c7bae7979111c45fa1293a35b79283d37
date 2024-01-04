@@ -105,6 +105,24 @@
       "parentUuid": "a4e76e59_1250ca44",
       "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "493e37e8_40299c16",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-04T18:35:01Z",
+      "side": 1,
+      "message": "(I edited the message, so you\u0027ll need to give it a +2 to make gerrit happy)",
+      "parentUuid": "4ad578b3_2cbb5c5e",
+      "revId": "cb21731c7bae7979111c45fa1293a35b79283d37",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
