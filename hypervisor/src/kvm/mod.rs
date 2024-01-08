@@ -1252,6 +1252,7 @@ impl TryFrom<HypervisorCap> for KvmCap {
 
     fn try_from(cap: HypervisorCap) -> Result<KvmCap> {
         match cap {
+            #[cfg(target_arch = "aarch64")]
             HypervisorCap::ArmPmuV3 => Ok(KvmCap::ArmPmuV3),
             HypervisorCap::ImmediateExit => Ok(KvmCap::ImmediateExit),
             HypervisorCap::S390UserSigp => Ok(KvmCap::S390UserSigp),
