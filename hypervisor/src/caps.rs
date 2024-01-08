@@ -5,6 +5,7 @@
 /// An enumeration of different hypervisor capabilities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HypervisorCap {
+    #[cfg(target_arch = "aarch64")]
     ArmPmuV3,
     ImmediateExit,
     S390UserSigp,
