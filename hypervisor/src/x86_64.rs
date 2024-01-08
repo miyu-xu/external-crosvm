@@ -154,13 +154,16 @@ pub trait VcpuX86_64: Vcpu {
 
     /// Snapshot vCPU state
     fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
+        let mut msrs = self.get_all_msrs()?;
+        msrs.retain(|&msr| msr.id != 0xc0010200);
+        msrs.retain(|&msr| msr.id != 0xc0010201);
         Ok(VcpuSnapshot {
             vcpu_id: self.id(),
             regs: self.get_regs()?,
             sregs: self.get_sregs()?,
             debug_regs: self.get_debugregs()?,
             xcrs: self.get_xcrs()?,
-            msrs: self.get_all_msrs()?,
+            msrs,
             xsave: self.get_xsave()?,
             hypervisor_data: self.get_interrupt_state()?,
             tsc_offset: self.get_tsc_offset()?,
