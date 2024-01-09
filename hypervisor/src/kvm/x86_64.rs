@@ -947,31 +947,53 @@ impl VcpuX86_64 for KvmVcpu {
     }
 
     fn set_msrs(&self, vec: &[Register]) -> Result<()> {
-        let msrs = to_kvm_msrs(vec);
-        let ret = {
-            // SAFETY:
-            // Here we trust the kernel not to read past the end of the kvm_msrs struct.
-            unsafe { ioctl_with_ref(self, KVM_SET_MSRS(), &msrs[0]) }
-        };
-        // KVM_SET_MSRS actually returns the number of msr entries written.
-        if ret < 0 {
-            return errno_result();
-        }
-        let num_set = ret as usize;
-        if num_set != vec.len() {
-            if let Some(register) = vec.get(num_set) {
-                error!(
-                    "failed to set MSR {:#x?} to {:#x?}",
-                    register.id, register.value
-                );
-            } else {
-                error!(
-                    "unexpected KVM_SET_MSRS return value {num_set} (nmsrs={})",
-                    vec.len()
-                );
+        for &msr in vec {
+            let msrs = to_kvm_msrs(&[msr]);
+            let ret = {
+                // SAFETY:
+                // Here we trust the kernel not to read past the end of the kvm_msrs struct.
+                unsafe { ioctl_with_ref(self, KVM_SET_MSRS(), &msrs[0]) }
+            };
+            let num_set = ret as usize;
+            if num_set != vec.len() {
+                if let Some(register) = vec.get(num_set) {
+                    error!(
+                        "failed to set MSR {:#x?} to {:#x?}",
+                        register.id, register.value
+                    );
+                } else {
+                    error!(
+                        "unexpected KVM_SET_MSRS return value {num_set} (nmsrs={})",
+                        vec.len()
+                    );
+                }
             }
-            return Err(base::Error::new(libc::EPERM));
         }
+        //let msrs = to_kvm_msrs(vec);
+        //let ret = {
+        //    // SAFETY:
+        //    // Here we trust the kernel not to read past the end of the kvm_msrs struct.
+        //    unsafe { ioctl_with_ref(self, KVM_SET_MSRS(), &msrs[0]) }
+        //};
+        //// KVM_SET_MSRS actually returns the number of msr entries written.
+        //if ret < 0 {
+        //    return errno_result();
+        //}
+        //let num_set = ret as usize;
+        //if num_set != vec.len() {
+        //    if let Some(register) = vec.get(num_set) {
+        //        error!(
+        //            "failed to set MSR {:#x?} to {:#x?}",
+        //            register.id, register.value
+        //        );
+        //    } else {
+        //        error!(
+        //            "unexpected KVM_SET_MSRS return value {num_set} (nmsrs={})",
+        //            vec.len()
+        //        );
+        //    }
+        //    return Err(base::Error::new(libc::EPERM));
+        //}
         Ok(())
     }
 
