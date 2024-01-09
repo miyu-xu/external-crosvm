@@ -6,6 +6,7 @@ use std::arch::x86_64::CpuidResult;
 
 use base::errno_result;
 use base::error;
+use base::info;
 use base::ioctl;
 use base::ioctl_with_mut_ptr;
 use base::ioctl_with_mut_ref;
@@ -582,6 +583,19 @@ impl KvmVcpu {
     pub fn system_event_reset(&self, _event_flags: u64) -> Result<VcpuExit> {
         Ok(VcpuExit::SystemEventReset)
     }
+
+    fn set_msr(&self, msr: Register) -> Result<()> {
+        let msrs = to_kvm_msr(msr);
+        let ret = {
+            // SAFETY:
+            // Here we trust the kernel not to read past the end of the kvm_msrs struct.
+            unsafe { ioctl_with_ref(self, KVM_SET_MSRS(), &msrs[0]) }
+        };
+        if ret <= 0 {
+            error!("Failed to set MSR {:#x?} to {:#x?}", msr.id, msr.value);
+        }
+        Ok(())
+    }
 }
 
 impl VcpuX86_64 for KvmVcpu {
@@ -947,30 +961,8 @@ impl VcpuX86_64 for KvmVcpu {
     }
 
     fn set_msrs(&self, vec: &[Register]) -> Result<()> {
-        let msrs = to_kvm_msrs(vec);
-        let ret = {
-            // SAFETY:
-            // Here we trust the kernel not to read past the end of the kvm_msrs struct.
-            unsafe { ioctl_with_ref(self, KVM_SET_MSRS(), &msrs[0]) }
-        };
-        // KVM_SET_MSRS actually returns the number of msr entries written.
-        if ret < 0 {
-            return errno_result();
-        }
-        let num_set = ret as usize;
-        if num_set != vec.len() {
-            if let Some(register) = vec.get(num_set) {
-                error!(
-                    "failed to set MSR {:#x?} to {:#x?}",
-                    register.id, register.value
-                );
-            } else {
-                error!(
-                    "unexpected KVM_SET_MSRS return value {num_set} (nmsrs={})",
-                    vec.len()
-                );
-            }
-            return Err(base::Error::new(libc::EPERM));
+        for &msr in vec {
+            let _ = self.set_msr(msr);
         }
         Ok(())
     }
@@ -1794,6 +1786,24 @@ fn to_kvm_xcrs(r: &[Register]) -> kvm_xcrs {
         kvm.xcrs[i].value = xcr.value;
     }
     kvm
+}
+
+fn to_kvm_msr(vec: Register) -> Vec<kvm_msrs> {
+    let msr = kvm_msr_entry {
+        index: vec.id,
+        data: vec.value,
+        ..Default::default()
+    };
+
+    let mut msrs = vec_with_array_field::<kvm_msrs, kvm_msr_entry>(1);
+    // SAFETY:
+    // Mapping the unsized array to a slice is unsafe because the length isn't known.
+    // Providing the length used to create the struct guarantees the entire slice is valid.
+    unsafe {
+        msrs[0].entries.as_mut_slice(1).copy_from_slice(&[msr]);
+    }
+    msrs[0].nmsrs = 1;
+    msrs
 }
 
 fn to_kvm_msrs(vec: &[Register]) -> Vec<kvm_msrs> {
