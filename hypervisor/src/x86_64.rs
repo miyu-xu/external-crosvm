@@ -154,6 +154,10 @@ pub trait VcpuX86_64: Vcpu {
 
     /// Snapshot vCPU state
     fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
+        // Disable perf capabilities before snapshotting. Currently facing a bug.
+        // Discarding result - if the operation fails, the MSR is likely unsupported. This does not
+        // affect the functionality of the VM and is safe to discard.
+        let _ = self.set_msrs(&[Register {id: 0x00000345, value: 0}]);
         Ok(VcpuSnapshot {
             vcpu_id: self.id(),
             regs: self.get_regs()?,
