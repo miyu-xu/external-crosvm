@@ -804,9 +804,11 @@ impl VcpuX86_64 for KvmVcpu {
         }
         // Ensure xsave is the same size as used in get_xsave.
         // Return err if sizes don't match => not the same extensions are enabled for CPU.
-        if xsave.len() != size as usize {
-            return Err(Error::new(EIO));
-        }
+        let size = if size > KVM_XSAVE_MAX_SIZE {
+            size
+        } else {
+            KVM_XSAVE_MAX_SIZE
+        };
 
         // SAFETY:
         // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
