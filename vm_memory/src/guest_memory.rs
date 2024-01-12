@@ -8,6 +8,7 @@ use std::convert::AsRef;
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::Read;
+use std::io::Write;
 use std::marker::Send;
 use std::marker::Sync;
 use std::result;
@@ -19,7 +20,6 @@ use base::pagesize;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::Error as SysError;
-use base::FileReadWriteVolatile;
 use base::MappedRegion;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
@@ -860,6 +860,8 @@ impl GuestMemory {
     /// Returns a JSON object that contains metadata about the underlying memory regions to allow
     /// validation checks at restore time.
     pub fn snapshot(&self, w: &mut std::fs::File) -> anyhow::Result<serde_json::Value> {
+        let mut w = lz4_flex::frame::FrameEncoder::new(w);
+
         let mut metadata = MemorySnapshotMetadata {
             regions: Vec::new(),
         };
@@ -872,7 +874,12 @@ impl GuestMemory {
                 let region_vslice = region
                     .mapping
                     .get_slice(range.start, range.end - range.start)?;
-                w.write_all_volatile(region_vslice)?;
+                // SAFETY: The data range is valid and the right length because we have a valid
+                // `VolatileSlice`. The memory referenced by the slice will not be mutated during
+                // its lifetime because all vCPUs and devices are suspended.
+                w.write_all(unsafe {
+                    std::slice::from_raw_parts(region_vslice.as_ptr(), region_vslice.size())
+                })?;
             }
             metadata.regions.push(MemoryRegionSnapshotMetadata {
                 guest_base: region.guest_base.0,
@@ -880,6 +887,8 @@ impl GuestMemory {
                 data_ranges,
             });
         }
+
+        w.finish()?;
 
         Ok(serde_json::to_value(metadata)?)
     }
@@ -896,6 +905,8 @@ impl GuestMemory {
         metadata: serde_json::Value,
         r: &mut std::fs::File,
     ) -> anyhow::Result<()> {
+        let mut r = lz4_flex::frame::FrameDecoder::new(r);
+
         let metadata: MemorySnapshotMetadata = serde_json::from_value(metadata)?;
         if self.regions.len() != metadata.regions.len() {
             bail!(
@@ -926,7 +937,12 @@ impl GuestMemory {
                 let region_vslice = region
                     .mapping
                     .get_slice(range.start, range.end - range.start)?;
-                r.read_exact_volatile(region_vslice)?;
+                // SAFETY: The data range is valid and the right length because we have a valid
+                // `VolatileSlice`. The memory referenced by the slice will not be accessed
+                // elsewhere during its lifetime because all vCPUs and devices are suspended.
+                r.read_exact(unsafe {
+                    std::slice::from_raw_parts_mut(region_vslice.as_mut_ptr(), region_vslice.size())
+                })?;
 
                 prev_end = range.end;
             }
