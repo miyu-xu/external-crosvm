@@ -1,0 +1,84 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "61fc6e12_7515c386",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-22T23:35:03Z",
+      "side": 1,
+      "message": "this is on an old branch. please send a CL for the main branch. once that is approved, we can figure out the backporting story\n\nnote there are going to be some conflicts with this, e.g. https://crrev.com/c/4504550 from May 2023",
+      "revId": "1ca9081292c65ae69db061a2db773012251baf47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0fa8ab60_1a0c518d",
+        "filename": "devices/src/virtio/balloon/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-22T23:35:03Z",
+      "side": 1,
+      "message": "this only checks the error from the tube recv, but the `VmMemoryResponse` itself can contain errors. one pattern is to check if `resp \u003d\u003d VmMemoryResponse::Ok` and print the whole `VmMemoryResponse` in lieu of a normal `Error` type",
+      "revId": "1ca9081292c65ae69db061a2db773012251baf47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bdc442a6_35fc53ad",
+        "filename": "devices/src/virtio/balloon/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-22T23:35:03Z",
+      "side": 1,
+      "message": "add an underscore at the start of the arg names to avoid \"unused variable\" warnings",
+      "range": {
+        "startLine": 37,
+        "startChar": 2,
+        "endLine": 37,
+        "endChar": 4
+      },
+      "revId": "1ca9081292c65ae69db061a2db773012251baf47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "10ac88dc_ee482500",
+        "filename": "src/crosvm/sys/unix.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 1660,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-22T23:35:03Z",
+      "side": 1,
+      "message": "convert tabs to spaces (run `rustfmt`)",
+      "range": {
+        "startLine": 1658,
+        "startChar": 0,
+        "endLine": 1660,
+        "endChar": 2
+      },
+      "revId": "1ca9081292c65ae69db061a2db773012251baf47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
