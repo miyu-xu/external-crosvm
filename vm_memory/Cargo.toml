@@ -18,6 +18,3 @@ serde = { version = "1", features = [ "derive" ] }
 serde_json = "*"
 thiserror = "*"
 zerocopy = { version = "0.7", features = ["derive"] }
-
-[dev_dependencies]
-tempfile = "3"
