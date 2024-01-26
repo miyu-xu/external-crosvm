@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c2258b08_07fbdd4f",
+        "filename": "devices/src/virtio/balloon/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-26T21:09:55Z",
+      "side": 1,
+      "message": "this only checks the error from the tube recv, but the `VmMemoryResponse` itself can contain errors. one pattern is to check if `resp \u003d\u003d VmMemoryResponse::Ok` and print the whole `VmMemoryResponse` in lieu of a normal `Error` type\n\n(copied from https://android-review.git.corp.google.com/c/platform/external/crosvm/+/2904091/comment/0fa8ab60_1a0c518d/)",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 5
+      },
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f0e603e3_4e16f56f",
+        "filename": "devices/src/virtio/balloon/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-26T21:09:55Z",
+      "side": 1,
+      "message": "add an underscore at the start of the arg names to avoid \"unused variable\" warnings",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 27,
+        "endChar": 38
+      },
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
