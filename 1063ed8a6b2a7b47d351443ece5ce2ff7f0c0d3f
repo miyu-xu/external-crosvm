@@ -65,6 +65,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8bc90da8_3f63ac48",
+        "filename": "devices/src/virtio/balloon/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-26T21:19:46Z",
+      "side": 1,
+      "message": "you\u0027re right. resolved",
+      "parentUuid": "58115197_596ecfc2",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 5
+      },
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f0e603e3_4e16f56f",
