@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d429fe9c_da846539",
+        "filename": "devices/src/virtio/balloon.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1404,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-01-26T21:16:55Z",
+      "side": 1,
+      "message": "nit: this extra `{}` block could be removed now that the `#[cfg]` is gone",
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "c2258b08_07fbdd4f",
         "filename": "devices/src/virtio/balloon/sys/linux.rs",
         "patchSetId": 1
@@ -14,6 +31,30 @@
       "writtenOn": "2024-01-26T21:09:55Z",
       "side": 1,
       "message": "this only checks the error from the tube recv, but the `VmMemoryResponse` itself can contain errors. one pattern is to check if `resp \u003d\u003d VmMemoryResponse::Ok` and print the whole `VmMemoryResponse` in lieu of a normal `Error` type\n\n(copied from https://android-review.git.corp.google.com/c/platform/external/crosvm/+/2904091/comment/0fa8ab60_1a0c518d/)",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 5
+      },
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "58115197_596ecfc2",
+        "filename": "devices/src/virtio/balloon/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-01-26T21:16:55Z",
+      "side": 1,
+      "message": "I think this comment is obsolete now that `VmMemoryClient` is used rather than calling `Tube::recv()` directly - `dynamically_free_memory_range()` wraps the underlying `Tube` stuff so the caller only needs to check for a single kind of `Err`.",
+      "parentUuid": "c2258b08_07fbdd4f",
       "range": {
         "startLine": 15,
         "startChar": 0,
