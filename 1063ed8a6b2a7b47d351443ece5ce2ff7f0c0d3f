@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3e93eec4_739d7289",
+        "filename": "devices/src/virtio/balloon.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1404,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-01-29T18:54:45Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d429fe9c_da846539",
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "c2258b08_07fbdd4f",
@@ -102,6 +120,30 @@
       "writtenOn": "2024-01-26T21:09:55Z",
       "side": 1,
       "message": "add an underscore at the start of the arg names to avoid \"unused variable\" warnings",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 27,
+        "endChar": 38
+      },
+      "revId": "1063ed8a6b2a7b47d351443ece5ce2ff7f0c0d3f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7563562b_a1d5ca93",
+        "filename": "devices/src/virtio/balloon/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 27,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-01-29T18:54:45Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f0e603e3_4e16f56f",
       "range": {
         "startLine": 25,
         "startChar": 0,
