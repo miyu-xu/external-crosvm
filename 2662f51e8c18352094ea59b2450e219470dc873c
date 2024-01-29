@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3f187bef_a3f7a714",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-01-29T21:32:16Z",
+      "side": 1,
+      "message": "context:\n\nthe virtcpufreq changes are a revert of the upstream CL https://crrev.com/c/5237740\n\nthe host-guest interface isn\u0027t stable yet so this should only be used from microdroid (where we can update crosvm and the guest in lockstep once a stable interface is agreed on upstream)",
+      "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
