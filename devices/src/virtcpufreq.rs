@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use zerocopy::AsBytes;
+
 use base::sched_attr;
 use base::sched_setattr;
 use base::warn;
 use base::Error;
+use sync::Mutex;
 
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
@@ -24,6 +30,7 @@ pub struct VirtCpufreq {
     cpu_fmax: u32,
     cpu_capacity: u32,
     pcpu: u32,
+    socket: Option<Arc<Mutex<UnixStream>>>,
 }
 
 fn get_cpu_info(cpu_id: u32, property: &str) -> Result<u32, Error> {
@@ -47,7 +54,7 @@ fn get_cpu_curfreq_khz(cpu_id: u32) -> Result<u32, Error> {
 }
 
 impl VirtCpufreq {
-    pub fn new(pcpu: u32) -> Self {
+    pub fn new(pcpu: u32, socket: Option<Arc<Mutex<UnixStream>>>) -> Self {
         let cpu_capacity = get_cpu_capacity(pcpu).expect("Error reading capacity");
         let cpu_fmax = get_cpu_maxfreq_khz(pcpu).expect("Error reading max freq");
 
@@ -55,6 +62,7 @@ impl VirtCpufreq {
             cpu_fmax,
             cpu_capacity,
             pcpu,
+            socket,
         }
     }
 }
@@ -104,13 +112,24 @@ impl BusDevice for VirtCpufreq {
         let cpu_cap_scaled = self.cpu_capacity * 80 / 100;
         let util = cpu_cap_scaled * freq / self.cpu_fmax;
 
-        let mut sched_attr = sched_attr::default();
-        sched_attr.sched_flags =
-            SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
-        sched_attr.sched_util_min = util;
+        if let Some(socket) = &self.socket {
+            socket
+                .lock()
+                .write_all(base::linux::gettid().as_bytes())
+                .expect("failed to write to socket");
+            socket
+                .lock()
+                .write_all(util.as_bytes())
+                .expect("failed to write to socket");
+        } else {
+            let mut sched_attr = sched_attr::default();
+            sched_attr.sched_flags =
+                SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
+            sched_attr.sched_util_min = util;
 
-        if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
-            panic!("{}: Error setting util value: {}", self.debug_label(), e);
+            if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
+                panic!("{}: Error setting util value: {}", self.debug_label(), e);
+            }
         }
     }
 }
