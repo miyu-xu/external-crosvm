@@ -46,6 +46,8 @@ use devices::VirtCpufreq;
 use gdbstub::arch::Arch;
 #[cfg(feature = "gdb")]
 use gdbstub_arch::aarch64::AArch64 as GdbArch;
+use hypervisor::AArch64Register;
+use hypervisor::AArch64RegisterType;
 use hypervisor::CpuConfigAArch64;
 use hypervisor::DeviceKind;
 use hypervisor::Hypervisor;
@@ -54,7 +56,6 @@ use hypervisor::ProtectionType;
 use hypervisor::VcpuAArch64;
 use hypervisor::VcpuFeature;
 use hypervisor::VcpuInitAArch64;
-use hypervisor::VcpuRegAArch64;
 use hypervisor::Vm;
 use hypervisor::VmAArch64;
 #[cfg(windows)]
@@ -822,7 +823,11 @@ impl arch::LinuxArch for AArch64 {
         _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         for (reg, value) in vcpu_init.regs.iter() {
-            vcpu.set_one_reg(*reg, *value).map_err(Error::SetReg)?;
+            vcpu.set_one_reg(AArch64Register {
+                reg_id: (*reg).clone(),
+                data: (*value).to_ne_bytes().to_vec(),
+            })
+            .map_err(Error::SetReg)?;
         }
         Ok(())
     }
@@ -1062,11 +1067,11 @@ impl AArch64 {
         fdt_address: GuestAddress,
         protection_type: ProtectionType,
     ) -> VcpuInitAArch64 {
-        let mut regs: BTreeMap<VcpuRegAArch64, u64> = Default::default();
+        let mut regs: BTreeMap<AArch64RegisterType, u64> = Default::default();
 
         // All interrupts masked
         let pstate = PSR_D_BIT | PSR_A_BIT | PSR_I_BIT | PSR_F_BIT | PSR_MODE_EL1H;
-        regs.insert(VcpuRegAArch64::Pstate, pstate);
+        regs.insert(AArch64RegisterType::Pstate, pstate);
 
         // Other cpus are powered off initially
         if vcpu_id == 0 {
@@ -1080,18 +1085,18 @@ impl AArch64 {
 
             /* PC -- entry point */
             if let Some(entry) = entry_addr {
-                regs.insert(VcpuRegAArch64::Pc, entry);
+                regs.insert(AArch64RegisterType::Pc, entry);
             }
 
             /* X0 -- fdt address */
-            regs.insert(VcpuRegAArch64::X(0), fdt_address.offset());
+            regs.insert(AArch64RegisterType::X(0), fdt_address.offset());
 
             if protection_type.runs_firmware() {
                 /* X1 -- payload entry point */
-                regs.insert(VcpuRegAArch64::X(1), payload.entry().offset());
+                regs.insert(AArch64RegisterType::X(1), payload.entry().offset());
 
                 /* X2 -- image size */
-                regs.insert(VcpuRegAArch64::X(2), payload.size());
+                regs.insert(AArch64RegisterType::X(2), payload.size());
             }
         }
 
@@ -1123,10 +1128,16 @@ mod tests {
         let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot);
 
         // PC: kernel image entry point
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::Pc), Some(&0x8080_0000));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::Pc),
+            Some(&0x8080_0000)
+        );
 
         // X0: fdt_offset
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::X(0)), Some(&0x1234));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::X(0)),
+            Some(&0x1234)
+        );
     }
 
     #[test]
@@ -1141,10 +1152,16 @@ mod tests {
         let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot);
 
         // PC: bios image entry point
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::Pc), Some(&0x8020_0000));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::Pc),
+            Some(&0x8020_0000)
+        );
 
         // X0: fdt_offset
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::X(0)), Some(&0x1234));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::X(0)),
+            Some(&0x1234)
+        );
     }
 
     #[test]
@@ -1161,18 +1178,24 @@ mod tests {
 
         // The hypervisor provides the initial value of PC, so PC should not be present in the
         // vcpu_init register map.
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::Pc), None);
+        assert_eq!(vcpu_init.regs.get(&AArch64RegisterType::Pc), None);
 
         // X0: fdt_offset
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::X(0)), Some(&0x1234));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::X(0)),
+            Some(&0x1234)
+        );
 
         // X1: kernel image entry point
         assert_eq!(
-            vcpu_init.regs.get(&VcpuRegAArch64::X(1)),
+            vcpu_init.regs.get(&AArch64RegisterType::X(1)),
             Some(&0x8080_0000)
         );
 
         // X2: image size
-        assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::X(2)), Some(&0x1000));
+        assert_eq!(
+            vcpu_init.regs.get(&AArch64RegisterType::X(2)),
+            Some(&0x1000)
+        );
     }
 }

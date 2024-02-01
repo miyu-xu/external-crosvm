@@ -57,6 +57,8 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::MemoryRegionPurpose;
 
+use crate::AArch64Register;
+use crate::AArch64RegisterType;
 use crate::BalloonEvent;
 use crate::ClockState;
 use crate::Config;
@@ -74,7 +76,6 @@ use crate::Vcpu;
 use crate::VcpuAArch64;
 use crate::VcpuExit;
 use crate::VcpuFeature;
-use crate::VcpuRegAArch64;
 use crate::VcpuSignalHandle;
 use crate::VcpuSignalHandleInner;
 use crate::Vm;
@@ -216,9 +217,9 @@ impl GeniezoneVcpu {
     fn set_one_geniezone_reg_u64(
         &self,
         gzvm_reg_id: GeniezoneVcpuRegister,
-        data: u64,
+        data: Vec<u8>,
     ) -> Result<()> {
-        self.set_one_geniezone_reg(gzvm_reg_id, data.to_ne_bytes().as_slice())
+        self.set_one_geniezone_reg(gzvm_reg_id, data.as_slice())
     }
 
     fn set_one_geniezone_reg(&self, gzvm_reg_id: GeniezoneVcpuRegister, data: &[u8]) -> Result<()> {
@@ -400,14 +401,15 @@ impl TryFrom<AArch64RegId> for GeniezoneVcpuRegister {
     }
 }
 
-impl From<VcpuRegAArch64> for GeniezoneVcpuRegister {
-    fn from(reg: VcpuRegAArch64) -> Self {
-        match reg {
-            VcpuRegAArch64::X(n @ 0..=30) => Self::X(n),
-            VcpuRegAArch64::X(n) => unreachable!("invalid VcpuRegAArch64 index: {n}"),
-            VcpuRegAArch64::Sp => Self::Sp,
-            VcpuRegAArch64::Pc => Self::Pc,
-            VcpuRegAArch64::Pstate => Self::Pstate,
+impl From<AArch64RegisterType> for GeniezoneVcpuRegister {
+    fn from(reg_id: AArch64RegisterType) -> Self {
+        match reg_id {
+            AArch64RegisterType::X(n @ 0..=30) => Self::X(n),
+            AArch64RegisterType::X(n) => unreachable!("invalid AArch64Register index: {n}"),
+            AArch64RegisterType::SpEl(_) => Self::Sp,
+            AArch64RegisterType::Pc => Self::Pc,
+            AArch64RegisterType::Pstate => Self::Pstate,
+            _ => unreachable!("invalid AArch64Register type"),
         }
     }
 }
@@ -436,12 +438,24 @@ impl VcpuAArch64 for GeniezoneVcpu {
         Err(Error::new(EINVAL))
     }
 
-    fn set_one_reg(&self, reg_id: VcpuRegAArch64, data: u64) -> Result<()> {
-        self.set_one_geniezone_reg_u64(GeniezoneVcpuRegister::from(reg_id), data)
+    fn set_regs(&self, _reg_id: Vec<AArch64Register>) -> Result<()> {
+        unimplemented!()
     }
 
-    fn get_one_reg(&self, reg_id: VcpuRegAArch64) -> Result<u64> {
-        self.get_one_geniezone_reg_u64(GeniezoneVcpuRegister::from(reg_id))
+    fn get_regs(&self) -> Result<Vec<AArch64Register>> {
+        Err(Error::new(ENOTSUP))
+    }
+
+    fn set_one_reg(&self, reg: AArch64Register) -> Result<()> {
+        self.set_one_geniezone_reg_u64(GeniezoneVcpuRegister::from(reg.reg_id), reg.data)
+    }
+
+    fn get_one_reg(&self, reg_id: AArch64RegisterType) -> Result<AArch64Register> {
+        let data = self.get_one_geniezone_reg_u64(GeniezoneVcpuRegister::from(reg_id.clone()))?;
+        Ok(AArch64Register {
+            reg_id,
+            data: data.to_ne_bytes().to_vec(),
+        })
     }
 
     fn get_psci_version(&self) -> Result<PsciVersion> {

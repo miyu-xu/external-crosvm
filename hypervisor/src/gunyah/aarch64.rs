@@ -16,10 +16,11 @@ use vm_memory::MemoryRegionPurpose;
 
 use super::GunyahVcpu;
 use super::GunyahVm;
+use crate::AArch64Register;
+use crate::AArch64RegisterType;
 use crate::Hypervisor;
 use crate::PsciVersion;
 use crate::VcpuAArch64;
-use crate::VcpuRegAArch64;
 use crate::VmAArch64;
 use crate::PSCI_0_2;
 
@@ -205,11 +206,19 @@ impl VcpuAArch64 for GunyahVcpu {
         Err(Error::new(ENOTSUP))
     }
 
-    fn set_one_reg(&self, _reg_id: VcpuRegAArch64, _data: u64) -> Result<()> {
+    fn set_regs(&self, _reg_id: Vec<AArch64Register>) -> Result<()> {
         unimplemented!()
     }
 
-    fn get_one_reg(&self, _reg_id: VcpuRegAArch64) -> Result<u64> {
+    fn get_regs(&self) -> Result<Vec<AArch64Register>> {
+        Err(Error::new(ENOTSUP))
+    }
+
+    fn set_one_reg(&self, _reg_id: AArch64Register) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn get_one_reg(&self, _reg_id: AArch64RegisterType) -> Result<AArch64Register> {
         Err(Error::new(ENOTSUP))
     }
 
