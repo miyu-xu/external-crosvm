@@ -15,6 +15,7 @@ gunyah = []
 anyhow = "*"
 bit_field = { path = "../bit_field" }
 bitflags = "2.2.1"
+byteorder = "*"
 cros_fdt = { path = "../cros_fdt" }
 data_model = { path = "../common/data_model" }
 downcast-rs = "1.2.0"
