@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3d8bc746_f5a44793",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1883470
+      },
+      "writtenOn": "2024-02-01T23:10:13Z",
+      "side": 1,
+      "message": "Associated bug. b/323377317",
+      "revId": "5ac23f0437cd86dd3d380fa8646e07bdd06c096c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
