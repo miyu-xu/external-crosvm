@@ -54,12 +54,38 @@ impl TryFrom<u32> for PsciVersion {
 pub const PSCI_0_2: PsciVersion = PsciVersion { major: 0, minor: 2 };
 pub const PSCI_1_0: PsciVersion = PsciVersion { major: 1, minor: 0 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub enum VcpuRegAArch64 {
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum AArch64RegisterType {
+    // General purpose X0-X30
     X(u8),
-    Sp,
+    // Stack pointer (EL 0-3)
+    SpEl(u8),
+    // Program counter
     Pc,
+    // Exception Link (EL 0-3)
+    ElrEl(u8),
+    // Program Status (EL 0-3)
+    SpsrEl(u8),
+    // Processor State
     Pstate,
+    // System Registers
+    SystemRegister(AArch64SystemRegisters),
+    // Vectors
+    V(u8),
+}
+
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum AArch64SystemRegisters {
+    CcsidrEl(u8),
+    FPCR,
+    FPSR,
+    SysReg(u32),
+}
+
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct AArch64Register {
+    pub reg_id: AArch64RegisterType,
+    pub data: Vec<u8>,
 }
 
 /// A wrapper for using a VM on aarch64 and getting/setting its state.
@@ -108,11 +134,22 @@ pub trait VcpuAArch64: Vcpu {
     /// structure as `pvtime_ipa`.
     fn init_pvtime(&self, pvtime_ipa: u64) -> Result<()>;
 
+    /// Sets the value of a group of registers on this VCPU.
+    fn set_regs(&self, regs: Vec<AArch64Register>) -> Result<()> {
+        for reg in regs {
+            self.set_reg(reg)?;
+        }
+        Ok(())
+    }
+
+    /// Gets the value of all registers on this VCPU.
+    fn get_regs(&self) -> Result<Vec<AArch64Register>>;
+
     /// Sets the value of a register on this VCPU.
-    fn set_one_reg(&self, reg_id: VcpuRegAArch64, data: u64) -> Result<()>;
+    fn set_one_reg(&self, reg_id: AArch64Register) -> Result<()>;
 
     /// Gets the value of a register on this VCPU.
-    fn get_one_reg(&self, reg_id: VcpuRegAArch64) -> Result<u64>;
+    fn get_one_reg(&self, reg_id: AArch64RegisterType) -> Result<AArch64Register>;
 
     /// Gets the current PSCI version.
     fn get_psci_version(&self) -> Result<PsciVersion>;
@@ -150,6 +187,33 @@ pub trait VcpuAArch64: Vcpu {
     fn restore(&self, _snapshot: &VcpuSnapshot) -> anyhow::Result<()> {
         Err(anyhow!("not yet implemented"))
     }
+
+    fn set_reg(&self, reg: AArch64Register) -> Result<()> {
+        validate_reg(&reg.reg_id)?;
+        self.set_one_reg(reg)
+    }
+
+    fn get_reg(&self, reg: AArch64RegisterType) -> Result<AArch64Register> {
+        validate_reg(&reg)?;
+        self.get_one_reg(reg)
+    }
+}
+
+fn validate_reg(reg_id: &AArch64RegisterType) -> Result<()> {
+    use crate::AArch64RegisterType::*;
+    match reg_id {
+        X(0..=30)
+        | SpEl(0..=3)
+        | ElrEl(1..=3)
+        | SpsrEl(1..=3)
+        | V(0..=31)
+        | AArch64RegisterType::Pc
+        | AArch64RegisterType::Pstate
+        | SystemRegister(AArch64SystemRegisters::FPCR)
+        | SystemRegister(AArch64SystemRegisters::FPSR)
+        | SystemRegister(AArch64SystemRegisters::CcsidrEl(1)) => Ok(()),
+        _ => Err(Error::new(EINVAL)),
+    }
 }
 
 /// Aarch64 specific vCPU snapshot.
@@ -167,7 +231,7 @@ impl_downcast!(VcpuAArch64);
 pub struct VcpuInitAArch64 {
     /// Initial register state as a map of register name to value pairs. Registers that do not have
     /// a value specified in this map will retain the original value provided by the hypervisor.
-    pub regs: BTreeMap<VcpuRegAArch64, u64>,
+    pub regs: BTreeMap<AArch64RegisterType, u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
