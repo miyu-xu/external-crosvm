@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::MemfdSeals;
-use base::MemoryMappingUnix;
+use base::linux::FileDataIterator;
+use base::linux::MemfdSeals;
+use base::linux::MemoryMappingUnix;
+use base::linux::SharedMemoryLinux;
+use base::MappedRegion;
 use base::SharedMemory;
-use base::SharedMemoryUnix;
 use bitflags::bitflags;
 
 use crate::Error;
 use crate::GuestAddress;
 use crate::GuestMemory;
+use crate::MemoryRegion;
 use crate::Result;
 
 bitflags! {
@@ -80,6 +83,33 @@ impl GuestMemory {
         for region in self.regions.iter() {
             region.mapping.use_dontfork()?;
         }
+        Ok(())
+    }
+}
+
+impl MemoryRegion {
+    /// Finds ranges of memory that might have non-zero data (i.e. not unallocated memory). The
+    /// ranges are offsets into the region's mmap, not offsets into the backing file.
+    ///
+    /// For example, if there were three bytes and the second byte was a hole, the return would be
+    /// `[1..2]` (in practice these are probably always at least page sized).
+    pub(crate) fn find_data_ranges(&self) -> anyhow::Result<Vec<std::ops::Range<usize>>> {
+        FileDataIterator::new(
+            &self.shared_obj,
+            self.obj_offset,
+            u64::try_from(self.mapping.size()).unwrap(),
+        )
+        .map(|range| {
+            let range = range?;
+            // Convert from file offsets to mmap offsets.
+            Ok(usize::try_from(range.start - self.obj_offset).unwrap()
+                ..usize::try_from(range.end - self.obj_offset).unwrap())
+        })
+        .collect()
+    }
+
+    pub(crate) fn zero_range(&self, offset: usize, size: usize) -> anyhow::Result<()> {
+        self.mapping.remove_range(offset, size)?;
         Ok(())
     }
 }

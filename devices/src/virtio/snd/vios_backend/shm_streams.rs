@@ -24,13 +24,13 @@ use audio_streams::SampleFormat;
 use audio_streams::StreamDirection;
 use audio_streams::StreamEffect;
 use base::error;
+use base::linux::SharedMemoryLinux;
 use base::Error as SysError;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
 use base::RawDescriptor;
 use base::SharedMemory;
-use base::SharedMemoryUnix;
-use data_model::VolatileMemory;
+use base::VolatileMemory;
 use sync::Mutex;
 
 use super::shm_vios::Error;
@@ -218,18 +218,16 @@ impl VioSndShmStream {
     ) -> GenericResult<Box<dyn ShmStream>> {
         let interval = Duration::from_millis(buffer_size as u64 * 1000 / frame_rate as u64);
 
-        let dup_fd = unsafe {
-            // Safe because fcntl doesn't affect memory and client_shm should wrap a known valid
-            // file descriptor.
-            libc::fcntl(client_shm.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0)
-        };
+        // SAFETY:
+        // Safe because fcntl doesn't affect memory and client_shm should wrap a known valid
+        // file descriptor.
+        let dup_fd = unsafe { libc::fcntl(client_shm.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
         if dup_fd < 0 {
             return Err(Box::new(Error::DupError(SysError::last())));
         }
-        let file = unsafe {
-            // safe because we checked the result of libc::fcntl()
-            File::from_raw_fd(dup_fd)
-        };
+        // SAFETY:
+        // safe because we checked the result of libc::fcntl()
+        let file = unsafe { File::from_raw_fd(dup_fd) };
         let client_shm_clone = SharedMemory::from_file(file).map_err(Error::BaseMmapError)?;
 
         Ok(Box::new(Self {

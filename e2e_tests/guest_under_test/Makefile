@@ -56,20 +56,28 @@ x86_64_initramfs: $(TARGET)/initramfs
 
 delegate: $(TARGET)/rootfs-build/delegate
 
+readclock: $(TARGET)/rootfs-build/readclock
+
 ################################################################################
 # Build rootfs
+rootfs : ${TARGET}/rootfs
 
 # Build rootfs from Dockerfile and export into squashfs
-$(TARGET)/rootfs: $(TARGET)/rootfs-build/delegate rootfs/Dockerfile
+$(TARGET)/rootfs: $(TARGET)/rootfs-build/delegate $(TARGET)/rootfs-build/readclock rootfs/Dockerfile
 	# Build image from Dockerfile
 	DOCKER_BUILDKIT=1 docker build -t crosvm_e2e_test_guest $(TARGET)/rootfs-build \
 		-f rootfs/Dockerfile --build-arg ARCH=$(DOCKER_ARCH)
-
+	# Make sure tar2sqfs is available. If not, print a help message.
+	tar2sqfs --help > /dev/null || \
+		{ \
+			echo 'tar2sqfs is not found. To install, run: `sudo apt install -y squashfs-tools-ng` or something equivalent.' ; \
+			exit 1 ; \
+		}
 	# Create container and export into squashfs, and don't forget to clean up
 	# the container afterwards.
-	set -x; \
-		CONTAINER=$$(docker create crosvm_e2e_test_guest); \
-		docker export $$CONTAINER | tar2sqfs -c gzip -f $@; \
+	set -x && \
+		CONTAINER=$$(docker create crosvm_e2e_test_guest) && \
+		docker export $$CONTAINER | tar2sqfs -c gzip -f $@ && \
 		docker rm $$CONTAINER
 
 # Build and copy delegate binary into rootfs build directory
@@ -78,6 +86,13 @@ $(TARGET)/rootfs-build/delegate: rootfs/delegate/Cargo.toml rootfs/delegate/src/
 	CARGO_TARGET_DIR=$(TARGET) RUSTFLAGS=$(RUSTFLAGS) cargo build --target $(RUST_TARGET) --release --manifest-path=rootfs/delegate/Cargo.toml
 	mkdir -p $(TARGET)/rootfs-build
 	cp $(TARGET)/$(RUST_TARGET)/release/delegate $(TARGET)/rootfs-build/delegate
+
+# Build and copy readclock binary into rootfs build directory
+$(TARGET)/rootfs-build/readclock: rootfs/readclock/Cargo.toml rootfs/readclock/src/main.rs rootfs/readclock/src/lib.rs
+	rustup target add $(RUST_TARGET)
+	CARGO_TARGET_DIR=$(TARGET) RUSTFLAGS=$(RUSTFLAGS) cargo build --target $(RUST_TARGET) --release --manifest-path=rootfs/readclock/Cargo.toml
+	mkdir -p $(TARGET)/rootfs-build
+	cp $(TARGET)/$(RUST_TARGET)/release/readclock $(TARGET)/rootfs-build/readclock
 
 ################################################################################
 # Build initramfs
@@ -100,6 +115,8 @@ $(TARGET)/initramfs: $(TARGET)/rootfs-build/delegate initramfs/Containerfile ini
 
 ################################################################################
 # Build kernel
+
+kernel : $(TARGET)/bzImage
 
 $(TARGET)/bzImage: $(TARGET)/kernel-source $(TARGET)/kernel-build
 	cd $(TARGET)/kernel-source \
