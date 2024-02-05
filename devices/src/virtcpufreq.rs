@@ -2,10 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+<<<<<<< HEAD   (2a4eb5 Merge "Revert "ANDROID: Revert "Replace internal p9 with cra)
 use base::sched_attr;
 use base::sched_setattr;
 use base::warn;
 use base::Error;
+=======
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+
+use sync::Mutex;
+>>>>>>> BRANCH (62d492 Roll recipe dependencies (trivial).)
 
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
@@ -47,6 +54,7 @@ fn get_cpu_curfreq_khz(cpu_id: u32) -> Result<u32, Error> {
 }
 
 impl VirtCpufreq {
+<<<<<<< HEAD   (2a4eb5 Merge "Revert "ANDROID: Revert "Replace internal p9 with cra)
     pub fn new(pcpu: u32) -> Self {
         let cpu_capacity = get_cpu_capacity(pcpu).expect("Error reading capacity");
         let cpu_fmax = get_cpu_maxfreq_khz(pcpu).expect("Error reading max freq");
@@ -56,6 +64,10 @@ impl VirtCpufreq {
             cpu_capacity,
             pcpu,
         }
+=======
+    pub fn new(pcpu: u32, _socket: Option<Arc<Mutex<UnixStream>>>) -> Self {
+        panic!("Virt Cpufreq not supported, do not use! {}", pcpu);
+>>>>>>> BRANCH (62d492 Roll recipe dependencies (trivial).)
     }
 }
 
