@@ -16,6 +16,24 @@
       "message": "context:\n\nthe virtcpufreq changes are a revert of the upstream CL https://crrev.com/c/5237740\n\nthe host-guest interface isn\u0027t stable yet so this should only be used from microdroid (where we can update crosvm and the guest in lockstep once a stable interface is agreed on upstream)",
       "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f574d4af_cecea54f",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-05T23:57:05Z",
+      "side": 1,
+      "message": "okay, this had conflicts with upstream in the merge this week. David please check my merge resolution was okay http://r.android.com/2952105\n\nAlso - David - please unfork this and get upstream review. What is the plan?",
+      "parentUuid": "3f187bef_a3f7a714",
+      "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
