@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "70b5a823_c06fa386",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 54,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-05T23:58:35Z",
+      "side": 1,
+      "message": "this okay David?",
+      "range": {
+        "startLine": 54,
+        "startChar": 26,
+        "endLine": 54,
+        "endChar": 64
+      },
+      "revId": "cd9ec81862293d5daedd2ebe557c4813b6544289",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
