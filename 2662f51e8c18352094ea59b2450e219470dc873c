@@ -70,6 +70,24 @@
       "parentUuid": "dd926ee5_82aa5084",
       "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "926acde6_4ccc50ed",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-06T00:14:53Z",
+      "side": 1,
+      "message": "If it\u0027s not this week...\n\nWhether it\u0027s in this tree or upstream, we need to maintain this indefinitely if Android devices get the old kernel. If you are worried about it for the other reasons you said, put it underneath an Android configuration, e.g. `#![cfg(target_os \u003d \"android\")]` so that it won\u0027t conflict here, and put exactly what you are saying as a comment.\n\nI know I ran out of the room because I had to go, but please do this. The policy is no forking. I will greatly greatly appreciate it.",
+      "parentUuid": "bb5d1a8d_cb792d0f",
+      "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
