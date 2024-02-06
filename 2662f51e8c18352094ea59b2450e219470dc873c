@@ -34,6 +34,24 @@
       "parentUuid": "3f187bef_a3f7a714",
       "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dd926ee5_82aa5084",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-06T00:05:18Z",
+      "side": 1,
+      "message": "This looks good, I don\u0027t expect to see another merge conflict outside of this week\u0027s merge. Frederick OKed the out-of-tree patches until interface stabilizes in upstream linux.",
+      "parentUuid": "f574d4af_cecea54f",
+      "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
