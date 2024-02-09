@@ -88,6 +88,24 @@
       "parentUuid": "bb5d1a8d_cb792d0f",
       "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a37ab98a_9ccb1d10",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-09T00:59:47Z",
+      "side": 1,
+      "message": "Resolving this as I think we reached the understanding offline that kernel driver using this interface does not change KMI, and should be only used by microdroid. The trade off is a small short-term maintenance burden to avoid potential long-term maintenance of multiple vcpufreq interfaces. This patch will be removed once upstream discussions conclude and be upgraded with microdroid in lockstep.",
+      "parentUuid": "926acde6_4ccc50ed",
+      "revId": "2662f51e8c18352094ea59b2450e219470dc873c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
