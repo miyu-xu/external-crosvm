@@ -33,6 +33,57 @@
       "message": "Hi Daniel, would you mind giving your thoughts on this? Essentially the second half of https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5258454.",
       "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f71993a5_293e9426",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-12T21:41:18Z",
+      "side": 1,
+      "message": "nit: Consider calling `gettid()` in `on_sandboxed()` and saving it in `struct VirtCpufreq` to avoid the overhead of an extra syscall on every `write()`",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6055e574_63d245bb",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 118,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-12T21:41:18Z",
+      "side": 1,
+      "message": "Will this stay in the Android downstream copy of crosvm only? If it\u0027s meant to be added to upstream crosvm, I don\u0027t think this will fly since PIDs/TIDs on general Linux can be larger than 16 bits, and I think this is true even on Bionic - bionc/README.md says \"*32-bit* bionic requires PIDs less than 65536\", but doesn\u0027t say anything about 64-bit bionic.\n\nIt is probably simpler to just send a separate 32-bit tid unless there\u0027s a really strong reason to pack everything into a single u32 (assuming we get to make up the protocol and it\u0027s not something that is already defined elsewhere).",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b7df0d2d_c94f23d3",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-12T21:41:18Z",
+      "side": 1,
+      "message": "`expect()` seems a bit harsh to me - this will panic and kill the whole VM if the socket can\u0027t be written (e.g. if the receiving process exits and the socket gets closed).",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
