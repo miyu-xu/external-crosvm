@@ -52,6 +52,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f03a3ffe_424a4ef6",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-12T21:49:19Z",
+      "side": 1,
+      "message": "Never mind, I guess this is written with the assumption that `write()` is called directly from the vcpu thread in the non-sandboxed mode, so the tid can actually differ. That could probably use a comment, though.",
+      "parentUuid": "f71993a5_293e9426",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6055e574_63d245bb",
