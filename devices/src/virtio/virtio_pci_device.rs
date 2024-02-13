@@ -21,6 +21,7 @@ use base::SharedMemory;
 use base::Tube;
 use data_model::Le32;
 use hypervisor::Datamatch;
+use hypervisor::MemCacheType;
 use libc::ERANGE;
 use resources::Alloc;
 use resources::AllocOptions;
@@ -1131,7 +1132,10 @@ impl Suspendable for VirtioPciDevice {
         if let Some(queues) = self.device.virtio_sleep()? {
             anyhow::ensure!(
                 self.device_activated,
-                "unactivated device returned queues on sleep"
+                format!(
+                    "unactivated device {} returned queues on sleep",
+                    self.debug_label()
+                ),
             );
             self.sleep_state = Some(SleepState::Active {
                 activated_queues: queues,
@@ -1139,7 +1143,10 @@ impl Suspendable for VirtioPciDevice {
         } else {
             anyhow::ensure!(
                 !self.device_activated,
-                "activated device didn't return queues on sleep"
+                format!(
+                    "activated device {} didn't return queues on sleep",
+                    self.debug_label()
+                ),
             );
             self.sleep_state = Some(SleepState::Inactive);
         }
@@ -1157,9 +1164,12 @@ impl Suspendable for VirtioPciDevice {
                 // If the device is already awake, we should not request it to wake again.
             }
             Some(SleepState::Inactive) => {
-                self.device
-                    .virtio_wake(None)
-                    .expect("virtio_wake failed, can't recover");
+                self.device.virtio_wake(None).with_context(|| {
+                    format!(
+                        "virtio_wake failed for {}, can't recover",
+                        self.debug_label(),
+                    )
+                })?;
             }
             Some(SleepState::Active { activated_queues }) => {
                 self.device
@@ -1170,7 +1180,12 @@ impl Suspendable for VirtioPciDevice {
                             .expect("interrupt missing for already active queues"),
                         activated_queues,
                     )))
-                    .expect("virtio_wake failed, can't recover");
+                    .with_context(|| {
+                        format!(
+                            "virtio_wake failed for {}, can't recover",
+                            self.debug_label(),
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -1398,6 +1413,7 @@ impl SharedMemoryMapper for VmRequester {
         source: VmMemorySource,
         offset: u64,
         prot: Protection,
+        cache: MemCacheType,
     ) -> anyhow::Result<()> {
         if self.needs_prepare {
             self.vm_memory_client
@@ -1415,6 +1431,7 @@ impl SharedMemoryMapper for VmRequester {
                     offset,
                 },
                 prot,
+                cache,
             )
             .context("register_memory failed")?;
 
