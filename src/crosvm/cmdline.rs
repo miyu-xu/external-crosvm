@@ -88,6 +88,7 @@ use crate::crosvm::config::DtboOption;
 use crate::crosvm::config::Executable;
 use crate::crosvm::config::FileBackedMappingParameters;
 use crate::crosvm::config::HypervisorKind;
+use crate::crosvm::config::InputDeviceOption;
 use crate::crosvm::config::IrqChipKind;
 use crate::crosvm::config::MemOptions;
 use crate::crosvm::config::TouchDeviceOption;
@@ -176,6 +177,9 @@ pub struct BalloonCommand {
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
     pub socket_path: String,
+    /// wait for response
+    #[argh(switch)]
+    pub wait: bool,
 }
 
 #[derive(argh::FromArgs)]
@@ -1313,6 +1317,8 @@ pub struct RunCommand {
     ///     implicit-render-server[=true|=false] - If the render
     ///        server process should be allowed to autostart
     ///        (ignored when sandboxing is enabled)
+    ///     fixed-blob-mapping[=true|=false] - if gpu memory blobs
+    ///        should use fixed address mapping.
     ///
     /// Possible key values for GpuDisplayParameters:
     ///     mode=(borderless_full_screen|windowed[width,height]) -
@@ -1414,6 +1420,24 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     /// initial ramdisk to load
     pub initrd: Option<PathBuf>,
+
+    #[argh(option, arg_name = "TYPE[OPTIONS]")]
+    #[serde(default)]
+    #[merge(strategy = append)]
+    /// virtio-input device
+    /// TYPE is an input device type, and OPTIONS are key=value
+    /// pairs specific to the device type:
+    ///     evdev[path=PATH]
+    ///     keyboard[path=PATH]
+    ///     mouse[path=PATH]
+    ///     multi-touch[path=PATH,width=W,height=H,name=N]
+    ///     rotary[path=PATH]
+    ///     single-touch[path=PATH,width=W,height=H,name=N]
+    ///     switches[path=PATH]
+    ///     trackpad[path=PATH,width=W,height=H,name=N]
+    /// See <https://crosvm.dev/book/devices/input.html> for more
+    /// information.
+    pub input: Vec<InputDeviceOption>,
 
     #[argh(option, arg_name = "kernel|split|userspace")]
     #[merge(strategy = overwrite_option)]
@@ -1518,7 +1542,7 @@ pub struct RunCommand {
     #[cfg(all(unix, feature = "net"))]
     #[argh(
         option,
-        arg_name = "(tap-name=TAP_NAME,mac=MAC_ADDRESS|tap-fd=TAP_FD,mac=MAC_ADDRESS|host-ip=IP,netmask=NETMASK,mac=MAC_ADDRESS),vhost-net=VHOST_NET,vq-pairs=N"
+        arg_name = "(tap-name=TAP_NAME,mac=MAC_ADDRESS|tap-fd=TAP_FD,mac=MAC_ADDRESS|host-ip=IP,netmask=NETMASK,mac=MAC_ADDRESS),vhost-net=VHOST_NET,vq-pairs=N,pci-address=ADDR"
     )]
     #[serde(default)]
     #[merge(strategy = append)]
@@ -1557,6 +1581,8 @@ pub struct RunCommand {
     ///                       If not set or set to false, it will
     ///                       use split virtqueue.
     ///                       Default: false.  [Optional]
+    ///   pci-address     - preferred PCI address, e.g. "00:01.0"
+    ///                       Default: automatic PCI address assignment. [Optional]
     ///
     /// Either one tap_name, one tap_fd or a triplet of host_ip,
     /// netmask and mac must be specified.
@@ -2357,10 +2383,20 @@ pub struct RunCommand {
     /// enable a virtual cpu freq device
     pub virt_cpufreq: Option<bool>,
 
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[argh(option, arg_name = "SOCKET_PATH")]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// (EXPERIMENTAL) use UDS for a virtual cpu freq device
+    pub virt_cpufreq_socket: Option<PathBuf>,
+
     #[cfg(feature = "audio")]
     #[argh(
         option,
-        arg_name = "[capture=true,backend=BACKEND,num_output_devices=1,
+        arg_name = "[capture=true,backend=BACKEND,num_output_devices=1,\
         num_input_devices=1,num_output_streams=1,num_input_streams=1]"
     )]
     #[serde(skip)] // TODO(b/255223604)
@@ -2551,6 +2587,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         ))]
         {
             cfg.virt_cpufreq = cmd.virt_cpufreq.unwrap_or_default();
+            cfg.virt_cpufreq_socket = cmd.virt_cpufreq_socket;
         }
 
         cfg.vcpu_cgroup_path = cmd.vcpu_cgroup_path;
@@ -2890,14 +2927,97 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vtpm_proxy = cmd.vtpm_proxy.unwrap_or_default();
         }
 
-        cfg.virtio_single_touch = cmd.single_touch;
-        cfg.virtio_multi_touch = cmd.multi_touch;
-        cfg.virtio_trackpad = cmd.trackpad;
-        cfg.virtio_mice = cmd.mouse;
-        cfg.virtio_keyboard = cmd.keyboard;
-        cfg.virtio_switches = cmd.switches;
-        cfg.virtio_rotary = cmd.rotary;
-        cfg.virtio_input_evdevs = cmd.evdev;
+        cfg.virtio_input = cmd.input;
+
+        if !cmd.single_touch.is_empty() {
+            log::warn!("`--single-touch` is deprecated; please use `--input single-touch[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.single_touch
+                        .into_iter()
+                        .map(|touch| InputDeviceOption::SingleTouch {
+                            path: touch.path,
+                            width: touch.width,
+                            height: touch.height,
+                            name: touch.name,
+                        }),
+                );
+        }
+
+        if !cmd.multi_touch.is_empty() {
+            log::warn!("`--multi-touch` is deprecated; please use `--input multi-touch[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.multi_touch
+                        .into_iter()
+                        .map(|touch| InputDeviceOption::MultiTouch {
+                            path: touch.path,
+                            width: touch.width,
+                            height: touch.height,
+                            name: touch.name,
+                        }),
+                );
+        }
+
+        if !cmd.trackpad.is_empty() {
+            log::warn!("`--trackpad` is deprecated; please use `--input trackpad[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.trackpad
+                        .into_iter()
+                        .map(|trackpad| InputDeviceOption::Trackpad {
+                            path: trackpad.path,
+                            width: trackpad.width,
+                            height: trackpad.height,
+                            name: trackpad.name,
+                        }),
+                );
+        }
+
+        if !cmd.mouse.is_empty() {
+            log::warn!("`--mouse` is deprecated; please use `--input mouse[...]`");
+            cfg.virtio_input.extend(
+                cmd.mouse
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Mouse { path }),
+            );
+        }
+
+        if !cmd.keyboard.is_empty() {
+            log::warn!("`--keyboard` is deprecated; please use `--input keyboard[...]`");
+            cfg.virtio_input.extend(
+                cmd.keyboard
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Keyboard { path }),
+            )
+        }
+
+        if !cmd.switches.is_empty() {
+            log::warn!("`--switches` is deprecated; please use `--input switches[...]`");
+            cfg.virtio_input.extend(
+                cmd.switches
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Switches { path }),
+            );
+        }
+
+        if !cmd.rotary.is_empty() {
+            log::warn!("`--rotary` is deprecated; please use `--input rotary[...]`");
+            cfg.virtio_input.extend(
+                cmd.rotary
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Rotary { path }),
+            );
+        }
+
+        if !cmd.evdev.is_empty() {
+            log::warn!("`--evdev` is deprecated; please use `--input evdev[...]`");
+            cfg.virtio_input.extend(
+                cmd.evdev
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Evdev { path }),
+            );
+        }
 
         cfg.irq_chip = cmd.irqchip;
 
@@ -3027,6 +3147,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                     vhost_net: vhost_net_config.clone(),
                     vq_pairs: cmd.net_vq_pairs,
                     packed_queue: false,
+                    pci_address: None,
                 });
             }
 
@@ -3040,6 +3161,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                     vhost_net: vhost_net_config.clone(),
                     vq_pairs: cmd.net_vq_pairs,
                     packed_queue: false,
+                    pci_address: None,
                 });
             }
 
@@ -3078,6 +3200,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                     vhost_net: vhost_net_config,
                     vq_pairs: cmd.net_vq_pairs,
                     packed_queue: false,
+                    pci_address: None,
                 });
             }
 
