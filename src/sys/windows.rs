@@ -218,10 +218,13 @@ use x86_64::X8664arch as Arch;
 
 use crate::crosvm::config::Config;
 use crate::crosvm::config::Executable;
+use crate::crosvm::config::InputDeviceOption;
 #[cfg(any(feature = "gvm", feature = "whpx"))]
 use crate::crosvm::config::IrqChipKind;
 #[cfg(feature = "gpu")]
 use crate::crosvm::config::TouchDeviceOption;
+use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_HEIGHT;
+use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_WIDTH;
 use crate::crosvm::sys::config::HypervisorKind;
 use crate::crosvm::sys::windows::broker::BrokerTubes;
 #[cfg(feature = "stats")]
@@ -408,12 +411,12 @@ fn create_vhost_user_snd_device(base_features: u64, vhost_user_tube: Tube) -> De
 #[cfg(feature = "gpu")]
 fn create_multi_touch_device(
     cfg: &Config,
-    multi_touch_spec: &TouchDeviceOption,
     event_pipe: StreamChannel,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
     idx: u32,
 ) -> DeviceResult {
-    let (width, height) = multi_touch_spec.get_size();
-    let name = multi_touch_spec.get_name();
     let dev = virtio::input::new_multi_touch(
         idx,
         event_pipe,
@@ -696,23 +699,48 @@ fn create_virtio_input_event_devices(
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
 
-    if !cfg.virtio_single_touch.is_empty() {
-        unimplemented!("--single-touch is no longer supported. Use --multi-touch instead.");
-    }
-
     // Iterate event devices, create the VMM end.
-    for (idx, pipe) in input_event_vmm_config
+    let mut multi_touch_pipes = input_event_vmm_config
         .multi_touch_pipes
         .drain(..)
-        .enumerate()
-    {
-        devs.push(create_multi_touch_device(
-            cfg,
-            &cfg.virtio_multi_touch[idx],
-            pipe,
-            idx as u32,
-        )?);
+        .enumerate();
+    for input in &cfg.virtio_input {
+        match input {
+            InputDeviceOption::SingleTouch { .. } => {
+                unimplemented!("--single-touch is no longer supported. Use --multi-touch instead.");
+            }
+            InputDeviceOption::MultiTouch {
+                width,
+                height,
+                name,
+                ..
+            } => {
+                let Some((idx, pipe)) = multi_touch_pipes.next() else {
+                    break;
+                };
+                let mut width = *width;
+                let mut height = *height;
+                if idx == 0 {
+                    if width.is_none() {
+                        width = cfg.display_input_width;
+                    }
+                    if height.is_none() {
+                        height = cfg.display_input_height;
+                    }
+                }
+                devs.push(create_multi_touch_device(
+                    cfg,
+                    pipe,
+                    width.unwrap_or(DEFAULT_TOUCH_DEVICE_WIDTH),
+                    height.unwrap_or(DEFAULT_TOUCH_DEVICE_HEIGHT),
+                    name.as_deref(),
+                    idx as u32,
+                )?);
+            }
+            _ => {}
+        }
     }
+    drop(multi_touch_pipes);
 
     product::push_mouse_device(cfg, &mut input_event_vmm_config, &mut devs)?;
 
@@ -1954,12 +1982,11 @@ fn create_whpx_split_irq_chip(
     )
 }
 
-fn create_userspace_irq_chip<Vm, Vcpu>(
+fn create_userspace_irq_chip<Vcpu>(
     vcpu_count: usize,
     ioapic_device_tube: Tube,
 ) -> base::Result<UserspaceIrqChip<Vcpu>>
 where
-    Vm: VmArch + 'static,
     Vcpu: VcpuArch + 'static,
 {
     info!("Creating userspace irqchip");
@@ -2252,6 +2279,7 @@ pub fn run_config_for_broker(raw_tube_transporter: RawDescriptor) -> Result<Exit
             .recv::<Event>()
             .exit_context(Exit::TubeFailure, "failed to read bootstrap tube")?,
     );
+    #[cfg(feature = "crash-report")]
     let crash_tube_map = bootstrap_tube
         .recv::<HashMap<ProcessType, Vec<SendTube>>>()
         .exit_context(Exit::TubeFailure, "failed to read bootstrap tube")?;
@@ -2327,10 +2355,8 @@ fn run_config_inner(
             let vm = create_haxm_vm(haxm, guest_mem, &cfg.kernel_log_file)?;
             let (ioapic_host_tube, ioapic_device_tube) =
                 Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
-            let irq_chip = create_userspace_irq_chip::<HaxmVm, HaxmVcpu>(
-                components.vcpu_count,
-                ioapic_device_tube,
-            )?;
+            let irq_chip =
+                create_userspace_irq_chip::<HaxmVcpu>(components.vcpu_count, ioapic_device_tube)?;
             run_vm::<HaxmVcpu, HaxmVm>(
                 cfg,
                 components,
@@ -2387,7 +2413,7 @@ fn run_config_inner(
                     WindowsIrqChip::WhpxSplit(create_whpx_split_irq_chip(&vm, ioapic_device_tube)?)
                 }
                 IrqChipKind::Userspace => {
-                    WindowsIrqChip::Userspace(create_userspace_irq_chip::<WhpxVm, WhpxVcpu>(
+                    WindowsIrqChip::Userspace(create_userspace_irq_chip::<WhpxVcpu>(
                         components.vcpu_count,
                         ioapic_device_tube,
                     )?)
@@ -2420,7 +2446,7 @@ fn run_config_inner(
                     let (host_tube, ioapic_device_tube) =
                         Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
                     ioapic_host_tube = Some(host_tube);
-                    WindowsIrqChip::Userspace(create_userspace_irq_chip::<GvmVm, GvmVcpu>(
+                    WindowsIrqChip::Userspace(create_userspace_irq_chip::<GvmVcpu>(
                         components.vcpu_count,
                         ioapic_device_tube,
                     )?)
