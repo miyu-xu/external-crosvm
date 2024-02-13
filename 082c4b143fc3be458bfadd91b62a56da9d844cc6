@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ee5f8f78_952b52ad",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 119,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-13T18:35:28Z",
+      "side": 1,
+      "message": "nit: `write_all()` can only return `Ok(())` (or an error), so we could just write it out rather than using `_` here, but actually I think it would be clearest to write something like:\n\n```\nif let Err(e) \u003d socket.lock().write_all(msg.as_bytes()) {\n    warn!(\"...\");\n}\n```\n\n(but it\u0027s up to you, either way is fine)",
+      "revId": "082c4b143fc3be458bfadd91b62a56da9d844cc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "594cb0a0_efbcc034",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 126,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-02-13T18:35:28Z",
+      "side": 1,
+      "message": "nit: I don\u0027t think this `return` is strictly necessary, but it\u0027s probably OK as long as clippy doesn\u0027t complain about it",
+      "revId": "082c4b143fc3be458bfadd91b62a56da9d844cc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
