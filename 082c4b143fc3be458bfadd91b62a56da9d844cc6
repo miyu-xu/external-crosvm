@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b1a2b1e3_45db3eab",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 119,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-13T21:12:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ee5f8f78_952b52ad",
+      "revId": "082c4b143fc3be458bfadd91b62a56da9d844cc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "594cb0a0_efbcc034",
@@ -31,6 +49,24 @@
       "writtenOn": "2024-02-13T18:35:28Z",
       "side": 1,
       "message": "nit: I don\u0027t think this `return` is strictly necessary, but it\u0027s probably OK as long as clippy doesn\u0027t complain about it",
+      "revId": "082c4b143fc3be458bfadd91b62a56da9d844cc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "af9128b6_04f4eea9",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 126,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-13T21:12:10Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "594cb0a0_efbcc034",
       "revId": "082c4b143fc3be458bfadd91b62a56da9d844cc6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
