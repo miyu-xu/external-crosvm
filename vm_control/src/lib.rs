@@ -21,6 +21,7 @@ use base::linux::MemoryMappingBuilderUnix;
 #[cfg(windows)]
 use base::MemoryMappingBuilderWindows;
 use hypervisor::BalloonEvent;
+use hypervisor::MemCacheType;
 use hypervisor::MemRegion;
 
 #[cfg(feature = "balloon")]
@@ -421,6 +422,19 @@ unsafe impl MappedRegion for RutabagaMemoryRegion {
     }
 }
 
+impl Display for VmMemorySource {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::VmMemorySource::*;
+
+        match self {
+            SharedMemory(..) => write!(f, "VmMemorySource::SharedMemory"),
+            Descriptor { .. } => write!(f, "VmMemorySource::Descriptor"),
+            Vulkan { .. } => write!(f, "VmMemorySource::Vulkan"),
+            ExternalMapping { .. } => write!(f, "VmMemorySource::ExternalMapping"),
+        }
+    }
+}
+
 impl VmMemorySource {
     /// Map the resource and return its mapping and size in bytes.
     pub fn map(
@@ -533,6 +547,8 @@ pub enum VmMemoryRequest {
         dest: VmMemoryDestination,
         /// Whether to map the memory read only (true) or read-write (false).
         prot: Protection,
+        /// Cache attribute for guest memory setting
+        cache: MemCacheType,
     },
     /// Call hypervisor to free the given memory range.
     DynamicallyFreeMemoryRange {
@@ -598,7 +614,7 @@ impl Default for VmMemoryRegionState {
     }
 }
 
-fn handle_prepared_region(
+fn try_map_to_prepared_region(
     vm: &mut impl Vm,
     region_state: &mut VmMemoryRegionState,
     source: &VmMemorySource,
@@ -625,7 +641,13 @@ fn handle_prepared_region(
             let size = shm.size() as usize;
             (Descriptor(shm.as_raw_descriptor()), 0, size)
         }
-        _ => return Some(VmMemoryResponse::Err(SysError::new(EINVAL))),
+        _ => {
+            error!(
+                "source {} is not compatible with fixed mapping into prepared memory region",
+                source
+            );
+            return Some(VmMemoryResponse::Err(SysError::new(EINVAL)));
+        }
     };
     if let Err(err) = vm.add_fd_mapping(
         *slot,
@@ -666,9 +688,13 @@ impl VmMemoryRequest {
         use self::VmMemoryRequest::*;
         match self {
             PrepareSharedMemoryRegion { alloc } => {
-                // Currently the iommu_client is only used by virtio-gpu, and virtio-gpu
-                // is incompatible with PrepareSharedMemoryRegion because we can't use
-                // add_fd_mapping with VmMemorySource::Vulkan.
+                // Currently the iommu_client is only used by virtio-gpu when used alongside GPU
+                // pci-passthrough.
+                //
+                // TODO(b/323368701): Make compatible with iommu_client by ensuring that
+                // VirtioIOMMUVfioCommand::VfioDmabufMap is submitted for both dynamic mappings and
+                // fixed mappings (i.e. whether or not try_map_to_prepared_region succeeds in
+                // RegisterMemory case below).
                 assert!(iommu_client.is_none());
 
                 if !sys::should_prepare_memory_region() {
@@ -683,8 +709,14 @@ impl VmMemoryRequest {
                     Err(e) => VmMemoryResponse::Err(e),
                 }
             }
-            RegisterMemory { source, dest, prot } => {
-                if let Some(resp) = handle_prepared_region(vm, region_state, &source, &dest, &prot)
+            RegisterMemory {
+                source,
+                dest,
+                prot,
+                cache,
+            } => {
+                if let Some(resp) =
+                    try_map_to_prepared_region(vm, region_state, &source, &dest, &prot)
                 {
                     return resp;
                 }
@@ -706,6 +738,7 @@ impl VmMemoryRequest {
                     mapped_region,
                     prot == Protection::read(),
                     false,
+                    cache,
                 ) {
                     Ok(slot) => slot,
                     Err(e) => return VmMemoryResponse::Err(e),
@@ -2030,6 +2063,7 @@ fn do_snapshot(
     let snapshot_writer = SnapshotWriter::new(snapshot_path)?;
 
     // Snapshot Vcpus
+    info!("VCPUs snapshotting...");
     let (send_chan, recv_chan) = mpsc::channel();
     kick_vcpus(VcpuControl::Snapshot(
         snapshot_writer.add_namespace("vcpu")?,
@@ -2042,14 +2076,18 @@ fn do_snapshot(
             .context("Failed to recv Vcpu snapshot response")?
             .context("Failed to snapshot Vcpu")?;
     }
+    info!("VCPUs snapshotted.");
 
     // Snapshot irqchip
+    info!("Snapshotting irqchip...");
     let irqchip_snap = snapshot_irqchip()?;
     snapshot_writer
         .write_fragment("irqchip", &irqchip_snap)
         .context("Failed to write irqchip state")?;
+    info!("Snapshotted irqchip.");
 
     // Snapshot devices
+    info!("Devices snapshotting...");
     device_control_tube
         .send(&DeviceControlCommand::SnapshotDevices { snapshot_writer })
         .context("send command to devices control socket")?;
@@ -2059,6 +2097,7 @@ fn do_snapshot(
     if !matches!(resp, VmResponse::Ok) {
         bail!("unexpected SnapshotDevices response: {resp}");
     }
+    info!("Devices snapshotted.");
     Ok(())
 }
 
