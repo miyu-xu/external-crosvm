@@ -87,6 +87,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "521983b4_b75fa13d",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 118,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-13T01:24:12Z",
+      "side": 1,
+      "message": "Ok, ended packing it into a single u64 and the messages are behind a single lock.",
+      "parentUuid": "6055e574_63d245bb",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b7df0d2d_c94f23d3",
@@ -100,6 +118,24 @@
       "writtenOn": "2024-02-12T21:41:18Z",
       "side": 1,
       "message": "`expect()` seems a bit harsh to me - this will panic and kill the whole VM if the socket can\u0027t be written (e.g. if the receiving process exits and the socket gets closed).",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e8045876_9470429f",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-02-13T01:24:12Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "b7df0d2d_c94f23d3",
       "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
