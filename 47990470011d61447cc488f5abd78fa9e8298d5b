@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "6c8d16b4_f6cfe767",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 2
+      },
+      "lineNbr": 12,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-02-14T16:20:58Z",
+      "side": 1,
+      "message": "Did you mean to remove this from the description?",
+      "revId": "47990470011d61447cc488f5abd78fa9e8298d5b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d62a991a_20c3551d",
         "filename": "third_party/minigbm~HEAD",
         "patchSetId": 2
