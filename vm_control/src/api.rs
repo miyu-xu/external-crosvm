@@ -11,6 +11,7 @@ use base::RawDescriptor;
 use base::Tube;
 use base::TubeError;
 use hypervisor::Datamatch;
+use hypervisor::MemCacheType;
 use remain::sorted;
 use resources::Alloc;
 use serde::Deserialize;
@@ -65,14 +66,6 @@ impl VmMemoryClient {
         }
     }
 
-    fn request_register_memory(&self, request: &VmMemoryRequest) -> Result<VmMemoryRegionId> {
-        match self.request(request)? {
-            VmMemoryResponse::Err(e) => Err(ApiClientError::RequestFailed(e)),
-            VmMemoryResponse::RegisterMemory(region_id) => Ok(region_id),
-            _other => Err(ApiClientError::UnexpectedResponse),
-        }
-    }
-
     /// Prepare a shared memory region to make later operations more efficient. This
     /// may be a no-op depending on underlying platform support.
     pub fn prepare_shared_memory_region(&self, alloc: Alloc) -> Result<()> {
@@ -84,8 +77,19 @@ impl VmMemoryClient {
         source: VmMemorySource,
         dest: VmMemoryDestination,
         prot: Protection,
+        cache: MemCacheType,
     ) -> Result<VmMemoryRegionId> {
-        self.request_register_memory(&VmMemoryRequest::RegisterMemory { source, dest, prot })
+        let request = VmMemoryRequest::RegisterMemory {
+            source,
+            dest,
+            prot,
+            cache,
+        };
+        match self.request(&request)? {
+            VmMemoryResponse::Err(e) => Err(ApiClientError::RequestFailed(e)),
+            VmMemoryResponse::RegisterMemory(region_id) => Ok(region_id),
+            _other => Err(ApiClientError::UnexpectedResponse),
+        }
     }
 
     /// Call hypervisor to free the given memory range.

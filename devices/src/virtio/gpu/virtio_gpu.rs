@@ -21,6 +21,7 @@ use base::Protection;
 use base::SafeDescriptor;
 use base::VolatileSlice;
 use gpu_display::*;
+use hypervisor::MemCacheType;
 use libc::c_void;
 use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
@@ -38,6 +39,7 @@ use rutabaga_gfx::RUTABAGA_MAP_ACCESS_MASK;
 use rutabaga_gfx::RUTABAGA_MAP_ACCESS_READ;
 use rutabaga_gfx::RUTABAGA_MAP_ACCESS_RW;
 use rutabaga_gfx::RUTABAGA_MAP_ACCESS_WRITE;
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
 use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD;
@@ -284,14 +286,11 @@ impl VirtioGpuScanout {
 
         let surface_id = display.create_surface(
             self.parent_surface_id,
+            self.scanout_id,
             self.width,
             self.height,
             self.scanout_type,
         )?;
-
-        if let Some(scanout_id) = self.scanout_id {
-            display.set_scanout_id(surface_id, scanout_id)?;
-        }
 
         self.surface_id = Some(surface_id);
 
@@ -425,6 +424,7 @@ pub struct VirtioGpu {
     rutabaga: Rutabaga,
     resources: Map<u32, VirtioGpuResource>,
     external_blob: bool,
+    fixed_blob_mapping: bool,
     udmabuf_driver: Option<UdmabufDriver>,
 }
 
@@ -498,6 +498,7 @@ impl VirtioGpu {
         rutabaga: Rutabaga,
         mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
         external_blob: bool,
+        fixed_blob_mapping: bool,
         udmabuf: bool,
     ) -> Option<VirtioGpu> {
         let mut udmabuf_driver = None;
@@ -530,6 +531,7 @@ impl VirtioGpu {
             rutabaga,
             resources: Default::default(),
             external_blob,
+            fixed_blob_mapping,
             udmabuf_driver,
         })
     }
@@ -1017,9 +1019,10 @@ impl VirtioGpu {
             }
         }
 
-        // fallback to ExternalMapping via rutabaga if sandboxing (hence external_blob) is disabled.
+        // fallback to ExternalMapping via rutabaga if sandboxing (hence external_blob) and fixed
+        // mapping are both disabled as neither is currently compatible.
         if source.is_none() {
-            if self.external_blob {
+            if self.external_blob || self.fixed_blob_mapping {
                 return Err(ErrUnspec);
             }
 
@@ -1039,11 +1042,19 @@ impl VirtioGpu {
             _ => return Err(ErrUnspec),
         };
 
+        let cache = if cfg!(feature = "noncoherent-dma")
+            && map_info & RUTABAGA_MAP_CACHE_MASK != RUTABAGA_MAP_CACHE_CACHED
+        {
+            MemCacheType::CacheNonCoherent
+        } else {
+            MemCacheType::CacheCoherent
+        };
+
         self.mapper
             .lock()
             .as_mut()
             .expect("No backend request connection found")
-            .add_mapping(source.unwrap(), offset, prot)
+            .add_mapping(source.unwrap(), offset, prot, cache)
             .map_err(|_| ErrUnspec)?;
 
         resource.shmem_offset = Some(offset);
@@ -1235,7 +1246,7 @@ impl VirtioGpu {
             rutabaga: {
                 let mut buffer = std::io::Cursor::new(Vec::new());
                 self.rutabaga
-                    .snapshot(&mut buffer)
+                    .snapshot(&mut buffer, "")
                     .context("failed to snapshot rutabaga")?;
                 buffer.into_inner()
             },
@@ -1275,7 +1286,7 @@ impl VirtioGpu {
         )?;
 
         self.rutabaga
-            .restore(&mut &snapshot.rutabaga[..])
+            .restore(&mut &snapshot.rutabaga[..], "")
             .context("failed to restore rutabaga")?;
 
         for (id, s) in snapshot.resources.into_iter() {

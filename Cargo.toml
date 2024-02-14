@@ -205,6 +205,10 @@ gfxstream_stub = ["rutabaga_gfx/gfxstream_stub"]
 ## Enables 3D acceleration for the guest via the virglrenderer library over virtio-gpu.
 virgl_renderer = ["devices/virgl_renderer"]
 
+# Enables the highly experimental vulkan graphics buffer allocator.
+# see rutabaga_gfx/Cargo.toml for instructions on building with enabled.
+vulkano = ["rutabaga_gfx/vulkano"]
+
 #! ### Video features
 #!
 #! See [Video Device](https://crosvm.dev/book/devices/video.html) for more information.
@@ -236,6 +240,12 @@ trace_marker = ["cros_tracing/trace_marker"]
 
 ## Facilitate tracing all syscalls by sandboxed processes.
 seccomp_trace = ["jail/seccomp_trace","base/seccomp_trace","devices/seccomp_trace"]
+
+## Enables virtio-gpu devices to request a non-coherent memory mapping from the
+## hypervisor. Currently only supported in KVM on x86 and requires kernel
+## patches from:
+## <https://lore.kernel.org/all/20240105091535.24760-1-yan.y.zhao@intel.com/>
+noncoherent-dma = ["devices/noncoherent-dma", "hypervisor/noncoherent-dma"]
 
 #! ### Windows-specific feature flags
 #!
@@ -324,6 +334,7 @@ all-default = [
     "gfxstream_stub",
     "libvda-stub",
     "net",
+    "noncoherent-dma",
     "panic-memfd",
     "pci-hotplug",
     "power-monitor-powerd",
