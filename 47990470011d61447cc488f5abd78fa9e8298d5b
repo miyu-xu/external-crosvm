@@ -16,6 +16,24 @@
       "message": "That\u0027s an unusual filename, what\u0027s going on with this?",
       "revId": "47990470011d61447cc488f5abd78fa9e8298d5b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b3b1a9c9_bcd27ddb",
+        "filename": "third_party/minigbm~HEAD",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1125918
+      },
+      "writtenOn": "2024-02-14T15:48:34Z",
+      "side": 1,
+      "message": "Looks like we can safely remove this, it\u0027s a leftover from:\n\n```\nCONFLICT (distinct types): third_party/minigbm had different types on each side; renamed both of them so each can be recorded somewhere.\n```\n\nI must have missed this during the merge. We are keeping the existing android symlink introduced in b921e9a01734904e7bc330e89c2064a96515769f",
+      "parentUuid": "d62a991a_20c3551d",
+      "revId": "47990470011d61447cc488f5abd78fa9e8298d5b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
