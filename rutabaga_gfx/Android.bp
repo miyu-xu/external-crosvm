@@ -28,6 +28,9 @@ rust_library {
         "libthiserror",
         "libzerocopy",
     ],
+    cfgs: [
+	"gfxstream_unstable",
+    ],
     proc_macros: ["libremain"],
     target: {
         host: {
