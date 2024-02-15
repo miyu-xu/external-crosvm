@@ -1,8 +1,16 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index f2c450cb4..a32b9445d 100644
+index f2c450cb4..177b0e352 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -29,12 +29,26 @@ rust_library {
+@@ -14,6 +14,7 @@ rust_library {
+     name: "librutabaga_gfx",
+     defaults: ["crosvm_inner_defaults"],
+     host_supported: true,
++    vendor_available: true,
+     crate_name: "rutabaga_gfx",
+     cargo_env_compat: true,
+     cargo_pkg_version: "0.1.2",
+@@ -29,12 +30,29 @@ rust_library {
          "libzerocopy",
      ],
      proc_macros: ["libremain"],
@@ -11,7 +19,9 @@ index f2c450cb4..a32b9445d 100644
 -        "libepoxy",
 -        "libgbm",
 -        "libvirglrenderer",
--    ],
++    cfgs: [
++        "gfxstream_unstable",
+     ],
 +    target: {
 +        host: {
 +            features: ["gfxstream"],
@@ -35,7 +45,7 @@ index f2c450cb4..a32b9445d 100644
  }
  
  rust_test {
-@@ -61,10 +75,24 @@ rust_test {
+@@ -61,10 +79,24 @@ rust_test {
          "libzerocopy",
      ],
      proc_macros: ["libremain"],
