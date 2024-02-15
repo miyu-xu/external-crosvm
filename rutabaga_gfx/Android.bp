@@ -29,6 +29,9 @@ rust_library {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
+    cfgs: [
+        "gfxstream_unstable",
+    ],
     target: {
         host: {
             features: ["gfxstream"],
