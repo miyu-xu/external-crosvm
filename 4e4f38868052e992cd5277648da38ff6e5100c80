@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ee51fbed_665ba799",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 3
+      },
+      "lineNbr": 20,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-16T01:32:21Z",
+      "side": 1,
+      "message": "like this here? gfxstream_unstable\n\nwe should add it into cargo_embargo or a patch file, otherwise we need to manually add it back in every week",
+      "range": {
+        "startLine": 20,
+        "startChar": 0,
+        "endLine": 20,
+        "endChar": 33
+      },
+      "revId": "4e4f38868052e992cd5277648da38ff6e5100c80",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
