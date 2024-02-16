@@ -10,6 +10,7 @@ package {
 cc_library_headers {
     name: "rutabaga_gfx_ffi_headers",
     host_supported: true,
+    vendor_available: true,
     export_include_dirs: ["src/include"],
 }
 
@@ -20,7 +21,7 @@ rust_ffi_shared {
     host_supported: true,
     vendor_available: true,
     rustlibs: [
-        "librutabaga_gfx",
+        "librutabaga_gfx_gfxstream",
         "liblibc",
         "liblog_rust",
         "libnix",
