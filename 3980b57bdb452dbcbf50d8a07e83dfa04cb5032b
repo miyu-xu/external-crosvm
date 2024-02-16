@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "02e07139_de6d6d94",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-02-16T11:27:06Z",
+      "side": 1,
+      "message": "Fine here as this is a cherry-pick, but I\u0027ve left some comments on the upstream change.",
+      "revId": "3980b57bdb452dbcbf50d8a07e83dfa04cb5032b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
