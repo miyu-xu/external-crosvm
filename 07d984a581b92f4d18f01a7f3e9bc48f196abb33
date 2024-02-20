@@ -69,6 +69,24 @@
       "parentUuid": "a197cc9f_01bafc77",
       "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6d832856_869882b0",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 310,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T21:54:58Z",
+      "side": 1,
+      "message": "i figure that it is a waste of disk space for AVF, but don\u0027t have a strong objection to enabling it anyways",
+      "parentUuid": "76e74157_205d6d39",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
