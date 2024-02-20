@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd0ae8fa_f7b2b4c0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-20T21:15:41Z",
+      "side": 1,
+      "message": "can you add features in external/crosvm/carge_embarge.json so these .bp files can be automatically generated?\n\nnote - external/crosvm/android-merge-2-cargo-embargo.sh will update the .bp files off of this.",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
