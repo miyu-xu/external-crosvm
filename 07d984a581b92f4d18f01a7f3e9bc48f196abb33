@@ -55,6 +55,42 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "05d86dac_eeca1e4c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T23:04:09Z",
+      "side": 1,
+      "message": "i made a quick attempt at it and uploaded to this CL. not sure if it works on all targets yet",
+      "parentUuid": "c7eb4882_1097e653",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0ecd4524_2a01b1b2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T23:04:09Z",
+      "side": 1,
+      "message": "fixed in the patch i uploaded",
+      "parentUuid": "289598c5_50cb8676",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a197cc9f_01bafc77",
         "filename": "devices/Android.bp",
         "patchSetId": 1
