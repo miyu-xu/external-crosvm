@@ -24,6 +24,7 @@ rust_library {
         "gdbstub_arch",
     ],
     rustlibs: [
+        "liblog_rust",
         "libacpi_tables",
         "libanyhow",
         "libarch",

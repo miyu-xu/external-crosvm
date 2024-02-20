@@ -305,7 +305,7 @@ pub struct X8664arch;
 // Like `bootparam::setup_data` without the incomplete array field at the end, which allows us to
 // safely implement Copy, Clone
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromZeroes, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Default, FromZeroes, FromBytes, AsBytes, Debug)]
 struct setup_data_hdr {
     pub next: u64,
     pub type_: u32,
@@ -320,6 +320,7 @@ pub enum SetupDataType {
 }
 
 /// A single entry to be inserted in the bootparam `setup_data` linked list.
+#[derive(Debug)]
 pub struct SetupData {
     pub data: Vec<u8>,
     pub type_: SetupDataType,
@@ -1632,12 +1633,16 @@ impl X8664arch {
             .map_err(Error::LoadCmdline)?;
 
         let mut setup_data = Vec::<SetupData>::new();
+        log::error!("fstab/crosvm: android_fstab: {:?} ", android_fstab);
         if let Some(android_fstab) = android_fstab {
+            log::error!("fstab/Confirmed android_fstab is some");
             setup_data.push(
                 fdt::create_fdt(android_fstab, dump_device_tree_blob, device_tree_overlays)
                     .map_err(Error::CreateFdt)?,
             );
         }
+        log::error!("fstab/crosvm: Setup data {:?}", setup_data);
+
         setup_data.push(setup_data_rng_seed());
 
         let setup_data = write_setup_data(
