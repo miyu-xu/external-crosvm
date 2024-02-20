@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "21d426ee_e879bcf0",
+        "filename": "Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-02-20T23:23:28Z",
+      "side": 1,
+      "message": "add virgl_renderer_next as well?",
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0db3e403_1ccdaf36",
+        "filename": "Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 138,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-02-20T23:23:28Z",
+      "side": 1,
+      "message": "just out of curiosity: why is this part not affected?",
+      "range": {
+        "startLine": 129,
+        "startChar": 0,
+        "endLine": 138,
+        "endChar": 10
+      },
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
