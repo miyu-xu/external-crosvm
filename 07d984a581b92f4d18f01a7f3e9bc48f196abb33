@@ -105,6 +105,24 @@
       "parentUuid": "6d832856_869882b0",
       "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "91471ecc_a86dab0f",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 310,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T22:07:43Z",
+      "side": 1,
+      "message": "\u003e guests we can\u0027t control\n\na big topic :)\n\nanyways, not a blocker. marking resolved",
+      "parentUuid": "bb39fb7e_783182bc",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
