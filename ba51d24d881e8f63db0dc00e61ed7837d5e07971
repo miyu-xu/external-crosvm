@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fedbe2ad_4d593fa3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-02-20T21:35:28Z",
+      "side": 1,
+      "message": "Frederick, can this be done in cargo_embarge.json instead of the patch? Do you know?",
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
