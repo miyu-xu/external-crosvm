@@ -87,6 +87,24 @@
       "parentUuid": "76e74157_205d6d39",
       "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bb39fb7e_783182bc",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 310,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2024-02-20T22:04:44Z",
+      "side": 1,
+      "message": "It\u0027s not a waste if we need it :) I think virgl_renderer might be used for some guests we can\u0027t control, like generic Linux distros, and gfxstream for Google things. We have upstreamed gfxstream to QEMU but it will take time for distro support to appear.",
+      "parentUuid": "6d832856_869882b0",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
