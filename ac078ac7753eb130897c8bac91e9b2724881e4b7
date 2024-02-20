@@ -3,6 +3,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "1f5a78ce_e756e557",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-02-20T23:25:24Z",
+      "side": 1,
+      "message": "when I ran android-merge-2-cargo-embargo.sh by myself (with and without this change), it failed. \n\n```\n    error: failed to run custom build command for `rutabaga_gfx v0.1.2 (/usr/local/google/home/jiyong/android/aosp/external/crosvm/rutabaga_gfx)`\n\n    Caused by:\n      process didn\u0027t exit successfully: `/usr/local/google/home/jiyong/android/aosp/external/crosvm/target.tmp/debug/build/rutabaga_gfx-248162a1c6baafa2/build-script-build` (exit status: 1)\n      ```",
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "21d426ee_e879bcf0",
         "filename": "Android.bp",
         "patchSetId": 4
