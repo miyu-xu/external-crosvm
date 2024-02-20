@@ -38,6 +38,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "289598c5_50cb8676",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T22:43:22Z",
+      "side": 1,
+      "message": "the most important changes for the gpu backend support are actually in `rutabga_gfx/Android.bp`, which are missing from this CL",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a197cc9f_01bafc77",
         "filename": "devices/Android.bp",
         "patchSetId": 1
