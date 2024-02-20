@@ -16,6 +16,41 @@
       "message": "can you add features in external/crosvm/carge_embarge.json so these .bp files can be automatically generated?\n\nnote - external/crosvm/android-merge-2-cargo-embargo.sh will update the .bp files off of this.",
       "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c7eb4882_1097e653",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T21:32:38Z",
+      "side": 1,
+      "message": "+1\n\nit might be tricky though. at the very least, as a temp solution, the patch files should be updated so that running `external/crosvm/android-merge-2-cargo-embargo.sh` doesn\u0027t produce any diffs",
+      "parentUuid": "bd0ae8fa_f7b2b4c0",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a197cc9f_01bafc77",
+        "filename": "devices/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 310,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T21:32:38Z",
+      "side": 1,
+      "message": "gfxstream and virtgl_renderer are disjoint backends i think. do we need both?",
+      "revId": "07d984a581b92f4d18f01a7f3e9bc48f196abb33",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
