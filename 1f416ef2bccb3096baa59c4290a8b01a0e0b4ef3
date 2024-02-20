@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "97fe0bcf_26996338",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2024-02-20T17:41:10Z",
+      "side": 1,
+      "message": "The android_fstab feature is deprecated, and the kernel support for DT is broken, please don\u0027t use device tree on x86.",
+      "revId": "1f416ef2bccb3096baa59c4290a8b01a0e0b4ef3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
