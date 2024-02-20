@@ -20,6 +20,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c64ca7b6_fda555b4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T23:34:39Z",
+      "side": 1,
+      "message": "hard to tell without more logs. might be something useful in the `cargo.out` file it should leave in your repo\n\nmaybe a missing dep on your workstation. can you try running `external/crosvm/tools/install-deps`?",
+      "parentUuid": "1f5a78ce_e756e557",
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "21d426ee_e879bcf0",
         "filename": "Android.bp",
         "patchSetId": 4
@@ -31,6 +49,24 @@
       "writtenOn": "2024-02-20T23:23:28Z",
       "side": 1,
       "message": "add virgl_renderer_next as well?",
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b5c1739a_4a8d42d0",
+        "filename": "Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 61,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T23:34:39Z",
+      "side": 1,
+      "message": "that feature doesn\u0027t exist anymore. the manually maintained patch was just stale\n\n(i think only `cargo` knows the list of features a crate supports. soong and rustc will happily accept anything)",
+      "parentUuid": "21d426ee_e879bcf0",
       "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -48,6 +84,30 @@
       "writtenOn": "2024-02-20T23:23:28Z",
       "side": 1,
       "message": "just out of curiosity: why is this part not affected?",
+      "range": {
+        "startLine": 129,
+        "startChar": 0,
+        "endLine": 138,
+        "endChar": 10
+      },
+      "revId": "ac078ac7753eb130897c8bac91e9b2724881e4b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b16736ea_0a04a64a",
+        "filename": "Android.bp",
+        "patchSetId": 4
+      },
+      "lineNbr": 138,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-20T23:34:39Z",
+      "side": 1,
+      "message": "thanks, i just had missed it. fixed.",
+      "parentUuid": "0db3e403_1ccdaf36",
       "range": {
         "startLine": 129,
         "startChar": 0,
