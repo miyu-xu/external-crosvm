@@ -22,6 +22,30 @@
       },
       "revId": "5a515097f852db40abdff9eeb860d3efd4f8abe9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2d4a22ee_72ae425e",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 6
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-02-21T01:57:19Z",
+      "side": 1,
+      "message": "I will chase that in b/326147655.",
+      "parentUuid": "339fcfb6_82e99ab1",
+      "range": {
+        "startLine": 35,
+        "startChar": 4,
+        "endLine": 35,
+        "endChar": 15
+      },
+      "revId": "5a515097f852db40abdff9eeb860d3efd4f8abe9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
