@@ -3,6 +3,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "dc1b10e5_82192366",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 6
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-21T22:35:28Z",
+      "side": 1,
+      "message": "coincidentally, this is about to happen in https://android-review.git.corp.google.com/q/topic:%22enable_gfxstream%22. will that obsolete the need for this CL?",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 18,
+        "endChar": 40
+      },
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "fedbe2ad_4d593fa3",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 6
@@ -14,6 +37,23 @@
       "writtenOn": "2024-02-20T21:35:28Z",
       "side": 1,
       "message": "Frederick, can this be done in cargo_embarge.json instead of the patch? Do you know?",
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "70bdd54f_c03865ce",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 6
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-21T22:35:28Z",
+      "side": 1,
+      "message": "what does this do? did you mean to enable it for the existing module?",
       "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
