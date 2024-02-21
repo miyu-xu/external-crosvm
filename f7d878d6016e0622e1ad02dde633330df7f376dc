@@ -16,6 +16,23 @@
       "message": "ToT difference, will handle after b/322835691",
       "revId": "f7d878d6016e0622e1ad02dde633330df7f376dc",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ac748d10_94d3f347",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-21T22:09:38Z",
+      "side": 1,
+      "message": "could also add `readclock` to the `workspace_excludes` in cargo_embargo.json if we don\u0027t expect to ever use this",
+      "revId": "f7d878d6016e0622e1ad02dde633330df7f376dc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
