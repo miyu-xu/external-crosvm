@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "339fcfb6_82e99ab1",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 6
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1415877
+      },
+      "writtenOn": "2024-02-21T01:50:52Z",
+      "side": 1,
+      "message": "Can this be `static_libs`?\n\n(We need b/300218949 for variant-specific settings..)",
+      "range": {
+        "startLine": 35,
+        "startChar": 4,
+        "endLine": 35,
+        "endChar": 15
+      },
+      "revId": "5a515097f852db40abdff9eeb860d3efd4f8abe9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
