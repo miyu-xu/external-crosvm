@@ -46,6 +46,30 @@
       },
       "revId": "5a515097f852db40abdff9eeb860d3efd4f8abe9",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0dfddf17_b8261d14",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 6
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-21T22:05:42Z",
+      "side": 1,
+      "message": "I don\u0027t have an opinion. Probably need to use a patch file to switch it right now. We could try to add a cargo_embargo feature to force some deps to `static_libs`",
+      "parentUuid": "2d4a22ee_72ae425e",
+      "range": {
+        "startLine": 35,
+        "startChar": 4,
+        "endLine": 35,
+        "endChar": 15
+      },
+      "revId": "5a515097f852db40abdff9eeb860d3efd4f8abe9",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
