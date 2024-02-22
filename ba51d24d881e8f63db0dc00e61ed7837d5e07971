@@ -41,6 +41,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "88cda8aa_0d1177c0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-22T01:02:26Z",
+      "side": 1,
+      "message": "this would be handled automatically if we actually ran the cargo build with gfxstream enabled (and it had this unstable feature available or something, i don\u0027t fully understand the build.rs file). right now we have gfxstream disabled and then use patches to turn it on (or, after Jiyong\u0027s CL, we build against the stub gfxstream and then tweaks the result, which will also miss this cfg option)",
+      "parentUuid": "fedbe2ad_4d593fa3",
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "70bdd54f_c03865ce",
