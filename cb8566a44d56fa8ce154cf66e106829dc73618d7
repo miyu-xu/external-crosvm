@@ -123,6 +123,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b0e7b43f_8ea570ad",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 118,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-22T02:39:03Z",
+      "side": 1,
+      "message": "you can avoid the bit fiddling with something like\n\n```\nsocket.lock().write_all([util, tid as u32].as_bytes())\n```\n\nor\n\n```\n#[repr(C)]\n#[derive(zerocopy::AsBytes)]\nstruct Msg {\n  util: u32,\n  tid: i32,\n}\n\nsocket.lock().write_all(Msg { util, tid }.as_bytes())\n```\n\nup to you",
+      "parentUuid": "521983b4_b75fa13d",
+      "revId": "cb8566a44d56fa8ce154cf66e106829dc73618d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b7df0d2d_c94f23d3",
