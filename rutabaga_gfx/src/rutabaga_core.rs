@@ -984,6 +984,7 @@ pub struct RutabagaBuilder {
     capset_mask: u64,
     channels: Option<Vec<RutabagaChannel>>,
     debug_handler: Option<RutabagaDebugHandler>,
+    renderer_features: Option<String>,
 }
 
 impl RutabagaBuilder {
@@ -1002,6 +1003,7 @@ impl RutabagaBuilder {
             capset_mask,
             channels: None,
             debug_handler: None,
+            renderer_features: None,
         }
     }
 
@@ -1086,12 +1088,21 @@ impl RutabagaBuilder {
         self
     }
 
-    /// Set rutabaga channels for the RutabagaBuilder
+    /// Set debug handler for the RutabagaBuilder
     pub fn set_debug_handler(
         mut self,
         debug_handler: Option<RutabagaDebugHandler>,
     ) -> RutabagaBuilder {
         self.debug_handler = debug_handler;
+        self
+    }
+
+    /// Set renderer features for the RutabagaBuilder
+    pub fn set_renderer_features(
+        mut self,
+        renderer_features: Option<String>,
+    ) -> RutabagaBuilder {
+        self.renderer_features = renderer_features;
         self
     }
 
@@ -1199,6 +1210,7 @@ impl RutabagaBuilder {
                     self.display_width,
                     self.display_height,
                     self.gfxstream_flags,
+                    self.renderer_features,
                     fence_handler.clone(),
                     self.debug_handler.clone(),
                 )?;

@@ -232,6 +232,15 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
             rutabaga_channels_opt = Some(rutabaga_channels);
         }
 
+        let mut renderer_features_opt = None;
+        if let Some(renderer_features) = (*builder).renderer_features {
+            let c_str_slice = CStr::from_ptr(renderer_features);
+            let result = c_str_slice.to_str();
+            let str_slice = return_on_error!(result);
+            let string = str_slice.to_owned();
+            renderer_features_opt = Some(string);
+        }
+
         let mut component_type = RutabagaComponentType::CrossDomain;
         if (*builder).capset_mask == 0 {
             component_type = RutabagaComponentType::Rutabaga2D;
@@ -248,6 +257,7 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
             .set_wsi(rutabaga_wsi)
             .set_debug_handler(debug_handler_opt)
             .set_rutabaga_channels(rutabaga_channels_opt)
+            .set_renderer_features(renderer_features_opt)
             .build(fence_handler, None);
 
         let rtbg = return_on_error!(result);
