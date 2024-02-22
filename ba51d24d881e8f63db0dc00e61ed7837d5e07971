@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "1315becd_15ce36a7",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 6
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-02-22T23:50:32Z",
+      "side": 1,
+      "message": "Not the entire CL, but I can remove the extra rutabaga_gfx_gfxstream with that CL chain.  I can wait for that to land (hopefully soon) and rebase this.",
+      "parentUuid": "dc1b10e5_82192366",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 18,
+        "endChar": 40
+      },
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "fedbe2ad_4d593fa3",
@@ -72,6 +96,24 @@
       "writtenOn": "2024-02-21T22:35:28Z",
       "side": 1,
       "message": "what does this do? did you mean to enable it for the existing module?",
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5158e532_19d0ed56",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 6
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-02-22T23:50:32Z",
+      "side": 1,
+      "message": "This enables gfxstream APIs that are not present in the v-0.1.2 release of gfxstream: unstable snapshot APIs essentially.  I meant to enable in the existing module, since it I expect unstable snapshot APIs to be tested before reaching stablity.",
+      "parentUuid": "70bdd54f_c03865ce",
       "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
