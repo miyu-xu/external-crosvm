@@ -71,6 +71,7 @@ pub struct GpuParameters {
     pub system_blob: bool,
     #[serde(rename = "implicit-render-server")]
     pub allow_implicit_render_server_exec: bool,
+    pub renderer_features: Option<String>,
 }
 
 impl Default for GpuParameters {
@@ -95,6 +96,7 @@ impl Default for GpuParameters {
             external_blob: false,
             system_blob: false,
             allow_implicit_render_server_exec: false,
+            renderer_features: None,
         }
     }
 }

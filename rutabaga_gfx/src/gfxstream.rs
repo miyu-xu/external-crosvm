@@ -9,6 +9,7 @@
 #![cfg(feature = "gfxstream")]
 
 use std::convert::TryInto;
+use std::ffi::CString;
 use std::io::IoSliceMut;
 use std::mem::size_of;
 use std::os::raw::c_char;
@@ -42,8 +43,9 @@ const STREAM_RENDERER_PARAM_FENCE_CALLBACK: u64 = 3;
 const STREAM_RENDERER_PARAM_WIN0_WIDTH: u64 = 4;
 const STREAM_RENDERER_PARAM_WIN0_HEIGHT: u64 = 5;
 const STREAM_RENDERER_PARAM_DEBUG_CALLBACK: u64 = 6;
+const STREAM_RENDERER_PARAM_RENDERER_FEATURES: u64 = 11;
 
-const STREAM_RENDERER_MAX_PARAMS: usize = 6;
+const STREAM_RENDERER_MAX_PARAMS: usize = 7;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -302,6 +304,7 @@ impl Gfxstream {
         display_width: u32,
         display_height: u32,
         gfxstream_flags: GfxstreamFlags,
+        gfxstream_features: Option<String>,
         fence_handler: RutabagaFenceHandler,
         debug_handler: Option<RutabagaDebugHandler>,
     ) -> RutabagaResult<Box<dyn RutabagaComponent>> {
@@ -311,6 +314,9 @@ impl Gfxstream {
             fence_handler: Some(fence_handler),
             debug_handler,
         });
+
+        let gfxstream_features_str = gfxstream_features.unwrap_or("".to_string());
+        let gfxstream_features_cstr = CString::new(gfxstream_features_str).unwrap();
 
         let mut stream_renderer_params: [stream_renderer_param; STREAM_RENDERER_MAX_PARAMS] = [
             stream_renderer_param {
@@ -345,6 +351,10 @@ impl Gfxstream {
                     key: STREAM_RENDERER_PARAM_NULL,
                     value: 0,
                 }
+            },
+            stream_renderer_param {
+                key: STREAM_RENDERER_PARAM_RENDERER_FEATURES,
+                value: gfxstream_features_cstr.as_ptr() as u64,
             },
         ];
 
