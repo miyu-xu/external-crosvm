@@ -48,6 +48,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c63837bb_3a7817f2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 6
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-02-23T02:52:01Z",
+      "side": 1,
+      "message": "It doesn\u0027t look like that CL will land soon, I will test + possibly remove the extra `rutabaga_gfx_gfxstream` backend after the other change lands.",
+      "parentUuid": "1315becd_15ce36a7",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 18,
+        "endChar": 40
+      },
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "fedbe2ad_4d593fa3",
