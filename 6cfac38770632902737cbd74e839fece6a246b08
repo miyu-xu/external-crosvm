@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dd62a7c2_f626de25",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 7
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-02-27T01:08:27Z",
+      "side": 1,
+      "message": "Steven and Frederick, I lost the review vote after rebasing (and merge conflict resolution). Can I get it again?",
+      "revId": "6cfac38770632902737cbd74e839fece6a246b08",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
