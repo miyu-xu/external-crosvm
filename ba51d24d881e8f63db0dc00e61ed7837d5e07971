@@ -72,6 +72,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a64271eb_908a4b16",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 6
+      },
+      "lineNbr": 18,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-02-27T01:44:10Z",
+      "side": 1,
+      "message": "FYI it landed now. Not urgent though.",
+      "parentUuid": "c63837bb_3a7817f2",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 18,
+        "endChar": 40
+      },
+      "revId": "ba51d24d881e8f63db0dc00e61ed7837d5e07971",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "fedbe2ad_4d593fa3",
