@@ -521,7 +521,7 @@ pub struct IrqRoute {
 }
 
 /// The state of the paravirtual clock.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct ClockState {
     /// Current pv clock timestamp, as seen by the guest
     pub clock: u64,

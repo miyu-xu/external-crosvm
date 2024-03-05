@@ -21,6 +21,10 @@ use windows::Win32::Foundation::WHV_E_INSUFFICIENT_BUFFER;
 
 use super::types::*;
 use super::*;
+use crate::get_tsc_offset_from_msr;
+use crate::set_tsc_offset_via_msr;
+use crate::set_tsc_value_via_msr;
+use crate::ClockState;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
@@ -1271,6 +1275,14 @@ impl VcpuX86_64 for WhpxVcpu {
         // and adjusts CLOCK_BOOTTIME accordingly. It also hides the TSC jump
         // from CLOCK_MONOTONIC by setting the timebase.)
         self.set_tsc_value(host_tsc_reference_moment.wrapping_add(tsc_offset))
+    }
+
+    fn get_clock_state(&self) -> Result<ClockState> {
+        Ok(ClockState::Default())
+    }
+
+    fn set_clock_state(&self, clock_state: &ClockState) -> Result<()> {
+        Ok(())
     }
 }
 

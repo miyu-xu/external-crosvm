@@ -1108,6 +1108,33 @@ impl VcpuX86_64 for KvmVcpu {
         // research is required.)
         self.set_tsc_offset(tsc_offset)
     }
+
+    fn get_clock_state(&self) -> Result<ClockState> {
+        let mut clock_data: kvm_clock_data = Default::default();
+        let ret =
+            // SAFETY:
+            // Safe because we know that our file is a VM fd, we know the kernel will only write correct
+            // amount of memory to our pointer, and we verify the return result.
+            unsafe { ioctl_with_mut_ref(&self.vm, KVM_GET_CLOCK(), &mut clock_data) };
+        if ret == 0 {
+            Ok(ClockState::from(&clock_data))
+        } else {
+            errno_result()
+        }
+    }
+
+    fn set_clock_state(&self, clock_state: &ClockState) -> Result<()> {
+        let clock_data = kvm_clock_data::from(clock_state);
+        // SAFETY:
+        // Safe because we know that our file is a VM fd, we know the kernel will only read correct
+        // amount of memory from our pointer, and we verify the return result.
+        let ret = unsafe { ioctl_with_ref(&self.vm, KVM_SET_CLOCK(), &clock_data) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
+    }
 }
 
 impl KvmVcpu {
