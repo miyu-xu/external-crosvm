@@ -10,12 +10,12 @@ pub mod sys;
 
 pub mod common_backend;
 pub mod file_backend;
+pub mod aaudio_backend;
 pub mod null_backend;
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "android", target_os = "linux"))] {
         pub mod vios_backend;
-
         pub use vios_backend::new_sound;
         pub use vios_backend::SoundError;
     }

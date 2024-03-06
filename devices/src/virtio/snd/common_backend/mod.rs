@@ -52,6 +52,7 @@ use crate::virtio::snd::common_backend::stream_info::StreamInfoSnapshot;
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::file_backend::create_file_stream_source_generators;
 use crate::virtio::snd::file_backend::Error as FileError;
+use crate::virtio::snd::file_backend::Error as AaudioError;
 use crate::virtio::snd::layout::*;
 use crate::virtio::snd::null_backend::create_null_stream_source_generators;
 use crate::virtio::snd::parameters::Parameters;
@@ -93,6 +94,8 @@ pub enum Error {
     CreateWaitContext(SysError),
     #[error("Failed to create file stream source generator")]
     CreateFileStreamSourceGenerator(FileError),
+    #[error("Failed to create aaudio stream source generator")]
+    CreateAaudioStreamSourceGenerator(AaudioError),
     /// Cloning kill event failed.
     #[error("Failed to clone kill event: {0}")]
     CloneKillEvent(SysError),

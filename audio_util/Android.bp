@@ -19,6 +19,59 @@ rust_library {
         "libaudio_streams",
         "libbase_rust",
         "libthiserror",
+        "libcxx",
     ],
+    target: {
+        android: {
+            static_libs: [
+                "libcxx_aaudio_cpp",
+            ],
+            shared_libs: [
+                "libaaudio",
+            ],
+        },
+    },
     proc_macros: ["libasync_trait"],
+}
+
+cc_library_static {
+    name: "libcxx_aaudio_cpp",
+    srcs: ["src/cxx_aaudio.cpp"],
+    compile_multilib: "both",
+    generated_headers: [
+        "cxx-bridge-header",
+        "libcxx_aaudio_bridge_header",
+    ],
+
+    generated_sources: ["libcxx_aaudio_bridge_code"],
+    target: {
+        android: {
+            shared_libs: [
+                "libaaudio",
+            ],
+        },
+    },
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.virt",
+    ],
+}
+
+// Generate the C++ code that Rust calls into.
+genrule {
+    name: "libcxx_aaudio_bridge_code",
+    tools: ["cxxbridge"],
+    cmd: "$(location cxxbridge) $(in) > $(out)",
+    srcs: ["src/aaudio_streams.rs"],
+    out: ["libcxx_aaudio_cxx_generated.cc"],
+}
+
+// Generate a C++ header containing the C++ bindings
+// to the Rust exported functions in lib.rs.
+genrule {
+    name: "libcxx_aaudio_bridge_header",
+    tools: ["cxxbridge"],
+    cmd: "$(location cxxbridge) $(in) --header > $(out)",
+    srcs: ["src/aaudio_streams.rs"],
+    out: ["src/aaudio_streams.rs.h"],
 }

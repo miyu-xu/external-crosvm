@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 mod file_streams;
+mod aaudio_streams;
 
 pub use file_streams::Error;
 pub use file_streams::FileStreamSourceGenerator;
+pub use aaudio_streams::AaudioStreamSourceGenerator;

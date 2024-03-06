@@ -22,6 +22,7 @@ use libcras::CrasStreamType;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::virtio::snd::aaudio_backend::create_aaudio_stream_source_generators;
 use crate::virtio::snd::common_backend::async_funcs::CaptureBufferReader;
 use crate::virtio::snd::common_backend::async_funcs::PlaybackBufferWriter;
 use crate::virtio::snd::common_backend::stream_info::StreamInfo;
@@ -52,6 +53,7 @@ pub(crate) struct SysAsyncStreamObjects {
 pub enum StreamSourceBackend {
     #[cfg(feature = "audio_cras")]
     CRAS,
+    AAUDIO,
 }
 
 // Implemented to make backend serialization possible, since we deserialize from str.
@@ -60,6 +62,7 @@ impl From<StreamSourceBackend> for String {
         match backend {
             #[cfg(feature = "audio_cras")]
             StreamSourceBackend::CRAS => "cras".to_owned(),
+            StreamSourceBackend::AAUDIO => "aaudio".to_owned(),
         }
     }
 }
@@ -71,6 +74,7 @@ impl TryFrom<&str> for StreamSourceBackend {
         match s {
             #[cfg(feature = "audio_cras")]
             "cras" => Ok(StreamSourceBackend::CRAS),
+            "aaudio" => Ok(StreamSourceBackend::AAUDIO),
             _ => Err(ParametersError::InvalidBackend),
         }
     }
@@ -109,6 +113,7 @@ pub(crate) fn create_stream_source_generators(
     match backend {
         #[cfg(feature = "audio_cras")]
         StreamSourceBackend::CRAS => create_cras_stream_source_generators(params, snd_data),
+        StreamSourceBackend::AAUDIO => create_aaudio_stream_source_generators(snd_data),
     }
 }
 
