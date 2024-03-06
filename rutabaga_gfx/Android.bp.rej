@@ -1,0 +1,12 @@
+--- Android.bp
++++ Android.bp
+@@ -60,6 +60,9 @@ rust_library {
+         "libzerocopy",
+     ],
+     proc_macros: ["libremain"],
++    cfgs: [
++        "gfxstream_unstable",
++    ],
+     shared_libs: [
+         "libdrm",
+         "libepoxy",
