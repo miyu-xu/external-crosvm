@@ -34,6 +34,24 @@
       "parentUuid": "b68e5f8a_72b2fe54",
       "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a9b26076_5afc06e9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-03-07T19:24:43Z",
+      "side": 1,
+      "message": "I found some logs in the presubmit artifacts (`sandbox-stdout*`) that led me to go/android-deqp#google-internal-2 that gave me the command `atest CtsDeqpTestCases -- --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-VK.api.smoke#*\u0027` which passes.\n\nTrying to piece together the same thing happening in presubmits led to this:\n```\natest CtsDeqpTestCases --  --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-EGL.functional.create_surface.*\u0027 --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-GLES2.functional.draw.draw_elements.*\u0027 --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-GLES3.functional.draw.draw_elements.*\u0027 --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-VK.api.smoke#*\u0027 --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-VK.api.external.memory.android_hardware_buffer.dedicated.image*\u0027  --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-VK.api.external.memory.android_hardware_buffer.image_formats*\u0027  --module-arg \u0027CtsDeqpTestCases:include-filter:dEQP-VK.api.external.memory.android_hardware_buffer.suballocated.image*\u0027\n```\n\nWhich also passes locally.\n\n\nI wonder if this is a due to a difference between my Cloudtop and the machines we use in presubmits. Maybe they use a different GPU, or have other things going on in the machine leading to actually memory issues.",
+      "parentUuid": "a8a3fbeb_8027bdf9",
+      "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
