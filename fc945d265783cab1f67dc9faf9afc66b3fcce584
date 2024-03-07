@@ -16,6 +16,24 @@
       "message": "CF gfxstream tests are failing presubmits and not blocking :( Getting `VK_ERROR_OUT_OF_DEVICE_MEMORY` errors for some of the tests - the only bugs I see with that are older.\n\nWe should figure these out before submitting.",
       "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a8a3fbeb_8027bdf9",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-03-07T18:55:48Z",
+      "side": 1,
+      "message": "I can\u0027t seem to run `CtsDeqpTestCases` locally. It runs more than 1 million test cases! I left it running overnight and it was on [90k/900k]. Each time it looks like it\u0027s going to finish ([3702/3702]) it starts up another round with a different number of test cases.\n\nRunning the failing test cases only pass with no problem (`atest CtsDeqpTestCases:dEQP-VK.api.smoke#asm_triangle`).\n\nRerunning presubmits to see if it happens again.",
+      "parentUuid": "b68e5f8a_72b2fe54",
+      "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
