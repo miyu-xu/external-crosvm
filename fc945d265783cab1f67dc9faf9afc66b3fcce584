@@ -52,6 +52,24 @@
       "parentUuid": "a8a3fbeb_8027bdf9",
       "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9484e4d8_14286431",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-03-08T01:17:52Z",
+      "side": 1,
+      "message": "Should be fixed with https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5354345 cherry-picked in aosp/2994803. I\u0027ll rerun the merge overnight - if it picks up the upstream change and works well I\u0027ll abandon the cherry-pick.",
+      "parentUuid": "a9b26076_5afc06e9",
+      "revId": "fc945d265783cab1f67dc9faf9afc66b3fcce584",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
