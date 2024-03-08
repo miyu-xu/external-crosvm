@@ -16,6 +16,29 @@
       "message": "Reran the merge to pick up the upstream fix for fgxstream",
       "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8bed9471_3b18bfd3",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-08T17:03:11Z",
+      "side": 1,
+      "message": "Add license?",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
