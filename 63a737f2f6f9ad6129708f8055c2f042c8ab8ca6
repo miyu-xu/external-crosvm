@@ -87,6 +87,30 @@
       },
       "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "63501a4d_650b6ad3",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-03-08T17:52:28Z",
+      "side": 1,
+      "message": "Got it! Thanks. How do you determine which license to use? Can we just have cargo_embargo put the license there?\n\nasop/2995005 for now to make it more obvious.\n\nI reran android-merge-2-cargo-embargo after that CL with the license change and it didn\u0027t change anything in external/crosvm.",
+      "parentUuid": "8c575359_65c7d8c7",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
