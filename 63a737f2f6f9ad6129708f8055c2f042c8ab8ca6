@@ -63,6 +63,30 @@
       },
       "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8c575359_65c7d8c7",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-08T17:19:04Z",
+      "side": 1,
+      "message": "I believe it keeps the licenses. \n\nJust above that line you selected, there\u0027s a section that scans, skips comments, and retains sections/lines that don\u0027t start with `rust_` || `genrule {`.\n\n---\n\n`package {\n    // See: http://go/android-license-faq\n    // A large-scale-change added \u0027default_applicable_licenses\u0027 to import\n    // all of the \u0027license_kinds\u0027 from \"external_crosvm_license\"\n    // to get the below license kinds:\n    //   SPDX-license-identifier-BSD\n    default_applicable_licenses: [\"external_crosvm_license\"],\n}`\n\nthe license ^.\n\nYou could also run android-merge-2-cargo-embargo after adding the license to validate that it doesn\u0027t lose the changes.",
+      "parentUuid": "118dc3cd_b5aed3dc",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
