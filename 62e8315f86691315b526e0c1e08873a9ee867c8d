@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "679a8fce_645cd07c",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 9,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-08T20:11:02Z",
+      "side": 1,
+      "message": "not for this CL, but we should probably delete this part of the comment throughout the repo, no one cares that this came from a large-scale-change in times long past",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 9,
+        "endChar": 36
+      },
+      "revId": "62e8315f86691315b526e0c1e08873a9ee867c8d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
