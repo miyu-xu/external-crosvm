@@ -111,6 +111,30 @@
       },
       "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "699394f0_d5e9ecac",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-08T18:02:27Z",
+      "side": 1,
+      "message": "cargo_embargo is used to generate Android.bp for various projects. These projects have different licenses.\n\nI think it would be possible to scan for existing licenses and fill the information in.\n\nIn this case however, this is the license used in external/crosvm, which includes various licenses. \n\nSee https://cs.android.com/h/android/platform/superproject/main/+/main:external/crosvm/Android.bp;l\u003d23?q\u003dexternal_crosvm_license\u0026ss\u003dh%2Fgoogleplex-android%2Fplatform%2Fsuperproject%2Fmain%2F%2B%2Frefs%2Fheads%2Fmain:external%2Fcrosvm%2F",
+      "parentUuid": "63501a4d_650b6ad3",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
