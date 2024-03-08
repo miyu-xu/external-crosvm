@@ -39,6 +39,30 @@
       },
       "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "118dc3cd_b5aed3dc",
+        "filename": "vendor/generic/crypto/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 4,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-03-08T17:06:36Z",
+      "side": 1,
+      "message": "Is it going to be overwritten by cargo_embargo next time it\u0027s updated? The comment at the top makes me think so.\nhttps://source.corp.google.com/h/googleplex-android/platform/superproject/main/+/main:development/tools/cargo_embargo/src/main.rs;drc\u003d4cc5950a52bcaf03a7874de14a572710485dc838;l\u003d523",
+      "parentUuid": "8bed9471_3b18bfd3",
+      "range": {
+        "startLine": 4,
+        "startChar": 0,
+        "endLine": 4,
+        "endChar": 21
+      },
+      "revId": "63a737f2f6f9ad6129708f8055c2f042c8ab8ca6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
