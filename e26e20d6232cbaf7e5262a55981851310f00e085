@@ -16,6 +16,24 @@
       "message": "revert\n\nthe script is supposed to handle this, maybe a bug in it: https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/android-merge-2-cargo-embargo.sh;l\u003d59;drc\u003da27d674969741cc0364fff1fd5b37084e52a3cad",
       "revId": "e26e20d6232cbaf7e5262a55981851310f00e085",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "69d36782_204e5473",
+        "filename": "Cargo.lock",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-11T20:55:17Z",
+      "side": 1,
+      "message": "That was my bad. I had amended the change before running merge-2, so it didn\u0027t restore.\n\nFixed in next PS. Figuring out some issues prior to uploading.",
+      "parentUuid": "4ff62a08_6f358cfd",
+      "revId": "e26e20d6232cbaf7e5262a55981851310f00e085",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
