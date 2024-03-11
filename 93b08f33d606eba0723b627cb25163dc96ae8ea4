@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "60bef349_f1e6312c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-11T17:52:42Z",
+      "side": 1,
+      "message": "this is maybe redundant with `external/crosvm/tools/install-deps`, but i think that is OK",
+      "revId": "93b08f33d606eba0723b627cb25163dc96ae8ea4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
