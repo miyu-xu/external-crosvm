@@ -39,6 +39,30 @@
       },
       "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5b89bade_7bbb5b79",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-03-11T23:59:46Z",
+      "side": 1,
+      "message": "please teach me the best way to generate this patch file.\n\nWhat I did was...\n\n1. delete the patch\n2. stash the current Android.bp to somewhere else.\n3. run cargo_embargo. Android.bp is updated.\n4. create a temp commit with the updated Android.bp.\n5. apply #2 and make my additional change\n6. git diff from #4 to #5. and pipe it to the patch.",
+      "parentUuid": "a9f57221_f41729a3",
+      "range": {
+        "startLine": 5,
+        "startChar": 0,
+        "endLine": 23,
+        "endChar": 41
+      },
+      "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
