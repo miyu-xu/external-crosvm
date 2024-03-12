@@ -111,6 +111,30 @@
       },
       "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "022cf75b_7c78a53f",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-12T17:43:59Z",
+      "side": 1,
+      "message": "LGTM, thanks!",
+      "parentUuid": "eb05ea3d_6be6c893",
+      "range": {
+        "startLine": 5,
+        "startChar": 0,
+        "endLine": 23,
+        "endChar": 41
+      },
+      "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
