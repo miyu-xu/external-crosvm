@@ -185,7 +185,7 @@
     "kvm_sys": {
       "no_presubmit": true
     },
-    "metrics": {
+    "metrics_generic": {
       "copy_out": true
     },
     "net_util": {
