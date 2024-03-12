@@ -63,6 +63,30 @@
       },
       "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "57413665_ea78acf6",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 23,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-12T02:06:58Z",
+      "side": 1,
+      "message": "that sounds right. when you did step 3, i would have expected it to leave this section alone and so it wouldn\u0027t end up in your `git diff`\n\nthe `// Do not modify this file as changes will be overridden on upgrade.` part can be explained by https://r.android.com/2995005. it changed the cargo_embargo output and we didn\u0027t immediately update the Android.bp files to match, so you ended up with an unrelated change\n\ni think you got the `DO NOT SUBMIT` and `package` diffs because in step 2, you moved the Android.bp file instead of copying it. cargo_embargo inherited the cargo2android behavior of preserving the header of the file, so it is important you don\u0027t delete the Android.bp unless you want to manually fix the header after generating a new version\n\ntip: `./android-merge-2-cargo-embargo.sh -r` will cache the cargo build output. if you are only iterating on cargo_embargo.json and patch file changes, then it is significantly faster for iterating",
+      "parentUuid": "5b89bade_7bbb5b79",
+      "range": {
+        "startLine": 5,
+        "startChar": 0,
+        "endLine": 23,
+        "endChar": 41
+      },
+      "revId": "15b3618a1a8a5cf95a026291ee015e7c4eca9ee5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
