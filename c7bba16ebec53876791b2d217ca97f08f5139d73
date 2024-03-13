@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7e76476f_070485ca",
+        "filename": "metrics/out",
+        "patchSetId": 8
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-13T20:31:22Z",
+      "side": 1,
+      "message": "did you add this symlink manually? haven\u0027t seen this before\n\nalso this crate doesn\u0027t have a build.rs file anymore, so i wonder if it really needs an out dir",
+      "revId": "c7bba16ebec53876791b2d217ca97f08f5139d73",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7b056117_11ba003f",
+        "filename": "metrics/src/lib.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-13T20:31:22Z",
+      "side": 1,
+      "message": "in the future, prefer to put these diffs in separate commits. manual changes inside merge commits are hard to spot when looking through the history",
+      "range": {
+        "startLine": 19,
+        "startChar": 0,
+        "endLine": 21,
+        "endChar": 30
+      },
+      "revId": "c7bba16ebec53876791b2d217ca97f08f5139d73",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
