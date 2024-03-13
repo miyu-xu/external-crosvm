@@ -38,6 +38,24 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "a1d99cb7_c360787b",
+        "filename": "metrics/out",
+        "patchSetId": 8
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-13T20:56:50Z",
+      "side": 1,
+      "message": "That\u0027s definitely the resolution here, I did not realize it was the script complaining about the path, I thought it was related to the build.\n\nThank you! Removed symlinks and moved out to vendor/generic/metrics/src/out.",
+      "parentUuid": "8ea5db9b_2afb1af1",
+      "revId": "c7bba16ebec53876791b2d217ca97f08f5139d73",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "7b056117_11ba003f",
         "filename": "metrics/src/lib.rs",
         "patchSetId": 8
@@ -49,6 +67,30 @@
       "writtenOn": "2024-03-13T20:31:22Z",
       "side": 1,
       "message": "in the future, prefer to put these diffs in separate commits. manual changes inside merge commits are hard to spot when looking through the history",
+      "range": {
+        "startLine": 19,
+        "startChar": 0,
+        "endLine": 21,
+        "endChar": 30
+      },
+      "revId": "c7bba16ebec53876791b2d217ca97f08f5139d73",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "26b14f46_d9bdcb9e",
+        "filename": "metrics/src/lib.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 21,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-03-13T20:56:50Z",
+      "side": 1,
+      "message": "Ack, will keep that in mind for future merges",
+      "parentUuid": "7b056117_11ba003f",
       "range": {
         "startLine": 19,
         "startChar": 0,
