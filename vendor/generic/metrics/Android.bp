@@ -12,17 +12,20 @@ package {
 }
 
 rust_library {
-    name: "libcrash_report",
+    name: "libmetrics_generic",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
-    crate_name: "crash_report",
+    crate_name: "metrics_generic",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    features: ["default"],
     rustlibs: [
         "libanyhow",
         "libbase_rust",
+        "libcfg_if",
+        "libprotobuf",
         "libserde",
     ],
 }
