@@ -63,6 +63,7 @@
     "libbase64": "libbase64_rust",
     "libfuse": "libfuse_rust",
     "liblog": "liblog_rust",
+    "libmetrics_generic": "libmetrics_product",
     "libminijail": "libminijail_rust",
     "libsync": "libsync_rust",
     "libx86_64": "libx86_64_rust"
@@ -187,6 +188,12 @@
     },
     "metrics": {
       "copy_out": true
+    },
+    "metrics_generic": {
+      // The "metrics' crates renames "metrics_generic" to "metrics_product" in
+      // its Cargo.toml. We can't do that in Soong, but, since there is only
+      // one dependant, we can just rename the crate as a simple workaround.
+      "crate_name_override": "metrics_product"
     },
     "net_util": {
       "no_presubmit": true
