@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+<<<<<<< HEAD   (81fbff ANDROID: fix "metrics" diffs using new cargo_embargo feature)
 use std::io;
 use std::mem::size_of;
 use std::mem::MaybeUninit;
@@ -30,6 +31,8 @@ pub fn zerocopy_from_slice<T: FromBytes>(data: &[u8]) -> Option<&T> {
     Some(lv.into_ref())
 }
 
+=======
+>>>>>>> BRANCH (d9eb22 Roll recipe dependencies (trivial).)
 pub mod endian;
 pub use crate::endian::*;
 
