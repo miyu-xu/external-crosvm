@@ -262,10 +262,12 @@ fn from_bcd(v: u8) -> Option<u32> {
 }
 
 fn alarm_from_registers(year: i32, data: &[u8; DATA_LEN]) -> Option<DateTime<Utc>> {
-    Utc.with_ymd_and_hms(
+    Utc.ymd_opt(
         year,
         from_bcd(data[RTC_REG_ALARM_MONTH as usize])?,
         from_bcd(data[RTC_REG_ALARM_DAY as usize])?,
+    )
+    .and_hms_opt(
         from_bcd(data[RTC_REG_ALARM_HOUR as usize])?,
         from_bcd(data[RTC_REG_ALARM_MIN as usize])?,
         from_bcd(data[RTC_REG_ALARM_SEC as usize])?,
@@ -416,6 +418,8 @@ impl Suspendable for Cmos {
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDateTime;
+
     use super::*;
     use crate::suspendable_tests;
 
@@ -469,7 +473,7 @@ mod tests {
     }
 
     fn timestamp_to_datetime(timestamp: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(timestamp, 0).unwrap()
+        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(timestamp, 0).unwrap())
     }
 
     fn test_now_party_like_its_1999() -> DateTime<Utc> {
