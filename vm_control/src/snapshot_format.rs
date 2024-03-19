@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use crypto::CryptKey;
+// ANDROID: b/329312851 - Switch back to crypto when bug is fixed.
+use crypto_generic as crypto;
 
 // Use 4kB encrypted chunks by default (if encryption is used).
 const DEFAULT_ENCRYPTED_CHUNK_SIZE_BYTES: usize = 1024 * 4;

@@ -17,7 +17,9 @@ anyhow = "*"
 balloon_control = { path = "../common/balloon_control" }
 base = { path = "../base" }
 cfg-if = "*"
-crypto = { path = "../vendor/generic/crypto", package = "crypto_generic" }
+# ANDROID: b/329312851 - Switch back to crypto when bug is fixed.
+# crypto = { path = "../vendor/generic/crypto", package = "crypto_generic" }
+crypto_generic = { path = "../vendor/generic/crypto", package = "crypto_generic" }
 gdbstub = { version = "0.7.0", optional = true }
 gdbstub_arch = { version = "0.3.0", optional = true }
 hypervisor = { path = "../hypervisor" }
