@@ -61,6 +61,7 @@
   "module_name_overrides": {
     "libbase": "libbase_rust",
     "libbase64": "libbase64_rust",
+    "libcrypto_generic": "libcrypto_product",
     "libfuse": "libfuse_rust",
     "liblog": "liblog_rust",
     "libmetrics_generic": "libmetrics_product",
@@ -158,6 +159,10 @@
     },
     "crosvm_control": {
       "patch": "crosvm_control/cargo2android.bp.patch"
+    },
+    "crypto_generic": {
+      // See the comment on "metrics_generic".
+      "crate_name_override": "crypto_product"
     },
     "devices": {
       "no_presubmit": true,
