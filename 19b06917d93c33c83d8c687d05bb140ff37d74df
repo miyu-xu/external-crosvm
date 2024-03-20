@@ -22,6 +22,30 @@
       },
       "revId": "19b06917d93c33c83d8c687d05bb140ff37d74df",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1aca3ebd_d72151e5",
+        "filename": "vm_control/src/snapshot_format.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-20T22:30:56Z",
+      "side": 1,
+      "message": "rust has a multi-pass compiler, the declaration order doesn\u0027t matter (except for macros maybe?)",
+      "parentUuid": "15f318f8_4db3908f",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 21
+      },
+      "revId": "19b06917d93c33c83d8c687d05bb140ff37d74df",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
