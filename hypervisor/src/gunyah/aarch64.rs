@@ -42,6 +42,10 @@ fn fdt_create_shm_device(
     mem_node.set_prop("label", index)?;
     mem_node.set_prop("#address-cells", 2u32)?;
     mem_node.set_prop("base", guest_addr.offset())
+    // We have to add the shm device for RM to accept the swiotlb memparcel.
+    // Memparcel is only used on android14-6.1. Once android14-6.1 is EOL
+    // we should be able to remove all the times we call fdt_create_shm_device()
+    mem_node.set_prop("optional", ())?;
 }
 
 impl VmAArch64 for GunyahVm {
