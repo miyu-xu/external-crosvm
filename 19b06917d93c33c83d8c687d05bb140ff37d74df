@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "15f318f8_4db3908f",
+        "filename": "vm_control/src/snapshot_format.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-03-20T22:12:26Z",
+      "side": 1,
+      "message": "I\u0027m curious this works, when \u0027crypto_generic as crypto\u0027 is below. That\u0027s quite interesting.",
+      "range": {
+        "startLine": 15,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 21
+      },
+      "revId": "19b06917d93c33c83d8c687d05bb140ff37d74df",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
