@@ -37,6 +37,10 @@ fn fdt_create_shm_device(
     let shm_node = parent.subnode_mut(&shm_name)?;
     shm_node.set_prop("vdevice-type", "shm")?;
     shm_node.set_prop("peer-default", ())?;
+    // We have to add the shm device for RM to accept the swiotlb memparcel.
+    // Memparcel is only used on android14-6.1. Once android14-6.1 is EOL
+    // we should be able to remove all the times we call fdt_create_shm_device()
+    shm_node.set_prop("optional", ())?;
     shm_node.set_prop("dma_base", 0u64)?;
     let mem_node = shm_node.subnode_mut("memory")?;
     mem_node.set_prop("label", index)?;
