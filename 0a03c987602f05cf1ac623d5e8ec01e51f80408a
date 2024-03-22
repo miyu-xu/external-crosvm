@@ -50,6 +50,24 @@
       "message": "This change may also break others who have already encoded the enumeration behavior for their different device. It would probably be better for us to change the kernel cmdline, no?",
       "revId": "0a03c987602f05cf1ac623d5e8ec01e51f80408a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "29796fd6_747aa24e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-03-22T23:54:51Z",
+      "side": 1,
+      "message": "Alistair, the enumeration on arm is very odd, so I would be surprised if anyone is consciously depending on it.\n\nThe first serial device (with the `num\u003d1` parameter in crosvm) is recognized as `/dev/ttyS3` in the guest, and the last serial device (with `num\u003d4`) is recognized as `/dev/ttyS0`. \n\nI am optimistic in fixing this because on VMs virtio consoles are used much more than the hw serial consoles. Let\u0027s see.",
+      "parentUuid": "9b3f5fea_7f86212d",
+      "revId": "0a03c987602f05cf1ac623d5e8ec01e51f80408a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
