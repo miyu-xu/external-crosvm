@@ -16,6 +16,24 @@
       "message": "Is it possible to group this CL in a topic with aosp/3008128 since it depends on it?",
       "revId": "c8134bb84148d348b7e20d027ccaa347d0de9a71",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "32c07547_06facf0c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-03-22T12:01:55Z",
+      "side": 1,
+      "message": "aosp/3008128 is already submitted so that shouldn\u0027t be necessary.",
+      "parentUuid": "a358ecb1_e43cb81f",
+      "revId": "c8134bb84148d348b7e20d027ccaa347d0de9a71",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
