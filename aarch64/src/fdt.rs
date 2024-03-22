@@ -284,7 +284,13 @@ fn create_serial_nodes(fdt: &mut Fdt) -> Result<()> {
     create_serial_node(fdt, SERIAL_ADDR[1], AARCH64_SERIAL_2_4_IRQ)?;
     create_serial_node(fdt, SERIAL_ADDR[2], AARCH64_SERIAL_1_3_IRQ)?;
     create_serial_node(fdt, SERIAL_ADDR[3], AARCH64_SERIAL_2_4_IRQ)?;
-
+    let alias_node = fdt
+        .root_mut()
+        .subnode_mut("aliases")?;
+    alias_node.set_prop("serial0", format!("/U6_16550A@{:x}", SERIAL_ADDR[0]))?;
+    alias_node.set_prop("serial1", format!("/U6_16550A@{:x}", SERIAL_ADDR[1]))?;
+    alias_node.set_prop("serial2", format!("/U6_16550A@{:x}", SERIAL_ADDR[2]))?;
+    alias_node.set_prop("serial3", format!("/U6_16550A@{:x}", SERIAL_ADDR[3]))?;
     Ok(())
 }
 
