@@ -11,28 +11,24 @@ use base::SafeDescriptor;
 use cros_async::AsyncWrapper;
 use cros_async::Executor;
 use vmm_vhost::Error as VhostError;
-use vmm_vhost::MasterReqHandler;
+use vmm_vhost::FrontendServer;
 
-use crate::virtio::vhost::user::vmm::handler::BackendReqHandler;
-use crate::virtio::vhost::user::vmm::handler::BackendReqHandlerImpl;
-use crate::virtio::vhost::user::vmm::Error;
-use crate::virtio::vhost::user::vmm::Result as VhostResult;
+use crate::virtio::vhost_user_frontend::handler::BackendReqHandler;
+use crate::virtio::vhost_user_frontend::handler::BackendReqHandlerImpl;
+use crate::virtio::vhost_user_frontend::Error;
+use crate::virtio::vhost_user_frontend::Result as VhostResult;
 
-pub fn create_backend_req_handler(h: BackendReqHandlerImpl) -> VhostResult<BackendReqHandler> {
-    let handler = MasterReqHandler::with_stream(h).map_err(Error::CreateBackendReqHandler)?;
-    Ok(handler)
+pub fn create_backend_req_handler(
+    h: BackendReqHandlerImpl,
+) -> VhostResult<(BackendReqHandler, SafeDescriptor)> {
+    FrontendServer::with_stream(h).map_err(Error::CreateBackendReqHandler)
 }
 
 pub async fn run_backend_request_handler(
-    handler: Option<BackendReqHandler>,
+    handler: &mut BackendReqHandler,
     ex: &Executor,
 ) -> Result<()> {
-    let mut handler = match handler {
-        Some(h) => h,
-        None => std::future::pending().await,
-    };
-
-    let h = SafeDescriptor::try_from(&handler as &dyn AsRawDescriptor)
+    let h = SafeDescriptor::try_from(handler as &dyn AsRawDescriptor)
         .map(AsyncWrapper::new)
         .context("failed to get safe descriptor for handler")?;
     let handler_source = ex

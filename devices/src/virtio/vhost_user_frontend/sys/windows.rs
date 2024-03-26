@@ -7,42 +7,32 @@ use anyhow::Result;
 use base::info;
 use base::CloseNotifier;
 use base::ReadNotifier;
+use base::SafeDescriptor;
 use base::Tube;
 use cros_async::EventAsync;
 use cros_async::Executor;
 use futures::pin_mut;
 use futures::select;
 use futures::FutureExt;
-use vmm_vhost::connection::TubePlatformConnection;
-use vmm_vhost::message::MasterReq;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::Master;
-use vmm_vhost::MasterReqHandler;
 
-use crate::virtio::vhost::user::vmm::handler::BackendReqHandler;
-use crate::virtio::vhost::user::vmm::handler::BackendReqHandlerImpl;
-use crate::virtio::vhost::user::vmm::Error;
-use crate::virtio::vhost::user::vmm::Result as VhostResult;
+use crate::virtio::vhost_user_frontend::handler::BackendReqHandler;
+use crate::virtio::vhost_user_frontend::handler::BackendReqHandlerImpl;
+use crate::virtio::vhost_user_frontend::Error;
+use crate::virtio::vhost_user_frontend::Result as VhostResult;
 
 pub fn create_backend_req_handler(
     h: BackendReqHandlerImpl,
     backend_pid: Option<u32>,
-) -> VhostResult<BackendReqHandler> {
+) -> VhostResult<(BackendReqHandler, SafeDescriptor)> {
     let backend_pid = backend_pid.expect("tube needs target pid for backend requests");
-    let mut handler =
-        MasterReqHandler::with_tube(h, backend_pid).map_err(Error::CreateBackendReqHandler)?;
-    Ok(handler)
+    vmm_vhost::FrontendServer::with_tube(h, backend_pid).map_err(Error::CreateBackendReqHandler)
 }
 
 pub async fn run_backend_request_handler(
-    handler: Option<BackendReqHandler>,
+    handler: &mut BackendReqHandler,
     ex: &Executor,
 ) -> Result<()> {
-    let mut handler = match handler {
-        Some(h) => h,
-        None => std::future::pending().await,
-    };
-
     let read_notifier = handler.get_read_notifier();
     let close_notifier = handler.get_close_notifier();
 
