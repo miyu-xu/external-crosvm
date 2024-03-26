@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::process::abort;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -37,6 +39,7 @@ pub type android_display_error_callback_type =
 extern "C" {
     fn create_android_display_context(
         service_name: *const ::std::os::raw::c_char,
+        service_name_len: usize,
         error_callback: android_display_error_callback_type,
     ) -> *mut android_display_context;
 
@@ -61,28 +64,24 @@ extern "C" {
         width: u32,
         height: u32,
         bytes: *mut u8,
+        size: usize,
     );
 }
 
 unsafe extern "C" fn error_callback(message: *const ::std::os::raw::c_char) {
     catch_unwind(|| {
-        assert!(!message.is_null());
-        // SAFETY: message is always a valid utf8-encoded C string.
-        let msg = unsafe {
-            #[allow(clippy::unnecessary_cast)] // c_char can be *const u8 or *const i8 depending on
-            // arch
-            std::str::from_utf8(std::slice::from_raw_parts(
-                message as *const u8,
-                libc::strlen(message),
-            ))
-            .unwrap()
-        };
-        error!("{}", msg);
+        error!(
+            "{}",
+            String::from_utf8_lossy(
+                // SAFETY:  message is null terminated
+                unsafe { CStr::from_ptr(message).to_bytes() }
+            )
+        )
     })
     .unwrap_or_else(|_| abort())
 }
 
-struct AndroidDisplayContext(*mut android_display_context);
+struct AndroidDisplayContext(NonNull<android_display_context>);
 // SAFETY: safe because access to the context is protected by a lock
 unsafe impl Sync for AndroidDisplayContext {}
 // SAFETY: pointers are safe to send between threads
@@ -90,12 +89,9 @@ unsafe impl Send for AndroidDisplayContext {}
 
 impl Drop for AndroidDisplayContext {
     fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: Safe given that we checked the pointer for non-null and it should always be
-            // of the correct type.
-            unsafe {
-                destroy_android_display_context(Some(error_callback), &mut self.0);
-            }
+        // SAFETY: the context pointer is non-null and always valid.
+        unsafe {
+            destroy_android_display_context(Some(error_callback), &mut self.0.as_ptr());
         }
     }
 }
@@ -155,10 +151,11 @@ impl GpuDisplaySurface for AndroidSurface {
             unsafe {
                 blit_android_display(
                     Some(error_callback),
-                    context.0,
+                    context.0.as_ptr(),
                     w,
                     h,
                     self.buffer.bytes.as_mut_ptr(),
+                    self.buffer.bytes.len(),
                 )
             };
         });
@@ -184,12 +181,18 @@ impl DisplayAndroid {
         ))?;
 
         let context = AndroidDisplayContext(
-            // SAFETY: service_name is not leaked outside of this function
-            unsafe { create_android_display_context(service_name.as_ptr(), Some(error_callback)) },
+            NonNull::new(
+                // SAFETY: service_name is not leaked outside of this function
+                unsafe {
+                    create_android_display_context(
+                        service_name.as_ptr(),
+                        service_name.to_bytes().len(),
+                        Some(error_callback),
+                    )
+                },
+            )
+            .ok_or(GpuDisplayError::Unsupported)?,
         );
-        if context.0.is_null() {
-            return Err(GpuDisplayError::Unsupported);
-        }
 
         Ok(DisplayAndroid {
             context: Arc::new(Mutex::new(context)),
@@ -218,10 +221,10 @@ impl DisplayT for DisplayAndroid {
             .map(|context| {
                 let android_width: u32 =
                     // SAFETY: context is not leaked outside of this function
-                    unsafe { get_android_display_width(Some(error_callback), context.0) };
+                    unsafe { get_android_display_width(Some(error_callback), context.0.as_ptr()) };
                 let android_height: u32 =
                     // SAFETY: context is not leaked outside of this function
-                    unsafe { get_android_display_height(Some(error_callback), context.0) };
+                    unsafe { get_android_display_height(Some(error_callback), context.0.as_ptr()) };
                 (android_width, android_height)
             })
             .map_err(|_| GpuDisplayError::Unsupported)?;
