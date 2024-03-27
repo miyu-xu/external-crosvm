@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a5731d99_83669f94",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 127,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-03-27T18:23:06Z",
+      "side": 1,
+      "message": "looks like this is effectively constant after init, so could move it to a field. up to you",
+      "revId": "bca5ee157a646c128d0f85a66413b8ec5796271f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
