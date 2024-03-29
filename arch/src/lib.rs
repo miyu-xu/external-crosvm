@@ -80,7 +80,6 @@ pub use serial::add_serial_devices;
 pub use serial::get_serial_cmdline;
 pub use serial::set_default_serial_parameters;
 pub use serial::GetSerialCmdlineError;
-pub use serial::SERIAL_ADDR;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use sync::Condvar;
 use sync::Mutex;

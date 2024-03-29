@@ -214,7 +214,10 @@ impl arch::LinuxArch for Riscv64 {
         let com_evt_1_3 = Event::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = Event::new().map_err(Error::CreateEvent)?;
         let serial_devices = arch::add_serial_devices(
+            system_allocator,
+            &[],
             components.hv_cfg.protection_type,
+            &io_bus,
             &mmio_bus,
             // TODO: the IRQ numbers are bogus since the events aren't actually wired up
             (0, &com_evt_1_3),
