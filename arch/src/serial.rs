@@ -11,6 +11,7 @@ use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
 use devices::serial_device::SerialType;
 use devices::Bus;
+use devices::BusType;
 use devices::Serial;
 use hypervisor::ProtectionType;
 #[cfg(feature = "seccomp_trace")]
@@ -20,6 +21,8 @@ use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
+use resources::AllocOptions;
+use resources::SystemAllocator;
 use thiserror::Error as ThisError;
 
 use crate::DeviceRegistrationError;
@@ -80,13 +83,13 @@ pub fn set_default_serial_parameters(
     }
 }
 
-/// Address for Serial ports in x86
-pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
-
 /// Information about a serial device (16550-style UART) created by `add_serial_devices()`.
 pub struct SerialDeviceInfo {
-    /// Address of the device on the bus.
+    /// Bus which contains the device.
     /// This is the I/O bus on x86 machines and MMIO otherwise.
+    pub bus: BusType,
+
+    /// Address of the device on the bus.
     pub address: u64,
 
     /// Size of the device's address space on the bus.
@@ -102,16 +105,23 @@ pub struct SerialDeviceInfo {
 ///
 /// # Arguments
 ///
+/// * `system_allocator` - system resource allocator for non-fixed addresses
+/// * `fixed_addrs` - bus/address pairs for hard-coded serial port locations
 /// * `protection_type` - VM protection mode.
-/// * `io_bus` - Bus to add the devices to
+/// * `io_bus` - I/O bus used for devices in the IO port region (used on x86 only).
+/// * `mmio_bus` - Memory bus used for devices in the MMIO region.
 /// * `com_evt_1_3` - irq and event for com1 and com3
 /// * `com_evt_1_4` - irq and event for com2 and com4
 /// * `serial_parameters` - definitions of serial parameter configurations.
-/// * `serial_jail` - minijail object cloned for use with each serial device. All four of the
-///   traditional PC-style serial ports (COM1-COM4) must be specified.
+/// * `serial_jail` - minijail object cloned for use with each serial device.
+///
+/// All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
+    system_allocator: &mut SystemAllocator,
+    fixed_addrs: &[(BusType, u64)],
     protection_type: ProtectionType,
     io_bus: &Bus,
+    mmio_bus: &Bus,
     com_evt_1_3: (u32, &Event),
     com_evt_2_4: (u32, &Event),
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -168,10 +178,35 @@ pub fn add_serial_devices(
             swap_controller,
         )?;
 
-        let address = SERIAL_ADDR[usize::from(com_num)];
         let size = 0x8; // 16550 UART uses 8 bytes of address space.
-        io_bus.insert(com, address, size).unwrap();
-        devices.push(SerialDeviceInfo { address, size, irq })
+        let alloc = system_allocator.get_anon_alloc();
+        let tag = format!("COM{}", com_num);
+
+        let (bus, address) = if let Some((bus, addr)) = fixed_addrs.get(usize::from(com_num)) {
+            (*bus, *addr)
+        } else if let Some(allocator) = system_allocator.io_allocator() {
+            let addr = allocator
+                .allocate(size, alloc, tag)
+                .map_err(DeviceRegistrationError::AllocateIoResource)?;
+            (BusType::Io, addr)
+        } else {
+            let addr = system_allocator
+                .allocate_mmio(size, alloc, tag, AllocOptions::new().align(size))
+                .map_err(DeviceRegistrationError::AllocateIoResource)?;
+            (BusType::Mmio, addr)
+        };
+
+        let res = match bus {
+            BusType::Io => io_bus.insert(com, address, size),
+            BusType::Mmio => mmio_bus.insert(com, address, size),
+        };
+        res.unwrap();
+        devices.push(SerialDeviceInfo {
+            bus,
+            address,
+            size,
+            irq,
+        })
     }
 
     Ok(devices)
@@ -247,21 +282,43 @@ pub fn get_serial_cmdline(
 mod tests {
     use devices::BusType;
     use kernel_cmdline::Cmdline;
+    use resources::AddressRange;
+    use resources::SystemAllocatorConfig;
 
     use super::*;
 
+    fn test_system_allocator() -> SystemAllocator {
+        SystemAllocator::new(
+            SystemAllocatorConfig {
+                io: Some(AddressRange::from_start_and_end(0, u64::from(u16::MAX))),
+                low_mmio: AddressRange::from_start_and_end(0, u64::from(u32::MAX)),
+                high_mmio: AddressRange::from_start_and_end(u64::from(u32::MAX) + 1, u64::MAX),
+                platform_mmio: None,
+                first_irq: 1,
+            },
+            None,
+            &[],
+        )
+        .unwrap()
+    }
+
     #[test]
     fn get_serial_cmdline_default() {
+        let mut system_allocator = test_system_allocator();
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
+        let mmio_bus = Bus::new(BusType::Mmio);
         let evt1_3 = Event::new().unwrap();
         let evt2_4 = Event::new().unwrap();
 
         set_default_serial_parameters(&mut serial_parameters, false);
         let serial_devices = add_serial_devices(
+            &mut system_allocator,
+            &[],
             ProtectionType::Unprotected,
             &io_bus,
+            &mmio_bus,
             (4, &evt1_3),
             (3, &evt2_4),
             &serial_parameters,
@@ -279,9 +336,11 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console() {
+        let mut system_allocator = test_system_allocator();
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
+        let mmio_bus = Bus::new(BusType::Mmio);
         let evt1_3 = Event::new().unwrap();
         let evt2_4 = Event::new().unwrap();
 
@@ -306,8 +365,11 @@ mod tests {
 
         set_default_serial_parameters(&mut serial_parameters, false);
         let serial_devices = add_serial_devices(
+            &mut system_allocator,
+            &[],
             ProtectionType::Unprotected,
             &io_bus,
+            &mmio_bus,
             (4, &evt1_3),
             (3, &evt2_4),
             &serial_parameters,
@@ -325,9 +387,11 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console_serial_earlycon() {
+        let mut system_allocator = test_system_allocator();
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
+        let mmio_bus = Bus::new(BusType::Mmio);
         let evt1_3 = Event::new().unwrap();
         let evt2_4 = Event::new().unwrap();
 
@@ -371,8 +435,11 @@ mod tests {
 
         set_default_serial_parameters(&mut serial_parameters, false);
         let serial_devices = add_serial_devices(
+            &mut system_allocator,
+            &[(BusType::Io, 0x3f8)],
             ProtectionType::Unprotected,
             &io_bus,
+            &mmio_bus,
             (4, &evt1_3),
             (3, &evt2_4),
             &serial_parameters,
@@ -391,9 +458,11 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console_invalid_earlycon() {
+        let mut system_allocator = test_system_allocator();
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
+        let mmio_bus = Bus::new(BusType::Mmio);
         let evt1_3 = Event::new().unwrap();
         let evt2_4 = Event::new().unwrap();
 
@@ -418,8 +487,11 @@ mod tests {
 
         set_default_serial_parameters(&mut serial_parameters, false);
         let serial_devices = add_serial_devices(
+            &mut system_allocator,
+            &[],
             ProtectionType::Unprotected,
             &io_bus,
+            &mmio_bus,
             (4, &evt1_3),
             (3, &evt2_4),
             &serial_parameters,

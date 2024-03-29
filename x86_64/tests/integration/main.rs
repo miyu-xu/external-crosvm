@@ -169,9 +169,11 @@ where
     arch::set_default_serial_parameters(&mut serial_params, false);
 
     X8664arch::setup_serial_devices(
+        &mut resources,
         ProtectionType::Unprotected,
         &mut irq_chip,
         &io_bus,
+        &mmio_bus,
         &serial_params,
         None,
         #[cfg(feature = "swap")]

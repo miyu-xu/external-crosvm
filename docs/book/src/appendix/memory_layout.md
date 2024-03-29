@@ -54,10 +54,6 @@ These apply for all boot modes.
 
 | Name/source link                  | Address         | End (exclusive) | Size           | Notes                                                         |
 | --------------------------------- | --------------- | --------------- | ----------     | ------------------------------------------------------------- |
-| [`SERIAL_ADDR[3]`][serial_addr]   | `2e8`           | `2f0`           | 8 bytes        | Serial port MMIO                                              |
-| [`SERIAL_ADDR[1]`][serial_addr]   | `2f8`           | `300`           | 8 bytes        | Serial port MMIO                                              |
-| [`SERIAL_ADDR[2]`][serial_addr]   | `3e8`           | `3f0`           | 8 bytes        | Serial port MMIO                                              |
-| [`SERIAL_ADDR[0]`][serial_addr]   | `3f8`           | `400`           | 8 bytes        | Serial port MMIO                                              |
 | [`AARCH64_RTC_ADDR`]              | `2000`          | `3000`          | 4 KiB          | Real-time clock                                               |
 | [`AARCH64_VMWDT_ADDR`]            | `3000`          | `4000`          | 4 KiB          | Watchdog device                                               |
 | [`AARCH64_PCI_CFG_BASE`]          | `1_0000`        | `2_0000`        | 64 KiB         | PCI configuration (CAM)                                       |
@@ -92,7 +88,6 @@ These apply when a bootloader is passed with `--bios`.
 | [`AARCH64_FDT_OFFSET_IN_BIOS_MODE`] | `8000_0000` | `8020_0000`     | 2 MiB | Flattened device tree in RAM |
 | [`AARCH64_BIOS_OFFSET`]             | `8020_0000` |                 |       | Bootloader image in RAM      |
 
-[serial_addr]: https://crsrc.org/o/src/platform/crosvm/arch/src/serial.rs;l=78?q=SERIAL_ADDR
 [`aarch64_rtc_addr`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=177?q=AARCH64_RTC_ADDR
 [`aarch64_vmwdt_addr`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=187?q=AARCH64_VMWDT_ADDR
 [`aarch64_pci_cfg_base`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=192?q=AARCH64_PCI_CFG_BASE

@@ -632,7 +632,10 @@ impl arch::LinuxArch for AArch64 {
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let serial_devices = arch::add_serial_devices(
+            system_allocator,
+            &[],
             components.hv_cfg.protection_type,
+            &io_bus,
             &mmio_bus,
             (AARCH64_SERIAL_1_3_IRQ, com_evt_1_3.get_trigger()),
             (AARCH64_SERIAL_2_4_IRQ, com_evt_2_4.get_trigger()),

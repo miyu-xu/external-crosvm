@@ -351,6 +351,13 @@ const CMDLINE_OFFSET: u64 = 0x2_0000;
 const CMDLINE_MAX_SIZE: u64 = 0x800; // including terminating zero
 const SETUP_DATA_START: u64 = CMDLINE_OFFSET + CMDLINE_MAX_SIZE;
 const SETUP_DATA_END: u64 = ACPI_HI_RSDP_WINDOW_BASE;
+// Standard PC I/O port addresses for UARTs (COM1-COM3)
+const X86_64_SERIAL_ADDRS: [(BusType, u64); 4] = [
+    (BusType::Io, 0x3f8),
+    (BusType::Io, 0x2f8),
+    (BusType::Io, 0x3e8),
+    (BusType::Io, 0x2e8),
+];
 const X86_64_SERIAL_1_3_IRQ: u32 = 4;
 const X86_64_SERIAL_2_4_IRQ: u32 = 3;
 // X86_64_SCI_IRQ is used to fill the ACPI FACP table.
@@ -874,9 +881,11 @@ impl arch::LinuxArch for X8664arch {
             None
         };
         let serial_devices = Self::setup_serial_devices(
+            system_allocator,
             components.hv_cfg.protection_type,
             irq_chip.as_irq_chip_mut(),
             &io_bus,
+            &mmio_bus,
             serial_parameters,
             serial_jail,
             #[cfg(feature = "swap")]
@@ -2181,9 +2190,11 @@ impl X8664arch {
     /// * - `io_bus` the I/O bus to add the devices to
     /// * - `serial_parameters` - definitions for how the serial devices should be configured
     pub fn setup_serial_devices(
+        system_allocator: &mut SystemAllocator,
         protection_type: ProtectionType,
         irq_chip: &mut dyn IrqChip,
         io_bus: &Bus,
+        mmio_bus: &Bus,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
@@ -2192,8 +2203,11 @@ impl X8664arch {
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
 
         let serial_devices = arch::add_serial_devices(
+            system_allocator,
+            &X86_64_SERIAL_ADDRS,
             protection_type,
             io_bus,
+            mmio_bus,
             (X86_64_SERIAL_1_3_IRQ, com_evt_1_3.get_trigger()),
             (X86_64_SERIAL_2_4_IRQ, com_evt_2_4.get_trigger()),
             serial_parameters,
