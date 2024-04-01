@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d523d2cc_aa0ab91a",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-01T08:50:03Z",
+      "side": 1,
+      "message": "This series is to unblock our development until crosvm merge is done.",
+      "revId": "84c85c8f6f5749acf999acb1e8993c249806433c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
