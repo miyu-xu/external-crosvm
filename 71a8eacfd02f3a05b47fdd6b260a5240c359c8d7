@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c54c90f3_dde6d3b8",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-01T08:25:10Z",
+      "side": 1,
+      "message": "Did you run cargo_embargo? The format of this part is different from that of Android.bp.",
+      "range": {
+        "startLine": 38,
+        "startChar": 0,
+        "endLine": 42,
+        "endChar": 7
+      },
+      "revId": "71a8eacfd02f3a05b47fdd6b260a5240c359c8d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
