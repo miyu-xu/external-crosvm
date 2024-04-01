@@ -8,6 +8,7 @@ use std::process::abort;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::slice;
 
 use base::error;
 use base::warn;
@@ -24,46 +25,52 @@ use crate::GpuDisplaySurface;
 use crate::SurfaceType;
 use crate::SysDisplayT;
 
-// Structs and functions from display_android.cpp:
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct android_display_context {
-    pub _bindgen_opaque_blob: [u32; 1usize],
+pub(crate) struct AndroidDisplayContext {
+    _data: [u8; 0],
 }
 
-#[allow(non_camel_case_types)]
-pub type android_display_error_callback_type =
-    ::std::option::Option<unsafe extern "C" fn(message: *const ::std::os::raw::c_char)>;
+#[repr(C)]
+pub(crate) struct ANativeWindow {
+    _data: [u8; 0],
+
+}
+
+#[repr(C)]
+pub(crate) struct ANativeWindow_buffer {
+    _data: [u8; 0],
+}
 
 extern "C" {
     fn create_android_display_context(
         service_name: *const ::std::os::raw::c_char,
         service_name_len: usize,
-        error_callback: android_display_error_callback_type,
-    ) -> *mut android_display_context;
+    ) -> *mut AndroidDisplayContext;
 
     fn destroy_android_display_context(
         error_callback: android_display_error_callback_type,
-        self_: *mut *mut android_display_context,
+        self_: *mut AndroidDisplayContext,
     );
 
-    fn get_android_display_width(
-        error_callback: android_display_error_callback_type,
-        self_: *mut android_display_context,
-    ) -> u32;
-
-    fn get_android_display_height(
-        error_callback: android_display_error_callback_type,
-        self_: *mut android_display_context,
-    ) -> u32;
-
-    fn blit_android_display(
-        error_callback: android_display_error_callback_type,
-        self_: *mut android_display_context,
+    fn create_android_surface(
+        ctx: *mut AndroidDisplayContext,
         width: u32,
         height: u32,
-        bytes: *mut u8,
-        size: usize,
+    ) -> *mut ANativeWindow;
+
+    fn destroy_android_surface(
+        ctx: *mut AndroidDisplayContext,
+        surface: *mut ANativeWindow,
+    );
+
+    fn get_android_surface_buffer(
+        ctx: *mut AndroidDisplayContext,
+        surface: *mut ANativeWindow,
+    ) -> *mut u8;
+
+    fn post_android_surface((
+        ctx: *mut AndroidDisplayContext,
+        surface: *mut AndroidSurface,
     );
 }
 
@@ -78,91 +85,45 @@ unsafe extern "C" fn error_callback(message: *const ::std::os::raw::c_char) {
     .unwrap_or_else(|_| abort())
 }
 
-struct AndroidDisplayContext(NonNull<android_display_context>);
-// SAFETY: pointers are safe to send between threads
-unsafe impl Send for AndroidDisplayContext {}
-
 impl Drop for AndroidDisplayContext {
     fn drop(&mut self) {
         // SAFETY: the context pointer is non-null and always valid.
         unsafe {
-            destroy_android_display_context(Some(error_callback), &mut self.0.as_ptr());
+            destroy_android_display_context(Some(error_callback), self as *mut AndroidDisplayContext);
         }
     }
 }
 
-#[allow(dead_code)]
-struct Buffer {
-    width: u32,
-    height: u32,
-    bytes_per_pixel: u32,
-    bytes: Vec<u8>,
-}
-
-impl Buffer {
-    fn as_volatile_slice(&mut self) -> VolatileSlice {
-        VolatileSlice::new(self.bytes.as_mut_slice())
-    }
-
-    fn width(&self) -> u32 {
-        self.width
-    }
-
-    fn height(&self) -> u32 {
-        self.height
-    }
-
-    fn stride(&self) -> usize {
-        (self.bytes_per_pixel as usize) * (self.width as usize)
-    }
-
-    fn bytes_per_pixel(&self) -> usize {
-        self.bytes_per_pixel as usize
-    }
-}
-
-struct AndroidSurface {
-    context: Arc<Mutex<AndroidDisplayContext>>,
-    buffer: Buffer,
-}
-
-impl GpuDisplaySurface for AndroidSurface {
+impl GpuDisplaySurface for AndroidDisplayContext {
     fn framebuffer(&mut self) -> Option<GpuDisplayFramebuffer> {
-        let framebuffer = &mut self.buffer;
-        let framebuffer_stride = framebuffer.stride() as u32;
-        let framebuffer_bytes_per_pixel = framebuffer.bytes_per_pixel() as u32;
+        let ctx = self as *mut AndroidDisplayContext;
+        let buf = unsafe { get_android_display_context(ctx) };
+        let width = unsafe { get_android_display_width(ctx) };
+        let height = unsafe { get_android_display_height(ctx) };
+        let stride = (width * 4) as usize;
+        let total_size = (width * height * 4) as usize;
+        let buf = unsafe { slice::from_raw_parts_mut(buf,  total_size)};
         Some(GpuDisplayFramebuffer::new(
-            framebuffer.as_volatile_slice(),
-            framebuffer_stride,
-            framebuffer_bytes_per_pixel,
+            VolatileSlice::new(buf),
+            stride,
+            4,
         ))
     }
 
     fn flip(&mut self) {
-        let w = self.buffer.width();
-        let h = self.buffer.height();
-        let _context = self.context.lock().map(|context| {
-            // SAFETY: self.buffer is not leaked outside of this function
-            unsafe {
-                blit_android_display(
-                    Some(error_callback),
-                    context.0.as_ptr(),
-                    w,
-                    h,
-                    self.buffer.bytes.as_mut_ptr(),
-                    self.buffer.bytes.len(),
-                )
-            };
-        });
+        let ctx = self.context.lock().unwrap();
+        // SAFETY: self.buffer is not leaked outside of this function
+        unsafe {
+            blit_android_display(
+                Some(error_callback),
+                &mut *ctx as *mut AndroidDisplayContext,
+            )
+        };
     }
 }
 
-impl Drop for AndroidSurface {
-    fn drop(&mut self) {}
-}
-
 pub struct DisplayAndroid {
-    context: Arc<Mutex<AndroidDisplayContext>>,
+    context: NonNull<AndroidDisplayContext>,
     /// This event is never triggered and is used solely to fulfill AsRawDescriptor.
     event: Event,
 }
@@ -171,7 +132,11 @@ impl DisplayAndroid {
     pub fn new(service_name: &str) -> GpuDisplayResult<DisplayAndroid> {
         let event = Event::new().map_err(|_| GpuDisplayError::CreateEvent)?;
 
-        let context = AndroidDisplayContext(
+        let service_name = CString::new(service_name).or(Err(
+            GpuDisplayError::InvalidAndroidDisplayServiceName(service_name.to_string()),
+        ))?;
+
+        let context = 
             NonNull::new(
                 // SAFETY: service_name is not leaked outside of this function
                 unsafe {
@@ -182,8 +147,7 @@ impl DisplayAndroid {
                     )
                 },
             )
-            .ok_or(GpuDisplayError::Unsupported)?,
-        );
+            .ok_or(GpuDisplayError::Unsupported)?;
 
         Ok(DisplayAndroid {
             context: Arc::new(Mutex::new(context)),
@@ -206,34 +170,6 @@ impl DisplayT for DisplayAndroid {
             return Err(GpuDisplayError::Unsupported);
         }
 
-        let (android_width, android_height): (u32, u32) = self
-            .context
-            .lock()
-            .map(|context| {
-                let android_width: u32 =
-                    // SAFETY: context is not leaked outside of this function
-                    unsafe { get_android_display_width(Some(error_callback), context.0.as_ptr()) };
-                let android_height: u32 =
-                    // SAFETY: context is not leaked outside of this function
-                    unsafe { get_android_display_height(Some(error_callback), context.0.as_ptr()) };
-                (android_width, android_height)
-            })
-            .map_err(|_| GpuDisplayError::Unsupported)?;
-
-        if requested_width != android_width {
-            warn!(
-                "Display surface width ({}) doesn't match Android Surface width ({}).",
-                requested_width, android_width
-            );
-        }
-
-        if requested_height != android_height {
-            warn!(
-                "Display surface height ({}) doesn't match Android Surface height ({}).",
-                requested_height, android_height
-            );
-        }
-
         let bytes_per_pixel = 4;
         let bytes_total =
             (requested_width as u64) * (requested_height as u64) * (bytes_per_pixel as u64);
@@ -243,7 +179,6 @@ impl DisplayT for DisplayAndroid {
                 width: requested_width,
                 height: requested_height,
                 bytes_per_pixel,
-                bytes: vec![0; bytes_total as usize],
             },
         }))
     }
