@@ -45,6 +45,14 @@ rust_library {
     static_libs: [
         "libdrm",
     ],
+    target: {
+        android: {
+            shared_libs: [
+                "libEGL",
+                "libGLESv2",
+            ],
+        },
+    },
 }
 
 rust_library {
