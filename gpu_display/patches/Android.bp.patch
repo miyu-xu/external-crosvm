@@ -24,9 +24,9 @@ index dc5db8549..18a04722e 100644
 +        },
 +        android: {
 +            static_libs: [
++                "libandroid_display_backend",
 +                "libwayland_client_static",
 +                "libffi",
-+                "libcrosvm_android_display_client",
 +            ],
 +            shared_libs: [
 +                "libc++",
