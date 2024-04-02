@@ -16,6 +16,24 @@
       "message": "please update the android.bp.patch as well",
       "revId": "494dffed998912a08175856df7c9c94c4ac16e47",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "96807748_cf5f8492",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1386891
+      },
+      "writtenOn": "2024-04-02T07:17:52Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "68284869_edc5beef",
+      "revId": "494dffed998912a08175856df7c9c94c4ac16e47",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
