@@ -41,6 +41,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a1b723cc_81981f76",
+        "filename": "gpu_display/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 33,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-02T02:25:25Z",
+      "side": 1,
+      "message": "That\u0027s because libcrosvm_android_display_client is statically linked to crosvm. Soong doesn\u0027t carry shared lib dependencies of a static lib over to the module where the static lib is linked to.",
+      "parentUuid": "0caf29bc_e0aafaab",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 33,
+        "endChar": 35
+      },
+      "revId": "84c85c8f6f5749acf999acb1e8993c249806433c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d4a059cc_01ff67b8",
@@ -54,6 +78,30 @@
       "writtenOn": "2024-04-01T20:34:42Z",
       "side": 1,
       "message": "same question here. why do we need to list these deps on the crosvm bin module?",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 26,
+        "endChar": 35
+      },
+      "revId": "84c85c8f6f5749acf999acb1e8993c249806433c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "652fa246_868e9580",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-02T02:25:25Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d4a059cc_01ff67b8",
       "range": {
         "startLine": 25,
         "startChar": 0,
