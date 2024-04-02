@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "663a20f9_ebee7983",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-02T17:46:40Z",
+      "side": 1,
+      "message": "can you add a TODO to delete this when libandroid_display_backend gets rewritten in rust?",
+      "revId": "dcb7fe20aa73e4f2f2dd0770380ef191682017f2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "89bdd817_a058919b",
+        "filename": "Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-02T17:46:40Z",
+      "side": 1,
+      "message": "where did this comment change come from?",
+      "revId": "dcb7fe20aa73e4f2f2dd0770380ef191682017f2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
