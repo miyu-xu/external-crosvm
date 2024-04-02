@@ -135,6 +135,7 @@ rust_binary {
         },
         android: {
             shared_libs: [
+                "libc++",
                 "libbinder_ndk",
                 "libnativewindow",
                 "libprocessgroup",
