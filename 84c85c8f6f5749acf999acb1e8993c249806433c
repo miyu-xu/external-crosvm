@@ -110,6 +110,30 @@
       },
       "revId": "84c85c8f6f5749acf999acb1e8993c249806433c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aacfc8ac_2da4dd38",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-02T17:51:07Z",
+      "side": 1,
+      "message": "are you sure we need this one? there are other shared deps, even in `gpu_display` already, that aren\u0027t being duplicated between the rust_lib module and the top level rust_bin module",
+      "parentUuid": "652fa246_868e9580",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 26,
+        "endChar": 35
+      },
+      "revId": "84c85c8f6f5749acf999acb1e8993c249806433c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
