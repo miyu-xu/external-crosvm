@@ -16,6 +16,24 @@
       "message": "Hey Steven, \n\nDid you run cargo embargo after you merged the upstream? I see that my crosvm changes are in, but this CL isn\u0027t. I don\u0027t see android_display feature enabled in the Android.bp file.",
       "revId": "b5a6fd340cfe0476c8408995d597c36db68a179f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6e284320_b517f915",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-03T18:27:02Z",
+      "side": 1,
+      "message": "He ran it, but the `android_display` feature wasn\u0027t enabled in cargo_embargo.json, so it wouldn\u0027t affect the Android.bp files. It is only enabled starting in this CL.",
+      "parentUuid": "88f84b0f_6cba484d",
+      "revId": "b5a6fd340cfe0476c8408995d597c36db68a179f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
