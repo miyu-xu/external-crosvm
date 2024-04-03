@@ -383,7 +383,6 @@ pub fn create_gpu_minijail(
             "/lib64",
             "/usr/share/drirc.d",
             "/usr/share/glvnd",
-            "/usr/share/libdrm",
             "/usr/share/vulkan",
         ],
     )?;

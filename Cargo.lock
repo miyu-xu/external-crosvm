@@ -641,7 +641,6 @@ name = "cros_fdt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "indexmap",
  "remain",
  "thiserror",
 ]

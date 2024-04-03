@@ -425,10 +425,15 @@ impl SerialDevice for ConsoleDevice {
     }
 }
 
+enum VirtioConsoleState {
+    Stopped(ConsoleDevice),
+    Running(WorkerThread<anyhow::Result<ConsoleDevice>>),
+    Broken,
+}
+
 /// Virtio console device.
 pub struct AsyncConsole {
-    console_device: Option<ConsoleDevice>,
-    worker_thread: Option<WorkerThread<anyhow::Result<ConsoleDevice>>>,
+    state: VirtioConsoleState,
     base_features: u64,
     keep_descriptors: Vec<Descriptor>,
     pci_address: Option<PciAddress>,
@@ -446,7 +451,7 @@ impl SerialDevice for AsyncConsole {
     ) -> AsyncConsole {
         let pci_address = options.pci_address;
         AsyncConsole {
-            console_device: Some(ConsoleDevice::new(
+            state: VirtioConsoleState::Stopped(ConsoleDevice::new(
                 protection_type,
                 evt,
                 input,
@@ -455,7 +460,6 @@ impl SerialDevice for AsyncConsole {
                 options,
                 Default::default(),
             )),
-            worker_thread: None,
             base_features: base_features(protection_type),
             keep_descriptors: keep_rds.iter().copied().map(Descriptor).collect(),
             pci_address,
@@ -513,34 +517,49 @@ impl VirtioDevice for AsyncConsole {
             return Err(anyhow!("expected 2 queues, got {}", queues.len()));
         }
 
-        let console = self.console_device.take().context("no console_device")?;
+        // Reset the device if it was already running.
+        if matches!(self.state, VirtioConsoleState::Running { .. }) {
+            self.reset();
+        }
+
+        let state = std::mem::replace(&mut self.state, VirtioConsoleState::Broken);
+        let console = match state {
+            VirtioConsoleState::Running { .. } => {
+                return Err(anyhow!("device should not be running here. This is a bug."));
+            }
+            VirtioConsoleState::Stopped(console) => console,
+            VirtioConsoleState::Broken => {
+                return Err(anyhow!("device is broken and cannot be activated"));
+            }
+        };
 
         let ex = Executor::new().expect("failed to create an executor");
         let receive_queue = queues.remove(&0).unwrap();
         let transmit_queue = queues.remove(&1).unwrap();
 
-        self.worker_thread = Some(WorkerThread::start("v_console", move |kill_evt| {
-            let mut console = console;
-            let receive_queue = Arc::new(Mutex::new(receive_queue));
-            let transmit_queue = Arc::new(Mutex::new(transmit_queue));
+        self.state =
+            VirtioConsoleState::Running(WorkerThread::start("v_console", move |kill_evt| {
+                let mut console = console;
+                let receive_queue = Arc::new(Mutex::new(receive_queue));
+                let transmit_queue = Arc::new(Mutex::new(transmit_queue));
 
-            // Start transmit queue of port 0
-            console.start_queue(&ex, 0, receive_queue, interrupt.clone())?;
-            // Start receive queue of port 0
-            console.start_queue(&ex, 1, transmit_queue, interrupt.clone())?;
+                // Start transmit queue of port 0
+                console.start_queue(&ex, 0, receive_queue, interrupt.clone())?;
+                // Start receive queue of port 0
+                console.start_queue(&ex, 1, transmit_queue, interrupt.clone())?;
 
-            // Run until the kill event is signaled and cancel all tasks.
-            ex.run_until(async {
-                async_utils::await_and_exit(&ex, kill_evt).await?;
-                let port = &mut console.port0;
-                if let Some(input) = port.input.as_mut() {
-                    input.stop().context("failed to stop rx queue")?;
-                }
-                port.output.stop().context("failed to stop tx queue")?;
+                // Run until the kill event is signaled and cancel all tasks.
+                ex.run_until(async {
+                    async_utils::await_and_exit(&ex, kill_evt).await?;
+                    let port = &mut console.port0;
+                    if let Some(input) = port.input.as_mut() {
+                        input.stop().context("failed to stop rx queue")?;
+                    }
+                    port.output.stop().context("failed to stop tx queue")?;
 
-                Ok(console)
-            })?
-        }));
+                    Ok(console)
+                })?
+            }));
 
         Ok(())
     }
@@ -549,11 +568,29 @@ impl VirtioDevice for AsyncConsole {
         self.pci_address
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
-        if let Some(worker_thread) = self.worker_thread.take() {
-            let console = worker_thread.stop()?;
-            self.console_device = Some(console);
+    fn reset(&mut self) -> bool {
+        match std::mem::replace(&mut self.state, VirtioConsoleState::Broken) {
+            // Stopped console is already in reset state.
+            state @ VirtioConsoleState::Stopped(_) => {
+                self.state = state;
+                true
+            }
+            // Stop the worker thread and go back to `Stopped` state.
+            VirtioConsoleState::Running(worker_thread) => {
+                let thread_res = worker_thread.stop();
+                match thread_res {
+                    Ok(console) => {
+                        self.state = VirtioConsoleState::Stopped(console);
+                        true
+                    }
+                    Err(e) => {
+                        error!("worker thread returned an error: {}", e);
+                        false
+                    }
+                }
+            }
+            // We are broken and cannot reset properly.
+            VirtioConsoleState::Broken => false,
         }
-        Ok(())
     }
 }

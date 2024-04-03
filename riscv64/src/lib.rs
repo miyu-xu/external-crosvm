@@ -213,12 +213,11 @@ impl arch::LinuxArch for Riscv64 {
 
         let com_evt_1_3 = Event::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = Event::new().map_err(Error::CreateEvent)?;
-        let serial_devices = arch::add_serial_devices(
+        arch::add_serial_devices(
             components.hv_cfg.protection_type,
             &mmio_bus,
-            // TODO: the IRQ numbers are bogus since the events aren't actually wired up
-            (0, &com_evt_1_3),
-            (0, &com_evt_2_4),
+            &com_evt_1_3,
+            &com_evt_2_4,
             serial_parameters,
             serial_jail,
             #[cfg(feature = "swap")]
@@ -285,7 +284,7 @@ impl arch::LinuxArch for Riscv64 {
             .insert(pci_bus, RISCV64_PCI_CFG_BASE, RISCV64_PCI_CFG_SIZE)
             .map_err(Error::RegisterPci)?;
 
-        get_serial_cmdline(&mut cmdline, serial_parameters, "mmio", serial_devices)
+        get_serial_cmdline(&mut cmdline, serial_parameters, "mmio")
             .map_err(Error::GetSerialCmdline)?;
         for param in components.extra_kernel_params {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;

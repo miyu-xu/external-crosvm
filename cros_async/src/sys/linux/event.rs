@@ -39,13 +39,12 @@ mod tests {
     use super::*;
     use crate::common_executor::RawExecutor;
     use crate::sys::linux::uring_executor::is_uring_stable;
-    use crate::ExecutorTrait;
 
     pub(crate) fn new_poll(
         event: Event,
         ex: &Arc<RawExecutor<EpollReactor>>,
     ) -> AsyncResult<EventAsync> {
-        ex.async_from(event)
+        ex.new_source(event)
             .map(|io_source| EventAsync { io_source })
     }
 
@@ -53,7 +52,7 @@ mod tests {
         event: Event,
         ex: &Arc<RawExecutor<UringReactor>>,
     ) -> AsyncResult<EventAsync> {
-        ex.async_from(event)
+        ex.new_source(event)
             .map(|io_source| EventAsync { io_source })
     }
 

@@ -1576,9 +1576,11 @@ impl VirtioDevice for Balloon {
         self.start_worker(mem, interrupt, queues)
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
-        let _worker = self.stop_worker();
-        Ok(())
+    fn reset(&mut self) -> bool {
+        if let StoppedWorker::AlreadyStopped = self.stop_worker() {
+            return false;
+        }
+        true
     }
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {

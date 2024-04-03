@@ -6,21 +6,25 @@ use std::sync::Arc;
 
 use base::RawDescriptor;
 use devices::serial_device::SerialParameters;
+use devices::Bus;
 use devices::BusDevice;
 use devices::ProxyDevice;
 use devices::Serial;
 use minijail::Minijail;
 use sync::Mutex;
 
+use crate::serial::SERIAL_ADDR;
 use crate::DeviceRegistrationError;
 
 pub fn add_serial_device(
+    com_num: usize,
     com: Serial,
     _serial_parameters: &SerialParameters,
     serial_jail: Option<Minijail>,
     preserved_descriptors: Vec<RawDescriptor>,
+    io_bus: &Bus,
     #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
-) -> std::result::Result<Arc<Mutex<dyn BusDevice>>, DeviceRegistrationError> {
+) -> std::result::Result<(), DeviceRegistrationError> {
     let com: Arc<Mutex<dyn BusDevice>> = if let Some(serial_jail) = serial_jail {
         Arc::new(Mutex::new(
             ProxyDevice::new(
@@ -35,5 +39,6 @@ pub fn add_serial_device(
     } else {
         Arc::new(Mutex::new(com))
     };
-    Ok(com)
+    io_bus.insert(com, SERIAL_ADDR[com_num], 0x8).unwrap();
+    Ok(())
 }

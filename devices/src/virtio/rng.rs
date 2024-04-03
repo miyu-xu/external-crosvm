@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::anyhow;
-use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Event;
@@ -16,6 +15,8 @@ use base::WaitContext;
 use base::WorkerThread;
 use rand::rngs::OsRng;
 use rand::RngCore;
+use remain::sorted;
+use thiserror::Error;
 use vm_memory::GuestMemory;
 
 use super::DeviceType;
@@ -26,8 +27,10 @@ use super::VirtioDevice;
 const QUEUE_SIZE: u16 = 256;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
 
-// Chosen to match the Linux guest driver RNG buffer refill size.
-const CHUNK_SIZE: usize = 64;
+#[sorted]
+#[derive(Error, Debug)]
+pub enum RngError {}
+pub type Result<T> = std::result::Result<T, RngError>;
 
 struct Worker {
     interrupt: Interrupt,
@@ -35,33 +38,33 @@ struct Worker {
 }
 
 impl Worker {
-    fn process_queue(&mut self) {
-        let mut rand_bytes = [0u8; CHUNK_SIZE];
+    fn process_queue(&mut self) -> bool {
+        let queue = &mut self.queue;
+
         let mut needs_interrupt = false;
-
-        while let Some(mut avail_desc) = self.queue.pop() {
+        while let Some(mut avail_desc) = queue.pop() {
             let writer = &mut avail_desc.writer;
-            while writer.available_bytes() > 0 {
-                let chunk_size = writer.available_bytes().min(CHUNK_SIZE);
-                let chunk = &mut rand_bytes[..chunk_size];
-                OsRng.fill_bytes(chunk);
-                if let Err(e) = writer.write_all(chunk) {
-                    warn!("Failed to write random data to the guest: {}", e);
-                    break;
-                }
-            }
+            let avail_bytes = writer.available_bytes();
 
-            let written_size = writer.bytes_written();
-            self.queue.add_used(avail_desc, written_size as u32);
+            let mut rand_bytes = vec![0u8; avail_bytes];
+            OsRng.fill_bytes(&mut rand_bytes);
+
+            let written_size = match writer.write_all(&rand_bytes) {
+                Ok(_) => rand_bytes.len(),
+                Err(e) => {
+                    warn!("Failed to write random data to the guest: {}", e);
+                    0usize
+                }
+            };
+
+            queue.add_used(avail_desc, written_size as u32);
             needs_interrupt = true;
         }
 
-        if needs_interrupt {
-            self.queue.trigger_interrupt(&self.interrupt);
-        }
+        needs_interrupt
     }
 
-    fn run(&mut self, kill_evt: Event) -> anyhow::Result<()> {
+    fn run(mut self, kill_evt: Event) -> anyhow::Result<Vec<Queue>> {
         #[derive(EventToken)]
         enum Token {
             QueueAvailable,
@@ -69,29 +72,43 @@ impl Worker {
             Kill,
         }
 
-        let wait_ctx = WaitContext::build_with(&[
+        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (self.queue.event(), Token::QueueAvailable),
             (&kill_evt, Token::Kill),
-        ])
-        .context("failed creating WaitContext")?;
-
+        ]) {
+            Ok(pc) => pc,
+            Err(e) => {
+                return Err(anyhow!("failed creating WaitContext: {}", e));
+            }
+        };
         if let Some(resample_evt) = self.interrupt.get_resample_evt() {
-            wait_ctx
+            if wait_ctx
                 .add(resample_evt, Token::InterruptResample)
-                .context("failed adding resample event to WaitContext.")?;
+                .is_err()
+            {
+                return Err(anyhow!("failed adding resample event to WaitContext."));
+            }
         }
 
-        let mut exiting = false;
-        while !exiting {
-            let events = wait_ctx.wait().context("failed polling for events")?;
+        'wait: loop {
+            let events = match wait_ctx.wait() {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("failed polling for events: {}", e);
+                    break;
+                }
+            };
+
+            let mut needs_interrupt = false;
+            let mut exiting = false;
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        self.queue
-                            .event()
-                            .wait()
-                            .context("failed reading queue Event")?;
-                        self.process_queue();
+                        if let Err(e) = self.queue.event().wait() {
+                            error!("failed reading queue Event: {}", e);
+                            break 'wait;
+                        }
+                        needs_interrupt |= self.process_queue();
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
@@ -99,21 +116,26 @@ impl Worker {
                     Token::Kill => exiting = true,
                 }
             }
+            if needs_interrupt {
+                self.queue.trigger_interrupt(&self.interrupt);
+            }
+            if exiting {
+                break;
+            }
         }
-
-        Ok(())
+        Ok(vec![self.queue])
     }
 }
 
 /// Virtio device for exposing entropy to the guest OS through virtio.
 pub struct Rng {
-    worker_thread: Option<WorkerThread<Worker>>,
+    worker_thread: Option<WorkerThread<anyhow::Result<Vec<Queue>>>>,
     virtio_features: u64,
 }
 
 impl Rng {
     /// Create a new virtio rng device that gets random data from /dev/urandom.
-    pub fn new(virtio_features: u64) -> anyhow::Result<Rng> {
+    pub fn new(virtio_features: u64) -> Result<Rng> {
         Ok(Rng {
             worker_thread: None,
             virtio_features,
@@ -151,27 +173,28 @@ impl VirtioDevice for Rng {
         let queue = queues.remove(&0).unwrap();
 
         self.worker_thread = Some(WorkerThread::start("v_rng", move |kill_evt| {
-            let mut worker = Worker { interrupt, queue };
-            if let Err(e) = worker.run(kill_evt) {
-                error!("rng worker thread failed: {:#}", e);
-            }
-            worker
+            let worker = Worker { interrupt, queue };
+            worker.run(kill_evt)
         }));
 
         Ok(())
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> bool {
         if let Some(worker_thread) = self.worker_thread.take() {
-            let _worker = worker_thread.stop();
+            if let Err(e) = worker_thread.stop() {
+                error!("rng worker failed: {:#}", e);
+                return false;
+            }
+            return true;
         }
-        Ok(())
+        false
     }
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            let worker = worker_thread.stop();
-            return Ok(Some(BTreeMap::from([(0, worker.queue)])));
+            let queues = worker_thread.stop()?;
+            return Ok(Some(BTreeMap::from_iter(queues.into_iter().enumerate())));
         }
         Ok(None)
     }

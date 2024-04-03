@@ -51,7 +51,7 @@ impl VhostUserDeviceBuilder for BlockAsync {
             acked_features: 0,
             acked_protocol_features: VhostUserProtocolFeatures::empty(),
         };
-        let handler = DeviceRequestHandler::new(backend);
+        let handler = DeviceRequestHandler::new(Box::new(backend));
         Ok(Box::new(handler))
     }
 }
@@ -103,9 +103,7 @@ impl VhostUserDevice for BlockBackend {
     }
 
     fn reset(&mut self) {
-        if let Err(e) = self.inner.reset() {
-            base::error!("reset failed: {:#}", e);
-        }
+        self.inner.reset();
     }
 
     fn start_queue(
@@ -126,7 +124,8 @@ impl VhostUserDevice for BlockBackend {
         // TODO: This assumes that `reset` only stops workers which might not be true in the
         // future. Consider moving the `reset` code into a `stop_all_workers` method or, maybe,
         // make `stop_queue` implicitly stop a worker thread when there is no active queue.
-        self.inner.reset()
+        self.inner.reset();
+        Ok(())
     }
 
     fn snapshot(&self) -> anyhow::Result<Vec<u8>> {

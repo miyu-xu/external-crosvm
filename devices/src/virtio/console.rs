@@ -394,7 +394,7 @@ impl VirtioDevice for Console {
         self.pci_address
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> bool {
         if let Some(input_thread) = self.input_thread.take() {
             self.input = Some(input_thread.stop());
         }
@@ -406,8 +406,9 @@ impl VirtioDevice for Console {
                 .input
                 .map_or(VecDeque::new(), |arc_mutex| arc_mutex.lock().clone());
             self.output = Some(worker.output);
+            return true;
         }
-        Ok(())
+        false
     }
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {

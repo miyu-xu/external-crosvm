@@ -36,14 +36,13 @@ mod tests {
     use crate::common_executor::RawExecutor;
     use crate::sys::linux::uring_executor::is_uring_stable;
     use crate::Executor;
-    use crate::ExecutorTrait;
 
     impl TimerAsync<Timer> {
         pub(crate) fn new_poll(
             timer: Timer,
             ex: &Arc<RawExecutor<EpollReactor>>,
         ) -> AsyncResult<TimerAsync<Timer>> {
-            ex.async_from(timer)
+            ex.new_source(timer)
                 .map(|io_source| TimerAsync { io_source })
         }
 
@@ -51,7 +50,7 @@ mod tests {
             timer: Timer,
             ex: &Arc<RawExecutor<UringReactor>>,
         ) -> AsyncResult<TimerAsync<Timer>> {
-            ex.async_from(timer)
+            ex.new_source(timer)
                 .map(|io_source| TimerAsync { io_source })
         }
     }

@@ -204,7 +204,6 @@ mod tests {
     use super::*;
     use crate::sys::linux::ExecutorKindSys;
     use crate::Executor;
-    use crate::ExecutorTrait;
     use crate::IoSource;
 
     async fn read_u64<T: AsRawDescriptor>(source: &UringSource<T>) -> u64 {
@@ -386,7 +385,7 @@ mod tests {
             waker: None,
         }));
 
-        let uring_ex = Executor::with_executor_kind(ExecutorKindSys::Uring.into()).unwrap();
+        let uring_ex = Executor::with_executor_kind(ExecutorKindSys::Uring).unwrap();
         let f = File::open("/dev/zero").unwrap();
         let source = uring_ex.async_from(f).unwrap();
 
@@ -395,7 +394,7 @@ mod tests {
         };
         let handle = std::thread::spawn(move || uring_ex.run_until(quit));
 
-        let poll_ex = Executor::with_executor_kind(ExecutorKindSys::Fd.into()).unwrap();
+        let poll_ex = Executor::with_executor_kind(ExecutorKindSys::Fd).unwrap();
         poll_ex.run_until(go(source)).unwrap();
 
         state.lock().wake();
@@ -421,7 +420,7 @@ mod tests {
             waker: None,
         }));
 
-        let poll_ex = Executor::with_executor_kind(ExecutorKindSys::Fd.into()).unwrap();
+        let poll_ex = Executor::with_executor_kind(ExecutorKindSys::Fd).unwrap();
         let f = File::open("/dev/zero").unwrap();
         let source = poll_ex.async_from(f).unwrap();
 
@@ -430,7 +429,7 @@ mod tests {
         };
         let handle = std::thread::spawn(move || poll_ex.run_until(quit));
 
-        let uring_ex = Executor::with_executor_kind(ExecutorKindSys::Uring.into()).unwrap();
+        let uring_ex = Executor::with_executor_kind(ExecutorKindSys::Uring).unwrap();
         uring_ex.run_until(go(source)).unwrap();
 
         state.lock().wake();

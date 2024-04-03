@@ -418,7 +418,6 @@ mod tests {
 
     use super::*;
     use crate::mem::VecIoWrapper;
-    use crate::ExecutorTrait;
 
     fn tempfile_path() -> (PathBuf, TempDir) {
         let dir = tempfile::TempDir::new().unwrap();

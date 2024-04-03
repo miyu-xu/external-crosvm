@@ -1132,16 +1132,18 @@ impl VirtioDevice for BlockAsync {
         Ok(())
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> bool {
+        let mut success = false;
         while let Some((_, (worker_thread, _))) = self.worker_threads.pop_first() {
             let (disk_image, control_tube) = worker_thread.stop();
             self.disk_image = Some(disk_image);
             if let Some(control_tube) = control_tube {
                 self.control_tube = Some(control_tube);
             }
+            success = true;
         }
         self.activated_queues.clear();
-        Ok(())
+        success
     }
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
@@ -1653,7 +1655,7 @@ mod tests {
         );
 
         // reset and assert resources are got back
-        assert!(b.reset().is_ok(), "reset should succeed");
+        assert!(b.reset(), "reset should succeed");
         assert!(
             b.disk_image.is_some(),
             "BlockAsync should have a disk image"

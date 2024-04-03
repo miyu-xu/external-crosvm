@@ -60,7 +60,7 @@ pub trait VhostUserListenerTrait {
     /// This is a legacy way to run devices - prefer `run_device`.
     fn run_backend<'e>(
         self,
-        backend: impl VhostUserDevice + 'static,
+        backend: Box<dyn VhostUserDevice>,
         ex: &'e Executor,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'e>>
     where

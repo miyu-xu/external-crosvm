@@ -51,15 +51,12 @@ use crate::PciAddress;
 
 pub struct VhostUserFrontend {
     device_type: DeviceType,
-    worker_thread: Option<WorkerThread<Option<BackendReqHandler>>>,
+    worker_thread: Option<WorkerThread<()>>,
 
     backend_client: BackendClient,
     avail_features: u64,
     acked_features: u64,
     protocol_features: VhostUserProtocolFeatures,
-    // `backend_req_handler` is only present if the backend supports BACKEND_REQ. `worker_thread`
-    // takes ownership of `backend_req_handler` when it starts. The worker thread will always
-    // return ownershp of the handler when stopped.
     backend_req_handler: Option<BackendReqHandler>,
     // Shared memory region info. IPC result from backend is saved with outer Option.
     shmem_region: RefCell<Option<Option<SharedMemoryRegion>>>,
@@ -122,21 +119,10 @@ impl VhostUserFrontend {
         connection: vmm_vhost::SystemStream,
         device_type: DeviceType,
         max_queue_size: Option<u16>,
-        mut base_features: u64,
+        base_features: u64,
         cfg: Option<&[u8]>,
         pci_address: Option<PciAddress>,
     ) -> Result<VhostUserFrontend> {
-        // Don't allow packed queues even if requested. We don't handle them properly yet at the
-        // protocol layer.
-        // TODO: b/331466964 - Remove once packed queue support is added to BackendClient.
-        if base_features & (1 << virtio_sys::virtio_config::VIRTIO_F_RING_PACKED) != 0 {
-            base_features &= !(1 << virtio_sys::virtio_config::VIRTIO_F_RING_PACKED);
-            base::warn!(
-                "VIRTIO_F_RING_PACKED requested, but not yet supported by vhost-user frontend. \
-                Automatically disabled."
-            );
-        }
-
         #[cfg(windows)]
         let backend_pid = connection.target_pid();
 
@@ -317,12 +303,12 @@ impl VhostUserFrontend {
 
     /// Helper to start up the worker thread that will be used with handling interrupts and requests
     /// from the device process.
-    fn start_worker(&mut self, interrupt: Interrupt, non_msix_evt: Event) {
-        assert!(
-            self.worker_thread.is_none(),
-            "BUG: attempted to start worker twice"
-        );
-
+    fn start_worker(
+        &mut self,
+        interrupt: Interrupt,
+        mem: GuestMemory,
+        non_msix_evt: Event,
+    ) -> Result<WorkerThread<()>> {
         let label = format!("vhost_user_virtio_{}", self.device_type);
 
         let mut backend_req_handler = self.backend_req_handler.take();
@@ -331,22 +317,18 @@ impl VhostUserFrontend {
             handler.frontend_mut().set_interrupt(interrupt.clone());
         }
 
-        self.worker_thread = Some(WorkerThread::start(label.clone(), move |kill_evt| {
-            let ex = cros_async::Executor::new().expect("failed to create an executor");
-            let ex2 = ex.clone();
-            ex.run_until(async {
-                let mut worker = Worker {
-                    kill_evt,
-                    non_msix_evt,
-                    backend_req_handler,
-                };
-                if let Err(e) = worker.run(&ex2, interrupt).await {
-                    error!("failed to run {} worker: {:#}", label, e);
-                }
-                worker.backend_req_handler
-            })
-            .expect("run_until failed")
-        }));
+        Ok(WorkerThread::start(label.clone(), move |kill_evt| {
+            let mut worker = Worker {
+                mem,
+                kill_evt,
+                non_msix_evt,
+                backend_req_handler,
+            };
+
+            if let Err(e) = worker.run(interrupt) {
+                error!("failed to start {} worker: {}", label, e);
+            }
+        }))
     }
 }
 
@@ -450,28 +432,32 @@ impl VirtioDevice for VhostUserFrontend {
 
         drop(msix_config);
 
-        self.start_worker(interrupt, non_msix_evt);
+        self.worker_thread = Some(self.start_worker(interrupt, mem, non_msix_evt)?);
         Ok(())
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> bool {
         for queue_index in 0..self.queue_sizes.len() {
             if self.acked_features & 1 << VHOST_USER_F_PROTOCOL_FEATURES != 0 {
-                self.backend_client
+                if let Err(e) = self
+                    .backend_client
                     .set_vring_enable(queue_index, false)
-                    .context("set_vring_enable failed during reset")?;
+                    .map_err(Error::SetVringEnable)
+                {
+                    error!("Failed to reset device: {}", e);
+                    return false;
+                }
             }
-            let _vring_base = self
+            if let Err(e) = self
                 .backend_client
                 .get_vring_base(queue_index)
-                .context("get_vring_base failed during reset")?;
+                .map_err(Error::GetVringBase)
+            {
+                error!("Failed to reset device: {}", e);
+                return false;
+            }
         }
-
-        if let Some(w) = self.worker_thread.take() {
-            self.backend_req_handler = w.stop();
-        }
-
-        Ok(())
+        true
     }
 
     fn pci_address(&self) -> Option<PciAddress> {
@@ -612,12 +598,21 @@ impl VirtioDevice for VhostUserFrontend {
                     Ok::<(), anyhow::Error>(())
                 })?;
 
-            self.start_worker(
-                interrupt.expect(
-                    "Interrupt doesn't exist. This shouldn't \
+            anyhow::ensure!(
+                self.worker_thread.is_none(),
+                "self.worker_thread is some, but that should not be possible since only cold restore \
+                is supported."
+            );
+            self.worker_thread = Some(
+                self.start_worker(
+                    interrupt.expect(
+                        "Interrupt doesn't exist. This shouldn't \
                         happen since the device is activated.",
-                ),
-                non_msix_evt,
+                    ),
+                    mem,
+                    non_msix_evt,
+                )
+                .context("Failed to start worker on restore.")?,
             );
         }
 

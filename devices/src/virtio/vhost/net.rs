@@ -315,15 +315,16 @@ where
         }
     }
 
-    fn reset(&mut self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> bool {
         if let Some(worker_thread) = self.worker_thread.take() {
             let (worker, tap) = worker_thread.stop();
             self.vhost_net_handle = Some(worker.vhost_handle);
             self.tap = Some(tap);
             self.vhost_interrupt = Some(worker.vhost_interrupt);
             self.response_tube = worker.response_tube;
+            return true;
         }
-        Ok(())
+        false
     }
 }
 
