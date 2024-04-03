@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "57ea8005_5048a11c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1386891
+      },
+      "writtenOn": "2024-04-03T06:48:22Z",
+      "side": 1,
+      "message": "it looks like the same change from upstream has been merged. can we abandon it?",
+      "revId": "365ea69f1bb0cefe88cdc68891ac07e316200a6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
