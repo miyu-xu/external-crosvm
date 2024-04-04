@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::ffi::c_char;
 use std::ffi::CStr;
 use std::panic::catch_unwind;
 use std::process::abort;
@@ -36,19 +37,12 @@ pub(crate) struct ANativeWindow {
 
 }
 
-#[repr(C)]
-pub(crate) struct ANativeWindow_buffer {
-    _data: [u8; 0],
-}
-
 extern "C" {
     fn create_android_display_context(
-        service_name: *const ::std::os::raw::c_char,
-        service_name_len: usize,
+        service_name: *const c_char,
     ) -> *mut AndroidDisplayContext;
 
     fn destroy_android_display_context(
-        error_callback: android_display_error_callback_type,
         self_: *mut AndroidDisplayContext,
     );
 
@@ -64,61 +58,54 @@ extern "C" {
     );
 
     fn get_android_surface_buffer(
-        ctx: *mut AndroidDisplayContext,
         surface: *mut ANativeWindow,
     ) -> *mut u8;
 
-    fn post_android_surface((
-        ctx: *mut AndroidDisplayContext,
-        surface: *mut AndroidSurface,
+    fn post_android_surface_buffer(
+        surface: *mut ANativeWindow,
     );
 }
 
-unsafe extern "C" fn error_callback(message: *const ::std::os::raw::c_char) {
-    catch_unwind(|| {
-        error!(
-            "{}",
-            // SAFETY:  message is null terminated
-            unsafe { CStr::from_ptr(message) }.to_string_lossy()
-        )
-    })
-    .unwrap_or_else(|_| abort())
+struct AndroidSurface {
+    surface: NonNull<ANativeWindow>,
+    width: u32,
+    height: u32,
 }
 
-impl Drop for AndroidDisplayContext {
-    fn drop(&mut self) {
-        // SAFETY: the context pointer is non-null and always valid.
-        unsafe {
-            destroy_android_display_context(Some(error_callback), self as *mut AndroidDisplayContext);
-        }
+impl AndroidSurface {
+    fn buffer_size(&self) -> usize {
+        (self.width * self.height * self.bytes_per_pixel()) as usize
+    }
+
+    fn stride(&self) -> u32 {
+        self.width * self.bytes_per_pixel()
+    }
+
+    fn bytes_per_pixel(&self) -> u32 {
+        4
+>>>>>>> 4d816cbd2 (gpu display)
     }
 }
 
-impl GpuDisplaySurface for AndroidDisplayContext {
+impl GpuDisplaySurface for AndroidSurface {
     fn framebuffer(&mut self) -> Option<GpuDisplayFramebuffer> {
-        let ctx = self as *mut AndroidDisplayContext;
-        let buf = unsafe { get_android_display_context(ctx) };
-        let width = unsafe { get_android_display_width(ctx) };
-        let height = unsafe { get_android_display_height(ctx) };
-        let stride = (width * 4) as usize;
-        let total_size = (width * height * 4) as usize;
-        let buf = unsafe { slice::from_raw_parts_mut(buf,  total_size)};
+        let buf = unsafe {
+            get_android_surface_buffer(self.surface.as_ptr() as *mut ANativeWindow)
+        };
+        let buf = unsafe {
+            slice::from_raw_parts_mut(buf, self.buffer_size())
+        };
         Some(GpuDisplayFramebuffer::new(
             VolatileSlice::new(buf),
-            stride,
-            4,
+            self.stride(),
+            self.bytes_per_pixel(),
         ))
     }
 
     fn flip(&mut self) {
-        let ctx = self.context.lock().unwrap();
-        // SAFETY: self.buffer is not leaked outside of this function
         unsafe {
-            blit_android_display(
-                Some(error_callback),
-                &mut *ctx as *mut AndroidDisplayContext,
-            )
-        };
+            post_android_surface_buffer(self.surface.as_ptr() as *mut ANativeWindow)
+        }
     }
 }
 
@@ -130,29 +117,18 @@ pub struct DisplayAndroid {
 
 impl DisplayAndroid {
     pub fn new(service_name: &str) -> GpuDisplayResult<DisplayAndroid> {
-        let event = Event::new().map_err(|_| GpuDisplayError::CreateEvent)?;
-
         let service_name = CString::new(service_name).or(Err(
             GpuDisplayError::InvalidAndroidDisplayServiceName(service_name.to_string()),
         ))?;
-
-        let context = 
-            NonNull::new(
+        let context = NonNull::new(
                 // SAFETY: service_name is not leaked outside of this function
                 unsafe {
-                    create_android_display_context(
-                        service_name.as_ptr() as *const ::std::os::raw::c_char,
-                        service_name.len(),
-                        Some(error_callback),
-                    )
-                },
+                    create_android_display_context(service_name.as_ptr())
+                }
             )
             .ok_or(GpuDisplayError::Unsupported)?;
-
-        Ok(DisplayAndroid {
-            context: Arc::new(Mutex::new(context)),
-            event,
-        })
+        let event = Event::new().map_err(|_| GpuDisplayError::CreateEvent)?;
+        Ok(DisplayAndroid { context, event })
     }
 }
 
@@ -170,16 +146,21 @@ impl DisplayT for DisplayAndroid {
             return Err(GpuDisplayError::Unsupported);
         }
 
-        let bytes_per_pixel = 4;
-        let bytes_total =
-            (requested_width as u64) * (requested_height as u64) * (bytes_per_pixel as u64);
+        let surface = NonNull::new(
+            unsafe {
+                create_android_surface(
+                    self.context.as_ptr() as *mut AndroidDisplayContext,
+                    requested_width,
+                    requested_height,
+                )
+            }
+        ).ok_or(GpuDisplayError::CreateSurface)?;
+
+
         Ok(Box::new(AndroidSurface {
-            context: self.context.clone(),
-            buffer: Buffer {
-                width: requested_width,
-                height: requested_height,
-                bytes_per_pixel,
-            },
+            surface,
+            width: requested_width,
+            height: requested_height,
         }))
     }
 }

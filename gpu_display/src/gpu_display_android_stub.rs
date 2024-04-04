@@ -8,46 +8,52 @@
 //! without libcrosvm_android_display_client available. It is only used for testing purposes and
 //! not functional at runtime.
 
+use std::ffi::c_char;
+
 use crate::gpu_display_android::AndroidDisplayContext;
-use crate::gpu_display_android::android_display_error_callback_type;
+use crate::gpu_display_android::ANativeWindow;
 
 #[no_mangle]
 extern "C" fn create_android_display_context(
-    _service_name: *const ::std::os::raw::c_char,
-    _service_name_len: ::std::os::raw::c_ulong,
-    _error_callback: android_display_error_callback_type,
+    service_name: *const c_char,
 ) -> *mut AndroidDisplayContext {
     unimplemented!();
 }
 
 #[no_mangle]
 extern "C" fn destroy_android_display_context(
-    _error_callback: android_display_error_callback_type,
-    _self_: *mut AndroidDisplayContext,
+    self_: *mut AndroidDisplayContext,
 ) {
     unimplemented!();
 }
 
 #[no_mangle]
-extern "C" fn get_android_display_width(
-    _error_callback: android_display_error_callback_type,
-    _self_: *mut AndroidDisplayContext,
-) -> u32 {
+extern "C" fn create_android_surface(
+    ctx: *mut AndroidDisplayContext,
+    width: u32,
+    height: u32,
+) -> *mut ANativeWindow {
     unimplemented!();
 }
 
 #[no_mangle]
-extern "C" fn get_android_display_height(
-    _error_callback: android_display_error_callback_type,
-    _self_: *mut AndroidDisplayContext,
-) -> u32 {
+extern "C" fn destroy_android_surface(
+    ctx: *mut AndroidDisplayContext,
+    surface: *mut ANativeWindow,
+) {
     unimplemented!();
 }
 
 #[no_mangle]
-extern "C" fn blit_android_display(
-    _error_callback: android_display_error_callback_type,
-    _self_: *mut AndroidDisplayContext,
+extern "C" fn get_android_surface_buffer(
+    surface: *mut ANativeWindow,
+) -> *mut u8 {
+    unimplemented!();
+}
+
+#[no_mangle]
+extern "C" fn post_android_surface_buffer(
+    surface: *mut ANativeWindow,
 ) {
     unimplemented!();
 }
