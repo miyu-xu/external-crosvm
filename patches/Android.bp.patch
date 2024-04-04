@@ -1,8 +1,8 @@
 diff --git a/Android.bp b/Android.bp
-index 509b3b73d..163a24305 100644
+index 5df1c8cdc..7bacdd74d 100644
 --- a/Android.bp
 +++ b/Android.bp
-@@ -37,6 +37,7 @@ rust_binary {
+@@ -36,6 +36,7 @@ rust_binary {
      name: "crosvm",
      defaults: ["crosvm_inner_defaults"],
      host_supported: true,
@@ -10,7 +10,7 @@ index 509b3b73d..163a24305 100644
      crate_name: "crosvm",
      cargo_env_compat: true,
      cargo_pkg_version: "0.1.0",
-@@ -54,7 +55,6 @@ rust_binary {
+@@ -53,7 +54,6 @@ rust_binary {
          "gdbstub_arch",
          "geniezone",
          "gfxstream",
@@ -18,16 +18,18 @@ index 509b3b73d..163a24305 100644
          "gpu",
          "gpu_display",
          "gunyah",
-@@ -135,6 +135,8 @@ rust_binary {
+@@ -134,6 +134,10 @@ rust_binary {
          },
          android: {
              shared_libs: [
++                // TODO(b/332677108): remove libc++ when display service is rewritten in rust.
++                "libc++",
 +                "libbinder_ndk",
 +                "libnativewindow",
                  "libprocessgroup",
              ],
          },
-@@ -143,6 +145,18 @@ rust_binary {
+@@ -142,6 +146,18 @@ rust_binary {
                  "libprocessgroup",
              ],
          },
@@ -46,7 +48,7 @@ index 509b3b73d..163a24305 100644
      },
      ld_flags: [
          "-Wl,--rpath,\\$$ORIGIN",
-@@ -177,7 +191,6 @@ rust_test {
+@@ -176,7 +192,6 @@ rust_test {
          "gdbstub_arch",
          "geniezone",
          "gfxstream",
