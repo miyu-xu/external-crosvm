@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c7732b89_aa767ffb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 5
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-04T09:04:16Z",
+      "side": 1,
+      "message": "@jeongik@google.com it looks like libc++ should be added also to `libgpu_display.dylib.so`",
+      "revId": "c04b725271ba5d8613c9c2bf40d451c2361b9ac6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
