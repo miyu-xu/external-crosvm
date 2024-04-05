@@ -1,0 +1,44 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8fecd283_cf8dc8c7",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-05T17:50:39Z",
+      "side": 1,
+      "message": "i wonder if we can fix this in soong one day",
+      "range": {
+        "startLine": 25,
+        "startChar": 0,
+        "endLine": 26,
+        "endChar": 56
+      },
+      "revId": "fbf230b6f8e7fead6cc716b8632396bc971a8979",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1ffeb1bc_c7a04730",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 72,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-05T17:50:39Z",
+      "side": 1,
+      "message": "consider updating the test module too",
+      "revId": "fbf230b6f8e7fead6cc716b8632396bc971a8979",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
