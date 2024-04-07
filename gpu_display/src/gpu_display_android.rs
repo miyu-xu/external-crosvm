@@ -4,6 +4,7 @@
 
 use std::ffi::c_char;
 use std::ffi::CStr;
+use std::ffi::CString;
 use std::panic::catch_unwind;
 use std::process::abort;
 use std::ptr::NonNull;
@@ -39,7 +40,7 @@ pub(crate) struct ANativeWindow {
 
 extern "C" {
     fn create_android_display_context(
-        service_name: *const c_char,
+        uds_path: *const c_char,
     ) -> *mut AndroidDisplayContext;
 
     fn destroy_android_display_context(
@@ -83,7 +84,6 @@ impl AndroidSurface {
 
     fn bytes_per_pixel(&self) -> u32 {
         4
->>>>>>> 4d816cbd2 (gpu display)
     }
 }
 

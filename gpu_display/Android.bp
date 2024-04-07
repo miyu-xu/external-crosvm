@@ -58,6 +58,7 @@ rust_library {
             shared_libs: [
                 "libc++",
                 "libbinder_ndk",
+                "libbinder_rpc_unstable",
                 "libnativewindow",
             ],
         },
