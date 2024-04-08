@@ -1124,7 +1124,7 @@ pub enum DisplayBackend {
     /// that the backend hosts. Currently, the AIDL service is registered to the service manager
     /// using the name given here. The entity holding the surface is expected to locate the service
     /// via this name, and pass the surface to it.
-    Android(String),
+    Android(PathBuf),
 }
 
 impl DisplayBackend {
@@ -1154,7 +1154,7 @@ impl DisplayBackend {
                 }
             },
             #[cfg(feature = "android_display")]
-            DisplayBackend::Android(service_name) => GpuDisplay::open_android(service_name),
+            DisplayBackend::Android(socket) => GpuDisplay::open_android(socket.as_ref()),
         }
     }
 }

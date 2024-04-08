@@ -639,7 +639,7 @@ pub struct Config {
     pub ac_adapter: bool,
     pub acpi_tables: Vec<PathBuf>,
     #[cfg(feature = "android_display")]
-    pub android_display_service: Option<String>,
+    pub android_display_service: Option<PathBuf>,
     pub android_fstab: Option<PathBuf>,
     pub async_executor: Option<ExecutorKind>,
     #[cfg(feature = "balloon")]

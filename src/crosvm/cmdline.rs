@@ -949,8 +949,8 @@ pub struct RunCommand {
     #[cfg(feature = "android_display")]
     #[argh(option, arg_name = "NAME")]
     #[merge(strategy = overwrite_option)]
-    /// name that the Android display backend will be registered to the service manager.
-    pub android_display_service: Option<String>,
+    /// path for the socket controlling the Android display backend
+    pub android_display_service: Option<PathBuf>,
 
     #[argh(option)]
     #[serde(skip)] // TODO(b/255223604)

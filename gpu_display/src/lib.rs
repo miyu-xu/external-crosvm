@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::io::Error as IoError;
 use std::time::Duration;
+use std::path::Path;
 
 use anyhow::anyhow;
 use anyhow::Context;
@@ -447,11 +448,11 @@ impl GpuDisplay {
         Err(GpuDisplayError::Unsupported)
     }
 
-    pub fn open_android(service_name: &str) -> GpuDisplayResult<GpuDisplay> {
-        let _ = service_name;
+    pub fn open_android(socket: &Path) -> GpuDisplayResult<GpuDisplay> {
+        let _ = socket;
         #[cfg(feature = "android_display")]
         {
-            let display = gpu_display_android::DisplayAndroid::new(service_name)?;
+            let display = gpu_display_android::DisplayAndroid::new(socket)?;
 
             let wait_ctx = WaitContext::new()?;
             wait_ctx.add(&display, DisplayEventToken::Display)?;

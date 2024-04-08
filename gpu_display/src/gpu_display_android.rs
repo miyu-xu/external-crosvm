@@ -6,11 +6,13 @@ use std::ffi::c_char;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::panic::catch_unwind;
+use std::path::Path;
 use std::process::abort;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::slice;
+use std::os::unix::ffi::OsStrExt;
 
 use base::error;
 use base::warn;
@@ -116,14 +118,13 @@ pub struct DisplayAndroid {
 }
 
 impl DisplayAndroid {
-    pub fn new(service_name: &str) -> GpuDisplayResult<DisplayAndroid> {
-        let service_name = CString::new(service_name).or(Err(
-            GpuDisplayError::InvalidAndroidDisplayServiceName(service_name.to_string()),
-        ))?;
+    pub fn new(socket: &Path) -> GpuDisplayResult<DisplayAndroid> {
+        error!("create android display backend. path: {:?}", socket);
+        let socket = CString::new(socket.as_os_str().as_bytes()).unwrap();
         let context = NonNull::new(
                 // SAFETY: service_name is not leaked outside of this function
                 unsafe {
-                    create_android_display_context(service_name.as_ptr())
+                    create_android_display_context(socket.as_ptr())
                 }
             )
             .ok_or(GpuDisplayError::Unsupported)?;
