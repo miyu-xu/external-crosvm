@@ -16,6 +16,29 @@
       "message": "Let\u0027s review this here along with the other change, and then I will upload this to the upstream.",
       "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8c283d9e_e08ddf02",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 104,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2024-04-09T15:50:05Z",
+      "side": 1,
+      "message": "optional: does `LINT.IfChange` work across projects? If so, maybe could do that here and in `crosvm_android_display_client.cpp` next to the `ANativeWindow_setBuffersGeometry()` call.",
+      "range": {
+        "startLine": 103,
+        "startChar": 8,
+        "endLine": 104,
+        "endChar": 43
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
