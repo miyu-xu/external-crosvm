@@ -18,6 +18,75 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "33c9372f_d3394cf4",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "consider using the trick at https://doc.rust-lang.org/nomicon/ffi.html#representing-opaque-structs",
+      "range": {
+        "startLine": 31,
+        "startChar": 0,
+        "endLine": 41,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2979db0e_9d3f2ef6",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 52,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "can we either (1) make this an opaque blob and provide accessor functions or (2) define another struct specifically for the FFI boundary and perform the translation  from `ANativeWindow_Buffer` to that type inside `libandroid_display_backend`. it is small enough that a conversion should be cheap",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 52,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4a46f4b2_3aa466a2",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 79,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "can you write some API docs to define the expectations/contract? ideally we don\u0027t need to read the AOSP implementation(s) to decide what kind of code changes are OK in crosvm and vice versa\n\nfor example, is it still safe to access the buffer memory from `get_android_surface_buffer` after is `post_android_surface_buffer` called?",
+      "range": {
+        "startLine": 56,
+        "startChar": 0,
+        "endLine": 79,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "8c283d9e_e08ddf02",
@@ -37,6 +106,156 @@
         "endLine": 104,
         "endChar": 43
       },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "12fda4f2_6674e70f",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 104,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "i think it would be best to avoid the `LINT.IfChange` mindset here. try to keep the coupling loose so that we can tolerate some version skew (so things are potentially less painful if we end up having to backport changes on either side)",
+      "parentUuid": "8c283d9e_e08ddf02",
+      "range": {
+        "startLine": 103,
+        "startChar": 8,
+        "endLine": 104,
+        "endChar": 43
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b99c3506_330f19e4",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "what\u0027s a `ANativeWindow_lock` and a `ANativeWindow_unlockAndPost`? i don\u0027t see anything like that in your API boundary :)",
+      "range": {
+        "startLine": 108,
+        "startChar": 0,
+        "endLine": 109,
+        "endChar": 73
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f91135fb_18c202e8",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "the lifetime of this slice may last until *AFTER* the `ANativeWindow_unlockAndPost` call though, at least as far as you can tell from this function\n\nthere is some attempt in this code base to use rust\u0027s borrow checker to validate that the frame buffers live long. i\u0027m not sure how bullet proof the other uses of it are, but this one is technically wrong",
+      "range": {
+        "startLine": 108,
+        "startChar": 88,
+        "endLine": 109,
+        "endChar": 72
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2183c2a2_41a25d1e",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 129,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "shouldn\u0027t need this cast",
+      "range": {
+        "startLine": 129,
+        "startChar": 37,
+        "endLine": 129,
+        "endChar": 59
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2d9b908f_50537a34",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 145,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "shouldn\u0027t need this cast",
+      "range": {
+        "startLine": 145,
+        "startChar": 38,
+        "endLine": 145,
+        "endChar": 59
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "aea71d87_1c5d11fb",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "why switch back to null terminated strings?",
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3cae1f8e_c8c7618d",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 194,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T22:37:40Z",
+      "side": 1,
+      "message": "this is sharing the `AndroidDisplayContext` ptr among multiple objects with no ref counting or lifetime tracking. if `self` is dropped before the `AndroidSurface`, then you will get a use-after-free",
       "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
