@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "abf7f9a1_24b19dc0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-09T19:16:11Z",
+      "side": 1,
+      "message": "cherrypicking this to reduce the scope because the nix update touches a lot of other AOSP repos",
+      "revId": "37cba2a3e4b60a0d6174215e1fe2ce18457767b5",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
