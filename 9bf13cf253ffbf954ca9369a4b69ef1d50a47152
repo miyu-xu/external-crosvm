@@ -41,6 +41,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "21e7001b_654bcafe",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "33c9372f_d3394cf4",
+      "range": {
+        "startLine": 31,
+        "startChar": 0,
+        "endLine": 41,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2979db0e_9d3f2ef6",
@@ -54,6 +78,30 @@
       "writtenOn": "2024-04-09T22:37:40Z",
       "side": 1,
       "message": "can we either (1) make this an opaque blob and provide accessor functions or (2) define another struct specifically for the FFI boundary and perform the translation  from `ANativeWindow_Buffer` to that type inside `libandroid_display_backend`. it is small enough that a conversion should be cheap",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 52,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "15915cef_e8040fb2",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 52,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "I thought that, but ANativeWindow_Buffer is a part of NDK. It\u0027s layout is guaranteed to be stable. (ANativeWindow* is defined as an opaque handle in NDK).",
+      "parentUuid": "2979db0e_9d3f2ef6",
       "range": {
         "startLine": 42,
         "startChar": 0,
@@ -83,6 +131,47 @@
         "endLine": 79,
         "endChar": 1
       },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "26e8cd0f_96e4444e",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 79,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4a46f4b2_3aa466a2",
+      "range": {
+        "startLine": 56,
+        "startChar": 0,
+        "endLine": 79,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "41e73133_e25e51ab",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 96,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "This was wrong. It caused stack overflow because of the infinite recursion.",
       "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -180,6 +269,54 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0acd3dda_fddbaa3b",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "in this function, yes, but inside of crosvm, the lifecycle of the slice is during one frame. (1) obtain a new slice, (2) draw something on it, and then (3) send the slice back to the display system. See the blow block.\n\nhttps://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/devices/src/virtio/gpu/virtio_gpu.rs;l\u003d380-387?q\u003df:virtio_gpu.rs\u0026ss\u003dandroid%2Fplatform%2Fsuperproject%2Fmain",
+      "parentUuid": "f91135fb_18c202e8",
+      "range": {
+        "startLine": 108,
+        "startChar": 88,
+        "endLine": 109,
+        "endChar": 72
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "67394348_ae56a2e4",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "switched to the wrapper API names.",
+      "parentUuid": "b99c3506_330f19e4",
+      "range": {
+        "startLine": 108,
+        "startChar": 0,
+        "endLine": 109,
+        "endChar": 73
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2183c2a2_41a25d1e",
@@ -193,6 +330,30 @@
       "writtenOn": "2024-04-09T22:37:40Z",
       "side": 1,
       "message": "shouldn\u0027t need this cast",
+      "range": {
+        "startLine": 129,
+        "startChar": 37,
+        "endLine": 129,
+        "endChar": 59
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e7f6678_c0f970c5",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 129,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "2183c2a2_41a25d1e",
       "range": {
         "startLine": 129,
         "startChar": 37,
@@ -226,6 +387,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "bb05f204_31251464",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 145,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "2d9b908f_50537a34",
+      "range": {
+        "startLine": 145,
+        "startChar": 38,
+        "endLine": 145,
+        "endChar": 59
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "aea71d87_1c5d11fb",
@@ -243,6 +428,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ccb57a73_ab5af038",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "it\u0027s because I found it more natural to use null-terminated string inside of create_android_display_context. std::string is null-terminated, and many other functions which will be used there (not included in this and the other change yet) there expects null-terminated strings.\n\nI could have constructed a null-terminated string there instead, but that didn\u0027t mean that I could just pass ptr to String and its length (which I did before), because I may be sending a string having NUL in it. i.e. I was breaking the contract actually.\n\nso, I thought ensuring the null terminal here is much simpler.",
+      "parentUuid": "aea71d87_1c5d11fb",
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3cae1f8e_c8c7618d",
@@ -256,6 +459,24 @@
       "writtenOn": "2024-04-09T22:37:40Z",
       "side": 1,
       "message": "this is sharing the `AndroidDisplayContext` ptr among multiple objects with no ref counting or lifetime tracking. if `self` is dropped before the `AndroidSurface`, then you will get a use-after-free",
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d3afbc6e_b13f052d",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 194,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-10T05:52:28Z",
+      "side": 1,
+      "message": "`self` is included in `DisplayAndroid` which in turn is included in `GpuDisplay` and then in `Gpu`. The device doesn\u0027t get dropped until the end of VM. So we are safe.\n\nBut, yeah, it\u0027s not harmful to wrap the context with Rc. Done.",
+      "parentUuid": "3cae1f8e_c8c7618d",
       "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
