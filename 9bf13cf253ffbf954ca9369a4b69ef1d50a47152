@@ -114,6 +114,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "9a54c303_9f5a31a6",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 52,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-10T22:39:21Z",
+      "side": 1,
+      "message": "That makes sense. Can you mention it in the comment?",
+      "parentUuid": "15915cef_e8040fb2",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 52,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "4a46f4b2_3aa466a2",
         "filename": "gpu_display/src/gpu_display_android.rs",
         "patchSetId": 4
@@ -317,6 +341,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "50c53591_99334971",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-10T22:39:21Z",
+      "side": 1,
+      "message": "rust claims it has some attractive properties, like guaranteeing that you can\u0027t have a user-after-free. if you have to examine the whole program, not just the local function context, to determine if you satisfy the safety requirements, then you are tossing those advantages out\n\nthe other implementations seem to tie the buffer lifetime to the `GpuDisplay` instance. someone might make a clever change to gpu code later (maybe reuses the buffer instead of requesting a new one each time) and not realize android_display_backend is a special case\n\nwe don\u0027t need to block this CL over it, but maybe we can adjust the surrounding code to guarantee that the framebuffer object is dropped before flip is called\n\nFWIW, the gpu code is full of bad examples of unsafe code, e.g. the lines you linked to say `// SAFETY: trivially safe`, but the `VolatileSlice` type\u0027s entire purpose for existing is to keep people from converting it to a mutable slice as is essentially being done there",
+      "parentUuid": "0acd3dda_fddbaa3b",
+      "range": {
+        "startLine": 108,
+        "startChar": 88,
+        "endLine": 109,
+        "endChar": 72
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2183c2a2_41a25d1e",
@@ -442,6 +490,24 @@
       "side": 1,
       "message": "it\u0027s because I found it more natural to use null-terminated string inside of create_android_display_context. std::string is null-terminated, and many other functions which will be used there (not included in this and the other change yet) there expects null-terminated strings.\n\nI could have constructed a null-terminated string there instead, but that didn\u0027t mean that I could just pass ptr to String and its length (which I did before), because I may be sending a string having NUL in it. i.e. I was breaking the contract actually.\n\nso, I thought ensuring the null terminal here is much simpler.",
       "parentUuid": "aea71d87_1c5d11fb",
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aef75c46_c2796022",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 159,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-10T22:39:21Z",
+      "side": 1,
+      "message": "\u003e std::string is null-terminated\n\ncan\u0027t you just do `std::string(name_ptr, name_len)`? not only is a safer, but it is faster, no need to compute strlen",
+      "parentUuid": "ccb57a73_ab5af038",
       "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
