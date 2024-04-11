@@ -16,6 +16,24 @@
       "message": "Frederick, how should I land this change? Shall I submit this to upstream and wait until it lands on AOSP, or can I land here first, and submit the same change to upstream with a hope that there will be no merge conflict?",
       "revId": "4e5494276d9736fa697bcd3e62207f8708b1c0a4",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "683180f8_b688f360",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-11T03:16:32Z",
+      "side": 1,
+      "message": "I\u0027d prefer it to go upstream first, then it is OK to cherrypick immediately if you like.",
+      "parentUuid": "62e129d6_bccc9eb9",
+      "revId": "4e5494276d9736fa697bcd3e62207f8708b1c0a4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
