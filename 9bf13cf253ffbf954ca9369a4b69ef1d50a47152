@@ -413,6 +413,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8bd37c73_4c4d693d",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-11T22:50:57Z",
+      "side": 1,
+      "message": "I\u0027m thinking more about the crosvm half. Here is an attempt at what we might do to give the `gpu_display_android` module an easier time proving that the buffer isn\u0027t being used after the flip: https://crrev.com/c/5448402. It is a little ugly in some ways, I\u0027ll try asking the GPU folks what they think before I try to make it nicer.",
+      "parentUuid": "1f8f671d_cc4ae1e4",
+      "range": {
+        "startLine": 108,
+        "startChar": 88,
+        "endLine": 109,
+        "endChar": 72
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2183c2a2_41a25d1e",
