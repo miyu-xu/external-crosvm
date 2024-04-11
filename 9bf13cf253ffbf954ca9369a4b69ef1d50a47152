@@ -136,6 +136,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "4babf323_83134271",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 52,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-11T01:17:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9a54c303_9f5a31a6",
+      "range": {
+        "startLine": 42,
+        "startChar": 0,
+        "endLine": 52,
+        "endChar": 1
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4a46f4b2_3aa466a2",
@@ -355,6 +379,30 @@
       "side": 1,
       "message": "rust claims it has some attractive properties, like guaranteeing that you can\u0027t have a user-after-free. if you have to examine the whole program, not just the local function context, to determine if you satisfy the safety requirements, then you are tossing those advantages out\n\nthe other implementations seem to tie the buffer lifetime to the `GpuDisplay` instance. someone might make a clever change to gpu code later (maybe reuses the buffer instead of requesting a new one each time) and not realize android_display_backend is a special case\n\nwe don\u0027t need to block this CL over it, but maybe we can adjust the surrounding code to guarantee that the framebuffer object is dropped before flip is called\n\nFWIW, the gpu code is full of bad examples of unsafe code, e.g. the lines you linked to say `// SAFETY: trivially safe`, but the `VolatileSlice` type\u0027s entire purpose for existing is to keep people from converting it to a mutable slice as is essentially being done there",
       "parentUuid": "0acd3dda_fddbaa3b",
+      "range": {
+        "startLine": 108,
+        "startChar": 88,
+        "endLine": 109,
+        "endChar": 72
+      },
+      "revId": "9bf13cf253ffbf954ca9369a4b69ef1d50a47152",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1f8f671d_cc4ae1e4",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 109,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-11T01:17:03Z",
+      "side": 1,
+      "message": "I think it stems from the limitation(?) of surfaceflinger that you can\u0027t just pass a randomly allocated buffer (ex: a buffer created/owned by crosvm) to the surfaceflinger and order it to use it. See b//331900473#comment13 and other comments around it if you want more.",
+      "parentUuid": "50c53591_99334971",
       "range": {
         "startLine": 108,
         "startChar": 88,

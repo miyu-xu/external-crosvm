@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "adf8bfa2_bc1780f3",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-11T01:17:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "11921eee_b77064be",
+      "range": {
+        "startLine": 83,
+        "startChar": 8,
+        "endLine": 83,
+        "endChar": 16
+      },
+      "revId": "003b9e92392cb56d644521c2c5dc457799249651",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f38f852d_908e445a",
@@ -47,6 +71,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9d9068c0_00419bd7",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 99,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-11T01:17:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f38f852d_908e445a",
+      "range": {
+        "startLine": 99,
+        "startChar": 18,
+        "endLine": 99,
+        "endChar": 24
+      },
+      "revId": "003b9e92392cb56d644521c2c5dc457799249651",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "7d0845f5_9eeb8957",
@@ -60,6 +108,30 @@
       "writtenOn": "2024-04-10T22:39:21Z",
       "side": 1,
       "message": "I think this is unreachable because `AndroidDisplayContext` can\u0027t be constructed in rust (which means it can\u0027t be dropped either). You\u0027ll need a type to wrap the `NonNull\u003cAndroidDisplayContext\u003e` and implement `Drop` for it (then you\u0027d have `Rc\u003cTheWrapperType\u003e` below)",
+      "range": {
+        "startLine": 116,
+        "startChar": 0,
+        "endLine": 121,
+        "endChar": 1
+      },
+      "revId": "003b9e92392cb56d644521c2c5dc457799249651",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "254e646a_e56b12d0",
+        "filename": "gpu_display/src/gpu_display_android.rs",
+        "patchSetId": 5
+      },
+      "lineNbr": 121,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-11T01:17:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "7d0845f5_9eeb8957",
       "range": {
         "startLine": 116,
         "startChar": 0,
