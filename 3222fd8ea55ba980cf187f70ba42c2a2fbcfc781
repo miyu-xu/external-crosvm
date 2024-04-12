@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "942d69a2_5a63e72d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-04-12T01:00:01Z",
+      "side": 1,
+      "message": "If presubmit is breaking from this change, it means there is a build system bug.",
+      "revId": "3222fd8ea55ba980cf187f70ba42c2a2fbcfc781",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
