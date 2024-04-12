@@ -1,3 +1,4 @@
+<<<<<<< HEAD   (3eba86 Merge "Refactor android display backend" into main)
 // Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -31,3 +32,5 @@ fn build_protos(manifest_dir: &PathBuf) {
     // out_dir.push("metrics_protos");
     proto_build_tools::build_protos(&out_dir, &[event_details_path]);
 }
+=======
+>>>>>>> BRANCH (b0967c Roll recipe dependencies (trivial).)
