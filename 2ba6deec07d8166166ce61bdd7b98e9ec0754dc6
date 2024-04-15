@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd4523fe_8d717c0a",
+        "filename": "vendor/generic/metrics/src/out/event_details.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-04-15T18:09:32Z",
+      "side": 0,
+      "message": "Is this step handled by `cargo_embargo` and the source proto file was removed in the merge? Or this is part of a merge conflict?",
+      "range": {
+        "startLine": 1,
+        "startChar": 16,
+        "endLine": 1,
+        "endChar": 43
+      },
+      "revId": "2ba6deec07d8166166ce61bdd7b98e9ec0754dc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
