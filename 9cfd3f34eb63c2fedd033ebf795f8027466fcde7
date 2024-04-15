@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "2b5f1f14_52051652",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-15T18:09:00Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "093d6a32_e15d411e",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 4
+      },
+      "revId": "9cfd3f34eb63c2fedd033ebf795f8027466fcde7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "8f949c17_2145f3df",
@@ -55,6 +79,24 @@
       "side": 1,
       "message": "sg - do you want to submit this here anyway?",
       "parentUuid": "8f949c17_2145f3df",
+      "revId": "9cfd3f34eb63c2fedd033ebf795f8027466fcde7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "130aaef7_fa62315d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-15T18:09:00Z",
+      "side": 1,
+      "message": "sgtm",
+      "parentUuid": "07e644d4_dde2b2fb",
       "revId": "9cfd3f34eb63c2fedd033ebf795f8027466fcde7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
