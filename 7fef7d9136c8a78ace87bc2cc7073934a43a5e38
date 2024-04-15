@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "94a4fc09_d954329d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956258
+      },
+      "writtenOn": "2024-04-15T18:09:23Z",
+      "side": 1,
+      "message": "kernel team trendy name is trendy_team_android_kernel in case new modules absolutely need them\n```\npackage {\n    default_applicable_licenses: [\"frameworks_base_license\"],\n    default_team: \"trendy_team_android_kernel\",\n}\n```",
+      "revId": "7fef7d9136c8a78ace87bc2cc7073934a43a5e38",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
