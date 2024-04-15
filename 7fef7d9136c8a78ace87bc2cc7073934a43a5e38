@@ -16,6 +16,24 @@
       "message": "kernel team trendy name is trendy_team_android_kernel in case new modules absolutely need them\n```\npackage {\n    default_applicable_licenses: [\"frameworks_base_license\"],\n    default_team: \"trendy_team_android_kernel\",\n}\n```",
       "revId": "7fef7d9136c8a78ace87bc2cc7073934a43a5e38",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4d2778b0_bc318736",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-15T20:07:06Z",
+      "side": 1,
+      "message": "Thanks! using `trendy_team_foundation_security_rust_pkvm_` to start with",
+      "parentUuid": "94a4fc09_d954329d",
+      "revId": "7fef7d9136c8a78ace87bc2cc7073934a43a5e38",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

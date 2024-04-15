@@ -45,6 +45,30 @@
       },
       "revId": "2ba6deec07d8166166ce61bdd7b98e9ec0754dc6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "593edd86_63b7ef78",
+        "filename": "vendor/generic/metrics/src/out/event_details.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-15T20:07:06Z",
+      "side": 0,
+      "message": "`cargo_embargo` copies this file from `cargo`\u0027s intermediary output files. It isn\u0027t smart enough to delete it once the intermediary output file is no longer present though, so I manually deleted it. We could improve that. It will delete the associated build modules though.\n\nThere was no merge conflict for this because it isn\u0027t checked into source control upstream.",
+      "parentUuid": "bd4523fe_8d717c0a",
+      "range": {
+        "startLine": 1,
+        "startChar": 16,
+        "endLine": 1,
+        "endChar": 43
+      },
+      "revId": "2ba6deec07d8166166ce61bdd7b98e9ec0754dc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
