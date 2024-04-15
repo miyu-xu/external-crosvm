@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "79f9e977_845238b2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-15T22:38:47Z",
+      "side": 1,
+      "message": "the failures look like a known flake: http://b/329166035\n\nwill retry at EOD",
+      "revId": "c223989d8457ecb2345a8d2831d8a1e599abcb0c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
