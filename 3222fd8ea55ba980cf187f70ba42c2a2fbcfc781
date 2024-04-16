@@ -16,6 +16,24 @@
       "message": "If presubmit is breaking from this change, it means there is a build system bug.",
       "revId": "3222fd8ea55ba980cf187f70ba42c2a2fbcfc781",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8a22d867_218d7436",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-16T08:45:16Z",
+      "side": 1,
+      "message": "this is fixed with the other CL in the topic.",
+      "parentUuid": "942d69a2_5a63e72d",
+      "revId": "3222fd8ea55ba980cf187f70ba42c2a2fbcfc781",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
