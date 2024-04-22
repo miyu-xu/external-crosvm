@@ -1,3 +1,6 @@
+[features]
+audio_aaudio = []
+
 [package]
 name = "audio_util"
 version = "0.1.0"
@@ -9,3 +12,4 @@ audio_streams = "*"
 async-trait = "0.1.36"
 base = { path = "../base" }
 thiserror = "1.0.20"
+aaudio_backend = "*"
