@@ -47,6 +47,7 @@ rust_binary {
         "android_display",
         "android_display_stub",
         "audio",
+        "audio_aaudio",
         "balloon",
         "config-file",
         "gdb",
