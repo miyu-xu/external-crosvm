@@ -207,6 +207,7 @@ rust_library {
         "android_display",
         "android_display_stub",
         "audio",
+        "audio_aaudio",
         "balloon",
         "geniezone",
         "gfxstream",

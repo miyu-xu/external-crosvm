@@ -15,9 +15,13 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    features: [
+        "audio_aaudio",
+    ],
     rustlibs: [
         "libaudio_streams",
         "libbase_rust",
+        "libaaudio_backend",
         "libthiserror",
     ],
     proc_macros: ["libasync_trait"],
