@@ -792,4 +792,10 @@ impl VcpuX86_64 for FakeVcpu {
     fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, _tsc_offset: u64) -> Result<()> {
         unimplemented!()
     }
+    fn get_clock_state(&self) -> Result<hypervisor::ClockState> {
+        unimplemented!()
+    }
+    fn set_clock_state(&self, clock_state: &hypervisor::ClockState) -> Result<()> {
+        unimplemented!()
+    }
 }

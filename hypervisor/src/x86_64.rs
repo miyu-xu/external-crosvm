@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use vm_memory::GuestAddress;
 
+use crate::ClockState;
 use crate::Hypervisor;
 use crate::IrqRoute;
 use crate::IrqSource;
@@ -209,6 +210,12 @@ pub trait VcpuX86_64: Vcpu {
         self.set_msr(crate::MSR_IA32_TSC, value)
     }
 
+    /// Get the guest clock state
+    fn get_clock_state(&self) -> Result<ClockState>;
+
+    /// Sets the guest clock state flags
+    fn set_clock_state(&self, clock_state: &ClockState) -> Result<()>;
+
     /// Some hypervisors require special handling to restore timekeeping when
     /// a snapshot is restored. They are provided with a host TSC reference
     /// moment, guaranteed to be the same across all Vcpus, and the Vcpu's TSC
@@ -227,6 +234,7 @@ pub trait VcpuX86_64: Vcpu {
             xsave: self.get_xsave()?,
             hypervisor_data: self.get_interrupt_state()?,
             tsc_offset: self.get_tsc_offset()?,
+            clock_state: self.get_clock_state()?,
         })
     }
 
@@ -281,8 +289,9 @@ pub trait VcpuX86_64: Vcpu {
             };
         }
         self.set_xsave(&snapshot.xsave)?;
+        self.set_clock_state(&snapshot.clock_state)?;
         self.set_interrupt_state(snapshot.hypervisor_data.clone())?;
-        self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_offset)?;
+        // self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_offset)?;
         Ok(())
     }
 }
@@ -299,6 +308,7 @@ pub struct VcpuSnapshot {
     xsave: Xsave,
     hypervisor_data: serde_json::Value,
     tsc_offset: u64,
+    clock_state: ClockState,
 }
 
 impl_downcast!(VcpuX86_64);

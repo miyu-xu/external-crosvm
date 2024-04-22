@@ -28,6 +28,10 @@ use libc::EOPNOTSUPP;
 use vm_memory::GuestAddress;
 
 use super::*;
+use crate::get_tsc_offset_from_msr;
+use crate::set_tsc_offset_via_msr;
+use crate::set_tsc_value_via_msr;
+use crate::ClockState;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
@@ -580,6 +584,18 @@ impl VcpuX86_64 for HaxmVcpu {
         // reference moment. (Alternatively, we may just expose a way to set the
         // offset directly.)
         self.set_tsc_offset(tsc_offset)
+    }
+
+    fn set_tsc_value(&self, value: u64) -> Result<()> {
+        set_tsc_value_via_msr(self, value)
+    }
+
+    fn get_clock_state(&self) -> Result<ClockState> {
+        Ok(ClockState::Default())
+    }
+
+    fn set_clock_state(&self, clock_state: &ClockState) -> Result<()> {
+        Ok(())
     }
 }
 
