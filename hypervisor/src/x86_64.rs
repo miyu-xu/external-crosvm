@@ -220,10 +220,11 @@ pub trait VcpuX86_64: Vcpu {
     /// a snapshot is restored. They are provided with a host TSC reference
     /// moment, guaranteed to be the same across all Vcpus, and the Vcpu's TSC
     /// offset at the moment it was snapshotted.
-    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()>;
+    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_value: u64) -> Result<()>;
 
     /// Snapshot vCPU state
     fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
+        let tsc_value = unsafe { _rdtsc() };
         Ok(VcpuSnapshot {
             vcpu_id: self.id(),
             regs: self.get_regs()?,
@@ -233,7 +234,7 @@ pub trait VcpuX86_64: Vcpu {
             msrs: self.get_all_msrs()?,
             xsave: self.get_xsave()?,
             hypervisor_data: self.get_interrupt_state()?,
-            tsc_offset: self.get_tsc_offset()?,
+            tsc_value,
             clock_state: self.get_clock_state()?,
         })
     }
@@ -291,7 +292,7 @@ pub trait VcpuX86_64: Vcpu {
         self.set_xsave(&snapshot.xsave)?;
         self.set_clock_state(&snapshot.clock_state)?;
         self.set_interrupt_state(snapshot.hypervisor_data.clone())?;
-        // self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_offset)?;
+        self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_value)?;
         Ok(())
     }
 }
@@ -307,7 +308,7 @@ pub struct VcpuSnapshot {
     msrs: BTreeMap<u32, u64>,
     xsave: Xsave,
     hypervisor_data: serde_json::Value,
-    tsc_offset: u64,
+    tsc_value: u64,
     clock_state: ClockState,
 }
 

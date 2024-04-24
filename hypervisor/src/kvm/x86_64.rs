@@ -1096,7 +1096,7 @@ impl VcpuX86_64 for KvmVcpu {
         Err(Error::new(ENXIO))
     }
 
-    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()> {
+    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, tsc_value: u64) -> Result<()> {
         // In theory, KVM requires no extra handling beyond restoring the TSC
         // MSR, which happens separately because TSC is in the all MSR list for
         // KVM; however, we found that when we don't directly restore the offset
@@ -1106,7 +1106,10 @@ impl VcpuX86_64 for KvmVcpu {
         // KVM_GET_CLOCK & KVM_SET_CLOCK instead. (We've also observed that
         // saving/restoring TSC_KHZ somehow fixes this issue as well. Further
         // research is required.)
-        self.set_tsc_offset(tsc_offset)
+        self.set_tsc_value(tsc_value)?;
+        // Zero the TSC offset, in case it contains any value. We are setting the TSC value to the
+        // desired value.
+        self.set_tsc_offset(0)
     }
 
     fn get_clock_state(&self) -> Result<ClockState> {

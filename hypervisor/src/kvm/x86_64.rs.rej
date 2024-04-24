@@ -1,0 +1,9 @@
+diff a/hypervisor/src/kvm/x86_64.rs b/hypervisor/src/kvm/x86_64.rs	(rejected hunks)
+@@ -1106,6 +1111,7 @@ impl VcpuX86_64 for KvmVcpu {
+         // KVM_GET_CLOCK & KVM_SET_CLOCK instead. (We've also observed that
+         // saving/restoring TSC_KHZ somehow fixes this issue as well. Further
+         // research is required.)
++        self.set_tsc_value(tsc_value)?;
+         self.set_tsc_offset(tsc_offset)
+     }
+ }
