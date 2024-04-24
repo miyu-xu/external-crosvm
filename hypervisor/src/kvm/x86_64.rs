@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use base::errno_result;
 use base::error;
+use base::info;
 use base::ioctl;
 use base::ioctl_with_mut_ptr;
 use base::ioctl_with_mut_ref;
@@ -1096,20 +1097,53 @@ impl VcpuX86_64 for KvmVcpu {
         Err(Error::new(ENXIO))
     }
 
-    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, tsc_value: u64) -> Result<()> {
-        // In theory, KVM requires no extra handling beyond restoring the TSC
-        // MSR, which happens separately because TSC is in the all MSR list for
-        // KVM; however, we found that when we don't directly restore the offset
-        // timekeeping inside the guest goes haywire. We suspect that when KVM
-        // is using pvclock (which we do), it doesn't want anyone else messing
-        // with the guest's TSC. Long term, we should consider using
-        // KVM_GET_CLOCK & KVM_SET_CLOCK instead. (We've also observed that
-        // saving/restoring TSC_KHZ somehow fixes this issue as well. Further
-        // research is required.)
-        self.set_tsc_value(tsc_value)?;
-        // Zero the TSC offset, in case it contains any value. We are setting the TSC value to the
-        // desired value.
-        self.set_tsc_offset(0)
+    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, _tsc_offset: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_tsc_khz(&self) -> Result<u64> {
+        let mut tsc_khz: u64 = 0;
+        info!("Getting TSC CTL");
+        let tsc_ctl =
+            unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_VM_TSC_CONTROL as u64) };
+        info!("Getting TSC KHZ");
+        let ret =
+            // SAFETY:
+            // Safe because we know that our file is a VM fd, we know the kernel will only write correct
+            // amount of memory to our pointer, and we verify the return result.
+            unsafe {
+                if tsc_ctl != 0 {
+                    ioctl_with_mut_ref(&self.vm, KVM_GET_TSC_KHZ(), &mut tsc_khz)
+                } else {
+                    ioctl_with_mut_ref(self, KVM_GET_TSC_KHZ(), &mut tsc_khz)
+                }
+            };
+        info!("Got TSC KHZ. Could it be type?");
+        if ret >= 0 {
+            Ok(tsc_khz)
+        } else {
+            errno_result()
+        }
+    }
+
+    fn set_tsc_khz(&self, tsc_khz: u64) -> Result<()> {
+        let tsc_ctl =
+            unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_VM_TSC_CONTROL as u64) };
+        // SAFETY:
+        // Safe because we know that our file is a VM fd, we know the kernel will only read correct
+        // amount of memory from our pointer, and we verify the return result.
+        let ret = unsafe {
+            if tsc_ctl != 0 {
+                ioctl_with_val(&self.vm, KVM_SET_TSC_KHZ(), tsc_khz)
+            } else {
+                ioctl_with_val(self, KVM_GET_TSC_KHZ(), tsc_khz)
+            }
+        };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
     }
 
     fn get_clock_state(&self) -> Result<ClockState> {

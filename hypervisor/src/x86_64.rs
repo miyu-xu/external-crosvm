@@ -216,15 +216,20 @@ pub trait VcpuX86_64: Vcpu {
     /// Sets the guest clock state flags
     fn set_clock_state(&self, clock_state: &ClockState) -> Result<()>;
 
+    /// Get the guest clock state
+    fn get_tsc_khz(&self) -> Result<u64>;
+
+    /// Sets the guest clock state flags
+    fn set_tsc_khz(&self, tsc_khz: u64) -> Result<()>;
+
     /// Some hypervisors require special handling to restore timekeeping when
     /// a snapshot is restored. They are provided with a host TSC reference
     /// moment, guaranteed to be the same across all Vcpus, and the Vcpu's TSC
     /// offset at the moment it was snapshotted.
-    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_value: u64) -> Result<()>;
+    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()>;
 
     /// Snapshot vCPU state
     fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
-        let tsc_value = unsafe { _rdtsc() };
         Ok(VcpuSnapshot {
             vcpu_id: self.id(),
             regs: self.get_regs()?,
@@ -234,8 +239,9 @@ pub trait VcpuX86_64: Vcpu {
             msrs: self.get_all_msrs()?,
             xsave: self.get_xsave()?,
             hypervisor_data: self.get_interrupt_state()?,
-            tsc_value,
+            tsc_offset: self.get_tsc_offset()?,
             clock_state: self.get_clock_state()?,
+            tsc_khz: self.get_tsc_khz()?,
         })
     }
 
@@ -292,7 +298,8 @@ pub trait VcpuX86_64: Vcpu {
         self.set_xsave(&snapshot.xsave)?;
         self.set_clock_state(&snapshot.clock_state)?;
         self.set_interrupt_state(snapshot.hypervisor_data.clone())?;
-        self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_value)?;
+        self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_offset)?;
+        self.set_tsc_khz(snapshot.tsc_khz)?;
         Ok(())
     }
 }
@@ -308,8 +315,9 @@ pub struct VcpuSnapshot {
     msrs: BTreeMap<u32, u64>,
     xsave: Xsave,
     hypervisor_data: serde_json::Value,
-    tsc_value: u64,
+    tsc_offset: u64,
     clock_state: ClockState,
+    tsc_khz: u64,
 }
 
 impl_downcast!(VcpuX86_64);
