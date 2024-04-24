@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2f0a18e2_89a6e200",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-04-24T23:41:33Z",
+      "side": 1,
+      "message": "Can you update ./cargo_embargo.json for this change?\n\nAfter that, running ./android-merge-2-cargo-embargo.sh should cause no output difference.",
+      "revId": "46f6bf5f41f577c8217d0c1dba41106c9aa80a87",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
