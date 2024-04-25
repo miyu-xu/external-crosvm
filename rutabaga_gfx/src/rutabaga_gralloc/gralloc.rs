@@ -239,13 +239,8 @@ impl RutabagaGralloc {
 
         #[cfg(feature = "vulkano")]
         {
-            match VulkanoGralloc::init() {
-                Ok(vulkano) => {
-                    grallocs.insert(GrallocBackend::Vulkano, vulkano);
-                }
-                Err(e) => {
-                    error!("failed to init Vulkano gralloc: {:?}", e);
-                }
+            if let Ok(vulkano) = VulkanGralloc::init() {
+                grallocs.insert(GrallocBackend::Vulkano, vulkano);
             }
         }
 
