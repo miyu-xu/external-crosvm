@@ -237,18 +237,6 @@ impl RutabagaGralloc {
             }
         }
 
-        #[cfg(feature = "vulkano")]
-        {
-            match VulkanoGralloc::init() {
-                Ok(vulkano) => {
-                    grallocs.insert(GrallocBackend::Vulkano, vulkano);
-                }
-                Err(e) => {
-                    error!("failed to init Vulkano gralloc: {:?}", e);
-                }
-            }
-        }
-
         Ok(RutabagaGralloc { grallocs })
     }
 
@@ -291,11 +279,6 @@ impl RutabagaGralloc {
             if self.grallocs.contains_key(&GrallocBackend::Minigbm) {
                 _backend = GrallocBackend::Minigbm;
             }
-        }
-
-        #[cfg(feature = "vulkano")]
-        {
-            _backend = GrallocBackend::Vulkano;
         }
 
         _backend
