@@ -8,7 +8,7 @@
 use std::collections::BTreeMap as Map;
 
 #[cfg(feature = "vulkano")]
-use log::error;
+use log::info;
 
 use crate::rutabaga_gralloc::formats::*;
 #[cfg(feature = "minigbm")]
@@ -244,7 +244,7 @@ impl RutabagaGralloc {
                     grallocs.insert(GrallocBackend::Vulkano, vulkano);
                 }
                 Err(e) => {
-                    error!("failed to init Vulkano gralloc: {:?}", e);
+                    info!("failed to init Vulkano gralloc: {:?}", e);
                 }
             }
         }
