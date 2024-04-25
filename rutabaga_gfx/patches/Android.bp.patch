@@ -1,8 +1,8 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index 3384aee72..0c64f2ef2 100644
+index b99e49886..baef418f2 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -22,7 +22,6 @@ rust_library {
+@@ -23,7 +23,6 @@ rust_library {
      edition: "2021",
      features: [
          "gfxstream",
@@ -10,7 +10,7 @@ index 3384aee72..0c64f2ef2 100644
          "virgl_renderer",
      ],
      rustlibs: [
-@@ -34,14 +33,59 @@ rust_library {
+@@ -35,14 +34,69 @@ rust_library {
          "libzerocopy",
      ],
      proc_macros: ["libremain"],
@@ -28,6 +28,12 @@ index 3384aee72..0c64f2ef2 100644
 +                "libnativewindow",
 +                "libcutils",
 +                "liblog",
++            ],
++        },
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
 +            ],
 +        },
 +    },
@@ -57,12 +63,16 @@ index 3384aee72..0c64f2ef2 100644
 +        "libnix",
 +        "libthiserror",
 +        "libzerocopy",
++        "libvulkano",
 +    ],
 +    proc_macros: ["libremain"],
 +    cfgs: [
 +        "gfxstream_unstable",
 +    ],
-+    features: ["gfxstream"],
++    features: [
++        "gfxstream",
++        "vulkano",
++    ],
 +    shared_libs: [
 +        "libgfxstream_backend",
 +    ],
@@ -71,7 +81,7 @@ index 3384aee72..0c64f2ef2 100644
  rust_test {
      name: "rutabaga_gfx_test_src_lib",
      defaults: ["crosvm_inner_defaults"],
-@@ -58,7 +102,6 @@ rust_test {
+@@ -59,7 +113,6 @@ rust_test {
      edition: "2021",
      features: [
          "gfxstream",
@@ -79,7 +89,7 @@ index 3384aee72..0c64f2ef2 100644
          "virgl_renderer",
      ],
      rustlibs: [
-@@ -71,9 +114,12 @@ rust_test {
+@@ -72,9 +125,12 @@ rust_test {
      ],
      proc_macros: ["libremain"],
      shared_libs: [
