@@ -231,6 +231,8 @@ impl RutabagaGralloc {
             // rutabaga to the "minigbm" feature.  These tests run on hosts where a rendernode is
             // not present, and minigbm can not be initialized.
             //
+            // This is just a hack to test the CI.
+            //
             // Thus, to keep kokoro happy, allow minigbm initialization to fail silently for now.
             if let Ok(gbm_device) = MinigbmDevice::init() {
                 grallocs.insert(GrallocBackend::Minigbm, gbm_device);
