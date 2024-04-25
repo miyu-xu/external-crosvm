@@ -24,6 +24,7 @@ rust_library {
     features: [
         "gfxstream",
         "virgl_renderer",
+        "vulkano",
     ],
     rustlibs: [
         "libcfg_if",
@@ -32,6 +33,7 @@ rust_library {
         "libnix",
         "libthiserror",
         "libzerocopy",
+        "libvulkano",
     ],
     proc_macros: ["libremain"],
     cfgs: [
@@ -76,12 +78,16 @@ rust_library {
         "libnix",
         "libthiserror",
         "libzerocopy",
+        "libvulkano",
     ],
     proc_macros: ["libremain"],
     cfgs: [
         "gfxstream_unstable",
     ],
-    features: ["gfxstream"],
+    features: [
+        "gfxstream",
+        "vulkano",
+    ],
     shared_libs: [
         "libgfxstream_backend",
     ],
