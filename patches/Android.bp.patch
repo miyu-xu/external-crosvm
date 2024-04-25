@@ -1,58 +1,111 @@
-diff --git a/Android.bp b/Android.bp
-index 5df1c8cdc..7bacdd74d 100644
---- a/Android.bp
-+++ b/Android.bp
-@@ -36,6 +36,7 @@ rust_binary {
-     name: "crosvm",
-     defaults: ["crosvm_inner_defaults"],
-     host_supported: true,
-+    prefer_rlib: true,
-     crate_name: "crosvm",
-     cargo_env_compat: true,
-     cargo_pkg_version: "0.1.0",
-@@ -53,7 +54,6 @@ rust_binary {
-         "gdbstub_arch",
-         "geniezone",
+diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
+index b99e49886..6c37c03da 100644
+--- a/rutabaga_gfx/Android.bp
++++ b/rutabaga_gfx/Android.bp
+@@ -23,7 +23,6 @@ rust_library {
+     edition: "2021",
+     features: [
          "gfxstream",
 -        "gfxstream_stub",
-         "gpu",
-         "gpu_display",
-         "gunyah",
-@@ -134,6 +134,10 @@ rust_binary {
-         },
-         android: {
-             shared_libs: [
-+                // TODO(b/332677108): remove libc++ when display service is rewritten in rust.
-+                "libc++",
-+                "libbinder_ndk",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -35,14 +34,75 @@ rust_library {
+         "libzerocopy",
+     ],
+     proc_macros: ["libremain"],
++    cfgs: [
++        "gfxstream_unstable",
++    ],
+     shared_libs: [
+-        "libdrm",
++        "libc++",
++        "libbase",
++    ],
++    target: {
++        android: {
++            shared_libs: [
 +                "libnativewindow",
-                 "libprocessgroup",
-             ],
-         },
-@@ -142,6 +146,18 @@ rust_binary {
-                 "libprocessgroup",
-             ],
-         },
-+        linux_bionic_arm64: {
-+            relative_install_path: "aarch64-linux-bionic",
++                "libcutils",
++                "liblog",
++            ],
 +        },
-+        linux_glibc_x86_64: {
-+            relative_install_path: "x86_64-linux-gnu",
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
++            ],
 +        },
-+        linux_musl_x86_64: {
-+            relative_install_path: "x86_64-linux-musl",
++    },
++    static_libs: [
+         "libepoxy",
+         "libgbm",
++        "libdrm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
+     ],
+ }
+ 
++rust_library {
++    name: "librutabaga_gfx_gfxstream",
++    defaults: ["crosvm_inner_defaults"],
++    host_supported: true,
++    vendor_available: true,
++    crate_name: "rutabaga_gfx",
++    cargo_env_compat: true,
++    cargo_pkg_version: "0.1.2",
++    srcs: ["src/lib.rs"],
++    edition: "2021",
++    rustlibs: [
++        "libcfg_if",
++        "liblibc",
++        "liblog_rust",
++        "libnix",
++        "libthiserror",
++        "libzerocopy",
++    ],
++    proc_macros: ["libremain"],
++    cfgs: [
++        "gfxstream_unstable",
++    ],
++    features: [
++        "gfxstream",
++    ],
++    shared_libs: [
++        "libgfxstream_backend",
++    ],
++    target: {
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
++            ],
 +        },
-+        linux_musl_arm64: {
-+            relative_install_path: "aarch64-linux-musl",
-+        },
-     },
-     ld_flags: [
-         "-Wl,--rpath,\\$$ORIGIN",
-@@ -176,7 +192,6 @@ rust_test {
-         "gdbstub_arch",
-         "geniezone",
++    },
++}
++
+ rust_test {
+     name: "rutabaga_gfx_test_src_lib",
+     defaults: ["crosvm_inner_defaults"],
+@@ -59,7 +119,6 @@ rust_test {
+     edition: "2021",
+     features: [
          "gfxstream",
 -        "gfxstream_stub",
-         "gpu",
-         "gpu_display",
-         "gunyah",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -72,9 +131,12 @@ rust_test {
+     ],
+     proc_macros: ["libremain"],
+     shared_libs: [
+-        "libdrm",
+         "libepoxy",
+         "libgbm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
+     ],
++    static_libs: [
++        "libdrm",
++    ],
+ }
