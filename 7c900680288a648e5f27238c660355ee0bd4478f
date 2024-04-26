@@ -70,6 +70,24 @@
       "parentUuid": "e72f684d_72c0e3b6",
       "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bd122262_61427bf1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-26T20:00:39Z",
+      "side": 1,
+      "message": "It looks like rutabaga tries to init vulkano without any new CLI args. You can see it in the TH run, even for the openwrt VM, which I assume has no GPU device.\n\n```\nopenwrt E 04-26 17:24:24  2787  2787 log_tee.cpp:155] [2024-04-26T17:24:24.754654329+00:00 ERROR rutabaga_gfx::rutabaga_gralloc::gralloc] failed to init Vulkano gralloc: SpecViolation(\"no matching VK devices available\")\n```\n\nProbably due to this line: https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/src/crosvm/sys/linux.rs;l\u003d2183;drc\u003dc223989d8457ecb2345a8d2831d8a1e599abcb0c\n\nThat aside, if Jiyong is OK with the binary size increase, I don\u0027t have any objections.",
+      "parentUuid": "be9e67ad_ce99cdb7",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
