@@ -88,6 +88,24 @@
       "parentUuid": "be9e67ad_ce99cdb7",
       "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "64f4b6fc_d60c90f2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-04-26T20:07:27Z",
+      "side": 1,
+      "message": "Other APIs are probably a better option than VK for the use mentioned in this comment.  It makes most sense for Linux hosts.  I\u0027ll only build vulkano if \"host\" is set in the next version of the patch.",
+      "parentUuid": "bd122262_61427bf1",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
