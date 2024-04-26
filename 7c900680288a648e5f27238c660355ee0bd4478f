@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "20b991ec_d5b7a1f8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-26T19:05:07Z",
+      "side": 1,
+      "message": "This will also enable vulkano for the AVF build of crosvm. Do we want that?\n\nCC @jiyong@google.com @jeongik@google.com",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
