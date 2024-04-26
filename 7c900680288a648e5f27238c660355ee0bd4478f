@@ -16,6 +16,24 @@
       "message": "This will also enable vulkano for the AVF build of crosvm. Do we want that?\n\nCC @jiyong@google.com @jeongik@google.com",
       "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "efa33b37_f9649948",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-26T19:07:48Z",
+      "side": 1,
+      "message": "Looks like it adds a MiB according to the Bloat Busters tab\n\n```\nReference\tPresubmit\tDelta\tDelta (%)\tFile\n77.86 MiB\t78.83 MiB\t+992.00 KiB\t+1.24%\t/system/apex/com.google.android.virt.apex\n```",
+      "parentUuid": "20b991ec_d5b7a1f8",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
