@@ -52,6 +52,24 @@
       "parentUuid": "20b991ec_d5b7a1f8",
       "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "be9e67ad_ce99cdb7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1561731
+      },
+      "writtenOn": "2024-04-26T19:21:34Z",
+      "side": 1,
+      "message": "My understanding is that this will be unused unless explicitly enabled via starting Crosvm with `--gpu\u003d... context-types\u003dcross-domain ...`.\n\nEventually, after lots of testing and verifying, we would want to shift both host and guest builds of crosvm to use this to allow more sharing of buffers between the renderer and the display backend.",
+      "parentUuid": "e72f684d_72c0e3b6",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
