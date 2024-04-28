@@ -106,6 +106,24 @@
       "parentUuid": "bd122262_61427bf1",
       "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b7004097_5e8dfc6b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-04-28T04:45:50Z",
+      "side": 1,
+      "message": "Ok. If this can benefit Ferrochrome as of now, I think we better not have this. The size increase doesn\u0027t look serious IMO, but a bug will anyway be filed and we will have to justify this.\n\nGurchetan, yes, I think enabling vulkano only for host is the better option.",
+      "parentUuid": "64f4b6fc_d60c90f2",
+      "revId": "7c900680288a648e5f27238c660355ee0bd4478f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
