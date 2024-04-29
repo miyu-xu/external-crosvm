@@ -16,6 +16,24 @@
       "message": "Can you update ./cargo_embargo.json for this change?\n\nAfter that, running ./android-merge-2-cargo-embargo.sh should cause no output difference.",
       "revId": "46f6bf5f41f577c8217d0c1dba41106c9aa80a87",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2d2e6b07_7bd9ee06",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-04-29T10:44:06Z",
+      "side": 1,
+      "message": "Thanks! I modified it as well as some Android.bp.patch. And generated Android.bp(s).\n\nThere are two rust libraries export `aaudio_backend` crate.\nSo I added aaudio_backend/patches/Android.bp.patch to rename the generated library name in `external/crosvm/aaudio_backend` from `libaaudio_backend` to `libaaudio_backend_stub`.\nThe `libaaudio_backend` is implemented in aosp/3054802 (packages/modules/Virtualization), for android.\nThe `libaaudio_backend_stub` is implemented in aosp/3046353 (external/crosvm), for the host.",
+      "parentUuid": "2f0a18e2_89a6e200",
+      "revId": "46f6bf5f41f577c8217d0c1dba41106c9aa80a87",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
