@@ -22,6 +22,30 @@
       },
       "revId": "dbb9f00e588bc0387c0df8c62cb726d474397449",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "998aeb9b_a7f46e2a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 94,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-04-29T22:56:06Z",
+      "side": 1,
+      "message": "`librutabaga_gfx_gfxstream` shouldn\u0027t be built for on-device use cases, since `librutabaga_gfx_ffi` is used in AOSP for end2endtests.\n\nI do see that `librutabaga_gfx_ffi` has an `android` clause.\n\nhttps://android.googlesource.com/platform/external/crosvm/+/refs/heads/main/rutabaga_gfx/ffi/Android.bp#38\n\nI think there\u0027s a bug open somewhere for natsu@ to fix these issues.  So if it is built, I think whatever is pulling in `librutabaga_gfx_ffi` for Android builds needs to be fixed.",
+      "parentUuid": "39396c66_d609d9b3",
+      "range": {
+        "startLine": 85,
+        "startChar": 0,
+        "endLine": 94,
+        "endChar": 6
+      },
+      "revId": "dbb9f00e588bc0387c0df8c62cb726d474397449",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
