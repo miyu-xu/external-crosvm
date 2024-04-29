@@ -9,6 +9,7 @@
     "android_display_stub",
     "android-sparse",
     "audio",
+    "audio_aaudio",
     "balloon",
     "config-file",
     // TODO: The "protos" crate has been modified such that it doesn't work with cargo. If we fix that,
@@ -65,6 +66,7 @@
   "product_available": false,
   "vendor_available": false,
   "module_name_overrides": {
+    "libaaudio_backend": "libaaudio_backend_stub",
     "libbase": "libbase_rust",
     "libbase64": "libbase64_rust",
     "libfuse": "libfuse_rust",
@@ -126,6 +128,9 @@
   "package": {
     "aarch64": {
       "add_module_block": "aarch64/cargo2android_arch.bp"
+    },
+    "audio_util": {
+      "patch": "audio_util/patches/Android.bp.patch"
     },
     "base": {
       "patch": "base/patches/Android.bp.patch",
