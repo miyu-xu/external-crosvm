@@ -16,10 +16,23 @@ rust_library {
     cargo_pkg_version: "0.1.0",
     srcs: ["src/lib.rs"],
     edition: "2021",
+    features: ["audio_aaudio"],
     rustlibs: [
         "libaudio_streams",
         "libbase_rust",
         "libthiserror",
     ],
     proc_macros: ["libasync_trait"],
+    target: {
+        android: {
+            rustlibs: [
+                "libaaudio_backend",
+            ],
+        },
+        host: {
+            rustlibs: [
+                "libaaudio_backend_stub",
+            ],
+        },
+    },
 }

@@ -1,0 +1,27 @@
+diff --git a/audio_util/Android.bp b/audio_util/Android.bp
+index daf8ba381..9c6c62497 100644
+--- a/audio_util/Android.bp
++++ b/audio_util/Android.bp
+@@ -18,10 +18,21 @@ rust_library {
+     edition: "2021",
+     features: ["audio_aaudio"],
+     rustlibs: [
+-        "libaaudio_backend",
+         "libaudio_streams",
+         "libbase_rust",
+         "libthiserror",
+     ],
+     proc_macros: ["libasync_trait"],
++    target: {
++        android: {
++            rustlibs: [
++                "libaaudio_backend",
++            ],
++        },
++        host: {
++            rustlibs: [
++                "libaaudio_backend_stub",
++            ],
++        },
++    },
+ }

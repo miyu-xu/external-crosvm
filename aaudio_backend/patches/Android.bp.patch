@@ -1,0 +1,13 @@
+diff --git a/aaudio_backend/Android.bp b/aaudio_backend/Android.bp
+index 4766e61c4..50cb3b365 100644
+--- a/aaudio_backend/Android.bp
++++ b/aaudio_backend/Android.bp
+@@ -13,7 +13,7 @@ package {
+ }
+
+ rust_library {
+-    name: "libaaudio_backend",
++    name: "libaaudio_backend_stub",
+     defaults: ["crosvm_inner_defaults"],
+     host_supported: true,
+     crate_name: "aaudio_backend",
