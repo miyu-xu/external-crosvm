@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "beff3bab_30887ef4",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-04-30T15:59:14Z",
+      "side": 1,
+      "message": "looks like the wrong patch file got updated",
+      "revId": "01b646c9d59d3694627e91424bf4612fd513279b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
