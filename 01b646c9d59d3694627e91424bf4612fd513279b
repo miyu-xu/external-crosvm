@@ -16,6 +16,24 @@
       "message": "looks like the wrong patch file got updated",
       "revId": "01b646c9d59d3694627e91424bf4612fd513279b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4cf306dd_7dc8d5c7",
+        "filename": "patches/Android.bp.patch",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-04-30T17:34:35Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "beff3bab_30887ef4",
+      "revId": "01b646c9d59d3694627e91424bf4612fd513279b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
