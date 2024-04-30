@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "16fe7649_952619c9",
+        "filename": "aaudio_backend/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-04-30T09:02:59Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "76c1365b_97eed92d",
+      "revId": "74e531bc7ab9ff7728971e4132b591a9f2c0180f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1029e236_99a724b5",
@@ -31,6 +49,30 @@
       "writtenOn": "2024-04-29T18:33:02Z",
       "side": 1,
       "message": "instead of adding a patch file for `aaudio_backend`, can you add a `\"libaaudio_backend\": \"libaaudio_backend_stub\"` entry here?\n\nthen, you\u0027ll need to tweak the `audio_util/patches/Android.bp.patch` a bit. i think it will be overall simpler",
+      "range": {
+        "startLine": 68,
+        "startChar": 0,
+        "endLine": 76,
+        "endChar": 4
+      },
+      "revId": "74e531bc7ab9ff7728971e4132b591a9f2c0180f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "b9b32dcd_3551227a",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 3
+      },
+      "lineNbr": 76,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-04-30T09:02:59Z",
+      "side": 1,
+      "message": "Wow, thanks. I didn\u0027t know that trick.",
+      "parentUuid": "1029e236_99a724b5",
       "range": {
         "startLine": 68,
         "startChar": 0,
