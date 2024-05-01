@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "da0816cf_0c7ced96",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-05-01T01:59:37Z",
+      "side": 1,
+      "message": "[testing a hack to check presubmit -- \"crosvm E 04-30 23:12:09  2863  2863 log_tee.cpp:155] [2024-04-30T23:12:09.242793789+00:00 ERROR rutabaga_gfx::rutabaga_gralloc::gralloc] failed to init Vulkano gralloc: SpecViolation(\"no matching VK devices available\")\ncrosvm E 04-30 23:12:09  2863  2863 log_tee.cpp:155] [2024-04-30T23:12:09.245520815+00:00 ERROR crosvm::crosvm::sys::linux] child pid 3067 exited: signo 17, status 1, code 1\" seems to be the error?]",
+      "revId": "f0030a24a61fda9bb29a49dccb4b1dcee18c4ae1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
