@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "21961c16_47224c6f",
+        "filename": "src/crosvm/sys/linux/device_helpers.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 407,
+      "author": {
+        "id": 1337669
+      },
+      "writtenOn": "2024-05-02T00:43:45Z",
+      "side": 1,
+      "message": "I think this need to have an actual file like: https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/jail/seccomp/Android.bp;l\u003d1238?ss\u003dandroid%2Fplatform%2Fsuperproject%2Fmain\u0026q\u003dsnd_cras_device",
+      "revId": "111646e8b26a103ecb966256c154be72017359c1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
