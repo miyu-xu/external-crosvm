@@ -9,6 +9,7 @@
     "android_display_stub",
     "android-sparse",
     "audio",
+    "audio_aaudio",
     "balloon",
     "config-file",
     // TODO: The "protos" crate has been modified such that it doesn't work with cargo. If we fix that,
@@ -65,6 +66,7 @@
   "product_available": false,
   "vendor_available": false,
   "module_name_overrides": {
+    "libaaudio_backend": "libaaudio_backend_stub",
     "libbase": "libbase_rust",
     "libbase64": "libbase64_rust",
     "libfuse": "libfuse_rust",
@@ -88,6 +90,9 @@
     "libaarch64": [
       // For QCOM's crosvm fork.
       "//vendor:__subpackages__"
+    ],
+    "libaudio_streams": [
+      "//packages/modules/Virtualization/libs/android_audio_backend"
     ],
     "libbase_rust": [
       "//packages/modules/Virtualization/virtualizationmanager",
@@ -170,7 +175,8 @@
         // See the comment for base's "dep_blocklist" above (in this case
         // "devices_test_tests_passthroughfs_main" is the culprit).
         "liblibtest_mimic"
-      ]
+      ],
+      "patch": "devices/patches/Android.bp.patch"
     },
     "disk": {
       "patch": "disk/patches/Android.bp.patch"

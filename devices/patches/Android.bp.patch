@@ -1,0 +1,30 @@
+diff --git a/devices/Android.bp b/devices/Android.bp
+index 2903306c2..6c3678b50 100644
+--- a/devices/Android.bp
++++ b/devices/Android.bp
+@@ -226,7 +226,6 @@ rust_library {
+         "virgl_renderer",
+     ],
+     rustlibs: [
+-        "libaaudio_backend_stub",
+         "libacpi_tables",
+         "libanyhow",
+         "libargh",
+@@ -284,5 +283,17 @@ rust_library {
+         "libenumn",
+         "libremain",
+     ],
++    target: {
++        android: {
++            rustlibs: [
++                "libaaudio_backend",
++            ],
++        },
++        host: {
++            rustlibs: [
++                "libaaudio_backend_stub",
++            ],
++        },
++    },
+     visibility: ["//vendor:__subpackages__"],
+ }
