@@ -41,6 +41,7 @@ members = [
     "acpi_tables",
     "arch",
     "argh_helpers",
+    "aaudio_backend_stub",
     "audio_util",
     "audio_streams_conformance_test",
     "base",
@@ -294,6 +295,9 @@ default-no-sandbox = []
 ## org.chromium.ArcQuota dbus service.
 arc_quota = ["devices/arc_quota"]
 
+## Enables use of Android AAudio virtio-snd backend.
+audio_aaudio = ["devices/audio_aaudio"]
+
 ## Enables use of the ChromeOS audio server. ChromeOS builds will replace libcras_stub with an
 ## implementation that talks to the audio server. In upstream builds, using this option will panic.
 audio_cras = ["devices/audio_cras"]
@@ -364,6 +368,7 @@ all-default = [
 
 ## All features that are compiled and tested for aarch64
 all-aarch64 = [
+    "audio_aaudio",
     "all-default",
     "android_display",
     "android_display_stub",
@@ -377,6 +382,7 @@ all-riscv64 = [
 
 ## All features that are compiled and tested for x86_64
 all-x86_64 = [
+    "audio_aaudio",
     "all-default",
     "android_display",
     "android_display_stub",
@@ -502,6 +508,7 @@ base = "*"
 rand = "0.8"
 
 [patch.crates-io]
+aaudio_backend = {path = "aaudio_backend_stub" }
 audio_streams = { path = "common/audio_streams" }
 base = { path = "base" }
 cros_async = { path = "cros_async" }
