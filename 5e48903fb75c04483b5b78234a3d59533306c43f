@@ -16,6 +16,24 @@
       "message": "Sorry for the review again..\n\nI moved the implementation of aaudio_stream to packages/modules/Virtualization(aosp/3054802) according to b/325930215#comment42. And added visibility for it.",
       "revId": "5e48903fb75c04483b5b78234a3d59533306c43f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "02337817_aa64bb0d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-05-03T20:23:27Z",
+      "side": 1,
+      "message": "i\u0027d strongly prefer that `packages/modules/Virtualization` code not have visibility on crosvm modules unless the upstream agrees to maintain a stable-ish API for those modules.\n\nfor the GPU stuff mentioned in b/325930215#comment42, no visibility change was needed. the code in `packages/modules/Virtualization` exposes a C API and then the crosvm code makes calls into that C API. can we follow a similar model here?\n\nalternatively, if `android_audio_backend` only uses NDK APIs, not binder/aidl/etc, then maybe it would be OK for it to live entirely in upstream crosvm",
+      "parentUuid": "f20670cd_af001e50",
+      "revId": "5e48903fb75c04483b5b78234a3d59533306c43f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
