@@ -34,9 +34,13 @@ PRODUCT_PACKAGES += \
     net_device.policy \
     null_audio_device.policy \
     pmem_device.policy \
+    pvclock_device.policy \
     rng_device.policy \
+    scsi_device.policy \
+    scsi.policy \
     serial_device.policy \
     serial_device_vhost_user.policy \
+    snd_aaudio_device.policy \
     snd_cras_device.policy \
     snd_null_device.policy \
     vfio_device.policy \
@@ -68,9 +72,13 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
     system/etc/seccomp_policy/crosvm/net_device.policy \
     system/etc/seccomp_policy/crosvm/null_audio_device.policy \
     system/etc/seccomp_policy/crosvm/pmem_device.policy \
+    system/etc/seccomp_policy/crosvm/pvclock_device.policy \
     system/etc/seccomp_policy/crosvm/rng_device.policy \
+    system/etc/seccomp_policy/crosvm/scsi_device.policy \
+    system/etc/seccomp_policy/crosvm/scsi.policy \
     system/etc/seccomp_policy/crosvm/serial_device.policy \
     system/etc/seccomp_policy/crosvm/serial_device_vhost_user.policy \
+    system/etc/seccomp_policy/crosvm/snd_aaudio_device.policy \
     system/etc/seccomp_policy/crosvm/snd_cras_device.policy \
     system/etc/seccomp_policy/crosvm/snd_null_device.policy \
     system/etc/seccomp_policy/crosvm/vfio_device.policy \
