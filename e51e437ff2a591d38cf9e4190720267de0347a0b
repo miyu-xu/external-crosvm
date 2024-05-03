@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "62811853_d8bbe221",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-03T18:52:17Z",
+      "side": 1,
+      "message": "IIUC. This change is needed after aosp/3046353 is upstreamed and downstreamed.\nNot sure if it should be done by me.",
+      "revId": "e51e437ff2a591d38cf9e4190720267de0347a0b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
