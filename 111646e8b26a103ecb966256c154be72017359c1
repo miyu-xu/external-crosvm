@@ -16,6 +16,24 @@
       "message": "I think this need to have an actual file like: https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/jail/seccomp/Android.bp;l\u003d1238?ss\u003dandroid%2Fplatform%2Fsuperproject%2Fmain\u0026q\u003dsnd_cras_device",
       "revId": "111646e8b26a103ecb966256c154be72017359c1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6e7a7b86_d59efe8e",
+        "filename": "src/crosvm/sys/linux/device_helpers.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 407,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-03T18:51:32Z",
+      "side": 1,
+      "message": "Thanks. I added `jail/seccomp/{aarch64/x86_64}/snd_aaudio_device.policy`.\nAnd once this change is upstreamed and downstreamed. It may need changes like aosp/3074146.",
+      "parentUuid": "21961c16_47224c6f",
+      "revId": "111646e8b26a103ecb966256c154be72017359c1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
