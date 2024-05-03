@@ -882,6 +882,96 @@ prebuilt_etc {
 }
 
 genrule {
+    name: "pvclock_device.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["pvclock_device.policy"],
+    srcs: ["x86_64/pvclock_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "pvclock_device.policy_x86_64",
+    filename: "pvclock_device.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":pvclock_device.policy_inline_x86_64",
+}
+
+prebuilt_etc {
+    name: "pvclock_device.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":pvclock_device.policy_inline_x86_64",
+        },
+    },
+    target: {
+        android_arm64: {
+            enabled: false,
+        },
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+        android_riscv64: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
+    name: "scsi_device.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["scsi_device.policy"],
+    srcs: ["x86_64/scsi_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "scsi_device.policy_x86_64",
+    filename: "scsi_device.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":scsi_device.policy_inline_x86_64",
+}
+
+genrule {
+    name: "scsi_device.policy_inline_aarch64",
+    defaults: ["crosvm_inline_seccomp_policy_aarch64"],
+    out: ["scsi_device.policy"],
+    srcs: ["aarch64/scsi_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "scsi_device.policy_aarch64",
+    filename: "scsi_device.policy",
+    relative_install_path: "crosvm/aarch64-linux-gnu/seccomp",
+    src: ":scsi_device.policy_inline_aarch64",
+}
+
+prebuilt_etc {
+    name: "scsi_device.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":scsi_device.policy_inline_x86_64",
+        },
+        arm64: {
+            src: ":scsi_device.policy_inline_aarch64",
+        },
+    },
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+        android_riscv64: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
     name: "xhci_device.policy_inline_x86_64",
     defaults: ["crosvm_inline_seccomp_policy_x86_64"],
     out: ["xhci_device.policy"],
@@ -1213,6 +1303,96 @@ prebuilt_etc {
     arch: {
         x86_64: {
             src: ":serial_device_vhost_user.policy_inline_x86_64",
+        },
+    },
+    target: {
+        android_arm64: {
+            enabled: false,
+        },
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+        android_riscv64: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
+    name: "snd_aaudio_device.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["snd_aaudio_device.policy"],
+    srcs: ["x86_64/snd_aaudio_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_aaudio_device.policy_x86_64",
+    filename: "snd_aaudio_device.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":snd_aaudio_device.policy_inline_x86_64",
+}
+
+genrule {
+    name: "snd_aaudio_device.policy_inline_aarch64",
+    defaults: ["crosvm_inline_seccomp_policy_aarch64"],
+    out: ["snd_aaudio_device.policy"],
+    srcs: ["aarch64/snd_aaudio_device.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "snd_aaudio_device.policy_aarch64",
+    filename: "snd_aaudio_device.policy",
+    relative_install_path: "crosvm/aarch64-linux-gnu/seccomp",
+    src: ":snd_aaudio_device.policy_inline_aarch64",
+}
+
+prebuilt_etc {
+    name: "snd_aaudio_device.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":snd_aaudio_device.policy_inline_x86_64",
+        },
+        arm64: {
+            src: ":snd_aaudio_device.policy_inline_aarch64",
+        },
+    },
+    target: {
+        android_arm: {
+            enabled: false,
+        },
+        android_x86: {
+            enabled: false,
+        },
+        android_riscv64: {
+            enabled: false,
+        },
+    },
+}
+
+genrule {
+    name: "scsi.policy_inline_x86_64",
+    defaults: ["crosvm_inline_seccomp_policy_x86_64"],
+    out: ["scsi.policy"],
+    srcs: ["x86_64/scsi.policy"],
+}
+
+prebuilt_usr_share_host {
+    name: "scsi.policy_x86_64",
+    filename: "scsi.policy",
+    relative_install_path: "crosvm/x86_64-linux-gnu/seccomp",
+    src: ":scsi.policy_inline_x86_64",
+}
+
+prebuilt_etc {
+    name: "scsi.policy",
+    relative_install_path: "seccomp_policy/crosvm",
+    arch: {
+        x86_64: {
+            src: ":scsi.policy_inline_x86_64",
         },
     },
     target: {
