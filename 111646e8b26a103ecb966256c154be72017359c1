@@ -52,6 +52,24 @@
       "parentUuid": "6e7a7b86_d59efe8e",
       "revId": "111646e8b26a103ecb966256c154be72017359c1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "777215ac_5a749fae",
+        "filename": "src/crosvm/sys/linux/device_helpers.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 407,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-05-05T02:43:35Z",
+      "side": 1,
+      "message": "+1 to what Frederick said, but having the policy file is not harmful right?",
+      "parentUuid": "f7b678de_12d3d008",
+      "revId": "111646e8b26a103ecb966256c154be72017359c1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

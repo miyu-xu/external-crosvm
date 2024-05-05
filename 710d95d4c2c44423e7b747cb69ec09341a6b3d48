@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "354fdc95_38431af6",
+        "filename": "aaudio_backend_stub/src/aaudio_backend.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-05-05T02:43:35Z",
+      "side": 1,
+      "message": "unimplemented ? It also accepts a custom error message.",
+      "range": {
+        "startLine": 13,
+        "startChar": 8,
+        "endLine": 13,
+        "endChar": 13
+      },
+      "revId": "710d95d4c2c44423e7b747cb69ec09341a6b3d48",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
