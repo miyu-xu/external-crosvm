@@ -70,6 +70,24 @@
       "parentUuid": "f7b678de_12d3d008",
       "revId": "111646e8b26a103ecb966256c154be72017359c1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4b794606_53c58047",
+        "filename": "src/crosvm/sys/linux/device_helpers.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 407,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-05-06T18:26:31Z",
+      "side": 1,
+      "message": "right, it is fine to keep it\n\nFYI: if we actually use the policy at some point, we\u0027ll probably need to override it in AOSP to include any syscalls that the audio library uses (the policies living in upstream at all is already considered a bit off since they might be incorrect if you, e.g., use a different libc implementation",
+      "parentUuid": "777215ac_5a749fae",
+      "revId": "111646e8b26a103ecb966256c154be72017359c1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
