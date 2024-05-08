@@ -34,6 +34,24 @@
       "parentUuid": "f20670cd_af001e50",
       "revId": "5e48903fb75c04483b5b78234a3d59533306c43f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "de08f55c_e2d421db",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 6
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-08T08:01:15Z",
+      "side": 1,
+      "message": "Thanks! That a good point. I\u0027m taking the second one. And this is how windows does. In [`mod.rs`](https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/devices/src/virtio/snd/sys/mod.rs;l\u003d6) it uses different implementation for different platforms for virtio-snd. The Windows [implementation](https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/devices/src/virtio/snd/sys/windows.rs) uses the [win_audio](https://cs.android.com/android/platform/superproject/+/main:external/crosvm/win_audio/) in crosvm, which uses winapi. In android we can do similar things and make stub version of AAudio NDK API for upstream crosvm build and testing.",
+      "parentUuid": "02337817_aa64bb0d",
+      "revId": "5e48903fb75c04483b5b78234a3d59533306c43f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
