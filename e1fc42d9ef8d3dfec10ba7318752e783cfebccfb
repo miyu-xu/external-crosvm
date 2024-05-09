@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a814ce4d_9f3d936d",
+        "filename": "jail/seccomp/aarch64/gpu_common.policy",
+        "patchSetId": 1
+      },
+      "lineNbr": 111,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-05-09T20:33:20Z",
+      "side": 1,
+      "message": "is this diff intentional? in aosp/main the `ioctl` entry is commented out because conflicts with the entry in common_device.policy",
+      "revId": "e1fc42d9ef8d3dfec10ba7318752e783cfebccfb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
