@@ -86,6 +86,7 @@ const MB_ALIGNED: u64 = ONE_MB - 1;
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 // by default, if enabled, the balloon WS features will use 4 bins.
+#[cfg(feature = "balloon")]
 const VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS: u8 = 4;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -134,6 +135,9 @@ pub struct CpuOptions {
     /// Core Type of CPUs.
     #[cfg(target_arch = "x86_64")]
     pub core_types: Option<CpuCoreType>,
+    /// Select which CPU to boot from.
+    #[serde(default)]
+    pub boot_cpu: Option<usize>,
 }
 
 /// Device tree overlay configuration.
@@ -395,6 +399,16 @@ pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), Strin
         ));
     }
 
+    if params.pci_address.is_some()
+        && params.hardware != SerialHardware::VirtioConsole
+        && params.hardware != SerialHardware::LegacyVirtioConsole
+    {
+        return Err(invalid_value_err(
+            params.pci_address.unwrap().to_string(),
+            "Providing serial PCI address is only supported for virtio-console hardware type",
+        ));
+    }
+
     Ok(())
 }
 
@@ -624,19 +638,28 @@ pub struct Config {
     #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
     pub acpi_tables: Vec<PathBuf>,
+    #[cfg(feature = "android_display")]
+    pub android_display_service: Option<String>,
     pub android_fstab: Option<PathBuf>,
     pub async_executor: Option<ExecutorKind>,
+    #[cfg(feature = "balloon")]
     pub balloon: bool,
+    #[cfg(feature = "balloon")]
     pub balloon_bias: i64,
+    #[cfg(feature = "balloon")]
     pub balloon_control: Option<PathBuf>,
+    #[cfg(feature = "balloon")]
     pub balloon_page_reporting: bool,
+    #[cfg(feature = "balloon")]
     pub balloon_ws_num_bins: u8,
+    #[cfg(feature = "balloon")]
     pub balloon_ws_reporting: bool,
     pub battery_config: Option<BatteryConfig>,
     #[cfg(windows)]
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
     pub block_vhost_user_tube: Vec<Tube>,
+    pub boot_cpu: usize,
     #[cfg(target_arch = "x86_64")]
     pub break_linux_pci_config_io: bool,
     #[cfg(windows)]
@@ -690,6 +713,7 @@ pub struct Config {
     pub host_guid: Option<String>,
     pub hugepages: bool,
     pub hypervisor: Option<HypervisorKind>,
+    #[cfg(feature = "balloon")]
     pub init_memory: Option<u64>,
     pub initrd_path: Option<PathBuf>,
     #[cfg(all(windows, feature = "gpu"))]
@@ -744,7 +768,6 @@ pub struct Config {
     pub product_version: Option<String>,
     pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
-    #[cfg(windows)]
     pub pvclock: bool,
     /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
@@ -768,6 +791,7 @@ pub struct Config {
     pub socket_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
     pub sound: Option<PathBuf>,
+    #[cfg(feature = "balloon")]
     pub strict_balloon: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
     pub suspended: bool,
@@ -824,15 +848,24 @@ impl Default for Config {
             #[cfg(all(target_arch = "x86_64", unix))]
             ac_adapter: false,
             acpi_tables: Vec::new(),
+            #[cfg(feature = "android_display")]
+            android_display_service: None,
             android_fstab: None,
             async_executor: None,
+            #[cfg(feature = "balloon")]
             balloon: true,
+            #[cfg(feature = "balloon")]
             balloon_bias: 0,
+            #[cfg(feature = "balloon")]
             balloon_control: None,
+            #[cfg(feature = "balloon")]
             balloon_page_reporting: false,
+            #[cfg(feature = "balloon")]
             balloon_ws_num_bins: VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS,
+            #[cfg(feature = "balloon")]
             balloon_ws_reporting: false,
             battery_config: None,
+            boot_cpu: 0,
             #[cfg(windows)]
             block_control_tube: Vec::new(),
             #[cfg(windows)]
@@ -894,6 +927,7 @@ impl Default for Config {
             product_channel: None,
             hugepages: false,
             hypervisor: None,
+            #[cfg(feature = "balloon")]
             init_memory: None,
             initrd_path: None,
             #[cfg(all(windows, feature = "gpu"))]
@@ -948,7 +982,6 @@ impl Default for Config {
             product_name: None,
             protection_type: ProtectionType::Unprotected,
             pstore: None,
-            #[cfg(windows)]
             pvclock: false,
             pvm_fw: None,
             restore_path: None,
@@ -969,6 +1002,7 @@ impl Default for Config {
             socket_path: None,
             #[cfg(feature = "audio")]
             sound: None,
+            #[cfg(feature = "balloon")]
             strict_balloon: false,
             stub_pci_devices: Vec::new(),
             suspended: false,
@@ -1092,6 +1126,11 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
     }
 
+    if cfg.boot_cpu >= cfg.vcpu_count.unwrap_or(1) {
+        log::warn!("boot_cpu selection cannot be higher than vCPUs available, defaulting to 0");
+        cfg.boot_cpu = 0;
+    }
+
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
         any(target_os = "android", target_os = "linux")
@@ -1163,12 +1202,15 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
     }
 
-    if !cfg.balloon && cfg.balloon_control.is_some() {
-        return Err("'balloon-control' requires enabled balloon".to_string());
-    }
+    #[cfg(feature = "balloon")]
+    {
+        if !cfg.balloon && cfg.balloon_control.is_some() {
+            return Err("'balloon-control' requires enabled balloon".to_string());
+        }
 
-    if !cfg.balloon && cfg.balloon_page_reporting {
-        return Err("'balloon_page_reporting' requires enabled balloon".to_string());
+        if !cfg.balloon && cfg.balloon_page_reporting {
+            return Err("'balloon_page_reporting' requires enabled balloon".to_string());
+        }
     }
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1359,7 +1401,8 @@ mod tests {
 
     #[test]
     fn parse_cpu_set_repeated() {
-        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t conversion.
+        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t
+        // conversion.
         assert_eq!(
             CpuSet::from_str("1,1,1").expect("parse failed"),
             CpuSet::new([1, 1, 1])
@@ -1503,6 +1546,48 @@ mod tests {
             .unwrap()
         )
         .is_err())
+    }
+
+    #[test]
+    fn parse_serial_pci_address_valid_for_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_serial_pci_address_valid_for_legacy_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=legacy-virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_serial_pci_address_failed_for_serial() {
+        parse_serial_options("type=syslog,hardware=serial,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for serial hardware");
+    }
+
+    #[test]
+    fn parse_serial_pci_address_failed_for_debugcon() {
+        parse_serial_options("type=syslog,hardware=debugcon,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for debugcon hardware");
     }
 
     #[test]

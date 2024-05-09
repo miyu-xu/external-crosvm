@@ -25,6 +25,7 @@ use delegate::wire_format::ProgramExit;
 use log::info;
 use log::Level;
 use prebuilts::download_file;
+use readclock::ClockValues;
 use url::Url;
 
 use crate::sys::SerialArgs;
@@ -307,6 +308,7 @@ impl TestVm {
 
         // It's possible the prebuilts downloaded by crosvm-9999.ebuild differ
         // from the version that crosvm was compiled for.
+        info!("Prebuilt version to be used: {}", prebuilt_version());
         if let Ok(value) = env::var("CROSVM_CARGO_TEST_PREBUILT_VERSION") {
             if value != prebuilt_version() {
                 panic!(
@@ -404,7 +406,27 @@ impl TestVm {
         TestVm::new_generic(TestVmSys::append_config_args, cfg, false)
     }
 
-    pub fn new_cold_restore(cfg: Config) -> Result<TestVm> {
+    /// Create `TestVm` from a snapshot, using `--restore` but NOT `--suspended`.
+    pub fn new_restore(cfg: Config) -> Result<TestVm> {
+        let mut vm = TestVm::new_generic_restore(TestVmSys::append_config_args, cfg, false)?;
+        // Send a resume request to wait for the restore to finish.
+        // We don't want to return from this function until the restore is complete, otherwise it
+        // will be difficult to differentiate between a slow restore and a slow response from the
+        // guest.
+        let vm = run_with_timeout(
+            move || {
+                vm.resume_full().expect("failed to resume after VM restore");
+                vm
+            },
+            Duration::from_secs(60),
+        )
+        .expect("VM restore timeout");
+
+        Ok(vm)
+    }
+
+    /// Create `TestVm` from a snapshot, using `--restore` AND `--suspended`.
+    pub fn new_restore_suspended(cfg: Config) -> Result<TestVm> {
         TestVm::new_generic_restore(TestVmSys::append_config_args, cfg, false)
     }
 
@@ -608,6 +630,13 @@ impl TestVm {
     pub fn swap_command(&mut self, command: &str) -> Result<Vec<u8>> {
         self.sys
             .crosvm_command("swap", vec![command.to_string()], self.sudo)
+    }
+
+    pub fn guest_clock_values(&mut self) -> Result<ClockValues> {
+        let output = self
+            .exec_in_guest("readclock")
+            .context("Failed to execute readclock binary")?;
+        serde_json::from_str(&output.stdout).context("Failed to parse result")
     }
 }
 

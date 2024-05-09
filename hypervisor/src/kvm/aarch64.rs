@@ -257,6 +257,10 @@ impl KvmVcpu {
         self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
     }
 
+    fn set_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister, data: u128) -> Result<()> {
+        self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
+    }
+
     fn set_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister, data: &[u8]) -> Result<()> {
         let onereg = kvm_one_reg {
             id: kvm_reg_id.into(),
@@ -279,6 +283,12 @@ impl KvmVcpu {
         let mut bytes = 0u64.to_ne_bytes();
         self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
         Ok(u64::from_ne_bytes(bytes))
+    }
+
+    fn get_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u128> {
+        let mut bytes = 0u128.to_ne_bytes();
+        self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
+        Ok(u128::from_ne_bytes(bytes))
     }
 
     fn get_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister, data: &mut [u8]) -> Result<()> {
@@ -307,20 +317,10 @@ impl KvmVcpu {
         self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
     }
 
-    fn set_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister, data: u128) -> Result<()> {
-        self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
-    }
-
     fn get_one_kvm_reg_u32(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u32> {
         let mut bytes = 0u32.to_ne_bytes();
         self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
         Ok(u32::from_ne_bytes(bytes))
-    }
-
-    fn get_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u128> {
-        let mut bytes = 0u128.to_ne_bytes();
-        self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
-        Ok(u128::from_ne_bytes(bytes))
     }
 
     /// Retrieves the value of the currently active "version" of a multiplexed registers.
@@ -381,12 +381,24 @@ pub enum KvmVcpuRegister {
 }
 
 impl KvmVcpuRegister {
+    pub const MPIDR_EL1: Self = Self::from_encoding(0b11, 0b000, 0b0000, 0b0000, 0b101);
+
     // Firmware pseudo-registers are part of the ARM KVM interface:
     //     https://docs.kernel.org/virt/kvm/arm/hypercalls.html
     pub const PSCI_VERSION: Self = Self::Firmware(0);
     pub const SMCCC_ARCH_WORKAROUND_1: Self = Self::Firmware(1);
     pub const SMCCC_ARCH_WORKAROUND_2: Self = Self::Firmware(2);
     pub const SMCCC_ARCH_WORKAROUND_3: Self = Self::Firmware(3);
+
+    const fn from_encoding(op0: u8, op1: u8, crn: u8, crm: u8, op2: u8) -> Self {
+        let op0 = (op0 as u16 & 0b11) << 14;
+        let op1 = (op1 as u16 & 0b111) << 11;
+        let crn = (crn as u16 & 0b1111) << 7;
+        let crm = (crm as u16 & 0b1111) << 3;
+        let op2 = op2 as u16 & 0b111;
+
+        Self::System(op0 | op1 | crn | crm | op2)
+    }
 }
 
 /// Gives the `u64` register ID expected by the `GET_ONE_REG`/`SET_ONE_REG` ioctl API.
@@ -680,6 +692,24 @@ impl VcpuAArch64 for KvmVcpu {
         self.get_one_kvm_reg_u64(KvmVcpuRegister::from(reg_id))
     }
 
+    fn set_vector_reg(&self, reg_num: u8, data: u128) -> Result<()> {
+        if reg_num > 31 {
+            return Err(Error::new(EINVAL));
+        }
+        self.set_one_kvm_reg_u128(KvmVcpuRegister::V(reg_num), data)
+    }
+
+    fn get_vector_reg(&self, reg_num: u8) -> Result<u128> {
+        if reg_num > 31 {
+            return Err(Error::new(EINVAL));
+        }
+        self.get_one_kvm_reg_u128(KvmVcpuRegister::V(reg_num))
+    }
+
+    fn get_mpidr(&self) -> Result<u64> {
+        self.get_one_kvm_reg_u64(KvmVcpuRegister::MPIDR_EL1)
+    }
+
     fn get_psci_version(&self) -> Result<PsciVersion> {
         let version = if let Ok(v) = self.get_one_kvm_reg_u64(KvmVcpuRegister::PSCI_VERSION) {
             let v = u32::try_from(v).map_err(|_| Error::new(EINVAL))?;
@@ -782,7 +812,7 @@ impl VcpuAArch64 for KvmVcpu {
         self.set_one_kvm_reg_u64(KvmVcpuRegister::Pstate, pstate)?;
         for (i, reg) in regs.v.iter().enumerate() {
             let n = u8::try_from(i).expect("invalid Vn general purpose register index");
-            self.set_one_kvm_reg_u128(KvmVcpuRegister::V(n), *reg)?;
+            self.set_vector_reg(n, *reg)?;
         }
         self.set_one_kvm_reg_u32(KvmVcpuRegister::Fpcr, regs.fpcr)?;
         self.set_one_kvm_reg_u32(KvmVcpuRegister::Fpsr, regs.fpsr)?;
@@ -806,7 +836,7 @@ impl VcpuAArch64 for KvmVcpu {
         regs.cpsr = self.get_one_kvm_reg_u64(KvmVcpuRegister::Pstate)? as u32;
         for (i, reg) in regs.v.iter_mut().enumerate() {
             let n = u8::try_from(i).expect("invalid Vn general purpose register index");
-            *reg = self.get_one_kvm_reg_u128(KvmVcpuRegister::V(n))?;
+            *reg = self.get_vector_reg(n)?;
         }
         regs.fpcr = self.get_one_kvm_reg_u32(KvmVcpuRegister::Fpcr)?;
         regs.fpsr = self.get_one_kvm_reg_u32(KvmVcpuRegister::Fpsr)?;

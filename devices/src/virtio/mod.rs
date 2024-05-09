@@ -16,7 +16,7 @@ mod interrupt;
 mod iommu;
 #[cfg(feature = "net")]
 pub mod net;
-#[cfg(target_arch = "x86_64")]
+#[cfg(feature = "pvclock")]
 pub mod pvclock;
 mod queue;
 mod rng;
@@ -38,6 +38,7 @@ pub mod scsi;
 #[cfg(feature = "audio")]
 pub mod snd;
 pub mod vhost;
+pub mod vhost_user_frontend;
 pub mod vsock;
 
 #[cfg(feature = "balloon")]
@@ -64,6 +65,8 @@ pub use self::gpu::GpuDisplayMode;
 pub use self::gpu::GpuDisplayParameters;
 #[cfg(feature = "gpu")]
 pub use self::gpu::GpuMode;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuMouseMode;
 #[cfg(feature = "gpu")]
 pub use self::gpu::GpuParameters;
 #[cfg(feature = "gpu")]
@@ -94,6 +97,7 @@ pub use self::scsi::DiskConfig as ScsiDiskConfig;
 pub use self::tpm::Tpm;
 #[cfg(feature = "vtpm")]
 pub use self::tpm::TpmBackend;
+pub use self::vhost_user_frontend::VhostUserFrontend;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub use self::video::VideoDevice;
 pub use self::virtio_device::SharedMemoryMapper;
@@ -105,6 +109,8 @@ pub use self::virtio_pci_device::PciCapabilityType;
 pub use self::virtio_pci_device::VirtioPciCap;
 pub use self::virtio_pci_device::VirtioPciDevice;
 pub use self::virtio_pci_device::VirtioPciShmCap;
+#[cfg(feature = "pvclock")]
+pub use self::DeviceType::Pvclock;
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "android", target_os = "linux"))] {

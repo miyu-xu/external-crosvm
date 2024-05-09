@@ -49,7 +49,6 @@ members = [
     "common/audio_streams",
     "common/balloon_control",
     "common/data_model",
-    "common/p9",
     "common/sync",
     "cros_async",
     "cros_fdt",
@@ -73,6 +72,7 @@ members = [
     "linux_input_sys",
     "media/ffmpeg",
     "metrics",
+    "metrics_events",
     "net_sys",
     "net_util",
     "power_monitor",
@@ -90,6 +90,7 @@ members = [
     "usb_util",
     "vendor/generic/anti_tamper",
     "vendor/generic/crash_report",
+    "vendor/generic/crypto",
     "vfio_sys",
     "vhost",
     "virtio_sys",
@@ -104,10 +105,7 @@ exclude = [
     "sandbox",
     "tools/audio_streams_conformance_test",
     "tools/examples/baremetal",
-    "tube_transporter",
     "perfetto",
-    "win_audio",
-    "win_util",
 
     # This crate depends on optional features and is compiled via dependencies when enabled.
     "media/libvda",
@@ -155,11 +153,11 @@ gdb = [
 ## Enables virtio-net and vhost-user-net backend.
 net = ["devices/net"]
 
-## Enables a panic handler that writes panic info to the `RUST_PANIC_SIG` memfd.
-panic-memfd = []
-
 ## Enables PCI hotplug. Only available on Linux, and currently only for x86/x86-64.
 pci-hotplug = ["devices/pci-hotplug", "vm_control/pci-hotplug"]
+
+## Enables virtio-pvclock. Only available on Linux, and currently only for x86/x86-64.
+pvclock = ["devices/pvclock"]
 
 ## Enables the use of the qcow format for block devices.
 qcow = ["disk/qcow"]
@@ -172,6 +170,9 @@ swap = ["aarch64/swap", "arch/swap", "devices/swap", "vm_control/swap", "x86_64/
 
 ## Enables collection of VM statistics.
 stats = ["devices/stats"]
+
+## Supports tokio as an asynchronous executor.
+tokio = ["cros_async/tokio"]
 
 ## Enables USB host device passthrough via an emulated XHCI controller.
 ## USB is supported only on unix/linux. The feature is a no-op on windows.
@@ -205,9 +206,20 @@ gfxstream_stub = ["rutabaga_gfx/gfxstream_stub"]
 ## Enables 3D acceleration for the guest via the virglrenderer library over virtio-gpu.
 virgl_renderer = ["devices/virgl_renderer"]
 
+## Enables the usage of Vulkan for display on the host.
+vulkan_display = ["gpu_display/vulkan_display"]
+
 # Enables the highly experimental vulkan graphics buffer allocator.
 # see rutabaga_gfx/Cargo.toml for instructions on building with enabled.
 vulkano = ["rutabaga_gfx/vulkano"]
+
+# Enables the GPU display backend for Android. The backend uses Android surface as the backing
+# store.
+android_display = ["devices/android_display"]
+
+# Stub implementation of the Android display backend. This is only used for building and testing the
+# Android display backend on a non-Android target
+android_display_stub = ["devices/android_display_stub"]
 
 #! ### Video features
 #!
@@ -323,7 +335,6 @@ all-default = [
     "android-sparse",
     "arc_quota",
     "audio_cras",
-    "chromeos",
     "composite-disk",
     "crash-report",
     "default",
@@ -335,11 +346,12 @@ all-default = [
     "libvda-stub",
     "net",
     "noncoherent-dma",
-    "panic-memfd",
     "pci-hotplug",
     "power-monitor-powerd",
+    "registered_events",
     "slirp",
     "swap",
+    "tokio",
     "trace_marker",
     "vaapi",
     "video-decoder",
@@ -353,6 +365,8 @@ all-default = [
 ## All features that are compiled and tested for aarch64
 all-aarch64 = [
     "all-default",
+    "android_display",
+    "android_display_stub",
     "gunyah",
 ]
 
@@ -364,7 +378,10 @@ all-riscv64 = [
 ## All features that are compiled and tested for x86_64
 all-x86_64 = [
     "all-default",
+    "android_display",
+    "android_display_stub",
     "plugin",
+    "pvclock",
     "scudo"
 ]
 
@@ -390,16 +407,11 @@ all-mingw64 = [
     "net",
     "slirp",
     "stats",
+    "vulkan_display",
 ]
 
 ## All features that are compiled and tested for msvc64
 all-msvc64 = [ "all-mingw64" ]
-
-## All features that are enabled in ChromeOS builds.
-all-chromeos = ["audio_cras", "panic-memfd", "arc_quota", "vtpm", "registered_events"]
-
-# Deprecated feature flag. Remove after ChromeOS-side is updated.
-chromeos = ["all-chromeos"]
 
 [dependencies]
 anyhow = "1.0.32"
@@ -416,7 +428,6 @@ cros_async = { path = "cros_async" }
 cros_tracing = { path = "cros_tracing" }
 crosvm_cli = { path = "crosvm_cli" }
 crosvm_plugin = { path = "crosvm_plugin", optional = true }
-data_model = { path ="common/data_model" }
 devices = { path = "devices" }
 disk = { path = "disk" }
 document-features = { version = "0.2", optional = true }
@@ -443,7 +454,7 @@ protos = { path = "protos", optional = true }
 remain = "*"
 resources = { path = "resources" }
 scudo = { version = "0.1", optional = true }
-serde = "*"
+serde = { version = "*", features = ["rc"] }
 serde_json = "*"
 serde_keyvalue = { path = "serde_keyvalue", features = ["argh_derive"] }
 smallvec = "1.6.1"
@@ -469,7 +480,7 @@ aarch64 = { path = "aarch64" }
 
 [target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
 minijail = "*" # provided by ebuild
-p9 = "*"
+p9 = "0.2.3"
 vhost = { path = "vhost" }
 
 [target.'cfg(windows)'.dependencies]
@@ -496,7 +507,5 @@ base = { path = "base" }
 cros_async = { path = "cros_async" }
 data_model = { path = "common/data_model" }
 libcras = { path = "libcras_stub" } # ignored by ebuild
-p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
-wire_format_derive = { path = "common/p9/wire_format_derive" } # ignored by ebuild
 minijail = { path = "third_party/minijail/rust/minijail" } # ignored by ebuild

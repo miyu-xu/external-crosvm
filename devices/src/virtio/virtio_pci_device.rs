@@ -23,6 +23,8 @@ use data_model::Le32;
 use hypervisor::Datamatch;
 use hypervisor::MemCacheType;
 use libc::ERANGE;
+#[cfg(target_arch = "x86_64")]
+use metrics::MetricEventType;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
@@ -548,7 +550,9 @@ impl VirtioPciDevice {
             Some(PmWakeupEvent::new(
                 self.vm_control_tube.clone(),
                 self.pm_config.clone(),
-                self.device.debug_label(),
+                MetricEventType::VirtioWakeup {
+                    virtio_id: self.device.device_type() as u32,
+                },
             )),
         );
         self.interrupt = Some(interrupt.clone());
@@ -900,14 +904,18 @@ impl PciDevice for VirtioPciDevice {
         }
 
         // Device has been reset by the driver
-        if self.device_activated && self.is_reset_requested() && self.device.reset() {
-            self.device_activated = false;
-            // reset queues
-            self.queues.iter_mut().for_each(QueueConfig::reset);
-            // select queue 0 by default
-            self.common_config.queue_select = 0;
-            if let Err(e) = self.unregister_ioevents() {
-                error!("failed to unregister ioevents: {:#}", e);
+        if self.device_activated && self.is_reset_requested() {
+            if let Err(e) = self.device.reset() {
+                error!("failed to reset {} device: {:#}", self.debug_label(), e);
+            } else {
+                self.device_activated = false;
+                // reset queues
+                self.queues.iter_mut().for_each(QueueConfig::reset);
+                // select queue 0 by default
+                self.common_config.queue_select = 0;
+                if let Err(e) = self.unregister_ioevents() {
+                    error!("failed to unregister ioevents: {:#}", e);
+                }
             }
         }
     }
@@ -1308,7 +1316,9 @@ impl Suspendable for VirtioPciDevice {
                 Some(PmWakeupEvent::new(
                     self.vm_control_tube.clone(),
                     self.pm_config.clone(),
-                    self.device.debug_label(),
+                    MetricEventType::VirtioWakeup {
+                        virtio_id: self.device.device_type() as u32,
+                    },
                 )),
             ));
         }
@@ -1417,7 +1427,7 @@ impl SharedMemoryMapper for VmRequester {
     ) -> anyhow::Result<()> {
         if self.needs_prepare {
             self.vm_memory_client
-                .prepare_shared_memory_region(self.alloc)
+                .prepare_shared_memory_region(self.alloc, cache)
                 .context("prepare_shared_memory_region failed")?;
             self.needs_prepare = false;
         }

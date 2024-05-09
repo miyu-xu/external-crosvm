@@ -29,7 +29,6 @@ mod mmap;
 mod net;
 mod netlink;
 mod notifiers;
-pub mod panic_handler;
 pub mod platform_timer_resolution;
 mod poll;
 mod priority;
@@ -504,17 +503,6 @@ pub fn poll_in<F: AsRawDescriptor>(fd: &F) -> bool {
     fds.revents & libc::POLLIN != 0
 }
 
-/// Return a timespec filed with the specified Duration `duration`.
-#[allow(clippy::useless_conversion)]
-pub fn duration_to_timespec(duration: Duration) -> libc::timespec {
-    // nsec always fits in i32 because subsec_nanos is defined to be less than one billion.
-    let nsec = duration.subsec_nanos() as i32;
-    libc::timespec {
-        tv_sec: duration.as_secs() as libc::time_t,
-        tv_nsec: nsec.into(),
-    }
-}
-
 /// Return the maximum Duration that can be used with libc::timespec.
 pub fn max_timeout() -> Duration {
     Duration::new(libc::time_t::max_value() as u64, 999999999)
@@ -575,7 +563,6 @@ pub fn max_open_files() -> Result<u64> {
 }
 
 /// Moves the requested PID/TID to a particular cgroup
-///
 pub fn move_to_cgroup(cgroup_path: PathBuf, id_to_write: Pid, cgroup_file: &str) -> Result<()> {
     use std::io::Write;
 

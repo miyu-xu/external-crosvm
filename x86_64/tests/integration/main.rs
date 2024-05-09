@@ -45,8 +45,8 @@ use x86_64::mptable;
 use x86_64::read_pci_mmio_before_32bit;
 use x86_64::read_pcie_cfg_mmio;
 use x86_64::regs::configure_segments_and_sregs;
-use x86_64::regs::long_mode_msrs;
-use x86_64::regs::mtrr_msrs;
+use x86_64::regs::set_long_mode_msrs;
+use x86_64::regs::set_mtrr_msrs;
 use x86_64::regs::setup_page_tables;
 use x86_64::smbios;
 use x86_64::X8664arch;
@@ -192,9 +192,11 @@ where
     let initrd_image = None;
 
     // alternatively, load a real initrd and kernel from disk
+    // ```
     // let initrd_image = Some(File::open("/mnt/host/source/src/avd/ramdisk.img").expect("failed to open ramdisk"));
     // let mut kernel_image = File::open("/mnt/host/source/src/avd/vmlinux.uncompressed").expect("failed to open kernel");
     // let (params, kernel_end) = X8664arch::load_kernel(&guest_mem, &mut kernel_image).expect("failed to load kernel");
+    // ````
 
     let max_bus = (read_pcie_cfg_mmio().len().unwrap() / 0x100000 - 1) as u8;
     let suspend_evt = Event::new().unwrap();
@@ -279,9 +281,12 @@ where
                 setup_cpuid(&hyp, &irq_chip, &vcpu, 0, 1, cpu_config).unwrap();
             }
 
-            let mut msrs = long_mode_msrs();
-            msrs.append(&mut mtrr_msrs(&vm, read_pci_mmio_before_32bit().start));
-            vcpu.set_msrs(&msrs).unwrap();
+            let mut msrs = BTreeMap::new();
+            set_long_mode_msrs(&mut msrs);
+            set_mtrr_msrs(&mut msrs, &vm, read_pci_mmio_before_32bit().start);
+            for (msr_index, value) in msrs {
+                vcpu.set_msr(msr_index, value).unwrap();
+            }
 
             let mut vcpu_regs = Regs {
                 rip: start_addr.offset(),

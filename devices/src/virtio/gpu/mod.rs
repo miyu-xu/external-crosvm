@@ -50,6 +50,7 @@ pub use vm_control::gpu::DisplayMode as GpuDisplayMode;
 pub use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
 use vm_control::gpu::GpuControlCommand;
 use vm_control::gpu::GpuControlResult;
+pub use vm_control::gpu::MouseMode as GpuMouseMode;
 pub use vm_control::gpu::DEFAULT_DISPLAY_HEIGHT;
 pub use vm_control::gpu::DEFAULT_DISPLAY_WIDTH;
 pub use vm_control::gpu::DEFAULT_REFRESH_RATE;
@@ -67,6 +68,7 @@ pub use self::protocol::VIRTIO_GPU_F_FENCE_PASSING;
 pub use self::protocol::VIRTIO_GPU_F_RESOURCE_BLOB;
 pub use self::protocol::VIRTIO_GPU_F_RESOURCE_UUID;
 pub use self::protocol::VIRTIO_GPU_F_VIRGL;
+pub use self::protocol::VIRTIO_GPU_MAX_SCANOUTS;
 pub use self::protocol::VIRTIO_GPU_SHM_ID_HOST_VISIBLE;
 use self::protocol::*;
 use self::virtio_gpu::to_rutabaga_descriptor;
@@ -717,7 +719,12 @@ impl Frontend {
         let mut gpu_response = match resp {
             Ok(gpu_response) => gpu_response,
             Err(gpu_response) => {
-                debug!("{:?} -> {:?}", gpu_cmd, gpu_response);
+                if let Some(gpu_cmd) = gpu_cmd {
+                    error!(
+                        "error processing gpu command {:?}: {:?}",
+                        gpu_cmd, gpu_response
+                    );
+                }
                 gpu_response
             }
         };
@@ -1112,7 +1119,13 @@ pub enum DisplayBackend {
     Stub,
     #[cfg(windows)]
     /// Open a window using WinAPI.
-    WinApi(WinDisplayProperties),
+    WinApi,
+    #[cfg(feature = "android_display")]
+    /// The display buffer is backed by an Android surface. The surface is set via an AIDL service
+    /// that the backend hosts. Currently, the AIDL service is registered to the service manager
+    /// using the name given here. The entity holding the surface is expected to locate the service
+    /// via this name, and pass the surface to it.
+    Android(String),
 }
 
 impl DisplayBackend {
@@ -1128,18 +1141,20 @@ impl DisplayBackend {
             DisplayBackend::X(display) => GpuDisplay::open_x(display.as_deref()),
             DisplayBackend::Stub => GpuDisplay::open_stub(),
             #[cfg(windows)]
-            DisplayBackend::WinApi(display_properties) => match wndproc_thread.take() {
+            DisplayBackend::WinApi => match wndproc_thread.take() {
                 Some(wndproc_thread) => GpuDisplay::open_winapi(
                     wndproc_thread,
                     /* win_metrics= */ None,
-                    display_properties.clone(),
                     gpu_display_wait_descriptor_ctrl,
+                    None,
                 ),
                 None => {
                     error!("wndproc_thread is none");
                     Err(GpuDisplayError::Allocate)
                 }
             },
+            #[cfg(feature = "android_display")]
+            DisplayBackend::Android(service_name) => GpuDisplay::open_android(service_name),
         }
     }
 }
@@ -1182,9 +1197,9 @@ pub struct Gpu {
     udmabuf: bool,
     rutabaga_server_descriptor: Option<SafeDescriptor>,
     #[cfg(windows)]
-    /// Because the Windows GpuDisplay can't expose an epollfd, it has to inform the GPU worker which
-    /// descriptors to add to its wait context. That's what this Tube is used for (it is provided
-    /// to each display backend.
+    /// Because the Windows GpuDisplay can't expose an epollfd, it has to inform the GPU worker
+    /// which descriptors to add to its wait context. That's what this Tube is used for (it is
+    /// provided to each display backend.
     gpu_display_wait_descriptor_ctrl_wr: SendTube,
     #[cfg(windows)]
     /// The GPU worker uses this Tube to receive the descriptors that should be added to its wait
@@ -1266,7 +1281,8 @@ impl Gpu {
             .set_wsi(rutabaga_wsi)
             .set_use_external_blob(gpu_parameters.external_blob)
             .set_use_system_blob(gpu_parameters.system_blob)
-            .set_use_render_server(use_render_server);
+            .set_use_render_server(use_render_server)
+            .set_renderer_features(gpu_parameters.renderer_features.clone());
 
         #[cfg(windows)]
         let (gpu_display_wait_descriptor_ctrl_wr, gpu_display_wait_descriptor_ctrl_rd) =

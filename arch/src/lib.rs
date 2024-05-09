@@ -140,7 +140,7 @@ pub struct Pstore {
 }
 
 /// Set of CPU cores.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CpuSet(Vec<usize>);
 
 impl CpuSet {
@@ -331,6 +331,7 @@ pub struct VmComponents {
     pub ac_adapter: bool,
     pub acpi_sdts: Vec<SDT>,
     pub android_fstab: Option<File>,
+    pub boot_cpu: usize,
     pub bootorder_fw_cfg_blob: Vec<u8>,
     #[cfg(target_arch = "x86_64")]
     pub break_linux_pci_config_io: bool,
@@ -453,8 +454,8 @@ pub trait LinuxArch {
     /// # Arguments
     ///
     /// * `components` - Parts to use to build the VM.
-    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest
-    ///     wants to stop/shut down or requested reset.
+    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest wants
+    ///   to stop/shut down or requested reset.
     /// * `system_allocator` - Allocator created by this trait's implementation of
     ///   `get_system_allocator_config`.
     /// * `serial_parameters` - Definitions for how the serial devices should be configured.
@@ -739,6 +740,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     let mut keep_rds = device.keep_rds();
     syslog::push_descriptors(&mut keep_rds);
     cros_tracing::push_descriptors!(&mut keep_rds);
+    metrics::push_descriptors(&mut keep_rds);
 
     device
         .register_device_capabilities()
@@ -820,6 +822,7 @@ pub fn generate_virtio_mmio_bus(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
 
         let irq_num = resources
             .allocate_irq()
@@ -1147,6 +1150,7 @@ pub fn generate_pci_root(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
         keep_rds.append(&mut vm.get_memory().as_raw_descriptors());
 
         let ranges = io_ranges.remove(&dev_idx).unwrap_or_default();
@@ -1288,8 +1292,8 @@ where
 /// * `image` - The file containing the image to be loaded.
 /// * `min_guest_addr` - The minimum address of the start of the image.
 /// * `max_guest_addr` - The address to load the last byte of the image.
-/// * `align` - The minimum alignment of the start address of the image in bytes
-///   (must be a power of two).
+/// * `align` - The minimum alignment of the start address of the image in bytes (must be a power of
+///   two).
 ///
 /// The guest address and size in bytes of the loaded image are returned.
 pub fn load_image_high<F>(

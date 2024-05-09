@@ -35,7 +35,7 @@ use crate::virtio;
 use crate::virtio::net::process_rx;
 use crate::virtio::net::validate_and_configure_tap;
 use crate::virtio::net::NetError;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::net::run_ctrl_queue;
@@ -176,7 +176,7 @@ async fn run_rx_queue<T: TapT>(
     queue
 }
 
-/// Platform specific impl of VhostUserBackend::start_queue.
+/// Platform specific impl of VhostUserDevice::start_queue.
 pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + IntoAsync + TapT>(
     backend: &mut NetBackend<T>,
     idx: usize,
@@ -331,7 +331,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
                     let listener = VhostUserListener::new_socket(&socket, None)?;
                     // run_until() returns an Result<Result<..>> which the ? operator lets us
                     // flatten.
-                    ex.run_until(listener.run_backend(Box::new(backend), &ex))?
+                    ex.run_until(listener.run_backend(backend, &ex))?
                 }));
             }
         };

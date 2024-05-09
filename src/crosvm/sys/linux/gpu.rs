@@ -105,10 +105,6 @@ pub fn create_gpu_device(
             // mapping.
             debug!("gpu fixed blob mapping disabled: not compatible with vulkano");
             gpu_params.fixed_blob_mapping = false;
-        } else if cfg!(feature = "noncoherent-dma") {
-            // TODO(b/246334944): make fixed_blob_mapping compatible with noncoherent-dma.
-            debug!("gpu fixed blob mapping disabled: not compatible with noncoherent-dma");
-            gpu_params.fixed_blob_mapping = false;
         }
     }
 
@@ -128,6 +124,11 @@ pub fn create_gpu_device(
         virtio::DisplayBackend::X(cfg.x_display.clone()),
         virtio::DisplayBackend::Stub,
     ];
+
+    #[cfg(feature = "android_display")]
+    if let Some(service_name) = &cfg.android_display_service {
+        display_backends.insert(0, virtio::DisplayBackend::Android(service_name.to_string()));
+    }
 
     // Use the unnamed socket for GPU display screens.
     if let Some(socket_path) = cfg.wayland_socket_paths.get("") {
@@ -192,7 +193,7 @@ pub fn create_gpu_device(
                     socket_path.display(),
                 )
             })?;
-            jail.mount_bind(dir, dir, true)?;
+            jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
         }
 
         Some(jail)
@@ -249,7 +250,13 @@ fn get_gpu_render_server_environment(
     }
 
     // TODO(b/237493180, b/284517235): workaround to enable ETC2/ASTC format emulation in Mesa
-    let driconf_options = ["radv_require_etc2", "vk_require_etc2", "vk_require_astc"];
+    // TODO(b/284361281, b/328827736): workaround to enable legacy sparse binding in RADV
+    let driconf_options = [
+        "radv_legacy_sparse_binding",
+        "radv_require_etc2",
+        "vk_require_etc2",
+        "vk_require_astc",
+    ];
     for opt in driconf_options {
         if !env.contains_key(opt) {
             env.insert(opt.to_string(), "true".to_string());

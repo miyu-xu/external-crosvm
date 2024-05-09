@@ -356,7 +356,7 @@ impl Rutabaga {
                 .get(&self.default_component)
                 .ok_or(RutabagaError::InvalidComponent)?;
 
-            component.snapshot(directory)?
+            component.snapshot(directory)
         } else if self.default_component == RutabagaComponentType::Rutabaga2D {
             let snapshot = RutabagaSnapshot {
                 resources: self
@@ -380,9 +380,9 @@ impl Rutabaga {
             };
 
             return snapshot.serialize_to(w).map_err(RutabagaError::IoError);
+        } else {
+            Err(RutabagaError::Unsupported)
         }
-
-        Err(RutabagaError::Unsupported)
     }
 
     /// Restore Rutabaga to a previously snapshot'd state.
@@ -412,7 +412,8 @@ impl Rutabaga {
                 .components
                 .get_mut(&self.default_component)
                 .ok_or(RutabagaError::InvalidComponent)?;
-            component.restore(directory)?
+
+            component.restore(directory)
         } else if self.default_component == RutabagaComponentType::Rutabaga2D {
             let snapshot = RutabagaSnapshot::deserialize_from(r).map_err(RutabagaError::IoError)?;
 
@@ -450,9 +451,9 @@ impl Rutabaga {
                 .collect();
 
             return Ok(());
+        } else {
+            Err(RutabagaError::Unsupported)
         }
-
-        Err(RutabagaError::Unsupported)
     }
 
     fn capset_id_to_component_type(&self, capset_id: u32) -> RutabagaResult<RutabagaComponentType> {
@@ -978,6 +979,7 @@ pub struct RutabagaBuilder {
     capset_mask: u64,
     channels: Option<Vec<RutabagaChannel>>,
     debug_handler: Option<RutabagaDebugHandler>,
+    renderer_features: Option<String>,
 }
 
 impl RutabagaBuilder {
@@ -996,6 +998,7 @@ impl RutabagaBuilder {
             capset_mask,
             channels: None,
             debug_handler: None,
+            renderer_features: None,
         }
     }
 
@@ -1080,12 +1083,18 @@ impl RutabagaBuilder {
         self
     }
 
-    /// Set rutabaga channels for the RutabagaBuilder
+    /// Set debug handler for the RutabagaBuilder
     pub fn set_debug_handler(
         mut self,
         debug_handler: Option<RutabagaDebugHandler>,
     ) -> RutabagaBuilder {
         self.debug_handler = debug_handler;
+        self
+    }
+
+    /// Set renderer features for the RutabagaBuilder
+    pub fn set_renderer_features(mut self, renderer_features: Option<String>) -> RutabagaBuilder {
+        self.renderer_features = renderer_features;
         self
     }
 
@@ -1118,8 +1127,8 @@ impl RutabagaBuilder {
                         rutabaga_capsets.push(*capset);
                     }
                 } else {
-                    // Unconditionally push capset -- this should eventually be deleted when context types are
-                    // always specified by crosvm launchers.
+                    // Unconditionally push capset -- this should eventually be deleted when context
+                    // types are always specified by crosvm launchers.
                     rutabaga_capsets.push(*capset);
                 }
             };
@@ -1193,6 +1202,7 @@ impl RutabagaBuilder {
                     self.display_width,
                     self.display_height,
                     self.gfxstream_flags,
+                    self.renderer_features,
                     fence_handler.clone(),
                     self.debug_handler.clone(),
                 )?;
