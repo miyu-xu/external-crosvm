@@ -28,13 +28,18 @@ rust_static_library(
     srcs = glob(["src/**/*.rs"]),
     edition = "2021",
     deps = [
-        ":ffi_build_script",
+        # ":ffi_build_script",
         "//external/crosvm/rutabaga_gfx",
         "//hardware/google/gfxstream/host:gfxstream_backend",
         "@libc",
         "@log",
         "@once_cell",
-    ],
+    ] + select({
+        "@platforms//os:windows": [
+        ],
+        "@platforms//os:linux": ["@nix"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

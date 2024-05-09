@@ -48,6 +48,7 @@ rust_library(
             "@winapi",
             "@winapi-x86_64-pc-windows-gnu",
         ],
+        "@platforms//os:linux": ["@nix"],
         "//conditions:default": [],
     }),
 )
