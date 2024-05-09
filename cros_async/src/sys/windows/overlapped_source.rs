@@ -203,7 +203,8 @@ impl<F: AsRawDescriptor> OverlappedSource<F> {
                 .map_err(Error::BackingMemoryVolatileSliceFetchFailed)?;
 
             // SAFETY:
-            // Safe because we're passing a volatile slice (valid ptr), and the size of the memory region it refers to.
+            // Safe because we're passing a volatile slice (valid ptr), and the size of the memory
+            // region it refers to.
             unsafe {
                 read(
                     self.source.as_raw_descriptor(),
@@ -291,7 +292,8 @@ impl<F: AsRawDescriptor> OverlappedSource<F> {
                 .map_err(Error::BackingMemoryVolatileSliceFetchFailed)?;
 
             // SAFETY:
-            // Safe because we're passing a volatile slice (valid ptr), and the size of the memory region it refers to.
+            // Safe because we're passing a volatile slice (valid ptr), and the size of the memory
+            // region it refers to.
             unsafe {
                 write(
                     self.source.as_raw_descriptor(),
@@ -416,6 +418,7 @@ mod tests {
 
     use super::*;
     use crate::mem::VecIoWrapper;
+    use crate::ExecutorTrait;
 
     fn tempfile_path() -> (PathBuf, TempDir) {
         let dir = tempfile::TempDir::new().unwrap();

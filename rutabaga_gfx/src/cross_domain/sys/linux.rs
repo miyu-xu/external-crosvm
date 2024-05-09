@@ -17,8 +17,8 @@ use nix::fcntl::fcntl;
 use nix::fcntl::FcntlArg;
 use nix::sys::epoll::EpollCreateFlags;
 use nix::sys::epoll::EpollFlags;
-use nix::sys::eventfd::eventfd;
 use nix::sys::eventfd::EfdFlags;
+use nix::sys::eventfd::EventFd;
 use nix::sys::socket::connect;
 use nix::sys::socket::recvmsg;
 use nix::sys::socket::sendmsg;
@@ -121,7 +121,8 @@ impl CrossDomainState {
                     fds.into_iter()
                         .map(|fd| {
                             // SAFETY:
-                            // Safe since the descriptors from recv_with_fds(..) are owned by us and valid.
+                            // Safe since the descriptors from recv_with_fds(..) are owned by us and
+                            // valid.
                             unsafe { File::from_raw_descriptor(fd) }
                         })
                         .collect()
@@ -211,10 +212,8 @@ impl CrossDomainContext {
                 }
 
                 let (raw_read_pipe, raw_write_pipe) = pipe()?;
-                // SAFETY: Safe because we have created the pipe above and is valid.
-                let read_pipe = unsafe { File::from_raw_descriptor(raw_read_pipe) };
-                // SAFETY: Safe because we have created the pipe above and is valid.
-                let write_pipe = unsafe { File::from_raw_descriptor(raw_write_pipe) };
+                let read_pipe = File::from(raw_read_pipe);
+                let write_pipe = File::from(raw_write_pipe);
 
                 *descriptor = write_pipe.as_raw_descriptor();
                 let read_pipe_id: u32 = add_item(
@@ -224,14 +223,15 @@ impl CrossDomainContext {
 
                 // For Wayland read pipes, the guest guesses which identifier the host will use to
                 // avoid waiting for the host to generate one.  Validate guess here.  This works
-                // because of the way Sommelier copy + paste works.  If the Sommelier sequence of events
-                // changes, it's always possible to wait for the host response.
+                // because of the way Sommelier copy + paste works.  If the Sommelier sequence of
+                // events changes, it's always possible to wait for the host
+                // response.
                 if read_pipe_id != *identifier {
                     return Err(RutabagaError::InvalidCrossDomainItemId);
                 }
 
-                // The write pipe needs to be dropped after the send_msg(..) call is complete, so the read pipe
-                // can receive subsequent hang-up events.
+                // The write pipe needs to be dropped after the send_msg(..) call is complete, so
+                // the read pipe can receive subsequent hang-up events.
                 write_pipe_opt = Some(write_pipe);
                 read_pipe_id_opt = Some(read_pipe_id);
             } else {
@@ -255,11 +255,12 @@ impl CrossDomainContext {
     }
 }
 
-pub type Sender = File;
+pub type Sender = EventFd;
+// TODO: Receiver should be EventFd as well, but there is no way to clone a nix EventFd.
 pub type Receiver = File;
 
 pub fn channel_signal(sender: &Sender) -> RutabagaResult<()> {
-    write(sender.as_raw_fd(), &1u64.to_ne_bytes())?;
+    sender.write(1)?;
     Ok(())
 }
 
@@ -274,13 +275,13 @@ pub fn read_volatile(file: &File, opaque_data: &mut [u8]) -> RutabagaResult<usiz
 }
 
 pub fn write_volatile(file: &File, opaque_data: &[u8]) -> RutabagaResult<()> {
-    write(file.as_raw_fd(), opaque_data)?;
+    write(file.as_fd(), opaque_data)?;
     Ok(())
 }
 
 pub fn channel() -> RutabagaResult<(Sender, Receiver)> {
-    let sender: File = eventfd(0, EfdFlags::empty())?.into();
-    let receiver = sender.try_clone()?;
+    let sender = EventFd::from_flags(EfdFlags::empty())?;
+    let receiver = sender.as_fd().try_clone_to_owned()?.into();
     Ok((sender, receiver))
 }
 

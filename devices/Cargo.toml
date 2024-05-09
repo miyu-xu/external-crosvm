@@ -5,6 +5,8 @@ authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [features]
+android_display = ["gpu_display/android_display"]
+android_display_stub = ["gpu_display/android_display_stub"]
 arc_quota = ["dbus", "protobuf", "system_api"]
 audio = []
 audio_cras = ["libcras"]
@@ -13,6 +15,7 @@ gpu = ["gpu_display"]
 gunyah = []
 libvda-stub = ["libvda/libvda-stub"]
 net = []
+pvclock = []
 geniezone = []
 usb = []
 vaapi = ["cros-codecs/vaapi", "crc32fast"]
@@ -44,13 +47,13 @@ balloon_control = { path = "../common/balloon_control" }
 base = { path = "../base" }
 bit_field = { path = "../bit_field" }
 cfg-if = "1.0.0"
-chrono = { version = "0.4.19", features = [ "serde" ] }
+chrono = { version = "0.4.34", features = [ "serde", "now" ], default-features = false }
 crc32fast = { version = "1.2.1", optional = true }
 cros_async = { path = "../cros_async" }
 cros-codecs = { version = "0.0.4", optional = true }
 crosvm_cli = { path = "../crosvm_cli" }
 data_model = { path = "../common/data_model" }
-dbus = { version = "0.9", optional = true }
+dbus = { version = "0.9.7", features = ["stdfd"], optional = true }
 disk = { path = "../disk" }
 downcast-rs = "1.2.0"
 enumn = "0.1.0"
@@ -63,6 +66,7 @@ libc = "*"
 libvda = { path = "../media/libvda", optional = true }
 linux_input_sys = { path = "../linux_input_sys" }
 memoffset = { version = "0.6" }
+metrics = { path = "../metrics" }
 net_util = { path = "../net_util" }
 num-traits = "0.2"
 once_cell = "1.7.2"
@@ -72,7 +76,7 @@ protos = { path = "../protos", optional = true }
 rand = "0.8"
 remain = "*"
 resources = { path = "../resources" }
-serde = { version = "1", features = [ "derive" ] }
+serde = { version = "1", features = [ "derive", "rc" ] }
 serde_json = "1"
 serde_keyvalue = { path = "../serde_keyvalue", features = ["argh_derive"] }
 smallvec = "1.6.1"
@@ -99,7 +103,6 @@ vhost = { path = "../vhost" }
 
 [target.'cfg(windows)'.dependencies]
 broker_ipc = { path = "../broker_ipc" }
-metrics = { path = "../metrics" }
 tube_transporter = { path = "../tube_transporter" }
 win_audio = { path = "../win_audio"}
 win_util = { path = "../win_util"}

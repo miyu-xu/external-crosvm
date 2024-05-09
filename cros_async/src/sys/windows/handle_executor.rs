@@ -26,7 +26,7 @@ use winapi::um::minwinbase::OVERLAPPED;
 
 use crate::common_executor;
 use crate::common_executor::RawExecutor;
-use crate::sys::windows::executor::DEFAULT_IO_CONCURRENCY;
+use crate::common_executor::RawTaskHandle;
 use crate::sys::windows::io_completion_port::CompletionPacket;
 use crate::sys::windows::io_completion_port::IoCompletionPort;
 use crate::waker::WakerToken;
@@ -34,6 +34,9 @@ use crate::waker::WeakWake;
 use crate::AsyncError;
 use crate::AsyncResult;
 use crate::IoSource;
+use crate::TaskHandle;
+
+const DEFAULT_IO_CONCURRENCY: u32 = 1;
 
 #[derive(Debug, ThisError)]
 pub enum Error {
@@ -92,7 +95,7 @@ impl HandleReactor {
         })
     }
 
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         Self::new_with(DEFAULT_IO_CONCURRENCY)
     }
 
@@ -214,6 +217,10 @@ impl common_executor::Reactor for HandleReactor {
     ) -> AsyncResult<IoSource<F>> {
         Ok(IoSource::Handle(super::HandleSource::new(f)?))
     }
+
+    fn wrap_task_handle<R>(task: RawTaskHandle<HandleReactor, R>) -> TaskHandle<R> {
+        TaskHandle::Handle(task)
+    }
 }
 
 /// Represents a handle that has been registered for overlapped operations with a specific executor.
@@ -259,8 +266,8 @@ impl WeakWake for HandleReactor {
 ///     1. The reactor in use is a HandleReactor.
 ///     2. Immediately after the IO syscall, this future MUST be awaited. We rely on the fact that
 ///        the executor cannot poll the IOCP before this future is polled for the first time to
-///        ensure the waker has been registered. (If the executor polls the IOCP before the waker
-///        is registered, the future will stall.)
+///        ensure the waker has been registered. (If the executor polls the IOCP before the waker is
+///        registered, the future will stall.)
 pub(crate) struct OverlappedOperation {
     overlapped: BoxedOverlapped,
     ex: Weak<RawExecutor<HandleReactor>>,
@@ -343,6 +350,7 @@ mod test {
     use futures::StreamExt;
 
     use crate::BlockingPool;
+    use crate::ExecutorTrait;
 
     #[test]
     fn run_future() {

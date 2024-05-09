@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
+use anyhow::anyhow;
 use anyhow::Result;
 use base::Event;
 use base::Protection;
@@ -119,10 +120,10 @@ pub trait VirtioDevice: Send {
 
     /// Optionally deactivates this device. If the reset method is
     /// not able to reset the virtio device, or the virtio device model doesn't
-    /// implement the reset method, a false value is returned to indicate
-    /// the reset is not successful. Otherwise a true value should be returned.
-    fn reset(&mut self) -> bool {
-        false
+    /// implement the reset method, an `Err` value is returned to indicate
+    /// the reset is not successful. Otherwise `Ok(())` should be returned.
+    fn reset(&mut self) -> Result<()> {
+        Err(anyhow!("reset not implemented for {}", self.debug_label()))
     }
 
     /// Returns any additional BAR configuration required by the device.
@@ -321,32 +322,17 @@ macro_rules! suspendable_virtio_tests {
             }
 
             #[test]
-            fn test_sleep_snapshot() {
-                let (_ctx, device) = &mut $dev();
-                let mem = memory();
-                let interrupt = interrupt();
-                let queues = create_queues(
-                    $num_queues,
-                    device
-                        .queue_max_sizes()
-                        .first()
-                        .cloned()
-                        .expect("missing queue size"),
-                    &mem,
-                );
-                device
-                    .activate(mem.clone(), interrupt.clone(), queues)
-                    .expect("failed to activate");
-                device
-                    .virtio_sleep()
-                    .expect("failed to sleep")
-                    .expect("missing queues while sleeping");
+            fn test_unactivated_sleep_snapshot_wake() {
+                let (_ctx, mut device) = $dev();
+                let sleep_result = device.virtio_sleep().expect("failed to sleep");
+                assert!(sleep_result.is_none());
                 device.virtio_snapshot().expect("failed to snapshot");
+                device.virtio_wake(None).expect("failed to wake");
             }
 
             #[test]
             fn test_sleep_snapshot_wake() {
-                let (_ctx, device) = &mut $dev();
+                let (_ctx, mut device) = $dev();
                 let mem = memory();
                 let interrupt = interrupt();
                 let queues = create_queues(
@@ -373,7 +359,7 @@ macro_rules! suspendable_virtio_tests {
 
             #[test]
             fn test_suspend_mod_restore() {
-                let (context, device) = &mut $dev();
+                let (mut context, mut device) = $dev();
                 let mem = memory();
                 let interrupt = interrupt();
                 let queues = create_queues(
@@ -393,7 +379,7 @@ macro_rules! suspendable_virtio_tests {
                     .expect("failed to sleep")
                     .expect("missing queues while sleeping");
                 // Modify device before snapshotting.
-                $modfun(context, device);
+                $modfun(&mut context, &mut device);
                 let snap = device
                     .virtio_snapshot()
                     .expect("failed to take initial snapshot");

@@ -102,8 +102,6 @@ use gpu_display::EventDevice;
 use gpu_display::WindowProcedureThread;
 #[cfg(feature = "gpu")]
 use gpu_display::WindowProcedureThreadBuilder;
-use metrics::protos::event_details::EmulatorChildProcessExitDetails;
-use metrics::protos::event_details::RecordDetails;
 use metrics::MetricEventType;
 #[cfg(all(feature = "net", feature = "slirp"))]
 use net_util::slirp::sys::windows::SlirpStartupConfig;
@@ -399,12 +397,10 @@ impl Drop for ChildCleanup {
             if self.process_type != ProcessType::Metrics {
                 let exit_code = self.child.wait();
                 if let Ok(Some(exit_code)) = exit_code {
-                    let mut details = RecordDetails::new();
-                    let mut exit_details = EmulatorChildProcessExitDetails::new();
-                    exit_details.set_exit_code(exit_code as u32);
-                    exit_details.set_process_type(self.process_type.into());
-                    details.emulator_child_process_exit_details = Some(exit_details).into();
-                    metrics::log_event_with_details(MetricEventType::ChildProcessExit, &details);
+                    metrics::log_event(MetricEventType::ChildProcessExit {
+                        exit_code: exit_code as u32,
+                        process_type: self.process_type,
+                    });
                 } else {
                     error!(
                         "Failed to log exit code for process: {:?}, couldn't get exit code",
@@ -419,8 +415,8 @@ impl Drop for ChildCleanup {
 /// Represents a child process spawned by the broker.
 struct ChildProcess {
     // This is unused, but we hold it open to avoid an EPIPE in the child if it doesn't
-    // immediately read its startup information. We don't use FlushFileBuffers to avoid this because
-    // that would require blocking the startup sequence.
+    // immediately read its startup information. We don't use FlushFileBuffers to avoid this
+    // because that would require blocking the startup sequence.
     tube_transporter: TubeTransporter,
 
     // Used to set up the child process. Unused in steady state.
@@ -466,10 +462,11 @@ fn get_log_path(cfg: &Config, file_name: &str) -> Option<PathBuf> {
 /// IMPORTANT NOTE: The metrics process must receive the client (second) end
 /// of the Tube pair in order to allow the connection to be properly shut
 /// down without data loss.
-fn metrics_tube_pair(metric_tubes: &mut Vec<Tube>) -> Result<Tube> {
+fn metrics_tube_pair(metric_tubes: &mut Vec<RecvTube>) -> Result<SendTube> {
     // TODO(nkgold): as written, this Tube pair won't handle ancillary data properly because the
     // PIDs are not set properly at each end; however, we don't plan to send ancillary data.
-    let (t1, t2) = Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    let (t1, t2) =
+        Tube::directional_pair().exit_context(Exit::CreateTube, "failed to create tube")?;
     metric_tubes.push(t2);
     Ok(t1)
 }
@@ -679,10 +676,6 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         Tube::directional_pair().context("failed to create vm event tube")?;
 
     #[cfg(feature = "gpu")]
-    let (gpu_control_host_tube, gpu_control_device_tube) =
-        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
-
-    #[cfg(feature = "gpu")]
     let mut input_event_split_config = platform_create_input_event_config(&cfg)
         .context("create input event devices for virtio-gpu device")?;
 
@@ -697,12 +690,10 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         vm_evt_wrtube
             .try_clone()
             .exit_context(Exit::CloneEvent, "failed to clone event")?,
-        gpu_control_host_tube,
-        gpu_control_device_tube,
     )?;
 
     #[cfg(feature = "gpu")]
-    let _gpu_child = if let Some(gpu_cfg) = gpu_cfg {
+    let _gpu_child = if let Some(mut gpu_cfg) = gpu_cfg {
         if !cfg
             .vhost_user
             .iter()
@@ -713,6 +704,10 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
             cfg.gpu_vmm_config = Some(gpu_cfg.1);
             None
         } else {
+            // If we are running in a separate process, turn on external blobs (memory will be
+            // exported, sent to VMM for import, then mapped).
+            gpu_cfg.0.params.external_blob = true;
+
             Some(start_up_gpu(
                 &mut cfg,
                 &log_args,
@@ -1043,10 +1038,10 @@ impl Supervisor {
 
                         // Save the child's exit code (to pass through to the broker's exit code) if
                         // none has been saved or if the previously saved exit code was
-                        // KilledBySignal.  We overwrite KilledBySignal because the child exit may
-                        // race with the sigterm from the service, esp if child exit is slowed by a Crashpad
-                        // dump, and we don't want to lose the child's exit code if it was the
-                        // initial cause of the emulator failing.
+                        // KilledBySignal. We overwrite KilledBySignal because the child exit may
+                        // race with the sigterm from the service, esp if child exit is slowed by a
+                        // Crashpad dump, and we don't want to lose the child's exit code if it was
+                        // the initial cause of the emulator failing.
                         if exit_code != 0
                             && (first_nonzero_exitcode.is_none()
                                 || matches!(first_nonzero_exitcode, Some(KILLED_BY_SIGNAL)))
@@ -1195,7 +1190,7 @@ fn start_up_block_backends(
     exit_events: &mut Vec<Event>,
     wait_ctx: &mut WaitContext<Token>,
     main_child: &mut ChildProcess,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<Vec<ChildProcess>> {
     let mut block_children = Vec::new();
@@ -1423,7 +1418,7 @@ fn start_up_net_backend(
     wait_ctx: &mut WaitContext<Token>,
     cfg: &mut Config,
     log_args: &LogArgs,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<(ChildProcess, ChildProcess)> {
     let (host_pipe, guest_pipe) = named_pipes::pair_with_buffer_size(
@@ -1611,7 +1606,7 @@ fn start_up_snd(
     main_child: &mut ChildProcess,
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<ChildProcess> {
     // Extract the backend config from the sound config, so it can run elsewhere.
@@ -1747,8 +1742,6 @@ fn platform_create_gpu(
     #[allow(unused_variables)] main_child: &mut ChildProcess,
     exit_events: &mut Vec<Event>,
     exit_evt_wrtube: SendTube,
-    gpu_control_host_tube: Tube,
-    gpu_control_device_tube: Tube,
 ) -> Result<Option<(GpuBackendConfig, GpuVmmConfig)>> {
     if cfg.gpu_parameters.is_none() {
         return Ok(None);
@@ -1763,8 +1756,19 @@ fn platform_create_gpu(
     let (backend_config_product, vmm_config_product) =
         get_gpu_product_configs(cfg, main_child.alias_pid)?;
 
+    let (mut main_vhost_user_tube, mut device_host_user_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    // Start off the vhost-user tube assuming it is in the main process.
+    main_vhost_user_tube.set_target_pid(main_child.alias_pid);
+    device_host_user_tube.set_target_pid(main_child.alias_pid);
+
+    let (mut gpu_control_host_tube, mut gpu_control_device_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    gpu_control_host_tube.set_target_pid(main_child.alias_pid);
+    gpu_control_device_tube.set_target_pid(main_child.alias_pid);
+
     let backend_config = GpuBackendConfig {
-        device_vhost_user_tube: None,
+        device_vhost_user_tube: Some(device_host_user_tube),
         exit_event,
         exit_evt_wrtube,
         gpu_control_device_tube,
@@ -1777,7 +1781,7 @@ fn platform_create_gpu(
     };
 
     let vmm_config = GpuVmmConfig {
-        main_vhost_user_tube: None,
+        main_vhost_user_tube: Some(main_vhost_user_tube),
         gpu_control_host_tube: Some(gpu_control_host_tube),
         product_config: vmm_config_product,
     };
@@ -1795,14 +1799,11 @@ fn start_up_gpu(
     main_child: &mut ChildProcess,
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     wndproc_thread_builder: WindowProcedureThreadBuilder,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<ChildProcess> {
-    let (mut backend_cfg, mut vmm_cfg) = gpu_cfg;
-
-    let (mut main_vhost_user_tube, mut device_host_user_tube) =
-        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    let (backend_cfg, mut vmm_cfg) = gpu_cfg;
 
     let gpu_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
@@ -1838,21 +1839,14 @@ fn start_up_gpu(
         .take()
         .expect("The window procedure thread builder is missing");
     cfg.window_procedure_thread_split_config = Some(wndproc_thread_cfg);
-    // Update target PIDs to new child.
-    device_host_user_tube.set_target_pid(main_child.alias_pid);
-    main_vhost_user_tube.set_target_pid(gpu_child.alias_pid);
-    backend_cfg
-        .gpu_control_device_tube
-        .set_target_pid(main_child.alias_pid);
-    vmm_cfg
-        .gpu_control_host_tube
-        .as_mut()
-        .unwrap()
-        .set_target_pid(gpu_child.alias_pid);
 
-    // Insert vhost-user tube to backend / frontend configs.
-    backend_cfg.device_vhost_user_tube = Some(device_host_user_tube);
-    vmm_cfg.main_vhost_user_tube = Some(main_vhost_user_tube);
+    // Update target PIDs to new child.
+    if let Some(tube) = &mut vmm_cfg.main_vhost_user_tube {
+        tube.set_target_pid(gpu_child.alias_pid);
+    }
+    if let Some(tube) = &mut vmm_cfg.gpu_control_host_tube {
+        tube.set_target_pid(gpu_child.alias_pid);
+    }
 
     // Send VMM config to main process. Note we don't set gpu_backend_config and
     // input_event_backend_config, since it is passed to the child.

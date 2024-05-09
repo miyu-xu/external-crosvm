@@ -11,9 +11,12 @@ pub mod handle_source;
 mod io_completion_port;
 pub mod overlapped_source;
 mod timer;
+#[cfg(feature = "tokio")]
+pub mod tokio_source;
 pub mod wait_for_handle;
 
 pub use error::AsyncErrorSys;
+pub use executor::ExecutorKindSys;
 pub use handle_executor::HandleReactor;
 pub use handle_source::HandleSource;
 pub use handle_source::HandleWrapper;

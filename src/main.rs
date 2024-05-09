@@ -22,7 +22,6 @@ use base::syslog;
 use base::syslog::LogArgs;
 use base::syslog::LogConfig;
 use cmdline::RunCommand;
-use cmdline::UsbAttachCommand;
 mod crosvm;
 use crosvm::cmdline;
 #[cfg(feature = "plugin")]
@@ -59,11 +58,14 @@ use vm_control::client::do_gpu_display_add;
 use vm_control::client::do_gpu_display_list;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_remove;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_set_display_mouse_mode;
 use vm_control::client::do_modify_battery;
 #[cfg(feature = "pci-hotplug")]
 use vm_control::client::do_net_add;
 #[cfg(feature = "pci-hotplug")]
 use vm_control::client::do_net_remove;
+use vm_control::client::do_security_key_attach;
 use vm_control::client::do_swap_status;
 use vm_control::client::do_usb_attach;
 use vm_control::client::do_usb_detach;
@@ -557,11 +559,17 @@ fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult
 }
 
 #[cfg(feature = "gpu")]
+fn gpu_set_display_mouse_mode(cmd: cmdline::GpuSetDisplayMouseModeCommand) -> ModifyGpuResult {
+    do_gpu_set_display_mouse_mode(cmd.socket_path, cmd.display_id, cmd.mouse_mode)
+}
+
+#[cfg(feature = "gpu")]
 fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
     let result = match cmd.command {
         cmdline::GpuSubCommand::AddDisplays(cmd) => gpu_display_add(cmd),
         cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
         cmdline::GpuSubCommand::RemoveDisplays(cmd) => gpu_display_remove(cmd),
+        cmdline::GpuSubCommand::SetDisplayMouseMode(cmd) => gpu_set_display_mouse_mode(cmd),
     };
     match result {
         Ok(response) => {
@@ -575,10 +583,16 @@ fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
     }
 }
 
-fn usb_attach(cmd: UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
+fn usb_attach(cmd: cmdline::UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
     do_usb_attach(cmd.socket_path, dev_path)
+}
+
+fn security_key_attach(cmd: cmdline::UsbAttachKeyCommand) -> ModifyUsbResult<UsbControlResult> {
+    let dev_path = Path::new(&cmd.dev_path);
+
+    do_security_key_attach(cmd.socket_path, dev_path)
 }
 
 fn usb_detach(cmd: cmdline::UsbDetachCommand) -> ModifyUsbResult<UsbControlResult> {
@@ -592,6 +606,7 @@ fn usb_list(cmd: cmdline::UsbListCommand) -> ModifyUsbResult<UsbControlResult> {
 fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
     let result = match cmd.command {
         cmdline::UsbSubCommand::Attach(cmd) => usb_attach(cmd),
+        cmdline::UsbSubCommand::SecurityKeyAttach(cmd) => security_key_attach(cmd),
         cmdline::UsbSubCommand::Detach(cmd) => usb_detach(cmd),
         cmdline::UsbSubCommand::List(cmd) => usb_list(cmd),
     };
@@ -610,15 +625,18 @@ fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
 fn snapshot_vm(cmd: cmdline::SnapshotCommand) -> std::result::Result<(), ()> {
     use cmdline::SnapshotSubCommands::*;
     let (socket_path, request) = match cmd.snapshot_command {
-        Take(path) => {
+        Take(take_cmd) => {
             let req = VmRequest::Snapshot(SnapshotCommand::Take {
-                snapshot_path: path.snapshot_path,
+                snapshot_path: take_cmd.snapshot_path,
+                compress_memory: take_cmd.compress_memory,
+                encrypt: take_cmd.encrypt,
             });
-            (path.socket_path, req)
+            (take_cmd.socket_path, req)
         }
         Restore(path) => {
             let req = VmRequest::Restore(RestoreCommand::Apply {
                 restore_path: path.snapshot_path,
+                require_encrypted: path.require_encrypted,
             });
             (path.socket_path, req)
         }
@@ -753,8 +771,8 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                 // but also indicates whether the guest requested reset or stop.
                 run_vm(cmd, log_config)
             } else if let CrossPlatformCommands::Device(cmd) = command {
-                // On windows, the device command handles its own logging setup, so we can't handle it below
-                // otherwise logging will double init.
+                // On windows, the device command handles its own logging setup, so we can't handle
+                // it below otherwise logging will double init.
                 if cfg!(unix) {
                     syslog::init_with(log_config).context("failed to initialize syslog")?;
                 }
@@ -775,11 +793,6 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     }
                     #[cfg(feature = "balloon")]
                     CrossPlatformCommands::BalloonWs(cmd) => {
-                        balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
-                    }
-                    // TODO(b/288432539): remove once concierge is migrated
-                    #[cfg(feature = "balloon")]
-                    CrossPlatformCommands::BalloonWss(cmd) => {
                         balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
                     }
                     CrossPlatformCommands::Battery(cmd) => {
