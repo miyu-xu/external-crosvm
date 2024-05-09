@@ -46,9 +46,11 @@ use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
+use vm_control::gpu::DisplayMode;
 use vm_control::gpu::DisplayParameters;
 use vm_control::gpu::GpuControlCommand;
 use vm_control::gpu::GpuControlResult;
+use vm_control::gpu::MouseMode;
 use vm_control::VmMemorySource;
 use vm_memory::udmabuf::UdmabufDriver;
 use vm_memory::udmabuf::UdmabufDriverTrait;
@@ -284,11 +286,17 @@ impl VirtioGpuScanout {
 
         let mut display = display.borrow_mut();
 
+        let display_params =
+            self.display_params
+                .clone()
+                .unwrap_or(DisplayParameters::default_with_mode(DisplayMode::Windowed(
+                    self.width,
+                    self.height,
+                )));
         let surface_id = display.create_surface(
             self.parent_surface_id,
             self.scanout_id,
-            self.width,
-            self.height,
+            &display_params,
             self.scanout_type,
         )?;
 
@@ -303,6 +311,19 @@ impl VirtioGpuScanout {
         }
 
         self.surface_id = None;
+    }
+
+    fn set_mouse_mode(
+        &mut self,
+        display: &Rc<RefCell<GpuDisplay>>,
+        mouse_mode: MouseMode,
+    ) -> VirtioGpuResult {
+        if let Some(surface_id) = self.surface_id {
+            display
+                .borrow_mut()
+                .set_mouse_mode(surface_id, mouse_mode)?;
+        }
+        Ok(OkNoData)
     }
 
     fn set_position(
@@ -337,9 +358,15 @@ impl VirtioGpuScanout {
         };
 
         if let Some(import_id) =
-            VirtioGpuScanout::import_resource_to_display(display, resource, rutabaga)
+            VirtioGpuScanout::import_resource_to_display(display, surface_id, resource, rutabaga)
         {
-            display.borrow_mut().flip_to(surface_id, import_id)?;
+            display
+                .borrow_mut()
+                .flip_to(surface_id, import_id, None, None, None)
+                .map_err(|e| {
+                    error!("flip_to failed: {:#}", e);
+                    ErrUnspec
+                })?;
             return Ok(OkNoData);
         }
 
@@ -370,6 +397,7 @@ impl VirtioGpuScanout {
 
     fn import_resource_to_display(
         display: &Rc<RefCell<GpuDisplay>>,
+        surface_id: u32,
         resource: &mut VirtioGpuResource,
         rutabaga: &mut Rutabaga,
     ) -> Option<u32> {
@@ -399,14 +427,17 @@ impl VirtioGpuScanout {
 
         let import_id = display
             .borrow_mut()
-            .import_memory(
-                &dmabuf,
-                offset,
-                stride,
-                query.modifier,
-                width,
-                height,
-                format,
+            .import_resource(
+                surface_id,
+                DisplayExternalResourceImport::Dmabuf {
+                    descriptor: &dmabuf,
+                    offset,
+                    stride,
+                    modifiers: query.modifier,
+                    width,
+                    height,
+                    fourcc: format,
+                },
             )
             .ok()?;
         resource.display_import = Some(import_id);
@@ -548,7 +579,8 @@ impl VirtioGpu {
         &self.display
     }
 
-    /// Gets the list of supported display resolutions as a slice of `(width, height, enabled)` tuples.
+    /// Gets the list of supported display resolutions as a slice of `(width, height, enabled)`
+    /// tuples.
     pub fn display_info(&self) -> Vec<(u32, u32, bool)> {
         (0..VIRTIO_GPU_MAX_SCANOUTS)
             .map(|scanout_id| scanout_id as u32)
@@ -635,12 +667,30 @@ impl VirtioGpu {
             })
     }
 
+    fn set_display_mouse_mode(
+        &mut self,
+        display_id: u32,
+        mouse_mode: MouseMode,
+    ) -> GpuControlResult {
+        match self.scanouts.get_mut(&display_id) {
+            Some(scanout) => match scanout.set_mouse_mode(&self.display, mouse_mode) {
+                Ok(_) => GpuControlResult::DisplayMouseModeSet,
+                Err(e) => GpuControlResult::ErrString(e.to_string()),
+            },
+            None => GpuControlResult::NoSuchDisplay { display_id },
+        }
+    }
+
     /// Performs the given command to interact with or modify the device.
     pub fn process_gpu_control_command(&mut self, cmd: GpuControlCommand) -> GpuControlResult {
         match cmd {
             GpuControlCommand::AddDisplays { displays } => self.add_displays(displays),
             GpuControlCommand::ListDisplays => self.list_displays(),
             GpuControlCommand::RemoveDisplays { display_ids } => self.remove_displays(display_ids),
+            GpuControlCommand::SetDisplayMouseMode {
+                display_id,
+                mouse_mode,
+            } => self.set_display_mouse_mode(display_id, mouse_mode),
         }
     }
 

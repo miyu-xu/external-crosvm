@@ -45,6 +45,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::thread::JoinHandle;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use aarch64::AArch64 as Arch;
@@ -74,6 +75,8 @@ use cros_async::Executor;
 use device_helpers::*;
 use devices::create_devices_worker_thread;
 use devices::serial_device::SerialHardware;
+#[cfg(feature = "pvclock")]
+use devices::tsc::get_tsc_sync_mitigations;
 use devices::vfio::VfioCommonSetup;
 use devices::vfio::VfioCommonTrait;
 #[cfg(feature = "gpu")]
@@ -161,6 +164,7 @@ use jail_warden::JailWardenImpl;
 #[cfg(feature = "pci-hotplug")]
 use jail_warden::PermissiveJailWarden;
 use libc;
+use metrics::MetricsController;
 use minijail::Minijail;
 #[cfg(feature = "pci-hotplug")]
 use pci_hotplug_manager::PciHotPlugManager;
@@ -225,6 +229,7 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
     #[cfg(feature = "gpu")] has_vfio_gfx_device: bool,
     #[cfg(feature = "registered_events")] registered_evt_q: &SendTube,
+    #[cfg(feature = "pvclock")] pvclock_device_tube: Option<Tube>,
 ) -> DeviceResult<Vec<VirtioDeviceStub>> {
     let mut devs = Vec::new();
 
@@ -399,6 +404,27 @@ fn create_virtio_devices(
 
     if cfg.rng {
         devs.push(create_rng_device(cfg.protection_type, &cfg.jail_config)?);
+    }
+
+    #[cfg(feature = "pvclock")]
+    if let Some(suspend_tube) = pvclock_device_tube {
+        let tsc_state = devices::tsc::tsc_state()?;
+        let tsc_sync_mitigations =
+            get_tsc_sync_mitigations(&tsc_state, cfg.vcpu_count.unwrap_or(1));
+        if tsc_state.core_grouping.size() > 1 {
+            // Host TSCs are not in sync. Log what mitigations are applied.
+            warn!(
+                "Host TSCs are not in sync, applying the following mitigations: {:?}",
+                tsc_sync_mitigations
+            );
+        }
+        devs.push(create_pvclock_device(
+            cfg.protection_type,
+            &cfg.jail_config,
+            tsc_state.frequency,
+            suspend_tube,
+        )?);
+        info!("virtio-pvclock is enabled for this vm");
     }
 
     #[cfg(feature = "vtpm")]
@@ -715,6 +741,7 @@ fn create_devices(
     #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
     iova_max_addr: &mut Option<u64>,
     #[cfg(feature = "registered_events")] registered_evt_q: &SendTube,
+    #[cfg(feature = "pvclock")] pvclock_device_tube: Option<Tube>,
 ) -> DeviceResult<Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>> {
     let mut devices: Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)> = Vec::new();
     #[cfg(feature = "balloon")]
@@ -859,6 +886,8 @@ fn create_devices(
         has_vfio_gfx_device,
         #[cfg(feature = "registered_events")]
         registered_evt_q,
+        #[cfg(feature = "pvclock")]
+        pvclock_device_tube,
     )?;
 
     for stub in stubs {
@@ -975,8 +1004,8 @@ fn create_file_backed_mappings(
         ) {
             // OutOfSpace just means that this mapping is not in the MMIO regions at all, so don't
             // consider it an error.
-            // TODO(b/222769529): Reserve this region in a global memory address space allocator once
-            // we have that so nothing else can accidentally overlap with it.
+            // TODO(b/222769529): Reserve this region in a global memory address space allocator
+            // once we have that so nothing else can accidentally overlap with it.
             Ok(()) | Err(resources::Error::OutOfSpace) => {}
             e => e.context("failed to allocate guest address for file-backed mapping")?,
         }
@@ -1278,6 +1307,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         #[cfg(target_arch = "x86_64")]
         pci_low_start: cfg.pci_low_start,
         dynamic_power_coefficient: cfg.dynamic_power_coefficient.clone(),
+        boot_cpu: cfg.boot_cpu,
     })
 }
 
@@ -1652,6 +1682,10 @@ where
         // access to those files will not be possible.
         info!("crosvm entering multiprocess mode");
     }
+
+    let (metrics_send, metrics_recv) = Tube::directional_pair().context("metrics tube")?;
+    metrics::initialize(metrics_send);
+
     #[cfg(all(feature = "pci-hotplug", feature = "swap"))]
     let swap_device_helper = match &swap_controller {
         Some(swap_controller) => Some(swap_controller.create_device_helper()?),
@@ -1859,6 +1893,19 @@ where
         BTreeMap::new();
     let mut iova_max_addr: Option<u64> = None;
 
+    // pvclock gets a tube for handling suspend/resume requests from the main thread.
+    #[cfg(feature = "pvclock")]
+    let (pvclock_host_tube, pvclock_device_tube) = if cfg.pvclock {
+        let (host, device) = Tube::pair().context("failed to create tube")?;
+        (Some(host), Some(device))
+    } else {
+        (None, None)
+    };
+    #[cfg(not(feature = "pvclock"))]
+    if cfg.pvclock {
+        bail!("pvclock device is only supported when crosvm is built with a feature 'pvclock'");
+    }
+
     #[cfg(feature = "registered_events")]
     let (reg_evt_wrtube, reg_evt_rdtube) =
         Tube::directional_pair().context("failed to create registered event tube")?;
@@ -1890,6 +1937,8 @@ where
         &mut iova_max_addr,
         #[cfg(feature = "registered_events")]
         &reg_evt_wrtube,
+        #[cfg(feature = "pvclock")]
+        pvclock_device_tube,
     )?;
 
     #[cfg(feature = "pci-hotplug")]
@@ -2165,6 +2214,9 @@ where
         #[cfg(feature = "registered_events")]
         reg_evt_rdtube,
         guest_suspended_cvar,
+        #[cfg(feature = "pvclock")]
+        pvclock_host_tube,
+        metrics_recv,
     )
 }
 
@@ -2393,7 +2445,7 @@ fn add_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
     };
     hp_bus.lock().add_hotplug_device(hotplug_key, pci_address);
     if device.hp_interrupt {
-        hp_bus.lock().hot_plug(pci_address);
+        hp_bus.lock().hot_plug(pci_address)?;
     }
     Ok(())
 }
@@ -2519,7 +2571,7 @@ fn remove_hotplug_bridge<V: VmArch, Vcpu: VcpuArch>(
         let mut hp_bus_lock = hp_bus.lock();
         if let Some(pci_addr) = hp_bus_lock.get_hotplug_device(hotplug_key) {
             sys_allocator.release_pci(pci_addr.bus, pci_addr.dev, pci_addr.func);
-            hp_bus_lock.hot_unplug(pci_addr);
+            hp_bus_lock.hot_unplug(pci_addr)?;
             buses_to_remove.push(child_bus);
             if hp_bus_lock.is_empty() {
                 if let Some(hotplug_key) = hp_bus_lock.get_hotplug_key() {
@@ -2605,7 +2657,7 @@ fn remove_hotplug_device<V: VmArch, Vcpu: VcpuArch>(
             // downstream port. Root port will send one plug out interrupt and remove all
             // the remaining devices
             if !empty_simbling {
-                hp_bus_lock.hot_unplug(pci_addr);
+                hp_bus_lock.hot_unplug(pci_addr)?;
             }
 
             sys_allocator.release_pci(pci_addr.bus, pci_addr.dev, pci_addr.func);
@@ -2699,6 +2751,24 @@ pub fn trigger_vm_suspend_and_wait_for_entry(
     }
 }
 
+#[cfg(feature = "pvclock")]
+fn send_pvclock_cmd(tube: &Tube, command: PvClockCommand) -> Result<()> {
+    tube.send(&command)
+        .with_context(|| format!("failed to send pvclock command {:?}", command))?;
+    let resp = tube
+        .recv::<PvClockCommandResponse>()
+        .context("failed to receive pvclock command response")?;
+    if let PvClockCommandResponse::Err(e) = resp {
+        bail!("pvclock encountered error on {:?}: {}", command, e);
+    }
+    if let PvClockCommandResponse::DeviceInactive = resp {
+        warn!("Tried to send {command:?} but pvclock device was inactive");
+    } else {
+        info!("{command:?} completed with {resp:?}");
+    }
+    Ok(())
+}
+
 #[cfg(target_arch = "x86_64")]
 fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
@@ -2747,6 +2817,445 @@ fn handle_hotplug_command<V: VmArch, Vcpu: VcpuArch>(
     }
 }
 
+struct ControlLoopState<'a, V: VmArch, Vcpu: VcpuArch> {
+    linux: &'a mut RunnableLinuxVm<V, Vcpu>,
+    cfg: &'a Config,
+    sys_allocator: &'a Arc<Mutex<SystemAllocator>>,
+    control_tubes: &'a BTreeMap<usize, TaggedControlTube>,
+    disk_host_tubes: &'a [Tube],
+    #[cfg(feature = "gpu")]
+    gpu_control_tube: &'a Tube,
+    #[cfg(feature = "usb")]
+    usb_control_tube: &'a Tube,
+    #[cfg(target_arch = "x86_64")]
+    iommu_host_tube: &'a Option<Arc<Mutex<Tube>>>,
+    #[cfg(target_arch = "x86_64")]
+    hp_control_tube: &'a mpsc::Sender<PciRootCommand>,
+    guest_suspended_cvar: &'a Option<Arc<(Mutex<bool>, Condvar)>>,
+    #[cfg(feature = "pci-hotplug")]
+    hotplug_manager: &'a mut Option<PciHotPlugManager>,
+    #[cfg(feature = "swap")]
+    swap_controller: &'a mut Option<SwapController>,
+    vcpu_handles: &'a [(JoinHandle<()>, mpsc::Sender<vm_control::VcpuControl>)],
+    #[cfg(feature = "balloon")]
+    balloon_tube: Option<&'a mut BalloonTube>,
+    device_ctrl_tube: &'a Tube,
+    irq_handler_control: &'a Tube,
+    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
+    vm_memory_handler_control: &'a Tube,
+    #[cfg(feature = "registered_events")]
+    registered_evt_tubes: &'a mut HashMap<RegisteredEvent, HashSet<AddressedProtoTube>>,
+    #[cfg(feature = "pvclock")]
+    pvclock_host_tube: Option<Arc<Tube>>,
+}
+
+fn process_vm_request<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
+    state: &mut ControlLoopState<V, Vcpu>,
+    id: usize,
+    tube: &Tube,
+    request: VmRequest,
+    #[cfg_attr(
+        not(any(target_arch = "x86_64", feature = "pci-hotplug")),
+        allow(unused_variables, clippy::ptr_arg)
+    )]
+    add_tubes: &mut Vec<TaggedControlTube>,
+) -> Result<(Option<VmResponse>, bool, Option<VmRunMode>)> {
+    let mut suspend_requested = false;
+    let mut run_mode_opt = None;
+
+    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
+    let mut add_irq_control_tubes = Vec::new();
+    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
+    let mut add_vm_memory_control_tubes = Vec::new();
+
+    let response = match request {
+        VmRequest::HotPlugVfioCommand { device, add } => {
+            #[cfg(target_arch = "x86_64")]
+            {
+                handle_hotplug_command(
+                    state.linux,
+                    &mut state.sys_allocator.lock(),
+                    state.cfg,
+                    &mut add_irq_control_tubes,
+                    &mut add_vm_memory_control_tubes,
+                    add_tubes,
+                    state.hp_control_tube,
+                    state.iommu_host_tube.as_ref().map(|t| t.lock()).as_deref(),
+                    &device,
+                    add,
+                    #[cfg(feature = "swap")]
+                    state.swap_controller,
+                )
+            }
+
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                // Suppress warnings.
+                let _ = (device, add);
+                VmResponse::Ok
+            }
+        }
+        #[cfg(feature = "pci-hotplug")]
+        VmRequest::HotPlugNetCommand(net_cmd) => {
+            if let Some(hotplug_manager) = state.hotplug_manager.as_mut() {
+                handle_hotplug_net_command(
+                    net_cmd,
+                    state.linux,
+                    &mut state.sys_allocator.lock(),
+                    &mut add_irq_control_tubes,
+                    &mut add_vm_memory_control_tubes,
+                    add_tubes,
+                    hotplug_manager,
+                )
+            } else {
+                VmResponse::ErrString("PCI hotplug is not enabled.".to_owned())
+            }
+        }
+        #[cfg(feature = "registered_events")]
+        VmRequest::RegisterListener { socket_addr, event } => {
+            let (registered_tube, already_registered) =
+                find_registered_tube(state.registered_evt_tubes, &socket_addr, event);
+
+            if !already_registered {
+                let addr_tube = make_addr_tube_from_maybe_existing(registered_tube, socket_addr)?;
+
+                if let Some(tubes) = state.registered_evt_tubes.get_mut(&event) {
+                    tubes.insert(addr_tube);
+                } else {
+                    state
+                        .registered_evt_tubes
+                        .insert(event, vec![addr_tube].into_iter().collect());
+                }
+            }
+            VmResponse::Ok
+        }
+        #[cfg(feature = "registered_events")]
+        VmRequest::UnregisterListener { socket_addr, event } => {
+            if let Some(tubes) = state.registered_evt_tubes.get_mut(&event) {
+                tubes.retain(|t| t.socket_addr != socket_addr);
+            }
+            state
+                .registered_evt_tubes
+                .retain(|_, tubes| !tubes.is_empty());
+            VmResponse::Ok
+        }
+        #[cfg(feature = "registered_events")]
+        VmRequest::Unregister { socket_addr } => {
+            for (_, tubes) in state.registered_evt_tubes.iter_mut() {
+                tubes.retain(|t| t.socket_addr != socket_addr);
+            }
+            state
+                .registered_evt_tubes
+                .retain(|_, tubes| !tubes.is_empty());
+            VmResponse::Ok
+        }
+        #[cfg(feature = "balloon")]
+        VmRequest::BalloonCommand(cmd) => {
+            if let Some(tube) = state.balloon_tube.as_mut() {
+                let Some((r, key)) = tube.send_cmd(cmd, Some(id)) else {
+                    return Ok((None, false, None));
+                };
+                if key != id {
+                    let Some(TaggedControlTube::Vm(tube)) = state.control_tubes.get(&key) else {
+                        return Ok((None, false, None));
+                    };
+                    if let Err(e) = tube.send(&r) {
+                        error!("failed to send VmResponse: {}", e);
+                    }
+                    return Ok((None, false, None));
+                }
+                r
+            } else {
+                VmResponse::Err(base::Error::new(libc::ENOTSUP))
+            }
+        }
+        _ => {
+            let response = request.execute(
+                &mut run_mode_opt,
+                state.disk_host_tubes,
+                &mut state.linux.pm,
+                #[cfg(feature = "gpu")]
+                Some(state.gpu_control_tube),
+                #[cfg(not(feature = "gpu"))]
+                None,
+                #[cfg(feature = "usb")]
+                Some(state.usb_control_tube),
+                #[cfg(not(feature = "usb"))]
+                None,
+                &mut state.linux.bat_control,
+                |msg| {
+                    vcpu::kick_all_vcpus(
+                        state.vcpu_handles,
+                        state.linux.irq_chip.as_irq_chip(),
+                        msg,
+                    )
+                },
+                |msg, index| {
+                    vcpu::kick_vcpu(
+                        &state.vcpu_handles.get(index),
+                        state.linux.irq_chip.as_irq_chip(),
+                        msg,
+                    )
+                },
+                state.cfg.force_s2idle,
+                #[cfg(feature = "swap")]
+                state.swap_controller.as_ref(),
+                state.device_ctrl_tube,
+                state.vcpu_handles.len(),
+                state.irq_handler_control,
+                || state.linux.irq_chip.snapshot(state.linux.vcpu_count),
+                |image| {
+                    state
+                        .linux
+                        .irq_chip
+                        .try_box_clone()?
+                        .restore(image, state.linux.vcpu_count)
+                },
+            );
+            if state.cfg.force_s2idle {
+                if let VmRequest::SuspendVcpus = request {
+                    suspend_requested = true;
+
+                    // Spawn s2idle wait thread.
+                    let send_tube = tube.try_clone_send_tube().unwrap();
+                    let suspend_evt = state.linux.suspend_evt.try_clone().unwrap();
+                    let guest_suspended_cvar = state.guest_suspended_cvar.clone();
+                    let delayed_response = response.clone();
+                    let pm = state.linux.pm.clone();
+
+                    std::thread::Builder::new()
+                        .name("s2idle_wait".to_owned())
+                        .spawn(move || {
+                            trigger_vm_suspend_and_wait_for_entry(
+                                guest_suspended_cvar.unwrap(),
+                                &send_tube,
+                                delayed_response,
+                                suspend_evt,
+                                pm,
+                            )
+                        })
+                        .context("failed to spawn s2idle_wait thread")?;
+                }
+            } else {
+                // if not doing s2idle, the guest clock should
+                // behave as the host does, so let the guest
+                // know about the suspend / resume via
+                // virtio-pvclock.
+                #[cfg(feature = "pvclock")]
+                if let Some(ref pvclock_host_tube) = state.pvclock_host_tube {
+                    let cmd = match request {
+                        VmRequest::SuspendVcpus => Some(PvClockCommand::Suspend),
+                        VmRequest::ResumeVcpus => Some(PvClockCommand::Resume),
+                        _ => None,
+                    };
+                    if let Some(cmd) = cmd {
+                        if let Err(e) = send_pvclock_cmd(pvclock_host_tube, cmd.clone()) {
+                            error!("{:?} command failed: {:#}", cmd, e);
+                        } else {
+                            info!("{:?} command successfully processed", cmd);
+                        }
+                    }
+                }
+            }
+            response
+        }
+    };
+
+    cfg_if::cfg_if! {
+        if #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))] {
+            if !add_irq_control_tubes.is_empty() {
+                state
+                    .irq_handler_control
+                    .send(&IrqHandlerRequest::AddIrqControlTubes(
+                        add_irq_control_tubes,
+                    ))?;
+            }
+            if !add_vm_memory_control_tubes.is_empty() {
+                state
+                    .vm_memory_handler_control
+                    .send(&VmMemoryHandlerRequest::AddControlTubes(
+                        add_vm_memory_control_tubes,
+                    ))?;
+            }
+        }
+    }
+
+    Ok((Some(response), suspend_requested, run_mode_opt))
+}
+
+fn process_vm_control_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
+    state: &mut ControlLoopState<V, Vcpu>,
+    id: usize,
+    socket: &TaggedControlTube,
+) -> Result<(bool, Vec<usize>, Vec<TaggedControlTube>)> {
+    let mut vm_control_ids_to_remove = Vec::new();
+    let mut add_tubes = Vec::new();
+    match socket {
+        TaggedControlTube::Vm(tube) => match tube.recv::<VmRequest>() {
+            Ok(request) => {
+                let (response, suspend_requested, run_mode_opt) =
+                    process_vm_request(state, id, tube, request, &mut add_tubes)?;
+
+                if let Some(response) = response {
+                    // If suspend requested skip that step since it will be
+                    // performed by s2idle_wait thread when suspension actually
+                    // happens.
+                    if !suspend_requested {
+                        if let Err(e) = tube.send(&response) {
+                            error!("failed to send VmResponse: {}", e);
+                        }
+                    }
+                }
+
+                if let Some(run_mode) = run_mode_opt {
+                    info!("control socket changed run mode to {}", run_mode);
+                    match run_mode {
+                        VmRunMode::Exiting => {
+                            return Ok((true, Vec::new(), Vec::new()));
+                        }
+                        other => {
+                            if other == VmRunMode::Running {
+                                for dev in &state.linux.resume_notify_devices {
+                                    dev.lock().resume_imminent();
+                                }
+                            }
+                            // If suspend requested skip that step since it
+                            // will be performed by s2idle_wait thread when
+                            // needed.
+                            if !suspend_requested {
+                                vcpu::kick_all_vcpus(
+                                    state.vcpu_handles,
+                                    state.linux.irq_chip.as_irq_chip(),
+                                    VcpuControl::RunState(other),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                if let TubeError::Disconnected = e {
+                    vm_control_ids_to_remove.push(id);
+                } else {
+                    error!("failed to recv VmRequest: {}", e);
+                }
+            }
+        },
+        TaggedControlTube::VmMsync(tube) => match tube.recv::<VmMsyncRequest>() {
+            Ok(request) => {
+                let response = request.execute(&mut state.linux.vm);
+                if let Err(e) = tube.send(&response) {
+                    error!("failed to send VmMsyncResponse: {}", e);
+                }
+            }
+            Err(e) => {
+                if let TubeError::Disconnected = e {
+                    vm_control_ids_to_remove.push(id);
+                } else {
+                    error!("failed to recv VmMsyncRequest: {}", e);
+                }
+            }
+        },
+        TaggedControlTube::Fs(tube) => match tube.recv::<FsMappingRequest>() {
+            Ok(request) => {
+                let response =
+                    request.execute(&mut state.linux.vm, &mut state.sys_allocator.lock());
+                if let Err(e) = tube.send(&response) {
+                    error!("failed to send VmResponse: {}", e);
+                }
+            }
+            Err(e) => {
+                if let TubeError::Disconnected = e {
+                    vm_control_ids_to_remove.push(id);
+                } else {
+                    error!("failed to recv VmResponse: {}", e);
+                }
+            }
+        },
+    }
+
+    Ok((false, vm_control_ids_to_remove, add_tubes))
+}
+
+#[cfg(feature = "registered_events")]
+struct AddressedProtoTube {
+    tube: Rc<ProtoTube>,
+    socket_addr: String,
+}
+
+#[cfg(feature = "registered_events")]
+impl PartialEq for AddressedProtoTube {
+    fn eq(&self, other: &Self) -> bool {
+        self.socket_addr == other.socket_addr
+    }
+}
+
+#[cfg(feature = "registered_events")]
+impl Eq for AddressedProtoTube {}
+
+#[cfg(feature = "registered_events")]
+impl Hash for AddressedProtoTube {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.socket_addr.hash(state);
+    }
+}
+
+#[cfg(feature = "registered_events")]
+impl AddressedProtoTube {
+    pub fn send<M: protobuf::Message>(&self, msg: &M) -> Result<(), base::TubeError> {
+        self.tube.send_proto(msg)
+    }
+}
+
+#[cfg(feature = "registered_events")]
+fn find_registered_tube<'a>(
+    registered_tubes: &'a HashMap<RegisteredEvent, HashSet<AddressedProtoTube>>,
+    socket_addr: &str,
+    event: RegisteredEvent,
+) -> (Option<&'a Rc<ProtoTube>>, bool) {
+    let mut registered_tube: Option<&Rc<ProtoTube>> = None;
+    let mut already_registered = false;
+    'outer: for (evt, addr_tubes) in registered_tubes {
+        for addr_tube in addr_tubes {
+            if addr_tube.socket_addr == socket_addr {
+                if *evt == event {
+                    already_registered = true;
+                    break 'outer;
+                }
+                // Since all tubes of the same addr should
+                // be an RC to the same tube, it doesn't
+                // matter which one we get. But we do need
+                // to check for a registration for the
+                // current event, so can't break here.
+                registered_tube = Some(&addr_tube.tube);
+            }
+        }
+    }
+    (registered_tube, already_registered)
+}
+
+#[cfg(feature = "registered_events")]
+fn make_addr_tube_from_maybe_existing(
+    tube: Option<&Rc<ProtoTube>>,
+    addr: String,
+) -> Result<AddressedProtoTube> {
+    if let Some(registered_tube) = tube {
+        Ok(AddressedProtoTube {
+            tube: registered_tube.clone(),
+            socket_addr: addr,
+        })
+    } else {
+        let sock = UnixSeqpacket::connect(addr.clone()).with_context(|| {
+            format!("failed to connect to registered listening socket {}", addr)
+        })?;
+        let tube = ProtoTube::new_from_unix_seqpacket(sock)?;
+        Ok(AddressedProtoTube {
+            tube: Rc::new(tube),
+            socket_addr: addr,
+        })
+    }
+}
+
 fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut linux: RunnableLinuxVm<V, Vcpu>,
     sys_allocator: SystemAllocator,
@@ -2773,6 +3282,8 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     mut swap_controller: Option<SwapController>,
     #[cfg(feature = "registered_events")] reg_evt_rdtube: RecvTube,
     guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
+    #[cfg(feature = "pvclock")] pvclock_host_tube: Option<Tube>,
+    metrics_tube: RecvTube,
 ) -> Result<ExitState> {
     #[derive(EventToken)]
     enum Token {
@@ -2788,86 +3299,6 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         #[cfg(feature = "balloon")]
         BalloonTube,
     }
-
-    #[cfg(feature = "registered_events")]
-    struct AddressedProtoTube {
-        tube: Rc<ProtoTube>,
-        socket_addr: String,
-    }
-
-    #[cfg(feature = "registered_events")]
-    impl PartialEq for AddressedProtoTube {
-        fn eq(&self, other: &Self) -> bool {
-            self.socket_addr == other.socket_addr
-        }
-    }
-
-    #[cfg(feature = "registered_events")]
-    impl Eq for AddressedProtoTube {}
-
-    #[cfg(feature = "registered_events")]
-    impl Hash for AddressedProtoTube {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            self.socket_addr.hash(state);
-        }
-    }
-
-    #[cfg(feature = "registered_events")]
-    impl AddressedProtoTube {
-        pub fn send<M: protobuf::Message>(&self, msg: &M) -> Result<(), base::TubeError> {
-            self.tube.send_proto(msg)
-        }
-    }
-
-    #[cfg(feature = "registered_events")]
-    fn find_registered_tube<'a>(
-        registered_tubes: &'a HashMap<RegisteredEvent, HashSet<AddressedProtoTube>>,
-        socket_addr: &str,
-        event: RegisteredEvent,
-    ) -> (Option<&'a Rc<ProtoTube>>, bool) {
-        let mut registered_tube: Option<&Rc<ProtoTube>> = None;
-        let mut already_registered = false;
-        'outer: for (evt, addr_tubes) in registered_tubes {
-            for addr_tube in addr_tubes {
-                if addr_tube.socket_addr == socket_addr {
-                    if *evt == event {
-                        already_registered = true;
-                        break 'outer;
-                    }
-                    // Since all tubes of the same addr should
-                    // be an RC to the same tube, it doesn't
-                    // matter which one we get. But we do need
-                    // to check for a registration for the
-                    // current event, so can't break here.
-                    registered_tube = Some(&addr_tube.tube);
-                }
-            }
-        }
-        (registered_tube, already_registered)
-    }
-
-    #[cfg(feature = "registered_events")]
-    fn make_addr_tube_from_maybe_existing(
-        tube: Option<&Rc<ProtoTube>>,
-        addr: String,
-    ) -> Result<AddressedProtoTube> {
-        if let Some(registered_tube) = tube {
-            Ok(AddressedProtoTube {
-                tube: registered_tube.clone(),
-                socket_addr: addr,
-            })
-        } else {
-            let sock = UnixSeqpacket::connect(addr.clone()).with_context(|| {
-                format!("failed to connect to registered listening socket {}", addr)
-            })?;
-            let tube = ProtoTube::new_from_unix_seqpacket(sock)?;
-            Ok(AddressedProtoTube {
-                tube: Rc::new(tube),
-                socket_addr: addr,
-            })
-        }
-    }
-
     stdin()
         .set_raw_mode()
         .expect("failed to set terminal raw mode");
@@ -3030,6 +3461,9 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         (run_mode, run_mode)
     };
 
+    #[cfg(feature = "pvclock")]
+    let pvclock_host_tube = pvclock_host_tube.map(Arc::new);
+
     // Architecture-specific code must supply a vcpu_init element for each VCPU.
     assert_eq!(vcpus.len(), linux.vcpu_init.len());
 
@@ -3182,6 +3616,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     .try_box_clone()?
                     .restore(image, linux.vcpu_count)
             },
+            /* require_encrypted= */ false,
         )?;
         // Allow the vCPUs to start for real.
         vcpu::kick_all_vcpus(
@@ -3197,6 +3632,21 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             .on_static_devices_setup_complete()
             .context("static device setup complete")?;
     }
+
+    let metrics_thread = if metrics::is_initialized() {
+        Some(
+            std::thread::Builder::new()
+                .name("metrics_thread".into())
+                .spawn(move || {
+                    if let Err(e) = MetricsController::new(vec![metrics_tube]).run() {
+                        error!("Metrics controller error: {:?}", e);
+                    }
+                })
+                .context("metrics thread failed")?,
+        )
+    } else {
+        None
+    };
 
     let mut exit_state = ExitState::Stop;
     let mut pvpanic_code = PvPanicCode::Unknown;
@@ -3359,311 +3809,54 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     }
                 }
                 Token::VmControl { id } => {
-                    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
-                    let mut add_tubes = Vec::new();
-                    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
-                    let mut add_irq_control_tubes = Vec::new();
-                    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
-                    let mut add_vm_memory_control_tubes = Vec::new();
                     if let Some(socket) = control_tubes.get(&id) {
-                        match socket {
-                            TaggedControlTube::Vm(tube) => match tube.recv::<VmRequest>() {
-                                Ok(request) => {
-                                    let mut suspend_requested = false;
-                                    let mut run_mode_opt = None;
-                                    let response = match request {
-                                        VmRequest::HotPlugVfioCommand { device, add } => {
-                                            #[cfg(target_arch = "x86_64")]
-                                            {
-                                                handle_hotplug_command(
-                                                    &mut linux,
-                                                    &mut sys_allocator_mutex.lock(),
-                                                    &cfg,
-                                                    &mut add_irq_control_tubes,
-                                                    &mut add_vm_memory_control_tubes,
-                                                    &mut add_tubes,
-                                                    &hp_control_tube,
-                                                    iommu_host_tube
-                                                        .as_ref()
-                                                        .map(|t| t.lock())
-                                                        .as_deref(),
-                                                    &device,
-                                                    add,
-                                                    #[cfg(feature = "swap")]
-                                                    &mut swap_controller,
-                                                )
-                                            }
-
-                                            #[cfg(not(target_arch = "x86_64"))]
-                                            {
-                                                // Suppress warnings.
-                                                let _ = (device, add);
-                                                VmResponse::Ok
-                                            }
-                                        }
-                                        #[cfg(feature = "pci-hotplug")]
-                                        VmRequest::HotPlugNetCommand(net_cmd) => {
-                                            if let Some(hotplug_manager) = &mut hotplug_manager {
-                                                handle_hotplug_net_command(
-                                                    net_cmd,
-                                                    &mut linux,
-                                                    &mut sys_allocator_mutex.lock(),
-                                                    &mut add_irq_control_tubes,
-                                                    &mut add_vm_memory_control_tubes,
-                                                    &mut add_tubes,
-                                                    hotplug_manager,
-                                                )
-                                            } else {
-                                                VmResponse::ErrString(
-                                                    "PCI hotplug is not enabled.".to_owned(),
-                                                )
-                                            }
-                                        }
-                                        #[cfg(feature = "registered_events")]
-                                        VmRequest::RegisterListener { socket_addr, event } => {
-                                            let (registered_tube, already_registered) =
-                                                find_registered_tube(
-                                                    &registered_evt_tubes,
-                                                    &socket_addr,
-                                                    event,
-                                                );
-
-                                            if !already_registered {
-                                                let addr_tube = make_addr_tube_from_maybe_existing(
-                                                    registered_tube,
-                                                    socket_addr,
-                                                )?;
-
-                                                if let Some(tubes) =
-                                                    registered_evt_tubes.get_mut(&event)
-                                                {
-                                                    tubes.insert(addr_tube);
-                                                } else {
-                                                    registered_evt_tubes.insert(
-                                                        event,
-                                                        vec![addr_tube].into_iter().collect(),
-                                                    );
-                                                }
-                                            }
-                                            VmResponse::Ok
-                                        }
-                                        #[cfg(feature = "registered_events")]
-                                        VmRequest::UnregisterListener { socket_addr, event } => {
-                                            if let Some(tubes) =
-                                                registered_evt_tubes.get_mut(&event)
-                                            {
-                                                tubes.retain(|t| t.socket_addr != socket_addr);
-                                            }
-                                            registered_evt_tubes
-                                                .retain(|_, tubes| !tubes.is_empty());
-                                            VmResponse::Ok
-                                        }
-                                        #[cfg(feature = "registered_events")]
-                                        VmRequest::Unregister { socket_addr } => {
-                                            for (_, tubes) in registered_evt_tubes.iter_mut() {
-                                                tubes.retain(|t| t.socket_addr != socket_addr);
-                                            }
-                                            registered_evt_tubes
-                                                .retain(|_, tubes| !tubes.is_empty());
-                                            VmResponse::Ok
-                                        }
-                                        #[cfg(feature = "balloon")]
-                                        VmRequest::BalloonCommand(cmd) => {
-                                            if let Some(tube) = balloon_tube.as_mut() {
-                                                let Some((r, key)) = tube.send_cmd(cmd, Some(id))
-                                                else {
-                                                    continue;
-                                                };
-                                                if key != id {
-                                                    let Some(TaggedControlTube::Vm(tube)) =
-                                                        control_tubes.get(&key)
-                                                    else {
-                                                        continue;
-                                                    };
-                                                    if let Err(e) = tube.send(&r) {
-                                                        error!("failed to send VmResponse: {}", e);
-                                                    }
-                                                    continue;
-                                                }
-                                                r
-                                            } else {
-                                                VmResponse::Err(base::Error::new(libc::ENOTSUP))
-                                            }
-                                        }
-                                        _ => {
-                                            let response = request.execute(
-                                                &mut run_mode_opt,
-                                                disk_host_tubes,
-                                                &mut linux.pm,
-                                                #[cfg(feature = "gpu")]
-                                                Some(&gpu_control_tube),
-                                                #[cfg(feature = "usb")]
-                                                Some(&usb_control_tube),
-                                                #[cfg(not(feature = "usb"))]
-                                                None,
-                                                &mut linux.bat_control,
-                                                |msg| {
-                                                    vcpu::kick_all_vcpus(
-                                                        &vcpu_handles,
-                                                        linux.irq_chip.as_irq_chip(),
-                                                        msg,
-                                                    )
-                                                },
-                                                |msg, index| {
-                                                    vcpu::kick_vcpu(
-                                                        &vcpu_handles.get(index),
-                                                        linux.irq_chip.as_irq_chip(),
-                                                        msg,
-                                                    )
-                                                },
-                                                cfg.force_s2idle,
-                                                #[cfg(feature = "swap")]
-                                                swap_controller.as_ref(),
-                                                &device_ctrl_tube,
-                                                vcpu_handles.len(),
-                                                &irq_handler_control,
-                                                || linux.irq_chip.snapshot(linux.vcpu_count),
-                                                |image| {
-                                                    linux
-                                                        .irq_chip
-                                                        .try_box_clone()?
-                                                        .restore(image, linux.vcpu_count)
-                                                },
-                                            );
-
-                                            // For non s2idle guest suspension we are done
-                                            if let VmRequest::SuspendVcpus = request {
-                                                if cfg.force_s2idle {
-                                                    suspend_requested = true;
-
-                                                    // Spawn s2idle wait thread.
-                                                    let send_tube =
-                                                        tube.try_clone_send_tube().unwrap();
-                                                    let suspend_evt =
-                                                        linux.suspend_evt.try_clone().unwrap();
-                                                    let guest_suspended_cvar =
-                                                        guest_suspended_cvar.clone();
-                                                    let delayed_response = response.clone();
-                                                    let pm = linux.pm.clone();
-
-                                                    std::thread::Builder::new()
-                                                        .name("s2idle_wait".to_owned())
-                                                        .spawn(move || {
-                                                            trigger_vm_suspend_and_wait_for_entry(
-                                                                guest_suspended_cvar.unwrap(),
-                                                                &send_tube,
-                                                                delayed_response,
-                                                                suspend_evt,
-                                                                pm,
-                                                            )
-                                                        })
-                                                        .context(
-                                                            "failed to spawn s2idle_wait thread",
-                                                        )?;
-                                                }
-                                            }
-                                            response
-                                        }
-                                    };
-
-                                    // If suspend requested skip that step since it will be
-                                    // performed by s2idle_wait thread when suspension actually
-                                    // happens.
-                                    if !suspend_requested {
-                                        if let Err(e) = tube.send(&response) {
-                                            error!("failed to send VmResponse: {}", e);
-                                        }
-                                    }
-
-                                    if let Some(run_mode) = run_mode_opt {
-                                        info!("control socket changed run mode to {}", run_mode);
-                                        match run_mode {
-                                            VmRunMode::Exiting => {
-                                                break 'wait;
-                                            }
-                                            other => {
-                                                if other == VmRunMode::Running {
-                                                    for dev in &linux.resume_notify_devices {
-                                                        dev.lock().resume_imminent();
-                                                    }
-                                                }
-                                                // If suspend requested skip that step since it
-                                                // will be performed by s2idle_wait thread when
-                                                // needed.
-                                                if !suspend_requested {
-                                                    vcpu::kick_all_vcpus(
-                                                        &vcpu_handles,
-                                                        linux.irq_chip.as_irq_chip(),
-                                                        VcpuControl::RunState(other),
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    if let TubeError::Disconnected = e {
-                                        vm_control_ids_to_remove.push(id);
-                                    } else {
-                                        error!("failed to recv VmRequest: {}", e);
-                                    }
-                                }
-                            },
-                            TaggedControlTube::VmMsync(tube) => {
-                                match tube.recv::<VmMsyncRequest>() {
-                                    Ok(request) => {
-                                        let response = request.execute(&mut linux.vm);
-                                        if let Err(e) = tube.send(&response) {
-                                            error!("failed to send VmMsyncResponse: {}", e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if let TubeError::Disconnected = e {
-                                            vm_control_ids_to_remove.push(id);
-                                        } else {
-                                            error!("failed to recv VmMsyncRequest: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            TaggedControlTube::Fs(tube) => match tube.recv::<FsMappingRequest>() {
-                                Ok(request) => {
-                                    let response = request
-                                        .execute(&mut linux.vm, &mut sys_allocator_mutex.lock());
-                                    if let Err(e) = tube.send(&response) {
-                                        error!("failed to send VmResponse: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    if let TubeError::Disconnected = e {
-                                        vm_control_ids_to_remove.push(id);
-                                    } else {
-                                        error!("failed to recv VmResponse: {}", e);
-                                    }
-                                }
-                            },
+                        let mut state = ControlLoopState {
+                            linux: &mut linux,
+                            cfg: &cfg,
+                            sys_allocator: &sys_allocator_mutex,
+                            control_tubes: &control_tubes,
+                            disk_host_tubes,
+                            #[cfg(feature = "gpu")]
+                            gpu_control_tube: &gpu_control_tube,
+                            #[cfg(feature = "usb")]
+                            usb_control_tube: &usb_control_tube,
+                            #[cfg(target_arch = "x86_64")]
+                            iommu_host_tube: &iommu_host_tube,
+                            #[cfg(target_arch = "x86_64")]
+                            hp_control_tube: &hp_control_tube,
+                            guest_suspended_cvar: &guest_suspended_cvar,
+                            #[cfg(feature = "pci-hotplug")]
+                            hotplug_manager: &mut hotplug_manager,
+                            #[cfg(feature = "swap")]
+                            swap_controller: &mut swap_controller,
+                            vcpu_handles: &vcpu_handles,
+                            #[cfg(feature = "balloon")]
+                            balloon_tube: balloon_tube.as_mut(),
+                            device_ctrl_tube: &device_ctrl_tube,
+                            irq_handler_control: &irq_handler_control,
+                            #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
+                            vm_memory_handler_control: &vm_memory_handler_control,
+                            #[cfg(feature = "registered_events")]
+                            registered_evt_tubes: &mut registered_evt_tubes,
+                            #[cfg(feature = "pvclock")]
+                            pvclock_host_tube: pvclock_host_tube.clone(),
+                        };
+                        let (exit_requested, mut ids_to_remove, add_tubes) =
+                            process_vm_control_event(&mut state, id, socket)?;
+                        if exit_requested {
+                            break 'wait;
                         }
-                    }
-                    #[cfg(target_arch = "x86_64")]
-                    for socket in add_tubes {
-                        let id = next_control_id;
-                        next_control_id += 1;
-                        wait_ctx
-                            .add(socket.as_ref(), Token::VmControl { id })
-                            .context("failed to add hotplug vfio-pci descriptor to wait context")?;
-                        control_tubes.insert(id, socket);
-                    }
-                    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
-                    if !add_irq_control_tubes.is_empty() {
-                        irq_handler_control.send(&IrqHandlerRequest::AddIrqControlTubes(
-                            add_irq_control_tubes,
-                        ))?;
-                    }
-                    #[cfg(any(target_arch = "x86_64", feature = "pci-hotplug"))]
-                    if !add_vm_memory_control_tubes.is_empty() {
-                        vm_memory_handler_control.send(
-                            &VmMemoryHandlerRequest::AddControlTubes(add_vm_memory_control_tubes),
-                        )?;
+                        vm_control_ids_to_remove.append(&mut ids_to_remove);
+                        for socket in add_tubes {
+                            let id = next_control_id;
+                            next_control_id += 1;
+                            wait_ctx
+                                .add(socket.as_ref(), Token::VmControl { id })
+                                .context(
+                                    "failed to add hotplug vfio-pci descriptor to wait context",
+                                )?;
+                            control_tubes.insert(id, socket);
+                        }
                     }
                 }
                 #[cfg(feature = "balloon")]
@@ -3783,6 +3976,20 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     // Explicitly drop the VM structure here to allow the devices to clean up before the
     // control sockets are closed when this function exits.
     mem::drop(linux);
+
+    // Drop the hotplug manager to tell the warden process to exit before we try to join
+    // the metrics thread.
+    #[cfg(feature = "pci-hotplug")]
+    mem::drop(hotplug_manager);
+
+    // All our children should have exited by now, so closing our fd should
+    // terminate metrics. Then join so that everything gets flushed.
+    metrics::get_destructor().cleanup();
+    if let Some(metrics_thread) = metrics_thread {
+        if let Err(e) = metrics_thread.join() {
+            error!("failed to exit irq handler thread: {:?}", e);
+        }
+    }
 
     stdin()
         .set_canon_mode()
@@ -4229,6 +4436,7 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
 
     base::syslog::push_descriptors(&mut keep_rds);
     cros_tracing::push_descriptors!(&mut keep_rds);
+    metrics::push_descriptors(&mut keep_rds);
 
     let jail_type = VirtioDeviceType::VhostUser;
 
@@ -4246,16 +4454,13 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
     let device = params
         .create_vhost_user_device(&mut keep_rds)
         .context("failed to create vhost-user device")?;
-    let mut listener = VhostUserListener::new(vhost, device.max_queue_num(), Some(&mut keep_rds))
+    let mut listener = VhostUserListener::new(vhost, Some(&mut keep_rds))
         .context("failed to create the vhost listener")?;
     let parent_resources = listener.take_parent_process_resources();
 
-    let tz = std::env::var("TZ").unwrap_or_default();
-
     // Executor must be created before jail in order to prevent the jailed process from creating
     // unrestricted io_urings.
-    let ex = Executor::with_executor_kind(device.executor_kind().unwrap_or_default())
-        .context("Failed to create an Executor")?;
+    let ex = Executor::new().context("Failed to create an Executor")?;
     keep_rds.extend(ex.as_raw_descriptors());
 
     // Deduplicate the FDs since minijail expects them to be unique.
@@ -4286,9 +4491,6 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             // Safe because we trimmed the name to 15 characters (and pthread_setname_np will return
             // an error if we don't anyway).
             let _ = unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
-
-            // Preserve TZ for `chrono::Local` (b/257987535).
-            std::env::set_var("TZ", tz);
 
             // Run the device loop and terminate the child process once it exits.
             let res = match listener.run_device(ex, device) {

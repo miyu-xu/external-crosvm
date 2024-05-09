@@ -22,8 +22,6 @@ use broker_ipc::CommonChildStartupArgs;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
-use metrics::protos::event_details::EmulatorDllDetails;
-use metrics::protos::event_details::RecordDetails;
 use metrics::MetricEventType;
 #[cfg(feature = "slirp")]
 use net_util::slirp::sys::windows::SlirpStartupConfig;
@@ -110,11 +108,7 @@ pub fn sandbox_lower_token() -> Result<()> {
 }
 
 fn report_dll_loaded(dll_name: String) {
-    let mut dll_load_details = EmulatorDllDetails::new();
-    dll_load_details.set_dll_base_name(dll_name);
-    let mut details = RecordDetails::new();
-    details.emulator_dll_details = Some(dll_load_details).into();
-    metrics::log_event_with_details(MetricEventType::DllLoaded, &details);
+    metrics::log_event(MetricEventType::DllLoaded(dll_name));
 }
 
 pub fn get_library_watcher(
@@ -149,7 +143,8 @@ pub(crate) fn run_vm_for_broker(args: RunMainCommand) -> Result<()> {
 
 pub(crate) fn cleanup() {
     // We've already cleaned everything up by waiting for all the vcpu threads on windows.
-    // TODO: b/142733266. When we sandbox each device, have a way to terminate the other sandboxed processes.
+    // TODO: b/142733266. When we sandbox each device, have a way to terminate the other sandboxed
+    // processes.
 }
 
 fn run_broker(cmd: RunCommand, log_args: LogArgs) -> Result<()> {

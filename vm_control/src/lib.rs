@@ -233,6 +233,10 @@ pub enum UsbControlCommand {
         #[serde(with = "with_as_descriptor")]
         file: File,
     },
+    AttachSecurityKey {
+        #[serde(with = "with_as_descriptor")]
+        file: File,
+    },
     DetachDevice {
         port: u8,
     },
@@ -313,13 +317,20 @@ impl Display for UsbControlResult {
 /// Commands for snapshot feature
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SnapshotCommand {
-    Take { snapshot_path: PathBuf },
+    Take {
+        snapshot_path: PathBuf,
+        compress_memory: bool,
+        encrypt: bool,
+    },
 }
 
 /// Commands for restore feature
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RestoreCommand {
-    Apply { restore_path: PathBuf },
+    Apply {
+        restore_path: PathBuf,
+        require_encrypted: bool,
+    },
 }
 
 /// Commands for actions on devices and the devices control thread.
@@ -327,8 +338,13 @@ pub enum RestoreCommand {
 pub enum DeviceControlCommand {
     SleepDevices,
     WakeDevices,
-    SnapshotDevices { snapshot_writer: SnapshotWriter },
-    RestoreDevices { snapshot_reader: SnapshotReader },
+    SnapshotDevices {
+        snapshot_writer: SnapshotWriter,
+        compress_memory: bool,
+    },
+    RestoreDevices {
+        snapshot_reader: SnapshotReader,
+    },
     GetDevicesState,
     Exit,
 }
@@ -539,7 +555,7 @@ pub struct IoEventUpdateRequest {
 pub enum VmMemoryRequest {
     /// Prepare a shared memory region to make later operations more efficient. This
     /// may be a no-op depending on underlying platform support.
-    PrepareSharedMemoryRegion { alloc: Alloc },
+    PrepareSharedMemoryRegion { alloc: Alloc, cache: MemCacheType },
     RegisterMemory {
         /// Source of the memory to register (mapped file descriptor, shared memory region, etc.)
         source: VmMemorySource,
@@ -687,7 +703,7 @@ impl VmMemoryRequest {
     ) -> VmMemoryResponse {
         use self::VmMemoryRequest::*;
         match self {
-            PrepareSharedMemoryRegion { alloc } => {
+            PrepareSharedMemoryRegion { alloc, cache } => {
                 // Currently the iommu_client is only used by virtio-gpu when used alongside GPU
                 // pci-passthrough.
                 //
@@ -701,7 +717,7 @@ impl VmMemoryRequest {
                     return VmMemoryResponse::Ok;
                 }
 
-                match sys::prepare_shared_memory_region(vm, sys_allocator, alloc) {
+                match sys::prepare_shared_memory_region(vm, sys_allocator, alloc, cache) {
                     Ok(info) => {
                         region_state.slot_map.insert(alloc, info);
                         VmMemoryResponse::Ok
@@ -1245,7 +1261,7 @@ pub struct HotPlugDeviceInfo {
 }
 
 /// Message for communicating a suspend or resume to the virtio-pvclock device.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PvClockCommand {
     Suspend,
     Resume,
@@ -1255,6 +1271,7 @@ pub enum PvClockCommand {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PvClockCommandResponse {
     Ok,
+    DeviceInactive,
     Err(SysError),
 }
 
@@ -1305,8 +1322,8 @@ pub enum VmRequest {
     },
     /// Command to use controller.
     UsbCommand(UsbControlCommand),
-    #[cfg(feature = "gpu")]
     /// Command to modify the gpu.
+    #[cfg(feature = "gpu")]
     GpuCommand(GpuControlCommand),
     /// Command to set battery.
     BatCommand(BatteryType, BatControlCommand),
@@ -1606,7 +1623,7 @@ impl VmRequest {
         run_mode: &mut Option<VmRunMode>,
         disk_host_tubes: &[Tube],
         pm: &mut Option<Arc<Mutex<dyn PmResource + Send>>>,
-        #[cfg(feature = "gpu")] gpu_control_tube: Option<&Tube>,
+        gpu_control_tube: Option<&Tube>,
         usb_control_tube: Option<&Tube>,
         bat_control: &mut Option<BatControl>,
         kick_vcpus: impl Fn(VcpuControl),
@@ -1948,7 +1965,11 @@ impl VmRequest {
             VmRequest::HotPlugNetCommand(ref _net_cmd) => {
                 VmResponse::ErrString("hot plug not supported".to_owned())
             }
-            VmRequest::Snapshot(SnapshotCommand::Take { ref snapshot_path }) => {
+            VmRequest::Snapshot(SnapshotCommand::Take {
+                ref snapshot_path,
+                compress_memory,
+                encrypt,
+            }) => {
                 info!("Starting crosvm snapshot");
                 match do_snapshot(
                     snapshot_path.to_path_buf(),
@@ -1957,6 +1978,8 @@ impl VmRequest {
                     device_control_tube,
                     vcpu_size,
                     snapshot_irqchip,
+                    compress_memory,
+                    encrypt,
                 ) {
                     Ok(()) => {
                         info!("Finished crosvm snapshot successfully");
@@ -1968,7 +1991,10 @@ impl VmRequest {
                     }
                 }
             }
-            VmRequest::Restore(RestoreCommand::Apply { ref restore_path }) => {
+            VmRequest::Restore(RestoreCommand::Apply {
+                ref restore_path,
+                require_encrypted,
+            }) => {
                 info!("Starting crosvm restore");
                 match do_restore(
                     restore_path.clone(),
@@ -1978,6 +2004,7 @@ impl VmRequest {
                     device_control_tube,
                     vcpu_size,
                     restore_irqchip,
+                    require_encrypted,
                 ) {
                     Ok(()) => {
                         info!("Finished crosvm restore successfully");
@@ -2013,6 +2040,8 @@ fn do_snapshot(
     device_control_tube: &Tube,
     vcpu_size: usize,
     snapshot_irqchip: impl Fn() -> anyhow::Result<serde_json::Value>,
+    compress_memory: bool,
+    encrypt: bool,
 ) -> anyhow::Result<()> {
     let _vcpu_guard = VcpuSuspendGuard::new(&kick_vcpus, vcpu_size)?;
     let _device_guard = DeviceSleepGuard::new(device_control_tube)?;
@@ -2060,7 +2089,7 @@ fn do_snapshot(
     }
     info!("flushed IRQs in {} iterations", flush_attempts);
 
-    let snapshot_writer = SnapshotWriter::new(snapshot_path)?;
+    let snapshot_writer = SnapshotWriter::new(snapshot_path, encrypt)?;
 
     // Snapshot Vcpus
     info!("VCPUs snapshotting...");
@@ -2089,7 +2118,10 @@ fn do_snapshot(
     // Snapshot devices
     info!("Devices snapshotting...");
     device_control_tube
-        .send(&DeviceControlCommand::SnapshotDevices { snapshot_writer })
+        .send(&DeviceControlCommand::SnapshotDevices {
+            snapshot_writer,
+            compress_memory,
+        })
         .context("send command to devices control socket")?;
     let resp: VmResponse = device_control_tube
         .recv()
@@ -2113,11 +2145,12 @@ pub fn do_restore(
     device_control_tube: &Tube,
     vcpu_size: usize,
     mut restore_irqchip: impl FnMut(serde_json::Value) -> anyhow::Result<()>,
+    require_encrypted: bool,
 ) -> anyhow::Result<()> {
     let _guard = VcpuSuspendGuard::new(&kick_vcpus, vcpu_size);
     let _devices_guard = DeviceSleepGuard::new(device_control_tube)?;
 
-    let snapshot_reader = SnapshotReader::new(restore_path)?;
+    let snapshot_reader = SnapshotReader::new(restore_path, require_encrypted)?;
 
     // Restore IrqChip
     let irq_snapshot: serde_json::Value = snapshot_reader.read_fragment("irqchip")?;

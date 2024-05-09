@@ -12,7 +12,6 @@ use std::os::windows::io::RawHandle;
 use std::time::Duration;
 
 use log::warn;
-use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
@@ -89,9 +88,8 @@ struct MsgHeader {
     descriptor_json_size: usize,
 }
 
-static DH_TUBE: Lazy<sync::Mutex<Option<DuplicateHandleTube>>> =
-    Lazy::new(|| sync::Mutex::new(None));
-static ALIAS_PID: Lazy<sync::Mutex<Option<u32>>> = Lazy::new(|| sync::Mutex::new(None));
+static DH_TUBE: sync::Mutex<Option<DuplicateHandleTube>> = sync::Mutex::new(None);
+static ALIAS_PID: sync::Mutex<Option<u32>> = sync::Mutex::new(None);
 
 /// Set a tube to delegate duplicate handle calls.
 pub fn set_duplicate_handle_tube(dh_tube: DuplicateHandleTube) {
@@ -275,9 +273,9 @@ fn duplicate_handle(desc: RawHandle, target_pid: Option<u32>) -> Result<RawHandl
 }
 
 /// Reads a part of a Tube packet asserting that it was correctly read. This means:
-/// * Treats partial "message" (transport framing) reads are Ok, as long as we filled our buffer.
-///   We use this to ignore errors when reading the message header, which has the lengths we need
-///   to allocate our buffers for the remainder of the message.
+/// * Treats partial "message" (transport framing) reads are Ok, as long as we filled our buffer. We
+///   use this to ignore errors when reading the message header, which has the lengths we need to
+///   allocate our buffers for the remainder of the message.
 /// * We filled the supplied buffer.
 fn perform_read<F: FnMut(&mut [u8]) -> io::Result<usize>>(
     read_fn: &mut F,
@@ -383,6 +381,18 @@ impl AsRawDescriptor for SendTube {
 impl AsRawDescriptor for RecvTube {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.0.as_raw_descriptor()
+    }
+}
+
+impl CloseNotifier for SendTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
+        self.0.get_close_notifier()
+    }
+}
+
+impl CloseNotifier for RecvTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
+        self.0.get_close_notifier()
     }
 }
 

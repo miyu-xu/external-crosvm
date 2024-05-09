@@ -27,10 +27,12 @@ use sync::Mutex;
 use thiserror::Error as ThisError;
 
 use crate::common_executor::RawExecutor;
+use crate::common_executor::RawTaskHandle;
 use crate::common_executor::Reactor;
 use crate::waker::WakerToken;
 use crate::AsyncResult;
 use crate::IoSource;
+use crate::TaskHandle;
 
 #[sorted]
 #[derive(Debug, ThisError)]
@@ -102,8 +104,8 @@ enum OpStatus {
     WakeEvent,
 }
 
-// An IO source previously registered with an EpollReactor. Used to initiate asynchronous IO with the
-// associated executor.
+// An IO source previously registered with an EpollReactor. Used to initiate asynchronous IO with
+// the associated executor.
 pub struct RegisteredSource<F> {
     pub(crate) source: F,
     ex: Weak<RawExecutor<EpollReactor>>,
@@ -378,6 +380,10 @@ impl Reactor for EpollReactor {
     ) -> AsyncResult<IoSource<F>> {
         Ok(IoSource::Epoll(super::PollSource::new(f, ex)?))
     }
+
+    fn wrap_task_handle<R>(task: RawTaskHandle<EpollReactor, R>) -> TaskHandle<R> {
+        TaskHandle::Fd(task)
+    }
 }
 
 impl AsRawDescriptors for EpollReactor {
@@ -401,6 +407,7 @@ mod test {
 
     use super::*;
     use crate::BlockingPool;
+    use crate::ExecutorTrait;
 
     #[test]
     fn test_it() {

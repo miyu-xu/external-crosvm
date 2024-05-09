@@ -14,13 +14,12 @@ pub use sys::start_device as run_block_device;
 pub use sys::Options;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::*;
-use vmm_vhost::VhostUserSlaveReqHandler;
 
 use crate::virtio;
 use crate::virtio::block::asynchronous::BlockAsync;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
-use crate::virtio::vhost::user::device::VhostUserDevice;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
+use crate::virtio::vhost::user::device::VhostUserDeviceBuilder;
 use crate::virtio::Interrupt;
 use crate::virtio::VirtioDevice;
 
@@ -43,15 +42,8 @@ struct BlockBackendSnapshot {
     acked_protocol_features: u64,
 }
 
-impl VhostUserDevice for BlockAsync {
-    fn max_queue_num(&self) -> usize {
-        NUM_QUEUES as usize
-    }
-
-    fn into_req_handler(
-        self: Box<Self>,
-        _ex: &Executor,
-    ) -> anyhow::Result<Box<dyn VhostUserSlaveReqHandler>> {
+impl VhostUserDeviceBuilder for BlockAsync {
+    fn build(self: Box<Self>, _ex: &Executor) -> anyhow::Result<Box<dyn vmm_vhost::Backend>> {
         let avail_features = self.features() | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
         let backend = BlockBackend {
             inner: self,
@@ -59,12 +51,12 @@ impl VhostUserDevice for BlockAsync {
             acked_features: 0,
             acked_protocol_features: VhostUserProtocolFeatures::empty(),
         };
-        let handler = DeviceRequestHandler::new(Box::new(backend));
+        let handler = DeviceRequestHandler::new(backend);
         Ok(Box::new(handler))
     }
 }
 
-impl VhostUserBackend for BlockBackend {
+impl VhostUserDevice for BlockBackend {
     fn max_queue_num(&self) -> usize {
         NUM_QUEUES as usize
     }
@@ -91,7 +83,7 @@ impl VhostUserBackend for BlockBackend {
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         VhostUserProtocolFeatures::CONFIG
             | VhostUserProtocolFeatures::MQ
-            | VhostUserProtocolFeatures::SLAVE_REQ
+            | VhostUserProtocolFeatures::BACKEND_REQ
     }
 
     fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
@@ -111,7 +103,9 @@ impl VhostUserBackend for BlockBackend {
     }
 
     fn reset(&mut self) {
-        self.inner.reset();
+        if let Err(e) = self.inner.reset() {
+            base::error!("reset failed: {:#}", e);
+        }
     }
 
     fn start_queue(
@@ -132,8 +126,7 @@ impl VhostUserBackend for BlockBackend {
         // TODO: This assumes that `reset` only stops workers which might not be true in the
         // future. Consider moving the `reset` code into a `stop_all_workers` method or, maybe,
         // make `stop_queue` implicitly stop a worker thread when there is no active queue.
-        self.inner.reset();
-        Ok(())
+        self.inner.reset()
     }
 
     fn snapshot(&self) -> anyhow::Result<Vec<u8>> {

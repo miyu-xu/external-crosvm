@@ -16,6 +16,7 @@ use winapi::um::dpapi::CryptProtectData;
 use winapi::um::dpapi::CryptUnprotectData;
 use winapi::um::winbase::LocalFree;
 use winapi::um::wincrypt::DATA_BLOB;
+use zeroize::Zeroize;
 
 use crate::syscall_bail;
 
@@ -46,6 +47,9 @@ impl LocalAllocBuffer {
 
 impl Drop for LocalAllocBuffer {
     fn drop(&mut self) {
+        // This buffer likely contains cryptographic key material. Zero it.
+        self.as_mut_slice().zeroize();
+
         // SAFETY: when this struct is created, the caller guarantees
         // ptr is a valid pointer to a buffer that can be freed with LocalFree.
         unsafe {
@@ -71,9 +75,8 @@ pub fn crypt_protect_data(plaintext: &mut [u8]) -> Result<LocalAllocBuffer> {
 
     // SAFETY: the FFI call is safe because
     // 1. plaintext_blob lives longer than the call.
-    // 2. ciphertext_blob lives longer than the call, and we later give
-    //    ownership of the memory the kernel allocates to LocalAllocBuffer
-    //    which guarantees it is freed.
+    // 2. ciphertext_blob lives longer than the call, and we later give ownership of the memory the
+    //    kernel allocates to LocalAllocBuffer which guarantees it is freed.
     let res = unsafe {
         CryptProtectData(
             &mut plaintext_blob as *mut _,
@@ -116,9 +119,8 @@ pub fn crypt_unprotect_data(ciphertext: &mut [u8]) -> Result<LocalAllocBuffer> {
 
     // SAFETY: the FFI call is safe because
     // 1. ciphertext_blob lives longer than the call.
-    // 2. plaintext_blob lives longer than the call, and we later give
-    //    ownership of the memory the kernel allocates to LocalAllocBuffer
-    //    which guarantees it is freed.
+    // 2. plaintext_blob lives longer than the call, and we later give ownership of the memory the
+    //    kernel allocates to LocalAllocBuffer which guarantees it is freed.
     let res = unsafe {
         CryptUnprotectData(
             &mut ciphertext_blob as *mut _,

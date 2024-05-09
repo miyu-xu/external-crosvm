@@ -331,8 +331,8 @@ impl<F: AsRawDescriptor> HandleSource<F> {
             .spawn(
                 move || {
                     let mut file = get_thread_file(descriptors);
-                    // ZeroRange calls `punch_hole` which doesn't extend the File size if it needs to.
-                    // Will fix if it becomes a problem.
+                    // ZeroRange calls `punch_hole` which doesn't extend the File size if it needs
+                    // to. Will fix if it becomes a problem.
                     file.write_zeroes_at(file_offset, len as usize)
                         .map_err(Error::IoWriteZeroesError)?;
                     Ok(())
@@ -400,6 +400,7 @@ mod tests {
     use super::super::HandleReactor;
     use super::*;
     use crate::common_executor::RawExecutor;
+    use crate::ExecutorTrait;
 
     #[cfg_attr(all(target_os = "windows", target_env = "gnu"), ignore)]
     #[test]

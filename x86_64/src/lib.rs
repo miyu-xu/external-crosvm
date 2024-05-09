@@ -52,6 +52,7 @@ use acpi_tables::aml::Aml;
 use acpi_tables::sdt::SDT;
 use anyhow::Context;
 use arch::get_serial_cmdline;
+use arch::serial::SerialDeviceInfo;
 use arch::CpuSet;
 use arch::DtbOverlay;
 use arch::GetSerialCmdlineError;
@@ -252,6 +253,8 @@ pub enum Error {
     ReservePcieCfgMmio(resources::Error),
     #[error("failed to set a hardware breakpoint: {0}")]
     SetHwBreakpoint(base::Error),
+    #[error("failed to set identity map addr: {0}")]
+    SetIdentityMapAddr(base::Error),
     #[error("failed to set interrupts: {0}")]
     SetLint(interrupts::Error),
     #[error("failed to set tss addr: {0}")]
@@ -340,7 +343,8 @@ const FIRST_ADDR_PAST_32BITS: u64 = 1 << 32;
 const HIGH_MMIO_MAX_END: u64 = (1u64 << 46) - 1;
 pub const KERNEL_64BIT_ENTRY_OFFSET: u64 = 0x200;
 pub const ZERO_PAGE_OFFSET: u64 = 0x7000;
-const TSS_ADDR: u64 = 0xfffb_d000;
+// Set BIOS max size to 16M: this is used only when `unrestricted guest` is disabled
+const BIOS_MAX_SIZE: u64 = 0x1000000;
 
 pub const KERNEL_START_OFFSET: u64 = 0x20_0000;
 const CMDLINE_OFFSET: u64 = 0x2_0000;
@@ -435,6 +439,21 @@ fn bios_start(bios_size: u64) -> GuestAddress {
     GuestAddress(FIRST_ADDR_PAST_32BITS - bios_size)
 }
 
+fn identity_map_addr_start() -> GuestAddress {
+    // Set Identity map address 4 pages before the max BIOS size
+    GuestAddress(FIRST_ADDR_PAST_32BITS - BIOS_MAX_SIZE - 4 * 0x1000)
+}
+
+fn tss_addr_start() -> GuestAddress {
+    // Set TSS address one page after identity map address
+    GuestAddress(identity_map_addr_start().offset() + 0x1000)
+}
+
+fn tss_addr_end() -> GuestAddress {
+    // Set TSS address section to have 3 pages
+    GuestAddress(tss_addr_start().offset() + 0x3000)
+}
+
 fn configure_system(
     guest_mem: &GuestMemory,
     kernel_addr: GuestAddress,
@@ -496,6 +515,16 @@ fn configure_system(
     add_e820_entry(
         &mut params,
         X8664arch::get_pcie_vcfg_mmio_range(guest_mem, &pcie_cfg_mmio_range),
+        E820Type::Reserved,
+    )?;
+
+    // Reserve memory section for Identity map and TSS
+    add_e820_entry(
+        &mut params,
+        AddressRange {
+            start: identity_map_addr_start().offset(),
+            end: tss_addr_end().offset() - 1,
+        },
         E820Type::Reserved,
     )?;
 
@@ -708,8 +737,11 @@ impl arch::LinuxArch for X8664arch {
 
         let vcpu_count = components.vcpu_count;
 
-        let tss_addr = GuestAddress(TSS_ADDR);
-        vm.set_tss_addr(tss_addr).map_err(Error::SetTssAddr)?;
+        vm.set_identity_map_addr(identity_map_addr_start())
+            .map_err(Error::SetIdentityMapAddr)?;
+
+        vm.set_tss_addr(tss_addr_start())
+            .map_err(Error::SetTssAddr)?;
 
         // Use IRQ info in ACPI if provided by the user.
         let mut mptable = true;
@@ -841,7 +873,7 @@ impl arch::LinuxArch for X8664arch {
         } else {
             None
         };
-        Self::setup_serial_devices(
+        let serial_devices = Self::setup_serial_devices(
             components.hv_cfg.protection_type,
             irq_chip.as_irq_chip_mut(),
             &io_bus,
@@ -957,7 +989,7 @@ impl arch::LinuxArch for X8664arch {
 
         let mut cmdline = Self::get_base_linux_cmdline();
 
-        get_serial_cmdline(&mut cmdline, serial_parameters, "io")
+        get_serial_cmdline(&mut cmdline, serial_parameters, "io", &serial_devices)
             .map_err(Error::GetSerialCmdline)?;
 
         for param in components.extra_kernel_params {
@@ -972,8 +1004,8 @@ impl arch::LinuxArch for X8664arch {
         let pci_start = read_pci_mmio_before_32bit().start;
 
         let mut vcpu_init = vec![VcpuInitX86_64::default(); vcpu_count];
+        let mut msrs = BTreeMap::new();
 
-        let mut msrs;
         match components.vm_image {
             VmImage::Bios(ref mut bios) => {
                 // Allow a bios to hardcode CMDLINE_OFFSET and read the kernel command line from it.
@@ -984,7 +1016,7 @@ impl arch::LinuxArch for X8664arch {
                 )
                 .map_err(Error::LoadCmdline)?;
                 Self::load_bios(&mem, bios)?;
-                msrs = regs::default_msrs();
+                regs::set_default_msrs(&mut msrs);
                 // The default values for `Regs` and `Sregs` already set up the reset vector.
             }
             VmImage::Kernel(ref mut kernel_image) => {
@@ -1007,8 +1039,8 @@ impl arch::LinuxArch for X8664arch {
                 vcpu_init[0].regs.rsp = BOOT_STACK_POINTER;
                 vcpu_init[0].regs.rsi = ZERO_PAGE_OFFSET;
 
-                msrs = regs::long_mode_msrs();
-                msrs.append(&mut regs::mtrr_msrs(&vm, pci_start));
+                regs::set_long_mode_msrs(&mut msrs);
+                regs::set_mtrr_msrs(&mut msrs, &vm, pci_start);
 
                 // Set up long mode and enable paging.
                 regs::configure_segments_and_sregs(&mem, &mut vcpu_init[0].sregs)
@@ -1079,23 +1111,25 @@ impl arch::LinuxArch for X8664arch {
 
         let vcpu_supported_var_mtrrs = regs::vcpu_supported_variable_mtrrs(vcpu);
         let num_var_mtrrs = regs::count_variable_mtrrs(&vcpu_init.msrs);
-        let msrs = if num_var_mtrrs > vcpu_supported_var_mtrrs {
+        let skip_mtrr_msrs = if num_var_mtrrs > vcpu_supported_var_mtrrs {
             warn!(
                 "Too many variable MTRR entries ({} required, {} supported),
                 please check pci_start addr, guest with pass through device may be very slow",
                 num_var_mtrrs, vcpu_supported_var_mtrrs,
             );
             // Filter out the MTRR entries from the MSR list.
-            vcpu_init
-                .msrs
-                .into_iter()
-                .filter(|&msr| !regs::is_mtrr_msr(msr.id))
-                .collect()
+            true
         } else {
-            vcpu_init.msrs
+            false
         };
 
-        vcpu.set_msrs(&msrs).map_err(Error::SetupMsrs)?;
+        for (msr_index, value) in vcpu_init.msrs.into_iter() {
+            if skip_mtrr_msrs && regs::is_mtrr_msr(msr_index) {
+                continue;
+            }
+
+            vcpu.set_msr(msr_index, value).map_err(Error::SetupMsrs)?;
+        }
 
         interrupts::set_lint(vcpu_id, irq_chip).map_err(Error::SetLint)?;
 
@@ -1686,7 +1720,8 @@ impl X8664arch {
     }
 
     fn get_pcie_vcfg_mmio_range(mem: &GuestMemory, pcie_cfg_mmio: &AddressRange) -> AddressRange {
-        // Put PCIe VCFG region at a 2MB boundary after physical memory or 4gb, whichever is greater.
+        // Put PCIe VCFG region at a 2MB boundary after physical memory or 4gb, whichever is
+        // greater.
         let ram_end_round_2mb = (mem.end_addr().offset() + 2 * MB - 1) / (2 * MB) * (2 * MB);
         let start = std::cmp::max(ram_end_round_2mb, 4 * GB);
         // Each pci device's ECAM size is 4kb and its vcfg size is 8kb
@@ -1865,16 +1900,14 @@ impl X8664arch {
     /// # Arguments
     ///
     /// * - `io_bus` the I/O bus to add the devices to
-    /// * - `resources` the SystemAllocator to allocate IO and MMIO for acpi
-    ///                devices.
+    /// * - `resources` the SystemAllocator to allocate IO and MMIO for acpi devices.
     /// * - `suspend_evt` the event object which used to suspend the vm
     /// * - `sdts` ACPI system description tables
     /// * - `irq_chip` the IrqChip object for registering irq events
     /// * - `battery` indicate whether to create the battery
     /// * - `mmio_bus` the MMIO bus to add the devices to
-    /// * - `pci_irqs` IRQ assignment of PCI devices. Tuples of (PCI address,
-    ///               gsi, PCI interrupt pin). Note that this matches one of
-    ///               the return values of generate_pci_root.
+    /// * - `pci_irqs` IRQ assignment of PCI devices. Tuples of (PCI address, gsi, PCI interrupt
+    ///   pin). Note that this matches one of the return values of generate_pci_root.
     pub fn setup_acpi_devices(
         pci_root: Arc<Mutex<PciRoot>>,
         mem: &GuestMemory,
@@ -2142,14 +2175,13 @@ impl X8664arch {
         ))
     }
 
-    /// Sets up the serial devices for this platform. Returns the serial port number and serial
-    /// device to be used for stdout
+    /// Sets up the serial devices for this platform. Returns a list of configured serial devices.
     ///
     /// # Arguments
     ///
     /// * - `irq_chip` the IrqChip object for registering irq events
     /// * - `io_bus` the I/O bus to add the devices to
-    /// * - `serial_parmaters` - definitions for how the serial devices should be configured
+    /// * - `serial_parameters` - definitions for how the serial devices should be configured
     pub fn setup_serial_devices(
         protection_type: ProtectionType,
         irq_chip: &mut dyn IrqChip,
@@ -2157,15 +2189,15 @@ impl X8664arch {
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
         serial_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
-    ) -> Result<()> {
+    ) -> Result<Vec<SerialDeviceInfo>> {
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
 
-        arch::add_serial_devices(
+        let serial_devices = arch::add_serial_devices(
             protection_type,
             io_bus,
-            com_evt_1_3.get_trigger(),
-            com_evt_2_4.get_trigger(),
+            (X86_64_SERIAL_1_3_IRQ, com_evt_1_3.get_trigger()),
+            (X86_64_SERIAL_2_4_IRQ, com_evt_2_4.get_trigger()),
             serial_parameters,
             serial_jail,
             #[cfg(feature = "swap")]
@@ -2185,7 +2217,7 @@ impl X8664arch {
             .register_edge_irq_event(X86_64_SERIAL_2_4_IRQ, &com_evt_2_4, source)
             .map_err(Error::RegisterIrqfd)?;
 
-        Ok(())
+        Ok(serial_devices)
     }
 
     fn setup_debugcon_devices(
@@ -2278,8 +2310,8 @@ impl CpuIdCall {
 
 /// Check if host supports hybrid CPU feature. The check include:
 ///     1. Check if CPUID.1AH exists. CPUID.1AH is hybrid information enumeration leaf.
-///     2. Check if CPUID.07H.00H:EDX[bit 15] sets. This bit means the processor is
-///        identified as a hybrid part.
+///     2. Check if CPUID.07H.00H:EDX[bit 15] sets. This bit means the processor is identified as a
+///        hybrid part.
 ///     3. Check if CPUID.1AH:EAX sets. The hybrid core type is set in EAX.
 ///
 /// # Arguments
