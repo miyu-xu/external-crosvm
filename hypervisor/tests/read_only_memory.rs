@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
@@ -16,7 +16,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_read_only_memory() {
     use hypervisor::kvm::*;
     test_read_only_memory(|guest_mem| {
@@ -29,7 +29,7 @@ fn test_kvm_read_only_memory() {
 // TODO(b/163163457): HAXM has a bug where the mmio write for read only memory
 //  does not happen to the correct address.
 // #[test]
-// #[cfg(feature = "haxm")]
+// #[cfg(all(windows, feature = "haxm"))]
 // fn test_haxm_read_only_memory() {
 //     use hypervisor::haxm::*;
 //     test_read_only_memory(|guest_mem| {
@@ -108,7 +108,7 @@ where
     vcpu.set_sregs(&vcpu_sregs).expect("set sregs failed");
 
     let vcpu_regs = Regs {
-        rip: load_addr.offset() as u64,
+        rip: load_addr.offset(),
         rflags: 2,
         rax: 0,
         rbx: 0,
@@ -125,6 +125,7 @@ where
         ),
         false,
         false,
+        MemCacheType::CacheCoherent,
     )
     .expect("failed to register memory");
 
@@ -149,15 +150,15 @@ where
         ),
         true,
         false,
+        MemCacheType::CacheCoherent,
     )
     .expect("failed to register memory");
 
     // Ensure we get exactly 1 exit from attempting to write to read only memory.
     let exits = AtomicU16::new(0);
 
-    let run_handle = vcpu.take_run_handle(None).unwrap();
     loop {
-        match vcpu.run(&run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             // Continue on external interrupt or signal
             VcpuExit::Intr => continue,
             VcpuExit::Hlt => break,

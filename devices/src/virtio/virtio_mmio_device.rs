@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
 use anyhow::Context;
@@ -20,7 +20,6 @@ use base::Result;
 use hypervisor::Datamatch;
 use resources::AllocOptions;
 use resources::SystemAllocator;
-use sync::Mutex;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_ACKNOWLEDGE;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER_OK;
@@ -32,7 +31,6 @@ use vm_memory::GuestMemory;
 
 use super::*;
 use crate::pci::CrosvmDeviceId;
-use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
 use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::BusDeviceObj;
@@ -55,7 +53,7 @@ pub struct VirtioMmioDevice {
     interrupt: Option<Interrupt>,
     interrupt_evt: Option<IrqEdgeEvent>,
     async_intr_status: bool,
-    queues: Vec<Queue>,
+    queues: Vec<QueueConfig>,
     queue_evts: Vec<Event>,
     mem: GuestMemory,
     device_feature_select: u32,
@@ -65,8 +63,6 @@ pub struct VirtioMmioDevice {
     mmio_base: u64,
     irq_num: u32,
     config_generation: u32,
-
-    iommu: Option<Arc<Mutex<IpcMemoryMapper>>>,
 }
 
 impl VirtioMmioDevice {
@@ -80,10 +76,10 @@ impl VirtioMmioDevice {
         for _ in device.queue_max_sizes() {
             queue_evts.push(Event::new()?)
         }
-        let queues: Vec<Queue> = device
+        let queues = device
             .queue_max_sizes()
             .iter()
-            .map(|&s| Queue::new(s))
+            .map(|&s| QueueConfig::new(s, device.features()))
             .collect();
 
         Ok(VirtioMmioDevice {
@@ -102,7 +98,6 @@ impl VirtioMmioDevice {
             mmio_base: 0,
             irq_num: 0,
             config_generation: 0,
-            iommu: None,
         })
     }
     pub fn ioevents(&self) -> Vec<(&Event, u64, Datamatch)> {
@@ -154,14 +149,18 @@ impl VirtioMmioDevice {
             .queues
             .iter_mut()
             .zip(self.queue_evts.iter())
-            .filter(|(q, _)| q.ready())
-            .map(|(queue, evt)| {
+            .enumerate()
+            .filter(|(_, (q, _))| q.ready())
+            .map(|(queue_index, (queue, evt))| {
+                let queue_evt = evt.try_clone().context("failed to clone queue_evt")?;
                 Ok((
-                    queue.activate().context("failed to activate queue")?,
-                    evt.try_clone().context("failed to clone queue_evt")?,
+                    queue_index,
+                    queue
+                        .activate(&mem, queue_evt)
+                        .context("failed to activate queue")?,
                 ))
             })
-            .collect::<anyhow::Result<Vec<(Queue, Event)>>>()?;
+            .collect::<anyhow::Result<BTreeMap<usize, Queue>>>()?;
 
         if let Err(e) = self.device.activate(mem, interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
@@ -327,39 +326,37 @@ impl VirtioMmioDevice {
         };
 
         if !self.device_activated && self.is_driver_ready() {
-            if let Some(iommu) = &self.iommu {
-                for q in &mut self.queues {
-                    q.set_iommu(Arc::clone(iommu));
-                }
-            }
-
             if let Err(e) = self.activate() {
                 error!("failed to activate device: {:#}", e);
             }
         }
 
         // Device has been reset by the driver
-        if self.device_activated && self.is_reset_requested() && self.device.reset() {
-            self.device_activated = false;
-            // reset queues
-            self.queues.iter_mut().for_each(Queue::reset);
-            // select queue 0 by default
-            self.queue_select = 0;
-            // reset interrupt
-            self.interrupt = None;
+        if self.device_activated && self.is_reset_requested() {
+            if let Err(e) = self.device.reset() {
+                error!("failed to reset {} device: {:#}", self.debug_label(), e);
+            } else {
+                self.device_activated = false;
+                // reset queues
+                self.queues.iter_mut().for_each(QueueConfig::reset);
+                // select queue 0 by default
+                self.queue_select = 0;
+                // reset interrupt
+                self.interrupt = None;
+            }
         }
     }
 
     fn with_queue<U, F>(&self, f: F) -> Option<U>
     where
-        F: FnOnce(&Queue) -> U,
+        F: FnOnce(&QueueConfig) -> U,
     {
         self.queues.get(self.queue_select as usize).map(f)
     }
 
     fn with_queue_mut<F>(&mut self, f: F)
     where
-        F: FnOnce(&mut Queue),
+        F: FnOnce(&mut QueueConfig),
     {
         if let Some(queue) = self.queues.get_mut(self.queue_select as usize) {
             f(queue);
@@ -393,9 +390,6 @@ impl VirtioMmioDevice {
         if let Some(interrupt_evt) = &self.interrupt_evt {
             rds.extend(interrupt_evt.as_raw_descriptors());
         }
-        if let Some(iommu) = &self.iommu {
-            rds.append(&mut iommu.lock().as_raw_descriptors());
-        }
         rds
     }
 
@@ -403,7 +397,7 @@ impl VirtioMmioDevice {
         self.device.on_device_sandboxed();
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub fn generate_acpi(&mut self, mut sdts: Vec<SDT>) -> Option<Vec<SDT>> {
         const OEM_REVISION: u32 = 1;
         const SSDT_REVISION: u8 = 0;
@@ -493,20 +487,5 @@ impl BusDevice for VirtioMmioDevice {
     }
 }
 
-impl Suspendable for VirtioMmioDevice {
-    fn sleep(&mut self) -> anyhow::Result<()> {
-        self.device.sleep()
-    }
-
-    fn wake(&mut self) -> anyhow::Result<()> {
-        self.device.wake()
-    }
-
-    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
-        self.device.snapshot()
-    }
-
-    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
-        self.device.restore(data)
-    }
-}
+// TODO: Mimic the Suspendable impl in ViritoPciDevice when/if someone wants it.
+impl Suspendable for VirtioMmioDevice {}

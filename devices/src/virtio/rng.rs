@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::io;
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::warn;
 use base::Event;
@@ -15,73 +16,52 @@ use base::WaitContext;
 use base::WorkerThread;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use remain::sorted;
-use thiserror::Error;
 use vm_memory::GuestMemory;
 
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
-use super::VirtioDeviceSaved;
-use crate::virtio::virtio_device::Error as VirtioError;
-use crate::virtio::Writer;
-use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
 
-#[sorted]
-#[derive(Error, Debug)]
-pub enum RngError {}
-pub type Result<T> = std::result::Result<T, RngError>;
+// Chosen to match the Linux guest driver RNG buffer refill size.
+const CHUNK_SIZE: usize = 64;
 
 struct Worker {
     interrupt: Interrupt,
     queue: Queue,
-    queue_evt: Event,
-    mem: GuestMemory,
 }
 
 impl Worker {
-    fn process_queue(&mut self) -> bool {
-        let queue = &mut self.queue;
-
+    fn process_queue(&mut self) {
+        let mut rand_bytes = [0u8; CHUNK_SIZE];
         let mut needs_interrupt = false;
-        while let Some(avail_desc) = queue.pop(&self.mem) {
-            let index = avail_desc.index;
 
-            let writer_or_err = Writer::new(self.mem.clone(), avail_desc)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e));
-            let written_size = match writer_or_err {
-                Ok(mut writer) => {
-                    let avail_bytes = writer.available_bytes();
-
-                    let mut rand_bytes = vec![0u8; avail_bytes];
-                    OsRng.fill_bytes(&mut rand_bytes);
-
-                    match writer.write_all(&rand_bytes) {
-                        Ok(_) => rand_bytes.len(),
-                        Err(e) => {
-                            warn!("Failed to write random data to the guest: {}", e);
-                            0usize
-                        }
-                    }
-                }
-                Err(e) => {
+        while let Some(mut avail_desc) = self.queue.pop() {
+            let writer = &mut avail_desc.writer;
+            while writer.available_bytes() > 0 {
+                let chunk_size = writer.available_bytes().min(CHUNK_SIZE);
+                let chunk = &mut rand_bytes[..chunk_size];
+                OsRng.fill_bytes(chunk);
+                if let Err(e) = writer.write_all(chunk) {
                     warn!("Failed to write random data to the guest: {}", e);
-                    0usize
+                    break;
                 }
-            };
-            queue.add_used(&self.mem, index, written_size as u32);
+            }
+
+            let written_size = writer.bytes_written();
+            self.queue.add_used(avail_desc, written_size as u32);
             needs_interrupt = true;
         }
 
-        needs_interrupt
+        if needs_interrupt {
+            self.queue.trigger_interrupt(&self.interrupt);
+        }
     }
 
-    fn run(mut self, kill_evt: Event) -> anyhow::Result<VirtioDeviceSaved> {
+    fn run(&mut self, kill_evt: Event) -> anyhow::Result<()> {
         #[derive(EventToken)]
         enum Token {
             QueueAvailable,
@@ -89,68 +69,51 @@ impl Worker {
             Kill,
         }
 
-        let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
-            (&self.queue_evt, Token::QueueAvailable),
+        let wait_ctx = WaitContext::build_with(&[
+            (self.queue.event(), Token::QueueAvailable),
             (&kill_evt, Token::Kill),
-        ]) {
-            Ok(pc) => pc,
-            Err(e) => {
-                return Err(anyhow!("failed creating WaitContext: {}", e));
-            }
-        };
+        ])
+        .context("failed creating WaitContext")?;
+
         if let Some(resample_evt) = self.interrupt.get_resample_evt() {
-            if wait_ctx
+            wait_ctx
                 .add(resample_evt, Token::InterruptResample)
-                .is_err()
-            {
-                return Err(anyhow!("failed adding resample event to WaitContext."));
-            }
+                .context("failed adding resample event to WaitContext.")?;
         }
 
-        'wait: loop {
-            let events = match wait_ctx.wait() {
-                Ok(v) => v,
-                Err(e) => {
-                    error!("failed polling for events: {}", e);
-                    break;
-                }
-            };
-
-            let mut needs_interrupt = false;
+        let mut exiting = false;
+        while !exiting {
+            let events = wait_ctx.wait().context("failed polling for events")?;
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        if let Err(e) = self.queue_evt.wait() {
-                            error!("failed reading queue Event: {}", e);
-                            break 'wait;
-                        }
-                        needs_interrupt |= self.process_queue();
+                        self.queue
+                            .event()
+                            .wait()
+                            .context("failed reading queue Event")?;
+                        self.process_queue();
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
                     }
-                    Token::Kill => break 'wait,
+                    Token::Kill => exiting = true,
                 }
             }
-            if needs_interrupt {
-                self.queue.trigger_interrupt(&self.mem, &self.interrupt);
-            }
         }
-        Ok(VirtioDeviceSaved {
-            queues: vec![self.queue],
-        })
+
+        Ok(())
     }
 }
 
 /// Virtio device for exposing entropy to the guest OS through virtio.
 pub struct Rng {
-    worker_thread: Option<WorkerThread<anyhow::Result<VirtioDeviceSaved>>>,
+    worker_thread: Option<WorkerThread<Worker>>,
     virtio_features: u64,
 }
 
 impl Rng {
     /// Create a new virtio rng device that gets random data from /dev/urandom.
-    pub fn new(virtio_features: u64) -> Result<Rng> {
+    pub fn new(virtio_features: u64) -> anyhow::Result<Rng> {
         Ok(Rng {
             worker_thread: None,
             virtio_features,
@@ -177,47 +140,64 @@ impl VirtioDevice for Rng {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != 1 {
             return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
 
-        let (queue, queue_evt) = queues.remove(0);
+        let queue = queues.remove(&0).unwrap();
 
         self.worker_thread = Some(WorkerThread::start("v_rng", move |kill_evt| {
-            let worker = Worker {
-                interrupt,
-                queue,
-                queue_evt,
-                mem,
-            };
-            worker.run(kill_evt)
+            let mut worker = Worker { interrupt, queue };
+            if let Err(e) = worker.run(kill_evt) {
+                error!("rng worker thread failed: {:#}", e);
+            }
+            worker
         }));
 
         Ok(())
     }
 
-    fn reset(&mut self) -> bool {
+    fn reset(&mut self) -> anyhow::Result<()> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            if let Err(e) = worker_thread.stop() {
-                error!("rng worker failed: {:#}", e);
-                return false;
-            }
-            return true;
+            let _worker = worker_thread.stop();
         }
-        false
+        Ok(())
     }
 
-    fn stop(&mut self) -> std::result::Result<Option<VirtioDeviceSaved>, VirtioError> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            let state = worker_thread.stop().map_err(VirtioError::InThreadFailure)?;
-            return Ok(Some(state));
+            let worker = worker_thread.stop();
+            return Ok(Some(BTreeMap::from([(0, worker.queue)])));
         }
         Ok(None)
     }
-}
 
-impl Suspendable for Rng {}
+    fn virtio_wake(
+        &mut self,
+        queues_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
+    ) -> anyhow::Result<()> {
+        if let Some((mem, interrupt, queues)) = queues_state {
+            self.activate(mem, interrupt, queues)?;
+        }
+        Ok(())
+    }
+
+    fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        // `virtio_sleep` ensures there is no pending state, except for the `Queue`s, which are
+        // handled at a higher layer.
+        Ok(serde_json::Value::Null)
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data == serde_json::Value::Null,
+            "unexpected snapshot data: should be null, got {}",
+            data,
+        );
+        Ok(())
+    }
+}

@@ -4,24 +4,17 @@
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::mpsc;
 
+use anyhow::bail;
 use base::error;
-use resources::SystemAllocator;
-use sync::Mutex;
 
-use crate::bus::HostHotPlugKey;
 use crate::bus::HotPlugBus;
-use crate::pci::pci_configuration::PciCapabilityID;
-use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
-use crate::pci::pcie::pcie_device::PcieCap;
-use crate::pci::pcie::pcie_device::PcieDevice;
+use crate::bus::HotPlugKey;
 use crate::pci::pcie::pcie_port::PciePort;
+use crate::pci::pcie::pcie_port::PciePortVariant;
 use crate::pci::pcie::*;
-use crate::pci::pm::PciPmCap;
-use crate::pci::MsiConfig;
 use crate::pci::PciAddress;
-use crate::pci::PciCapability;
 use crate::pci::PciDeviceError;
 
 const PCIE_UP_DID: u16 = 0x3500;
@@ -30,7 +23,7 @@ const PCIE_DP_DID: u16 = 0x3510;
 pub struct PcieUpstreamPort {
     pcie_port: PciePort,
     hotplugged: bool,
-    downstream_devices: BTreeMap<PciAddress, HostHotPlugKey>,
+    downstream_devices: BTreeMap<PciAddress, HotPlugKey>,
 }
 
 impl PcieUpstreamPort {
@@ -43,7 +36,7 @@ impl PcieUpstreamPort {
                 primary_bus_num,
                 secondary_bus_num,
                 false,
-                false,
+                PcieDevicePortType::UpstreamPort,
             ),
             hotplugged,
             downstream_devices: BTreeMap::new(),
@@ -54,7 +47,8 @@ impl PcieUpstreamPort {
         pcie_host: PcieHostPort,
         hotplugged: bool,
     ) -> std::result::Result<Self, PciDeviceError> {
-        let pcie_port = PciePort::new_from_host(pcie_host, false, false)?;
+        let pcie_port =
+            PciePort::new_from_host(pcie_host, false, PcieDevicePortType::UpstreamPort)?;
         Ok(PcieUpstreamPort {
             pcie_port,
             hotplugged,
@@ -63,67 +57,25 @@ impl PcieUpstreamPort {
     }
 }
 
-impl PcieDevice for PcieUpstreamPort {
-    fn get_device_id(&self) -> u16 {
-        self.pcie_port.get_device_id()
+impl PciePortVariant for PcieUpstreamPort {
+    fn get_pcie_port(&self) -> &PciePort {
+        &self.pcie_port
     }
 
-    fn debug_label(&self) -> String {
-        self.pcie_port.debug_label()
+    fn get_pcie_port_mut(&mut self) -> &mut PciePort {
+        &mut self.pcie_port
     }
 
-    fn preferred_address(&self) -> Option<PciAddress> {
-        self.pcie_port.preferred_address()
-    }
-
-    fn allocate_address(
-        &mut self,
-        resources: &mut SystemAllocator,
-    ) -> std::result::Result<PciAddress, PciDeviceError> {
-        self.pcie_port.allocate_address(resources)
-    }
-
-    fn clone_interrupt(&mut self, msi_config: Arc<Mutex<MsiConfig>>) {
-        self.pcie_port.clone_interrupt(msi_config);
-    }
-
-    fn read_config(&self, reg_idx: usize, data: &mut u32) {
-        self.pcie_port.read_config(reg_idx, data);
-    }
-
-    fn write_config(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.pcie_port.write_config(reg_idx, offset, data);
-    }
-
-    fn get_caps(&self) -> Vec<Box<dyn PciCapability>> {
-        vec![
-            Box::new(PcieCap::new(PcieDevicePortType::UpstreamPort, false, 0)),
-            Box::new(PciPmCap::new()),
-        ]
-    }
-
-    fn set_capability_reg_idx(&mut self, id: PciCapabilityID, reg_idx: usize) {
-        self.pcie_port.set_capability_reg_idx(id, reg_idx);
-    }
-
-    fn get_bus_range(&self) -> Option<PciBridgeBusRange> {
-        self.pcie_port.get_bus_range()
-    }
-
-    fn get_removed_devices(&self) -> Vec<PciAddress> {
+    fn get_removed_devices_impl(&self) -> Vec<PciAddress> {
         Vec::new()
     }
 
-    fn hotplug_implemented(&self) -> bool {
+    fn hotplug_implemented_impl(&self) -> bool {
         false
     }
 
-    fn hotplugged(&self) -> bool {
+    fn hotplugged_impl(&self) -> bool {
         self.hotplugged
-    }
-
-    fn get_bridge_window_size(&self) -> (u64, u64) {
-        self.pcie_port.get_bridge_window_size()
     }
 }
 
@@ -133,24 +85,35 @@ impl PcieDevice for PcieUpstreamPort {
 // hotplug out.
 impl HotPlugBus for PcieUpstreamPort {
     // Do nothing. We are not a real hotplug bus.
-    fn hot_plug(&mut self, _addr: PciAddress) {}
+    fn hot_plug(&mut self, _addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
+        bail!("hot plug not supported on upstream port.")
+    }
 
     // Just remove the downstream device.
-    fn hot_unplug(&mut self, addr: PciAddress) {
+    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
         self.downstream_devices.remove(&addr);
+        Ok(None)
+    }
+
+    fn get_secondary_bus_number(&self) -> Option<u8> {
+        Some(self.pcie_port.get_bus_range()?.secondary)
     }
 
     fn is_match(&self, host_addr: PciAddress) -> Option<u8> {
         self.pcie_port.is_match(host_addr)
     }
 
-    fn add_hotplug_device(&mut self, host_key: HostHotPlugKey, guest_addr: PciAddress) {
-        self.downstream_devices.insert(guest_addr, host_key);
+    fn add_hotplug_device(&mut self, hotplug_key: HotPlugKey, guest_addr: PciAddress) {
+        self.downstream_devices.insert(guest_addr, hotplug_key);
     }
 
-    fn get_hotplug_device(&self, host_key: HostHotPlugKey) -> Option<PciAddress> {
+    fn get_address(&self) -> Option<PciAddress> {
+        self.pcie_port.get_address()
+    }
+
+    fn get_hotplug_device(&self, hotplug_key: HotPlugKey) -> Option<PciAddress> {
         for (guest_address, host_info) in self.downstream_devices.iter() {
-            if host_key == *host_info {
+            if hotplug_key == *host_info {
                 return Some(*guest_address);
             }
         }
@@ -161,10 +124,10 @@ impl HotPlugBus for PcieUpstreamPort {
         self.downstream_devices.is_empty()
     }
 
-    fn get_hotplug_key(&self) -> Option<HostHotPlugKey> {
+    fn get_hotplug_key(&self) -> Option<HotPlugKey> {
         if self.pcie_port.is_host() {
             match PciAddress::from_str(&self.pcie_port.debug_label()) {
-                Ok(host_addr) => Some(HostHotPlugKey::UpstreamPort { host_addr }),
+                Ok(host_addr) => Some(HotPlugKey::HostUpstreamPort { host_addr }),
                 Err(e) => {
                     error!(
                         "failed to get hotplug key for {}: {}",
@@ -183,7 +146,7 @@ impl HotPlugBus for PcieUpstreamPort {
 pub struct PcieDownstreamPort {
     pcie_port: PciePort,
     hotplugged: bool,
-    downstream_devices: BTreeMap<PciAddress, HostHotPlugKey>,
+    downstream_devices: BTreeMap<PciAddress, HotPlugKey>,
     hotplug_out_begin: bool,
     removed_downstream: Vec<PciAddress>,
 }
@@ -198,7 +161,7 @@ impl PcieDownstreamPort {
                 primary_bus_num,
                 secondary_bus_num,
                 false,
-                false,
+                PcieDevicePortType::DownstreamPort,
             ),
             hotplugged,
             downstream_devices: BTreeMap::new(),
@@ -211,7 +174,8 @@ impl PcieDownstreamPort {
         pcie_host: PcieHostPort,
         hotplugged: bool,
     ) -> std::result::Result<Self, PciDeviceError> {
-        let pcie_port = PciePort::new_from_host(pcie_host, true, false)?;
+        let pcie_port =
+            PciePort::new_from_host(pcie_host, true, PcieDevicePortType::DownstreamPort)?;
         Ok(PcieDownstreamPort {
             pcie_port,
             hotplugged,
@@ -222,54 +186,16 @@ impl PcieDownstreamPort {
     }
 }
 
-impl PcieDevice for PcieDownstreamPort {
-    fn get_device_id(&self) -> u16 {
-        self.pcie_port.get_device_id()
+impl PciePortVariant for PcieDownstreamPort {
+    fn get_pcie_port(&self) -> &PciePort {
+        &self.pcie_port
     }
 
-    fn debug_label(&self) -> String {
-        self.pcie_port.debug_label()
+    fn get_pcie_port_mut(&mut self) -> &mut PciePort {
+        &mut self.pcie_port
     }
 
-    fn preferred_address(&self) -> Option<PciAddress> {
-        self.pcie_port.preferred_address()
-    }
-
-    fn allocate_address(
-        &mut self,
-        resources: &mut SystemAllocator,
-    ) -> std::result::Result<PciAddress, PciDeviceError> {
-        self.pcie_port.allocate_address(resources)
-    }
-
-    fn clone_interrupt(&mut self, msi_config: Arc<Mutex<MsiConfig>>) {
-        self.pcie_port.clone_interrupt(msi_config);
-    }
-
-    fn read_config(&self, reg_idx: usize, data: &mut u32) {
-        self.pcie_port.read_config(reg_idx, data);
-    }
-
-    fn write_config(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.pcie_port.write_config(reg_idx, offset, data);
-    }
-
-    fn get_caps(&self) -> Vec<Box<dyn PciCapability>> {
-        vec![
-            Box::new(PcieCap::new(PcieDevicePortType::DownstreamPort, true, 0)),
-            Box::new(PciPmCap::new()),
-        ]
-    }
-
-    fn set_capability_reg_idx(&mut self, id: PciCapabilityID, reg_idx: usize) {
-        self.pcie_port.set_capability_reg_idx(id, reg_idx);
-    }
-
-    fn get_bus_range(&self) -> Option<PciBridgeBusRange> {
-        self.pcie_port.get_bus_range()
-    }
-
-    fn get_removed_devices(&self) -> Vec<PciAddress> {
+    fn get_removed_devices_impl(&self) -> Vec<PciAddress> {
         if self.pcie_port.removed_downstream_valid() {
             self.removed_downstream.clone()
         } else {
@@ -277,33 +203,35 @@ impl PcieDevice for PcieDownstreamPort {
         }
     }
 
-    fn hotplug_implemented(&self) -> bool {
+    fn hotplug_implemented_impl(&self) -> bool {
         false
     }
 
-    fn hotplugged(&self) -> bool {
+    fn hotplugged_impl(&self) -> bool {
         self.hotplugged
-    }
-
-    fn get_bridge_window_size(&self) -> (u64, u64) {
-        self.pcie_port.get_bridge_window_size()
     }
 }
 
 impl HotPlugBus for PcieDownstreamPort {
-    fn hot_plug(&mut self, addr: PciAddress) {
-        if !self.pcie_port.hotplug_implemented() || self.downstream_devices.get(&addr).is_none() {
-            return;
+    fn hot_plug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
+        if !self.pcie_port.hotplug_implemented() {
+            bail!("hotplug not implemented.");
+        }
+        if self.downstream_devices.get(&addr).is_none() {
+            bail!("no downstream devices.");
         }
         self.pcie_port
             .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
         self.pcie_port.trigger_hp_or_pme_interrupt();
+        Ok(None)
     }
 
-    fn hot_unplug(&mut self, addr: PciAddress) {
-        if self.downstream_devices.remove(&addr).is_none() || !self.pcie_port.hotplug_implemented()
-        {
-            return;
+    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
+        if !self.pcie_port.hotplug_implemented() {
+            bail!("hotplug not implemented.");
+        }
+        if self.downstream_devices.remove(&addr).is_none() {
+            bail!("no downstream devices.");
         }
 
         if !self.hotplug_out_begin {
@@ -322,25 +250,34 @@ impl HotPlugBus for PcieDownstreamPort {
         }
 
         self.hotplug_out_begin = true;
+        Ok(None)
+    }
+
+    fn get_address(&self) -> Option<PciAddress> {
+        self.pcie_port.get_address()
+    }
+
+    fn get_secondary_bus_number(&self) -> Option<u8> {
+        Some(self.pcie_port.get_bus_range()?.secondary)
     }
 
     fn is_match(&self, host_addr: PciAddress) -> Option<u8> {
         self.pcie_port.is_match(host_addr)
     }
 
-    fn add_hotplug_device(&mut self, host_key: HostHotPlugKey, guest_addr: PciAddress) {
+    fn add_hotplug_device(&mut self, hotplug_key: HotPlugKey, guest_addr: PciAddress) {
         if self.hotplug_out_begin {
             self.hotplug_out_begin = false;
             self.downstream_devices.clear();
             self.removed_downstream.clear();
         }
 
-        self.downstream_devices.insert(guest_addr, host_key);
+        self.downstream_devices.insert(guest_addr, hotplug_key);
     }
 
-    fn get_hotplug_device(&self, host_key: HostHotPlugKey) -> Option<PciAddress> {
+    fn get_hotplug_device(&self, hotplug_key: HotPlugKey) -> Option<PciAddress> {
         for (guest_address, host_info) in self.downstream_devices.iter() {
-            if host_key == *host_info {
+            if hotplug_key == *host_info {
                 return Some(*guest_address);
             }
         }
@@ -351,10 +288,10 @@ impl HotPlugBus for PcieDownstreamPort {
         self.downstream_devices.is_empty()
     }
 
-    fn get_hotplug_key(&self) -> Option<HostHotPlugKey> {
+    fn get_hotplug_key(&self) -> Option<HotPlugKey> {
         if self.pcie_port.is_host() {
             match PciAddress::from_str(&self.pcie_port.debug_label()) {
-                Ok(host_addr) => Some(HostHotPlugKey::DownstreamPort { host_addr }),
+                Ok(host_addr) => Some(HotPlugKey::HostDownstreamPort { host_addr }),
                 Err(e) => {
                     error!(
                         "failed to get hotplug key for {}: {}",

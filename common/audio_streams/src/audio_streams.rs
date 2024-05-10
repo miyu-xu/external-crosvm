@@ -65,7 +65,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SampleFormat {
     U8,
     S16LE,
@@ -126,8 +126,9 @@ pub enum StreamDirection {
 }
 
 /// Valid effects for an audio stream.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum StreamEffect {
+    #[default]
     NoEffect,
     #[serde(alias = "aec")]
     EchoCancellation,
@@ -135,12 +136,6 @@ pub enum StreamEffect {
 
 pub mod capture;
 pub mod shm_streams;
-
-impl Default for StreamEffect {
-    fn default() -> Self {
-        StreamEffect::NoEffect
-    }
-}
 
 /// Errors that can pass across threads.
 pub type BoxError = Box<dyn error::Error + Send + Sync>;
@@ -379,6 +374,13 @@ pub trait BufferCommit {
     /// `write_playback_buffer` or `read_capture_buffer` would trigger this automatically. `nframes`
     /// indicates the number of audio frames that were read or written to the device.
     fn commit(&mut self, nframes: usize);
+    /// `latency_bytes` the current device latency.
+    /// For playback it means how many bytes need to be consumed
+    /// before the current playback buffer will be played.
+    /// For capture it means the latency in terms of bytes that the capture buffer was recorded.
+    fn latency_bytes(&self) -> u32 {
+        0
+    }
 }
 
 /// `AsyncBufferCommit` is a cleanup funcion that must be called before dropping the buffer,
@@ -389,6 +391,13 @@ pub trait AsyncBufferCommit {
     /// automatically. `nframes` indicates the number of audio frames that were read or written to
     /// the device.
     async fn commit(&mut self, nframes: usize);
+    /// `latency_bytes` the current device latency.
+    /// For playback it means how many bytes need to be consumed
+    /// before the current playback buffer will be played.
+    /// For capture it means the latency in terms of bytes that the capture buffer was recorded.
+    fn latency_bytes(&self) -> u32 {
+        0
+    }
 }
 
 /// Errors that are possible from a `PlaybackBuffer`.
@@ -519,24 +528,10 @@ impl<'a> PlaybackBuffer<'a> {
             .commit(self.buffer.offset / self.buffer.frame_size);
     }
 
-    /// Writes up to `size` bytes directly to this buffer inside of the given callback function
-    /// with a buffer size error check.
-    ///
-    /// TODO(b/238933737): Investigate removing this method for Windows when
-    /// switching from Ac97 to Virtio-Snd
-    pub fn copy_cb_with_checks<F: FnOnce(&mut [u8])>(
-        &mut self,
-        size: usize,
-        cb: F,
-    ) -> Result<(), PlaybackBufferError> {
-        // only write complete frames.
-        let len = size / self.buffer.frame_size * self.buffer.frame_size;
-        if self.buffer.offset + len > self.buffer.buffer.len() {
-            return Err(PlaybackBufferError::SliceOutOfBounds);
-        }
-        cb(&mut self.buffer.buffer[self.buffer.offset..(self.buffer.offset + len)]);
-        self.buffer.offset += len;
-        Ok(())
+    /// It returns how many bytes need to be consumed
+    /// before the current playback buffer will be played.
+    pub fn latency_bytes(&self) -> u32 {
+        self.drop.latency_bytes()
     }
 
     /// Writes up to `size` bytes directly to this buffer inside of the given callback function.
@@ -597,6 +592,11 @@ impl<'a> AsyncPlaybackBuffer<'a> {
         self.trigger
             .commit(self.buffer.offset / self.buffer.frame_size)
             .await;
+    }
+
+    /// It returns the latency in terms of bytes that the capture buffer was recorded.
+    pub fn latency_bytes(&self) -> u32 {
+        self.trigger.latency_bytes()
     }
 
     /// Writes up to `size` bytes directly to this buffer inside of the given callback function.
@@ -785,6 +785,12 @@ pub struct NoopStreamSourceGenerator;
 impl NoopStreamSourceGenerator {
     pub fn new() -> Self {
         NoopStreamSourceGenerator {}
+    }
+}
+
+impl Default for NoopStreamSourceGenerator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -3,6 +3,6 @@
 // found in the LICENSE file.
 
 #[macro_use]
-mod log;
-pub mod host_backend;
+mod trace;
+pub mod backend;
 pub mod xhci;

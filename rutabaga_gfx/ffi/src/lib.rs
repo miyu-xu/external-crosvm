@@ -5,32 +5,62 @@
 ///! C-bindings for the rutabaga_gfx crate
 extern crate rutabaga_gfx;
 
+use std::cell::RefCell;
 use std::convert::TryInto;
 use std::ffi::CStr;
+use std::ffi::CString;
+use std::fs::File;
+use std::io::IoSliceMut;
 use std::os::raw::c_char;
+use std::os::raw::c_void;
 use std::panic::catch_unwind;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::path::PathBuf;
 use std::ptr::copy_nonoverlapping;
+use std::ptr::null;
 use std::ptr::null_mut;
 use std::slice::from_raw_parts;
 use std::slice::from_raw_parts_mut;
 
-use base::error;
-use base::FromRawDescriptor;
-use base::IntoRawDescriptor;
-use base::SafeDescriptor;
-use data_model::VolatileSlice;
+#[cfg(unix)]
 use libc::iovec;
 use libc::EINVAL;
 use libc::ESRCH;
 use rutabaga_gfx::*;
 
+#[cfg(not(unix))]
+#[repr(C)]
+pub struct iovec {
+    pub iov_base: *mut c_void,
+    pub iov_len: usize,
+}
+
 const NO_ERROR: i32 = 0;
+const RUTABAGA_WSI_SURFACELESS: u64 = 1;
+
+thread_local! {
+    static S_DEBUG_HANDLER: RefCell<Option<RutabagaDebugHandler>> = const { RefCell::new(None) };
+}
+
+fn log_error(debug_string: String) {
+    S_DEBUG_HANDLER.with(|handler_cell| {
+        if let Some(handler) = &*handler_cell.borrow() {
+            let cstring = CString::new(debug_string.as_str()).expect("CString creation failed");
+
+            let debug = RutabagaDebug {
+                debug_type: RUTABAGA_DEBUG_ERROR,
+                message: cstring.as_ptr(),
+            };
+
+            handler.call(debug);
+        }
+    });
+}
 
 fn return_result<T>(result: RutabagaResult<T>) -> i32 {
     if let Err(e) = result {
-        error!("Received an error {}", e);
+        log_error(e.to_string());
         -EINVAL
     } else {
         NO_ERROR
@@ -42,17 +72,24 @@ macro_rules! return_on_error {
         match $result {
             Ok(t) => t,
             Err(e) => {
-                error!("Received an error {}", e);
+                log_error(e.to_string());
                 return -EINVAL;
             }
         }
     };
 }
 
-const RUTABAGA_COMPONENT_2D: u32 = 1;
-const RUTABAGA_COMPONENT_VIRGL_RENDERER: u32 = 2;
-const RUTABAGA_COMPONENT_GFXSTREAM: u32 = 3;
-const RUTABAGA_COMPONENT_CROSS_DOMAIN: u32 = 4;
+macro_rules! return_on_io_error {
+    ($result:expr) => {
+        match $result {
+            Ok(t) => t,
+            Err(e) => {
+                log_error(e.to_string());
+                return -e.raw_os_error().unwrap_or(EINVAL);
+            }
+        }
+    };
+}
 
 #[allow(non_camel_case_types)]
 type rutabaga = Rutabaga;
@@ -69,6 +106,9 @@ type rutabaga_transfer = Transfer3D;
 #[allow(non_camel_case_types)]
 type rutabaga_fence = RutabagaFence;
 
+#[allow(non_camel_case_types)]
+type rutabaga_debug = RutabagaDebug;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rutabaga_iovecs {
@@ -79,8 +119,14 @@ pub struct rutabaga_iovecs {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rutabaga_handle {
-    pub os_handle: i32,
+    pub os_handle: i64,
     pub handle_type: u32,
+}
+
+#[repr(C)]
+pub struct rutabaga_mapping {
+    pub ptr: *mut c_void,
+    pub size: u64,
 }
 
 #[repr(C)]
@@ -95,19 +141,65 @@ pub struct rutabaga_channels {
     pub num_channels: usize,
 }
 
+#[repr(C)]
+pub struct rutabaga_command {
+    pub ctx_id: u32,
+    pub cmd_size: u32,
+    pub cmd: *mut u8,
+    pub num_in_fences: u32,
+    pub fence_ids: *mut u64,
+}
+
 #[allow(non_camel_case_types)]
-pub type write_fence_cb = extern "C" fn(user_data: u64, fence_data: rutabaga_fence);
+pub type rutabaga_fence_callback = extern "C" fn(user_data: u64, fence: &rutabaga_fence);
+
+#[allow(non_camel_case_types)]
+pub type rutabaga_debug_callback = extern "C" fn(user_data: u64, debug: &rutabaga_debug);
 
 #[repr(C)]
 pub struct rutabaga_builder<'a> {
     pub user_data: u64,
-    pub default_component: u32,
-    pub fence_cb: write_fence_cb,
+    pub capset_mask: u64,
+    pub wsi: u64,
+    pub fence_cb: rutabaga_fence_callback,
+    pub debug_cb: Option<rutabaga_debug_callback>,
     pub channels: Option<&'a rutabaga_channels>,
+    pub renderer_features: *const c_char,
 }
 
-fn create_ffi_fence_handler(user_data: u64, fence_cb: write_fence_cb) -> RutabagaFenceHandler {
-    RutabagaFenceClosure::new(move |completed_fence| fence_cb(user_data, completed_fence))
+fn create_ffi_fence_handler(
+    user_data: u64,
+    fence_cb: rutabaga_fence_callback,
+) -> RutabagaFenceHandler {
+    RutabagaFenceHandler::new(move |completed_fence| fence_cb(user_data, &completed_fence))
+}
+
+fn create_ffi_debug_handler(
+    user_data: u64,
+    debug_cb: rutabaga_debug_callback,
+) -> RutabagaDebugHandler {
+    RutabagaDebugHandler::new(move |rutabaga_debug| debug_cb(user_data, &rutabaga_debug))
+}
+
+#[no_mangle]
+/// # Safety
+/// - `capset_names` must be a null-terminated C-string.
+pub unsafe extern "C" fn rutabaga_calculate_capset_mask(
+    capset_names: *const c_char,
+    capset_mask: &mut u64,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        if capset_names == null() {
+            return -EINVAL;
+        }
+
+        let c_str_slice = CStr::from_ptr(capset_names);
+        let result = c_str_slice.to_str();
+        let str_slice = return_on_error!(result);
+        *capset_mask = rutabaga_gfx::calculate_capset_mask(str_slice.split(':'));
+        NO_ERROR
+    }))
+    .unwrap_or(-ESRCH)
 }
 
 /// # Safety
@@ -118,17 +210,15 @@ fn create_ffi_fence_handler(user_data: u64, fence_cb: write_fence_cb) -> Rutabag
 pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mut rutabaga) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         let fence_handler = create_ffi_fence_handler((*builder).user_data, (*builder).fence_cb);
+        let mut debug_handler_opt: Option<RutabagaDebugHandler> = None;
 
-        let component = match (*builder).default_component {
-            RUTABAGA_COMPONENT_2D => RutabagaComponentType::Rutabaga2D,
-            RUTABAGA_COMPONENT_VIRGL_RENDERER => RutabagaComponentType::VirglRenderer,
-            RUTABAGA_COMPONENT_GFXSTREAM => RutabagaComponentType::Gfxstream,
-            RUTABAGA_COMPONENT_CROSS_DOMAIN => RutabagaComponentType::CrossDomain,
-            _ => {
-                error!("unknown component type");
-                return -EINVAL;
-            }
-        };
+        if let Some(func) = (*builder).debug_cb {
+            let debug_handler = create_ffi_debug_handler((*builder).user_data, func);
+            S_DEBUG_HANDLER.with(|handler_cell| {
+                *handler_cell.borrow_mut() = Some(debug_handler.clone());
+            });
+            debug_handler_opt = Some(debug_handler);
+        }
 
         let mut rutabaga_channels_opt = None;
         if let Some(channels) = (*builder).channels {
@@ -150,17 +240,35 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
 
             rutabaga_channels_opt = Some(rutabaga_channels);
         }
-        let result = RutabagaBuilder::new(component, 0)
+
+        let mut renderer_features_opt = None;
+        let renderer_features_ptr = (*builder).renderer_features;
+        if !renderer_features_ptr.is_null() {
+            let c_str_slice = CStr::from_ptr(renderer_features_ptr);
+            let result = c_str_slice.to_str();
+            let str_slice = return_on_error!(result);
+            let string = str_slice.to_owned();
+            renderer_features_opt = Some(string);
+        }
+
+        let mut component_type = RutabagaComponentType::CrossDomain;
+        if (*builder).capset_mask == 0 {
+            component_type = RutabagaComponentType::Rutabaga2D;
+        }
+
+        let rutabaga_wsi = match (*builder).wsi {
+            RUTABAGA_WSI_SURFACELESS => RutabagaWsi::Surfaceless,
+            _ => return -EINVAL,
+        };
+
+        let result = RutabagaBuilder::new(component_type, (*builder).capset_mask)
+            .set_use_external_blob(false)
             .set_use_egl(true)
-            .set_use_surfaceless(true)
-            .set_use_guest_angle(true)
-            .set_use_vulkan(true)
-            .set_use_external_blob(true)
+            .set_wsi(rutabaga_wsi)
+            .set_debug_handler(debug_handler_opt)
             .set_rutabaga_channels(rutabaga_channels_opt)
-            .build(
-                fence_handler,
-                #[cfg(feature = "virgl_renderer_next")] /* render_server_fd= */ None,
-            );
+            .set_renderer_features(renderer_features_opt)
+            .build(fence_handler, None);
 
         let rtbg = return_on_error!(result);
         *ptr = Box::into_raw(Box::new(rtbg)) as _;
@@ -182,25 +290,12 @@ pub extern "C" fn rutabaga_finish(ptr: &mut *mut rutabaga) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn rutabaga_get_num_capsets() -> u32 {
-    let mut num_capsets = 0;
-
-    // Cross-domain (like virtio_wl with llvmpipe) is always available.
-    num_capsets += 1;
-
-    // Three capsets for virgl_renderer
-    #[cfg(feature = "virgl_renderer")]
-    {
-        num_capsets += 3;
-    }
-
-    // One capset for gfxstream
-    #[cfg(feature = "gfxstream")]
-    {
-        num_capsets += 1;
-    }
-
-    num_capsets
+pub extern "C" fn rutabaga_get_num_capsets(ptr: &mut rutabaga, num_capsets: &mut u32) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        *num_capsets = ptr.get_num_capsets();
+        NO_ERROR
+    }))
+    .unwrap_or(-ESRCH)
 }
 
 #[no_mangle]
@@ -321,8 +416,8 @@ pub extern "C" fn rutabaga_resource_create_3d(
 /// - If `iovecs` is not null, the caller must ensure `(*iovecs).iovecs` points to a valid array of
 ///   iovecs of size `(*iovecs).num_iovecs`.
 /// - Each iovec must point to valid memory starting at `iov_base` with length `iov_len`.
-/// - Each iovec must valid until the resource's backing is explictly detached or the resource is
-///   is unreferenced.
+/// - Each iovec must valid until the resource's backing is explictly detached or the resource is is
+///   unreferenced.
 #[no_mangle]
 pub unsafe extern "C" fn rutabaga_resource_attach_backing(
     ptr: &mut rutabaga,
@@ -368,10 +463,10 @@ pub unsafe extern "C" fn rutabaga_resource_transfer_read(
     catch_unwind(AssertUnwindSafe(|| {
         let mut slice_opt = None;
         if let Some(iovec) = buf {
-            slice_opt = Some(VolatileSlice::from_raw_parts(
+            slice_opt = Some(IoSliceMut::new(std::slice::from_raw_parts_mut(
                 iovec.iov_base as *mut u8,
                 iovec.iov_len,
-            ));
+            )));
         }
 
         let result = ptr.transfer_read(ctx_id, resource_id, *transfer, slice_opt);
@@ -399,8 +494,8 @@ pub extern "C" fn rutabaga_resource_transfer_write(
 ///   iovecs of size `(*iovecs).num_iovecs`.
 /// - If `handle` is not null, the caller must ensure it is a valid OS-descriptor.  Ownership is
 ///   transfered to rutabaga.
-/// - Each iovec must valid until the resource's backing is explictly detached or the resource is
-///   is unreferenced.
+/// - Each iovec must valid until the resource's backing is explictly detached or the resource is is
+///   unreferenced.
 #[no_mangle]
 pub unsafe extern "C" fn rutabaga_resource_create_blob(
     ptr: &mut rutabaga,
@@ -425,9 +520,15 @@ pub unsafe extern "C" fn rutabaga_resource_create_blob(
         }
 
         let mut handle_opt: Option<RutabagaHandle> = None;
+
+        // Only needed on Unix, since there is no way to create a handle from guest memory on
+        // Windows.
+        #[cfg(unix)]
         if let Some(hnd) = handle {
             handle_opt = Some(RutabagaHandle {
-                os_handle: SafeDescriptor::from_raw_descriptor((*hnd).os_handle),
+                os_handle: RutabagaDescriptor::from_raw_descriptor(
+                    (*hnd).os_handle.try_into().unwrap(),
+                ),
                 handle_type: (*hnd).handle_type,
             });
         }
@@ -462,8 +563,33 @@ pub extern "C" fn rutabaga_resource_export_blob(
         let hnd = return_on_error!(result);
 
         (*handle).handle_type = hnd.handle_type;
-        (*handle).os_handle = hnd.os_handle.into_raw_descriptor();
+        (*handle).os_handle = hnd.os_handle.into_raw_descriptor() as i64;
         NO_ERROR
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+#[no_mangle]
+pub extern "C" fn rutabaga_resource_map(
+    ptr: &mut rutabaga,
+    resource_id: u32,
+    mapping: &mut rutabaga_mapping,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = ptr.map(resource_id);
+        let internal_map = return_on_error!(result);
+        (*mapping).ptr = internal_map.ptr as *mut c_void;
+        (*mapping).size = internal_map.size;
+        NO_ERROR
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+#[no_mangle]
+pub extern "C" fn rutabaga_resource_unmap(ptr: &mut rutabaga, resource_id: u32) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = ptr.unmap(resource_id);
+        return_result(result)
     }))
     .unwrap_or(-ESRCH)
 }
@@ -487,13 +613,12 @@ pub extern "C" fn rutabaga_resource_map_info(
 #[no_mangle]
 pub unsafe extern "C" fn rutabaga_submit_command(
     ptr: &mut rutabaga,
-    ctx_id: u32,
-    commands: *mut u8,
-    size: usize,
+    cmd: &rutabaga_command,
 ) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
-        let cmd_slice = from_raw_parts_mut(commands, size);
-        let result = ptr.submit_command(ctx_id, cmd_slice);
+        let cmd_slice = from_raw_parts_mut(cmd.cmd, cmd.cmd_size as usize);
+        let fence_ids = from_raw_parts(cmd.fence_ids, cmd.num_in_fences as usize);
+        let result = ptr.submit_command(cmd.ctx_id, cmd_slice, fence_ids);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)
@@ -503,6 +628,40 @@ pub unsafe extern "C" fn rutabaga_submit_command(
 pub extern "C" fn rutabaga_create_fence(ptr: &mut rutabaga, fence: &rutabaga_fence) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         let result = ptr.create_fence(*fence);
+        return_result(result)
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+/// # Safety
+/// - `dir` must be a null-terminated C-string.
+#[no_mangle]
+pub unsafe extern "C" fn rutabaga_snapshot(ptr: &mut rutabaga, dir: *const c_char) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let c_str_slice = CStr::from_ptr(dir);
+
+        let result = c_str_slice.to_str();
+        let directory = return_on_error!(result);
+
+        let file = return_on_io_error!(File::create(Path::new(directory).join("snapshot")));
+        let result = ptr.snapshot(&mut std::io::BufWriter::new(file), directory);
+        return_result(result)
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+/// # Safety
+/// - `dir` must be a null-terminated C-string.
+#[no_mangle]
+pub unsafe extern "C" fn rutabaga_restore(ptr: &mut rutabaga, dir: *const c_char) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let c_str_slice = CStr::from_ptr(dir);
+
+        let result = c_str_slice.to_str();
+        let directory = return_on_error!(result);
+
+        let file = return_on_io_error!(File::open(Path::new(directory).join("snapshot")));
+        let result = ptr.restore(&mut std::io::BufReader::new(file), directory);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)

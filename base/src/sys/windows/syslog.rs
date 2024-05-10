@@ -20,7 +20,25 @@
 //! error!("something went horribly wrong: {}", "out of RAMs");
 //! ```
 
+use crate::syslog::Error;
+use crate::syslog::Facility;
+use crate::syslog::Log;
+use crate::syslog::Syslog;
+use crate::RawDescriptor;
+
+// SAFETY:
 // On windows RawDescriptor is !Sync + !Send, but also on windows we don't do anything with them
 unsafe impl Sync for crate::syslog::State {}
+// SAFETY: See comments for impl Sync
 unsafe impl Send for crate::syslog::State {}
-pub use super::win::syslog::PlatformSyslog;
+
+pub struct PlatformSyslog {}
+
+impl Syslog for PlatformSyslog {
+    fn new(
+        _proc_name: String,
+        _facility: Facility,
+    ) -> Result<(Option<Box<dyn Log + Send>>, Option<RawDescriptor>), Error> {
+        Ok((None, None))
+    }
+}

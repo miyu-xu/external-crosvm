@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 #[cfg(not(test))]
 use base::Clock;
@@ -31,6 +33,8 @@ use hypervisor::Vm;
 use hypervisor::VmX86_64;
 use kvm_sys::*;
 use resources::SystemAllocator;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 
 use crate::irqchip::Ioapic;
@@ -80,6 +84,16 @@ pub struct KvmKernelIrqChip {
     pub(super) vm: KvmVm,
     pub(super) vcpus: Arc<Mutex<Vec<Option<KvmVcpu>>>>,
     pub(super) routes: Arc<Mutex<Vec<IrqRoute>>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct KvmKernelIrqChipSnapshot {
+    routes: Vec<IrqRoute>,
+    // apic_base and interrupt_bitmap are part of the IrqChip, despite the
+    // fact that we get the values from the Vcpu ioctl "KVM_GET_SREGS".
+    // Contains 1 entry per Vcpu.
+    apic_base: Vec<u64>,
+    interrupt_bitmap: Vec<[u64; 4usize]>,
 }
 
 impl KvmKernelIrqChip {
@@ -175,6 +189,44 @@ impl IrqChipX86_64 for KvmKernelIrqChip {
     fn pit_uses_speaker_port(&self) -> bool {
         false
     }
+
+    fn snapshot_chip_specific(&self) -> anyhow::Result<serde_json::Value> {
+        let mut apics: Vec<u64> = Vec::new();
+        let mut interrupt_bitmaps: Vec<[u64; 4usize]> = Vec::new();
+        {
+            let vcpus_lock = self.vcpus.lock();
+            for vcpu in (*vcpus_lock).iter().flatten() {
+                apics.push(vcpu.get_apic_base()?);
+                interrupt_bitmaps.push(vcpu.get_interrupt_bitmap()?);
+            }
+        }
+        serde_json::to_value(KvmKernelIrqChipSnapshot {
+            routes: self.routes.lock().clone(),
+            apic_base: apics,
+            interrupt_bitmap: interrupt_bitmaps,
+        })
+        .context("failed to serialize KvmKernelIrqChip")
+    }
+
+    fn restore_chip_specific(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let deser: KvmKernelIrqChipSnapshot =
+            serde_json::from_value(data).context("failed to deserialize data")?;
+        self.set_irq_routes(&deser.routes)?;
+        let vcpus_lock = self.vcpus.lock();
+        assert_eq!(deser.interrupt_bitmap.len(), vcpus_lock.len());
+        assert_eq!(deser.apic_base.len(), vcpus_lock.len());
+        for (i, vcpu) in vcpus_lock.iter().enumerate() {
+            if let Some(vcpu) = vcpu {
+                vcpu.set_apic_base(*deser.apic_base.get(i).unwrap())?;
+                vcpu.set_interrupt_bitmap(*deser.interrupt_bitmap.get(i).unwrap())?;
+            } else {
+                return Err(anyhow!(
+                    "Received None instead of Vcpu while restoring apic_base and interrupt_bitmap"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The KvmSplitIrqsChip supports KVM's SPLIT_IRQCHIP feature, where the PIC and IOAPIC
@@ -254,15 +306,6 @@ impl KvmSplitIrqChip {
             irq_events: Arc::new(Mutex::new(Default::default())),
         };
 
-        // crosvm-direct requires 1:1 GSI mapping between host and guest. The predefined IRQ
-        // numbering will be exposed to the guest with no option to allocate it dynamically.
-        // Tell the IOAPIC to fill in IRQ output events with 1:1 GSI mapping upfront so that
-        // IOAPIC wont assign a new GSI but use the same as for host instead.
-        #[cfg(feature = "direct")]
-        chip.ioapic
-            .lock()
-            .init_direct_gsi(|gsi, event| chip.vm.register_irqfd(gsi as u32, event, None))?;
-
         // Setup standard x86 irq routes
         let mut routes = kvm_default_irq_routing_table(ioapic_pins);
         // Add dummy MSI routes for the first ioapic_pins GSIs
@@ -291,6 +334,9 @@ impl KvmSplitIrqChip {
                     | IrqSourceChip::Ioapic => chips.push((*chip, *pin)),
                     IrqSourceChip::Gic => {
                         error!("gic irq should not be possible on a KvmSplitIrqChip")
+                    }
+                    IrqSourceChip::Aia => {
+                        error!("Aia irq should not be possible on x86_64")
                     }
                 },
                 // Ignore MSIs and other routes
@@ -565,8 +611,8 @@ impl IrqChip for KvmSplitIrqChip {
             vcpu.interrupt(vector)?;
         }
 
-        // The second interrupt request should be handled immediately, so ask vCPU to exit as soon as
-        // possible.
+        // The second interrupt request should be handled immediately, so ask vCPU to exit as soon
+        // as possible.
         if self.interrupt_requested(vcpu_id) {
             vcpu.set_interrupt_window_requested(true);
         }
@@ -728,8 +774,14 @@ impl IrqChip for KvmSplitIrqChip {
                 .get_hypervisor()
                 .check_capability(HypervisorCap::TscDeadlineTimer),
             IrqChipCap::X2Apic => true,
+            IrqChipCap::MpStateGetSet => true,
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct KvmSplitIrqChipSnapshot {
+    routes: Vec<IrqRoute>,
 }
 
 impl IrqChipX86_64 for KvmSplitIrqChip {
@@ -804,5 +856,19 @@ impl IrqChipX86_64 for KvmSplitIrqChip {
     /// devices::Pit uses 0x61.
     fn pit_uses_speaker_port(&self) -> bool {
         true
+    }
+
+    fn snapshot_chip_specific(&self) -> anyhow::Result<serde_json::Value> {
+        serde_json::to_value(KvmSplitIrqChipSnapshot {
+            routes: self.routes.lock().clone(),
+        })
+        .context("failed to serialize KvmSplitIrqChip")
+    }
+
+    fn restore_chip_specific(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let deser: KvmSplitIrqChipSnapshot =
+            serde_json::from_value(data).context("failed to deserialize KvmSplitIrqChip")?;
+        self.set_irq_routes(&deser.routes)?;
+        Ok(())
     }
 }

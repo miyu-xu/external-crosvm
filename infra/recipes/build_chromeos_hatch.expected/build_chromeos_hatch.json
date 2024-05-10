@@ -3,10 +3,12 @@
     "cmd": [
       "vpython3",
       "[CACHE]/builder/crosvm/tools/dev_container",
+      "--no-interactive",
       "--verbose",
       "--cros",
       "cros_sdk",
-      "emerge-hatch",
+      "build_packages",
+      "--board=hatch",
       "crosvm"
     ],
     "cwd": "[CACHE]/builder/crosvm",

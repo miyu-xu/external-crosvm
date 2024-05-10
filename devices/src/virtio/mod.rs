@@ -8,17 +8,19 @@ mod async_device;
 mod async_utils;
 #[cfg(feature = "balloon")]
 mod balloon;
+mod descriptor_chain;
 mod descriptor_utils;
 pub mod device_constants;
-mod input;
+pub mod input;
 mod interrupt;
 mod iommu;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(feature = "net")]
+pub mod net;
+#[cfg(feature = "pvclock")]
 pub mod pvclock;
 mod queue;
 mod rng;
-mod sys;
-#[cfg(any(feature = "tpm", feature = "vtpm"))]
+#[cfg(feature = "vtpm")]
 mod tpm;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 mod video;
@@ -32,65 +34,116 @@ pub mod console;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod resource_bridge;
+pub mod scsi;
 #[cfg(feature = "audio")]
 pub mod snd;
 pub mod vhost;
+pub mod vhost_user_frontend;
+pub mod vsock;
 
 #[cfg(feature = "balloon")]
-pub use self::balloon::*;
-pub use self::block::*;
-pub use self::console::*;
-pub use self::descriptor_utils::Error as DescriptorError;
-pub use self::descriptor_utils::*;
+pub use self::balloon::Balloon;
+#[cfg(feature = "balloon")]
+pub use self::balloon::BalloonFeatures;
+#[cfg(feature = "balloon")]
+pub use self::balloon::BalloonMode;
+pub use self::block::BlockAsync;
+pub use self::console::Console;
+pub use self::descriptor_chain::DescriptorChain;
+pub use self::descriptor_chain::DescriptorChainIter;
+pub use self::descriptor_utils::create_descriptor_chain;
+pub use self::descriptor_utils::DescriptorType;
+pub use self::descriptor_utils::Reader;
+pub use self::descriptor_utils::Writer;
 #[cfg(feature = "gpu")]
-pub use self::gpu::*;
-pub use self::input::*;
-pub use self::interrupt::*;
-pub use self::iommu::*;
-pub use self::queue::*;
-pub use self::rng::*;
-#[cfg(any(feature = "tpm", feature = "vtpm"))]
-pub use self::tpm::*;
+pub use self::gpu::DisplayBackend;
+#[cfg(feature = "gpu")]
+pub use self::gpu::Gpu;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuDisplayMode;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuDisplayParameters;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuMode;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuMouseMode;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuParameters;
+#[cfg(feature = "gpu")]
+pub use self::gpu::GpuWsi;
+pub use self::interrupt::Interrupt;
+pub use self::interrupt::InterruptSnapshot;
+pub use self::iommu::ipc_memory_mapper;
+pub use self::iommu::memory_mapper;
+pub use self::iommu::Iommu;
+pub use self::iommu::IommuError;
+#[cfg(feature = "net")]
+pub use self::net::Net;
+#[cfg(feature = "net")]
+pub use self::net::NetError;
+#[cfg(feature = "net")]
+pub use self::net::NetParameters;
+#[cfg(feature = "net")]
+pub use self::net::NetParametersMode;
+pub use self::queue::split_descriptor_chain::Desc;
+pub use self::queue::split_descriptor_chain::SplitDescriptorChain;
+pub use self::queue::PeekedDescriptorChain;
+pub use self::queue::Queue;
+pub use self::queue::QueueConfig;
+pub use self::rng::Rng;
+pub use self::scsi::Controller as ScsiController;
+pub use self::scsi::DiskConfig as ScsiDiskConfig;
+#[cfg(feature = "vtpm")]
+pub use self::tpm::Tpm;
+#[cfg(feature = "vtpm")]
+pub use self::tpm::TpmBackend;
+pub use self::vhost_user_frontend::VhostUserFrontend;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
-pub use self::video::*;
-pub use self::virtio_device::*;
-pub use self::virtio_mmio_device::*;
-pub use self::virtio_pci_device::*;
+pub use self::video::VideoDevice;
+pub use self::virtio_device::SharedMemoryMapper;
+pub use self::virtio_device::SharedMemoryRegion;
+pub use self::virtio_device::VirtioDevice;
+pub use self::virtio_device::VirtioTransportType;
+pub use self::virtio_mmio_device::VirtioMmioDevice;
+pub use self::virtio_pci_device::PciCapabilityType;
+pub use self::virtio_pci_device::VirtioPciCap;
+pub use self::virtio_pci_device::VirtioPciDevice;
+pub use self::virtio_pci_device::VirtioPciShmCap;
+#[cfg(feature = "pvclock")]
+pub use self::DeviceType::Pvclock;
+
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         mod p9;
         mod pmem;
 
         pub mod wl;
         pub mod fs;
-        pub mod net;
 
-        pub use self::iommu::sys::unix::vfio_wrapper;
-        pub use self::net::*;
-        pub use self::p9::*;
-        pub use self::pmem::*;
+        pub use self::iommu::sys::linux::vfio_wrapper;
+        #[cfg(feature = "net")]
+        pub use self::net::VhostNetParameters;
+        #[cfg(feature = "net")]
+        pub use self::net::VHOST_NET_DEFAULT_PATH;
+        pub use self::p9::P9;
+        pub use self::pmem::Pmem;
         #[cfg(feature = "audio")]
-        pub use self::snd::*;
-        pub use self::wl::*;
-
+        pub use self::snd::new_sound;
+        pub use self::wl::Wl;
     } else if #[cfg(windows)] {
-        mod vsock;
-        #[cfg(feature = "slirp")]
-        pub mod net;
-
-        #[cfg(feature = "slirp")]
-        pub use self::net::*;
-        #[cfg(feature = "slirp")]
-        pub use self::sys::windows::NetExt;
-        pub use self::vsock::*;
+        pub use self::vsock::Vsock;
     } else {
         compile_error!("Unsupported platform");
     }
 }
+
 use std::cmp;
 use std::convert::TryFrom;
 
+use futures::channel::oneshot;
 use hypervisor::ProtectionType;
+use serde::Deserialize;
+use serde::Serialize;
 use virtio_sys::virtio_config::VIRTIO_F_ACCESS_PLATFORM;
 use virtio_sys::virtio_config::VIRTIO_F_VERSION_1;
 use virtio_sys::virtio_ids;
@@ -103,7 +156,8 @@ const INTERRUPT_STATUS_CONFIG_CHANGED: u32 = 0x2;
 
 const VIRTIO_MSI_NO_VECTOR: u16 = 0xffff;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 #[repr(u32)]
 pub enum DeviceType {
     Net = virtio_ids::VIRTIO_ID_NET,
@@ -111,26 +165,56 @@ pub enum DeviceType {
     Console = virtio_ids::VIRTIO_ID_CONSOLE,
     Rng = virtio_ids::VIRTIO_ID_RNG,
     Balloon = virtio_ids::VIRTIO_ID_BALLOON,
-    Rpmsg = virtio_ids::VIRTIO_ID_RPMSG,
     Scsi = virtio_ids::VIRTIO_ID_SCSI,
+    #[serde(rename = "9p")]
     P9 = virtio_ids::VIRTIO_ID_9P,
-    RprocSerial = virtio_ids::VIRTIO_ID_RPROC_SERIAL,
-    Caif = virtio_ids::VIRTIO_ID_CAIF,
     Gpu = virtio_ids::VIRTIO_ID_GPU,
     Input = virtio_ids::VIRTIO_ID_INPUT,
     Vsock = virtio_ids::VIRTIO_ID_VSOCK,
-    Crypto = virtio_ids::VIRTIO_ID_CRYPTO,
     Iommu = virtio_ids::VIRTIO_ID_IOMMU,
     Sound = virtio_ids::VIRTIO_ID_SOUND,
     Fs = virtio_ids::VIRTIO_ID_FS,
     Pmem = virtio_ids::VIRTIO_ID_PMEM,
+    #[serde(rename = "mac80211-hwsim")]
     Mac80211HwSim = virtio_ids::VIRTIO_ID_MAC80211_HWSIM,
-    VideoEnc = virtio_ids::VIRTIO_ID_VIDEO_ENCODER,
-    VideoDec = virtio_ids::VIRTIO_ID_VIDEO_DECODER,
+    VideoEncoder = virtio_ids::VIRTIO_ID_VIDEO_ENCODER,
+    VideoDecoder = virtio_ids::VIRTIO_ID_VIDEO_DECODER,
+    Scmi = virtio_ids::VIRTIO_ID_SCMI,
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     Pvclock = virtio_ids::VIRTIO_ID_PVCLOCK,
-    VhostUser = virtio_ids::VIRTIO_ID_VHOST_USER,
+}
+
+impl DeviceType {
+    /// Returns the minimum number of queues that a device of the corresponding type must support.
+    ///
+    /// Note that this does not mean a driver must activate these queues, only that they must be
+    /// implemented by a spec-compliant device.
+    pub fn min_queues(&self) -> usize {
+        match self {
+            DeviceType::Net => 3,           // rx, tx (TODO: b/314353246: ctrl is optional)
+            DeviceType::Block => 1,         // request queue
+            DeviceType::Console => 2,       // receiveq, transmitq
+            DeviceType::Rng => 1,           // request queue
+            DeviceType::Balloon => 2,       // inflateq, deflateq
+            DeviceType::Scsi => 3,          // controlq, eventq, request queue
+            DeviceType::P9 => 1,            // request queue
+            DeviceType::Gpu => 2,           // controlq, cursorq
+            DeviceType::Input => 2,         // eventq, statusq
+            DeviceType::Vsock => 3,         // rx, tx, event
+            DeviceType::Iommu => 2,         // requestq, eventq
+            DeviceType::Sound => 4,         // controlq, eventq, txq, rxq
+            DeviceType::Fs => 2,            // hiprio, request queue
+            DeviceType::Pmem => 1,          // request queue
+            DeviceType::Mac80211HwSim => 2, // tx, rx
+            DeviceType::VideoEncoder => 2,  // cmdq, eventq
+            DeviceType::VideoDecoder => 2,  // cmdq, eventq
+            DeviceType::Scmi => 2,          // cmdq, eventq
+            DeviceType::Wl => 2,            // in, out
+            DeviceType::Tpm => 1,           // request queue
+            DeviceType::Pvclock => 1,       // request queue
+        }
+    }
 }
 
 /// Prints a string representation of the given virtio device type.
@@ -142,26 +226,22 @@ impl std::fmt::Display for DeviceType {
             DeviceType::Console => write!(f, "console"),
             DeviceType::Rng => write!(f, "rng"),
             DeviceType::Balloon => write!(f, "balloon"),
-            DeviceType::Rpmsg => write!(f, "rpmsg"),
             DeviceType::Scsi => write!(f, "scsi"),
             DeviceType::P9 => write!(f, "9p"),
-            DeviceType::RprocSerial => write!(f, "rproc-serial"),
-            DeviceType::Caif => write!(f, "caif"),
             DeviceType::Input => write!(f, "input"),
             DeviceType::Gpu => write!(f, "gpu"),
             DeviceType::Vsock => write!(f, "vsock"),
-            DeviceType::Crypto => write!(f, "crypto"),
             DeviceType::Iommu => write!(f, "iommu"),
-            DeviceType::VhostUser => write!(f, "vhost-user"),
-            DeviceType::Sound => write!(f, "snd"),
+            DeviceType::Sound => write!(f, "sound"),
             DeviceType::Fs => write!(f, "fs"),
             DeviceType::Pmem => write!(f, "pmem"),
             DeviceType::Wl => write!(f, "wl"),
             DeviceType::Tpm => write!(f, "tpm"),
             DeviceType::Pvclock => write!(f, "pvclock"),
-            DeviceType::VideoDec => write!(f, "video-decoder"),
-            DeviceType::VideoEnc => write!(f, "video-encoder"),
-            DeviceType::Mac80211HwSim => write!(f, "mac-80211-hw-sim"),
+            DeviceType::VideoDecoder => write!(f, "video-decoder"),
+            DeviceType::VideoEncoder => write!(f, "video-encoder"),
+            DeviceType::Mac80211HwSim => write!(f, "mac80211-hwsim"),
+            DeviceType::Scmi => write!(f, "scmi"),
         }
     }
 }
@@ -210,8 +290,6 @@ pub enum VirtioDeviceType {
     Regular,
     /// Socket-backed vhost-user device.
     VhostUser,
-    /// Virtio-backed vhost-user device, aka virtio-vhost-user.
-    Vvu,
 }
 
 impl VirtioDeviceType {
@@ -221,7 +299,30 @@ impl VirtioDeviceType {
         match self {
             VirtioDeviceType::Regular => format!("{base}_device"),
             VirtioDeviceType::VhostUser => format!("{base}_device_vhost_user"),
-            VirtioDeviceType::Vvu => format!("{base}_device_vvu"),
         }
     }
+}
+
+/// Creates a oneshot channel, returning the rx end and adding the tx end to the
+/// provided `Vec`. Useful for creating oneshots that signal a virtqueue future
+/// to stop processing and exit.
+pub(crate) fn create_stop_oneshot(tx_vec: &mut Vec<oneshot::Sender<()>>) -> oneshot::Receiver<()> {
+    let (stop_tx, stop_rx) = futures::channel::oneshot::channel();
+    tx_vec.push(stop_tx);
+    stop_rx
+}
+
+/// When we request to stop the worker, this represents the terminal state
+/// for the thread (if it exists).
+pub(crate) enum StoppedWorker<Q> {
+    /// Worker stopped successfully & returned its queues.
+    WithQueues(Box<Q>),
+
+    /// Worker wasn't running when the stop was requested.
+    AlreadyStopped,
+
+    /// Worker was running but did not successfully return its queues. Something
+    /// has gone wrong (and will be in the error log). In the case of a device
+    /// reset this is fine since the next activation will replace the queues.
+    MissingQueues,
 }

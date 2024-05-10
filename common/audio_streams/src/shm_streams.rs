@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::sync::Condvar;
@@ -143,7 +143,7 @@ pub trait ShmStream: Send {
     /// # Return value
     ///
     /// Returns `Some(request)` where `request` is an object that implements the
-    /// [`ServerRequest`](ServerRequest) trait and which can be used to get the
+    /// [`ServerRequest`] trait and which can be used to get the
     /// number of bytes requested for playback streams or that have already been
     /// written to shm for capture streams.
     ///
@@ -174,17 +174,17 @@ pub trait SharedMemory {
     fn size(&self) -> u64;
 
     /// Returns the underlying raw fd.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn as_raw_fd(&self) -> RawFd;
 }
 
 /// `ShmStreamSource` creates streams for playback or capture of audio.
 pub trait ShmStreamSource<E: std::error::Error>: Send {
-    /// Creates a new [`ShmStream`](ShmStream)
+    /// Creates a new [`ShmStream`]
     ///
     /// Creates a new `ShmStream` object, which allows:
-    /// * Waiting until the server has communicated that data is ready or
-    ///   requested that we make more data available.
+    /// * Waiting until the server has communicated that data is ready or requested that we make
+    ///   more data available.
     /// * Setting the location and length of buffers for reading/writing audio data.
     ///
     /// # Arguments
@@ -193,15 +193,13 @@ pub trait ShmStreamSource<E: std::error::Error>: Send {
     /// * `num_channels` - The number of audio channels for the stream.
     /// * `format` - The audio format to use for audio samples.
     /// * `frame_rate` - The stream's frame rate in Hz.
-    /// * `buffer_size` - The maximum size of an audio buffer. This will be the
-    ///                   size used for transfers of audio data between client
-    ///                   and server.
+    /// * `buffer_size` - The maximum size of an audio buffer. This will be the size used for
+    ///   transfers of audio data between client and server.
     /// * `effects` - Audio effects to use for the stream, such as echo-cancellation.
     /// * `client_shm` - The shared memory area that will contain samples.
-    /// * `buffer_offsets` - The two initial values to use as buffer offsets
-    ///                      for streams. This way, the server will not write
-    ///                      audio data to an arbitrary offset in `client_shm`
-    ///                      if the client fails to update offsets in time.
+    /// * `buffer_offsets` - The two initial values to use as buffer offsets for streams. This way,
+    ///   the server will not write audio data to an arbitrary offset in `client_shm` if the client
+    ///   fails to update offsets in time.
     ///
     /// # Errors
     ///
@@ -224,7 +222,7 @@ pub trait ShmStreamSource<E: std::error::Error>: Send {
     /// Returns any open file descriptors needed by the implementation.
     /// This list helps users of the ShmStreamSource enter Linux jails without
     /// closing needed file descriptors.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn keep_fds(&self) -> Vec<RawFd> {
         Vec::new()
     }
@@ -310,7 +308,7 @@ pub struct NullShmStreamSource;
 
 impl NullShmStreamSource {
     pub fn new() -> Self {
-        Self::default()
+        NullShmStreamSource
     }
 }
 
@@ -365,7 +363,7 @@ impl MockShmStream {
     /// from `wait_for_next_action_with_timeout`, or until `timeout` elapses.
     /// Returns true if a response was successfully received.
     pub fn trigger_callback_with_timeout(&mut self, timeout: Duration) -> bool {
-        let &(ref lock, ref cvar) = &*self.request_notifier;
+        let (lock, cvar) = &*self.request_notifier;
         let mut requested = lock.lock().unwrap();
         *requested = true;
         cvar.notify_one();
@@ -383,7 +381,7 @@ impl MockShmStream {
     }
 
     fn notify_request(&mut self) {
-        let &(ref lock, ref cvar) = &*self.request_notifier;
+        let (lock, cvar) = &*self.request_notifier;
         let mut requested = lock.lock().unwrap();
         *requested = false;
         cvar.notify_one();
@@ -421,7 +419,7 @@ impl ShmStream for MockShmStream {
     ) -> GenericResult<Option<ServerRequest>> {
         {
             let start_time = Instant::now();
-            let &(ref lock, ref cvar) = &*self.request_notifier;
+            let (lock, cvar) = &*self.request_notifier;
             let mut requested = lock.lock().unwrap();
             while !*requested {
                 requested = cvar.wait_timeout(requested, timeout).unwrap().0;
@@ -449,7 +447,7 @@ impl MockShmStreamSource {
     /// Get the last stream that has been created from this source. If no stream
     /// has been created, block until one has.
     pub fn get_last_stream(&self) -> MockShmStream {
-        let &(ref last_stream, ref cvar) = &*self.last_stream;
+        let (last_stream, cvar) = &*self.last_stream;
         let mut stream = last_stream.lock().unwrap();
         loop {
             match &*stream {
@@ -472,7 +470,7 @@ impl<E: std::error::Error> ShmStreamSource<E> for MockShmStreamSource {
         _client_shm: &dyn SharedMemory<Error = E>,
         _buffer_offsets: [u64; 2],
     ) -> GenericResult<Box<dyn ShmStream>> {
-        let &(ref last_stream, ref cvar) = &*self.last_stream;
+        let (last_stream, cvar) = &*self.last_stream;
         let mut stream = last_stream.lock().unwrap();
 
         let new_stream = MockShmStream::new(num_channels, frame_rate, format, buffer_size);
@@ -500,7 +498,7 @@ pub mod tests {
             0
         }
 
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         fn as_raw_fd(&self) -> RawFd {
             0
         }

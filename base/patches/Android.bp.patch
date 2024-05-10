@@ -33,30 +33,19 @@ index 734ab7c1..20f48f53 100644
 +            ],
 +        },
 +    },
-+    shared_libs: ["libcap"], // specified in src/unix/capabilities.rs
++    shared_libs: ["libcap"], // specified in src/linux/capabilities.rs
  }
  
  rust_test {
-@@ -70,7 +70,9 @@ rust_test {
- rust_test {
-     name: "base_test_tests_process",
-     defaults: ["crosvm_inner_defaults"],
--    host_supported: true,
-+    // Suffers from strange linker error on host when run on Oxygen or non-bazel
-+    // `atest`. See http://b/262748006 discussion.
-+    host_supported: false,
-     crate_name: "process",
-     cargo_env_compat: true,
-     cargo_pkg_version: "0.1.0",
 @@ -86,7 +106,7 @@ rust_test {
  rust_test {
-     name: "base_test_tests_unix_main",
+     name: "base_test_tests_linux_main",
      defaults: ["crosvm_inner_defaults"],
 -    host_supported: true,
 +    host_supported: false, // Can't seem to access syslog in TH host tests.
-     crate_name: "unix",
+     crate_name: "linux",
      cargo_env_compat: true,
-     srcs: ["tests/unix/main.rs"],
+     srcs: ["tests/linux/main.rs"],
 @@ -118,6 +138,25 @@ rust_test {
          "libbase_event_token_derive",
          "libremain",
@@ -79,7 +68,7 @@ index 734ab7c1..20f48f53 100644
 +            ],
 +        },
 +    },
-+    shared_libs: ["libcap"], // specified in src/unix/capabilities.rs
++    shared_libs: ["libcap"], // specified in src/linux/capabilities.rs
  }
  
  rust_library {
@@ -105,6 +94,9 @@ index 734ab7c1..20f48f53 100644
 +            ],
 +        },
 +    },
-+    shared_libs: ["libcap"], // specified in src/unix/capabilities.rs
-     visibility: ["//packages/modules/Virtualization/virtualizationmanager"],
++    shared_libs: ["libcap"], // specified in src/linux/capabilities.rs
+     visibility: [
+         "//packages/modules/Virtualization/virtualizationmanager",
+         "//vendor:__subpackages__",
+     ],
  }

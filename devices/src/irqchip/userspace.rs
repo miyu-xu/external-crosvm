@@ -175,7 +175,7 @@ impl<V: VcpuX86_64 + 'static> UserspaceIrqChip<V> {
             timer_descriptors.push(Descriptor(timer.as_raw_descriptor()));
 
             let id: u8 = id.try_into().or(Err(Error::new(libc::EINVAL)))?;
-            let apic = Apic::new(id, timer);
+            let apic = Apic::new(id, Box::new(timer));
             apics.push(Arc::new(Mutex::new(apic)));
         }
         let dropper = Dropper {
@@ -673,7 +673,7 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
     /// `wait_until_runnable` calls go back to waiting for runnability normally.
     fn kick_halted_vcpus(&self) {
         for waiter in self.waiters.iter() {
-            waiter.set_and_notify(/*interrupted=*/ true);
+            waiter.set_and_notify(/* interrupted= */ true);
         }
     }
 
@@ -825,6 +825,7 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
         match c {
             IrqChipCap::TscDeadlineTimer => false,
             IrqChipCap::X2Apic => false,
+            IrqChipCap::MpStateGetSet => true,
         }
     }
 }
@@ -937,6 +938,13 @@ impl<V: VcpuX86_64 + 'static> IrqChipX86_64 for UserspaceIrqChip<V> {
     /// devices::Pit uses 0x61.
     fn pit_uses_speaker_port(&self) -> bool {
         true
+    }
+
+    fn snapshot_chip_specific(&self) -> anyhow::Result<serde_json::Value> {
+        Err(anyhow::anyhow!("Not supported yet in userspace"))
+    }
+    fn restore_chip_specific(&mut self, _data: serde_json::Value) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("Not supported yet in userspace"))
     }
 }
 

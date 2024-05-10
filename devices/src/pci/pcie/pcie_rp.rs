@@ -3,34 +3,26 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::mpsc;
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use resources::SystemAllocator;
-use sync::Mutex;
 use vm_control::GpeNotify;
 use vm_control::PmeNotify;
 
-use crate::bus::HostHotPlugKey;
 use crate::bus::HotPlugBus;
-use crate::pci::pci_configuration::PciCapabilityID;
-use crate::pci::pcie::pci_bridge::PciBridgeBusRange;
-use crate::pci::pcie::pcie_device::PcieCap;
-use crate::pci::pcie::pcie_device::PcieDevice;
+use crate::bus::HotPlugKey;
 use crate::pci::pcie::pcie_host::PcieHostPort;
 use crate::pci::pcie::pcie_port::PciePort;
+use crate::pci::pcie::pcie_port::PciePortVariant;
 use crate::pci::pcie::*;
-use crate::pci::pm::PciPmCap;
-use crate::pci::MsiConfig;
 use crate::pci::PciAddress;
-use crate::pci::PciCapability;
-use crate::pci::PciDeviceError;
 
 const PCIE_RP_DID: u16 = 0x3420;
 pub struct PcieRootPort {
     pcie_port: PciePort,
-    downstream_devices: BTreeMap<PciAddress, HostHotPlugKey>,
+    downstream_devices: BTreeMap<PciAddress, HotPlugKey>,
     hotplug_out_begin: bool,
     removed_downstream: Vec<PciAddress>,
 }
@@ -45,7 +37,7 @@ impl PcieRootPort {
                 0,
                 secondary_bus_num,
                 slot_implemented,
-                true,
+                PcieDevicePortType::RootPort,
             ),
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
@@ -56,8 +48,12 @@ impl PcieRootPort {
     /// Constructs a new PCIE root port which associated with the host physical pcie RP
     pub fn new_from_host(pcie_host: PcieHostPort, slot_implemented: bool) -> Result<Self> {
         Ok(PcieRootPort {
-            pcie_port: PciePort::new_from_host(pcie_host, slot_implemented, true)
-                .context("PciePort::new_from_host failed")?,
+            pcie_port: PciePort::new_from_host(
+                pcie_host,
+                slot_implemented,
+                PcieDevicePortType::RootPort,
+            )
+            .context("PciePort::new_from_host failed")?,
             downstream_devices: BTreeMap::new(),
             hotplug_out_begin: false,
             removed_downstream: Vec::new(),
@@ -65,58 +61,16 @@ impl PcieRootPort {
     }
 }
 
-impl PcieDevice for PcieRootPort {
-    fn get_device_id(&self) -> u16 {
-        self.pcie_port.get_device_id()
+impl PciePortVariant for PcieRootPort {
+    fn get_pcie_port(&self) -> &PciePort {
+        &self.pcie_port
     }
 
-    fn debug_label(&self) -> String {
-        self.pcie_port.debug_label()
+    fn get_pcie_port_mut(&mut self) -> &mut PciePort {
+        &mut self.pcie_port
     }
 
-    fn preferred_address(&self) -> Option<PciAddress> {
-        self.pcie_port.preferred_address()
-    }
-
-    fn allocate_address(
-        &mut self,
-        resources: &mut SystemAllocator,
-    ) -> std::result::Result<PciAddress, PciDeviceError> {
-        self.pcie_port.allocate_address(resources)
-    }
-
-    fn clone_interrupt(&mut self, msi_config: Arc<Mutex<MsiConfig>>) {
-        self.pcie_port.clone_interrupt(msi_config);
-    }
-
-    fn get_caps(&self) -> Vec<Box<dyn PciCapability>> {
-        vec![
-            Box::new(PcieCap::new(
-                PcieDevicePortType::RootPort,
-                self.pcie_port.hotplug_implemented(),
-                0,
-            )),
-            Box::new(PciPmCap::new()),
-        ]
-    }
-
-    fn set_capability_reg_idx(&mut self, id: PciCapabilityID, reg_idx: usize) {
-        self.pcie_port.set_capability_reg_idx(id, reg_idx);
-    }
-
-    fn read_config(&self, reg_idx: usize, data: &mut u32) {
-        self.pcie_port.read_config(reg_idx, data);
-    }
-
-    fn write_config(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.pcie_port.write_config(reg_idx, offset, data);
-    }
-
-    fn get_bus_range(&self) -> Option<PciBridgeBusRange> {
-        self.pcie_port.get_bus_range()
-    }
-
-    fn get_removed_devices(&self) -> Vec<PciAddress> {
+    fn get_removed_devices_impl(&self) -> Vec<PciAddress> {
         if self.pcie_port.removed_downstream_valid() {
             self.removed_downstream.clone()
         } else {
@@ -124,59 +78,74 @@ impl PcieDevice for PcieRootPort {
         }
     }
 
-    fn hotplug_implemented(&self) -> bool {
+    fn hotplug_implemented_impl(&self) -> bool {
         self.pcie_port.hotplug_implemented()
     }
 
-    fn hotplugged(&self) -> bool {
+    fn hotplugged_impl(&self) -> bool {
         false
-    }
-
-    fn get_bridge_window_size(&self) -> (u64, u64) {
-        self.pcie_port.get_bridge_window_size()
     }
 }
 
 impl HotPlugBus for PcieRootPort {
-    fn hot_plug(&mut self, addr: PciAddress) {
-        if self.downstream_devices.get(&addr).is_none() {
-            return;
+    fn hot_plug(&mut self, addr: PciAddress) -> Result<Option<mpsc::Receiver<()>>> {
+        if self.pcie_port.is_cc_pending() {
+            bail!("Slot busy: plugging too early or guest does not support PCIe hotplug.");
         }
+        self.downstream_devices
+            .get(&addr)
+            .context("No downstream devices.")?;
 
+        let (cc_sender, cc_recvr) = mpsc::channel();
+        self.pcie_port.set_cc_sender(cc_sender);
         self.pcie_port
             .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
         self.pcie_port.trigger_hp_or_pme_interrupt();
+        Ok(Some(cc_recvr))
     }
 
-    fn hot_unplug(&mut self, addr: PciAddress) {
-        if self.downstream_devices.remove(&addr).is_none() {
-            return;
+    fn hot_unplug(&mut self, addr: PciAddress) -> Result<Option<mpsc::Receiver<()>>> {
+        self.downstream_devices
+            .remove(&addr)
+            .context("No downstream devices.")?;
+        if self.hotplug_out_begin {
+            bail!("Hot unplug is pending.")
         }
-
-        if !self.hotplug_out_begin {
-            self.removed_downstream.clear();
-            self.removed_downstream.push(addr);
-            // All the remaine devices will be removed also in this hotplug out interrupt
-            for (guest_pci_addr, _) in self.downstream_devices.iter() {
-                self.removed_downstream.push(*guest_pci_addr);
-            }
-
-            self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
-            self.pcie_port.trigger_hp_or_pme_interrupt();
-
-            if self.pcie_port.is_host() {
-                self.pcie_port.hot_unplug()
-            }
-        }
-
         self.hotplug_out_begin = true;
+
+        self.removed_downstream.clear();
+        self.removed_downstream.push(addr);
+        // All the remaine devices will be removed also in this hotplug out interrupt
+        for (guest_pci_addr, _) in self.downstream_devices.iter() {
+            self.removed_downstream.push(*guest_pci_addr);
+        }
+
+        let (cc_sender, cc_recvr) = mpsc::channel();
+        if self.pcie_port.set_cc_sender(cc_sender).is_some() {
+            bail!("Slot busy: unplugging too early or guest does not support PCIe hotplug.");
+        }
+        self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
+        self.pcie_port.trigger_hp_or_pme_interrupt();
+
+        if self.pcie_port.is_host() {
+            self.pcie_port.hot_unplug()
+        }
+        Ok(Some(cc_recvr))
+    }
+
+    fn get_address(&self) -> Option<PciAddress> {
+        self.pcie_port.get_address()
+    }
+
+    fn get_secondary_bus_number(&self) -> Option<u8> {
+        Some(self.pcie_port.get_bus_range()?.secondary)
     }
 
     fn is_match(&self, host_addr: PciAddress) -> Option<u8> {
         self.pcie_port.is_match(host_addr)
     }
 
-    fn add_hotplug_device(&mut self, host_key: HostHotPlugKey, guest_addr: PciAddress) {
+    fn add_hotplug_device(&mut self, hotplug_key: HotPlugKey, guest_addr: PciAddress) {
         if !self.pcie_port.hotplug_implemented() {
             return;
         }
@@ -188,12 +157,12 @@ impl HotPlugBus for PcieRootPort {
             self.removed_downstream.clear();
         }
 
-        self.downstream_devices.insert(guest_addr, host_key);
+        self.downstream_devices.insert(guest_addr, hotplug_key);
     }
 
-    fn get_hotplug_device(&self, host_key: HostHotPlugKey) -> Option<PciAddress> {
+    fn get_hotplug_device(&self, hotplug_key: HotPlugKey) -> Option<PciAddress> {
         for (guest_address, host_info) in self.downstream_devices.iter() {
-            if host_key == *host_info {
+            if hotplug_key == *host_info {
                 return Some(*guest_address);
             }
         }
@@ -204,7 +173,7 @@ impl HotPlugBus for PcieRootPort {
         self.downstream_devices.is_empty()
     }
 
-    fn get_hotplug_key(&self) -> Option<HostHotPlugKey> {
+    fn get_hotplug_key(&self) -> Option<HotPlugKey> {
         None
     }
 }

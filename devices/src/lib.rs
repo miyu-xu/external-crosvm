@@ -12,44 +12,40 @@ pub mod bat;
 mod bus;
 #[cfg(feature = "stats")]
 mod bus_stats;
-mod cmos;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub mod cmos;
+#[cfg(target_arch = "x86_64")]
 mod debugcon;
-#[cfg(feature = "direct")]
-pub mod direct_io;
-#[cfg(feature = "direct")]
-pub mod direct_irq;
+mod fw_cfg;
 mod i8042;
 mod irq_event;
 pub mod irqchip;
 mod pci;
 mod pflash;
 pub mod pl030;
+pub mod pmc_virt;
 mod serial;
 pub mod serial_device;
-#[cfg(feature = "tpm")]
-mod software_tpm;
 mod suspendable;
 mod sys;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+mod virtcpufreq;
 pub mod virtio;
-#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+#[cfg(feature = "vtpm")]
 mod vtpm_proxy;
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
+    if #[cfg(target_arch = "x86_64")] {
         mod pit;
         pub use self::pit::{Pit, PitError};
         pub mod tsc;
     }
 }
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::fs::OpenOptions;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::debug;
 use base::error;
 use base::info;
 use base::Tube;
@@ -57,8 +53,8 @@ use base::TubeError;
 use cros_async::AsyncTube;
 use cros_async::Executor;
 use vm_control::DeviceControlCommand;
-use vm_control::RestoreControlResult;
-use vm_control::SnapshotControlResult;
+use vm_control::DevicesState;
+use vm_control::VmResponse;
 use vm_memory::GuestMemory;
 
 pub use self::acpi::ACPIPMFixedEvent;
@@ -74,35 +70,36 @@ pub use self::bus::BusRange;
 pub use self::bus::BusResumeDevice;
 pub use self::bus::BusType;
 pub use self::bus::Error as BusError;
-pub use self::bus::HostHotPlugKey;
 pub use self::bus::HotPlugBus;
+pub use self::bus::HotPlugKey;
 #[cfg(feature = "stats")]
 pub use self::bus_stats::BusStatistics;
-pub use self::cmos::Cmos;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub use self::debugcon::Debugcon;
-#[cfg(feature = "direct")]
-pub use self::direct_io::DirectIo;
-#[cfg(feature = "direct")]
-pub use self::direct_io::DirectMmio;
-#[cfg(feature = "direct")]
-pub use self::direct_irq::DirectIrq;
-#[cfg(feature = "direct")]
-pub use self::direct_irq::DirectIrqError;
+pub use self::fw_cfg::Error as FwCfgError;
+pub use self::fw_cfg::FwCfgDevice;
+pub use self::fw_cfg::FwCfgItemType;
+pub use self::fw_cfg::FwCfgParameters;
+pub use self::fw_cfg::FW_CFG_BASE_PORT;
+pub use self::fw_cfg::FW_CFG_MAX_FILE_SLOTS;
+pub use self::fw_cfg::FW_CFG_WIDTH;
 pub use self::i8042::I8042Device;
 pub use self::irq_event::IrqEdgeEvent;
 pub use self::irq_event::IrqLevelEvent;
 pub use self::irqchip::*;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Backend;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Dev;
-#[cfg(feature = "audio")]
-pub use self::pci::Ac97Parameters;
 pub use self::pci::BarRange;
 pub use self::pci::CrosvmDeviceId;
+pub use self::pci::GpeScope;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::HotPluggable;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::IntxParameter;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::NetResourceCarrier;
 pub use self::pci::PciAddress;
 pub use self::pci::PciAddressError;
+pub use self::pci::PciBarConfiguration;
+pub use self::pci::PciBarIndex;
 pub use self::pci::PciBus;
 pub use self::pci::PciClassCode;
 pub use self::pci::PciConfigIo;
@@ -110,10 +107,13 @@ pub use self::pci::PciConfigMmio;
 pub use self::pci::PciDevice;
 pub use self::pci::PciDeviceError;
 pub use self::pci::PciInterruptPin;
+pub use self::pci::PciMmioMapper;
 pub use self::pci::PciRoot;
 pub use self::pci::PciRootCommand;
 pub use self::pci::PciVirtualConfigMmio;
 pub use self::pci::PreferredIrq;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci::ResourceCarrier;
 pub use self::pci::StubPciDevice;
 pub use self::pci::StubPciParameters;
 pub use self::pflash::Pflash;
@@ -125,17 +125,17 @@ pub use self::serial_device::SerialDevice;
 pub use self::serial_device::SerialHardware;
 pub use self::serial_device::SerialParameters;
 pub use self::serial_device::SerialType;
-#[cfg(feature = "tpm")]
-pub use self::software_tpm::SoftwareTpm;
 pub use self::suspendable::DeviceState;
 pub use self::suspendable::Suspendable;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+pub use self::virtcpufreq::VirtCpufreq;
 pub use self::virtio::VirtioMmioDevice;
 pub use self::virtio::VirtioPciDevice;
-#[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+#[cfg(feature = "vtpm")]
 pub use self::vtpm_proxy::VtpmProxy;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         mod platform;
         mod proxy;
         pub mod vmwdt;
@@ -155,10 +155,12 @@ cfg_if::cfg_if! {
         };
         pub use self::platform::VfioPlatformDevice;
         pub use self::ac_adapter::AcAdapter;
+        pub use self::pmc_virt::VirtualPmc;
+        pub use self::proxy::ChildProcIntf;
         pub use self::proxy::Error as ProxyError;
         pub use self::proxy::ProxyDevice;
         #[cfg(feature = "usb")]
-        pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+        pub use self::usb::backend::device_provider::DeviceProvider;
         #[cfg(feature = "usb")]
         pub use self::usb::xhci::xhci_controller::XhciController;
         pub use self::vfio::VfioContainer;
@@ -188,20 +190,17 @@ pub enum UnpinResponse {
     Failed,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub enum IommuDevType {
     #[serde(rename = "off")]
+    #[default]
     NoIommu,
     #[serde(rename = "viommu")]
     VirtioIommu,
     #[serde(rename = "coiommu")]
     CoIommu,
-}
-
-impl Default for IommuDevType {
-    fn default() -> Self {
-        IommuDevType::NoIommu
-    }
+    #[serde(rename = "pkvm-iommu")]
+    PkvmPviommu,
 }
 
 // Thread that handles commands sent to devices - such as snapshot, sleep, suspend
@@ -218,9 +217,9 @@ pub fn create_devices_worker_thread(
             let ex = Executor::new().expect("Failed to create an executor");
 
             let async_control = AsyncTube::new(&ex, device_ctrl_resp).unwrap();
-            match ex.run_until(ex.spawn_local(async move {
+            match ex.run_until(async move {
                 handle_command_tube(async_control, guest_memory, io_bus, mmio_bus).await
-            })) {
+            }) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("Device control thread exited with error: {}", e);
@@ -229,202 +228,84 @@ pub fn create_devices_worker_thread(
         })
 }
 
-fn sleep_devices(bus: &Bus) -> anyhow::Result<()> {
-    match bus.sleep_devices() {
-        Ok(_) => {
-            info!("Devices slept successfully");
-            Ok(())
-        }
-        Err(e) => Err(anyhow!(
-            "Failed to sleep all devices: {}. Waking up sleeping devices.",
-            e
-        )),
+fn sleep_buses(buses: &[&Bus]) -> anyhow::Result<()> {
+    for bus in buses {
+        bus.sleep_devices()
+            .with_context(|| format!("failed to sleep devices on {:?} bus", bus.get_bus_type()))?;
+        debug!("Devices slept successfully on {:?} bus", bus.get_bus_type());
     }
+    Ok(())
 }
 
-fn wake_devices(bus: &Bus) {
-    match bus.wake_devices() {
-        Ok(_) => {
-            info!("Devices awoken successfully");
-        }
-        Err(e) => {
+fn wake_buses(buses: &[&Bus]) {
+    for bus in buses {
+        bus.wake_devices()
+            .with_context(|| format!("failed to wake devices on {:?} bus", bus.get_bus_type()))
             // Some devices may have slept. Eternally.
             // Recovery - impossible.
             // Shut down VM.
-            panic!(
-                "Failed to wake devices: {}. VM panicked to avoid unexpected behavior",
-                e
-            )
-        }
+            .expect("VM panicked to avoid unexpected behavior");
+        debug!(
+            "Devices awoken successfully on {:?} Bus",
+            bus.get_bus_type()
+        );
     }
 }
 
-/// `SleepGuard` sends the devices on all of the provided buses to sleep when it is created and
-/// wakes them all up when it is dropped.
-///
-/// This allows snapshot and restore operations to be executed while the `BusDevice`s attached to
-/// the buses are stopped so that the VM state will not change during the snapshot process.
-struct SleepGuard<'a> {
-    buses: &'a [&'a Bus],
-}
-
-impl<'a> SleepGuard<'a> {
-    pub fn new(buses: &'a [&'a Bus]) -> anyhow::Result<Self> {
-        for bus in buses {
-            if let Err(e) = sleep_devices(bus) {
-                // Failing to sleep could mean a single device failing to sleep.
-                // Wake up devices to resume functionality of the VM.
-                for bus in buses {
-                    wake_devices(bus);
-                }
-
-                return Err(e);
-            }
-        }
-
-        Ok(SleepGuard { buses })
-    }
-}
-
-impl<'a> Drop for SleepGuard<'a> {
-    fn drop(&mut self) {
-        for bus in self.buses {
-            wake_devices(bus);
-        }
-    }
-}
-
-fn snapshot_devices(
-    bus: &Bus,
-    add_snapshot: impl FnMut(u32, serde_json::Value),
-) -> anyhow::Result<()> {
-    match bus.snapshot_devices(add_snapshot) {
-        Ok(_) => {
-            info!("Devices snapshot successfully");
-            Ok(())
-        }
-        Err(e) => {
-            // If snapshot fails, wake devices and return error
-            error!("failed to snapshot devices: {}", e);
-            Err(e)
-        }
-    }
-}
-
-fn restore_devices(
-    bus: &Bus,
-    devices_map: &mut HashMap<u32, VecDeque<serde_json::Value>>,
-) -> anyhow::Result<()> {
-    match bus.restore_devices(devices_map) {
-        Ok(_) => {
-            info!("Devices restore successfully");
-            Ok(())
-        }
-        Err(e) => {
-            // If restore fails, wake devices and return error
-            error!("failed to restore devices: {}", e);
-            Err(e)
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotRoot {
-    guest_memory_metadata: serde_json::Value,
-    devices: Vec<HashMap<u32, serde_json::Value>>,
-}
+// Use 64MB chunks when writing the memory snapshot (if encryption is used).
+const MEMORY_SNAP_ENCRYPTED_CHUNK_SIZE_BYTES: usize = 1024 * 1024 * 64;
 
 async fn snapshot_handler(
-    path: &std::path::Path,
+    snapshot_writer: vm_control::SnapshotWriter,
     guest_memory: &GuestMemory,
     buses: &[&Bus],
+    compress_memory: bool,
 ) -> anyhow::Result<()> {
-    let mut snapshot_root = SnapshotRoot {
-        guest_memory_metadata: serde_json::Value::Null,
-        devices: Vec::new(),
+    // SAFETY:
+    // VM & devices are stopped.
+    let guest_memory_metadata = unsafe {
+        guest_memory
+            .snapshot(
+                &mut snapshot_writer
+                    .raw_fragment_with_chunk_size("mem", MEMORY_SNAP_ENCRYPTED_CHUNK_SIZE_BYTES)?,
+                compress_memory,
+            )
+            .context("failed to snapshot memory")?
     };
-
-    // TODO(b/268093674): Better output file format.
-    // TODO(b/268094487): If the snapshot fail, this leaves an incomplete memory snapshot at the
-    // requested path.
-
-    let mut json_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-
-    let mem_path = path.with_extension("mem");
-    let mut mem_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&mem_path)
-        .with_context(|| format!("failed to open {}", mem_path.display()))?;
-
-    {
-        let _sleep_guard = SleepGuard::new(buses)?;
-
-        snapshot_root.guest_memory_metadata = guest_memory
-            .snapshot(&mut mem_file)
-            .context("failed to snapshot memory")?;
-
-        for bus in buses {
-            snapshot_devices(bus, |id, snapshot| {
-                snapshot_root.devices.push([(id, snapshot)].into())
-            })
-            .context("failed to snapshot devices")?;
-        }
+    snapshot_writer.write_fragment("mem_metadata", &guest_memory_metadata)?;
+    for (i, bus) in buses.iter().enumerate() {
+        bus.snapshot_devices(&snapshot_writer.add_namespace(&format!("bus{i}"))?)
+            .context("failed to snapshot bus devices")?;
+        debug!(
+            "Devices snapshot successfully for {:?} Bus",
+            bus.get_bus_type()
+        );
     }
-
-    serde_json::to_writer(&mut json_file, &snapshot_root)?;
-
     Ok(())
 }
 
 async fn restore_handler(
-    path: &std::path::Path,
+    snapshot_reader: vm_control::SnapshotReader,
     guest_memory: &GuestMemory,
     buses: &[&Bus],
 ) -> anyhow::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(false)
-        .open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-
-    let mem_path = path.with_extension("mem");
-    let mut mem_file = OpenOptions::new()
-        .read(true)
-        .write(false)
-        .open(&mem_path)
-        .with_context(|| format!("failed to open {}", mem_path.display()))?;
-
-    let snapshot_root: SnapshotRoot = serde_json::from_reader(file)?;
-
-    let mut devices_map: HashMap<u32, VecDeque<serde_json::Value>> = HashMap::new();
-    for (id, device) in snapshot_root.devices.into_iter().flatten() {
-        devices_map.entry(id).or_default().push_back(device)
-    }
-
-    {
-        let _sleep_guard = SleepGuard::new(buses)?;
-
-        guest_memory.restore(snapshot_root.guest_memory_metadata, &mut mem_file)?;
-
-        for bus in buses {
-            restore_devices(bus, &mut devices_map)?;
-        }
-    }
-
-    for (key, _) in devices_map.iter().filter(|(_, v)| !v.is_empty()) {
-        info!(
-            "Unused restore data for device_id {}, device might be missing.",
-            key
+    let guest_memory_metadata = snapshot_reader.read_fragment("mem_metadata")?;
+    // SAFETY:
+    // VM & devices are stopped.
+    unsafe {
+        guest_memory.restore(
+            guest_memory_metadata,
+            &mut snapshot_reader.raw_fragment("mem")?,
+        )?
+    };
+    for (i, bus) in buses.iter().enumerate() {
+        bus.restore_devices(&snapshot_reader.namespace(&format!("bus{i}"))?)
+            .context("failed to restore bus devices")?;
+        debug!(
+            "Devices restore successfully for {:?} Bus",
+            bus.get_bus_type()
         );
     }
-
     Ok(())
 }
 
@@ -434,45 +315,103 @@ async fn handle_command_tube(
     io_bus: Arc<Bus>,
     mmio_bus: Arc<Bus>,
 ) -> anyhow::Result<()> {
+    let buses = &[&*io_bus, &*mmio_bus];
+
+    // We assume devices are awake. This is safe because if the VM starts the
+    // sleeping state, run_control will ask us to sleep devices.
+    let mut devices_state = DevicesState::Wake;
+
     loop {
         match command_tube.next().await {
             Ok(command) => {
                 match command {
+                    DeviceControlCommand::SleepDevices => {
+                        if let DevicesState::Wake = devices_state {
+                            match sleep_buses(buses) {
+                                Ok(()) => {
+                                    devices_state = DevicesState::Sleep;
+                                }
+                                Err(e) => {
+                                    error!("failed to sleep: {:#}", e);
+
+                                    // Failing to sleep could mean a single device failing to sleep.
+                                    // Wake up devices to resume functionality of the VM.
+                                    info!("Attempting to wake devices after failed sleep");
+                                    wake_buses(buses);
+
+                                    command_tube
+                                        .send(VmResponse::ErrString(e.to_string()))
+                                        .await
+                                        .context("failed to send response.")?;
+                                    continue;
+                                }
+                            }
+                        }
+                        command_tube
+                            .send(VmResponse::Ok)
+                            .await
+                            .context("failed to reply to sleep command")?;
+                    }
+                    DeviceControlCommand::WakeDevices => {
+                        if let DevicesState::Sleep = devices_state {
+                            wake_buses(buses);
+                            devices_state = DevicesState::Wake;
+                        }
+                        command_tube
+                            .send(VmResponse::Ok)
+                            .await
+                            .context("failed to reply to wake devices request")?;
+                    }
                     DeviceControlCommand::SnapshotDevices {
-                        snapshot_path: path,
+                        snapshot_writer,
+                        compress_memory,
                     } => {
+                        assert!(
+                            matches!(devices_state, DevicesState::Sleep),
+                            "devices must be sleeping to snapshot"
+                        );
                         if let Err(e) =
-                            snapshot_handler(path.as_path(), &guest_memory, &[&*io_bus, &*mmio_bus])
+                            snapshot_handler(snapshot_writer, &guest_memory, buses, compress_memory)
                                 .await
                         {
-                            error!("failed to snapshot: {}", e);
+                            error!("failed to snapshot: {:#}", e);
                             command_tube
-                                .send(SnapshotControlResult::Failed(e.to_string()))
+                                .send(VmResponse::ErrString(e.to_string()))
                                 .await
                                 .context("Failed to send response")?;
                             continue;
                         }
                         command_tube
-                            .send(SnapshotControlResult::Ok)
+                            .send(VmResponse::Ok)
                             .await
                             .context("Failed to send response")?;
                     }
-                    DeviceControlCommand::RestoreDevices { restore_path: path } => {
+                    DeviceControlCommand::RestoreDevices { snapshot_reader } => {
+                        assert!(
+                            matches!(devices_state, DevicesState::Sleep),
+                            "devices must be sleeping to restore"
+                        );
                         if let Err(e) =
-                            restore_handler(path.as_path(), &guest_memory, &[&*io_bus, &*mmio_bus])
+                            restore_handler(snapshot_reader, &guest_memory, &[&*io_bus, &*mmio_bus])
                                 .await
                         {
-                            error!("failed to restore: {}", e);
+                            error!("failed to restore: {:#}", e);
                             command_tube
-                                .send(RestoreControlResult::Failed(e.to_string()))
+                                .send(VmResponse::ErrString(e.to_string()))
                                 .await
                                 .context("Failed to send response")?;
                             continue;
                         }
                         command_tube
-                            .send(RestoreControlResult::Ok)
+                            .send(VmResponse::Ok)
                             .await
                             .context("Failed to send response")?;
+                    }
+                    DeviceControlCommand::GetDevicesState => {
+                        command_tube
+                            .send(VmResponse::DevicesState(devices_state.clone()))
+                            .await
+                            .context("failed to send response")?;
                     }
                     DeviceControlCommand::Exit => {
                         return Ok(());

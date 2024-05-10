@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(unix)]
+#![cfg(any(target_os = "android", target_os = "linux"))]
 
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -18,6 +18,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::channel;
@@ -28,6 +29,7 @@ use std::time::Duration;
 
 use base::pipe;
 use base::EventType;
+use base::IoBufMut;
 use base::WaitContext;
 use io_uring::Error;
 use io_uring::URingAllowlist;
@@ -45,46 +47,40 @@ fn append_file_name(path: &Path, name: &str) -> PathBuf {
     joined
 }
 
-fn check_one_read(
+// TODO(b/315998194): Add safety comment
+#[allow(clippy::undocumented_unsafe_blocks)]
+unsafe fn add_one_read(
     uring: &URingContext,
-    buf: &mut [u8],
+    ptr: *mut u8,
+    len: usize,
     fd: RawFd,
-    offset: u64,
+    offset: Option<u64>,
     user_data: UserData,
-) {
-    let (user_data_ret, res) = unsafe {
-        // Safe because the `wait` call waits until the kernel is done with `buf`.
-        uring
-            .add_read(buf.as_mut_ptr(), buf.len(), fd, Some(offset), user_data)
-            .unwrap();
-        uring.wait().unwrap().next().unwrap()
-    };
-    assert_eq!(user_data_ret, user_data);
-    assert_eq!(res.unwrap(), buf.len() as u32);
+) -> Result<(), Error> {
+    uring.add_readv(
+        Pin::from(vec![IoBufMut::from_raw_parts(ptr, len)].into_boxed_slice()),
+        fd,
+        offset,
+        user_data,
+    )
 }
 
-fn check_one_readv(
+// TODO(b/315998194): Add safety comment
+#[allow(clippy::undocumented_unsafe_blocks)]
+unsafe fn add_one_write(
     uring: &URingContext,
-    buf: &mut [u8],
+    ptr: *const u8,
+    len: usize,
     fd: RawFd,
-    offset: u64,
+    offset: Option<u64>,
     user_data: UserData,
-) {
-    let io_vecs = unsafe {
-        //safe to transmut from IoSlice to iovec.
-        vec![IoSliceMut::new(buf)]
-            .into_iter()
-            .map(|slice| std::mem::transmute::<IoSliceMut, libc::iovec>(slice))
-    };
-    let (user_data_ret, res) = unsafe {
-        // Safe because the `wait` call waits until the kernel is done with `buf`.
-        uring
-            .add_readv_iter(io_vecs, fd, Some(offset), user_data)
-            .unwrap();
-        uring.wait().unwrap().next().unwrap()
-    };
-    assert_eq!(user_data_ret, user_data);
-    assert_eq!(res.unwrap(), buf.len() as u32);
+) -> Result<(), Error> {
+    uring.add_writev(
+        Pin::from(vec![IoBufMut::from_raw_parts(ptr as *mut u8, len)].into_boxed_slice()),
+        fd,
+        offset,
+        user_data,
+    )
 }
 
 fn create_test_file(size: u64) -> std::fs::File {
@@ -107,9 +103,12 @@ fn read_parallel() {
     // double the quue depth of buffers.
     for i in 0..QUEUE_SIZE * 64 {
         let index = i as u64;
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             let offset = (i % QUEUE_SIZE) * BUF_SIZE;
-            match uring.add_read(
+            match add_one_read(
+                &uring,
                 buf[offset..].as_mut_ptr(),
                 BUF_SIZE,
                 f.as_raw_fd(),
@@ -138,8 +137,23 @@ fn read_readv() {
     // double the quue depth of buffers.
     for i in 0..queue_size * 2 {
         let index = i as u64;
-        check_one_read(&uring, &mut buf, f.as_raw_fd(), (index % 2) * 0x1000, index);
-        check_one_readv(&uring, &mut buf, f.as_raw_fd(), (index % 2) * 0x1000, index);
+        // SAFETY:
+        // safe to transmut from IoSlice to iovec.
+        let io_vecs = unsafe {
+            vec![IoSliceMut::new(&mut buf)]
+                .into_iter()
+                .map(|slice| std::mem::transmute::<IoSliceMut, libc::iovec>(slice))
+        };
+        // SAFETY:
+        // Safe because the `wait` call waits until the kernel is done with `buf`.
+        let (user_data_ret, res) = unsafe {
+            uring
+                .add_readv_iter(io_vecs, f.as_raw_fd(), Some((index % 2) * 0x1000), index)
+                .unwrap();
+            uring.wait().unwrap().next().unwrap()
+        };
+        assert_eq!(user_data_ret, index);
+        assert_eq!(res.unwrap(), buf.len() as u32);
     }
 }
 
@@ -152,8 +166,9 @@ fn readv_vec() {
     let mut buf = [0u8; BUF_SIZE];
     let mut buf2 = [0u8; BUF_SIZE];
     let mut buf3 = [0u8; BUF_SIZE];
+    // SAFETY:
+    //safe to transmut from IoSlice to iovec.
     let io_vecs = unsafe {
-        //safe to transmut from IoSlice to iovec.
         vec![
             IoSliceMut::new(&mut buf),
             IoSliceMut::new(&mut buf2),
@@ -165,8 +180,9 @@ fn readv_vec() {
     };
     let total_len = io_vecs.iter().fold(0, |a, iovec| a + iovec.iov_len);
     let f = create_test_file(total_len as u64 * 2);
+    // SAFETY:
+    // Safe because the `wait` call waits until the kernel is done with `buf`.
     let (user_data_ret, res) = unsafe {
-        // Safe because the `wait` call waits until the kernel is done with `buf`.
         uring
             .add_readv_iter(io_vecs.into_iter(), f.as_raw_fd(), Some(0), 55)
             .unwrap();
@@ -184,11 +200,18 @@ fn write_one_block() {
     f.write_all(&buf).unwrap();
     f.write_all(&buf).unwrap();
 
+    // SAFETY:
+    // Safe because the `wait` call waits until the kernel is done mutating `buf`.
     unsafe {
-        // Safe because the `wait` call waits until the kernel is done mutating `buf`.
-        uring
-            .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 55)
-            .unwrap();
+        add_one_write(
+            &uring,
+            buf.as_mut_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(0),
+            55,
+        )
+        .unwrap();
         let (user_data, res) = uring.wait().unwrap().next().unwrap();
         assert_eq!(user_data, 55_u64);
         assert_eq!(res.unwrap(), buf.len() as u32);
@@ -210,11 +233,18 @@ fn write_one_submit_poll() {
         assert!(events.iter().next().is_none());
     }
 
+    // SAFETY:
+    // Safe because the `wait` call waits until the kernel is done mutating `buf`.
     unsafe {
-        // Safe because the `wait` call waits until the kernel is done mutating `buf`.
-        uring
-            .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 55)
-            .unwrap();
+        add_one_write(
+            &uring,
+            buf.as_mut_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(0),
+            55,
+        )
+        .unwrap();
         uring.submit().unwrap();
         // Poll for completion with epoll.
         let events = ctx.wait().unwrap();
@@ -237,8 +267,9 @@ fn writev_vec() {
     let buf = [0xaau8; BUF_SIZE];
     let buf2 = [0xffu8; BUF_SIZE];
     let buf3 = [0x55u8; BUF_SIZE];
+    // SAFETY:
+    //safe to transmut from IoSlice to iovec.
     let io_vecs = unsafe {
-        //safe to transmut from IoSlice to iovec.
         vec![IoSlice::new(&buf), IoSlice::new(&buf2), IoSlice::new(&buf3)]
             .into_iter()
             .map(|slice| std::mem::transmute::<IoSlice, libc::iovec>(slice))
@@ -246,8 +277,9 @@ fn writev_vec() {
     };
     let total_len = io_vecs.iter().fold(0, |a, iovec| a + iovec.iov_len);
     let mut f = create_test_file(total_len as u64 * 2);
+    // SAFETY:
+    // Safe because the `wait` call waits until the kernel is done with `buf`.
     let (user_data_ret, res) = unsafe {
-        // Safe because the `wait` call waits until the kernel is done with `buf`.
         uring
             .add_writev_iter(io_vecs.into_iter(), f.as_raw_fd(), Some(OFFSET), 55)
             .unwrap();
@@ -312,18 +344,30 @@ fn fallocate_fsync() {
     // Add a few writes and then fsync
     let buf = [0u8; 4096];
     let mut pending = std::collections::BTreeSet::new();
+    // TODO(b/315998194): Add safety comment
+    #[allow(clippy::undocumented_unsafe_blocks)]
     unsafe {
-        uring
-            .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(0), 67)
-            .unwrap();
+        add_one_write(&uring, buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(0), 67).unwrap();
         pending.insert(67u64);
-        uring
-            .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(4096), 68)
-            .unwrap();
+        add_one_write(
+            &uring,
+            buf.as_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(4096),
+            68,
+        )
+        .unwrap();
         pending.insert(68);
-        uring
-            .add_write(buf.as_ptr(), buf.len(), f.as_raw_fd(), Some(8192), 69)
-            .unwrap();
+        add_one_write(
+            &uring,
+            buf.as_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(8192),
+            69,
+        )
+        .unwrap();
         pending.insert(69);
     }
     uring.add_fsync(f.as_raw_fd(), 70).unwrap();
@@ -419,22 +463,24 @@ fn wake_with_nop() {
     const BUF_DATA: [u8; 16] = [0xf4; 16];
 
     let uring = URingContext::new(4, None).map(Arc::new).unwrap();
-    let (pipe_out, mut pipe_in) = pipe(true).unwrap();
+    let (pipe_out, mut pipe_in) = pipe().unwrap();
     let (tx, rx) = channel();
 
     let uring2 = uring.clone();
     let wait_thread = thread::spawn(move || {
         let mut buf = [0u8; BUF_DATA.len()];
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
-            uring2
-                .add_read(
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    pipe_out.as_raw_fd(),
-                    Some(0),
-                    0,
-                )
-                .unwrap();
+            add_one_read(
+                &uring2,
+                buf.as_mut_ptr(),
+                buf.len(),
+                pipe_out.as_raw_fd(),
+                Some(0),
+                0,
+            )
+            .unwrap();
         }
 
         // This is still a bit racy as the other thread may end up adding the NOP before we make
@@ -602,10 +648,6 @@ fn submit_from_any_thread() {
     assert_eq!(*in_flight.lock(), 0);
     assert_eq!(uring.submit_ring.lock().added, 0);
     assert_eq!(uring.complete_ring.num_ready(), 0);
-    assert_eq!(
-        uring.stats.total_ops.load(Ordering::Relaxed),
-        (NUM_THREADS * ITERATIONS) as u64
-    );
 }
 
 // TODO(b/183722981): Fix and re-enable test
@@ -712,10 +754,6 @@ fn multi_thread_submit_and_complete() {
         NUM_COMPLETERS as u32
     );
     assert_eq!(uring.submit_ring.lock().added, 0);
-    assert_eq!(
-        uring.stats.total_ops.load(Ordering::Relaxed),
-        (NUM_SUBMITTERS * ITERATIONS + NUM_COMPLETERS) as u64
-    );
 }
 
 #[test]
@@ -736,10 +774,18 @@ fn restrict_ops() {
 
     // add_read, which submits Readv, should succeed
 
+    // TODO(b/315998194): Add safety comment
+    #[allow(clippy::undocumented_unsafe_blocks)]
     unsafe {
-        uring
-            .add_read(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 0)
-            .unwrap();
+        add_one_read(
+            &uring,
+            buf.as_mut_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(0),
+            0,
+        )
+        .unwrap();
     }
     let result = uring.wait().unwrap().next().unwrap();
     assert!(result.1.is_ok(), "uring read should succeed");
@@ -751,10 +797,18 @@ fn restrict_ops() {
     let mut buf: [u8; 4] = TEST_DATA.to_owned(); // fake data, which should not be written
     let mut f = create_test_file(4);
 
+    // TODO(b/315998194): Add safety comment
+    #[allow(clippy::undocumented_unsafe_blocks)]
     unsafe {
-        uring
-            .add_write(buf.as_mut_ptr(), buf.len(), f.as_raw_fd(), Some(0), 0)
-            .unwrap();
+        add_one_write(
+            &uring,
+            buf.as_mut_ptr(),
+            buf.len(),
+            f.as_raw_fd(),
+            Some(0),
+            0,
+        )
+        .unwrap();
     }
     let result = uring.wait().unwrap().next().unwrap();
     assert!(result.1.is_err(), "uring write should fail");

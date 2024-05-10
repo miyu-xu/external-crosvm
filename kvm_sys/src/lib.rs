@@ -4,7 +4,7 @@
 
 //! Bindings for the Linux KVM (Kernel Virtual Machine) API.
 
-#![cfg(unix)]
+#![cfg(any(target_os = "android", target_os = "linux"))]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
@@ -13,18 +13,19 @@ use base::ioctl_io_nr;
 use base::ioctl_ior_nr;
 use base::ioctl_iow_nr;
 use base::ioctl_iowr_nr;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use data_model::flexible_array_impl;
 // Each of the below modules defines ioctls specific to their platform.
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub const KVM_MSR_FILTER_RANGE_MAX_BITS: usize = 0x2000;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub const KVM_MSR_FILTER_RANGE_MAX_BYTES: usize = KVM_MSR_FILTER_RANGE_MAX_BITS / 8;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub mod x86 {
-    // generated with bindgen /usr/include/linux/kvm.h --no-unstable-rust --constified-enum '*' --with-derive-default
+    // generated with bindgen /usr/include/linux/kvm.h --no-unstable-rust --constified-enum '*'
+    // --with-derive-default
     #[allow(clippy::all)]
     pub mod bindings;
     use base::ioctl_ior_nr;
@@ -36,7 +37,6 @@ pub mod x86 {
     ioctl_iowr_nr!(KVM_GET_MSR_INDEX_LIST, KVMIO, 0x02, kvm_msr_list);
     ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
     ioctl_iowr_nr!(KVM_GET_EMULATED_CPUID, KVMIO, 0x09, kvm_cpuid2);
-    ioctl_iow_nr!(KVM_SET_MEMORY_ALIAS, KVMIO, 0x43, kvm_memory_alias);
     ioctl_iow_nr!(KVM_XEN_HVM_CONFIG, KVMIO, 0x7a, kvm_xen_hvm_config);
     ioctl_ior_nr!(KVM_GET_PIT2, KVMIO, 0x9f, kvm_pit_state2);
     ioctl_iow_nr!(KVM_SET_PIT2, KVMIO, 0xa0, kvm_pit_state2);
@@ -59,11 +59,13 @@ pub mod x86 {
     ioctl_ior_nr!(KVM_GET_XCRS, KVMIO, 0xa6, kvm_xcrs);
     ioctl_iow_nr!(KVM_SET_XCRS, KVMIO, 0xa7, kvm_xcrs);
     ioctl_iowr_nr!(KVM_GET_SUPPORTED_HV_CPUID, KVMIO, 0xc1, kvm_cpuid2);
+    ioctl_ior_nr!(KVM_GET_XSAVE2, KVMIO, 0xcf, kvm_xsave);
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub mod aarch64 {
-    // generated with bindgen <arm sysroot>/usr/include/linux/kvm.h --no-unstable-rust --constified-enum '*' --with-derive-default -- -I<arm sysroot>/usr/include
+    // generated with bindgen <arm sysroot>/usr/include/linux/kvm.h --no-unstable-rust
+    // --constified-enum '*' --with-derive-default -- -I<arm sysroot>/usr/include
     pub mod bindings;
     use base::ioctl_ior_nr;
     use base::ioctl_iow_nr;
@@ -74,12 +76,17 @@ pub mod aarch64 {
     ioctl_ior_nr!(KVM_ARM_PREFERRED_TARGET, KVMIO, 0xaf, kvm_vcpu_init);
 }
 
+#[cfg(target_arch = "riscv64")]
+pub mod riscv64 {
+    pub mod bindings;
+    pub use bindings::*;
+}
+
 // These ioctls are commonly defined on all/multiple platforms.
 ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
 ioctl_io_nr!(KVM_CREATE_VM, KVMIO, 0x01);
 ioctl_io_nr!(KVM_CHECK_EXTENSION, KVMIO, 0x03);
 ioctl_io_nr!(KVM_GET_VCPU_MMAP_SIZE, KVMIO, 0x04);
-ioctl_iow_nr!(KVM_SET_MEMORY_REGION, KVMIO, 0x40, kvm_memory_region);
 ioctl_io_nr!(KVM_CREATE_VCPU, KVMIO, 0x41);
 ioctl_iow_nr!(KVM_GET_DIRTY_LOG, KVMIO, 0x42, kvm_dirty_log);
 ioctl_io_nr!(KVM_SET_NR_MMU_PAGES, KVMIO, 0x44);
@@ -164,17 +171,20 @@ ioctl_iow_nr!(KVM_SET_ONE_REG, KVMIO, 0xac, kvm_one_reg);
 ioctl_io_nr!(KVM_KVMCLOCK_CTRL, KVMIO, 0xad);
 ioctl_iowr_nr!(KVM_GET_REG_LIST, KVMIO, 0xb0, kvm_reg_list);
 ioctl_io_nr!(KVM_SMI, KVMIO, 0xb7);
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 ioctl_iow_nr!(KVM_X86_SET_MSR_FILTER, KVMIO, 0xc6, kvm_msr_filter);
 
 // Along with the common ioctls, we reexport the ioctls of the current
 // platform.
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub use crate::x86::*;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 flexible_array_impl!(kvm_cpuid2, kvm_cpuid_entry2, nent, entries);
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
+
+#[cfg(target_arch = "riscv64")]
+pub use crate::riscv64::*;

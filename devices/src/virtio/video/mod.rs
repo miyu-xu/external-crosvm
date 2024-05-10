@@ -7,6 +7,7 @@
 //!
 //! [v3 RFC]: https://markmail.org/thread/wxdne5re7aaugbjg
 
+use std::collections::BTreeMap;
 use std::thread;
 
 use anyhow::anyhow;
@@ -25,13 +26,11 @@ use thiserror::Error;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 
-use crate::virtio;
 use crate::virtio::copy_config;
 use crate::virtio::virtio_device::VirtioDevice;
-use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
-use crate::Suspendable;
+use crate::virtio::Queue;
 
 #[macro_use]
 mod macros;
@@ -78,7 +77,20 @@ use super::device_constants::video::backend_supported_virtio_features;
 use super::device_constants::video::virtio_video_config;
 use super::device_constants::video::VideoBackendType;
 use super::device_constants::video::VideoDeviceType;
-use super::device_constants::video::QUEUE_SIZES;
+
+// CMD_QUEUE_SIZE = max number of command descriptors for input and output queues
+// Experimentally, it appears a stream allocates 16 input and 26 output buffers = 42 total
+// For 8 simultaneous streams, 2 descs per buffer * 42 buffers * 8 streams = 672 descs
+// Allocate 1024 to give some headroom in case of extra streams/buffers
+//
+// TODO(b/204055006): Make cmd queue size dependent of
+// (max buf cnt for input + max buf cnt for output) * max descs per buffer * max nb of streams
+const CMD_QUEUE_SIZE: u16 = 1024;
+
+// EVENT_QUEUE_SIZE = max number of event descriptors for stream events like resolution changes
+const EVENT_QUEUE_SIZE: u16 = 256;
+
+const QUEUE_SIZES: &[u16] = &[CMD_QUEUE_SIZE, EVENT_QUEUE_SIZE];
 
 /// An error indicating something went wrong in virtio-video's worker.
 #[sorted]
@@ -97,9 +109,6 @@ pub enum Error {
     /// Making an EventAsync failed.
     #[error("failed to create an EventAsync: {0}")]
     EventAsyncCreationFailed(cros_async::AsyncError),
-    /// A DescriptorChain contains invalid data.
-    #[error("DescriptorChain contains invalid data: {0}")]
-    InvalidDescriptorChain(DescriptorError),
     /// Failed to read a virtio-video command.
     #[error("failed to read a command from the guest: {0}")]
     ReadFailure(ReadCmdError),
@@ -184,8 +193,8 @@ impl VirtioDevice for VideoDevice {
 
     fn device_type(&self) -> DeviceType {
         match &self.device_type {
-            VideoDeviceType::Decoder => DeviceType::VideoDec,
-            VideoDeviceType::Encoder => DeviceType::VideoEnc,
+            VideoDeviceType::Decoder => DeviceType::VideoDecoder,
+            VideoDeviceType::Encoder => DeviceType::VideoEncoder,
         }
     }
 
@@ -206,7 +215,7 @@ impl VirtioDevice for VideoDevice {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(virtio::queue::Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
@@ -221,20 +230,14 @@ impl VirtioDevice for VideoDevice {
             .context("failed to create kill Event pair")?;
         self.kill_evt = Some(self_kill_evt);
 
-        let (cmd_queue, cmd_evt) = queues.remove(0);
-        let (event_queue, event_evt) = queues.remove(0);
+        let cmd_queue = queues.pop_first().unwrap().1;
+        let event_queue = queues.pop_first().unwrap().1;
         let backend = self.backend;
         let resource_bridge = self
             .resource_bridge
             .take()
             .context("no resource bridge is passed")?;
-        let mut worker = Worker::new(
-            mem.clone(),
-            cmd_queue,
-            interrupt.clone(),
-            event_queue,
-            interrupt,
-        );
+        let mut worker = Worker::new(cmd_queue, interrupt.clone(), event_queue, interrupt);
 
         let worker_result = match &self.device_type {
             #[cfg(feature = "video-decoder")]
@@ -250,7 +253,7 @@ impl VirtioDevice for VideoDevice {
                             }
                         };
 
-                    if let Err(e) = worker.run(device, &cmd_evt, &event_evt, &kill_evt) {
+                    if let Err(e) = worker.run(device, &kill_evt) {
                         error!("Failed to start decoder worker: {}", e);
                     };
                     // Don't return any information since the return value is never checked.
@@ -302,7 +305,7 @@ impl VirtioDevice for VideoDevice {
                         }
                     };
 
-                    if let Err(e) = worker.run(device, &cmd_evt, &event_evt, &kill_evt) {
+                    if let Err(e) = worker.run(device, &kill_evt) {
                         error!("Failed to start encoder worker: {}", e);
                     }
                 }),
@@ -319,8 +322,6 @@ impl VirtioDevice for VideoDevice {
         Ok(())
     }
 }
-
-impl Suspendable for VideoDevice {}
 
 #[cfg(feature = "video-decoder")]
 pub fn create_decoder_device(

@@ -14,7 +14,6 @@ use base::EventToken;
 use base::WaitContext;
 use data_model::Le32;
 use sync::Mutex;
-use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 
 use super::super::constants::*;
@@ -26,43 +25,41 @@ use super::*;
 use crate::virtio::DescriptorChain;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
-use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
-use crate::virtio::Writer;
 
 pub struct Worker {
     // Lock order: Must never hold more than one queue lock at the same time.
     interrupt: Interrupt,
-    control_queue: Arc<Mutex<Queue>>,
-    control_queue_evt: Event,
-    event_queue: Queue,
-    event_queue_evt: Event,
-    guest_memory: GuestMemory,
-    vios_client: Arc<VioSClient>,
+    pub control_queue: Arc<Mutex<Queue>>,
+    pub event_queue: Option<Queue>,
+    vios_client: Arc<Mutex<VioSClient>>,
     streams: Vec<StreamProxy>,
+    pub tx_queue: Arc<Mutex<Queue>>,
+    pub rx_queue: Arc<Mutex<Queue>>,
     io_thread: Option<thread::JoinHandle<Result<()>>>,
     io_kill: Event,
+    // saved_stream_state holds the previous state of streams. When the sound device is newly
+    // created, this will be empty. It will only contain state if the sound device is put to sleep
+    // OR if we restore a VM.
+    pub saved_stream_state: Vec<StreamSnapshot>,
 }
 
 impl Worker {
     /// Creates a new virtio-snd worker.
     pub fn try_new(
-        vios_client: Arc<VioSClient>,
+        vios_client: Arc<Mutex<VioSClient>>,
         interrupt: Interrupt,
-        guest_memory: GuestMemory,
         control_queue: Arc<Mutex<Queue>>,
-        control_queue_evt: Event,
         event_queue: Queue,
-        event_queue_evt: Event,
         tx_queue: Arc<Mutex<Queue>>,
-        tx_queue_evt: Event,
         rx_queue: Arc<Mutex<Queue>>,
-        rx_queue_evt: Event,
+        saved_stream_state: Vec<StreamSnapshot>,
     ) -> Result<Worker> {
-        let mut streams: Vec<StreamProxy> = Vec::with_capacity(vios_client.num_streams() as usize);
+        let num_streams = vios_client.lock().num_streams();
+        let mut streams: Vec<StreamProxy> = Vec::with_capacity(num_streams as usize);
         {
-            for stream_id in 0..vios_client.num_streams() {
+            for stream_id in 0..num_streams {
                 let capture = vios_client
+                    .lock()
                     .stream_info(stream_id)
                     .map(|i| i.direction == VIRTIO_SND_D_INPUT)
                     .unwrap_or(false);
@@ -70,11 +67,11 @@ impl Worker {
                 streams.push(Stream::try_new(
                     stream_id,
                     vios_client.clone(),
-                    guest_memory.clone(),
                     interrupt.clone(),
                     control_queue.clone(),
                     io_queue.clone(),
                     capture,
+                    saved_stream_state.get(stream_id as usize).cloned(),
                 )?);
             }
         }
@@ -83,9 +80,10 @@ impl Worker {
             .map_err(SoundError::CreateEvent)?;
 
         let interrupt_clone = interrupt.clone();
-        let guest_memory_clone = guest_memory.clone();
-        let senders: Vec<Sender<StreamMsg>> =
+        let senders: Vec<Sender<Box<StreamMsg>>> =
             streams.iter().map(|sp| sp.msg_sender().clone()).collect();
+        let tx_queue_thread = tx_queue.clone();
+        let rx_queue_thread = rx_queue.clone();
         let io_thread = thread::Builder::new()
             .name("v_snd_io".to_string())
             .spawn(move || {
@@ -93,11 +91,8 @@ impl Worker {
 
                 io_loop(
                     interrupt_clone,
-                    guest_memory_clone,
-                    tx_queue,
-                    tx_queue_evt,
-                    rx_queue,
-                    rx_queue_evt,
+                    tx_queue_thread,
+                    rx_queue_thread,
                     senders,
                     kill_io,
                 )
@@ -106,14 +101,14 @@ impl Worker {
         Ok(Worker {
             interrupt,
             control_queue,
-            control_queue_evt,
-            event_queue,
-            event_queue_evt,
-            guest_memory,
+            event_queue: Some(event_queue),
             vios_client,
             streams,
+            tx_queue,
+            rx_queue,
             io_thread: Some(io_thread),
             io_kill: self_kill_io,
+            saved_stream_state: Vec::new(),
         })
     }
 
@@ -122,6 +117,7 @@ impl Worker {
     pub fn control_loop(&mut self, kill_evt: Event) -> Result<()> {
         let event_notifier = self
             .vios_client
+            .lock()
             .get_event_notifier()
             .map_err(SoundError::ClientEventNotifier)?;
         #[derive(EventToken)]
@@ -133,8 +129,11 @@ impl Worker {
             Kill,
         }
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.control_queue_evt, Token::ControlQAvailable),
-            (&self.event_queue_evt, Token::EventQAvailable),
+            (self.control_queue.lock().event(), Token::ControlQAvailable),
+            (
+                self.event_queue.as_ref().expect("queue missing").event(),
+                Token::EventQAvailable,
+            ),
             (&event_notifier, Token::EventTriggered),
             (&kill_evt, Token::Kill),
         ])
@@ -145,13 +144,16 @@ impl Worker {
                 .add(resample_evt, Token::InterruptResample)
                 .map_err(SoundError::WaitCtx)?;
         }
+        let mut event_queue = self.event_queue.take().expect("event_queue missing");
         'wait: loop {
             let wait_events = wait_ctx.wait().map_err(SoundError::WaitCtx)?;
 
             for wait_evt in wait_events.iter().filter(|e| e.is_readable) {
                 match wait_evt.token {
                     Token::ControlQAvailable => {
-                        self.control_queue_evt
+                        self.control_queue
+                            .lock()
+                            .event()
                             .wait()
                             .map_err(SoundError::QueueEvt)?;
                         self.process_controlq_buffers()?;
@@ -160,11 +162,11 @@ impl Worker {
                         // Just read from the event object to make sure the producer of such events
                         // never blocks. The buffers will only be used when actual virtio-snd
                         // events are triggered.
-                        self.event_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                        event_queue.event().wait().map_err(SoundError::QueueEvt)?;
                     }
                     Token::EventTriggered => {
                         event_notifier.wait().map_err(SoundError::QueueEvt)?;
-                        self.process_event_triggered()?;
+                        self.process_event_triggered(&mut event_queue)?;
                     }
                     Token::InterruptResample => {
                         self.interrupt.interrupt_resample();
@@ -176,6 +178,12 @@ impl Worker {
                 }
             }
         }
+        self.saved_stream_state = self
+            .streams
+            .drain(..)
+            .map(|stream| stream.stop_thread())
+            .collect();
+        self.event_queue = Some(event_queue);
         Ok(())
     }
 
@@ -203,9 +211,8 @@ impl Worker {
     // Pops and handles all available ontrol queue buffers. Logs minor errors, but returns an
     // Err if it encounters an unrecoverable error.
     fn process_controlq_buffers(&mut self) -> Result<()> {
-        while let Some(avail_desc) = lock_pop_unlock(&self.control_queue, &self.guest_memory) {
-            let mut reader = Reader::new(self.guest_memory.clone(), avail_desc.clone())
-                .map_err(SoundError::Descriptor)?;
+        while let Some(mut avail_desc) = lock_pop_unlock(&self.control_queue) {
+            let reader = &mut avail_desc.reader;
             let available_bytes = reader.available_bytes();
             if available_bytes < std::mem::size_of::<virtio_snd_hdr>() {
                 error!(
@@ -215,7 +222,6 @@ impl Worker {
                 return reply_control_op_status(
                     VIRTIO_SND_S_BAD_MSG,
                     avail_desc,
-                    &self.guest_memory,
                     &self.control_queue,
                     &self.interrupt,
                 );
@@ -236,7 +242,7 @@ impl Worker {
                             None => (VIRTIO_SND_S_BAD_MSG, Vec::new()),
                             Some((start_id, count)) => {
                                 let end_id = start_id.saturating_add(count);
-                                if end_id > self.vios_client.num_jacks() {
+                                if end_id > self.vios_client.lock().num_jacks() {
                                     error!(
                                         "virtio-snd: Requested info on invalid jacks ids: {}..{}",
                                         start_id,
@@ -246,9 +252,12 @@ impl Worker {
                                 } else {
                                     (
                                         VIRTIO_SND_S_OK,
-                                        // Safe to unwrap because we just ensured all the ids are valid
+                                        // Safe to unwrap because we just ensured all the ids are
+                                        // valid
                                         (start_id..end_id)
-                                            .map(|id| self.vios_client.jack_info(id).unwrap())
+                                            .map(|id| {
+                                                self.vios_client.lock().jack_info(id).unwrap()
+                                            })
                                             .collect(),
                                     )
                                 }
@@ -270,7 +279,10 @@ impl Worker {
                         let jack_id = request.hdr.jack_id.to_native();
                         let association = request.association.to_native();
                         let sequence = request.sequence.to_native();
-                        if let Err(e) = self.vios_client.remap_jack(jack_id, association, sequence)
+                        if let Err(e) =
+                            self.vios_client
+                                .lock()
+                                .remap_jack(jack_id, association, sequence)
                         {
                             error!("virtio-snd: Failed to remap jack: {}", e);
                             vios_error_to_status_code(e)
@@ -278,22 +290,17 @@ impl Worker {
                             VIRTIO_SND_S_OK
                         }
                     };
-                    let desc_index = avail_desc.index;
-                    let mut writer = Writer::new(self.guest_memory.clone(), avail_desc)
-                        .map_err(SoundError::Descriptor)?;
+                    let writer = &mut avail_desc.writer;
                     writer
                         .write_obj(virtio_snd_hdr {
                             code: Le32::from(code),
                         })
                         .map_err(SoundError::QueueIO)?;
+                    let len = writer.bytes_written() as u32;
                     {
                         let mut queue_lock = self.control_queue.lock();
-                        queue_lock.add_used(
-                            &self.guest_memory,
-                            desc_index,
-                            writer.bytes_written() as u32,
-                        );
-                        queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+                        queue_lock.add_used(avail_desc, len);
+                        queue_lock.trigger_interrupt(&self.interrupt);
                     }
                 }
                 VIRTIO_SND_R_CHMAP_INFO => {
@@ -302,7 +309,8 @@ impl Worker {
                             None => (VIRTIO_SND_S_BAD_MSG, Vec::new()),
                             Some((start_id, count)) => {
                                 let end_id = start_id.saturating_add(count);
-                                if end_id > self.vios_client.num_chmaps() {
+                                let num_chmaps = self.vios_client.lock().num_chmaps();
+                                if end_id > num_chmaps {
                                     error!(
                                         "virtio-snd: Requested info on invalid chmaps ids: {}..{}",
                                         start_id,
@@ -312,9 +320,12 @@ impl Worker {
                                 } else {
                                     (
                                         VIRTIO_SND_S_OK,
-                                        // Safe to unwrap because we just ensured all the ids are valid
+                                        // Safe to unwrap because we just ensured all the ids are
+                                        // valid
                                         (start_id..end_id)
-                                            .map(|id| self.vios_client.chmap_info(id).unwrap())
+                                            .map(|id| {
+                                                self.vios_client.lock().chmap_info(id).unwrap()
+                                            })
                                             .collect(),
                                     )
                                 }
@@ -329,7 +340,7 @@ impl Worker {
                             None => (VIRTIO_SND_S_BAD_MSG, Vec::new()),
                             Some((start_id, count)) => {
                                 let end_id = start_id.saturating_add(count);
-                                if end_id > self.vios_client.num_streams() {
+                                if end_id > self.vios_client.lock().num_streams() {
                                     error!(
                                         "virtio-snd: Requested info on invalid stream ids: {}..{}",
                                         start_id,
@@ -339,9 +350,12 @@ impl Worker {
                                 } else {
                                     (
                                         VIRTIO_SND_S_OK,
-                                        // Safe to unwrap because we just ensured all the ids are valid
+                                        // Safe to unwrap because we just ensured all the ids are
+                                        // valid
                                         (start_id..end_id)
-                                            .map(|id| self.vios_client.stream_info(id).unwrap())
+                                            .map(|id| {
+                                                self.vios_client.lock().stream_info(id).unwrap()
+                                            })
                                             .collect(),
                                     )
                                 }
@@ -371,7 +385,6 @@ impl Worker {
                     reply_control_op_status(
                         VIRTIO_SND_S_NOT_SUPP,
                         avail_desc,
-                        &self.guest_memory,
                         &self.control_queue,
                         &self.interrupt,
                     )?;
@@ -381,22 +394,14 @@ impl Worker {
         Ok(())
     }
 
-    fn process_event_triggered(&mut self) -> Result<()> {
-        while let Some(evt) = self.vios_client.pop_event() {
-            if let Some(desc) = self.event_queue.pop(&self.guest_memory) {
-                let desc_index = desc.index;
-                let mut writer =
-                    Writer::new(self.guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+    fn process_event_triggered(&mut self, event_queue: &mut Queue) -> Result<()> {
+        while let Some(evt) = self.vios_client.lock().pop_event() {
+            if let Some(mut desc) = event_queue.pop() {
+                let writer = &mut desc.writer;
                 writer.write_obj(evt).map_err(SoundError::QueueIO)?;
-                self.event_queue.add_used(
-                    &self.guest_memory,
-                    desc_index,
-                    writer.bytes_written() as u32,
-                );
-                {
-                    self.event_queue
-                        .trigger_interrupt(&self.guest_memory, &self.interrupt);
-                }
+                let len = writer.bytes_written() as u32;
+                event_queue.add_used(desc, len);
+                event_queue.trigger_interrupt(&self.interrupt);
             } else {
                 warn!("virtio-snd: Dropping event because there are no buffers in virtqueue");
             }
@@ -429,7 +434,6 @@ impl Worker {
             return reply_control_op_status(
                 VIRTIO_SND_S_BAD_MSG,
                 desc,
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             );
@@ -437,7 +441,7 @@ impl Worker {
         let mut params: virtio_snd_pcm_set_params = Default::default();
         params.as_bytes_mut().copy_from_slice(read_buf);
         let stream_id = params.hdr.stream_id.to_native();
-        if stream_id < self.vios_client.num_streams() {
+        if stream_id < self.vios_client.lock().num_streams() {
             self.streams[stream_id as usize].send(StreamMsg::SetParams(desc, params))
         } else {
             error!(
@@ -447,7 +451,6 @@ impl Worker {
             reply_control_op_status(
                 VIRTIO_SND_S_BAD_MSG,
                 desc,
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             )
@@ -470,7 +473,6 @@ impl Worker {
                     | StreamMsg::Release(d) => d,
                     _ => panic!("virtio-snd: Can't handle message. This is a BUG!!"),
                 },
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             );
@@ -478,7 +480,7 @@ impl Worker {
         let mut pcm_hdr: virtio_snd_pcm_hdr = Default::default();
         pcm_hdr.as_bytes_mut().copy_from_slice(read_buf);
         let stream_id = pcm_hdr.stream_id.to_native();
-        if stream_id < self.vios_client.num_streams() {
+        if stream_id < self.vios_client.lock().num_streams() {
             self.streams[stream_id as usize].send(msg)
         } else {
             error!(
@@ -494,7 +496,6 @@ impl Worker {
                     | StreamMsg::Release(d) => d,
                     _ => panic!("virtio-snd: Can't handle message. This is a BUG!!"),
                 },
-                &self.guest_memory,
                 &self.control_queue,
                 &self.interrupt,
             )
@@ -503,13 +504,11 @@ impl Worker {
 
     fn send_info_reply<T: AsBytes>(
         &mut self,
-        desc: DescriptorChain,
+        mut desc: DescriptorChain,
         code: u32,
         info_vec: Vec<T>,
     ) -> Result<()> {
-        let desc_index = desc.index;
-        let mut writer =
-            Writer::new(self.guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+        let writer = &mut desc.writer;
         writer
             .write_obj(virtio_snd_hdr {
                 code: Le32::from(code),
@@ -518,14 +517,11 @@ impl Worker {
         for info in info_vec {
             writer.write_obj(info).map_err(SoundError::QueueIO)?;
         }
+        let len = writer.bytes_written() as u32;
         {
             let mut queue_lock = self.control_queue.lock();
-            queue_lock.add_used(
-                &self.guest_memory,
-                desc_index,
-                writer.bytes_written() as u32,
-            );
-            queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+            queue_lock.add_used(desc, len);
+            queue_lock.trigger_interrupt(&self.interrupt);
         }
         Ok(())
     }
@@ -539,12 +535,9 @@ impl Drop for Worker {
 
 fn io_loop(
     interrupt: Interrupt,
-    guest_memory: GuestMemory,
     tx_queue: Arc<Mutex<Queue>>,
-    tx_queue_evt: Event,
     rx_queue: Arc<Mutex<Queue>>,
-    rx_queue_evt: Event,
-    senders: Vec<Sender<StreamMsg>>,
+    senders: Vec<Sender<Box<StreamMsg>>>,
     kill_evt: Event,
 ) -> Result<()> {
     #[derive(EventToken)]
@@ -554,8 +547,8 @@ fn io_loop(
         Kill,
     }
     let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-        (&tx_queue_evt, Token::TxQAvailable),
-        (&rx_queue_evt, Token::RxQAvailable),
+        (tx_queue.lock().event(), Token::TxQAvailable),
+        (rx_queue.lock().event(), Token::RxQAvailable),
         (&kill_evt, Token::Kill),
     ])
     .map_err(SoundError::WaitCtx)?;
@@ -565,11 +558,19 @@ fn io_loop(
         for wait_evt in wait_events.iter().filter(|e| e.is_readable) {
             let queue = match wait_evt.token {
                 Token::TxQAvailable => {
-                    tx_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                    tx_queue
+                        .lock()
+                        .event()
+                        .wait()
+                        .map_err(SoundError::QueueEvt)?;
                     &tx_queue
                 }
                 Token::RxQAvailable => {
-                    rx_queue_evt.wait().map_err(SoundError::QueueEvt)?;
+                    rx_queue
+                        .lock()
+                        .event()
+                        .wait()
+                        .map_err(SoundError::QueueEvt)?;
                     &rx_queue
                 }
                 Token::Kill => {
@@ -577,9 +578,8 @@ fn io_loop(
                     break 'wait;
                 }
             };
-            while let Some(avail_desc) = lock_pop_unlock(queue, &guest_memory) {
-                let mut reader = Reader::new(guest_memory.clone(), avail_desc.clone())
-                    .map_err(SoundError::Descriptor)?;
+            while let Some(mut avail_desc) = lock_pop_unlock(queue) {
+                let reader = &mut avail_desc.reader;
                 let xfer: virtio_snd_pcm_xfer = reader.read_obj().map_err(SoundError::QueueIO)?;
                 let stream_id = xfer.stream_id.to_native();
                 if stream_id as usize >= senders.len() {
@@ -587,14 +587,7 @@ fn io_loop(
                         "virtio-snd: Driver sent buffer for invalid stream: {}",
                         stream_id
                     );
-                    reply_pcm_buffer_status(
-                        VIRTIO_SND_S_IO_ERR,
-                        0,
-                        avail_desc,
-                        &guest_memory,
-                        queue,
-                        &interrupt,
-                    )?;
+                    reply_pcm_buffer_status(VIRTIO_SND_S_IO_ERR, 0, avail_desc, queue, &interrupt)?;
                 } else {
                     StreamProxy::send_msg(
                         &senders[stream_id as usize],
@@ -610,9 +603,6 @@ fn io_loop(
 // If queue.lock().pop() is used directly in the condition of a 'while' loop the lock is held over
 // the entire loop block. Encapsulating it in this fuction guarantees that the lock is dropped
 // immediately after pop() is called, which allows the code to remain somewhat simpler.
-fn lock_pop_unlock(
-    queue: &Arc<Mutex<Queue>>,
-    guest_memory: &GuestMemory,
-) -> Option<DescriptorChain> {
-    queue.lock().pop(guest_memory)
+fn lock_pop_unlock(queue: &Arc<Mutex<Queue>>) -> Option<DescriptorChain> {
+    queue.lock().pop()
 }

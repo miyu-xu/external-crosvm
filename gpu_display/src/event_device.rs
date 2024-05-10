@@ -5,39 +5,25 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io;
-use std::io::Error;
-use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::iter::ExactSizeIterator;
 
 use base::AsRawDescriptor;
 use base::RawDescriptor;
+use base::ReadNotifier;
 use base::StreamChannel;
-use data_model::DataInit;
 use linux_input_sys::virtio_input_event;
 use linux_input_sys::InputEventDecoder;
 use serde::Deserialize;
 use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromZeroes;
 
 const EVENT_SIZE: usize = virtio_input_event::SIZE;
 const EVENT_BUFFER_LEN_MAX: usize = 64 * EVENT_SIZE;
 
-// /// Half-way build `EventDevice` with only the `event_socket` defined. Finish building the
-// /// `EventDevice` by using `status_socket`.
-// pub struct PartialEventDevice(UnixStream);
-
-// impl PartialEventDevice {
-//     /// Finish build `EventDevice` by providing the `status_socket`.
-//     pub fn status_socket(self, status_socket: UnixStream) -> EventDevice {
-//         EventDevice {
-//             event_socket: self.0,
-//             status_socket,
-//         }
-//     }
-// }
-
-#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum EventDeviceKind {
     /// Produces relative mouse motions, wheel, and button clicks while the real mouse is captured.
     Mouse,
@@ -131,12 +117,12 @@ impl EventDevice {
         }
 
         for event in it {
-            let bytes = event.as_slice();
+            let bytes = event.as_bytes();
             self.event_buffer.extend(bytes.iter());
         }
 
         self.event_buffer
-            .extend(virtio_input_event::syn().as_slice().iter());
+            .extend(virtio_input_event::syn().as_bytes().iter());
 
         self.flush_buffered_events()
     }
@@ -148,7 +134,7 @@ impl EventDevice {
             return Ok(false);
         }
 
-        let bytes = event.as_slice();
+        let bytes = event.as_bytes();
         let written = self.event_socket.write(bytes)?;
 
         if written == bytes.len() {
@@ -163,21 +149,21 @@ impl EventDevice {
     }
 
     pub fn recv_event_encoded(&self) -> io::Result<virtio_input_event> {
-        let mut event_bytes = [0u8; 24];
-        (&self.event_socket).read_exact(&mut event_bytes)?;
-        match virtio_input_event::from_slice(&event_bytes) {
-            Some(event) => Ok(*event),
-            None => Err(Error::new(
-                ErrorKind::InvalidInput,
-                "failed to read virtio_input_event",
-            )),
-        }
+        let mut event = virtio_input_event::new_zeroed();
+        (&self.event_socket).read_exact(event.as_bytes_mut())?;
+        Ok(event)
     }
 }
 
 impl AsRawDescriptor for EventDevice {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.event_socket.as_raw_descriptor()
+    }
+}
+
+impl ReadNotifier for EventDevice {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        self.event_socket.get_read_notifier()
     }
 }
 

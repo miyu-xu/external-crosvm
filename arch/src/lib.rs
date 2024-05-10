@@ -5,6 +5,7 @@
 //! Virtual machine architecture support code.
 
 pub mod android;
+pub mod fdt;
 pub mod pstore;
 pub mod serial;
 
@@ -14,9 +15,6 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fs::File;
 use std::io;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -29,8 +27,9 @@ use base::syslog;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::Event;
+use base::FileGetLen;
+use base::FileReadWriteAtVolatile;
 use base::SendTube;
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
 use base::Tube;
 use devices::virtio::VirtioDevice;
 use devices::BarRange;
@@ -39,12 +38,10 @@ use devices::BusDevice;
 use devices::BusDeviceObj;
 use devices::BusError;
 use devices::BusResumeDevice;
+use devices::FwCfgParameters;
+use devices::GpeScope;
 use devices::HotPlugBus;
 use devices::IrqChip;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use devices::IrqChipAArch64 as IrqChipArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use devices::IrqChipX86_64 as IrqChipArch;
 use devices::IrqEventSource;
 use devices::PciAddress;
 use devices::PciBus;
@@ -54,45 +51,24 @@ use devices::PciInterruptPin;
 use devices::PciRoot;
 use devices::PciRootCommand;
 use devices::PreferredIrq;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::ProxyDevice;
 use devices::SerialHardware;
 use devices::SerialParameters;
 use devices::VirtioMmioDevice;
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+pub use fdt::apply_device_tree_overlays;
+pub use fdt::DtbOverlay;
+#[cfg(feature = "gdb")]
 use gdbstub::arch::Arch;
-#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
-use gdbstub_arch::aarch64::AArch64 as GdbArch;
-#[cfg(all(target_arch = "x86_64", feature = "gdb"))]
-use gdbstub_arch::x86::X86_64_SSE as GdbArch;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::CpuConfigAArch64 as CpuConfigArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::CpuConfigX86_64 as CpuConfigArch;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::Hypervisor as HypervisorArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::HypervisorX86_64 as HypervisorArch;
 use hypervisor::IoEventAddress;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::VcpuAArch64 as VcpuArch;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::VcpuInitAArch64 as VcpuInitArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::VcpuInitX86_64 as VcpuInitArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::VcpuX86_64 as VcpuArch;
+use hypervisor::MemCacheType;
 use hypervisor::Vm;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::VmAArch64 as VmArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::VmX86_64 as VmArch;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
@@ -105,14 +81,51 @@ pub use serial::get_serial_cmdline;
 pub use serial::set_default_serial_parameters;
 pub use serial::GetSerialCmdlineError;
 pub use serial::SERIAL_ADDR;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use sync::Condvar;
 use sync::Mutex;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+pub use sys::linux::PlatformBusResources;
 use thiserror::Error;
+use uuid::Uuid;
 use vm_control::BatControl;
 use vm_control::BatteryType;
 use vm_control::PmResource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
+use vm_memory::MemoryRegionOptions;
+
+cfg_if::cfg_if! {
+    if #[cfg(any(target_arch = "arm", target_arch = "aarch64"))] {
+        pub use devices::IrqChipAArch64 as IrqChipArch;
+        #[cfg(feature = "gdb")]
+        pub use gdbstub_arch::aarch64::AArch64 as GdbArch;
+        pub use hypervisor::CpuConfigAArch64 as CpuConfigArch;
+        pub use hypervisor::Hypervisor as HypervisorArch;
+        pub use hypervisor::VcpuAArch64 as VcpuArch;
+        pub use hypervisor::VcpuInitAArch64 as VcpuInitArch;
+        pub use hypervisor::VmAArch64 as VmArch;
+    } else if #[cfg(target_arch = "riscv64")] {
+        pub use devices::IrqChipRiscv64 as IrqChipArch;
+        #[cfg(feature = "gdb")]
+        pub use gdbstub_arch::riscv::Riscv64 as GdbArch;
+        pub use hypervisor::CpuConfigRiscv64 as CpuConfigArch;
+        pub use hypervisor::Hypervisor as HypervisorArch;
+        pub use hypervisor::VcpuInitRiscv64 as VcpuInitArch;
+        pub use hypervisor::VcpuRiscv64 as VcpuArch;
+        pub use hypervisor::VmRiscv64 as VmArch;
+    } else if #[cfg(target_arch = "x86_64")] {
+        pub use devices::IrqChipX86_64 as IrqChipArch;
+        #[cfg(feature = "gdb")]
+        pub use gdbstub_arch::x86::X86_64_SSE as GdbArch;
+        pub use hypervisor::CpuConfigX86_64 as CpuConfigArch;
+        pub use hypervisor::HypervisorX86_64 as HypervisorArch;
+        pub use hypervisor::VcpuInitX86_64 as VcpuInitArch;
+        pub use hypervisor::VcpuX86_64 as VcpuArch;
+        pub use hypervisor::VmX86_64 as VmArch;
+    }
+}
 
 pub enum VmImage {
     Kernel(File),
@@ -127,7 +140,7 @@ pub struct Pstore {
 }
 
 /// Set of CPU cores.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CpuSet(Vec<usize>);
 
 impl CpuSet {
@@ -137,6 +150,15 @@ impl CpuSet {
 
     pub fn iter(&self) -> std::slice::Iter<'_, usize> {
         self.0.iter()
+    }
+}
+
+impl FromIterator<usize> for CpuSet {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = usize>,
+    {
+        CpuSet::new(iter)
     }
 }
 
@@ -305,22 +327,29 @@ pub enum VcpuAffinity {
 /// create a `RunnableLinuxVm`.
 #[sorted]
 pub struct VmComponents {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
     pub acpi_sdts: Vec<SDT>,
     pub android_fstab: Option<File>,
+    pub boot_cpu: usize,
+    pub bootorder_fw_cfg_blob: Vec<u8>,
+    #[cfg(target_arch = "x86_64")]
+    pub break_linux_pci_config_io: bool,
     pub cpu_capacity: BTreeMap<usize, u32>,
     pub cpu_clusters: Vec<CpuSet>,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub cpu_frequencies: BTreeMap<usize, Vec<u32>>,
     pub delay_rt: bool,
-    #[cfg(feature = "direct")]
-    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
-    #[cfg(feature = "direct")]
-    pub direct_gpe: Vec<u32>,
-    pub dmi_path: Option<PathBuf>,
+    pub dynamic_power_coefficient: BTreeMap<usize, u32>,
     pub extra_kernel_params: Vec<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub force_s2idle: bool,
-    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+    pub fw_cfg_enable: bool,
+    pub fw_cfg_parameters: Vec<FwCfgParameters>,
+    #[cfg(feature = "gdb")]
     pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub host_cpu_topology: bool,
     pub hugepages: bool,
@@ -331,11 +360,9 @@ pub struct VmComponents {
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    pub oem_strings: Vec<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pci_low_start: Option<u64>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pcie_ecam: Option<AddressRange>,
     pub pflash_block_size: u32,
     pub pflash_image: Option<File>,
@@ -344,9 +371,16 @@ pub struct VmComponents {
     /// `hv_cfg.protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<File>,
     pub rt_cpus: CpuSet,
+    #[cfg(target_arch = "x86_64")]
+    pub smbios: SmbiosOptions,
     pub swiotlb: Option<u64>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub virt_cpufreq_socket: Option<std::os::unix::net::UnixStream>,
     pub vm_image: VmImage,
 }
 
@@ -356,16 +390,15 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub bat_control: Option<BatControl>,
     pub delay_rt: bool,
     pub devices_thread: Option<std::thread::JoinHandle<()>>,
-    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+    #[cfg(feature = "gdb")]
     pub gdb: Option<(u32, Tube)>,
-    pub has_bios: bool,
     pub hotplug_bus: BTreeMap<u8, Arc<Mutex<dyn HotPlugBus>>>,
     pub io_bus: Arc<Bus>,
     pub irq_chip: Box<dyn IrqChipArch>,
     pub mmio_bus: Arc<Bus>,
     pub no_smt: bool,
     pub pid_debug_label_map: BTreeMap<u32, String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub platform_devices: Vec<Arc<Mutex<dyn BusDevice>>>,
     pub pm: Option<Arc<Mutex<dyn PmResource + Send>>>,
     /// Devices to be notified before the system resumes from the S3 suspended state.
@@ -380,6 +413,7 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     /// If it's Some, then `build_vm` already created the vcpus.
     pub vcpus: Option<Vec<Vcpu>>,
     pub vm: V,
+    pub vm_request_tube: Option<Tube>,
 }
 
 /// The device and optional jail.
@@ -402,7 +436,7 @@ pub trait LinuxArch {
     fn guest_memory_layout(
         components: &VmComponents,
         hypervisor: &impl hypervisor::Hypervisor,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error>;
+    ) -> std::result::Result<Vec<(GuestAddress, u64, MemoryRegionOptions)>, Self::Error>;
 
     /// Gets the configuration for a new `SystemAllocator` that fits the given `Vm`'s memory layout.
     ///
@@ -420,8 +454,8 @@ pub trait LinuxArch {
     /// # Arguments
     ///
     /// * `components` - Parts to use to build the VM.
-    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest
-    ///     wants to stop/shut down or requested reset.
+    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest wants
+    ///   to stop/shut down or requested reset.
     /// * `system_allocator` - Allocator created by this trait's implementation of
     ///   `get_system_allocator_config`.
     /// * `serial_parameters` - Definitions for how the serial devices should be configured.
@@ -433,6 +467,8 @@ pub trait LinuxArch {
     /// * `irq_chip` - The IRQ chip implemention for the VM.
     /// * `debugcon_jail` - Jail used for debugcon devices created here.
     /// * `pflash_jail` - Jail used for pflash device created here.
+    /// * `fw_cfg_jail` - Jail used for fw_cfg device created here.
+    /// * `device_tree_overlays` - Device tree overlay binaries
     fn build_vm<V, Vcpu>(
         components: VmComponents,
         vm_evt_wrtube: &SendTube,
@@ -447,8 +483,13 @@ pub trait LinuxArch {
         vcpu_ids: &mut Vec<usize>,
         dump_device_tree_blob: Option<PathBuf>,
         debugcon_jail: Option<Minijail>,
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] pflash_jail: Option<Minijail>,
-        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        #[cfg(target_arch = "x86_64")] pflash_jail: Option<Minijail>,
+        #[cfg(target_arch = "x86_64")] fw_cfg_jail: Option<Minijail>,
+        #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] guest_suspended_cvar: Option<
+            Arc<(Mutex<bool>, Condvar)>,
+        >,
+        device_tree_overlays: Vec<DtbOverlay>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmArch,
@@ -465,7 +506,6 @@ pub trait LinuxArch {
     /// * `vcpu_init` - The data required to initialize VCPU registers and other state.
     /// * `vcpu_id` - The id of the given `vcpu`.
     /// * `num_cpus` - Number of virtual CPUs the guest will have.
-    /// * `has_bios` - Whether the `VmImage` is a `Bios` image
     /// * `cpu_config` - CPU feature configurations.
     fn configure_vcpu<V: Vm>(
         vm: &V,
@@ -475,7 +515,6 @@ pub trait LinuxArch {
         vcpu_init: VcpuInitArch,
         vcpu_id: usize,
         num_cpus: usize,
-        has_bios: bool,
         cpu_config: Option<CpuConfigArch>,
     ) -> Result<(), Self::Error>;
 
@@ -483,14 +522,23 @@ pub trait LinuxArch {
     fn register_pci_device<V: VmArch, Vcpu: VcpuArch>(
         linux: &mut RunnableLinuxVm<V, Vcpu>,
         device: Box<dyn PciDevice>,
-        #[cfg(unix)] minijail: Option<Minijail>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] minijail: Option<Minijail>,
         resources: &mut SystemAllocator,
         hp_control_tube: &mpsc::Sender<PciRootCommand>,
-        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
     ) -> Result<PciAddress, Self::Error>;
+
+    /// Returns frequency map for each of the host's logical cores.
+    fn get_host_cpu_frequencies_khz() -> Result<BTreeMap<usize, Vec<u32>>, Self::Error>;
+
+    /// Returns capacity map of the host's logical cores.
+    fn get_host_cpu_capacity() -> Result<BTreeMap<usize, u32>, Self::Error>;
+
+    /// Returns cluster masks for each of the host's logical cores.
+    fn get_host_cpu_clusters() -> Result<Vec<CpuSet>, Self::Error>;
 }
 
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), feature = "gdb"))]
+#[cfg(feature = "gdb")]
 pub trait GdbOps<T: VcpuArch> {
     type Error: StdError;
 
@@ -556,14 +604,14 @@ pub enum DeviceRegistrationError {
     #[error("Allocating IRQ number")]
     AllocateIrq,
     /// Could not allocate IRQ resource for the device.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("Allocating IRQ resource: {0}")]
     AllocateIrqResource(devices::vfio::VfioError),
     /// Broken pci topology
     #[error("pci topology is broken")]
     BrokenPciTopology,
     /// Unable to clone a jail for the device.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to clone jail: {0}")]
     CloneJail(minijail::Error),
     /// Appending to kernel command line failed.
@@ -575,6 +623,9 @@ pub enum DeviceRegistrationError {
     // Unable to create a pipe.
     #[error("failed to create pipe: {0}")]
     CreatePipe(base::Error),
+    // Unable to create a root.
+    #[error("failed to create pci root: {0}")]
+    CreateRoot(anyhow::Error),
     // Unable to create serial device from serial parameters
     #[error("failed to create serial device: {0}")]
     CreateSerialDevice(devices::SerialError),
@@ -593,17 +644,23 @@ pub enum DeviceRegistrationError {
     /// No more IRQs are available.
     #[error("no more IRQs are available")]
     IrqsExhausted,
+    /// VFIO device is missing a DT symbol.
+    #[error("cannot match VFIO device to DT node due to a missing symbol")]
+    MissingDeviceTreeSymbol,
     /// Missing a required serial device.
     #[error("missing required serial device {0}")]
     MissingRequiredSerialDevice(u8),
     /// Could not add a device to the mmio bus.
     #[error("failed to add to mmio bus: {0}")]
     MmioInsert(BusError),
-    #[cfg(unix)]
+    /// Failed to insert device into PCI root.
+    #[error("failed to insert device into PCI root: {0}")]
+    PciRootAddDevice(PciDeviceError),
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     /// Failed to initialize proxy device for jailed device.
     #[error("failed to create proxy device: {0}")]
     ProxyDeviceCreation(devices::ProxyError),
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     /// Failed to register battery device.
     #[error("failed to register battery device to VM: {0}")]
     RegisterBattery(devices::BatteryError),
@@ -628,10 +685,10 @@ pub enum DeviceRegistrationError {
 pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     linux: &mut RunnableLinuxVm<V, Vcpu>,
     mut device: Box<dyn PciDevice>,
-    #[cfg(unix)] jail: Option<Minijail>,
+    #[cfg(any(target_os = "android", target_os = "linux"))] jail: Option<Minijail>,
     resources: &mut SystemAllocator,
     hp_control_tube: &mpsc::Sender<PciRootCommand>,
-    #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+    #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
 ) -> Result<PciAddress, DeviceRegistrationError> {
     // Allocate PCI device address before allocating BARs.
     let pci_address = device
@@ -683,20 +740,13 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     let mut keep_rds = device.keep_rds();
     syslog::push_descriptors(&mut keep_rds);
     cros_tracing::push_descriptors!(&mut keep_rds);
+    metrics::push_descriptors(&mut keep_rds);
 
     device
         .register_device_capabilities()
         .map_err(DeviceRegistrationError::RegisterDeviceCapabilities)?;
-    for (event, addr, datamatch) in device.ioevents() {
-        let io_addr = IoEventAddress::Mmio(addr);
-        linux
-            .vm
-            .register_ioevent(event, io_addr, datamatch)
-            .map_err(DeviceRegistrationError::RegisterIoevent)?;
-        keep_rds.push(event.as_raw_descriptor());
-    }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     let arced_dev: Arc<Mutex<dyn BusDevice>> = if let Some(jail) = jail {
         let proxy = ProxyDevice::new(
             device,
@@ -721,7 +771,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
         Arc::new(Mutex::new(device))
     };
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     hp_control_tube
         .send(PciRootCommand::Add(pci_address, arced_dev.clone()))
         .map_err(DeviceRegistrationError::RegisterDevice)?;
@@ -751,16 +801,16 @@ pub fn generate_virtio_mmio_bus(
     resources: &mut SystemAllocator,
     vm: &mut impl Vm,
     sdts: Vec<SDT>,
-    #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+    #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
 ) -> Result<(BTreeMap<u32, String>, Vec<SDT>), DeviceRegistrationError> {
     #[cfg_attr(windows, allow(unused_mut))]
     let mut pid_labels = BTreeMap::new();
 
     // sdts can be updated only on x86 platforms.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     let mut sdts = sdts;
     for dev_value in devices.into_iter() {
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let (mut device, jail) = dev_value;
         #[cfg(windows)]
         let (mut device, _) = dev_value;
@@ -772,6 +822,7 @@ pub fn generate_virtio_mmio_bus(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
 
         let irq_num = resources
             .allocate_irq()
@@ -790,14 +841,14 @@ pub fn generate_virtio_mmio_bus(
             keep_rds.push(event.as_raw_descriptor());
         }
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         {
             sdts = device
                 .generate_acpi(sdts)
                 .ok_or(DeviceRegistrationError::GenerateAcpi)?;
         }
 
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let arced_dev: Arc<Mutex<dyn BusDevice>> = if let Some(jail) = jail {
             let proxy = ProxyDevice::new(
                 device,
@@ -941,17 +992,20 @@ pub fn generate_pci_root(
     mut devices: Vec<(Box<dyn PciDevice>, Option<Minijail>)>,
     irq_chip: &mut dyn IrqChip,
     mmio_bus: Arc<Bus>,
+    mmio_base: GuestAddress,
+    mmio_register_bit_num: usize,
     io_bus: Arc<Bus>,
     resources: &mut SystemAllocator,
     vm: &mut impl Vm,
     max_irqs: usize,
     vcfg_base: Option<u64>,
-    #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+    #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
 ) -> Result<
     (
         PciRoot,
         Vec<(PciAddress, u32, PciInterruptPin)>,
         BTreeMap<u32, String>,
+        BTreeMap<PciAddress, Vec<u8>>,
         BTreeMap<PciAddress, Vec<u8>>,
     ),
     DeviceRegistrationError,
@@ -978,7 +1032,15 @@ pub fn generate_pci_root(
         &mut devices,
     )?;
 
-    let mut root = PciRoot::new(Arc::downgrade(&mmio_bus), Arc::downgrade(&io_bus), root_bus);
+    let mut root = PciRoot::new(
+        vm,
+        Arc::downgrade(&mmio_bus),
+        mmio_base,
+        mmio_register_bit_num,
+        Arc::downgrade(&io_bus),
+        root_bus,
+    )
+    .map_err(DeviceRegistrationError::CreateRoot)?;
     #[cfg_attr(windows, allow(unused_mut))]
     let mut pid_labels = BTreeMap::new();
 
@@ -1073,12 +1135,13 @@ pub fn generate_pci_root(
             .into_iter()
             .enumerate()
             .partition(|(_, (_, jail))| jail.is_some());
-        sandboxed.into_iter().chain(non_sandboxed.into_iter())
+        sandboxed.into_iter().chain(non_sandboxed)
     };
 
     let mut amls = BTreeMap::new();
+    let mut gpe_scope_amls = BTreeMap::new();
     for (dev_idx, dev_value) in devices {
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let (mut device, jail) = dev_value;
         #[cfg(windows)]
         let (mut device, _) = dev_value;
@@ -1087,6 +1150,7 @@ pub fn generate_pci_root(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
         keep_rds.append(&mut vm.get_memory().as_raw_descriptors());
 
         let ranges = io_ranges.remove(&dev_idx).unwrap_or_default();
@@ -1094,12 +1158,6 @@ pub fn generate_pci_root(
         device
             .register_device_capabilities()
             .map_err(DeviceRegistrationError::RegisterDeviceCapabilities)?;
-        for (event, addr, datamatch) in device.ioevents() {
-            let io_addr = IoEventAddress::Mmio(addr);
-            vm.register_ioevent(event, io_addr, datamatch)
-                .map_err(DeviceRegistrationError::RegisterIoevent)?;
-            keep_rds.push(event.as_raw_descriptor());
-        }
 
         if let Some(vcfg_base) = vcfg_base {
             let (methods, shm) = device.generate_acpi_methods();
@@ -1112,11 +1170,13 @@ pub fn generate_pci_root(
                     Box::new(mmap),
                     false,
                     false,
+                    MemCacheType::CacheCoherent,
                 );
             }
         }
+        let gpe_nr = device.set_gpe(resources);
 
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let arced_dev: Arc<Mutex<dyn BusDevice>> = if let Some(jail) = jail {
             let proxy = ProxyDevice::new(
                 device,
@@ -1137,7 +1197,8 @@ pub fn generate_pci_root(
             device.on_sandboxed();
             Arc::new(Mutex::new(device))
         };
-        root.add_device(address, arced_dev.clone());
+        root.add_device(address, arced_dev.clone(), vm)
+            .map_err(DeviceRegistrationError::PciRootAddDevice)?;
         for range in &ranges {
             mmio_bus
                 .insert(arced_dev.clone(), range.addr, range.size)
@@ -1149,9 +1210,24 @@ pub fn generate_pci_root(
                 .insert(arced_dev.clone(), range.addr, range.size)
                 .map_err(DeviceRegistrationError::MmioInsert)?;
         }
+
+        if let Some(gpe_nr) = gpe_nr {
+            if let Some(acpi_path) = root.acpi_path(&address) {
+                let mut gpe_aml = Vec::new();
+
+                GpeScope {}.cast_to_aml_bytes(
+                    &mut gpe_aml,
+                    gpe_nr,
+                    format!("\\{}", acpi_path).as_str(),
+                );
+                if !gpe_aml.is_empty() {
+                    gpe_scope_amls.insert(address, gpe_aml);
+                }
+            }
+        }
     }
 
-    Ok((root, pci_irqs, pid_labels, amls))
+    Ok((root, pci_irqs, pid_labels, amls, gpe_scope_amls))
 }
 
 /// Errors for image loading.
@@ -1160,12 +1236,14 @@ pub fn generate_pci_root(
 pub enum LoadImageError {
     #[error("Alignment not a power of two: {0}")]
     BadAlignment(u64),
+    #[error("Getting image size failed: {0}")]
+    GetLen(io::Error),
+    #[error("GuestMemory get slice failed: {0}")]
+    GuestMemorySlice(GuestMemoryError),
     #[error("Image size too large: {0}")]
     ImageSizeTooLarge(u64),
     #[error("Reading image into memory failed: {0}")]
-    ReadToMemory(GuestMemoryError),
-    #[error("Seek failed: {0}")]
-    Seek(io::Error),
+    ReadToMemory(io::Error),
 }
 
 /// Load an image from a file into guest memory.
@@ -1185,9 +1263,9 @@ pub fn load_image<F>(
     max_size: u64,
 ) -> Result<usize, LoadImageError>
 where
-    F: Read + Seek + AsRawDescriptor,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
-    let size = image.seek(SeekFrom::End(0)).map_err(LoadImageError::Seek)?;
+    let size = image.get_len().map_err(LoadImageError::GetLen)?;
 
     if size > usize::max_value() as u64 || size > max_size {
         return Err(LoadImageError::ImageSizeTooLarge(size));
@@ -1196,12 +1274,11 @@ where
     // This is safe due to the bounds check above.
     let size = size as usize;
 
+    let guest_slice = guest_mem
+        .get_slice_at_addr(guest_addr, size)
+        .map_err(LoadImageError::GuestMemorySlice)?;
     image
-        .seek(SeekFrom::Start(0))
-        .map_err(LoadImageError::Seek)?;
-
-    guest_mem
-        .read_to_memory(guest_addr, image, size)
+        .read_exact_at_volatile(guest_slice, 0)
         .map_err(LoadImageError::ReadToMemory)?;
 
     Ok(size)
@@ -1215,8 +1292,8 @@ where
 /// * `image` - The file containing the image to be loaded.
 /// * `min_guest_addr` - The minimum address of the start of the image.
 /// * `max_guest_addr` - The address to load the last byte of the image.
-/// * `align` - The minimum alignment of the start address of the image in bytes
-///   (must be a power of two).
+/// * `align` - The minimum alignment of the start address of the image in bytes (must be a power of
+///   two).
 ///
 /// The guest address and size in bytes of the loaded image are returned.
 pub fn load_image_high<F>(
@@ -1227,22 +1304,18 @@ pub fn load_image_high<F>(
     align: u64,
 ) -> Result<(GuestAddress, usize), LoadImageError>
 where
-    F: Read + Seek + AsRawDescriptor,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
     if !align.is_power_of_two() {
         return Err(LoadImageError::BadAlignment(align));
     }
 
     let max_size = max_guest_addr.offset_from(min_guest_addr) & !(align - 1);
-    let size = image.seek(SeekFrom::End(0)).map_err(LoadImageError::Seek)?;
+    let size = image.get_len().map_err(LoadImageError::GetLen)?;
 
     if size > usize::max_value() as u64 || size > max_size {
         return Err(LoadImageError::ImageSizeTooLarge(size));
     }
-
-    image
-        .seek(SeekFrom::Start(0))
-        .map_err(LoadImageError::Seek)?;
 
     // Load image at the maximum aligned address allowed.
     // The subtraction cannot underflow because of the size checks above.
@@ -1251,87 +1324,41 @@ where
     // This is safe due to the bounds check above.
     let size = size as usize;
 
-    guest_mem
-        .read_to_memory(guest_addr, image, size)
+    let guest_slice = guest_mem
+        .get_slice_at_addr(guest_addr, size)
+        .map_err(LoadImageError::GuestMemorySlice)?;
+    image
+        .read_exact_at_volatile(guest_slice, 0)
         .map_err(LoadImageError::ReadToMemory)?;
 
     Ok((guest_addr, size))
 }
 
-/// Read and write permissions setting
-///
-/// Wrap read_allow and write_allow to store them in MsrHandlers level.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrRWType {
-    #[serde(rename = "r")]
-    ReadOnly,
-    #[serde(rename = "w")]
-    WriteOnly,
-    #[serde(rename = "rw", alias = "wr")]
-    ReadWrite,
-}
+/// SMBIOS table configuration
+#[derive(Clone, Debug, Default, Serialize, Deserialize, FromKeyValues, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SmbiosOptions {
+    /// BIOS vendor name.
+    pub bios_vendor: Option<String>,
 
-/// Handler types for userspace-msr
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrAction {
-    /// Read and write from host directly, and the control of MSR will
-    /// take effect on host.
-    #[serde(rename = "pass")]
-    MsrPassthrough,
-    /// Store the dummy value for msr (copy from host or custom values),
-    /// and the control(WRMSR) of MSR won't take effect on host.
-    #[serde(rename = "emu")]
-    MsrEmulate,
-}
+    /// BIOS version number (free-form string).
+    pub bios_version: Option<String>,
 
-/// Source CPU of MSR value
-///
-/// Indicate which CPU that user get/set MSRs from/to.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrValueFrom {
-    /// Read/write MSR value from/into CPU 0.
-    /// The MSR source CPU always be CPU 0.
-    #[serde(rename = "cpu0")]
-    RWFromCPU0,
-    /// Read/write MSR value from/into the running CPU.
-    /// If vCPU migrates to another pcpu, the MSR source CPU will also change.
-    #[serde(skip)]
-    RWFromRunningCPU,
-}
+    /// System manufacturer name.
+    pub manufacturer: Option<String>,
 
-/// Whether to force KVM-filtered MSRs.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-pub enum MsrFilter {
-    /// Leave it to hypervisor (KVM) default.
-    #[serde(rename = "no")]
-    Default,
-    /// Don't let KVM do the default thing and use our userspace MSR
-    /// implementation.
-    #[serde(rename = "yes")]
-    Override,
-}
+    /// System product name.
+    pub product_name: Option<String>,
 
-/// Config option for userspace-msr handing
-///
-/// MsrConfig will be collected with its corresponding MSR's index.
-/// eg, (msr_index, msr_config)
-#[derive(Clone, Serialize, Deserialize)]
-pub struct MsrConfig {
-    /// If support RDMSR/WRMSR emulation in crosvm?
-    pub rw_type: MsrRWType,
-    /// Handlers should be used to handling MSR.
-    pub action: MsrAction,
-    /// MSR source CPU.
-    pub from: MsrValueFrom,
-    /// Whether to override KVM MSR emulation.
-    pub filter: MsrFilter,
-}
+    /// System serial number (free-form string).
+    pub serial_number: Option<String>,
 
-#[sorted]
-#[derive(Error, Debug)]
-pub enum MsrExitHandlerError {
-    #[error("Fail to create MSR handler")]
-    HandlerCreateFailed,
+    /// System UUID.
+    pub uuid: Option<Uuid>,
+
+    /// Additional OEM strings to add to SMBIOS table.
+    #[serde(default)]
+    pub oem_strings: Vec<String>,
 }
 
 #[cfg(test)]

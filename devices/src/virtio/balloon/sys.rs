@@ -3,14 +3,15 @@
 // found in the LICENSE file.
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
-        mod unix;
-        use unix as platform;
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
+        mod linux;
+        use linux as platform;
     } else if #[cfg(windows)] {
         mod windows;
         use windows as platform;
     }
 }
 
+pub(in crate::virtio::balloon) use platform::balloon_target_reached;
 pub(in crate::virtio::balloon) use platform::free_memory;
 pub(in crate::virtio::balloon) use platform::reclaim_memory;

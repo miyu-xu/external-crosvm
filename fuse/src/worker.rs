@@ -14,6 +14,8 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
+use base::Protection;
+
 use crate::filesystem::FileSystem;
 use crate::filesystem::ZeroCopyReader;
 use crate::filesystem::ZeroCopyWriter;
@@ -145,7 +147,7 @@ impl Mapper for DevFuseMapper {
         _size: usize,
         _fd: &dyn AsRawFd,
         _file_offset: u64,
-        _prot: u32,
+        _prot: Protection,
     ) -> io::Result<()> {
         Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP))
     }
@@ -162,7 +164,7 @@ impl Mapper for DevFuseMapper {
 /// * `dev_fuse` - A `File` object of /dev/fuse
 /// * `input_buffer_size` - Maximum bytes of the buffer when reads from /dev/fuse.
 /// * `output_buffer_size` - Maximum bytes of the buffer when writes to /dev/fuse. Must be large
-///                          enough (usually equal) to `n` in `MountOption::MaxRead(n)`.
+///   enough (usually equal) to `n` in `MountOption::MaxRead(n)`.
 ///
 /// [deprecated(note="Please migrate to the `FuseConfig` builder API"]
 pub fn start_message_loop<F: FileSystem + Sync>(

@@ -7,8 +7,6 @@ use std::collections::hash_map::HashMap;
 use std::collections::hash_map::VacantEntry;
 use std::env::set_var;
 use std::fs::File;
-use std::io::IoSlice;
-use std::io::IoSliceMut;
 use std::io::Write;
 use std::mem::transmute;
 use std::os::unix::net::UnixDatagram;
@@ -20,6 +18,7 @@ use std::sync::RwLock;
 use std::thread::JoinHandle;
 
 use base::error;
+use base::linux::SharedMemoryLinux;
 use base::AsRawDescriptor;
 use base::Error as SysError;
 use base::Event;
@@ -29,10 +28,7 @@ use base::MemoryMappingBuilder;
 use base::Result as SysResult;
 use base::ScmSocket;
 use base::SharedMemory;
-use base::SharedMemoryUnix;
 use base::SIGRTMIN;
-// Wrapper types to make the kvm state structs DataInit
-use data_model::DataInit;
 use kvm::dirty_log_bitmap_size;
 use kvm::Datamatch;
 use kvm::IoeventAddress;
@@ -57,70 +53,56 @@ use libc::WTERMSIG;
 use minijail::Minijail;
 use net_util::Error as NetError;
 use net_util::TapTCommon;
+use protobuf::EnumOrUnknown;
 use protobuf::Message;
 use protos::plugin::*;
 use sync::Mutex;
 use vm_memory::GuestAddress;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 use super::*;
-#[derive(Copy, Clone)]
-struct VmPicState(kvm_pic_state);
-unsafe impl DataInit for VmPicState {}
-#[derive(Copy, Clone)]
-struct VmIoapicState(kvm_ioapic_state);
-unsafe impl DataInit for VmIoapicState {}
-#[derive(Copy, Clone)]
-struct VmPitState(kvm_pit_state2);
-unsafe impl DataInit for VmPitState {}
-#[derive(Copy, Clone)]
-struct VmClockState(kvm_clock_data);
-unsafe impl DataInit for VmClockState {}
 
 const CROSVM_SOCKET_ENV: &str = "CROSVM_SOCKET";
 
-fn get_vm_state(vm: &Vm, state_set: MainRequest_StateSet) -> SysResult<Vec<u8>> {
-    Ok(match state_set {
-        MainRequest_StateSet::PIC0 => VmPicState(vm.get_pic_state(PicId::Primary)?)
-            .as_slice()
-            .to_vec(),
-        MainRequest_StateSet::PIC1 => VmPicState(vm.get_pic_state(PicId::Secondary)?)
-            .as_slice()
-            .to_vec(),
-        MainRequest_StateSet::IOAPIC => VmIoapicState(vm.get_ioapic_state()?).as_slice().to_vec(),
-        MainRequest_StateSet::PIT => VmPitState(vm.get_pit_state()?).as_slice().to_vec(),
-        MainRequest_StateSet::CLOCK => VmClockState(vm.get_clock()?).as_slice().to_vec(),
-    })
+fn get_vm_state(vm: &Vm, state_set: EnumOrUnknown<main_request::StateSet>) -> SysResult<Vec<u8>> {
+    Ok(
+        match state_set.enum_value().map_err(|_| SysError::new(EINVAL))? {
+            main_request::StateSet::PIC0 => vm.get_pic_state(PicId::Primary)?.as_bytes().to_vec(),
+            main_request::StateSet::PIC1 => vm.get_pic_state(PicId::Secondary)?.as_bytes().to_vec(),
+            main_request::StateSet::IOAPIC => vm.get_ioapic_state()?.as_bytes().to_vec(),
+            main_request::StateSet::PIT => vm.get_pit_state()?.as_bytes().to_vec(),
+            main_request::StateSet::CLOCK => vm.get_clock()?.as_bytes().to_vec(),
+        },
+    )
 }
 
-fn set_vm_state(vm: &Vm, state_set: MainRequest_StateSet, state: &[u8]) -> SysResult<()> {
-    match state_set {
-        MainRequest_StateSet::PIC0 => vm.set_pic_state(
-            PicId::Primary,
-            &VmPicState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        MainRequest_StateSet::PIC1 => vm.set_pic_state(
-            PicId::Secondary,
-            &VmPicState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        MainRequest_StateSet::IOAPIC => vm.set_ioapic_state(
-            &VmIoapicState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        MainRequest_StateSet::PIT => vm.set_pit_state(
-            &VmPitState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        MainRequest_StateSet::CLOCK => vm.set_clock(
-            &VmClockState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
+fn set_vm_state(
+    vm: &Vm,
+    state_set: EnumOrUnknown<main_request::StateSet>,
+    state: &[u8],
+) -> SysResult<()> {
+    match state_set.enum_value().map_err(|_| SysError::new(EINVAL))? {
+        main_request::StateSet::PIC0 => {
+            let pic_state = kvm_pic_state::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vm.set_pic_state(PicId::Primary, &pic_state)
+        }
+        main_request::StateSet::PIC1 => {
+            let pic_state = kvm_pic_state::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vm.set_pic_state(PicId::Secondary, &pic_state)
+        }
+        main_request::StateSet::IOAPIC => {
+            let ioapic_state = kvm_ioapic_state::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vm.set_ioapic_state(&ioapic_state)
+        }
+        main_request::StateSet::PIT => {
+            let pit_state = kvm_pit_state2::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vm.set_pit_state(&pit_state)
+        }
+        main_request::StateSet::CLOCK => {
+            let clock_data = kvm_clock_data::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vm.set_clock(&clock_data)
+        }
     }
 }
 
@@ -138,13 +120,13 @@ pub enum ProcessStatus {
 
 /// Creates, owns, and handles messages from a plugin process.
 ///
-/// A plugin process has control over a single VM and a fixed number of VCPUs via a set of pipes & unix
-/// domain socket connections and a protocol defined in `protos::plugin`. The plugin process is run
-/// in an unprivileged manner as a child process spawned via a path to a arbitrary executable.
+/// A plugin process has control over a single VM and a fixed number of VCPUs via a set of pipes &
+/// unix domain socket connections and a protocol defined in `protos::plugin`. The plugin process is
+/// run in an unprivileged manner as a child process spawned via a path to a arbitrary executable.
 pub struct Process {
     started: bool,
     plugin_pid: pid_t,
-    request_sockets: Vec<UnixDatagram>,
+    request_sockets: Vec<ScmSocket<UnixDatagram>>,
     objects: HashMap<u32, PluginObject>,
     shared_vcpu_state: Arc<RwLock<SharedVcpuState>>,
     per_vcpu_states: Vec<Arc<Mutex<PerVcpuState>>>,
@@ -227,7 +209,7 @@ impl Process {
         Ok(Process {
             started: false,
             plugin_pid,
-            request_sockets: vec![request_socket],
+            request_sockets: vec![request_socket.try_into()?],
             objects: Default::default(),
             shared_vcpu_state: Default::default(),
             per_vcpu_states,
@@ -276,7 +258,7 @@ impl Process {
     /// If any socket in this slice becomes readable, `handle_socket` should be called with the
     /// index of that socket. If any socket becomes closed, its index should be passed to
     /// `drop_sockets`.
-    pub fn sockets(&self) -> &[UnixDatagram] {
+    pub fn sockets(&self) -> &[ScmSocket<UnixDatagram>] {
         &self.request_sockets
     }
 
@@ -315,7 +297,7 @@ impl Process {
         // the writable side of the pipe (normally used by the plugin).
         for pipe in self.vcpu_pipes.iter_mut() {
             let mut shutdown_request = VcpuRequest::new();
-            shutdown_request.set_shutdown(VcpuRequest_Shutdown::new());
+            shutdown_request.set_shutdown(vcpu_request::Shutdown::new());
             let mut buffer = Vec::new();
             shutdown_request
                 .write_to_vec(&mut buffer)
@@ -330,6 +312,7 @@ impl Process {
     /// Waits without blocking for the plugin process to exit and returns the status.
     pub fn try_wait(&mut self) -> SysResult<ProcessStatus> {
         let mut status = 0;
+        // SAFETY:
         // Safe because waitpid is given a valid pointer of correct size and mutability, and the
         // return value is checked.
         let ret = unsafe { waitpid(self.plugin_pid, &mut status, WNOHANG) };
@@ -353,10 +336,14 @@ impl Process {
     fn handle_io_event(
         entry: VacantEntry<u32, PluginObject>,
         vm: &mut Vm,
-        io_event: &MainRequest_Create_IoEvent,
+        io_event: &main_request::create::IoEvent,
     ) -> SysResult<RawDescriptor> {
         let evt = Event::new()?;
-        let addr = match io_event.space {
+        let addr = match io_event
+            .space
+            .enum_value()
+            .map_err(|_| SysError::new(EINVAL))?
+        {
             AddressSpace::IOPORT => IoeventAddress::Pio(io_event.address),
             AddressSpace::MMIO => IoeventAddress::Mmio(io_event.address),
         };
@@ -369,9 +356,7 @@ impl Process {
             4 => {
                 vm.register_ioevent(&evt, addr, Datamatch::U32(Some(io_event.datamatch as u32)))?
             }
-            8 => {
-                vm.register_ioevent(&evt, addr, Datamatch::U64(Some(io_event.datamatch as u64)))?
-            }
+            8 => vm.register_ioevent(&evt, addr, Datamatch::U64(Some(io_event.datamatch)))?,
             _ => return Err(SysError::new(EINVAL)),
         };
 
@@ -422,10 +407,17 @@ impl Process {
         Ok(())
     }
 
-    fn handle_reserve_range(&mut self, reserve_range: &MainRequest_ReserveRange) -> SysResult<()> {
+    fn handle_reserve_range(
+        &mut self,
+        reserve_range: &main_request::ReserveRange,
+    ) -> SysResult<()> {
         match self.shared_vcpu_state.write() {
             Ok(mut lock) => {
-                let space = match reserve_range.space {
+                let space = match reserve_range
+                    .space
+                    .enum_value()
+                    .map_err(|_| SysError::new(EINVAL))?
+                {
                     AddressSpace::IOPORT => IoSpace::Ioport,
                     AddressSpace::MMIO => IoSpace::Mmio,
                 };
@@ -445,20 +437,20 @@ impl Process {
 
     fn handle_set_irq_routing(
         vm: &mut Vm,
-        irq_routing: &MainRequest_SetIrqRouting,
+        irq_routing: &main_request::SetIrqRouting,
     ) -> SysResult<()> {
         let mut routes = Vec::with_capacity(irq_routing.routes.len());
         for route in &irq_routing.routes {
             routes.push(IrqRoute {
                 gsi: route.irq_id,
                 source: if route.has_irqchip() {
-                    let irqchip = route.get_irqchip();
+                    let irqchip = route.irqchip();
                     IrqSource::Irqchip {
                         chip: irqchip.irqchip,
                         pin: irqchip.pin,
                     }
                 } else if route.has_msi() {
-                    let msi = route.get_msi();
+                    let msi = route.msi();
                     IrqSource::Msi {
                         address: msi.address,
                         data: msi.data,
@@ -474,7 +466,7 @@ impl Process {
         vm.set_gsi_routing(&routes[..])
     }
 
-    fn handle_set_call_hint(&mut self, hints: &MainRequest_SetCallHint) -> SysResult<()> {
+    fn handle_set_call_hint(&mut self, hints: &main_request::SetCallHint) -> SysResult<()> {
         let mut regs: Vec<CallHintDetails> = vec![];
         for hint in &hints.hints {
             regs.push(CallHintDetails {
@@ -492,7 +484,11 @@ impl Process {
         }
         match self.shared_vcpu_state.write() {
             Ok(mut lock) => {
-                let space = match hints.space {
+                let space = match hints
+                    .space
+                    .enum_value()
+                    .map_err(|_| SysError::new(EINVAL))?
+                {
                     AddressSpace::IOPORT => IoSpace::Ioport,
                     AddressSpace::MMIO => IoSpace::Mmio,
                 };
@@ -517,8 +513,8 @@ impl Process {
     }
 
     fn handle_get_net_config(
-        tap: &net_util::sys::unix::Tap,
-        config: &mut MainResponse_GetNetConfig,
+        tap: &net_util::sys::linux::Tap,
+        config: &mut main_response::GetNetConfig,
     ) -> SysResult<()> {
         // Log any NetError so that the cause can be found later, but extract and return the
         // underlying errno for the client as well.
@@ -528,12 +524,12 @@ impl Process {
         }
 
         let ip_addr = tap.ip_addr().map_err(|e| map_net_error("IP address", e))?;
-        config.set_host_ipv4_address(u32::from(ip_addr));
+        config.host_ipv4_address = u32::from(ip_addr);
 
         let netmask = tap.netmask().map_err(|e| map_net_error("netmask", e))?;
-        config.set_netmask(u32::from(netmask));
+        config.netmask = u32::from(netmask);
 
-        let result_mac_addr = config.mut_host_mac_address();
+        let result_mac_addr = &mut config.host_mac_address;
         let mac_addr_octets = tap
             .mac_address()
             .map_err(|e| map_net_error("mac address", e))?
@@ -558,7 +554,8 @@ impl Process {
         taps: &[Tap],
     ) -> result::Result<(), CommError> {
         let (msg_size, request_file) = self.request_sockets[index]
-            .recv_with_fd(IoSliceMut::new(&mut self.request_buffer))
+            .recv_with_file(&mut self.request_buffer)
+            .map_err(io_to_sys_err)
             .map_err(CommError::PluginSocketRecv)?;
 
         if msg_size == 0 {
@@ -580,11 +577,11 @@ impl Process {
         let mut response = MainResponse::new();
         let res = if request.has_create() {
             response.mut_create();
-            let create = request.get_create();
+            let create = request.create();
             match self.objects.entry(create.id) {
                 Entry::Vacant(entry) => {
                     if create.has_io_event() {
-                        match Self::handle_io_event(entry, vm, create.get_io_event()) {
+                        match Self::handle_io_event(entry, vm, create.io_event()) {
                             Ok(fd) => {
                                 response_fds.push(fd);
                                 Ok(())
@@ -592,7 +589,7 @@ impl Process {
                             Err(e) => Err(e),
                         }
                     } else if create.has_memory() {
-                        let memory = create.get_memory();
+                        let memory = create.memory();
                         match request_file {
                             Some(memfd) => Self::handle_memory(
                                 entry,
@@ -607,7 +604,7 @@ impl Process {
                             None => Err(SysError::new(EBADF)),
                         }
                     } else if create.has_irq_event() {
-                        let irq_event = create.get_irq_event();
+                        let irq_event = create.irq_event();
                         match (Event::new(), Event::new()) {
                             (Ok(evt), Ok(resample_evt)) => match vm.register_irqfd_resample(
                                 &evt,
@@ -636,7 +633,7 @@ impl Process {
             }
         } else if request.has_destroy() {
             response.mut_destroy();
-            match self.objects.entry(request.get_destroy().id) {
+            match self.objects.entry(request.destroy().id) {
                 Entry::Occupied(entry) => entry.remove().destroy(vm),
                 Entry::Vacant(_) => Err(SysError::new(ENOENT)),
             }
@@ -644,7 +641,11 @@ impl Process {
             response.mut_new_connection();
             match new_seqpacket_pair() {
                 Ok((request_socket, child_socket)) => {
-                    self.request_sockets.push(request_socket);
+                    self.request_sockets.push(
+                        request_socket
+                            .try_into()
+                            .map_err(|_| CommError::PluginSocketHup)?,
+                    );
                     response_fds.push(child_socket.as_raw_descriptor());
                     boxed_fds.push(box_owned_fd(child_socket));
                     Ok(())
@@ -656,26 +657,27 @@ impl Process {
             response_fds.push(self.kill_evt.as_raw_descriptor());
             Ok(())
         } else if request.has_check_extension() {
+            // SAFETY:
             // Safe because the Cap enum is not read by the check_extension method. In that method,
             // cap is cast back to an integer and fed to an ioctl. If the extension name is actually
             // invalid, the kernel will safely reject the extension under the assumption that the
             // capability is legitimately unsupported.
-            let cap = unsafe { transmute(request.get_check_extension().extension) };
+            let cap = unsafe { transmute(request.check_extension().extension) };
             response.mut_check_extension().has_extension = vm.check_extension(cap);
             Ok(())
         } else if request.has_reserve_range() {
             response.mut_reserve_range();
-            self.handle_reserve_range(request.get_reserve_range())
+            self.handle_reserve_range(request.reserve_range())
         } else if request.has_set_irq() {
             response.mut_set_irq();
-            let irq = request.get_set_irq();
+            let irq = request.set_irq();
             vm.set_irq_line(irq.irq_id, irq.active)
         } else if request.has_set_irq_routing() {
             response.mut_set_irq_routing();
-            Self::handle_set_irq_routing(vm, request.get_set_irq_routing())
+            Self::handle_set_irq_routing(vm, request.set_irq_routing())
         } else if request.has_get_state() {
             let response_state = response.mut_get_state();
-            match get_vm_state(vm, request.get_get_state().set) {
+            match get_vm_state(vm, request.get_state().set) {
                 Ok(state) => {
                     response_state.state = state;
                     Ok(())
@@ -684,15 +686,15 @@ impl Process {
             }
         } else if request.has_set_state() {
             response.mut_set_state();
-            let set_state = request.get_set_state();
-            set_vm_state(vm, set_state.set, set_state.get_state())
+            let set_state = request.set_state();
+            set_vm_state(vm, set_state.set, &set_state.state)
         } else if request.has_set_identity_map_addr() {
             response.mut_set_identity_map_addr();
-            let addr = request.get_set_identity_map_addr().address;
+            let addr = request.set_identity_map_addr().address;
             vm.set_identity_map_addr(GuestAddress(addr as u64))
         } else if request.has_pause_vcpus() {
             response.mut_pause_vcpus();
-            let pause_vcpus = request.get_pause_vcpus();
+            let pause_vcpus = request.pause_vcpus();
             self.handle_pause_vcpus(vcpu_handles, pause_vcpus.cpu_mask, pause_vcpus.user);
             Ok(())
         } else if request.has_get_vcpus() {
@@ -725,14 +727,15 @@ impl Process {
             }
         } else if request.has_set_call_hint() {
             response.mut_set_call_hint();
-            self.handle_set_call_hint(request.get_set_call_hint())
+            self.handle_set_call_hint(request.set_call_hint())
         } else if request.has_dirty_log() {
             let dirty_log_response = response.mut_dirty_log();
-            match self.objects.get(&request.get_dirty_log().id) {
+            match self.objects.get(&request.dirty_log().id) {
                 Some(&PluginObject::Memory { slot, length }) => {
-                    let dirty_log = dirty_log_response.mut_bitmap();
-                    dirty_log.resize(dirty_log_bitmap_size(length), 0);
-                    vm.get_dirty_log(slot, &mut dirty_log[..])
+                    dirty_log_response
+                        .bitmap
+                        .resize(dirty_log_bitmap_size(length), 0);
+                    vm.get_dirty_log(slot, &mut dirty_log_response.bitmap)
                 }
                 _ => Err(SysError::new(ENOENT)),
             }
@@ -783,7 +786,8 @@ impl Process {
             .map_err(CommError::EncodeResponse)?;
         assert_ne!(self.response_buffer.len(), 0);
         self.request_sockets[index]
-            .send_with_fds(&[IoSlice::new(&self.response_buffer[..])], &response_fds)
+            .send_with_fds(&self.response_buffer, &response_fds)
+            .map_err(io_to_sys_err)
             .map_err(CommError::PluginSocketSend)?;
 
         Ok(())

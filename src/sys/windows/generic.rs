@@ -3,40 +3,72 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+use std::thread;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use anyhow::Result;
 use arch::RunnableLinuxVm;
+use arch::VcpuArch;
 use arch::VirtioDeviceStub;
+use arch::VmArch;
+use base::info;
 use base::AsRawDescriptor;
+use base::CloseNotifier;
 use base::Event;
 use base::EventToken;
 use base::ProtoTube;
+use base::ReadNotifier;
 use base::SendTube;
 use base::Tube;
 use base::WaitContext;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use devices::virtio;
-use devices::virtio::vhost::user::gpu::sys::windows::product;
+#[cfg(feature = "gpu")]
+use devices::virtio::gpu::EventDevice;
+#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuBackendConfig as GpuBackendConfigProduct;
+#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::product::GpuVmmConfig as GpuVmmConfigProduct;
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::gpu::sys::windows::product::WindowProcedureThreadVmmConfig as WindowProcedureThreadVmmConfigProduct;
+#[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::gpu::sys::windows::GpuVmmConfig;
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::gpu::sys::windows::InputEventVmmConfig;
+#[cfg(feature = "gpu")]
+use devices::virtio::vhost::user::gpu::sys::windows::WindowProcedureThreadVmmConfig;
+#[cfg(feature = "audio")]
+use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig as SndBackendConfigProduct;
+#[cfg(feature = "audio")]
+use devices::virtio::vhost::user::snd::sys::windows::product::SndVmmConfig as SndVmmConfigProduct;
+#[cfg(feature = "audio")]
+use devices::virtio::vhost::user::snd::sys::windows::SndVmmConfig;
+#[cfg(feature = "gpu")]
 use devices::virtio::DisplayBackend;
-use devices::virtio::EventDevice;
+#[cfg(feature = "gpu")]
 use devices::virtio::Gpu;
+#[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
-use hypervisor::VcpuX86_64 as VcpuArch;
-use hypervisor::VmX86_64 as VmArch;
+#[cfg(feature = "gpu")]
+use gpu_display::WindowProcedureThread;
+#[cfg(feature = "gpu")]
+use gpu_display::WindowProcedureThreadBuilder;
 pub(crate) use metrics::log_descriptor;
 pub(crate) use metrics::MetricEventType;
 use sync::Mutex;
+#[cfg(feature = "balloon")]
+use vm_control::BalloonTube;
 use vm_control::PvClockCommand;
+use vm_control::VmRequest;
+use vm_control::VmResponse;
+use vm_control::VmRunMode;
 
 use super::run_vcpu::VcpuRunMode;
 use crate::crosvm::config::Config;
 use crate::crosvm::sys::cmdline::RunMetricsCommand;
-use crate::sys::platform::TaggedControlTube as SharedTaggedControlTube;
+use crate::sys::windows::TaggedControlTube as SharedTaggedControlTube;
 
 pub struct MessageFromService {}
 
@@ -54,8 +86,17 @@ pub(super) enum TaggedControlTube {
     Unused,
 }
 
-impl TaggedControlTube {
-    pub fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+impl ReadNotifier for TaggedControlTube {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        panic!(
+            "get_read_notifier called on generic tagged control: {:?}",
+            self
+        )
+    }
+}
+
+impl CloseNotifier for TaggedControlTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
         panic!(
             "get_read_notifier called on generic tagged control: {:?}",
             self
@@ -67,7 +108,9 @@ impl TaggedControlTube {
 pub(super) enum Token {
     VmEvent,
     BrokerShutdown,
-    VmControl { index: usize },
+    VmControlServer,
+    VmControl { id: usize },
+    BalloonTube,
 }
 
 pub(super) fn handle_hungup_event(token: &Token) {
@@ -95,7 +138,7 @@ pub(super) fn handle_pvclock_request(tube: &Option<Tube>, command: PvClockComman
 
 // Run ime thread.
 pub(super) fn run_ime_thread(
-    product_args: RunControlArgs,
+    product_args: &mut RunControlArgs,
     exit_evt: &Event,
 ) -> Result<Option<JoinHandle<Result<()>>>> {
     Ok(None)
@@ -124,7 +167,6 @@ pub(super) fn handle_tagged_control_tube_event(
     virtio_snd_host_mute_tube: &mut Option<Tube>,
     service_vm_state: &mut ServiceVmState,
     ipc_main_loop_tube: Option<&Tube>,
-    ac97_host_tubes: &[Tube],
 ) {
 }
 
@@ -141,12 +183,11 @@ pub(super) fn push_triggers<'a>(
     }
 }
 
-pub(super) fn handle_received_token<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
+pub(super) fn handle_received_token<'a, V: VmArch + 'static, Vcpu: VcpuArch + 'static, F>(
     token: &Token,
-    _ac97_host_tubes: &[Tube],
     _anti_tamper_main_thread_tube: &Option<ProtoTube>,
-    _balloon_host_tube: &Option<Tube>,
-    _control_tubes: &[SharedTaggedControlTube],
+    #[cfg(feature = "balloon")] _balloon_tube: Option<&mut BalloonTube>,
+    _control_tubes: &BTreeMap<usize, SharedTaggedControlTube>,
     _guest_os: &mut RunnableLinuxVm<V, Vcpu>,
     _ipc_main_loop_tube: Option<&Tube>,
     _memory_size_mb: u64,
@@ -156,7 +197,11 @@ pub(super) fn handle_received_token<V: VmArch + 'static, Vcpu: VcpuArch + 'stati
     _service_vm_state: &mut ServiceVmState,
     _vcpu_boxes: &Mutex<Vec<Box<dyn VcpuArch>>>,
     _virtio_snd_host_mute_tube: &mut Option<Tube>,
-) {
+    _execute_vm_request: F,
+) -> Option<VmRunMode>
+where
+    F: FnMut(VmRequest, &'a mut RunnableLinuxVm<V, Vcpu>) -> (VmResponse, Option<VmRunMode>),
+{
     panic!(
         "Received an unrecognized shared token to product specific handler: {:?}",
         token
@@ -171,48 +216,68 @@ pub(super) fn create_service_vm_state(_memory_size_mb: u64) -> ServiceVmState {
     ServiceVmState {}
 }
 
+#[cfg(feature = "gpu")]
 pub(super) fn create_gpu(
     vm_evt_wrtube: &SendTube,
+    gpu_control_tube: Tube,
     resource_bridges: Vec<Tube>,
     display_backends: Vec<DisplayBackend>,
     gpu_parameters: &GpuParameters,
     event_devices: Vec<EventDevice>,
     features: u64,
-    _product_args: product::GpuBackendConfig,
+    _product_args: GpuBackendConfigProduct,
+    wndproc_thread: WindowProcedureThread,
 ) -> Result<Gpu> {
-    let wndproc_thread =
-        virtio::gpu::start_wndproc_thread(None).expect("Failed to start wndproc_thread!");
-
     Ok(Gpu::new(
         vm_evt_wrtube
             .try_clone()
             .exit_context(Exit::CloneTube, "failed to clone tube")?,
+        gpu_control_tube,
         resource_bridges,
         display_backends,
         gpu_parameters,
+        None,
         event_devices,
-        /* external_blob= */ false,
-        /* system_blob= */ false,
         features,
-        BTreeMap::new(),
+        &BTreeMap::new(),
         wndproc_thread,
     ))
 }
 
+#[cfg(feature = "gpu")]
+pub(super) fn push_window_procedure_thread_control_tubes(
+    #[allow(clippy::ptr_arg)]
+    // The implementor can extend the size of this argument, so mutable slice is not enough.
+    _control_tubes: &mut Vec<SharedTaggedControlTube>,
+    _: &mut WindowProcedureThreadVmmConfig,
+) {
+}
+
+#[cfg(feature = "gpu")]
 pub(super) fn push_gpu_control_tubes(
     _control_tubes: &mut [SharedTaggedControlTube],
     _gpu_vmm_config: &mut GpuVmmConfig,
 ) {
 }
 
-pub(super) fn num_input_sound_devices(_cfg: &Config) -> u32 {
+#[cfg(feature = "audio")]
+pub(super) fn push_snd_control_tubes(
+    _control_tubes: &mut [SharedTaggedControlTube],
+    _snd_vmm_config: &mut SndVmmConfig,
+) {
+}
+
+#[cfg(feature = "audio")]
+pub(crate) fn num_input_sound_devices(_cfg: &Config) -> u32 {
     0
 }
 
-pub(super) fn num_input_sound_streams(_cfg: &Config) -> u32 {
+#[cfg(feature = "audio")]
+pub(crate) fn num_input_sound_streams(_cfg: &Config) -> u32 {
     0
 }
 
+#[cfg(feature = "gpu")]
 pub(crate) fn get_gpu_product_configs(
     cfg: &Config,
     alias_pid: u32,
@@ -221,11 +286,21 @@ pub(crate) fn get_gpu_product_configs(
 }
 
 #[cfg(feature = "audio")]
+pub(crate) fn get_snd_product_configs(
+    _cfg: &Config,
+    _alias_pid: u32,
+) -> Result<(SndBackendConfigProduct, SndVmmConfigProduct)> {
+    Ok((SndBackendConfigProduct {}, SndVmmConfigProduct {}))
+}
+
+#[cfg(feature = "audio")]
 pub(super) fn virtio_sound_enabled() -> bool {
     false
 }
 
 pub(crate) fn run_metrics(_args: RunMetricsCommand) -> Result<()> {
+    info!("sleep forever. We will get killed by broker");
+    thread::sleep(Duration::MAX);
     Ok(())
 }
 
@@ -235,7 +310,7 @@ pub(crate) fn setup_metrics_reporting() -> Result<()> {
 
 pub(super) fn push_mouse_device(
     cfg: &Config,
-    _gpu_vmm_config: &mut GpuVmmConfig,
+    #[cfg(feature = "gpu")] _input_event_vmm_config: &mut InputEventVmmConfig,
     _devs: &mut [VirtioDeviceStub],
 ) -> Result<()> {
     Ok(())
@@ -247,4 +322,14 @@ pub(super) fn push_pvclock_device(
     tsc_frequency: u64,
     tube: Tube,
 ) {
+}
+
+#[cfg(feature = "gpu")]
+pub(crate) fn get_window_procedure_thread_product_configs(
+    _: &Config,
+    _: &mut WindowProcedureThreadBuilder,
+    _main_alias_pid: u32,
+    _device_alias_pid: u32,
+) -> Result<WindowProcedureThreadVmmConfigProduct> {
+    Ok(WindowProcedureThreadVmmConfigProduct {})
 }

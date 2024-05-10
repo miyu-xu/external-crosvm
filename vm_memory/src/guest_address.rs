@@ -57,8 +57,9 @@ impl GuestAddress {
 
     /// Returns the result of the base address + the size.
     /// Only use this when `offset` is guaranteed not to overflow.
+    #[inline]
     pub fn unchecked_add(self, offset: u64) -> GuestAddress {
-        GuestAddress(self.0 + offset)
+        GuestAddress(self.0.wrapping_add(offset))
     }
 
     /// Returns the result of the subtraction of None if there is underflow.
@@ -68,7 +69,7 @@ impl GuestAddress {
 
     /// Returns the bitwise and of the address with the given mask.
     pub fn mask(self, mask: u64) -> GuestAddress {
-        GuestAddress(self.0 & mask as u64)
+        GuestAddress(self.0 & mask)
     }
 
     /// Returns the next highest address that is a multiple of `align`, or an unchanged copy of the
@@ -87,7 +88,7 @@ impl BitAnd<u64> for GuestAddress {
     type Output = GuestAddress;
 
     fn bitand(self, other: u64) -> GuestAddress {
-        GuestAddress(self.0 & other as u64)
+        GuestAddress(self.0 & other)
     }
 }
 
@@ -95,7 +96,7 @@ impl BitOr<u64> for GuestAddress {
     type Output = GuestAddress;
 
     fn bitor(self, other: u64) -> GuestAddress {
-        GuestAddress(self.0 | other as u64)
+        GuestAddress(self.0 | other)
     }
 }
 

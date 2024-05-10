@@ -5,13 +5,19 @@
 use std::arch::x86_64::CpuidResult;
 #[cfg(any(unix, feature = "haxm", feature = "whpx"))]
 use std::arch::x86_64::__cpuid;
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
 use std::arch::x86_64::_rdtsc;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 
+use anyhow::Context;
+use base::custom_serde::deserialize_seq_to_arr;
+use base::custom_serde::serialize_arr;
 use base::error;
+use base::warn;
 use base::Result;
 use bit_field::*;
 use downcast_rs::impl_downcast;
+use libc::c_void;
 use serde::Deserialize;
 use serde::Serialize;
 use vm_memory::GuestAddress;
@@ -22,6 +28,20 @@ use crate::IrqSource;
 use crate::IrqSourceChip;
 use crate::Vcpu;
 use crate::Vm;
+
+const MSR_F15H_PERF_CTL0: u32 = 0xc0010200;
+const MSR_F15H_PERF_CTL1: u32 = 0xc0010202;
+const MSR_F15H_PERF_CTL2: u32 = 0xc0010204;
+const MSR_F15H_PERF_CTL3: u32 = 0xc0010206;
+const MSR_F15H_PERF_CTL4: u32 = 0xc0010208;
+const MSR_F15H_PERF_CTL5: u32 = 0xc001020a;
+const MSR_F15H_PERF_CTR0: u32 = 0xc0010201;
+const MSR_F15H_PERF_CTR1: u32 = 0xc0010203;
+const MSR_F15H_PERF_CTR2: u32 = 0xc0010205;
+const MSR_F15H_PERF_CTR3: u32 = 0xc0010207;
+const MSR_F15H_PERF_CTR4: u32 = 0xc0010209;
+const MSR_F15H_PERF_CTR5: u32 = 0xc001020b;
+const MSR_IA32_PERF_CAPABILITIES: u32 = 0x00000345;
 
 /// A trait for managing cpuids for an x86_64 hypervisor and for checking its capabilities.
 pub trait HypervisorX86_64: Hypervisor {
@@ -90,17 +110,33 @@ pub trait VcpuX86_64: Vcpu {
     fn set_debugregs(&self, debugregs: &DebugRegs) -> Result<()>;
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>>;
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>>;
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, xcrs: &[Register]) -> Result<()>;
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, xcr: u32, value: u64) -> Result<()>;
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()>;
+    /// Gets the VCPU x87 FPU, MMX, XMM, YMM and MXCSR registers.
+    fn get_xsave(&self) -> Result<Xsave>;
 
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()>;
+    /// Sets the VCPU x87 FPU, MMX, XMM, YMM and MXCSR registers.
+    fn set_xsave(&self, xsave: &Xsave) -> Result<()>;
+
+    /// Gets interrupt state (hypervisor specific) for this VCPU that must be
+    /// saved/restored for snapshotting.
+    fn get_interrupt_state(&self) -> Result<serde_json::Value>;
+
+    /// Sets interrupt state (hypervisor specific) for this VCPU. Only used for
+    /// snapshotting.
+    fn set_interrupt_state(&self, data: serde_json::Value) -> Result<()>;
+
+    /// Gets a single model-specific register's value.
+    fn get_msr(&self, msr_index: u32) -> Result<u64>;
+
+    /// Gets the model-specific registers. Returns all the MSRs for the VCPU.
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>>;
+
+    /// Sets a single model-specific register's value.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()>;
 
     /// Sets up the data returned by the CPUID instruction.
     fn set_cpuid(&self, cpuid: &CpuId) -> Result<()>;
@@ -116,11 +152,153 @@ pub trait VcpuX86_64: Vcpu {
     /// will then set the appropriate registers on the vcpu.
     fn handle_cpuid(&mut self, entry: &CpuIdEntry) -> Result<()>;
 
-    /// Get the guest->host TSC offset
-    fn get_tsc_offset(&self) -> Result<u64>;
+    /// Gets the guest->host TSC offset.
+    ///
+    /// The default implementation uses [`VcpuX86_64::get_msr()`] to read the guest TSC.
+    fn get_tsc_offset(&self) -> Result<u64> {
+        // SAFETY:
+        // Safe because _rdtsc takes no arguments
+        let host_before_tsc = unsafe { _rdtsc() };
 
-    /// Set the guest->host TSC offset
-    fn set_tsc_offset(&self, offset: u64) -> Result<()>;
+        // get guest TSC value from our hypervisor
+        let guest_tsc = self.get_msr(crate::MSR_IA32_TSC)?;
+
+        // SAFETY:
+        // Safe because _rdtsc takes no arguments
+        let host_after_tsc = unsafe { _rdtsc() };
+
+        // Average the before and after host tsc to get the best value
+        let host_tsc = ((host_before_tsc as u128 + host_after_tsc as u128) / 2) as u64;
+
+        Ok(guest_tsc.wrapping_sub(host_tsc))
+    }
+
+    /// Sets the guest->host TSC offset.
+    ///
+    /// The default implementation uses [`VcpuX86_64::set_tsc_value()`] to set the TSC value.
+    ///
+    /// It sets TSC_OFFSET (VMCS / CB field) by setting the TSC MSR to the current
+    /// host TSC value plus the desired offset. We rely on the fact that hypervisors
+    /// determine the value of TSC_OFFSET by computing TSC_OFFSET = new_tsc_value
+    /// - _rdtsc() = _rdtsc() + offset - _rdtsc() ~= offset. Note that the ~= is
+    /// important: this is an approximate operation, because the two _rdtsc() calls
+    /// are separated by at least a few ticks.
+    ///
+    /// Note: TSC_OFFSET, host TSC, guest TSC, and TSC MSR are all different
+    /// concepts.
+    /// * When a guest executes rdtsc, the value (guest TSC) returned is host_tsc * TSC_MULTIPLIER +
+    ///   TSC_OFFSET + TSC_ADJUST.
+    /// * The TSC MSR is a special MSR that when written to by the host, will cause TSC_OFFSET to be
+    ///   set accordingly by the hypervisor.
+    /// * When the guest *writes* to TSC MSR, it actually changes the TSC_ADJUST MSR *for the
+    ///   guest*. Generally this is only happens if the guest is trying to re-zero or synchronize
+    ///   TSCs.
+    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
+        // SAFETY: _rdtsc takes no arguments.
+        let host_tsc = unsafe { _rdtsc() };
+        self.set_tsc_value(host_tsc.wrapping_add(offset))
+    }
+
+    /// Sets the guest TSC exactly to the provided value.
+    ///
+    /// The default implementation sets the guest's TSC by writing the value to the MSR directly.
+    ///
+    /// See [`VcpuX86_64::set_tsc_offset()`] for an explanation of how this value is actually read
+    /// by the guest after being set.
+    fn set_tsc_value(&self, value: u64) -> Result<()> {
+        self.set_msr(crate::MSR_IA32_TSC, value)
+    }
+
+    /// Some hypervisors require special handling to restore timekeeping when
+    /// a snapshot is restored. They are provided with a host TSC reference
+    /// moment, guaranteed to be the same across all Vcpus, and the Vcpu's TSC
+    /// offset at the moment it was snapshotted.
+    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()>;
+
+    /// Snapshot vCPU state
+    fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
+        Ok(VcpuSnapshot {
+            vcpu_id: self.id(),
+            regs: self.get_regs()?,
+            sregs: self.get_sregs()?,
+            debug_regs: self.get_debugregs()?,
+            xcrs: self.get_xcrs()?,
+            msrs: self.get_all_msrs()?,
+            xsave: self.get_xsave()?,
+            hypervisor_data: self.get_interrupt_state()?,
+            tsc_offset: self.get_tsc_offset()?,
+        })
+    }
+
+    fn restore(
+        &mut self,
+        snapshot: &VcpuSnapshot,
+        host_tsc_reference_moment: u64,
+    ) -> anyhow::Result<()> {
+        // List of MSRs that may fail to restore due to lack of support in the host kernel.
+        // Some hosts are may be running older kernels which do not support all MSRs, but
+        // get_all_msrs will still fetch the MSRs supported by the CPU. Trying to set those MSRs
+        // will result in failures, so they will throw a warning instead.
+        let msr_allowlist = HashSet::from([
+            MSR_F15H_PERF_CTL0,
+            MSR_F15H_PERF_CTL1,
+            MSR_F15H_PERF_CTL2,
+            MSR_F15H_PERF_CTL3,
+            MSR_F15H_PERF_CTL4,
+            MSR_F15H_PERF_CTL5,
+            MSR_F15H_PERF_CTR0,
+            MSR_F15H_PERF_CTR1,
+            MSR_F15H_PERF_CTR2,
+            MSR_F15H_PERF_CTR3,
+            MSR_F15H_PERF_CTR4,
+            MSR_F15H_PERF_CTR5,
+            MSR_IA32_PERF_CAPABILITIES,
+        ]);
+        assert_eq!(snapshot.vcpu_id, self.id());
+        self.set_regs(&snapshot.regs)?;
+        self.set_sregs(&snapshot.sregs)?;
+        self.set_debugregs(&snapshot.debug_regs)?;
+        for (xcr_index, value) in &snapshot.xcrs {
+            self.set_xcr(*xcr_index, *value)?;
+        }
+
+        for (msr_index, value) in snapshot.msrs.iter() {
+            if self.get_msr(*msr_index) == Ok(*value) {
+                continue; // no need to set MSR since the values are the same.
+            }
+            if let Err(e) = self.set_msr(*msr_index, *value) {
+                if msr_allowlist.contains(msr_index) {
+                    warn!(
+                        "Failed to set MSR. MSR might not be supported in this kernel. Err: {}",
+                        e
+                    );
+                } else {
+                    return Err(e).context(
+                        "Failed to set MSR. MSR might not be supported by the CPU or by the kernel,
+                         and was not allow-listed.",
+                    );
+                }
+            };
+        }
+        self.set_xsave(&snapshot.xsave)?;
+        self.set_interrupt_state(snapshot.hypervisor_data.clone())?;
+        self.restore_timekeeping(host_tsc_reference_moment, snapshot.tsc_offset)?;
+        Ok(())
+    }
+}
+
+/// x86 specific vCPU snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VcpuSnapshot {
+    pub vcpu_id: usize,
+    regs: Regs,
+    sregs: Sregs,
+    debug_regs: DebugRegs,
+    xcrs: BTreeMap<u32, u64>,
+    msrs: BTreeMap<u32, u64>,
+    xsave: Xsave,
+    hypervisor_data: serde_json::Value,
+    tsc_offset: u64,
 }
 
 impl_downcast!(VcpuX86_64);
@@ -128,49 +306,13 @@ impl_downcast!(VcpuX86_64);
 // TSC MSR
 pub const MSR_IA32_TSC: u32 = 0x00000010;
 
-/// Implementation of get_tsc_offset that uses VcpuX86_64::get_msrs.
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
-pub(crate) fn get_tsc_offset_from_msr(vcpu: &impl VcpuX86_64) -> Result<u64> {
-    let mut regs = vec![Register {
-        id: crate::MSR_IA32_TSC,
-        value: 0,
-    }];
-
-    // Safe because _rdtsc takes no arguments
-    let host_before_tsc = unsafe { _rdtsc() };
-
-    // get guest TSC value from our hypervisor
-    vcpu.get_msrs(&mut regs)?;
-
-    // Safe because _rdtsc takes no arguments
-    let host_after_tsc = unsafe { _rdtsc() };
-
-    // Average the before and after host tsc to get the best value
-    let host_tsc = ((host_before_tsc as u128 + host_after_tsc as u128) / 2) as u64;
-
-    Ok(regs[0].value.wrapping_sub(host_tsc))
-}
-
-/// Implementation of get_tsc_offset that uses VcpuX86_64::get_msrs.
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
-pub(crate) fn set_tsc_offset_via_msr(vcpu: &impl VcpuX86_64, offset: u64) -> Result<()> {
-    // Safe because _rdtsc takes no arguments
-    let host_tsc = unsafe { _rdtsc() };
-
-    let regs = vec![Register {
-        id: crate::MSR_IA32_TSC,
-        value: host_tsc.wrapping_add(offset),
-    }];
-
-    // set guest TSC value from our hypervisor
-    vcpu.set_msrs(&regs)
-}
-
 /// Gets host cpu max physical address bits.
 #[cfg(any(unix, feature = "haxm", feature = "whpx"))]
 pub(crate) fn host_phys_addr_bits() -> u8 {
+    // SAFETY: trivially safe
     let highest_ext_function = unsafe { __cpuid(0x80000000) };
     if highest_ext_function.eax >= 0x80000008 {
+        // SAFETY: trivially safe
         let addr_size = unsafe { __cpuid(0x80000008) };
         // Low 8 bits of 0x80000008 leaf: host physical address size in bits.
         addr_size.eax as u8
@@ -192,7 +334,7 @@ pub struct VcpuInitX86_64 {
     pub fpu: Fpu,
 
     /// Machine-specific registers.
-    pub msrs: Vec<Register>,
+    pub msrs: BTreeMap<u32, u64>,
 }
 
 /// Hold the CPU feature configurations that are needed to setup a vCPU.
@@ -206,9 +348,6 @@ pub struct CpuConfigX86_64 {
 
     /// whether expose HWP feature to the guest.
     pub enable_hwp: bool,
-
-    /// whether enabling host cpu topology.
-    pub enable_pnp_data: bool,
 
     /// Wheter diabling SMT (Simultaneous Multithreading).
     pub no_smt: bool,
@@ -225,7 +364,6 @@ impl CpuConfigX86_64 {
         force_calibrated_tsc_leaf: bool,
         host_cpu_topology: bool,
         enable_hwp: bool,
-        enable_pnp_data: bool,
         no_smt: bool,
         itmt: bool,
         hybrid_type: Option<CpuHybridType>,
@@ -234,7 +372,6 @@ impl CpuConfigX86_64 {
             force_calibrated_tsc_leaf,
             host_cpu_topology,
             enable_hwp,
-            enable_pnp_data,
             no_smt,
             itmt,
             hybrid_type,
@@ -347,7 +484,7 @@ pub enum Level {
 
 /// Represents a IOAPIC redirection table entry.
 #[bitfield]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IoapicRedirectionTableEntry {
     vector: BitField8,
     #[bits = 3]
@@ -368,12 +505,9 @@ pub struct IoapicRedirectionTableEntry {
 /// Number of pins on the standard KVM/IOAPIC.
 pub const NUM_IOAPIC_PINS: usize = 24;
 
-/// Maximum number of pins on the IOAPIC.
-pub const MAX_IOAPIC_PINS: usize = 120;
-
 /// Represents the state of the IOAPIC.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IoapicState {
     /// base_address is the memory base address for this IOAPIC. It cannot be changed.
     pub base_address: u64,
@@ -384,11 +518,16 @@ pub struct IoapicState {
     /// current_interrupt_level_bitmap represents a bitmap of the state of all of the irq lines
     pub current_interrupt_level_bitmap: u32,
     /// redirect_table contains the irq settings for each irq line
-    pub redirect_table: [IoapicRedirectionTableEntry; 120],
+    #[serde(
+        serialize_with = "serialize_arr",
+        deserialize_with = "deserialize_seq_to_arr"
+    )]
+    pub redirect_table: [IoapicRedirectionTableEntry; NUM_IOAPIC_PINS],
 }
 
 impl Default for IoapicState {
     fn default() -> IoapicState {
+        // SAFETY: trivially safe
         unsafe { std::mem::zeroed() }
     }
 }
@@ -401,8 +540,9 @@ pub enum PicSelect {
 }
 
 #[repr(C)]
-#[derive(enumn::N, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(enumn::N, Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PicInitState {
+    #[default]
     Icw1 = 0,
     Icw2 = 1,
     Icw3 = 2,
@@ -419,15 +559,9 @@ impl From<u8> for PicInitState {
     }
 }
 
-impl Default for PicInitState {
-    fn default() -> Self {
-        PicInitState::Icw1
-    }
-}
-
 /// Represents the state of the PIC.
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PicState {
     /// Edge detection.
     pub last_irr: u8,
@@ -451,8 +585,8 @@ pub struct PicState {
     /// initialization. use_4_byte_icw is true if 4 bytes of ICW are needed.
     pub use_4_byte_icw: bool,
     /// "Edge/Level Control Registers", for edge trigger selection.
-    /// When a particular bit is set, the corresponding IRQ is in level-triggered mode. Otherwise it
-    /// is in edge-triggered mode.
+    /// When a particular bit is set, the corresponding IRQ is in level-triggered mode. Otherwise
+    /// it is in edge-triggered mode.
     pub elcr: u8,
     pub elcr_mask: u8,
 }
@@ -461,8 +595,12 @@ pub struct PicState {
 /// The Local APIC consists of 64 128-bit registers, but only the first 32-bits of each register
 /// can be used, so this structure only stores the first 32-bits of each register.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct LapicState {
+    #[serde(
+        serialize_with = "serialize_arr",
+        deserialize_with = "deserialize_seq_to_arr"
+    )]
     pub regs: [LapicRegister; 64],
 }
 
@@ -488,7 +626,7 @@ impl Eq for LapicState {}
 /// The PitState represents the state of the PIT (aka the Programmable Interval Timer).
 /// The state is simply the state of it's three channels.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PitState {
     pub channels: [PitChannelState; 3],
     /// Hypervisor-specific flags for setting the pit state.
@@ -500,7 +638,7 @@ pub struct PitState {
 /// but the count values and latch values are two bytes. So the access mode controls which of the
 /// two bytes will be read when.
 #[repr(C)]
-#[derive(enumn::N, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(enumn::N, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PitRWMode {
     /// None mode means that no access mode has been set.
     None = 0,
@@ -527,7 +665,7 @@ impl From<u8> for PitRWMode {
 /// This is related to the PitRWMode, it mainly gives more detail about the state of the channel
 /// with respect to PitRWMode::Both.
 #[repr(C)]
-#[derive(enumn::N, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(enumn::N, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PitRWState {
     /// None mode means that no access mode has been set.
     None = 0,
@@ -556,7 +694,7 @@ impl From<u8> for PitRWState {
 
 /// The PitChannelState represents the state of one of the PIT's three counters.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PitChannelState {
     /// The starting value for the counter.
     pub count: u32,
@@ -614,7 +752,7 @@ impl IrqRoute {
 
 /// State of a VCPU's general purpose registers.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Regs {
     pub rax: u64,
     pub rbx: u64,
@@ -663,7 +801,7 @@ impl Default for Regs {
 
 /// State of a memory segment.
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub base: u64,
     pub limit: u32,
@@ -680,7 +818,7 @@ pub struct Segment {
 
 /// State of a global descriptor table or interrupt descriptor table.
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct DescriptorTable {
     pub base: u64,
     pub limit: u16,
@@ -688,7 +826,7 @@ pub struct DescriptorTable {
 
 /// State of a VCPU's special registers.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Sregs {
     pub cs: Segment,
     pub ds: Segment,
@@ -805,7 +943,7 @@ impl Default for Sregs {
 
 /// State of a VCPU's floating point unit.
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Fpu {
     pub fpr: [[u8; 16usize]; 8usize],
     pub fcw: u16,
@@ -836,18 +974,11 @@ impl Default for Fpu {
 
 /// State of a VCPU's debug registers.
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct DebugRegs {
     pub db: [u64; 4usize],
     pub dr6: u64,
     pub dr7: u64,
-}
-
-/// State of one VCPU register.  Currently used for MSRs and XCRs.
-#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
-pub struct Register {
-    pub id: u32,
-    pub value: u64,
 }
 
 /// The hybrid type for intel hybrid CPU.
@@ -857,4 +988,46 @@ pub enum CpuHybridType {
     Atom,
     /// Intel Core.
     Core,
+}
+
+/// State of the VCPU's x87 FPU, MMX, XMM, YMM registers.
+/// May contain more state depending on enabled extensions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Xsave {
+    data: Vec<u32>,
+
+    // Actual length in bytes. May be smaller than data if a non-u32 multiple of bytes is
+    // requested.
+    len: usize,
+}
+
+impl Xsave {
+    /// Create a new buffer to store Xsave data.
+    ///
+    /// # Argments
+    /// * `len` size in bytes.
+    pub fn new(len: usize) -> Self {
+        Xsave {
+            data: vec![0; (len + 3) / 4],
+            len,
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const c_void {
+        self.data.as_ptr() as *const c_void
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut c_void {
+        self.data.as_mut_ptr() as *mut c_void
+    }
+
+    /// Length in bytes of the XSAVE data.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns true is length of XSAVE data is zero
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }

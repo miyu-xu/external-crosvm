@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(feature = "seccomp_trace")]
+use base::debug;
 use base::Event;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
@@ -11,9 +13,11 @@ use devices::serial_device::SerialType;
 use devices::Bus;
 use devices::Serial;
 use hypervisor::ProtectionType;
+#[cfg(feature = "seccomp_trace")]
+use jail::read_jail_addr;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
 use thiserror::Error as ThisError;
@@ -43,6 +47,7 @@ pub fn set_default_serial_parameters(
             .or_insert(SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::Serial,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -62,6 +67,7 @@ pub fn set_default_serial_parameters(
         serial_parameters.entry(key).or_insert(SerialParameters {
             type_: SerialType::Sink,
             hardware: SerialHardware::Serial,
+            name: None,
             path: None,
             input: None,
             num,
@@ -77,6 +83,19 @@ pub fn set_default_serial_parameters(
 /// Address for Serial ports in x86
 pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 
+/// Information about a serial device (16550-style UART) created by `add_serial_devices()`.
+pub struct SerialDeviceInfo {
+    /// Address of the device on the bus.
+    /// This is the I/O bus on x86 machines and MMIO otherwise.
+    pub address: u64,
+
+    /// Size of the device's address space on the bus.
+    pub size: u64,
+
+    /// IRQ number of the device.
+    pub irq: u32,
+}
+
 /// Adds serial devices to the provided bus based on the serial parameters given.
 ///
 /// Only devices with hardware type `SerialHardware::Serial` are added by this function.
@@ -85,20 +104,21 @@ pub const SERIAL_ADDR: [u64; 4] = [0x3f8, 0x2f8, 0x3e8, 0x2e8];
 ///
 /// * `protection_type` - VM protection mode.
 /// * `io_bus` - Bus to add the devices to
-/// * `com_evt_1_3` - event for com1 and com3
-/// * `com_evt_1_4` - event for com2 and com4
+/// * `com_evt_1_3` - irq and event for com1 and com3
+/// * `com_evt_1_4` - irq and event for com2 and com4
 /// * `serial_parameters` - definitions of serial parameter configurations.
-/// * `serial_jail` - minijail object cloned for use with each serial device.
-///   All four of the traditional PC-style serial ports (COM1-COM4) must be specified.
+/// * `serial_jail` - minijail object cloned for use with each serial device. All four of the
+///   traditional PC-style serial ports (COM1-COM4) must be specified.
 pub fn add_serial_devices(
     protection_type: ProtectionType,
     io_bus: &Bus,
-    com_evt_1_3: &Event,
-    com_evt_2_4: &Event,
+    com_evt_1_3: (u32, &Event),
+    com_evt_2_4: (u32, &Event),
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
     #[cfg_attr(windows, allow(unused_variables))] serial_jail: Option<Minijail>,
-    #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
-) -> std::result::Result<(), DeviceRegistrationError> {
+    #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
+) -> std::result::Result<Vec<SerialDeviceInfo>, DeviceRegistrationError> {
+    let mut devices = Vec::new();
     for com_num in 0..=3 {
         let com_evt = match com_num {
             0 => &com_evt_1_3,
@@ -107,6 +127,8 @@ pub fn add_serial_devices(
             3 => &com_evt_2_4,
             _ => &com_evt_1_3,
         };
+
+        let (irq, com_evt) = (com_evt.0, com_evt.1);
 
         let param = serial_parameters
             .get(&(SerialHardware::Serial, com_num + 1))
@@ -119,32 +141,40 @@ pub fn add_serial_devices(
             .create_serial_device::<Serial>(protection_type, com_evt, &mut preserved_descriptors)
             .map_err(DeviceRegistrationError::CreateSerialDevice)?;
 
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let serial_jail = if let Some(serial_jail) = serial_jail.as_ref() {
-            Some(
-                serial_jail
-                    .try_clone()
-                    .map_err(DeviceRegistrationError::CloneJail)?,
-            )
+            let jail_clone = serial_jail
+                .try_clone()
+                .map_err(DeviceRegistrationError::CloneJail)?;
+            #[cfg(feature = "seccomp_trace")]
+            debug!(
+                    "seccomp_trace {{\"event\": \"minijail_clone\", \"src_jail_addr\": \"0x{:x}\", \"dst_jail_addr\": \"0x{:x}\"}}",
+                    read_jail_addr(serial_jail),
+                    read_jail_addr(&jail_clone)
+                );
+            Some(jail_clone)
         } else {
             None
         };
         #[cfg(windows)]
         let serial_jail = None;
 
-        sys::add_serial_device(
-            com_num as usize,
+        let com = sys::add_serial_device(
             com,
             param,
             serial_jail,
             preserved_descriptors,
-            io_bus,
             #[cfg(feature = "swap")]
             swap_controller,
         )?;
+
+        let address = SERIAL_ADDR[usize::from(com_num)];
+        let size = 0x8; // 16550 UART uses 8 bytes of address space.
+        io_bus.insert(com, address, size).unwrap();
+        devices.push(SerialDeviceInfo { address, size, irq })
     }
 
-    Ok(())
+    Ok(devices)
 }
 
 #[sorted]
@@ -166,25 +196,26 @@ pub fn get_serial_cmdline(
     cmdline: &mut kernel_cmdline::Cmdline,
     serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
     serial_io_type: &str,
+    serial_devices: &[SerialDeviceInfo],
 ) -> GetSerialCmdlineResult<()> {
-    match serial_parameters
+    for serial_parameter in serial_parameters
         .iter()
         .filter(|(_, p)| p.console)
         .map(|(k, _)| k)
-        .next()
     {
-        Some((SerialHardware::Serial, num)) => {
-            cmdline
-                .insert("console", &format!("ttyS{}", num - 1))
-                .map_err(GetSerialCmdlineError::KernelCmdline)?;
+        match serial_parameter {
+            (SerialHardware::Serial, num) => {
+                cmdline
+                    .insert("console", &format!("ttyS{}", num - 1))
+                    .map_err(GetSerialCmdlineError::KernelCmdline)?;
+            }
+            (SerialHardware::VirtioConsole, num) | (SerialHardware::LegacyVirtioConsole, num) => {
+                cmdline
+                    .insert("console", &format!("hvc{}", num - 1))
+                    .map_err(GetSerialCmdlineError::KernelCmdline)?;
+            }
+            (SerialHardware::Debugcon, _) => {}
         }
-        Some((SerialHardware::VirtioConsole, num)) => {
-            cmdline
-                .insert("console", &format!("hvc{}", num - 1))
-                .map_err(GetSerialCmdlineError::KernelCmdline)?;
-        }
-        Some((SerialHardware::Debugcon, _)) => {}
-        None => {}
     }
 
     match serial_parameters
@@ -194,11 +225,11 @@ pub fn get_serial_cmdline(
         .next()
     {
         Some((SerialHardware::Serial, num)) => {
-            if let Some(addr) = SERIAL_ADDR.get(*num as usize - 1) {
+            if let Some(serial_device) = serial_devices.get(*num as usize - 1) {
                 cmdline
                     .insert(
                         "earlycon",
-                        &format!("uart8250,{},0x{:x}", serial_io_type, addr),
+                        &format!("uart8250,{},0x{:x}", serial_io_type, serial_device.address),
                     )
                     .map_err(GetSerialCmdlineError::KernelCmdline)?;
             }
@@ -214,6 +245,7 @@ pub fn get_serial_cmdline(
 
 #[cfg(test)]
 mod tests {
+    use devices::BusType;
     use kernel_cmdline::Cmdline;
 
     use super::*;
@@ -222,9 +254,23 @@ mod tests {
     fn get_serial_cmdline_default() {
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
+        let io_bus = Bus::new(BusType::Io);
+        let evt1_3 = Event::new().unwrap();
+        let evt2_4 = Event::new().unwrap();
 
         set_default_serial_parameters(&mut serial_parameters, false);
-        get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
+        let serial_devices = add_serial_devices(
+            ProtectionType::Unprotected,
+            &io_bus,
+            (4, &evt1_3),
+            (3, &evt2_4),
+            &serial_parameters,
+            None,
+            #[cfg(feature = "swap")]
+            &mut None,
+        )
+        .unwrap();
+        get_serial_cmdline(&mut cmdline, &serial_parameters, "io", &serial_devices)
             .expect("get_serial_cmdline failed");
 
         let cmdline_str = cmdline.as_str();
@@ -235,6 +281,9 @@ mod tests {
     fn get_serial_cmdline_virtio_console() {
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
+        let io_bus = Bus::new(BusType::Io);
+        let evt1_3 = Event::new().unwrap();
+        let evt2_4 = Event::new().unwrap();
 
         // Add a virtio-console device with console=true.
         serial_parameters.insert(
@@ -242,6 +291,7 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -250,11 +300,23 @@ mod tests {
                 stdin: true,
                 out_timestamp: false,
                 debugcon_port: 0,
+                pci_address: None,
             },
         );
 
         set_default_serial_parameters(&mut serial_parameters, false);
-        get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
+        let serial_devices = add_serial_devices(
+            ProtectionType::Unprotected,
+            &io_bus,
+            (4, &evt1_3),
+            (3, &evt2_4),
+            &serial_parameters,
+            None,
+            #[cfg(feature = "swap")]
+            &mut None,
+        )
+        .unwrap();
+        get_serial_cmdline(&mut cmdline, &serial_parameters, "io", &serial_devices)
             .expect("get_serial_cmdline failed");
 
         let cmdline_str = cmdline.as_str();
@@ -265,6 +327,9 @@ mod tests {
     fn get_serial_cmdline_virtio_console_serial_earlycon() {
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
+        let io_bus = Bus::new(BusType::Io);
+        let evt1_3 = Event::new().unwrap();
+        let evt2_4 = Event::new().unwrap();
 
         // Add a virtio-console device with console=true.
         serial_parameters.insert(
@@ -272,6 +337,7 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -280,6 +346,7 @@ mod tests {
                 stdin: true,
                 out_timestamp: false,
                 debugcon_port: 0,
+                pci_address: None,
             },
         );
 
@@ -289,6 +356,7 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::Serial,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -297,11 +365,23 @@ mod tests {
                 stdin: false,
                 out_timestamp: false,
                 debugcon_port: 0,
+                pci_address: None,
             },
         );
 
         set_default_serial_parameters(&mut serial_parameters, false);
-        get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
+        let serial_devices = add_serial_devices(
+            ProtectionType::Unprotected,
+            &io_bus,
+            (4, &evt1_3),
+            (3, &evt2_4),
+            &serial_parameters,
+            None,
+            #[cfg(feature = "swap")]
+            &mut None,
+        )
+        .unwrap();
+        get_serial_cmdline(&mut cmdline, &serial_parameters, "io", &serial_devices)
             .expect("get_serial_cmdline failed");
 
         let cmdline_str = cmdline.as_str();
@@ -313,6 +393,9 @@ mod tests {
     fn get_serial_cmdline_virtio_console_invalid_earlycon() {
         let mut cmdline = Cmdline::new(4096);
         let mut serial_parameters = BTreeMap::new();
+        let io_bus = Bus::new(BusType::Io);
+        let evt1_3 = Event::new().unwrap();
+        let evt2_4 = Event::new().unwrap();
 
         // Try to add a virtio-console device with earlycon=true (unsupported).
         serial_parameters.insert(
@@ -320,6 +403,7 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -328,11 +412,23 @@ mod tests {
                 stdin: true,
                 out_timestamp: false,
                 debugcon_port: 0,
+                pci_address: None,
             },
         );
 
         set_default_serial_parameters(&mut serial_parameters, false);
-        get_serial_cmdline(&mut cmdline, &serial_parameters, "io")
+        let serial_devices = add_serial_devices(
+            ProtectionType::Unprotected,
+            &io_bus,
+            (4, &evt1_3),
+            (3, &evt2_4),
+            &serial_parameters,
+            None,
+            #[cfg(feature = "swap")]
+            &mut None,
+        )
+        .unwrap();
+        get_serial_cmdline(&mut cmdline, &serial_parameters, "io", &serial_devices)
             .expect_err("get_serial_cmdline succeeded");
     }
 }

@@ -4,46 +4,38 @@
 
 //! Implements pci devices and busses.
 
-#[cfg(feature = "audio")]
-mod ac97;
-#[cfg(feature = "audio")]
-mod ac97_bus_master;
-#[cfg(feature = "audio")]
-mod ac97_mixer;
-#[cfg(feature = "audio")]
-mod ac97_regs;
 mod acpi;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod coiommu;
 mod msi;
 mod msix;
 mod pci_address;
 mod pci_configuration;
 mod pci_device;
+#[cfg(feature = "pci-hotplug")]
+mod pci_hotplug;
 mod pci_root;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod pcie;
-mod pm;
+pub mod pm;
 mod pvpanic;
 mod stub;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod vfio_pci;
 
 use libc::EINVAL;
+use serde::Deserialize;
+use serde::Serialize;
 
-#[cfg(feature = "audio")]
-pub use self::ac97::Ac97Backend;
-#[cfg(feature = "audio")]
-pub use self::ac97::Ac97Dev;
-#[cfg(feature = "audio")]
-pub use self::ac97::Ac97Parameters;
 pub use self::acpi::DeviceVcfgRegister;
+pub use self::acpi::DsmMethod;
+pub use self::acpi::GpeScope;
 pub use self::acpi::PowerResourceMethod;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::coiommu::CoIommuDev;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::coiommu::CoIommuParameters;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::coiommu::CoIommuUnpinPolicy;
 pub use self::msi::MsiConfig;
 pub use self::msix::MsixCap;
@@ -61,39 +53,50 @@ pub use self::pci_configuration::PciClassCode;
 pub use self::pci_configuration::PciConfiguration;
 pub use self::pci_configuration::PciDisplaySubclass;
 pub use self::pci_configuration::PciHeaderType;
+pub use self::pci_configuration::PciMassStorageSubclass;
 pub use self::pci_configuration::PciProgrammingInterface;
 pub use self::pci_configuration::PciSerialBusSubClass;
 pub use self::pci_configuration::PciSubclass;
 pub use self::pci_configuration::CAPABILITY_LIST_HEAD_OFFSET;
 pub use self::pci_device::BarRange;
 pub use self::pci_device::Error as PciDeviceError;
+pub use self::pci_device::IoEventError as PciIoEventError;
 pub use self::pci_device::PciBus;
 pub use self::pci_device::PciDevice;
 pub use self::pci_device::PreferredIrq;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci_hotplug::HotPluggable;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci_hotplug::IntxParameter;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci_hotplug::NetResourceCarrier;
+#[cfg(feature = "pci-hotplug")]
+pub use self::pci_hotplug::ResourceCarrier;
 pub use self::pci_root::PciConfigIo;
 pub use self::pci_root::PciConfigMmio;
+pub use self::pci_root::PciMmioMapper;
 pub use self::pci_root::PciRoot;
 pub use self::pci_root::PciRootCommand;
 pub use self::pci_root::PciVirtualConfigMmio;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::pcie::PciBridge;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::pcie::PcieDownstreamPort;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::pcie::PcieHostPort;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::pcie::PcieRootPort;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::pcie::PcieUpstreamPort;
 pub use self::pvpanic::PvPanicCode;
 pub use self::pvpanic::PvPanicPciDevice;
 pub use self::stub::StubPciDevice;
 pub use self::stub::StubPciParameters;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use self::vfio_pci::VfioPciDevice;
 
 /// PCI has four interrupt pins A->D.
-#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PciInterruptPin {
     IntA,
     IntB,
@@ -107,11 +110,16 @@ impl PciInterruptPin {
     }
 }
 
+// VCFG
+pub const PCI_VCFG_PM: usize = 0x0;
+pub const PCI_VCFG_DSM: usize = 0x1;
+pub const PCI_VCFG_NOTY: usize = 0x2;
+
 pub const PCI_VENDOR_ID_INTEL: u16 = 0x8086;
 pub const PCI_VENDOR_ID_REDHAT: u16 = 0x1b36;
 
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CrosvmDeviceId {
     Pit = 1,
     Pic = 2,
@@ -133,6 +141,9 @@ pub enum CrosvmDeviceId {
     Pflash = 18,
     VirtioMmio = 19,
     AcAdapter = 20,
+    VirtualPmc = 21,
+    VirtCpufreq = 22,
+    FwCfg = 23,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -160,13 +171,14 @@ impl TryFrom<u16> for CrosvmDeviceId {
             18 => Ok(CrosvmDeviceId::Pflash),
             19 => Ok(CrosvmDeviceId::VirtioMmio),
             20 => Ok(CrosvmDeviceId::AcAdapter),
+            21 => Ok(CrosvmDeviceId::VirtualPmc),
             _ => Err(base::Error::new(EINVAL)),
         }
     }
 }
 
 /// A wrapper structure for pci device and vendor id.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PciId {
     vendor_id: u16,
     device_id: u16,

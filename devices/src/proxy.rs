@@ -4,15 +4,17 @@
 
 //! Runs hardware devices in child processes.
 
-use std::time::Duration;
+use std::fs;
 
 use anyhow::anyhow;
 use base::error;
-use base::unix::process::fork_process;
+use base::info;
+use base::linux::process::fork_process;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
 use base::AsRawDescriptors;
 use base::RawDescriptor;
+use base::SharedMemory;
 use base::Tube;
 use base::TubeError;
 use libc::pid_t;
@@ -36,18 +38,21 @@ use crate::Suspendable;
 #[sorted]
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("Failed to activate ProxyDevice")]
+    ActivatingProxyDevice,
     #[error("Failed to fork jail process: {0}")]
     ForkingJail(#[from] minijail::Error),
+    #[error("Failed to configure swap: {0}")]
+    Swap(anyhow::Error),
     #[error("Failed to configure tube: {0}")]
     Tube(#[from] TubeError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-const SOCKET_TIMEOUT_MS: u64 = 2000;
-
 #[derive(Debug, Serialize, Deserialize)]
 enum Command {
+    Activate,
     Read {
         len: u32,
         info: BusAccessInfo,
@@ -64,11 +69,17 @@ enum Command {
         len: u32,
         data: [u8; 4],
     },
+    InitPciConfigMapping {
+        shmem: SharedMemory,
+        base: usize,
+        len: usize,
+    },
     ReadVirtualConfig(u32),
     WriteVirtualConfig {
         reg_idx: u32,
         value: u32,
     },
+    DestroyDevice,
     Shutdown,
     GetRanges,
     Snapshot,
@@ -90,6 +101,7 @@ enum CommandResult {
         io_add: Vec<BusRange>,
         removed_pci_devices: Vec<PciAddress>,
     },
+    InitPciConfigMappingResult(bool),
     ReadVirtualConfigResult(u32),
     GetRangesResult(Vec<(BusRange, BusType)>),
     SnapshotResult(std::result::Result<serde_json::Value, String>),
@@ -99,6 +111,25 @@ enum CommandResult {
 }
 
 fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
+    // Wait for activation signal to function as BusDevice.
+    match tube.recv() {
+        Ok(Command::Activate) => {
+            if let Err(e) = tube.send(&CommandResult::Ok) {
+                error!("sending activation result failed: {:?}", &e);
+                return;
+            }
+        }
+        // Commands other than activate is unexpected, close device.
+        Ok(cmd) => {
+            panic!("Receiving Command {:?} before device is activated", &cmd);
+        }
+        // Most likely tube error is caused by other end is dropped, release resource.
+        Err(e) => {
+            error!("device failed before activation: {:?}. Dropping device", e);
+            drop(device);
+            return;
+        }
+    };
     loop {
         let cmd = match tube.recv() {
             Ok(cmd) => cmd,
@@ -109,6 +140,9 @@ fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
         };
 
         let res = match cmd {
+            Command::Activate => {
+                panic!("Device shall only be activated once, duplicated ProxyDevice likely");
+            }
             Command::Read { len, info } => {
                 let mut buffer = [0u8; 8];
                 device.read(info, &mut buffer[0..len as usize]);
@@ -141,13 +175,20 @@ fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
                     removed_pci_devices: res.removed_pci_devices,
                 })
             }
+            Command::InitPciConfigMapping { shmem, base, len } => {
+                let success = device.init_pci_config_mapping(&shmem, base, len);
+                tube.send(&CommandResult::InitPciConfigMappingResult(success))
+            }
             Command::ReadVirtualConfig(idx) => {
                 let val = device.virtual_config_register_read(idx as usize);
                 tube.send(&CommandResult::ReadVirtualConfigResult(val))
             }
             Command::WriteVirtualConfig { reg_idx, value } => {
                 device.virtual_config_register_write(reg_idx as usize, value);
-                // Command::WriteVirtualConfig does not have a result.
+                tube.send(&CommandResult::Ok)
+            }
+            Command::DestroyDevice => {
+                device.destroy_device();
                 Ok(())
             }
             Command::Shutdown => {
@@ -189,47 +230,68 @@ fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
     }
 }
 
-/// Wraps an inner `BusDevice` that is run inside a child process via fork.
+/// ChildProcIntf is the interface to the device child process.
 ///
-/// Because forks are very unfriendly to destructors and all memory mappings and file descriptors
-/// are inherited, this should be used as early as possible in the main process.
-pub struct ProxyDevice {
+/// ChildProcIntf implements Serialize, and can be sent across process before it functions as a
+/// ProxyDevice. However, a child process shall only correspond to one ProxyDevice. The uniqueness
+/// is checked when ChildProcIntf is casted into ProxyDevice.
+#[derive(Serialize, Deserialize)]
+pub struct ChildProcIntf {
     tube: Tube,
     pid: pid_t,
     debug_label: String,
 }
 
-impl ProxyDevice {
-    /// Takes the given device and isolates it into another process via fork before returning.
+impl ChildProcIntf {
+    /// Creates ChildProcIntf that shall be turned into exactly one ProxyDevice.
     ///
-    /// The forked process will automatically be terminated when this is dropped, so be sure to keep
-    /// a reference.
+    /// The ChildProcIntf struct holds the interface to the device process. It shall be turned into
+    /// a ProxyDevice exactly once (at an arbitrary process). Since ChildProcIntf may be duplicated
+    /// by serde, the uniqueness of the interface is checked when ChildProcIntf is converted into
+    /// ProxyDevice.
     ///
     /// # Arguments
     /// * `device` - The device to isolate to another process.
     /// * `jail` - The jail to use for isolating the given device.
     /// * `keep_rds` - File descriptors that will be kept open in the child.
-    pub fn new<D: BusDevice>(
+    pub fn new<D: BusDevice, #[cfg(feature = "swap")] P: swap::PrepareFork>(
         mut device: D,
         jail: Minijail,
         mut keep_rds: Vec<RawDescriptor>,
-        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
-    ) -> Result<ProxyDevice> {
+        #[cfg(feature = "swap")] swap_prepare_fork: &mut Option<P>,
+    ) -> Result<ChildProcIntf> {
         let debug_label = device.debug_label();
         let (child_tube, parent_tube) = Tube::pair()?;
 
         keep_rds.push(child_tube.as_raw_descriptor());
 
         #[cfg(feature = "swap")]
-        if let Some(swap_controller) = swap_controller {
-            keep_rds.extend(swap_controller.as_raw_descriptors());
+        let swap_device_uffd_sender = if let Some(prepare_fork) = swap_prepare_fork {
+            let sender = prepare_fork.prepare_fork().map_err(Error::Swap)?;
+            keep_rds.extend(sender.as_raw_descriptors());
+            Some(sender)
+        } else {
+            None
+        };
+
+        // This will be removed after b/183540186 gets fixed.
+        // Only enabled it for x86_64 since the original bug mostly happens on x86 boards.
+        if cfg!(target_arch = "x86_64") && debug_label == "pcivirtio-gpu" {
+            if let Ok(cmd) = fs::read_to_string("/proc/self/cmdline") {
+                if cmd.contains("arcvm") {
+                    if let Ok(share) = fs::read_to_string("/sys/fs/cgroup/cpu/arcvm/cpu.shares") {
+                        info!("arcvm cpu share when booting gpu is {:}", share.trim());
+                    }
+                }
+            }
         }
 
         let child_process = fork_process(jail, keep_rds, Some(debug_label.clone()), || {
             #[cfg(feature = "swap")]
-            if let Some(swap_controller) = swap_controller {
-                if let Err(e) = swap_controller.on_process_forked() {
+            if let Some(swap_device_uffd_sender) = swap_device_uffd_sender {
+                if let Err(e) = swap_device_uffd_sender.on_process_forked() {
                     error!("failed to SwapController::on_process_forked: {:?}", e);
+                    // SAFETY:
                     // exit() is trivially safe.
                     unsafe { libc::exit(1) };
                 }
@@ -244,36 +306,84 @@ impl ProxyDevice {
             // TODO(crbug.com/992494): Remove this once device shutdown ordering is clearly
             // defined.
             //
+            // SAFETY:
             // exit() is trivially safe.
             // ! Never returns
             unsafe { libc::exit(0) };
         })?;
 
-        // Suppress the no waiting warning from `base::sys::unix::process::Child` because crosvm
+        // Suppress the no waiting warning from `base::sys::linux::process::Child` because crosvm
         // does not wait for the processes from ProxyDevice explicitly. Instead it reaps all the
-        // child processes on its exit by `crosvm::sys::unix::main::wait_all_children()`.
+        // child processes on its exit by `crosvm::sys::linux::main::wait_all_children()`.
         let pid = child_process.into_pid();
 
-        parent_tube.set_send_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))?;
-        parent_tube.set_recv_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))?;
-        Ok(ProxyDevice {
+        Ok(ChildProcIntf {
             tube: parent_tube,
             pid,
             debug_label,
         })
     }
+}
+
+/// Wraps an inner `BusDevice` that is run inside a child process via fork.
+///
+/// The forked device process will automatically be terminated when this is dropped.
+pub struct ProxyDevice {
+    child_proc_intf: ChildProcIntf,
+}
+
+impl TryFrom<ChildProcIntf> for ProxyDevice {
+    type Error = Error;
+    fn try_from(child_proc_intf: ChildProcIntf) -> Result<Self> {
+        // Notify child process to be activated as a BusDevice.
+        child_proc_intf.tube.send(&Command::Activate)?;
+        // Device returns Ok if it is activated only once.
+        match child_proc_intf.tube.recv()? {
+            CommandResult::Ok => Ok(Self { child_proc_intf }),
+            _ => Err(Error::ActivatingProxyDevice),
+        }
+    }
+}
+
+impl ProxyDevice {
+    /// Takes the given device and isolates it into another process via fork before returning.
+    ///
+    /// Because forks are very unfriendly to destructors and all memory mappings and file
+    /// descriptors are inherited, this should be used as early as possible in the main process.
+    /// ProxyDevice::new shall not be used for hotplugging. Call ChildProcIntf::new on jail warden
+    /// process, send using serde, then cast into ProxyDevice instead.
+    ///
+    /// # Arguments
+    /// * `device` - The device to isolate to another process.
+    /// * `jail` - The jail to use for isolating the given device.
+    /// * `keep_rds` - File descriptors that will be kept open in the child.
+    pub fn new<D: BusDevice, #[cfg(feature = "swap")] P: swap::PrepareFork>(
+        device: D,
+        jail: Minijail,
+        keep_rds: Vec<RawDescriptor>,
+        #[cfg(feature = "swap")] swap_prepare_fork: &mut Option<P>,
+    ) -> Result<ProxyDevice> {
+        ChildProcIntf::new(
+            device,
+            jail,
+            keep_rds,
+            #[cfg(feature = "swap")]
+            swap_prepare_fork,
+        )?
+        .try_into()
+    }
 
     pub fn pid(&self) -> pid_t {
-        self.pid
+        self.child_proc_intf.pid
     }
 
     /// Send a command that does not expect a response from the child device process.
     fn send_no_result(&self, cmd: &Command) {
-        let res = self.tube.send(cmd);
+        let res = self.child_proc_intf.tube.send(cmd);
         if let Err(e) = res {
             error!(
                 "failed write to child device process {}: {}",
-                self.debug_label, e,
+                self.child_proc_intf.debug_label, e,
             );
         }
     }
@@ -281,11 +391,11 @@ impl ProxyDevice {
     /// Send a command and read its response from the child device process.
     fn sync_send(&self, cmd: &Command) -> Option<CommandResult> {
         self.send_no_result(cmd);
-        match self.tube.recv() {
+        match self.child_proc_intf.tube.recv() {
             Err(e) => {
                 error!(
                     "failed to read result of {:?} from child device process {}: {}",
-                    cmd, self.debug_label, e,
+                    cmd, self.child_proc_intf.debug_label, e,
                 );
                 None
             }
@@ -300,7 +410,7 @@ impl BusDevice for ProxyDevice {
     }
 
     fn debug_label(&self) -> String {
-        self.debug_label.clone()
+        self.child_proc_intf.debug_label.clone()
     }
 
     fn config_register_write(
@@ -347,9 +457,18 @@ impl BusDevice for ProxyDevice {
         }
     }
 
+    fn init_pci_config_mapping(&mut self, shmem: &SharedMemory, base: usize, len: usize) -> bool {
+        let Ok(shmem) = shmem.try_clone() else {
+            error!("Failed to clone pci config mapping shmem");
+            return false;
+        };
+        let res = self.sync_send(&Command::InitPciConfigMapping { shmem, base, len });
+        matches!(res, Some(CommandResult::InitPciConfigMappingResult(true)))
+    }
+
     fn virtual_config_register_write(&mut self, reg_idx: usize, value: u32) {
         let reg_idx = reg_idx as u32;
-        self.send_no_result(&Command::WriteVirtualConfig { reg_idx, value });
+        self.sync_send(&Command::WriteVirtualConfig { reg_idx, value });
     }
 
     fn virtual_config_register_read(&self, reg_idx: usize) -> u32 {
@@ -389,10 +508,14 @@ impl BusDevice for ProxyDevice {
             Default::default()
         }
     }
+
+    fn destroy_device(&mut self) {
+        self.send_no_result(&Command::DestroyDevice);
+    }
 }
 
 impl Suspendable for ProxyDevice {
-    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         let res = self.sync_send(&Command::Snapshot);
         match res {
             Some(CommandResult::SnapshotResult(Ok(snap))) => Ok(snap),
@@ -511,7 +634,7 @@ mod tests {
             minijail,
             keep_fds,
             #[cfg(feature = "swap")]
-            None,
+            &mut None::<swap::SwapController>,
         )
         .unwrap()
     }

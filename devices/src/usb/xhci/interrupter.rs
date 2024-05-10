@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::time::Duration;
+use std::time::Instant;
+
+use base::Clock;
 use base::Error as SysError;
 use base::Event;
 use remain::sorted;
@@ -19,7 +23,10 @@ use super::xhci_abi::Trb;
 use super::xhci_abi::TrbCast;
 use super::xhci_abi::TrbCompletionCode;
 use super::xhci_abi::TrbType;
-use super::xhci_regs::*;
+use super::xhci_regs::XhciRegs;
+use super::xhci_regs::ERDP_EVENT_HANDLER_BUSY;
+use super::xhci_regs::IMAN_INTERRUPT_PENDING;
+use super::xhci_regs::USB_STS_EVENT_INTERRUPT;
 use crate::register_space::Register;
 
 #[sorted]
@@ -51,11 +58,14 @@ pub struct Interrupter {
     moderation_interval: u16,
     moderation_counter: u16,
     event_ring: EventRing,
+    last_interrupt_time: Instant,
+    clock: Clock,
 }
 
 impl Interrupter {
     /// Create a new interrupter.
     pub fn new(mem: GuestMemory, irq_evt: Event, regs: &XhciRegs) -> Self {
+        let clock = Clock::new();
         Interrupter {
             interrupt_evt: irq_evt,
             usbsts: regs.usbsts.clone(),
@@ -63,9 +73,11 @@ impl Interrupter {
             erdp: regs.erdp.clone(),
             event_handler_busy: false,
             enabled: false,
-            moderation_interval: 0,
-            moderation_counter: 0,
+            moderation_interval: 4000, // default to 1ms as per xhci 5.5.2.2
+            moderation_counter: 0,     // xhci specs leave this as undefined
             event_ring: EventRing::new(mem),
+            last_interrupt_time: clock.now(),
+            clock,
         }
     }
 
@@ -136,14 +148,14 @@ impl Interrupter {
 
     /// Enable/Disable this interrupter.
     pub fn set_enabled(&mut self, enabled: bool) -> Result<()> {
-        usb_debug!("interrupter set enabled {}", enabled);
+        xhci_trace!("interrupter set_enabled({})", enabled);
         self.enabled = enabled;
         self.interrupt_if_needed()
     }
 
     /// Set interrupt moderation.
     pub fn set_moderation(&mut self, interval: u16, counter: u16) -> Result<()> {
-        // TODO(jkwang) Moderation is not implemented yet.
+        xhci_trace!("interrupter set_moderation({}, {})", interval, counter);
         self.moderation_interval = interval;
         self.moderation_counter = counter;
         self.interrupt_if_needed()
@@ -151,7 +163,7 @@ impl Interrupter {
 
     /// Set event ring seg table size.
     pub fn set_event_ring_seg_table_size(&mut self, size: u16) -> Result<()> {
-        usb_debug!("interrupter set seg table size {}", size);
+        xhci_trace!("interrupter set_event_ring_seg_table_size({})", size);
         self.event_ring
             .set_seg_table_size(size)
             .map_err(Error::SetSegTableSize)
@@ -159,39 +171,47 @@ impl Interrupter {
 
     /// Set event ring segment table base address.
     pub fn set_event_ring_seg_table_base_addr(&mut self, addr: GuestAddress) -> Result<()> {
-        usb_debug!("interrupter set table base addr {:#x}", addr.0);
+        xhci_trace!("interrupter set_table_base_addr({:#x})", addr.0);
         self.event_ring
             .set_seg_table_base_addr(addr)
             .map_err(Error::SetSegTableBaseAddr)
     }
 
     /// Set event ring dequeue pointer.
-    pub fn set_event_ring_dequeue_pointer(&mut self, addr: GuestAddress) -> Result<()> {
-        usb_debug!("interrupter set dequeue ptr addr {:#x}", addr.0);
+    pub fn set_event_ring_dequeue_pointer(&mut self, addr: GuestAddress, busy: bool) -> Result<()> {
+        xhci_trace!(
+            "interrupter set_dequeue_pointer(addr = {:#x}, busy = {})",
+            addr.0,
+            busy
+        );
         self.event_ring.set_dequeue_pointer(addr);
-        self.interrupt_if_needed()
-    }
-
-    /// Set event hander busy.
-    pub fn set_event_handler_busy(&mut self, busy: bool) -> Result<()> {
-        usb_debug!("set event handler busy {}", busy);
         self.event_handler_busy = busy;
         self.interrupt_if_needed()
     }
 
     /// Send and interrupt.
     pub fn interrupt(&mut self) -> Result<()> {
-        usb_debug!("sending interrupt");
         self.event_handler_busy = true;
         self.usbsts.set_bits(USB_STS_EVENT_INTERRUPT);
         self.iman.set_bits(IMAN_INTERRUPT_PENDING);
         self.erdp.set_bits(ERDP_EVENT_HANDLER_BUSY);
+        self.moderation_counter = self.moderation_interval;
+        self.last_interrupt_time = self.clock.now();
         self.interrupt_evt.signal().map_err(Error::SendInterrupt)
     }
 
+    fn interrupt_interval(&self) -> Duration {
+        // Formula from xhci spec 4.17.2 in nanoseconds, but we use the imodc value instead of the
+        // imodi value because our implementation automatically adjusts the range of the duration
+        // based on the remaining time left in the moderation counter, which may be software
+        // defined.
+        Duration::new(0, 250 * u32::from(self.moderation_counter))
+    }
+
     fn interrupt_if_needed(&mut self) -> Result<()> {
-        // TODO(dverkamp): re-add !self.event_handler_busy after solving https://crbug.com/1082930
-        if self.enabled && !self.event_ring.is_empty() {
+        let can_interrupt = self.last_interrupt_time.elapsed() >= self.interrupt_interval();
+        if self.enabled && can_interrupt && !self.event_ring.is_empty() && !self.event_handler_busy
+        {
             self.interrupt()?;
         }
         Ok(())

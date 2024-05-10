@@ -24,16 +24,28 @@ if ! [ -x "$(command -v bpfmt)" ]; then
   exit 1
 fi
 
+# If there is need to verify installation of some packages, add them here in pkges.
+pkges='meson protobuf-compiler'
+for pkg in $pkges; do
+  result="$(dpkg-query -W --showformat='${db:Status-Status}' "$pkg" 2>&1)"
+  if [ ! $? = 0 ] || [ ! "$result" = installed ]; then
+    echo $pkg' not found. Please install.' >&2
+    exit 1
+  fi
+done
+
 # Use the specific rust version that crosvm upstream expects.
 #
 # TODO: Consider reading the toolchain from external/crosvm/rust-toolchain
 #
 # TODO: Consider using android's prebuilt rust binaries. Currently doesn't work
 # because they try to incorrectly use system clang and llvm.
-RUST_TOOLCHAIN="1.62.0"
+RUST_TOOLCHAIN="1.73.0"
 rustup which --toolchain $RUST_TOOLCHAIN cargo || \
   rustup toolchain install $RUST_TOOLCHAIN
 CARGO_BIN="$(dirname $(rustup which --toolchain $RUST_TOOLCHAIN cargo))"
+
+cd $ANDROID_BUILD_TOP/external/crosvm
 
 if [ ! "$REUSE" ]; then
   rm -f cargo.out cargo.metadata
@@ -41,7 +53,7 @@ if [ ! "$REUSE" ]; then
 fi
 
 set -x
-cargo_embargo --cfg cargo_embargo.json $REUSE --cargo-bin "$CARGO_BIN"
+cargo_embargo $REUSE --cargo-bin "$CARGO_BIN" generate cargo_embargo.json
 set +x
 
 if [ ! "$REUSE" ]; then
@@ -55,7 +67,3 @@ fi
 # cargo_embargo runs. This didn't happen with cargo2android.py because it
 # ignored the lock file.
 git restore Cargo.lock
-
-# Fix workstation specific path in "metrics" crate's generated files.
-# TODO(b/232150148): Find a better solution for protobuf generated files.
-sed --in-place 's/path = ".*\/out/path = "./' metrics/out/generated.rs

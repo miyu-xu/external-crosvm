@@ -52,7 +52,8 @@ impl Slirp {
     // TODO(nkgold): delete this code path as single process mode is no longer supported.
     pub fn new(
         shutdown_event: Event,
-        #[cfg(feature = "slirp-ring-capture")] slirp_capture_file: &Option<String>,
+        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
+        slirp_capture_file: &Option<String>,
     ) -> Result<Slirp> {
         let (host_pipe, guest_pipe) = named_pipes::pair_with_buffer_size(
             &FramingMode::Message,
@@ -67,7 +68,7 @@ impl Slirp {
         let slirp_thread;
         {
             let slirp_pipe = host_pipe;
-            #[cfg(feature = "slirp-ring-capture")]
+            #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             let slirp_capture_file_clone = slirp_capture_file.clone();
             slirp_thread = thread::spawn(move || {
                 let disable_access_to_host = !cfg!(feature = "guest-to-host-net-loopback");
@@ -76,7 +77,7 @@ impl Slirp {
                     slirp_pipe,
                     shutdown_event,
                     disable_access_to_host,
-                    #[cfg(feature = "slirp-ring-capture")]
+                    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
                     slirp_capture_file_clone,
                 )
                 .expect("Failed to start slirp");
@@ -115,7 +116,8 @@ impl Slirp {
     pub fn run_slirp_process(
         slirp_pipe: PipeConnection,
         shutdown_event: Event,
-        #[cfg(feature = "slirp-ring-capture")] mut slirp_capture_file: Option<String>,
+        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
+        mut slirp_capture_file: Option<String>,
     ) {
         // SLIRP_DEBUG is basically a CSV of debug options as defined in libslirp/src/slirp.c. See
         // g_parse_debug_string for more info on the format.
@@ -133,7 +135,7 @@ impl Slirp {
             slirp_pipe,
             shutdown_event,
             disable_access_to_host,
-            #[cfg(feature = "slirp-ring-capture")]
+            #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file.take(),
         ) {
             Err(Error::Slirp(SlirpError::BrokenPipe(e))) => {
@@ -222,21 +224,6 @@ impl TapTCommon for Slirp {
         Ok(())
     }
 
-    fn set_vnet_hdr_size(&self, _size: c_int) -> Result<()> {
-        // Unused by Slirp specific code that uses this struct.
-        unimplemented!("offloading is unsupported by Slirp.");
-    }
-
-    fn get_ifreq(&self) -> net_sys::ifreq {
-        // Used only by accessors on this struct, which are unimplemented for Slirp.
-        unimplemented!("not used by Slirp");
-    }
-
-    fn if_flags(&self) -> u32 {
-        // This function is unused by the Slirp code paths.
-        unimplemented!("not used by Slirp");
-    }
-
     /// WARNING: This is used so that we can pass Slirp into a listening loop. StreamChannels can't
     /// have >1 reader on one end of a channel, but in Slirp, there is only one guest packet stream
     /// so we have one reader and one writer.
@@ -251,6 +238,7 @@ impl TapTCommon for Slirp {
 
 impl Read for Slirp {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        // SAFETY:
         // Safe because we are reading simple bytes.
         unsafe {
             self.guest_pipe
@@ -263,13 +251,14 @@ impl Read for Slirp {
 }
 
 impl ReadOverlapped for Slirp {
-    fn read_overlapped(
+    /// # Safety
+    /// See requirements on [ReadOverlapped].
+    unsafe fn read_overlapped(
         &mut self,
         buf: &mut [u8],
         overlapped_wrapper: &mut OverlappedWrapper,
     ) -> IoResult<()> {
-        // Safe because we are reading simple bytes.
-        unsafe { self.guest_pipe.read_overlapped(buf, overlapped_wrapper) }
+        self.guest_pipe.read_overlapped(buf, overlapped_wrapper)
     }
 
     fn read_result(&mut self, overlapped_wrapper: &mut OverlappedWrapper) -> IoResult<usize> {
@@ -287,8 +276,12 @@ impl ReadOverlapped for Slirp {
 
 impl Write for Slirp {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        self.guest_pipe
-            .write_overlapped(buf, &mut self.overlapped_wrapper)?;
+        // SAFETY: safe because the operation ends with buf & overlapped_wrapper
+        // still in scope.
+        unsafe {
+            self.guest_pipe
+                .write_overlapped(buf, &mut self.overlapped_wrapper)?
+        };
         self.guest_pipe
             .get_overlapped_result(&mut self.overlapped_wrapper)
             .map(|x| x as usize)
@@ -300,7 +293,9 @@ impl Write for Slirp {
 }
 
 impl WriteOverlapped for Slirp {
-    fn write_overlapped(
+    /// # Safety
+    /// See requirements on [WriteOverlapped].
+    unsafe fn write_overlapped(
         &mut self,
         buf: &mut [u8],
         overlapped_wrapper: &mut OverlappedWrapper,
@@ -347,6 +342,6 @@ impl IntoAsync for Slirp {}
 pub struct SlirpStartupConfig {
     pub slirp_pipe: PipeConnection,
     pub shutdown_event: Event,
-    #[cfg(feature = "slirp-ring-capture")]
+    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pub slirp_capture_file: Option<String>,
 }

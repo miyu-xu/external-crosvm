@@ -25,6 +25,7 @@ use base::EventExt;
 use base::EventToken;
 use base::RawDescriptor;
 use base::Timer;
+use base::TimerTrait;
 use base::WaitContext;
 use base::WaitContextExt;
 use metrics::MetricEventType;
@@ -66,7 +67,7 @@ use crate::slirp::ETHERNET_FRAME_SIZE;
 use crate::Error;
 use crate::Result;
 
-#[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
+#[cfg(feature = "slirp-debug")]
 const SLIRP_CAPTURE_FILE_NAME: &str = "slirp_capture.pcap";
 
 #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
@@ -86,14 +87,20 @@ struct Handler {
     // Stores the actual timer (Event) and callback. Note that Event ownership is held by libslirp,
     // and created/released via `timer_new` and `timer_free`.
     timer_callbacks: HashMap<RawDescriptor, Box<dyn FnMut()>>,
+    tx_logger: PeriodicLogger,
+    rx_logger: PeriodicLogger,
+    #[allow(unused)]
+    handler_debug: Option<HandlerDebug>,
+}
+
+/// Additional fields that exist only when debugging the slirp connection.
+struct HandlerDebug {
     #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pcap_writer: PcapWriter<BufWriter<File>>,
     #[cfg(feature = "slirp-ring-capture")]
     tx_packet_ring_buffer: PacketRingBuffer,
     #[cfg(feature = "slirp-ring-capture")]
     rx_packet_ring_buffer: PacketRingBuffer,
-    tx_logger: PeriodicLogger,
-    rx_logger: PeriodicLogger,
 }
 
 impl CallbackHandler for Handler {
@@ -120,24 +127,33 @@ impl CallbackHandler for Handler {
         };
         let send_buf = [vnet_hdr.as_bytes(), buf].concat();
 
-        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
-        let d = self.start.elapsed();
-        #[cfg(feature = "slirp-debug")]
-        {
-            self.pcap_writer
-                .write(d.as_secs() as u32, d.subsec_nanos(), buf, buf.len() as u32)
-                .unwrap();
+        #[allow(unused)]
+        if let Some(handler_debug) = self.handler_debug.as_mut() {
+            let d = self.start.elapsed();
+            #[cfg(feature = "slirp-debug")]
+            {
+                handler_debug
+                    .pcap_writer
+                    .write(d.as_secs() as u32, d.subsec_nanos(), buf, buf.len() as u32)
+                    .unwrap();
+            }
+            #[cfg(feature = "slirp-ring-capture")]
+            {
+                handler_debug
+                    .tx_packet_ring_buffer
+                    .add_packet(buf, d)
+                    .expect("Failed to add packet.");
+            }
         }
-        #[cfg(feature = "slirp-ring-capture")]
-        {
-            self.tx_packet_ring_buffer
-                .add_packet(buf, d)
-                .expect("Failed to add packet.");
-        }
+
         // Log as rx from the guest's perspective
         self.rx_logger.log(buf.len() as i64);
-        self.pipe
-            .write_overlapped(&send_buf, &mut self.write_overlapped_wrapper)?;
+        // SAFETY: safe because the operation ends with send_buf and
+        // write_overlapped_wrapper still in scope.
+        unsafe {
+            self.pipe
+                .write_overlapped(&send_buf, &mut self.write_overlapped_wrapper)?;
+        }
         self.pipe
             .get_overlapped_result(&mut self.write_overlapped_wrapper)
             .map(|x| x as usize)
@@ -189,6 +205,7 @@ impl CallbackHandler for Handler {
     }
 
     fn begin_read_from_guest(&mut self) -> io::Result<()> {
+        // SAFETY:
         // Safe because we are writing simple bytes.
         unsafe {
             self.pipe
@@ -197,8 +214,6 @@ impl CallbackHandler for Handler {
     }
 
     fn end_read_from_guest(&mut self) -> io::Result<&[u8]> {
-        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
-        let d = self.start.elapsed();
         match self
             .pipe
             .try_get_overlapped_result(&mut self.read_overlapped_wrapper)
@@ -208,23 +223,31 @@ impl CallbackHandler for Handler {
                 // virtio spec).
                 let ethernet_pkt = &self.buf[VETH_HEADER_LENGTH..len as usize];
 
-                #[cfg(feature = "slirp-debug")]
-                {
-                    self.pcap_writer
-                        .write(
-                            d.as_secs() as u32,
-                            d.subsec_nanos(),
-                            ethernet_pkt,
-                            (len - VETH_HEADER_LENGTH) as u32,
-                        )
-                        .unwrap();
-                }
-                #[cfg(feature = "slirp-ring-capture")]
-                {
-                    self.rx_packet_ring_buffer
-                        .add_packet(ethernet_pkt, d)
-                        .expect("Failed to add packet.");
-                }
+                #[allow(unused)]
+                if let Some(handler_debug) = self.handler_debug.as_mut() {
+                    let d = self.start.elapsed();
+
+                    #[cfg(feature = "slirp-debug")]
+                    {
+                        handler_debug
+                            .pcap_writer
+                            .write(
+                                d.as_secs() as u32,
+                                d.subsec_nanos(),
+                                ethernet_pkt,
+                                len - VETH_HEADER_LENGTH as u32,
+                            )
+                            .unwrap();
+                    }
+                    #[cfg(feature = "slirp-ring-capture")]
+                    {
+                        handler_debug
+                            .rx_packet_ring_buffer
+                            .add_packet(ethernet_pkt, d)
+                            .expect("Failed to add packet.");
+                    }
+                };
+
                 // Log as tx from the guest's perspective
                 self.tx_logger.log(len as i64);
                 Ok(ethernet_pkt)
@@ -244,33 +267,40 @@ impl CallbackHandler for Handler {
 #[cfg(feature = "slirp-ring-capture")]
 impl Drop for Handler {
     fn drop(&mut self) {
-        let packets = PacketRingBuffer::pop_ring_buffers_and_aggregate(
-            &mut self.rx_packet_ring_buffer,
-            &mut self.tx_packet_ring_buffer,
-        );
+        if let Some(handler_debug) = &mut self.handler_debug {
+            let packets = PacketRingBuffer::pop_ring_buffers_and_aggregate(
+                &mut handler_debug.rx_packet_ring_buffer,
+                &mut handler_debug.tx_packet_ring_buffer,
+            );
 
-        for packet in packets {
-            self.pcap_writer
-                .write(
-                    packet.timestamp.as_secs() as u32,
-                    packet.timestamp.subsec_nanos(),
-                    &packet.buf,
-                    packet.buf.len() as u32,
-                )
-                .unwrap()
+            for packet in packets {
+                handler_debug
+                    .pcap_writer
+                    .write(
+                        packet.timestamp.as_secs() as u32,
+                        packet.timestamp.subsec_nanos(),
+                        &packet.buf,
+                        packet.buf.len() as u32,
+                    )
+                    .unwrap()
+            }
         }
     }
 }
 
 fn last_wsa_error() -> io::Error {
-    io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
+    io::Error::from_raw_os_error(
+        // SAFETY: trivially safe
+        unsafe { WSAGetLastError() },
+    )
 }
 
 fn poll_sockets(mut sockets: Vec<WSAPOLLFD>) -> io::Result<Vec<WSAPOLLFD>> {
+    // SAFETY:
     // Safe because sockets is guaranteed to be valid, and we handle error return codes below.
     let poll_result = unsafe {
         WSAPoll(
-            sockets.as_mut_ptr() as *mut WSAPOLLFD,
+            sockets.as_mut_ptr(),
             sockets.len() as u32,
             1, /* timeout in ms */
         )
@@ -348,6 +378,7 @@ struct EventSelectedSocket<'a> {
 
 impl<'a> EventSelectedSocket<'a> {
     fn new(socket: WSAPOLLFD, event: &'a Event) -> Result<EventSelectedSocket> {
+        // SAFETY:
         // Safe because socket.fd exists, the event handle is guaranteed to exist, and we check the
         // return code below.
         let res = unsafe {
@@ -368,6 +399,7 @@ impl<'a> EventSelectedSocket<'a> {
 
 impl<'a> Drop for EventSelectedSocket<'a> {
     fn drop(&mut self) {
+        // SAFETY:
         // Safe because socket.fd exists, the event handle is guaranteed to exist, and we check the
         // return code below.
         let res = unsafe {
@@ -465,9 +497,11 @@ struct WSAContext {
 
 impl WSAContext {
     fn new() -> Result<WSAContext> {
+        // SAFETY:
         // Trivially safe (initialization of this memory is not required).
         let mut ctx: WSAContext = unsafe { std::mem::zeroed() };
 
+        // SAFETY:
         // Safe because ctx.data is guaranteed to exist, and we check the return code.
         let err = unsafe { WSAStartup(MAKEWORD(2, 0), &mut ctx.data) };
         if err != 0 {
@@ -482,6 +516,7 @@ impl WSAContext {
 
 impl Drop for WSAContext {
     fn drop(&mut self) {
+        // SAFETY: trivially safe with return value checked.
         let err = unsafe { WSACleanup() };
         if err != 0 {
             error!("WSACleanup failed: {}", last_wsa_error())
@@ -497,7 +532,9 @@ pub fn start_slirp(
     host_pipe: PipeConnection,
     shutdown_event: Event,
     disable_access_to_host: bool,
-    #[cfg(feature = "slirp-ring-capture")] slirp_capture_file: Option<String>,
+    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))] slirp_capture_file: Option<
+        String,
+    >,
 ) -> Result<()> {
     // This call is not strictly required because libslirp currently calls WSAStartup for us, but
     // relying on that is brittle and a potential source of bugs as we have our own socket code that
@@ -507,7 +544,7 @@ pub fn start_slirp(
     let (mut context, host_pipe_notifier_handle) = create_slirp_context(
         host_pipe,
         disable_access_to_host,
-        #[cfg(feature = "slirp-ring-capture")]
+        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
         slirp_capture_file,
     )?;
     let shutdown_event_handle = shutdown_event.as_raw_descriptor();
@@ -520,15 +557,15 @@ pub fn start_slirp(
 
     'slirp: loop {
         // Request the FDs that we should poll from Slirp. Slirp provides them to us by way of a
-        // callback, which is invoked for each FD. This callback requires us to assign each FD an index
-        // which will be used by a subsequent Slirp call to get the poll events for each FD. The data
-        // flow can be thought of as follows:
-        //    1. pollfds_fill creates a map of index -> fd inside Slirp based on the return values from
-        //       the pollfds_fill callback.
+        // callback, which is invoked for each FD. This callback requires us to assign each FD an
+        // index which will be used by a subsequent Slirp call to get the poll events for
+        // each FD. The data flow can be thought of as follows:
+        //    1. pollfds_fill creates a map of index -> fd inside Slirp based on the return values
+        //       from the pollfds_fill callback.
         //    2. crosvm invokes poll on the FDs provided by Slirp.
         //    3. crosvm notifies Slirp via pollfds_poll that polling completed for the provided FDs.
-        //    4. Slirp calls into crosvm via the pollfds_poll callback and asks for the statuses using
-        //       the fd indicies registered in step #1.
+        //    4. Slirp calls into crosvm via the pollfds_poll callback and asks for the statuses
+        //       using the fd indicies registered in step #1.
         let mut poll_fds = Vec::new();
         // We'd like to sleep as long as possible (assuming no actionable notifications arrive).
         let mut timeout_ms: u32 = u32::MAX;
@@ -541,8 +578,8 @@ pub fn start_slirp(
             (poll_fds.len() - 1) as i32
         });
 
-        // There are relatively few concurrent timer_callbacks used by libslirp, so we set the small vector
-        // size low.
+        // There are relatively few concurrent timer_callbacks used by libslirp, so we set the small
+        // vector size low.
         let timer_callbacks = context
             .get_timers()
             .map(|timer| Descriptor(*timer))
@@ -594,42 +631,52 @@ pub fn start_slirp(
     Ok(())
 }
 
-/// Creates the slirp capture file.
-///
-/// Try to create a file in the user provided path. If no path is provided, or
-/// if creation at that path fails, create in current directory (named
-/// `SLIRP_CAPTURE_FILE_NAME`).
-#[cfg(feature = "slirp-ring-capture")]
-fn create_slirp_capture_file(slirp_capture_file: Option<String>) -> File {
-    if let Some(slirp_capture_file) = slirp_capture_file {
-        match File::create(&slirp_capture_file) {
-            Ok(file) => file,
-            Err(e) => {
-                warn!(
-                    "Unable to save slirp capture packets file to {}, \
-                Saving file to current directory. Error: {}",
-                    slirp_capture_file, e
-                );
-                File::create(SLIRP_CAPTURE_FILE_NAME).unwrap()
-            }
-        }
-    } else {
-        warn!(
-            "run parameter --slirp-capture-file not specified. Saving file to current directory."
-        );
-        File::create(SLIRP_CAPTURE_FILE_NAME).unwrap()
-    }
-}
-
 fn create_slirp_context(
     host_pipe: PipeConnection,
     disable_access_to_host: bool,
-    #[cfg(feature = "slirp-ring-capture")] slirp_capture_file: Option<String>,
+    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))] slirp_capture_file: Option<
+        String,
+    >,
 ) -> Result<(Box<Context<Handler>>, RawDescriptor)> {
-    #[cfg(feature = "slirp-ring-capture")]
-    let slirp_captured_packets_file = create_slirp_capture_file(slirp_capture_file);
-    #[cfg(all(not(feature = "slirp-ring-capture"), feature = "slirp-debug"))]
-    let slirp_captured_packets_file = File::create(SLIRP_CAPTURE_FILE_NAME).unwrap();
+    // Set up handler_debug:
+    // - If slirp-debug is used, write to SLIRP_CAPTURE_FILE_NAME if slirp_capture_file not set.
+    // - If slirp-ring-capture is used, write to slirp_capture_file.
+    //     - If slirp_capture_file not set, don't debug.
+    // - Otherwise, set to None.
+    cfg_if::cfg_if! {
+        if #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))] {
+            #[cfg(feature = "slirp-ring-capture")]
+            let capture_path = slirp_capture_file;
+            #[cfg(feature = "slirp-debug")]
+            let capture_path = slirp_capture_file.or(Some(SLIRP_CAPTURE_FILE_NAME.to_owned()));
+
+            let handler_debug = capture_path
+                .as_ref()
+                .map(File::create)
+                .transpose()
+                .unwrap_or_default()
+                .map(|capture_file| HandlerDebug {
+                    pcap_writer: PcapWriter::new(BufWriter::with_capacity(
+                        PCAP_FILE_BUFFER_SIZE,
+                        capture_file,
+                    ))
+                    .unwrap(),
+                    #[cfg(feature = "slirp-ring-capture")]
+                    tx_packet_ring_buffer: PacketRingBuffer::new(PACKET_RING_BUFFER_SIZE_IN_BYTES),
+                    #[cfg(feature = "slirp-ring-capture")]
+                    rx_packet_ring_buffer: PacketRingBuffer::new(PACKET_RING_BUFFER_SIZE_IN_BYTES),
+                });
+
+            // If there is a target capture, but no debug, let the dev know. In prod, capture_path
+            // won't exist, so we won't log.
+            if capture_path.is_some() && handler_debug.is_none() {
+                error!("Failed to start packet capture! Check provided file path or sandboxing?");
+            }
+        } else {
+            let handler_debug = None;
+        }
+    }
+
     let overlapped_wrapper = OverlappedWrapper::new(true).unwrap();
     let read_notifier = overlapped_wrapper
         .get_h_event_ref()
@@ -642,20 +689,11 @@ fn create_slirp_context(
         buf: [0; ETHERNET_FRAME_SIZE],
         write_overlapped_wrapper: OverlappedWrapper::new(true).unwrap(),
         timer_callbacks: HashMap::new(),
-        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
-        pcap_writer: PcapWriter::new(BufWriter::with_capacity(
-            PCAP_FILE_BUFFER_SIZE,
-            slirp_captured_packets_file,
-        ))
-        .unwrap(),
-        #[cfg(feature = "slirp-ring-capture")]
-        tx_packet_ring_buffer: PacketRingBuffer::new(PACKET_RING_BUFFER_SIZE_IN_BYTES),
-        #[cfg(feature = "slirp-ring-capture")]
-        rx_packet_ring_buffer: PacketRingBuffer::new(PACKET_RING_BUFFER_SIZE_IN_BYTES),
         tx_logger: PeriodicLogger::new(MetricEventType::NetworkTxRate, Duration::from_secs(1))
             .unwrap(),
         rx_logger: PeriodicLogger::new(MetricEventType::NetworkRxRate, Duration::from_secs(1))
             .unwrap(),
+        handler_debug,
     };
 
     // Address & mask of the virtual network.
@@ -852,8 +890,8 @@ mod tests {
         start_slirp(
             host_pipe,
             event_fd.try_clone().unwrap(),
-            /* disable_access_to_host=*/ false,
-            #[cfg(feature = "slirp-ring-capture")]
+            /* disable_access_to_host= */ false,
+            #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             None,
         )
         .expect("Failed to start slirp");
@@ -869,8 +907,8 @@ mod tests {
         0x02, 0x0f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a, 0x00, 0x02, 0x0f,
     ];
 
-    // TCP SYN from 52:55:0A:00:02:0F to 52:55:0A:00:02:01 (latter MAC should be arbitrary with Slirp)
-    // IP 10.0.2.15(5678) -> 127.0.0.1(19422)
+    // TCP SYN from 52:55:0A:00:02:0F to 52:55:0A:00:02:01 (latter MAC should be arbitrary with
+    // Slirp) IP 10.0.2.15(5678) -> 127.0.0.1(19422)
     // Note: MAC addresses in Slirp are arbitrary
     const VETH_TCP_SYN: [u8; 66] = [
         // VETH header
@@ -913,8 +951,8 @@ mod tests {
             start_slirp(
                 host_pipe,
                 shutdown_receiver,
-                /* disable_access_to_host=*/ false,
-                #[cfg(feature = "slirp-ring-capture")]
+                /* disable_access_to_host= */ false,
+                #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
                 None,
             )
             .unwrap();
@@ -932,20 +970,30 @@ mod tests {
         let _listener = TcpListener::bind(LOOPBACK_SOCKET).unwrap();
 
         // This ARP is required or else Slirp will send us an ARP request before it returns an ACK
-        guest_pipe
-            .write_overlapped(&VETH_ARP_ANNOUNCEMENT, &mut overlapped_wrapper)
-            .expect("Failed to write ARP to guest pipe");
+        // SAFETY: safe because the buffer & overlapped wrapper are in scope for
+        // the duration of the overlapped operation.
+        unsafe {
+            guest_pipe
+                .write_overlapped(&VETH_ARP_ANNOUNCEMENT, &mut overlapped_wrapper)
+                .expect("Failed to write ARP to guest pipe");
+        }
         guest_pipe
             .get_overlapped_result(&mut overlapped_wrapper)
             .unwrap();
-        guest_pipe
-            .write_overlapped(&VETH_TCP_SYN, &mut overlapped_wrapper)
-            .expect("Failed to write SYN to guest pipe");
+        // SAFETY: safe because the buffer & overlapped wrapper are in scope for
+        // the duration of the overlapped operation.
+        unsafe {
+            guest_pipe
+                .write_overlapped(&VETH_TCP_SYN, &mut overlapped_wrapper)
+                .expect("Failed to write SYN to guest pipe")
+        };
         guest_pipe
             .get_overlapped_result(&mut overlapped_wrapper)
             .unwrap();
 
         let mut recv_buffer: [u8; 512] = [0; 512];
+        // SAFETY: safe because the buffer & overlapped wrapper are in scope for
+        // the duration of the overlapped operation.
         unsafe { guest_pipe.read_overlapped(&mut recv_buffer, &mut overlapped_wrapper) }.unwrap();
         let size = guest_pipe
             .get_overlapped_result(&mut overlapped_wrapper)

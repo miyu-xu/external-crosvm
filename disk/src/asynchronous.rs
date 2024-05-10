@@ -13,6 +13,7 @@ use base::AsRawDescriptors;
 use base::FileAllocate;
 use base::FileSetLen;
 use base::FileSync;
+use base::PunchHoleMut;
 use base::RawDescriptor;
 use base::WriteZeroesAt;
 use cros_async::BackingMemory;
@@ -24,7 +25,6 @@ use crate::AsyncDisk;
 use crate::DiskFile;
 use crate::DiskGetLen;
 use crate::Error;
-use crate::PunchHoleMut;
 use crate::Result;
 
 /// Async wrapper around a non-async `DiskFile` using a `BlockingPool`.
@@ -70,10 +70,16 @@ impl<T: DiskFile + Send> AsRawDescriptors for AsyncDiskFileWrapper<T> {
     }
 }
 
+pub trait DiskFlush {
+    /// Flush intermediary buffers and/or dirty state to file. fsync not required.
+    fn flush(&mut self) -> io::Result<()>;
+}
+
 #[async_trait(?Send)]
 impl<
         T: 'static
             + DiskFile
+            + DiskFlush
             + Send
             + FileAllocate
             + FileSetLen
@@ -90,6 +96,16 @@ impl<
         Box::new(mtx.into_inner())
     }
 
+    async fn flush(&self) -> Result<()> {
+        let inner_clone = self.inner.clone();
+        self.blocking_pool
+            .spawn(move || {
+                let mut disk_file = inner_clone.lock();
+                disk_file.flush().map_err(Error::IoFlush)
+            })
+            .await
+    }
+
     async fn fsync(&self) -> Result<()> {
         let inner_clone = self.inner.clone();
         self.blocking_pool
@@ -100,14 +116,24 @@ impl<
             .await
     }
 
+    async fn fdatasync(&self) -> Result<()> {
+        let inner_clone = self.inner.clone();
+        self.blocking_pool
+            .spawn(move || {
+                let mut disk_file = inner_clone.lock();
+                disk_file.fdatasync().map_err(Error::IoFdatasync)
+            })
+            .await
+    }
+
     async fn read_to_mem<'a>(
         &'a self,
         mut file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize> {
         let inner_clone = self.inner.clone();
-        let mem_offsets = mem_offsets.to_vec();
+        let mem_offsets: Vec<cros_async::MemRegion> = mem_offsets.collect();
         self.blocking_pool
             .spawn(move || {
                 let mut disk_file = inner_clone.lock();
@@ -132,10 +158,10 @@ impl<
         &'a self,
         mut file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize> {
         let inner_clone = self.inner.clone();
-        let mem_offsets = mem_offsets.to_vec();
+        let mem_offsets: Vec<cros_async::MemRegion> = mem_offsets.collect();
         self.blocking_pool
             .spawn(move || {
                 let mut disk_file = inner_clone.lock();
@@ -163,7 +189,7 @@ impl<
                 let mut disk_file = inner_clone.lock();
                 disk_file
                     .punch_hole_mut(file_offset, length)
-                    .map_err(Error::PunchHole)
+                    .map_err(Error::IoPunchHole)
             })
             .await
     }

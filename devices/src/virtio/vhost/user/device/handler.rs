@@ -5,12 +5,12 @@
 //! Library for implementing vhost-user device executables.
 //!
 //! This crate provides
-//! * `VhostUserBackend` trait, which is a collection of methods to handle vhost-user requests, and
+//! * `VhostUserDevice` trait, which is a collection of methods to handle vhost-user requests, and
 //! * `DeviceRequestHandler` struct, which makes a connection to a VMM and starts an event loop.
 //!
 //! They are expected to be used as follows:
 //!
-//! 1. Define a struct and implement `VhostUserBackend` for it.
+//! 1. Define a struct and implement `VhostUserDevice` for it.
 //! 2. Create a `DeviceRequestHandler` with the backend struct.
 //! 3. Drive the `DeviceRequestHandler::run` async fn with an executor.
 //!
@@ -19,7 +19,7 @@
 //!   /* fields */
 //! }
 //!
-//! impl VhostUserBackend for MyBackend {
+//! impl VhostUserDevice for MyBackend {
 //!   /* implement methods */
 //! }
 //!
@@ -35,47 +35,50 @@
 //!   Ok(())
 //! }
 //! ```
-//!
 // Implementation note:
 // This code lets us take advantage of the vmm_vhost low level implementation of the vhost user
-// protocol. DeviceRequestHandler implements the VhostUserSlaveReqHandlerMut trait from vmm_vhost,
-// and includes some common code for setting up guest memory and managing partially configured
-// vrings. DeviceRequestHandler::run watches the vhost-user socket and then calls handle_request()
-// when it becomes readable. handle_request() reads and parses the message and then calls one of the
-// VhostUserSlaveReqHandlerMut trait methods. These dispatch back to the supplied VhostUserBackend
-// implementation (this is what our devices implement).
+// protocol. DeviceRequestHandler implements the Backend trait from vmm_vhost, and includes some
+// common code for setting up guest memory and managing partially configured vrings.
+// DeviceRequestHandler::run watches the vhost-user socket and then calls handle_request() when it
+// becomes readable. handle_request() reads and parses the message and then calls one of the
+// Backend trait methods. These dispatch back to the supplied VhostUserDevice implementation (this
+// is what our devices implement).
 
 pub(super) mod sys;
 
 use std::collections::BTreeMap;
 use std::convert::From;
-use std::convert::TryFrom;
 use std::fs::File;
 use std::num::Wrapping;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
 use anyhow::bail;
 use anyhow::Context;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use base::clear_fd_flags;
 use base::error;
+use base::warn;
 use base::Event;
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
 use base::Protection;
 use base::SafeDescriptor;
 use base::SharedMemory;
-use sys::Doorbell;
+use cros_async::TaskHandle;
+use hypervisor::MemCacheType;
+use serde::Deserialize;
+use serde::Serialize;
+use sync::Mutex;
+use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::MemoryRegion;
-use vmm_vhost::connection::Endpoint;
-use vmm_vhost::message::SlaveReq;
 use vmm_vhost::message::VhostSharedMemoryRegion;
 use vmm_vhost::message::VhostUserConfigFlags;
+use vmm_vhost::message::VhostUserExternalMapMsg;
 use vmm_vhost::message::VhostUserGpuMapMsg;
 use vmm_vhost::message::VhostUserInflight;
 use vmm_vhost::message::VhostUserMemoryRegion;
@@ -84,62 +87,21 @@ use vmm_vhost::message::VhostUserShmemMapMsg;
 use vmm_vhost::message::VhostUserShmemMapMsgFlags;
 use vmm_vhost::message::VhostUserShmemUnmapMsg;
 use vmm_vhost::message::VhostUserSingleMemoryRegion;
-use vmm_vhost::message::VhostUserVirtioFeatures;
 use vmm_vhost::message::VhostUserVringAddrFlags;
 use vmm_vhost::message::VhostUserVringState;
+use vmm_vhost::BackendReq;
+use vmm_vhost::Connection;
 use vmm_vhost::Error as VhostError;
-use vmm_vhost::Protocol;
+use vmm_vhost::Frontend;
+use vmm_vhost::FrontendClient;
 use vmm_vhost::Result as VhostResult;
-use vmm_vhost::Slave;
-use vmm_vhost::VhostUserMasterReqHandler;
-use vmm_vhost::VhostUserSlaveReqHandlerMut;
+use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
+use crate::virtio::Interrupt;
 use crate::virtio::Queue;
+use crate::virtio::QueueConfig;
 use crate::virtio::SharedMemoryMapper;
 use crate::virtio::SharedMemoryRegion;
-use crate::virtio::SignalableInterrupt;
-
-/// Largest valid number of entries in a virtqueue.
-const MAX_VRING_LEN: u16 = 32768;
-
-/// An event to deliver an interrupt to the guest.
-///
-/// Unlike `devices::Interrupt`, this doesn't support interrupt status and signal resampling.
-// TODO(b/187487351): To avoid sending unnecessary events, we might want to support interrupt
-// status. For this purpose, we need a mechanism to share interrupt status between the vmm and the
-// device process.
-#[derive(Clone)]
-pub struct CallEvent(Arc<Event>);
-
-impl CallEvent {
-    #[cfg_attr(windows, allow(dead_code))]
-    pub fn into_inner(self) -> Event {
-        Arc::try_unwrap(self.0).unwrap()
-    }
-}
-
-impl SignalableInterrupt for CallEvent {
-    fn signal(&self, _vector: u16, _interrupt_status_mask: u32) {
-        self.0.signal().unwrap();
-    }
-
-    fn signal_config_changed(&self) {} // TODO(dgreid)
-
-    fn get_resample_evt(&self) -> Option<&Event> {
-        None
-    }
-
-    fn do_interrupt_resample(&self) {}
-}
-
-impl From<File> for CallEvent {
-    fn from(file: File) -> Self {
-        // Safe because we own the file.
-        CallEvent(Arc::new(unsafe {
-            Event::from_raw_descriptor(file.into_raw_descriptor())
-        }))
-    }
-}
 
 /// Keeps a mapping from the vmm's virtual addresses to guest addresses.
 /// used to translate messages from the vmm to guest offsets.
@@ -159,8 +121,11 @@ pub fn vmm_va_to_gpa(maps: &[MappingInfo], vmm_va: u64) -> VhostResult<GuestAddr
     Err(VhostError::InvalidMessage)
 }
 
-/// Trait for vhost-user backend.
-pub trait VhostUserBackend {
+/// Trait for vhost-user devices. Analogous to the `VirtioDevice` trait.
+///
+/// In contrast with [[vmm_vhost::Backend]], which closely matches the vhost-user spec, this trait
+/// is designed to follow crosvm conventions for implementing devices.
+pub trait VhostUserDevice {
     /// The maximum number of queues that this backend can manage.
     fn max_queue_num(&self) -> usize;
 
@@ -196,12 +161,13 @@ pub trait VhostUserBackend {
         idx: usize,
         queue: Queue,
         mem: GuestMemory,
-        doorbell: Doorbell,
-        kick_evt: Event,
+        doorbell: Interrupt,
     ) -> anyhow::Result<()>;
 
     /// Indicates that the backend should stop processing requests for virtio queue number `idx`.
-    fn stop_queue(&mut self, idx: usize);
+    /// This method should return the queue passed to `start_queue` for the corresponding `idx`.
+    /// This method will only be called for queues that were previously started by `start_queue`.
+    fn stop_queue(&mut self, idx: usize) -> anyhow::Result<Queue>;
 
     /// Resets the vhost-user backend.
     fn reset(&mut self);
@@ -214,26 +180,63 @@ pub trait VhostUserBackend {
     /// Accepts `VhostBackendReqConnection` to conduct Vhost backend to frontend message
     /// handling.
     ///
-    /// This method will be called when `VhostUserProtocolFeatures::SLAVE_REQ` is
+    /// The backend is given an `Arc` instead of full ownership so that the framework can also use
+    /// the connection.
+    ///
+    /// This method will be called when `VhostUserProtocolFeatures::BACKEND_REQ` is
     /// negotiated.
-    fn set_backend_req_connection(&mut self, _conn: VhostBackendReqConnection) {
+    fn set_backend_req_connection(&mut self, _conn: Arc<VhostBackendReqConnection>) {
         error!("set_backend_req_connection is not implemented");
+    }
+
+    /// Used to stop non queue workers that `VhostUserDevice::stop_queue` can't stop. May or may
+    /// not also stop all queue workers.
+    fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
+        error!("sleep not implemented for vhost user device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(())
+    }
+
+    /// Snapshot device and return serialized bytes.
+    fn snapshot(&self) -> anyhow::Result<Vec<u8>> {
+        error!("snapshot not implemented for vhost user device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(Vec::new())
+    }
+
+    fn restore(&mut self, _data: Vec<u8>) -> anyhow::Result<()> {
+        error!("restore not implemented for vhost user device");
+        // TODO(rizhang): Return error once basic devices support this.
+        Ok(())
     }
 }
 
 /// A virtio ring entry.
 struct Vring {
-    queue: Queue,
-    doorbell: Option<Doorbell>,
+    // The queue config. This doesn't get mutated by the queue workers.
+    queue: QueueConfig,
+    doorbell: Option<Interrupt>,
+    enabled: bool,
+    // Active queue that is only `Some` when the device is sleeping.
+    paused_queue: Option<Queue>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VringSnapshot {
+    // Snapshot of queue config.
+    queue: serde_json::Value,
+    // Snapshot of the activated queue state.
+    paused_queue: Option<serde_json::Value>,
     enabled: bool,
 }
 
 impl Vring {
-    fn new(max_size: u16) -> Self {
+    fn new(max_size: u16, features: u64) -> Self {
         Self {
-            queue: Queue::new(max_size),
+            queue: QueueConfig::new(max_size, features),
             doorbell: None,
             enabled: false,
+            paused_queue: None,
         }
     }
 
@@ -241,54 +244,49 @@ impl Vring {
         self.queue.reset();
         self.doorbell = None;
         self.enabled = false;
+        self.paused_queue = None;
     }
-}
 
-/// Trait for defining vhost-user ops that are platform-dependent.
-pub trait VhostUserPlatformOps {
-    /// Returns the protocol implemented by these platform ops.
-    fn protocol(&self) -> Protocol;
-    /// Create the guest memory for the backend.
-    ///
-    /// `contexts` and `files` must be the same size, and provide a description of the memory
-    /// regions to map as well as the file descriptors from which to obtain the memory backing these
-    /// regions, respectively.
-    ///
-    /// The returned tuple contains the constructed `GuestMemory` from these memory contexts, as
-    /// well as a vector describing all the mappings described by these contexts.
+    fn snapshot(&self) -> anyhow::Result<VringSnapshot> {
+        Ok(VringSnapshot {
+            queue: self.queue.snapshot()?,
+            enabled: self.enabled,
+            paused_queue: self
+                .paused_queue
+                .as_ref()
+                .map(Queue::snapshot)
+                .transpose()?,
+        })
+    }
 
-    fn set_mem_table(
+    fn restore(
         &mut self,
-        contexts: &[VhostUserMemoryRegion],
-        files: Vec<File>,
-    ) -> VhostResult<(GuestMemory, Vec<MappingInfo>)>;
-
-    /// Return an `Event` that will be signaled by the frontend whenever vring `index` should be
-    /// processed.
-    ///
-    /// For protocols that support providing that event using a file descriptor (`Regular`), it is
-    /// provided by `file`. For other protocols, `file` will be `None`.
-    fn set_vring_kick(&mut self, index: u8, file: Option<File>) -> VhostResult<Event>;
-
-    /// Return a `Doorbell` that the backend will signal whenever it puts used buffers for vring
-    /// `index`.
-    ///
-    /// For protocols that support listening to a file descriptor (`Regular`), `file` provides a
-    /// file descriptor from which the `Doorbell` should be built. For other protocols, it will be
-    /// `None`.
-    fn set_vring_call(&mut self, index: u8, file: Option<File>) -> VhostResult<Doorbell>;
+        vring_snapshot: VringSnapshot,
+        mem: &GuestMemory,
+        event: Option<Event>,
+    ) -> anyhow::Result<()> {
+        self.queue.restore(vring_snapshot.queue)?;
+        self.enabled = vring_snapshot.enabled;
+        self.paused_queue = vring_snapshot
+            .paused_queue
+            .map(|value| {
+                Queue::restore(
+                    &self.queue,
+                    value,
+                    mem,
+                    event.context("missing queue event")?,
+                )
+            })
+            .transpose()?;
+        Ok(())
+    }
 }
 
 /// Ops for running vhost-user over a stream (i.e. regular protocol).
 pub(super) struct VhostUserRegularOps;
 
-impl VhostUserPlatformOps for VhostUserRegularOps {
-    fn protocol(&self) -> Protocol {
-        Protocol::Regular
-    }
-
-    fn set_mem_table(
-        &mut self,
+impl VhostUserRegularOps {
+    pub fn set_mem_table(
         contexts: &[VhostUserMemoryRegion],
         files: Vec<File>,
     ) -> VhostResult<(GuestMemory, Vec<MappingInfo>)> {
@@ -305,7 +303,7 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
                 Arc::new(
                     SharedMemory::from_safe_descriptor(
                         SafeDescriptor::from(file),
-                        Some(region.memory_size),
+                        region.memory_size,
                     )
                     .unwrap(),
                 ),
@@ -332,59 +330,54 @@ impl VhostUserPlatformOps for VhostUserRegularOps {
         Ok((guest_mem, vmm_maps))
     }
 
-    fn set_vring_kick(&mut self, _index: u8, file: Option<File>) -> VhostResult<Event> {
+    pub fn set_vring_kick(_index: u8, file: Option<File>) -> VhostResult<Event> {
         let file = file.ok_or(VhostError::InvalidParam)?;
         // Remove O_NONBLOCK from kick_fd. Otherwise, uring_executor will fails when we read
         // values via `next_val()` later.
         // This is only required (and can only be done) on Unix platforms.
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         if let Err(e) = clear_fd_flags(file.as_raw_fd(), libc::O_NONBLOCK) {
             error!("failed to remove O_NONBLOCK for kick fd: {}", e);
             return Err(VhostError::InvalidParam);
         }
-
-        // Safe because we own the file.
-        Ok(unsafe { Event::from_raw_descriptor(file.into_raw_descriptor()) })
+        Ok(Event::from(SafeDescriptor::from(file)))
     }
 
-    fn set_vring_call(&mut self, _index: u8, file: Option<File>) -> VhostResult<Doorbell> {
+    pub fn set_vring_call(
+        _index: u8,
+        file: Option<File>,
+        signal_config_change_fn: Box<dyn Fn() + Send + Sync>,
+    ) -> VhostResult<Interrupt> {
         let file = file.ok_or(VhostError::InvalidParam)?;
-        Ok(
-            // `Doorbell` is defined as `CallEvent` on Windows, prevent clippy from giving us a
-            // warning about the unneeded conversion.
-            #[allow(clippy::useless_conversion)]
-            Doorbell::from(CallEvent::try_from(file).map_err(|_| {
-                error!("failed to convert callfd to CallSignal");
-                VhostError::InvalidParam
-            })?),
-        )
+        Ok(Interrupt::new_vhost_user(
+            Event::from(SafeDescriptor::from(file)),
+            signal_config_change_fn,
+        ))
     }
 }
 
-/// Structure to have an event loop for interaction between a VMM and `VhostUserBackend`.
-pub struct DeviceRequestHandler {
+/// An adapter that implements `vmm_vhost::Backend` for any type implementing `VhostUserDevice`.
+pub struct DeviceRequestHandler<T: VhostUserDevice> {
     vrings: Vec<Vring>,
     owned: bool,
     vmm_maps: Option<Vec<MappingInfo>>,
     mem: Option<GuestMemory>,
-    backend: Box<dyn VhostUserBackend>,
-    ops: Box<dyn VhostUserPlatformOps>,
+    backend: T,
+    backend_req_connection: Arc<Mutex<VhostBackendReqConnectionState>>,
 }
 
-impl DeviceRequestHandler {
-    pub fn new(backend: Box<dyn VhostUserBackend>) -> Self {
-        Self::new_with_ops(backend, Box::new(VhostUserRegularOps))
-    }
+#[derive(Serialize, Deserialize)]
+pub struct DeviceRequestHandlerSnapshot {
+    vrings: Vec<VringSnapshot>,
+    backend: Vec<u8>,
+}
 
-    /// Creates a vhost-user handler instance for `backend` with a different set of platform ops
-    /// than the regular vhost-user ones.
-    pub(crate) fn new_with_ops(
-        backend: Box<dyn VhostUserBackend>,
-        ops: Box<dyn VhostUserPlatformOps>,
-    ) -> Self {
+impl<T: VhostUserDevice> DeviceRequestHandler<T> {
+    /// Creates a vhost-user handler instance for `backend`.
+    pub(crate) fn new(backend: T) -> Self {
         let mut vrings = Vec::with_capacity(backend.max_queue_num());
         for _ in 0..backend.max_queue_num() {
-            vrings.push(Vring::new(MAX_VRING_LEN));
+            vrings.push(Vring::new(Queue::MAX_SIZE, backend.features()));
         }
 
         DeviceRequestHandler {
@@ -393,16 +386,26 @@ impl DeviceRequestHandler {
             vmm_maps: None,
             mem: None,
             backend,
-            ops,
+            backend_req_connection: Arc::new(Mutex::new(
+                VhostBackendReqConnectionState::NoConnection,
+            )),
         }
     }
 }
 
-impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
-    fn protocol(&self) -> Protocol {
-        self.ops.protocol()
+impl<T: VhostUserDevice> AsRef<T> for DeviceRequestHandler<T> {
+    fn as_ref(&self) -> &T {
+        &self.backend
     }
+}
 
+impl<T: VhostUserDevice> AsMut<T> for DeviceRequestHandler<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.backend
+    }
+}
+
+impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     fn set_owner(&mut self) -> VhostResult<()> {
         if self.owned {
             return Err(VhostError::InvalidOperation);
@@ -444,7 +447,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         // VHOST_USER_SET_VRING_ENABLE with parameter 1, or after it has been disabled by
         // VHOST_USER_SET_VRING_ENABLE with parameter 0.
         let acked_features = self.backend.acked_features();
-        let vring_enabled = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits() & acked_features != 0;
+        let vring_enabled = acked_features & 1 << VHOST_USER_F_PROTOCOL_FEATURES != 0;
         for v in &mut self.vrings {
             v.enabled = vring_enabled;
         }
@@ -469,7 +472,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         contexts: &[VhostUserMemoryRegion],
         files: Vec<File>,
     ) -> VhostResult<()> {
-        let (guest_mem, vmm_maps) = self.ops.set_mem_table(contexts, files)?;
+        let (guest_mem, vmm_maps) = VhostUserRegularOps::set_mem_table(contexts, files)?;
         self.mem = Some(guest_mem);
         self.vmm_maps = Some(vmm_maps);
         Ok(())
@@ -480,7 +483,7 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn set_vring_num(&mut self, index: u32, num: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len() || num == 0 || num > MAX_VRING_LEN.into() {
+        if index as usize >= self.vrings.len() || num == 0 || num > Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
         self.vrings[index as usize].queue.set_size(num as u16);
@@ -515,35 +518,38 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
     }
 
     fn set_vring_base(&mut self, index: u32, base: u32) -> VhostResult<()> {
-        if index as usize >= self.vrings.len() || base >= MAX_VRING_LEN.into() {
+        if index as usize >= self.vrings.len() || base >= Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
 
         let vring = &mut self.vrings[index as usize];
-        vring.queue.next_avail = Wrapping(base as u16);
-        vring.queue.next_used = Wrapping(base as u16);
+        vring.queue.set_next_avail(Wrapping(base as u16));
+        vring.queue.set_next_used(Wrapping(base as u16));
 
         Ok(())
     }
 
     fn get_vring_base(&mut self, index: u32) -> VhostResult<VhostUserVringState> {
-        if index as usize >= self.vrings.len() {
-            return Err(VhostError::InvalidParam);
-        }
+        let vring = self
+            .vrings
+            .get_mut(index as usize)
+            .ok_or(VhostError::InvalidParam)?;
 
         // Quotation from vhost-user spec:
-        // Client must start ring upon receiving a kick (that is, detecting
-        // that file descriptor is readable) on the descriptor specified by
-        // VHOST_USER_SET_VRING_KICK, and stop ring upon receiving
-        // VHOST_USER_GET_VRING_BASE.
-        self.backend.stop_queue(index as usize);
+        // "The back-end must [...] stop ring upon receiving VHOST_USER_GET_VRING_BASE."
+        // We only call `queue.set_ready()` when starting the queue, so if the queue is ready, that
+        // means it is started and should be stopped.
+        if vring.queue.ready() {
+            if let Err(e) = self.backend.stop_queue(index as usize) {
+                error!("Failed to stop queue in get_vring_base: {:#}", e);
+            }
 
-        let vring = &mut self.vrings[index as usize];
-        vring.reset();
+            vring.reset();
+        }
 
         Ok(VhostUserVringState::new(
             index,
-            vring.queue.next_avail.0 as u32,
+            vring.queue.next_avail().0 as u32,
         ))
     }
 
@@ -558,33 +564,34 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
             return Err(VhostError::InvalidOperation);
         }
 
-        let kick_evt = self.ops.set_vring_kick(index, file)?;
+        let kick_evt = VhostUserRegularOps::set_vring_kick(index, file)?;
 
         // Enable any virtqueue features that were negotiated (like VIRTIO_RING_F_EVENT_IDX).
         vring.queue.ack_features(self.backend.acked_features());
         vring.queue.set_ready(true);
 
-        let queue = match vring.queue.activate() {
-            Ok(queue) => queue,
-            Err(e) => {
-                error!("failed to activate vring: {:#}", e);
-                return Err(VhostError::SlaveInternalError);
-            }
-        };
-
-        let doorbell = vring.doorbell.clone().ok_or(VhostError::InvalidOperation)?;
         let mem = self
             .mem
             .as_ref()
             .cloned()
             .ok_or(VhostError::InvalidOperation)?;
 
+        let queue = match vring.queue.activate(&mem, kick_evt) {
+            Ok(queue) => queue,
+            Err(e) => {
+                error!("failed to activate vring: {:#}", e);
+                return Err(VhostError::BackendInternalError);
+            }
+        };
+
+        let doorbell = vring.doorbell.clone().ok_or(VhostError::InvalidOperation)?;
+
         if let Err(e) = self
             .backend
-            .start_queue(index as usize, queue, mem, doorbell, kick_evt)
+            .start_queue(index as usize, queue, mem, doorbell)
         {
             error!("Failed to start queue {}: {}", index, e);
-            return Err(VhostError::SlaveInternalError);
+            return Err(VhostError::BackendInternalError);
         }
 
         Ok(())
@@ -595,7 +602,19 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
             return Err(VhostError::InvalidParam);
         }
 
-        let doorbell = self.ops.set_vring_call(index, file)?;
+        let backend_req_conn = self.backend_req_connection.clone();
+        let signal_config_change_fn = Box::new(move || match &*backend_req_conn.lock() {
+            VhostBackendReqConnectionState::Connected(frontend) => {
+                if let Err(e) = frontend.send_config_changed() {
+                    error!("Failed to notify config change: {:#}", e);
+                }
+            }
+            VhostBackendReqConnectionState::NoConnection => {
+                error!("No Backend request connection found");
+            }
+        });
+
+        let doorbell = VhostUserRegularOps::set_vring_call(index, file, signal_config_change_fn)?;
         self.vrings[index as usize].doorbell = Some(doorbell);
         Ok(())
     }
@@ -612,14 +631,13 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
 
         // This request should be handled only when VHOST_USER_F_PROTOCOL_FEATURES
         // has been negotiated.
-        if self.backend.acked_features() & VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits() == 0 {
+        if self.backend.acked_features() & 1 << VHOST_USER_F_PROTOCOL_FEATURES == 0 {
             return Err(VhostError::InvalidOperation);
         }
 
-        // Slave must not pass data to/from the backend until ring is
-        // enabled by VHOST_USER_SET_VRING_ENABLE with parameter 1,
-        // or after it has been disabled by VHOST_USER_SET_VRING_ENABLE
-        // with parameter 0.
+        // Backend must not pass data to/from the ring until ring is enabled by
+        // VHOST_USER_SET_VRING_ENABLE with parameter 1, or after it has been disabled by
+        // VHOST_USER_SET_VRING_ENABLE with parameter 0.
         self.vrings[index as usize].enabled = enable;
 
         Ok(())
@@ -646,11 +664,20 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
         Ok(())
     }
 
-    fn set_slave_req_fd(&mut self, ep: Box<dyn Endpoint<SlaveReq>>) {
-        let conn = VhostBackendReqConnection::new(
-            Slave::new(ep),
+    fn set_backend_req_fd(&mut self, ep: Connection<BackendReq>) {
+        let conn = Arc::new(VhostBackendReqConnection::new(
+            FrontendClient::new(ep),
             self.backend.get_shared_memory_region().map(|r| r.id),
-        );
+        ));
+
+        {
+            let mut backend_req_conn = self.backend_req_connection.lock();
+            if let VhostBackendReqConnectionState::Connected(_) = &*backend_req_conn {
+                warn!("Backend Request Connection already established. Overwriting");
+            }
+            *backend_req_conn = VhostBackendReqConnectionState::Connected(conn.clone());
+        }
+
         self.backend.set_backend_req_connection(conn);
     }
 
@@ -691,20 +718,124 @@ impl VhostUserSlaveReqHandlerMut for DeviceRequestHandler {
             Vec::new()
         })
     }
+
+    fn sleep(&mut self) -> VhostResult<()> {
+        for (index, vring) in self
+            .vrings
+            .iter_mut()
+            .enumerate()
+            .filter(|(_index, vring)| vring.queue.ready())
+        {
+            match self.backend.stop_queue(index) {
+                Ok(queue) => vring.paused_queue = Some(queue),
+                Err(e) => {
+                    error!("failed to stop queue index {}: {:#}", index, e);
+                    return Err(VhostError::StopQueueError(e));
+                }
+            }
+        }
+        self.backend
+            .stop_non_queue_workers()
+            .map_err(VhostError::SleepError)
+    }
+
+    fn wake(&mut self) -> VhostResult<()> {
+        for (index, vring) in self.vrings.iter_mut().enumerate() {
+            if let Some(queue) = vring.paused_queue.take() {
+                let mem = self.mem.clone().ok_or(VhostError::BackendInternalError)?;
+                let doorbell = vring.doorbell.clone().expect("Failed to clone doorbell");
+
+                if let Err(e) = self.backend.start_queue(index, queue, mem, doorbell) {
+                    error!("Failed to start queue {}: {}", index, e);
+                    return Err(VhostError::BackendInternalError);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> VhostResult<Vec<u8>> {
+        match serde_json::to_vec(&DeviceRequestHandlerSnapshot {
+            vrings: self
+                .vrings
+                .iter()
+                .map(|vring| vring.snapshot())
+                .collect::<anyhow::Result<Vec<VringSnapshot>>>()
+                .map_err(VhostError::SnapshotError)?,
+            backend: self.backend.snapshot().map_err(VhostError::SnapshotError)?,
+        }) {
+            Ok(serialized_json) => Ok(serialized_json),
+            Err(e) => {
+                error!("Failed to serialize DeviceRequestHandlerSnapshot: {}", e);
+                Err(VhostError::SerializationFailed)
+            }
+        }
+    }
+
+    fn restore(&mut self, data_bytes: &[u8], queue_evts: Vec<File>) -> VhostResult<()> {
+        let device_request_handler_snapshot: DeviceRequestHandlerSnapshot =
+            serde_json::from_slice(data_bytes).map_err(|e| {
+                error!("Failed to deserialize DeviceRequestHandlerSnapshot: {}", e);
+                VhostError::DeserializationFailed
+            })?;
+
+        let mem = self.mem.as_ref().ok_or(VhostError::InvalidOperation)?;
+
+        let snapshotted_vrings = device_request_handler_snapshot.vrings;
+        assert_eq!(snapshotted_vrings.len(), self.vrings.len());
+
+        let mut queue_evts_iter = if queue_evts.is_empty() {
+            None
+        } else {
+            Some(queue_evts.into_iter())
+        };
+
+        for (index, (vring, snapshotted_vring)) in self
+            .vrings
+            .iter_mut()
+            .zip(snapshotted_vrings.into_iter())
+            .enumerate()
+        {
+            let queue_evt = if let Some(queue_evts_iter) = &mut queue_evts_iter {
+                // TODO(b/288596005): It is assumed that the index of `queue_evts` should map to the
+                // index of `self.vrings`. However, this assumption may break in the future, so a
+                // Map of indexes to queue_evt should be used to support sparse activated queues.
+                let queue_evt_file = queue_evts_iter
+                    .next()
+                    .ok_or(VhostError::VringIndexNotFound(index))?;
+                Some(VhostUserRegularOps::set_vring_kick(
+                    index as u8,
+                    Some(queue_evt_file),
+                )?)
+            } else {
+                None
+            };
+
+            vring
+                .restore(snapshotted_vring, mem, queue_evt)
+                .map_err(VhostError::RestoreError)?;
+        }
+
+        self.backend
+            .restore(device_request_handler_snapshot.backend)
+            .map_err(VhostError::RestoreError)?;
+
+        Ok(())
+    }
 }
 
 /// Indicates the state of backend request connection
 pub enum VhostBackendReqConnectionState {
     /// A backend request connection (`VhostBackendReqConnection`) is established
-    Connected(VhostBackendReqConnection),
+    Connected(Arc<VhostBackendReqConnection>),
     /// No backend request connection has been established yet
     NoConnection,
 }
 
 /// Keeps track of Vhost user backend request connection.
 pub struct VhostBackendReqConnection {
-    conn: Slave,
-    shmem_info: Option<ShmemInfo>,
+    conn: Arc<Mutex<FrontendClient>>,
+    shmem_info: Mutex<Option<ShmemInfo>>,
 }
 
 #[derive(Clone)]
@@ -714,26 +845,31 @@ struct ShmemInfo {
 }
 
 impl VhostBackendReqConnection {
-    pub fn new(conn: Slave, shmid: Option<u8>) -> Self {
-        let shmem_info = shmid.map(|shmid| ShmemInfo {
+    pub fn new(conn: FrontendClient, shmid: Option<u8>) -> Self {
+        let shmem_info = Mutex::new(shmid.map(|shmid| ShmemInfo {
             shmid,
             mapped_regions: BTreeMap::new(),
-        });
-        Self { conn, shmem_info }
+        }));
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            shmem_info,
+        }
     }
 
     /// Send `VHOST_USER_CONFIG_CHANGE_MSG` to the frontend
     pub fn send_config_changed(&self) -> anyhow::Result<()> {
         self.conn
+            .lock()
             .handle_config_change()
             .context("Could not send config change message")?;
         Ok(())
     }
 
     /// Create a SharedMemoryMapper trait object from the ShmemInfo.
-    pub fn take_shmem_mapper(&mut self) -> anyhow::Result<Box<dyn SharedMemoryMapper>> {
+    pub fn take_shmem_mapper(&self) -> anyhow::Result<Box<dyn SharedMemoryMapper>> {
         let shmem_info = self
             .shmem_info
+            .lock()
             .take()
             .context("could not take shared memory mapper information")?;
 
@@ -745,7 +881,7 @@ impl VhostBackendReqConnection {
 }
 
 struct VhostShmemMapper {
-    conn: Slave,
+    conn: Arc<Mutex<FrontendClient>>,
     shmem_info: ShmemInfo,
 }
 
@@ -755,58 +891,75 @@ impl SharedMemoryMapper for VhostShmemMapper {
         source: VmMemorySource,
         offset: u64,
         prot: Protection,
+        _cache: MemCacheType,
     ) -> anyhow::Result<()> {
-        // True if we should send gpu_map instead of shmem_map.
-        let is_gpu = matches!(&source, &VmMemorySource::Vulkan { .. });
-
-        let size = if is_gpu {
-            match source {
-                VmMemorySource::Vulkan {
-                    descriptor,
-                    handle_type,
-                    memory_idx,
-                    device_id,
-                    size,
-                } => {
-                    let msg = VhostUserGpuMapMsg::new(
-                        self.shmem_info.shmid,
-                        offset,
-                        size,
-                        memory_idx,
-                        handle_type,
-                        device_id.device_uuid,
-                        device_id.driver_uuid,
-                    );
-                    self.conn
-                        .gpu_map(&msg, &descriptor)
-                        .context("failed to map memory")?;
-                    size
-                }
-                _ => unreachable!("inconsistent pattern match"),
-            }
-        } else {
-            let (descriptor, fd_offset, size) = match source {
-                VmMemorySource::Descriptor {
-                    descriptor,
+        let size = match source {
+            VmMemorySource::Vulkan {
+                descriptor,
+                handle_type,
+                memory_idx,
+                device_uuid,
+                driver_uuid,
+                size,
+            } => {
+                let msg = VhostUserGpuMapMsg::new(
+                    self.shmem_info.shmid,
                     offset,
                     size,
-                } => (descriptor, offset, size),
-                VmMemorySource::SharedMemory(shmem) => {
-                    let size = shmem.size();
-                    // Safe because we own shmem.
-                    let descriptor =
-                        unsafe { SafeDescriptor::from_raw_descriptor(shmem.into_raw_descriptor()) };
-                    (descriptor, 0, size)
-                }
-                _ => bail!("unsupported source"),
-            };
-            let flags = VhostUserShmemMapMsgFlags::from(prot);
-            let msg =
-                VhostUserShmemMapMsg::new(self.shmem_info.shmid, offset, fd_offset, size, flags);
-            self.conn
-                .shmem_map(&msg, &descriptor)
-                .context("failed to map memory")?;
-            size
+                    memory_idx,
+                    handle_type,
+                    device_uuid,
+                    driver_uuid,
+                );
+                self.conn
+                    .lock()
+                    .gpu_map(&msg, &descriptor)
+                    .context("failed to map memory")?;
+                size
+            }
+            VmMemorySource::ExternalMapping { ptr, size } => {
+                let msg = VhostUserExternalMapMsg::new(self.shmem_info.shmid, offset, size, ptr);
+                self.conn
+                    .lock()
+                    .external_map(&msg)
+                    .context("failed to map memory")?;
+                size
+            }
+            source => {
+                // The last two sources use the same VhostUserShmemMapMsg, continue matching here
+                // on the aliased `source` above.
+                let (descriptor, fd_offset, size) = match source {
+                    VmMemorySource::Descriptor {
+                        descriptor,
+                        offset,
+                        size,
+                    } => (descriptor, offset, size),
+                    VmMemorySource::SharedMemory(shmem) => {
+                        let size = shmem.size();
+                        let descriptor =
+                            // SAFETY:
+                            // Safe because we own shmem.
+                            unsafe {
+                                SafeDescriptor::from_raw_descriptor(shmem.into_raw_descriptor())
+                            };
+                        (descriptor, 0, size)
+                    }
+                    _ => bail!("unsupported source"),
+                };
+                let flags = VhostUserShmemMapMsgFlags::from(prot);
+                let msg = VhostUserShmemMapMsg::new(
+                    self.shmem_info.shmid,
+                    offset,
+                    fd_offset,
+                    size,
+                    flags,
+                );
+                self.conn
+                    .lock()
+                    .shmem_map(&msg, &descriptor)
+                    .context("failed to map memory")?;
+                size
+            }
         };
 
         self.shmem_info.mapped_regions.insert(offset, size);
@@ -821,41 +974,51 @@ impl SharedMemoryMapper for VhostShmemMapper {
             .context("unknown offset")?;
         let msg = VhostUserShmemUnmapMsg::new(self.shmem_info.shmid, offset, size);
         self.conn
+            .lock()
             .shmem_unmap(&msg)
             .context("failed to map memory")
             .map(|_| ())
     }
 }
 
+pub(crate) struct WorkerState<T, U> {
+    pub(crate) queue_task: TaskHandle<U>,
+    pub(crate) queue: T,
+}
+
+/// Errors for device operations
+#[derive(Debug, ThisError)]
+pub enum Error {
+    #[error("worker not found when stopping queue")]
+    WorkerNotFound,
+}
+
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use std::sync::mpsc::channel;
-    #[cfg(unix)]
     use std::sync::Barrier;
 
     use anyhow::anyhow;
     use anyhow::bail;
-    use data_model::DataInit;
-    #[cfg(unix)]
-    use tempfile::Builder;
-    #[cfg(unix)]
-    use tempfile::TempDir;
-    use vmm_vhost::message::MasterReq;
-    use vmm_vhost::SlaveReqHandler;
-    use vmm_vhost::VhostUserSlaveReqHandler;
+    use base::Event;
+    use vmm_vhost::BackendServer;
+    use vmm_vhost::FrontendReq;
+    use zerocopy::AsBytes;
+    use zerocopy::FromBytes;
+    use zerocopy::FromZeroes;
 
+    use super::sys::test_helpers;
     use super::*;
-    use crate::virtio::vhost::user::vmm::VhostUserHandler;
+    use crate::virtio::vhost_user_frontend::VhostUserFrontend;
+    use crate::virtio::DeviceType;
+    use crate::virtio::VirtioDevice;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, AsBytes, FromZeroes, FromBytes)]
+    #[repr(C, packed(4))]
     struct FakeConfig {
         x: u32,
         y: u64,
     }
-
-    unsafe impl DataInit for FakeConfig {}
 
     const FAKE_CONFIG_DATA: FakeConfig = FakeConfig { x: 1, y: 2 };
 
@@ -863,21 +1026,29 @@ mod tests {
         avail_features: u64,
         acked_features: u64,
         acked_protocol_features: VhostUserProtocolFeatures,
+        active_queues: Vec<Option<Queue>>,
+        allow_backend_req: bool,
+        backend_conn: Option<Arc<VhostBackendReqConnection>>,
     }
 
     impl FakeBackend {
         const MAX_QUEUE_NUM: usize = 16;
 
         pub(super) fn new() -> Self {
+            let mut active_queues = Vec::new();
+            active_queues.resize_with(Self::MAX_QUEUE_NUM, Default::default);
             Self {
-                avail_features: VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits(),
+                avail_features: 1 << VHOST_USER_F_PROTOCOL_FEATURES,
                 acked_features: 0,
                 acked_protocol_features: VhostUserProtocolFeatures::empty(),
+                active_queues,
+                allow_backend_req: false,
+                backend_conn: None,
             }
         }
     }
 
-    impl VhostUserBackend for FakeBackend {
+    impl VhostUserDevice for FakeBackend {
         fn max_queue_num(&self) -> usize {
             Self::MAX_QUEUE_NUM
         }
@@ -903,7 +1074,11 @@ mod tests {
         }
 
         fn protocol_features(&self) -> VhostUserProtocolFeatures {
-            VhostUserProtocolFeatures::CONFIG
+            let mut features = VhostUserProtocolFeatures::CONFIG;
+            if self.allow_backend_req {
+                features |= VhostUserProtocolFeatures::BACKEND_REQ;
+            }
+            features
         }
 
         fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
@@ -921,194 +1096,216 @@ mod tests {
         }
 
         fn read_config(&self, offset: u64, dst: &mut [u8]) {
-            dst.copy_from_slice(&FAKE_CONFIG_DATA.as_slice()[offset as usize..]);
+            dst.copy_from_slice(&FAKE_CONFIG_DATA.as_bytes()[offset as usize..]);
         }
 
         fn reset(&mut self) {}
 
         fn start_queue(
             &mut self,
-            _idx: usize,
-            _queue: Queue,
+            idx: usize,
+            queue: Queue,
             _mem: GuestMemory,
-            _doorbell: Doorbell,
-            _kick_evt: Event,
+            _doorbell: Interrupt,
         ) -> anyhow::Result<()> {
+            self.active_queues[idx] = Some(queue);
             Ok(())
         }
 
-        fn stop_queue(&mut self, _idx: usize) {}
+        fn stop_queue(&mut self, idx: usize) -> anyhow::Result<Queue> {
+            Ok(self.active_queues[idx]
+                .take()
+                .ok_or(Error::WorkerNotFound)?)
+        }
+
+        fn set_backend_req_connection(&mut self, conn: Arc<VhostBackendReqConnection>) {
+            self.backend_conn = Some(conn);
+        }
     }
 
-    #[cfg(unix)]
-    fn temp_dir() -> TempDir {
-        Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
-    }
-
-    #[cfg(unix)]
     #[test]
     fn test_vhost_user_activate() {
-        use std::os::unix::net::UnixStream;
+        test_vhost_user_activate_parameterized(false);
+    }
 
-        use vmm_vhost::connection::socket::Listener as SocketListener;
-        use vmm_vhost::SlaveListener;
+    #[test]
+    #[cfg(not(windows))] // Windows requries more complex connection setup.
+    fn test_vhost_user_activate_with_backend_req() {
+        test_vhost_user_activate_parameterized(true);
+    }
 
+    fn test_vhost_user_activate_parameterized(allow_backend_req: bool) {
         const QUEUES_NUM: usize = 2;
 
-        let dir = temp_dir();
-        let mut path = dir.path().to_owned();
-        path.push("sock");
-        let listener = SocketListener::new(&path, true).unwrap();
+        let (dev, vmm) = test_helpers::setup();
 
         let vmm_bar = Arc::new(Barrier::new(2));
         let dev_bar = vmm_bar.clone();
 
-        let (tx, rx) = channel();
+        let (ready_tx, ready_rx) = channel();
+        let (shutdown_tx, shutdown_rx) = channel();
 
         std::thread::spawn(move || {
             // VMM side
-            rx.recv().unwrap(); // Ensure the device is ready.
+            ready_rx.recv().unwrap(); // Ensure the device is ready.
 
-            let allow_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-            let init_features = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
-            let allow_protocol_features = VhostUserProtocolFeatures::CONFIG;
-            let connection = UnixStream::connect(&path).unwrap();
-            let mut vmm_handler = VhostUserHandler::new_from_connection(
-                connection,
-                QUEUES_NUM as u64,
-                allow_features,
-                init_features,
-                allow_protocol_features,
-            )
-            .unwrap();
+            let connection = test_helpers::connect(vmm);
+
+            let mut vmm_device =
+                VhostUserFrontend::new(DeviceType::Console, 0, connection, None, None).unwrap();
 
             println!("read_config");
             let mut buf = vec![0; std::mem::size_of::<FakeConfig>()];
-            vmm_handler.read_config(0, &mut buf).unwrap();
+            vmm_device.read_config(0, &mut buf);
             // Check if the obtained config data is correct.
-            let config = FakeConfig::from_slice(&buf).unwrap();
-            assert_eq!(*config, FAKE_CONFIG_DATA);
+            let config = FakeConfig::read_from(buf.as_bytes()).unwrap();
+            assert_eq!(config, FAKE_CONFIG_DATA);
 
-            println!("set_mem_table");
-            let mem = GuestMemory::new(&[(GuestAddress(0x0), 0x10000)]).unwrap();
-            vmm_handler.set_mem_table(&mem).unwrap();
+            let activate = |vmm_device: &mut VhostUserFrontend| {
+                let mem = GuestMemory::new(&[(GuestAddress(0x0), 0x10000)]).unwrap();
+                let interrupt = Interrupt::new_for_test_with_msix();
 
-            for idx in 0..QUEUES_NUM {
-                println!("activate_mem_table: queue_index={}", idx);
-                let queue = Queue::new(0x10);
-                let queue_evt = Event::new().unwrap();
-                let irqfd = Event::new().unwrap();
+                let mut queues = BTreeMap::new();
+                for idx in 0..QUEUES_NUM {
+                    let mut queue = QueueConfig::new(0x10, 0);
+                    queue.set_ready(true);
+                    let queue = queue
+                        .activate(&mem, Event::new().unwrap())
+                        .expect("QueueConfig::activate");
+                    queues.insert(idx, queue);
+                }
 
-                vmm_handler
-                    .activate_vring(&mem, idx, &queue, &queue_evt, &irqfd)
+                println!("activate");
+                vmm_device
+                    .activate(mem.clone(), interrupt.clone(), queues)
                     .unwrap();
-            }
+            };
+
+            activate(&mut vmm_device);
+
+            println!("reset");
+            let reset_result = vmm_device.reset();
+            assert!(
+                reset_result.is_ok(),
+                "reset failed: {:#}",
+                reset_result.unwrap_err()
+            );
+
+            activate(&mut vmm_device);
+
+            println!("virtio_sleep");
+            vmm_device.virtio_sleep().unwrap();
+
+            println!("virtio_wake");
+            vmm_device.virtio_wake(None).unwrap();
+
+            println!("wait for shutdown signal");
+            shutdown_rx.recv().unwrap();
 
             // The VMM side is supposed to stop before the device side.
-            drop(vmm_handler);
+            println!("drop");
+            drop(vmm_device);
 
             vmm_bar.wait();
         });
 
         // Device side
-        let handler = std::sync::Mutex::new(DeviceRequestHandler::new_with_ops(
-            Box::new(FakeBackend::new()),
-            Box::new(VhostUserRegularOps),
-        ));
-        let mut listener = SlaveListener::<SocketListener, _>::new(listener, handler).unwrap();
+        let mut handler = DeviceRequestHandler::new(FakeBackend::new());
+        handler.as_mut().allow_backend_req = allow_backend_req;
 
         // Notify listener is ready.
-        tx.send(()).unwrap();
+        ready_tx.send(()).unwrap();
 
-        let mut listener = listener.accept().unwrap().unwrap();
+        let mut req_handler = test_helpers::listen(dev, handler);
 
-        // VhostUserHandler::new()
-        handle_request(&mut listener).expect("set_owner");
-        handle_request(&mut listener).expect("get_features");
-        handle_request(&mut listener).expect("set_features");
-        handle_request(&mut listener).expect("get_protocol_features");
-        handle_request(&mut listener).expect("set_protocol_features");
-
-        // VhostUserHandler::read_config()
-        handle_request(&mut listener).expect("get_config");
-
-        // VhostUserHandler::set_mem_table()
-        handle_request(&mut listener).expect("set_mem_table");
-
-        for _ in 0..QUEUES_NUM {
-            // VhostUserHandler::activate_vring()
-            handle_request(&mut listener).expect("set_vring_num");
-            handle_request(&mut listener).expect("set_vring_addr");
-            handle_request(&mut listener).expect("set_vring_base");
-            handle_request(&mut listener).expect("set_vring_call");
-            handle_request(&mut listener).expect("set_vring_kick");
-            handle_request(&mut listener).expect("set_vring_enable");
+        // VhostUserFrontend::new()
+        handle_request(&mut req_handler, FrontendReq::SET_OWNER).unwrap();
+        handle_request(&mut req_handler, FrontendReq::GET_FEATURES).unwrap();
+        handle_request(&mut req_handler, FrontendReq::SET_FEATURES).unwrap();
+        handle_request(&mut req_handler, FrontendReq::GET_PROTOCOL_FEATURES).unwrap();
+        handle_request(&mut req_handler, FrontendReq::SET_PROTOCOL_FEATURES).unwrap();
+        if allow_backend_req {
+            handle_request(&mut req_handler, FrontendReq::SET_BACKEND_REQ_FD).unwrap();
         }
 
+        // VhostUserFrontend::read_config()
+        handle_request(&mut req_handler, FrontendReq::GET_CONFIG).unwrap();
+
+        // VhostUserFrontend::activate()
+        handle_request(&mut req_handler, FrontendReq::SET_MEM_TABLE).unwrap();
+        for _ in 0..QUEUES_NUM {
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_NUM).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_ADDR).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_BASE).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_CALL).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_KICK).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_ENABLE).unwrap();
+        }
+
+        // VhostUserFrontend::reset()
+        for _ in 0..QUEUES_NUM {
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_ENABLE).unwrap();
+            handle_request(&mut req_handler, FrontendReq::GET_VRING_BASE).unwrap();
+        }
+
+        // VhostUserFrontend::activate()
+        handle_request(&mut req_handler, FrontendReq::SET_MEM_TABLE).unwrap();
+        for _ in 0..QUEUES_NUM {
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_NUM).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_ADDR).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_BASE).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_CALL).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_KICK).unwrap();
+            handle_request(&mut req_handler, FrontendReq::SET_VRING_ENABLE).unwrap();
+        }
+
+        if allow_backend_req {
+            // Make sure the connection still works even after reset/reactivate.
+            req_handler
+                .as_ref()
+                .as_ref()
+                .backend_conn
+                .as_ref()
+                .expect("backend_conn missing")
+                .send_config_changed()
+                .expect("send_config_changed failed");
+        }
+
+        // VhostUserFrontend::virtio_sleep()
+        handle_request(&mut req_handler, FrontendReq::SLEEP).unwrap();
+
+        // VhostUserFrontend::virtio_wake()
+        handle_request(&mut req_handler, FrontendReq::WAKE).unwrap();
+
+        if allow_backend_req {
+            // Make sure the connection still works even after sleep/wake.
+            req_handler
+                .as_ref()
+                .as_ref()
+                .backend_conn
+                .as_ref()
+                .expect("backend_conn missing")
+                .send_config_changed()
+                .expect("send_config_changed failed");
+        }
+
+        // Ask the client to shutdown, then wait to it to finish.
+        shutdown_tx.send(()).unwrap();
         dev_bar.wait();
 
-        match handle_request(&mut listener) {
+        // Verify recv_header fails with `ClientExit` after the client has disconnected.
+        match req_handler.recv_header() {
             Err(VhostError::ClientExit) => (),
-            r => panic!("Err(ClientExit) was expected but {:?}", r),
+            r => panic!("expected Err(ClientExit) but got {:?}", r),
         }
     }
 
-    pub(super) fn vmm_handler_send_requests(vmm_handler: &mut VhostUserHandler, queues_num: usize) {
-        println!("read_config");
-        let mut buf = vec![0; std::mem::size_of::<FakeConfig>()];
-        vmm_handler.read_config(0, &mut buf).unwrap();
-        // Check if the obtained config data is correct.
-        let config = FakeConfig::from_slice(&buf).unwrap();
-        assert_eq!(*config, FAKE_CONFIG_DATA);
-
-        println!("set_mem_table");
-        let mem = GuestMemory::new(&[(GuestAddress(0x0), 0x10000)]).unwrap();
-        vmm_handler.set_mem_table(&mem).unwrap();
-
-        for idx in 0..queues_num {
-            println!("activate_mem_table: queue_index={}", idx);
-            let queue = Queue::new(0x10);
-            let queue_evt = Event::new().unwrap();
-            let irqfd = Event::new().unwrap();
-
-            vmm_handler
-                .activate_vring(&mem, idx, &queue, &queue_evt, &irqfd)
-                .unwrap();
-        }
-    }
-
-    fn handle_request<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>>(
-        handler: &mut SlaveReqHandler<S, E>,
+    fn handle_request<S: vmm_vhost::Backend>(
+        handler: &mut BackendServer<S>,
+        expected_message_type: FrontendReq,
     ) -> Result<(), VhostError> {
         let (hdr, files) = handler.recv_header()?;
+        assert_eq!(hdr.get_code(), Ok(expected_message_type));
         handler.process_message(hdr, files)
-    }
-
-    pub(super) fn test_handle_requests<S: VhostUserSlaveReqHandler, E: Endpoint<MasterReq>>(
-        req_handler: &mut SlaveReqHandler<S, E>,
-        queues_num: usize,
-    ) {
-        // VhostUserHandler::new()
-        handle_request(req_handler).expect("set_owner");
-        handle_request(req_handler).expect("get_features");
-        handle_request(req_handler).expect("set_features");
-        handle_request(req_handler).expect("get_protocol_features");
-        handle_request(req_handler).expect("set_protocol_features");
-
-        // VhostUserHandler::read_config()
-        handle_request(req_handler).expect("get_config");
-
-        // VhostUserHandler::set_mem_table()
-        handle_request(req_handler).expect("set_mem_table");
-
-        for _ in 0..queues_num {
-            // VhostUserHandler::activate_vring()
-            handle_request(req_handler).expect("set_vring_num");
-            handle_request(req_handler).expect("set_vring_addr");
-            handle_request(req_handler).expect("set_vring_base");
-            handle_request(req_handler).expect("set_vring_call");
-            handle_request(req_handler).expect("set_vring_kick");
-            handle_request(req_handler).expect("set_vring_enable");
-        }
     }
 }

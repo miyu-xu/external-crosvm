@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(target_arch = "x86_64")]
 
-use std::os::raw::c_int;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use base::Tube;
 use devices::Bus;
 use devices::BusAccessInfo;
 use devices::BusDeviceSync;
+use devices::BusType;
 use devices::CrosvmDeviceId;
 use devices::DestinationShorthand;
 use devices::DeviceId;
@@ -46,14 +47,14 @@ use hypervisor::IrqSource;
 use hypervisor::Level;
 use hypervisor::PicSelect;
 use hypervisor::PitRWMode;
-use hypervisor::Register;
 use hypervisor::Regs;
 use hypervisor::Sregs;
 use hypervisor::TriggerMode;
 use hypervisor::Vcpu;
 use hypervisor::VcpuExit;
-use hypervisor::VcpuRunHandle;
+use hypervisor::VcpuSnapshot;
 use hypervisor::VcpuX86_64;
+use hypervisor::Xsave;
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
@@ -203,8 +204,8 @@ fn irq_event_tokens() {
 fn finalize_devices() {
     let mut chip = get_chip(1);
 
-    let mmio_bus = Bus::new();
-    let io_bus = Bus::new();
+    let mmio_bus = Bus::new(BusType::Mmio);
+    let io_bus = Bus::new(BusType::Io);
     let mut resources = SystemAllocator::new(
         SystemAllocatorConfig {
             io: Some(AddressRange {
@@ -459,8 +460,8 @@ fn lowest_priority_destination() {
 fn broadcast_eoi() {
     let mut chip = get_chip(1);
 
-    let mmio_bus = Bus::new();
-    let io_bus = Bus::new();
+    let mmio_bus = Bus::new(BusType::Mmio);
+    let io_bus = Bus::new(BusType::Io);
     let mut resources = SystemAllocator::new(
         SystemAllocatorConfig {
             io: Some(AddressRange {
@@ -663,20 +664,17 @@ impl Vcpu for FakeVcpu {
         self
     }
 
-    fn take_run_handle(&self, _signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
+    fn run(&mut self) -> Result<VcpuExit> {
         unimplemented!()
     }
-    fn run(&mut self, _run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
-        unimplemented!()
-    }
+
     fn set_immediate_exit(&self, _exit: bool) {}
-    fn set_local_immediate_exit(_exit: bool) {}
-    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
-        extern "C" fn f() {
-            FakeVcpu::set_local_immediate_exit(true);
-        }
-        f
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    fn signal_handle(&self) -> hypervisor::VcpuSignalHandle {
+        unimplemented!()
     }
+
     fn handle_mmio(&self, _handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         unimplemented!()
     }
@@ -692,10 +690,7 @@ impl Vcpu for FakeVcpu {
     fn handle_wrmsr(&self) {
         unimplemented!()
     }
-    fn pvclock_ctrl(&self) -> Result<()> {
-        unimplemented!()
-    }
-    fn set_signal_mask(&self, _signals: &[c_int]) -> Result<()> {
+    fn on_suspend(&self) -> Result<()> {
         unimplemented!()
     }
     unsafe fn enable_raw_capability(&self, _cap: u32, _args: &[u64; 4]) -> Result<()> {
@@ -739,22 +734,37 @@ impl VcpuX86_64 for FakeVcpu {
     fn set_fpu(&self, _fpu: &Fpu) -> Result<()> {
         unimplemented!()
     }
+    fn get_xsave(&self) -> Result<Xsave> {
+        unimplemented!()
+    }
+    fn set_xsave(&self, _xsave: &Xsave) -> Result<()> {
+        unimplemented!()
+    }
+    fn get_interrupt_state(&self) -> Result<serde_json::Value> {
+        unimplemented!()
+    }
+    fn set_interrupt_state(&self, _data: serde_json::Value) -> Result<()> {
+        unimplemented!()
+    }
     fn get_debugregs(&self) -> Result<DebugRegs> {
         unimplemented!()
     }
     fn set_debugregs(&self, _debugregs: &DebugRegs) -> Result<()> {
         unimplemented!()
     }
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
         unimplemented!()
     }
-    fn set_xcrs(&self, _xcrs: &[Register]) -> Result<()> {
+    fn set_xcr(&self, _xcr_index: u32, _value: u64) -> Result<()> {
         unimplemented!()
     }
-    fn get_msrs(&self, _msrs: &mut Vec<Register>) -> Result<()> {
+    fn get_msr(&self, _msr_index: u32) -> Result<u64> {
         unimplemented!()
     }
-    fn set_msrs(&self, _msrs: &[Register]) -> Result<()> {
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
+        unimplemented!()
+    }
+    fn set_msr(&self, _msr_index: u32, _value: u64) -> Result<()> {
         unimplemented!()
     }
     fn set_cpuid(&self, _cpuid: &CpuId) -> Result<()> {
@@ -769,10 +779,17 @@ impl VcpuX86_64 for FakeVcpu {
     fn set_guest_debug(&self, _addrs: &[GuestAddress], _enable_singlestep: bool) -> Result<()> {
         unimplemented!()
     }
-    fn get_tsc_offset(&self) -> Result<u64> {
+    fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {
         unimplemented!()
     }
-    fn set_tsc_offset(&self, _offset: u64) -> Result<()> {
+    fn restore(
+        &mut self,
+        _snapshot: &VcpuSnapshot,
+        _host_tsc_reference_moment: u64,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, _tsc_offset: u64) -> Result<()> {
         unimplemented!()
     }
 }

@@ -4,44 +4,16 @@
 
 //! Linux input system bindings.
 
+pub mod constants;
+
 use std::mem::size_of;
 
-use data_model::DataInit;
+use constants::*;
 use data_model::Le16;
 use data_model::SLe32;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-
-pub const EV_SYN: u16 = 0x00;
-pub const EV_KEY: u16 = 0x01;
-pub const EV_REL: u16 = 0x02;
-pub const EV_ABS: u16 = 0x03;
-pub const SYN_REPORT: u16 = 0;
-pub const REL_X: u16 = 0x00;
-pub const REL_Y: u16 = 0x01;
-pub const ABS_X: u16 = 0x00;
-pub const ABS_Y: u16 = 0x01;
-pub const ABS_PRESSURE: u16 = 0x18;
-pub const ABS_TILT_X: u16 = 0x1a;
-pub const ABS_TILT_Y: u16 = 0x1b;
-pub const ABS_TOOL_WIDTH: u16 = 0x1c;
-pub const BTN_TOUCH: u16 = 0x14a;
-pub const BTN_TOOL_FINGER: u16 = 0x145;
-pub const ABS_MT_SLOT: u16 = 0x2f;
-pub const ABS_MT_TOUCH_MAJOR: u16 = 0x30;
-pub const ABS_MT_TOUCH_MINOR: u16 = 0x31;
-pub const ABS_MT_WIDTH_MAJOR: u16 = 0x32;
-pub const ABS_MT_WIDTH_MINOR: u16 = 0x33;
-pub const ABS_MT_ORIENTATION: u16 = 0x34;
-pub const ABS_MT_POSITION_X: u16 = 0x35;
-pub const ABS_MT_POSITION_Y: u16 = 0x36;
-pub const ABS_MT_TOOL_TYPE: u16 = 0x37;
-pub const ABS_MT_BLOB_ID: u16 = 0x38;
-pub const ABS_MT_TRACKING_ID: u16 = 0x39;
-pub const ABS_MT_PRESSURE: u16 = 0x3a;
-pub const ABS_MT_DISTANCE: u16 = 0x3b;
-pub const ABS_MT_TOOL_X: u16 = 0x3c;
-pub const ABS_MT_TOOL_Y: u16 = 0x3d;
+use zerocopy::FromZeroes;
 
 /// Allows a raw input event of the implementor's type to be decoded into
 /// a virtio_input_event.
@@ -50,7 +22,7 @@ pub trait InputEventDecoder {
     fn decode(data: &[u8]) -> virtio_input_event;
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 pub struct input_event {
     pub timestamp_fields: [u64; 2],
@@ -58,8 +30,6 @@ pub struct input_event {
     pub code: u16,
     pub value: i32,
 }
-// Safe because it only has data and has no implicit padding.
-unsafe impl DataInit for input_event {}
 
 impl input_event {
     pub fn from_virtio_input_event(other: &virtio_input_event) -> input_event {
@@ -76,10 +46,7 @@ impl InputEventDecoder for input_event {
     const SIZE: usize = size_of::<Self>();
 
     fn decode(data: &[u8]) -> virtio_input_event {
-        #[repr(align(8))]
-        struct Aligner([u8; input_event::SIZE]);
-        let data_aligned = Aligner(*<[u8; input_event::SIZE]>::from_slice(data).unwrap());
-        let e = Self::from_slice(&data_aligned.0).unwrap();
+        let e = input_event::read_from(data).unwrap();
         virtio_input_event {
             type_: Le16::from(e.type_),
             code: Le16::from(e.code),
@@ -88,7 +55,7 @@ impl InputEventDecoder for input_event {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_input_event {
     pub type_: Le16,
@@ -96,17 +63,11 @@ pub struct virtio_input_event {
     pub value: SLe32,
 }
 
-// Safe because it only has data and has no implicit padding.
-unsafe impl DataInit for virtio_input_event {}
-
 impl InputEventDecoder for virtio_input_event {
     const SIZE: usize = size_of::<Self>();
 
     fn decode(data: &[u8]) -> virtio_input_event {
-        #[repr(align(4))]
-        struct Aligner([u8; virtio_input_event::SIZE]);
-        let data_aligned = Aligner(*<[u8; virtio_input_event::SIZE]>::from_slice(data).unwrap());
-        *Self::from_slice(&data_aligned.0).unwrap()
+        virtio_input_event::read_from(data).unwrap()
     }
 }
 
@@ -180,20 +141,69 @@ impl virtio_input_event {
 
     #[inline]
     pub fn touch(has_contact: bool) -> virtio_input_event {
-        Self::key(BTN_TOUCH, has_contact)
+        Self::key(BTN_TOUCH, has_contact, false)
+    }
+
+    #[inline]
+    pub fn left_click(has_contact: bool) -> virtio_input_event {
+        Self::key(BTN_LEFT, has_contact, false)
+    }
+
+    #[inline]
+    pub fn wheel(delta: i32) -> virtio_input_event {
+        Self::relative(REL_WHEEL, delta)
+    }
+
+    #[inline]
+    pub fn right_click(has_contact: bool) -> virtio_input_event {
+        Self::key(BTN_RIGHT, has_contact, false)
+    }
+
+    #[inline]
+    pub fn middle_click(has_contact: bool) -> virtio_input_event {
+        Self::key(BTN_MIDDLE, has_contact, false)
+    }
+
+    #[inline]
+    pub fn forward_click(has_contact: bool) -> virtio_input_event {
+        Self::key(BTN_FORWARD, has_contact, false)
+    }
+
+    #[inline]
+    pub fn back_click(has_contact: bool) -> virtio_input_event {
+        Self::key(BTN_BACK, has_contact, false)
     }
 
     #[inline]
     pub fn finger_tool(active: bool) -> virtio_input_event {
-        Self::key(BTN_TOOL_FINGER, active)
+        Self::key(BTN_TOOL_FINGER, active, false)
     }
 
+    /// Repeated keys must set the `repeat` option if the key was already down, or repeated keys
+    /// will not be seen correctly by the guest.
     #[inline]
-    pub fn key(code: u16, pressed: bool) -> virtio_input_event {
+    pub fn key(code: u16, down: bool, repeat: bool) -> virtio_input_event {
         virtio_input_event {
             type_: Le16::from(EV_KEY),
             code: Le16::from(code),
-            value: SLe32::from(i32::from(pressed)),
+            value: SLe32::from(match (down, repeat) {
+                (true, true) => 2,
+                (true, false) => 1,
+                // repeat is not meaningful for key up events.
+                _ => 0,
+            }),
         }
+    }
+
+    /// If the event is EV_LED for the given LED code, return if it is on.
+    pub fn get_led_state(&self, led_code: u16) -> Option<bool> {
+        if self.type_ == EV_LED && self.code == led_code {
+            return match self.value.to_native() {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            };
+        }
+        None
     }
 }

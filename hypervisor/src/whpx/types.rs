@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::whpx_sys::*;
 use crate::CpuIdEntry;
@@ -584,6 +586,82 @@ impl From<&WhpxDebugRegs> for DebugRegs {
                 dr7: whpx_regs.register_values[5].Reg64,
             }
         }
+    }
+}
+
+/// Registers that store pending interrupts and interrupt state.
+///
+/// There are four critical registers:
+/// * WHvRegisterPendingInterruption (u64; HTLFS page 55): contains interrupts which are pending,
+///   but not yet delivered.
+/// * WHvRegisterInterruptState (u64; HTLFS page 55): contains the interrupt state for the VCPU
+///   (e.g. masking nmis, etc).
+/// * WHvX64RegisterDeliverabilityNotifications (u64; WHPX docs only): allows us to request a VCPU
+///   exit once injection of interrupts is possible.
+/// * WHvRegisterInternalActivityState (u64; WHPX docs only): this register is unspecified except
+///   for its existence, so we consider it to be opaque. From experimentation, we believe it
+///   contains some kind of state required by SMP guests, because snapshotting/restoring without it
+///   causes all APs to freeze (the BSP does exit periodically, but also seems to be very unhappy).
+#[derive(Default)]
+pub(super) struct WhpxInterruptRegs {
+    register_values: [WHV_REGISTER_VALUE; 4],
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct SerializedWhpxInterruptRegs {
+    pending_interruption: u64,
+    interrupt_state: u64,
+    deliverability_notifications: u64,
+    internal_activity_state: u64,
+}
+
+impl WhpxInterruptRegs {
+    pub(super) fn get_register_names() -> &'static [WHV_REGISTER_NAME; 4] {
+        const REG_NAMES: [WHV_REGISTER_NAME; 4] = [
+            WHV_REGISTER_NAME_WHvRegisterPendingInterruption,
+            WHV_REGISTER_NAME_WHvRegisterInterruptState,
+            WHV_REGISTER_NAME_WHvX64RegisterDeliverabilityNotifications,
+            WHV_REGISTER_NAME_WHvRegisterInternalActivityState,
+        ];
+        &REG_NAMES
+    }
+    pub(super) fn as_ptr(&self) -> *const WHV_REGISTER_VALUE {
+        self.register_values.as_ptr()
+    }
+    pub(super) fn as_mut_ptr(&mut self) -> *mut WHV_REGISTER_VALUE {
+        self.register_values.as_mut_ptr()
+    }
+
+    pub(super) fn into_serializable(self) -> SerializedWhpxInterruptRegs {
+        SerializedWhpxInterruptRegs {
+            // SAFETY: This register is a valid u64.
+            pending_interruption: unsafe { self.register_values[0].PendingInterruption.AsUINT64 },
+            // SAFETY: This register is a valid u64.
+            interrupt_state: unsafe { self.register_values[1].InterruptState.AsUINT64 },
+            // SAFETY: This register is a valid u64.
+            deliverability_notifications: unsafe {
+                self.register_values[2].DeliverabilityNotifications.AsUINT64
+            },
+            // SAFETY: This register is a valid u64.
+            internal_activity_state: unsafe { self.register_values[3].InternalActivity.AsUINT64 },
+        }
+    }
+
+    pub(super) fn from_serializable(serialized_regs: SerializedWhpxInterruptRegs) -> Self {
+        let mut whpx_interrupt_regs: WhpxInterruptRegs = Default::default();
+        whpx_interrupt_regs.register_values[0]
+            .PendingInterruption
+            .AsUINT64 = serialized_regs.pending_interruption;
+        whpx_interrupt_regs.register_values[1]
+            .InterruptState
+            .AsUINT64 = serialized_regs.interrupt_state;
+        whpx_interrupt_regs.register_values[2]
+            .DeliverabilityNotifications
+            .AsUINT64 = serialized_regs.deliverability_notifications;
+        whpx_interrupt_regs.register_values[3]
+            .InternalActivity
+            .AsUINT64 = serialized_regs.internal_activity_state;
+        whpx_interrupt_regs
     }
 }
 

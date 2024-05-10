@@ -8,13 +8,12 @@ pub mod layout;
 pub mod parameters;
 pub mod sys;
 
-#[cfg(feature = "audio")]
 pub mod common_backend;
-#[cfg(feature = "audio")]
+pub mod file_backend;
 pub mod null_backend;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         pub mod vios_backend;
 
         pub use vios_backend::new_sound;

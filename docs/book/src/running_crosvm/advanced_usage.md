@@ -2,6 +2,39 @@
 
 To see the usage information for your version of crosvm, run `crosvm` or `crosvm run --help`.
 
+## Specify log levels
+
+To change the log levels printed while running crosvm:
+
+```sh
+crosvm --log-level=LEVEL run
+```
+
+Ex:
+
+```sh
+crosvm --log-level=debug run
+```
+
+To change the log levels printed for a specific module:
+
+```sh
+crosvm --log-level=devices::usb::xhci=LEVEL run
+```
+
+Those can be combined to print different log levels for modules and for crosvm:
+
+```sh
+crosvm --log-level=devices::usb::xhci=LEVEL1,LEVEL2 run
+```
+
+Where LEVEL1 will be applied to the module "devices::usb::xhci" and LEVEL2 will be applied to the
+rest of crosvm.
+
+Available LEVELs: off, error, warn, info (default), debug, trace (only available in debug builds).
+
+Note: Logs will print all logs of the same or lower level. Ex: info will print error + warn + info.
+
 ## Boot a Kernel
 
 To run a very basic VM with just a kernel and default devices:
@@ -45,8 +78,10 @@ crosvm run --block "${ROOT_IMAGE}" -p "root=/dev/vda" bzImage
 
 ### With virtiofs
 
-Linux kernel 5.4+ is required for using virtiofs. This is convenient for testing. The file system
-must be named "mtd\*" or "ubi\*".
+Linux kernel 5.4+ is required for using virtiofs. This is convenient for testing. Note kernels
+before 5.15 require the file system to be named "mtd\*" or "ubi\*". See
+[discussions](https://listman.redhat.com/archives/virtio-fs/2019-September/000893.html) and
+[a patch](https://lore.kernel.org/lkml/20210617153649.1886693-3-hch@lst.de/) for the details.
 
 ```sh
 crosvm run --shared-dir "/:mtdfake:type=fs:cache=always" \
@@ -125,6 +160,17 @@ Crosvm will exit with a non-zero exit code on failure.
 
 See [CommandStatus](https://crosvm.dev/doc/crosvm/enum.CommandStatus.html) for meaning of the major
 exit codes.
+
+## Hypervisor
+
+The default hypervisor back can be overriden using `--hypervisor=<backend>`.
+
+The available backends are:
+
+- On Linux: "kvm"
+- On Windows: "whpx", "haxm", "ghaxm", "gvm"
+
+See the ["Hypervisors" chapter](../hypervisors.md) for more information.
 
 [gdb remote serial protocol]: https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html
 [kernel documentation]: https://www.kernel.org/doc/html/latest/dev-tools/gdb-kernel-debugging.html

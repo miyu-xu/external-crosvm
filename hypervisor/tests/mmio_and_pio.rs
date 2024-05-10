@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
@@ -14,7 +14,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_mmio_and_pio() {
     use hypervisor::kvm::*;
     test_mmio_and_pio(|guest_mem| {
@@ -25,7 +25,7 @@ fn test_kvm_mmio_and_pio() {
 }
 
 #[test]
-#[cfg(feature = "haxm")]
+#[cfg(all(windows, feature = "haxm"))]
 fn test_haxm_mmio_and_pio() {
     use hypervisor::haxm::*;
     test_mmio_and_pio(|guest_mem| {
@@ -98,7 +98,7 @@ where
     vcpu.set_sregs(&vcpu_sregs).expect("set sregs failed");
 
     let vcpu_regs = Regs {
-        rip: load_addr.offset() as u64,
+        rip: load_addr.offset(),
         rflags: 2,
         rax: 0x33,
         rbx: 0x3000,
@@ -110,9 +110,8 @@ where
     // Ensure we get exactly 2 exits for the mmio and the pio.
     let exits = AtomicU16::new(0);
 
-    let run_handle = vcpu.take_run_handle(None).unwrap();
     loop {
-        match vcpu.run(&run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             VcpuExit::Mmio => {
                 vcpu.handle_mmio(&mut |IoParams {
                                            address,

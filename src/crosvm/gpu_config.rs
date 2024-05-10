@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use devices::virtio::gpu::VIRTIO_GPU_MAX_SCANOUTS;
 use devices::virtio::GpuDisplayMode;
 use devices::virtio::GpuDisplayParameters;
 #[cfg(feature = "gfxstream")]
@@ -55,16 +56,6 @@ pub(crate) fn fixup_gpu_options(
             "backend type {:?} is deprecated, please use gfxstream",
             gpu_params.mode
         ));
-
-        #[cfg(unix)]
-        {
-            if gpu_params.gfxstream_use_guest_angle.is_some() {
-                return Err("'angle' is only supported for gfxstream backend".to_string());
-            }
-            if gpu_params.gfxstream_support_gles31.is_some() {
-                return Err("'gles31' is only supported for gfxstream backend".to_string());
-            }
-        }
     }
 
     Ok(FixedGpuParameters(gpu_params))
@@ -109,18 +100,32 @@ pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
             ));
         }
 
+        if gpu_parameters.max_num_displays < 1
+            || gpu_parameters.max_num_displays > VIRTIO_GPU_MAX_SCANOUTS as u32
+        {
+            return Err(format!(
+                "`max_num_displays` must be in range [1, {}]",
+                VIRTIO_GPU_MAX_SCANOUTS
+            ));
+        }
+        if gpu_parameters.display_params.len() as u32 > gpu_parameters.max_num_displays {
+            return Err(format!(
+                "Provided more `display_params` ({}) than `max_num_displays` ({})",
+                gpu_parameters.display_params.len(),
+                gpu_parameters.max_num_displays
+            ));
+        }
+
         // Add a default display if no display is specified.
         if gpu_parameters.display_params.is_empty() {
             gpu_parameters.display_params.push(Default::default());
         }
 
-        let (width, height) = gpu_parameters.display_params[0].get_virtual_display_size();
-        if let Some(virtio_multi_touch) = cfg.virtio_multi_touch.first_mut() {
-            virtio_multi_touch.set_default_size(width, height);
-        }
-        if let Some(virtio_single_touch) = cfg.virtio_single_touch.first_mut() {
-            virtio_single_touch.set_default_size(width, height);
-        }
+        let is_4k_uhd_enabled = false;
+        let (width, height) =
+            gpu_parameters.display_params[0].get_virtual_display_size_4k_uhd(is_4k_uhd_enabled);
+        cfg.display_input_width = Some(width);
+        cfg.display_input_height = Some(height);
     }
     Ok(())
 }
@@ -129,7 +134,7 @@ pub(crate) fn validate_gpu_config(cfg: &mut Config) -> Result<(), String> {
 mod tests {
     use argh::FromArgs;
     #[cfg(feature = "gfxstream")]
-    use rutabaga_gfx::RutabagaWsi;
+    use devices::virtio::GpuWsi;
 
     use super::*;
     use crate::crosvm::config::from_key_values;
@@ -151,6 +156,81 @@ mod tests {
 
     fn parse_gpu_display_options(s: &str) -> Result<GpuDisplayParameters, String> {
         from_key_values::<GpuDisplayParameters>(s)
+    }
+
+    #[test]
+    fn parse_gpu_options_max_num_displays() {
+        {
+            let gpu_params = parse_gpu_options("").unwrap();
+            assert_eq!(gpu_params.max_num_displays, VIRTIO_GPU_MAX_SCANOUTS as u32);
+        }
+        {
+            let gpu_params = parse_gpu_options("max-num-displays=5").unwrap();
+            assert_eq!(gpu_params.max_num_displays, 5);
+        }
+        {
+            let command = crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--gpu", "max-num-displays=0", "/dev/null"],
+            )
+            .unwrap();
+            assert!(Config::try_from(command).is_err());
+        }
+        {
+            let command = crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--gpu",
+                    format!("max-num-displays={}", VIRTIO_GPU_MAX_SCANOUTS + 1).as_str(),
+                    "/dev/null",
+                ],
+            )
+            .unwrap();
+            assert!(Config::try_from(command).is_err());
+        }
+        // TODO(b/332910955): Remove the single display restriction on Windows and enable this test.
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        {
+            let command = crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--gpu",
+                    "max-num-displays=1,displays=[[mode=windowed[1920,1080]],\
+                    [mode=windowed[1280,720]]]",
+                    "/dev/null",
+                ],
+            )
+            .unwrap();
+            assert!(Config::try_from(command).is_err());
+        }
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        {
+            let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--gpu",
+                    "max-num-displays=3,displays=[[mode=windowed[1920,1080]],\
+                    [mode=windowed[1280,720]]]",
+                    "/dev/null",
+                ],
+            )
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+            let gpu_params = config.gpu_parameters.unwrap();
+
+            assert_eq!(gpu_params.max_num_displays, 3);
+            assert_eq!(gpu_params.display_params.len(), 2);
+            assert_eq!(
+                gpu_params.display_params[0].mode,
+                GpuDisplayMode::Windowed(1920, 1080)
+            );
+            assert_eq!(
+                gpu_params.display_params[1].mode,
+                GpuDisplayMode::Windowed(1280, 720)
+            );
+        }
     }
 
     #[test]
@@ -230,11 +310,11 @@ mod tests {
     fn parse_gpu_options_gfxstream_with_wsi_specified() {
         {
             let gpu_params = parse_gpu_options("backend=gfxstream,wsi=vk").unwrap();
-            assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
+            assert!(matches!(gpu_params.wsi, Some(GpuWsi::Vulkan)));
         }
         {
             let gpu_params = parse_gpu_options("wsi=vk,backend=gfxstream").unwrap();
-            assert!(matches!(gpu_params.wsi, Some(RutabagaWsi::Vulkan)));
+            assert!(matches!(gpu_params.wsi, Some(GpuWsi::Vulkan)));
         }
         {
             assert!(parse_gpu_options("backend=gfxstream,wsi=invalid_value").is_err());
@@ -307,104 +387,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "gfxstream")]
-    #[test]
-    fn parse_gpu_options_gfxstream_with_guest_angle_specified() {
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream")
-                .unwrap()
-                .gfxstream_use_guest_angle,
-            None,
-        );
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream,angle=true")
-                .unwrap()
-                .gfxstream_use_guest_angle,
-            Some(true),
-        );
-        assert_eq!(
-            parse_gpu_options("angle=true,backend=gfxstream")
-                .unwrap()
-                .gfxstream_use_guest_angle,
-            Some(true),
-        );
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream,angle=false")
-                .unwrap()
-                .gfxstream_use_guest_angle,
-            Some(false),
-        );
-        assert_eq!(
-            parse_gpu_options("angle=false,backend=gfxstream")
-                .unwrap()
-                .gfxstream_use_guest_angle,
-            Some(false),
-        );
-        assert!(parse_gpu_options("backend=gfxstream,angle=invalid_value").is_err());
-        assert!(parse_gpu_options("angle=invalid_value,backend=gfxstream").is_err());
-    }
-
-    #[test]
-    fn parse_gpu_options_not_gfxstream_with_angle_specified() {
-        assert!(parse_gpu_options("backend=2d,angle=true").is_err());
-        assert!(parse_gpu_options("angle=true,backend=2d").is_err());
-
-        #[cfg(feature = "virgl_renderer")]
-        {
-            assert!(parse_gpu_options("backend=virglrenderer,angle=true").is_err());
-            assert!(parse_gpu_options("angle=true,backend=virglrenderer").is_err());
-        }
-    }
-
-    #[cfg(feature = "gfxstream")]
-    #[test]
-    fn parse_gpu_options_gfxstream_with_gles31_specified() {
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream")
-                .unwrap()
-                .gfxstream_support_gles31,
-            None,
-        );
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream,gles31=true")
-                .unwrap()
-                .gfxstream_support_gles31,
-            Some(true),
-        );
-        assert_eq!(
-            parse_gpu_options("gles31=true,backend=gfxstream")
-                .unwrap()
-                .gfxstream_support_gles31,
-            Some(true),
-        );
-        assert_eq!(
-            parse_gpu_options("backend=gfxstream,gles31=false")
-                .unwrap()
-                .gfxstream_support_gles31,
-            Some(false),
-        );
-        assert_eq!(
-            parse_gpu_options("gles31=false,backend=gfxstream")
-                .unwrap()
-                .gfxstream_support_gles31,
-            Some(false),
-        );
-        assert!(parse_gpu_options("backend=gfxstream,gles31=invalid_value").is_err());
-        assert!(parse_gpu_options("gles31=invalid_value,backend=gfxstream").is_err());
-    }
-
-    #[test]
-    fn parse_gpu_options_not_gfxstream_with_gles31_specified() {
-        assert!(parse_gpu_options("backend=2d,gles31=true").is_err());
-        assert!(parse_gpu_options("gles31=true,backend=2d").is_err());
-
-        #[cfg(feature = "virgl_renderer")]
-        {
-            assert!(parse_gpu_options("backend=virglrenderer,gles31=true").is_err());
-            assert!(parse_gpu_options("gles31=true,backend=virglrenderer").is_err());
-        }
-    }
-
     #[test]
     fn parse_gpu_options_context_types() {
         use rutabaga_gfx::RUTABAGA_CAPSET_CROSS_DOMAIN;
@@ -412,7 +394,7 @@ mod tests {
 
         let gpu_params = parse_gpu_options("context-types=virgl:cross-domain").unwrap();
         assert_eq!(
-            gpu_params.context_mask,
+            gpu_params.capset_mask,
             (1 << RUTABAGA_CAPSET_VIRGL) | (1 << RUTABAGA_CAPSET_CROSS_DOMAIN)
         );
     }
@@ -787,7 +769,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[test]
     fn parse_gpu_options_and_gpu_display_options_multi_display_supported_on_unix() {
         {

@@ -11,6 +11,7 @@ use std::sync::Weak;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use std::time::Instant;
 
 use base::error;
 use base::AsRawDescriptor;
@@ -21,7 +22,7 @@ use base::FromRawDescriptor;
 use base::SafeDescriptor;
 use base::WaitContext;
 use chrono::DateTime;
-use chrono::Local;
+use chrono::Utc;
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::minwindef::FILETIME;
 use winapi::um::processthreadsapi::GetProcessTimes;
@@ -39,9 +40,9 @@ use winapi::um::winnt::PROCESS_VM_READ;
 use winapi::um::winnt::SYNCHRONIZE;
 
 use crate::log_metric;
-use crate::windows::Error;
-use crate::windows::Result;
-use crate::windows::METRIC_UPLOAD_INTERVAL_SECONDS;
+use crate::sys::windows::Error;
+use crate::sys::windows::Result;
+use crate::sys::windows::METRICS_UPLOAD_INTERVAL;
 use crate::MetricEventType;
 
 const BYTES_PER_MB: usize = 1024 * 1024;
@@ -73,7 +74,7 @@ impl Worker {
                     return;
                 }
             };
-        let mut last_metric_upload_time = Local::now();
+        let mut last_metric_upload_time = Instant::now();
         'poll: loop {
             let events = match event_ctx.wait_timeout(WORKER_REPORT_INTERVAL) {
                 Ok(events) => events,
@@ -107,9 +108,8 @@ impl Worker {
         );
     }
 
-    fn upload_metrics(&self, last_metric_upload_time: &mut DateTime<Local>) {
-        let time_elapsed = (Local::now() - *last_metric_upload_time).num_seconds();
-        if time_elapsed >= METRIC_UPLOAD_INTERVAL_SECONDS {
+    fn upload_metrics(&self, last_metric_upload_time: &mut Instant) {
+        if last_metric_upload_time.elapsed() >= METRICS_UPLOAD_INTERVAL {
             let mut memory_acc = self.memory_acc.lock().unwrap();
             if let Some(acc) = &*memory_acc {
                 let mem = acc.accumulated.physical / acc.accumulated_count / BYTES_PER_MB;
@@ -142,7 +142,7 @@ impl Worker {
                 if total_systime > 0 {
                     let cpu_usage = 100 * total_processtime / total_systime;
                     // The i64 cast will not cause overflow because the usage is at most 100.
-                    log_metric(MetricEventType::CpuUsage, cpu_usage as i64);
+                    log_metric(MetricEventType::CpuUsage, cpu_usage);
                 }
             }
             *cpu_measurements = None;
@@ -166,7 +166,7 @@ impl Worker {
                 }
             }
             *io = None;
-            *last_metric_upload_time = Local::now();
+            *last_metric_upload_time = Instant::now();
         }
     }
 
@@ -224,15 +224,15 @@ impl Worker {
                 let updated_io = match *io_record {
                     Some(io) => ProcessIoRecord {
                         current: new_io,
-                        current_time: Local::now(),
+                        current_time: Utc::now(),
                         last_upload: io.last_upload,
                         last_upload_time: io.last_upload_time,
                     },
                     None => ProcessIoRecord {
                         current: new_io,
-                        current_time: Local::now(),
+                        current_time: Utc::now(),
                         last_upload: new_io,
-                        last_upload_time: Local::now(),
+                        last_upload_time: Utc::now(),
                     },
                 };
                 *io_record = Some(updated_io);
@@ -249,6 +249,7 @@ impl Worker {
 
         let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
 
+        // SAFETY:
         // Safe because we own the process handle and all memory was allocated.
         let result = unsafe {
             GetProcessMemoryInfo(
@@ -280,6 +281,7 @@ impl Worker {
         let mut process_time: ProcessCpuTime = Default::default();
         let sys_time_success: i32;
 
+        // SAFETY:
         // Safe because memory is allocated for sys_time before the windows call.
         // And the value were initilized to 0s.
         unsafe {
@@ -294,6 +296,7 @@ impl Worker {
             // Query current process cpu time.
             let process_handle = CoreWinMetrics::get_process_handle()?;
             let process_time_success: i32;
+            // SAFETY:
             // Safe because memory is allocated for process_time before the windows call.
             // And the value were initilized to 0s.
             unsafe {
@@ -328,6 +331,7 @@ impl Worker {
     fn get_io_metrics(&self) -> SysResult<ProcessIo> {
         let process_handle = CoreWinMetrics::get_process_handle()?;
         let mut io_counters = IO_COUNTERS::default();
+        // SAFETY:
         // Safe because we own the process handle and all memory was allocated.
         let result = unsafe {
             GetProcessIoCounters(
@@ -454,6 +458,7 @@ impl Worker {
 }
 
 fn compute_filetime_subtraction(fta: FILETIME, ftb: FILETIME) -> LONGLONG {
+    // SAFETY:
     // safe because we are initializing the struct to 0s.
     unsafe {
         let mut a: LARGE_INTEGER = mem::zeroed::<LARGE_INTEGER>();
@@ -525,9 +530,9 @@ struct ProcessIo {
 #[derive(Copy, Clone)]
 struct ProcessIoRecord {
     current: ProcessIo,
-    current_time: DateTime<Local>,
+    current_time: DateTime<Utc>,
     last_upload: ProcessIo,
-    last_upload_time: DateTime<Local>,
+    last_upload_time: DateTime<Utc>,
 }
 
 #[derive(Copy, Clone)]
@@ -584,6 +589,7 @@ impl CoreWinMetrics {
     }
 
     fn get_process_handle() -> SysResult<SafeDescriptor> {
+        // SAFETY:
         // Safe because we own the current process.
         let process_handle = unsafe {
             OpenProcess(
@@ -595,6 +601,7 @@ impl CoreWinMetrics {
         if process_handle.is_null() {
             return Err(SysError::last());
         }
+        // SAFETY:
         // Safe as the SafeDescriptor is the only thing with access to the handle after this.
         Ok(unsafe { SafeDescriptor::from_raw_descriptor(process_handle) })
     }

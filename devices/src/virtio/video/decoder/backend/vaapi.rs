@@ -7,17 +7,29 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::os::fd::FromRawFd;
+use std::os::fd::OwnedFd;
 use std::rc::Rc;
 
 use anyhow::anyhow;
 use anyhow::Result;
+use base::IntoRawDescriptor;
 use base::MappedRegion;
 use base::MemoryMappingArena;
-use cros_codecs::decoders::BlockingMode;
-use cros_codecs::decoders::DynDecodedHandle;
-use cros_codecs::decoders::VideoDecoder;
+use cros_codecs::decoder::stateless::h264::H264;
+use cros_codecs::decoder::stateless::h265::H265;
+use cros_codecs::decoder::stateless::vp8::Vp8;
+use cros_codecs::decoder::stateless::vp9::Vp9;
+use cros_codecs::decoder::stateless::DecodeError;
+use cros_codecs::decoder::stateless::StatelessVideoDecoder;
+use cros_codecs::decoder::DecodedHandle;
+use cros_codecs::libva;
+use cros_codecs::libva::Display;
+use cros_codecs::multiple_desc_type;
+use cros_codecs::utils::DmabufFrame;
 use cros_codecs::DecodedFormat;
-use libva::Display;
+use cros_codecs::FrameLayout;
+use cros_codecs::PlaneLayout;
 
 use crate::virtio::video::decoder::Capability;
 use crate::virtio::video::decoder::DecoderBackend;
@@ -33,31 +45,54 @@ use crate::virtio::video::format::Level;
 use crate::virtio::video::format::Profile;
 use crate::virtio::video::format::Rect;
 use crate::virtio::video::resource::BufferHandle;
+use crate::virtio::video::resource::GuestMemHandle;
 use crate::virtio::video::resource::GuestResource;
 use crate::virtio::video::resource::GuestResourceHandle;
 use crate::virtio::video::utils::EventQueue;
-use crate::virtio::video::utils::OutputQueue;
+
+/// A guest memory descriptor that uses a managed buffer as a shadow that will be copied into the
+/// guest memory once decoding is over.
+struct GuestMemDescriptor(GuestMemHandle);
+
+impl libva::SurfaceMemoryDescriptor for GuestMemDescriptor {
+    fn add_attrs(
+        &mut self,
+        attrs: &mut Vec<libva::VASurfaceAttrib>,
+    ) -> Option<Box<dyn std::any::Any>> {
+        // Decode into a managed buffer.
+        ().add_attrs(attrs)
+    }
+}
+
+multiple_desc_type! {
+    enum BufferDescriptor {
+        GuestMem(GuestMemDescriptor),
+        Dmabuf(DmabufFrame),
+    }
+}
+
+struct BufferDescWithPicId {
+    desc: BufferDescriptor,
+    picture_buffer_id: i32,
+}
+
+impl libva::SurfaceMemoryDescriptor for BufferDescWithPicId {
+    fn add_attrs(
+        &mut self,
+        attrs: &mut Vec<libva::VASurfaceAttrib>,
+    ) -> Option<Box<dyn std::any::Any>> {
+        self.desc.add_attrs(attrs)
+    }
+}
 
 /// Represents a buffer we have not yet sent to the accelerator.
 struct PendingJob {
     resource_id: u32,
     timestamp: u64,
     resource: GuestResourceHandle,
-    offset: u32,
-    bytes_used: u32,
-}
-
-/// A set of params returned when a dynamic resolution change is found in the
-/// bitstream.
-pub struct DrcParams {
-    /// The minimum amount of buffers needed to decode the stream.
-    min_num_buffers: usize,
-    /// The stream's new width.
-    width: u32,
-    /// The stream's new height.
-    height: u32,
-    /// The visible resolution.
-    visible_rect: Rect,
+    offset: usize,
+    bytes_used: usize,
+    remaining: usize,
 }
 
 impl TryFrom<DecodedFormat> for Format {
@@ -66,7 +101,7 @@ impl TryFrom<DecodedFormat> for Format {
     fn try_from(value: DecodedFormat) -> Result<Self, Self::Error> {
         match value {
             DecodedFormat::NV12 => Ok(Format::NV12),
-            DecodedFormat::I420 => Err(anyhow!("Unsupported format")),
+            _ => Err(anyhow!("Unsupported format")),
         }
     }
 }
@@ -113,22 +148,10 @@ enum OutputQueueState {
     /// Waiting for the client to call `set_output_buffer_count`.
     AwaitingBufferCount,
     /// Codec is capable of decoding frames.
-    Decoding {
-        /// The output queue which indirectly contains the output buffers given by crosvm
-        output_queue: OutputQueue,
-    },
+    Decoding,
     /// Dynamic Resolution Change - we can still accept buffers in the old
     /// format, but are waiting for new parameters before doing any decoding.
     Drc,
-}
-
-impl OutputQueueState {
-    fn output_queue_mut(&mut self) -> Result<&mut OutputQueue> {
-        match self {
-            OutputQueueState::Decoding { output_queue } => Ok(output_queue),
-            _ => Err(anyhow!("Invalid state")),
-        }
-    }
 }
 
 ///A safe decoder abstraction over libva for a single vaContext
@@ -272,7 +295,6 @@ impl VaapiDecoder {
 
         let va_profiles = display.query_config_profiles()?;
 
-        let mut profiles = Vec::new();
         let mut in_fmts = Vec::new();
         let mut out_fmts = Vec::new();
         let mut profiles_map: BTreeMap<Format, Vec<Profile>> = Default::default();
@@ -283,6 +305,8 @@ impl VaapiDecoder {
         let levels: BTreeMap<Format, Vec<Level>> = Default::default();
 
         for va_profile in va_profiles {
+            let mut profiles = Vec::new();
+
             let entrypoints = display.query_config_entrypoints(va_profile)?;
             if !entrypoints
                 .iter()
@@ -292,6 +316,13 @@ impl VaapiDecoder {
                 // VAEntrypointVLD.
                 continue;
             }
+
+            let profile = match Profile::try_from(va_profile) {
+                Ok(p) => p,
+                // Skip if we cannot convert to a valid virtio format
+                Err(_) => continue,
+            };
+
             // Manually push all VP8 profiles, since VA exposes only a single
             // VP8 profile for all of these
             if va_profile == libva::VAProfile::VAProfileVP8Version0_3 {
@@ -299,13 +330,9 @@ impl VaapiDecoder {
                 profiles.push(Profile::VP8Profile1);
                 profiles.push(Profile::VP8Profile2);
                 profiles.push(Profile::VP8Profile3);
+            } else {
+                profiles.push(profile);
             }
-
-            let profile = match Profile::try_from(va_profile) {
-                Ok(p) => p,
-                // Skip if we cannot convert to a valid virtio format
-                Err(_) => continue,
-            };
 
             let coded_cap = VaapiDecoder::get_coded_cap(display.as_ref(), va_profile)?;
             let raw_caps = VaapiDecoder::get_raw_caps(Rc::clone(&display), &coded_cap)?;
@@ -329,7 +356,7 @@ impl VaapiDecoder {
             let coded_format = profile.to_format();
             match profiles_map.entry(coded_format) {
                 Entry::Vacant(e) => {
-                    e.insert(vec![profile]);
+                    e.insert(profiles);
                 }
                 Entry::Occupied(mut ps) => {
                     ps.get_mut().push(profile);
@@ -398,11 +425,19 @@ trait AsBufferHandle {
     fn as_buffer_handle(&self) -> &Self::BufferHandle;
 }
 
-impl AsBufferHandle for &mut GuestResource {
+impl AsBufferHandle for GuestResource {
     type BufferHandle = GuestResourceHandle;
 
     fn as_buffer_handle(&self) -> &Self::BufferHandle {
         &self.handle
+    }
+}
+
+impl AsBufferHandle for GuestMemHandle {
+    type BufferHandle = Self;
+
+    fn as_buffer_handle(&self) -> &Self::BufferHandle {
+        self
     }
 }
 
@@ -415,116 +450,105 @@ impl AsBufferHandle for GuestResourceHandle {
 }
 
 /// A convenience type implementing persistent slice access for BufferHandles.
-struct BufferMapping<T: AsBufferHandle> {
+struct BufferMapping<'a, T: AsBufferHandle> {
     #[allow(dead_code)]
     /// The underlying resource. Must be kept so as not to drop the BufferHandle
-    resource: T,
+    resource: &'a T,
     /// The mapping that backs the underlying slices returned by AsRef and AsMut
     mapping: MemoryMappingArena,
 }
 
-impl<T: AsBufferHandle> BufferMapping<T> {
+impl<'a, T: AsBufferHandle> BufferMapping<'a, T> {
     /// Creates a new BufferMap
-    pub fn new(resource: T, offset: usize, size: usize) -> Result<Self> {
+    pub fn new(resource: &'a T, offset: usize, size: usize) -> Result<Self> {
         let mapping = resource.as_buffer_handle().get_mapping(offset, size)?;
 
         Ok(Self { resource, mapping })
     }
 }
 
-impl<T: AsBufferHandle> AsRef<[u8]> for BufferMapping<T> {
+impl<'a, T: AsBufferHandle> AsRef<[u8]> for BufferMapping<'a, T> {
     fn as_ref(&self) -> &[u8] {
         let mapping = &self.mapping;
+        // SAFETY:
         // Safe because the mapping is linear and we own it, so it will not be unmapped during
         // the lifetime of this slice.
         unsafe { std::slice::from_raw_parts(mapping.as_ptr(), mapping.size()) }
     }
 }
 
-impl<T: AsBufferHandle> AsMut<[u8]> for BufferMapping<T> {
+impl<'a, T: AsBufferHandle> AsMut<[u8]> for BufferMapping<'a, T> {
     fn as_mut(&mut self) -> &mut [u8] {
         let mapping = &self.mapping;
+        // SAFETY:
         // Safe because the mapping is linear and we own it, so it will not be unmapped during
         // the lifetime of this slice.
         unsafe { std::slice::from_raw_parts_mut(mapping.as_ptr(), mapping.size()) }
     }
 }
 
+/// A frame that is currently not available for being decoded into, either because it has been
+/// decoded and is waiting for us to release it (`Decoded`), or because we temporarily removed it
+/// from the decoder pool after a reset and are waiting for the client to tell us we can use it
+/// (`Held`).
+enum BorrowedFrame {
+    Decoded(Box<dyn DecodedHandle<Descriptor = BufferDescWithPicId>>),
+    Held(Box<dyn AsRef<BufferDescWithPicId>>),
+}
+
 /// A decoder session for the libva backend
 pub struct VaapiDecoderSession {
     /// The implementation for the codec specific logic.
-    codec: Box<dyn VideoDecoder>,
+    codec: Box<dyn StatelessVideoDecoder<BufferDescWithPicId>>,
     /// The state for the output queue. Updated when `set_output_buffer_count`
     /// is called or when we detect a dynamic resolution change.
     output_queue_state: OutputQueueState,
-    /// Queue containing decoded pictures.
-    ready_queue: VecDeque<Box<dyn DynDecodedHandle>>,
+    /// Frames currently held by us, indexed by `picture_buffer_id`.
+    held_frames: BTreeMap<i32, BorrowedFrame>,
     /// Queue containing the buffers we have not yet submitted to the codec.
     submit_queue: VecDeque<PendingJob>,
     /// The event queue we can use to signal new events.
     event_queue: EventQueue<DecoderEvent>,
     /// Whether the decoder is currently flushing.
     flushing: bool,
-    /// The last value for "display_order" we have managed to output.
-    last_display_order: u64,
 }
 
 impl VaapiDecoderSession {
-    fn change_resolution(&mut self, new_params: DrcParams) -> Result<()> {
-        // Ask the client for new buffers.
-        self.event_queue
-            .queue_event(DecoderEvent::ProvidePictureBuffers {
-                min_num_buffers: u32::try_from(new_params.min_num_buffers)?,
-                width: new_params.width as i32,
-                height: new_params.height as i32,
-                visible_rect: new_params.visible_rect,
-            })?;
-
-        // Drop our output queue and wait for the new number of output buffers.
-        self.output_queue_state = match &self.output_queue_state {
-            // If this is part of the initialization step, then do not switch states.
-            OutputQueueState::AwaitingBufferCount => OutputQueueState::AwaitingBufferCount,
-            OutputQueueState::Decoding { .. } => OutputQueueState::Drc,
-            _ => return Err(anyhow!("Invalid state during DRC.")),
-        };
-
-        Ok(())
-    }
-
     /// Copy raw decoded data from `image` into the output buffer
-    pub fn output_picture(&mut self, decoded_frame: &dyn DynDecodedHandle) -> Result<bool> {
-        let output_queue = self.output_queue_state.output_queue_mut()?;
-
-        // Output buffer to be used.
-        let (picture_buffer_id, output_buffer) = match output_queue.try_get_ready_buffer() {
-            Some(ready_buffer) => ready_buffer,
-            None => {
-                return Ok(false);
-            }
-        };
-
+    fn output_picture(
+        decoded_frame: &dyn DecodedHandle<Descriptor = BufferDescWithPicId>,
+        event_queue: &mut EventQueue<DecoderEvent>,
+    ) -> Result<()> {
         let display_resolution = decoded_frame.display_resolution();
-
-        let mut picture = decoded_frame.dyn_picture_mut();
-        let mut backend_handle = picture.dyn_mappable_handle_mut();
-        let buffer_size = backend_handle.image_size();
-
-        // Get a mapping from the start of the buffer to the size of the
-        // underlying decoded data in the Image.
-        let mut output_map = BufferMapping::new(output_buffer, 0, buffer_size)?;
-
-        let output_bytes = output_map.as_mut();
-
-        backend_handle.read(output_bytes)?;
-
-        drop(backend_handle);
-        drop(picture);
-
         let timestamp = decoded_frame.timestamp();
-        let picture_buffer_id = picture_buffer_id as i32;
+
+        let buffer_desc = decoded_frame.resource();
+        let picture_buffer_id = buffer_desc.picture_buffer_id;
+
+        // Sync the frame if it is in guest memory, as we are going to map and read it.
+        // This statement is in its own block so we can drop the `buffer_desc` reference
+        // before calling `sync`, which does a mutable borrow.
+        if let BufferDescriptor::GuestMem(_) = &buffer_desc.desc {
+            drop(buffer_desc);
+            decoded_frame.sync()?;
+        }
+
+        // Copy guest memory buffers into their destination.
+        if let BufferDescriptor::GuestMem(handle) = &decoded_frame.resource().desc {
+            let picture = decoded_frame.dyn_picture();
+            let mut backend_handle = picture.dyn_mappable_handle()?;
+            let buffer_size = backend_handle.image_size();
+
+            // Get a mapping from the start of the buffer to the size of the
+            // underlying decoded data in the Image.
+            let mut output_map = BufferMapping::new(&handle.0, 0, buffer_size)?;
+            let output_bytes = output_map.as_mut();
+
+            backend_handle.read(output_bytes)?;
+        }
 
         // Say that we are done decoding this picture.
-        self.event_queue
+        event_queue
             .queue_event(DecoderEvent::PictureReady {
                 picture_buffer_id,
                 timestamp,
@@ -539,93 +563,11 @@ impl VaapiDecoderSession {
                 VideoError::BackendFailure(anyhow!("Can't queue the PictureReady event {}", e))
             })?;
 
-        Ok(true)
-    }
-
-    fn drain_ready_queue(&mut self) -> Result<()> {
-        // Do not do anything if we haven't been given buffers yet.
-        if !matches!(self.output_queue_state, OutputQueueState::Decoding { .. }) {
-            return Ok(());
-        }
-
-        while let Some(mut decoded_frame) = self.ready_queue.pop_front() {
-            let display_order = decoded_frame.display_order().expect(
-                "A frame should have its display order set before being returned from the decoder.",
-            );
-
-            // We are receiving frames as-is from the decoder, which means there
-            // may be gaps if the decoder returns frames out of order.
-            // We simply wait in this case, as the decoder will eventually
-            // produce more frames that makes the gap not exist anymore.
-            //
-            // On the other hand, we take care to not stall. We compromise by
-            // emitting frames out of order instead. This should not really
-            // happen in production and a warn is left so we can think about
-            // bumping the number of resources allocated by the backends.
-            let gap = display_order != 0 && display_order != self.last_display_order + 1;
-
-            let stall = if let Some(left) = self.codec.num_resources_left() {
-                left == 0
-            } else {
-                false
-            };
-
-            if gap && !stall {
-                self.ready_queue.push_front(decoded_frame);
-                break;
-            } else if gap && stall {
-                self.ready_queue.push_front(decoded_frame);
-
-                // Try polling the decoder for all pending jobs.
-                let handles = self.codec.poll(BlockingMode::Blocking)?;
-                self.ready_queue.extend(handles);
-
-                self.ready_queue
-                    .make_contiguous()
-                    .sort_by_key(|h| h.display_order());
-
-                decoded_frame = self.ready_queue.pop_front().unwrap();
-
-                // See whether we *still* have a gap
-                let display_order = decoded_frame.display_order().expect(
-                "A frame should have its display order set before being returned from the decoder."
-                );
-
-                let gap = display_order != 0 && display_order != self.last_display_order + 1;
-
-                if gap {
-                    // If the stall is not due to a missing frame, then this may
-                    // signal that we are not allocating enough resources.
-                    base::warn!("Outputting out of order to avoid stalling.");
-                    base::warn!(
-                        "Expected {}, got {}",
-                        self.last_display_order + 1,
-                        display_order
-                    );
-                    base::warn!("Either a dropped frame, or not enough resources for the codec.");
-                    base::warn!(
-                        "Increasing the number of allocated resources can possibly fix this."
-                    );
-                }
-            }
-
-            let outputted = self.output_picture(decoded_frame.as_ref())?;
-            if !outputted {
-                self.ready_queue.push_front(decoded_frame);
-                break;
-            }
-
-            self.last_display_order = display_order;
-        }
-
         Ok(())
     }
 
     fn try_emit_flush_completed(&mut self) -> Result<()> {
-        let num_ready_remaining = self.ready_queue.len();
-        let num_submit_remaining = self.submit_queue.len();
-
-        if num_ready_remaining == 0 && num_submit_remaining == 0 {
+        if self.submit_queue.is_empty() {
             self.flushing = false;
 
             let event_queue = &mut self.event_queue;
@@ -638,97 +580,105 @@ impl VaapiDecoderSession {
         }
     }
 
-    fn decode_one_job(&mut self, job: PendingJob) -> VideoResult<()> {
-        let PendingJob {
-            resource_id,
-            timestamp,
-            resource,
-            offset,
-            bytes_used,
-        } = job;
-
-        let bitstream_map = BufferMapping::new(
-            resource,
-            offset.try_into().unwrap(),
-            bytes_used.try_into().unwrap(),
-        )
-        .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
-
-        let frames = self.codec.decode(timestamp, bitstream_map.as_ref());
-
-        // We are always done with the input buffer after `self.codec.decode()`.
-        self.event_queue
-            .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(resource_id))
-            .map_err(|e| {
-                VideoError::BackendFailure(anyhow!(
-                    "Can't queue the NotifyEndOfBitstream event {}",
-                    e
-                ))
-            })?;
-
-        match frames {
-            Ok(frames) => {
-                if self.codec.negotiation_possible() {
-                    let resolution = self.codec.coded_resolution().unwrap();
-
-                    let drc_params = DrcParams {
-                        min_num_buffers: self.codec.num_resources_total(),
-                        width: resolution.width,
-                        height: resolution.height,
-                        visible_rect: Rect {
-                            left: 0,
-                            top: 0,
-                            right: resolution.width as i32,
-                            bottom: resolution.height as i32,
-                        },
-                    };
-
-                    self.change_resolution(drc_params)
-                        .map_err(VideoError::BackendFailure)?;
-                }
-
-                for decoded_frame in frames {
-                    self.ready_queue.push_back(decoded_frame);
-                }
-
-                self.ready_queue
-                    .make_contiguous()
-                    .sort_by_key(|h| h.display_order());
-
-                self.drain_ready_queue()
-                    .map_err(VideoError::BackendFailure)?;
-
-                Ok(())
-            }
-
-            Err(e) => {
-                let event_queue = &mut self.event_queue;
-
-                event_queue
-                    .queue_event(DecoderEvent::NotifyError(VideoError::BackendFailure(
-                        anyhow!("Decoding buffer {} failed", resource_id),
-                    )))
-                    .map_err(|e| {
-                        VideoError::BackendFailure(anyhow!(
-                            "Can't queue the NotifyError event {}",
-                            e
-                        ))
-                    })?;
-
-                Err(VideoError::BackendFailure(anyhow!(e)))
-            }
-        }
-    }
-
     fn drain_submit_queue(&mut self) -> VideoResult<()> {
-        while let Some(queued_buffer) = self.submit_queue.pop_front() {
-            match self.codec.num_resources_left() {
-                Some(left) if left == 0 => {
-                    self.submit_queue.push_front(queued_buffer);
+        while let Some(job) = self.submit_queue.front_mut() {
+            let bitstream_map = BufferMapping::new(&job.resource, job.offset, job.bytes_used)
+                .map_err(VideoError::BackendFailure)?;
+
+            let slice_start = job.bytes_used - job.remaining;
+            match self
+                .codec
+                .decode(job.timestamp, &bitstream_map.as_ref()[slice_start..])
+            {
+                Ok(processed) => {
+                    job.remaining = job.remaining.saturating_sub(processed);
+                    // We have completed the buffer.
+                    if job.remaining == 0 {
+                        // We are always done with the input buffer after decode returns.
+                        self.event_queue
+                            .queue_event(DecoderEvent::NotifyEndOfBitstreamBuffer(job.resource_id))
+                            .map_err(|e| {
+                                VideoError::BackendFailure(anyhow!(
+                                    "Can't queue the NotifyEndOfBitstream event {}",
+                                    e
+                                ))
+                            })?;
+                        self.submit_queue.pop_front();
+                    }
+                }
+                Err(DecodeError::CheckEvents) => {
+                    self.process_decoder_events()?;
                     break;
                 }
+                // We will succeed once buffers are returned by the client. This could be optimized
+                // to only retry decoding once buffers are effectively returned.
+                Err(DecodeError::NotEnoughOutputBuffers(_)) => break,
+                // TODO add an InvalidInput error to cros-codecs so we can detect these cases and
+                // just throw a warning instead of a fatal error?
+                Err(e) => {
+                    self.event_queue
+                        .queue_event(DecoderEvent::NotifyError(VideoError::BackendFailure(
+                            anyhow!("Decoding buffer {} failed", job.resource_id),
+                        )))
+                        .map_err(|e| {
+                            VideoError::BackendFailure(anyhow!(
+                                "Can't queue the NotifyError event {}",
+                                e
+                            ))
+                        })?;
+                    return Err(VideoError::BackendFailure(e.into()));
+                }
+            }
+        }
 
-                _ => self.decode_one_job(queued_buffer)?,
+        Ok(())
+    }
+
+    fn process_decoder_events(&mut self) -> VideoResult<()> {
+        while let Some(event) = self.codec.next_event() {
+            match event {
+                cros_codecs::decoder::DecoderEvent::FrameReady(frame) => {
+                    Self::output_picture(frame.as_ref(), &mut self.event_queue)
+                        .map_err(VideoError::BackendFailure)?;
+                    let picture_id = frame.resource().picture_buffer_id;
+                    self.held_frames
+                        .insert(picture_id, BorrowedFrame::Decoded(frame));
+                }
+                cros_codecs::decoder::DecoderEvent::FormatChanged(mut format) => {
+                    let coded_resolution = format.stream_info().coded_resolution;
+                    let display_resolution = format.stream_info().display_resolution;
+
+                    // Ask the client for new buffers.
+                    self.event_queue
+                        .queue_event(DecoderEvent::ProvidePictureBuffers {
+                            min_num_buffers: format.stream_info().min_num_frames as u32,
+                            width: coded_resolution.width as i32,
+                            height: coded_resolution.height as i32,
+                            visible_rect: Rect {
+                                left: 0,
+                                top: 0,
+                                right: display_resolution.width as i32,
+                                bottom: display_resolution.height as i32,
+                            },
+                        })
+                        .map_err(|e| VideoError::BackendFailure(e.into()))?;
+
+                    format.frame_pool().clear();
+
+                    // Drop our output queue and wait for the new number of output buffers.
+                    self.output_queue_state = match &self.output_queue_state {
+                        // If this is part of the initialization step, then do not switch states.
+                        OutputQueueState::AwaitingBufferCount => {
+                            OutputQueueState::AwaitingBufferCount
+                        }
+                        OutputQueueState::Decoding => OutputQueueState::Drc,
+                        OutputQueueState::Drc => {
+                            return Err(VideoError::BackendFailure(anyhow!(
+                                "Invalid state during DRC."
+                            )))
+                        }
+                    };
+                }
             }
         }
 
@@ -736,13 +686,7 @@ impl VaapiDecoderSession {
     }
 
     fn try_make_progress(&mut self) -> VideoResult<()> {
-        // Note that the ready queue must be drained first to avoid deadlock.
-        // This is because draining the submit queue will fail if the ready
-        // queue is full enough, since this prevents the deallocation of the
-        // VASurfaces embedded in the handles stored in the ready queue.
-        // This means that no progress gets done.
-        self.drain_ready_queue()
-            .map_err(VideoError::BackendFailure)?;
+        self.process_decoder_events()?;
         self.drain_submit_queue()?;
 
         Ok(())
@@ -750,7 +694,7 @@ impl VaapiDecoderSession {
 }
 
 impl DecoderSession for VaapiDecoderSession {
-    fn set_output_parameters(&mut self, buffer_count: usize, _: Format) -> VideoResult<()> {
+    fn set_output_parameters(&mut self, _: usize, _: Format) -> VideoResult<()> {
         let output_queue_state = &mut self.output_queue_state;
 
         // This logic can still be improved, in particular it needs better
@@ -803,13 +747,11 @@ impl DecoderSession for VaapiDecoderSession {
                 //     }
                 // }
 
-                *output_queue_state = OutputQueueState::Decoding {
-                    output_queue: OutputQueue::new(buffer_count),
-                };
+                *output_queue_state = OutputQueueState::Decoding;
 
                 Ok(())
             }
-            OutputQueueState::Decoding { .. } => {
+            OutputQueueState::Decoding => {
                 // Covers the slightly awkward ffmpeg v4l2 stateful
                 // implementation for the capture queue setup.
                 //
@@ -842,9 +784,7 @@ impl DecoderSession for VaapiDecoderSession {
                 // a future CL. If a buffer with the LAST flag hasn't been
                 // emitted, it's technically a mistake to be here because we
                 // still have buffers of the old resolution to deliver.
-                *output_queue_state = OutputQueueState::Decoding {
-                    output_queue: OutputQueue::new(buffer_count),
-                };
+                *output_queue_state = OutputQueueState::Decoding;
 
                 // TODO: check whether we have emitted a buffer with the LAST
                 // flag before returning.
@@ -865,8 +805,9 @@ impl DecoderSession for VaapiDecoderSession {
             resource_id,
             timestamp,
             resource,
-            offset,
-            bytes_used,
+            offset: offset as usize,
+            bytes_used: bytes_used as usize,
+            remaining: bytes_used as usize,
         };
 
         self.submit_queue.push_back(job);
@@ -880,37 +821,32 @@ impl DecoderSession for VaapiDecoderSession {
 
         self.try_make_progress()?;
 
-        if self.submit_queue.len() != 0 {
+        if !self.submit_queue.is_empty() {
             return Ok(());
         }
 
         // Retrieve ready frames from the codec, if any.
-        let pics = self
-            .codec
+        self.codec
             .flush()
-            .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
-
-        self.ready_queue.extend(pics);
-        self.ready_queue
-            .make_contiguous()
-            .sort_by_key(|h| h.display_order());
-
-        self.drain_ready_queue()
-            .map_err(VideoError::BackendFailure)?;
+            .map_err(|e| VideoError::BackendFailure(e.into()))?;
+        self.process_decoder_events()?;
 
         self.try_emit_flush_completed()
             .map_err(VideoError::BackendFailure)
     }
 
     fn reset(&mut self) -> VideoResult<()> {
-        // Drop the queued output buffers.
-        self.clear_output_buffers()?;
-
         self.submit_queue.clear();
-        self.ready_queue.clear();
+
+        // Make sure the codec is not active.
         self.codec
             .flush()
-            .map_err(|e| VideoError::BackendFailure(anyhow!("Flushing the codec failed {}", e)))?;
+            .map_err(|e| VideoError::BackendFailure(e.into()))?;
+
+        self.process_decoder_events()?;
+
+        // Drop the queued output buffers.
+        self.clear_output_buffers()?;
 
         self.event_queue
             .queue_event(DecoderEvent::ResetCompleted(Ok(())))
@@ -925,11 +861,6 @@ impl DecoderSession for VaapiDecoderSession {
         // Cancel any ongoing flush.
         self.flushing = false;
 
-        // Drop all output buffers we currently hold.
-        if let OutputQueueState::Decoding { output_queue } = &mut self.output_queue_state {
-            output_queue.clear_ready_buffers();
-        }
-
         // Drop all decoded frames signaled as ready and cancel any reported flush.
         self.event_queue.retain(|event| {
             !matches!(
@@ -937,6 +868,14 @@ impl DecoderSession for VaapiDecoderSession {
                 DecoderEvent::PictureReady { .. } | DecoderEvent::FlushCompleted(_)
             )
         });
+
+        // Now hold all the imported frames until reuse_output_buffer is called on them.
+        let frame_pool = self.codec.frame_pool();
+        while let Some(frame) = frame_pool.take_free_frame() {
+            let picture_id = (*frame).as_ref().picture_buffer_id;
+            self.held_frames
+                .insert(picture_id, BorrowedFrame::Held(frame));
+        }
 
         Ok(())
     }
@@ -956,19 +895,47 @@ impl DecoderSession for VaapiDecoderSession {
             return Ok(());
         }
 
-        let output_queue = output_queue_state
-            .output_queue_mut()
-            .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
+        let desc = match resource.handle {
+            GuestResourceHandle::GuestPages(handle) => {
+                BufferDescriptor::GuestMem(GuestMemDescriptor(handle))
+            }
+            GuestResourceHandle::VirtioObject(handle) => {
+                // SAFETY: descriptor is expected to be valid
+                let fd = unsafe { OwnedFd::from_raw_fd(handle.desc.into_raw_descriptor()) };
+                let modifier = handle.modifier;
 
-        // TODO: there's a type mismatch here between the trait and the signature for `import_buffer`
-        output_queue
-            .import_buffer(picture_buffer_id as u32, resource)
-            .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
+                let frame = DmabufFrame {
+                    fds: vec![fd],
+                    layout: FrameLayout {
+                        format: (cros_codecs::Fourcc::from(b"NV12"), modifier),
+                        size: cros_codecs::Resolution::from((resource.width, resource.height)),
+                        planes: resource
+                            .planes
+                            .iter()
+                            .map(|p| PlaneLayout {
+                                buffer_index: 0,
+                                offset: p.offset,
+                                stride: p.stride,
+                            })
+                            .collect(),
+                    },
+                };
 
-        self.drain_ready_queue()
+                BufferDescriptor::Dmabuf(frame)
+            }
+        };
+
+        let desc_with_pic_id = BufferDescWithPicId {
+            desc,
+            picture_buffer_id,
+        };
+
+        self.codec
+            .frame_pool()
+            .add_frames(vec![desc_with_pic_id])
             .map_err(VideoError::BackendFailure)?;
 
-        Ok(())
+        self.try_make_progress()
     }
 
     fn reuse_output_buffer(&mut self, picture_buffer_id: i32) -> VideoResult<()> {
@@ -978,14 +945,7 @@ impl DecoderSession for VaapiDecoderSession {
             return Ok(());
         }
 
-        let output_queue = output_queue_state
-            .output_queue_mut()
-            .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
-
-        // TODO: there's a type mismatch here between the trait and the signature for `import_buffer`
-        output_queue
-            .reuse_buffer(picture_buffer_id as u32)
-            .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?;
+        self.held_frames.remove(&picture_buffer_id);
 
         self.try_make_progress()?;
 
@@ -1012,31 +972,33 @@ impl DecoderBackend for VaapiDecoder {
     }
 
     fn new_session(&mut self, format: Format) -> VideoResult<Self::Session> {
-        let display = Display::open().ok_or(VideoError::BackendFailure(anyhow!(
-            "failed to open VA display"
-        )))?;
+        let display = Display::open()
+            .ok_or_else(|| VideoError::BackendFailure(anyhow!("failed to open VA display")))?;
 
-        let codec: Box<dyn VideoDecoder> = match format {
+        let codec: Box<dyn StatelessVideoDecoder<BufferDescWithPicId>> = match format {
             Format::VP8 => Box::new(
-                cros_codecs::decoders::vp8::decoder::Decoder::new_vaapi(
+                cros_codecs::decoder::stateless::StatelessDecoder::<Vp8, _>::new_vaapi(
                     display,
-                    cros_codecs::decoders::BlockingMode::NonBlocking,
-                )
-                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+                    cros_codecs::decoder::BlockingMode::NonBlocking,
+                ),
             ),
             Format::VP9 => Box::new(
-                cros_codecs::decoders::vp9::decoder::Decoder::new_vaapi(
+                cros_codecs::decoder::stateless::StatelessDecoder::<Vp9, _>::new_vaapi(
                     display,
-                    cros_codecs::decoders::BlockingMode::NonBlocking,
-                )
-                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+                    cros_codecs::decoder::BlockingMode::NonBlocking,
+                ),
             ),
             Format::H264 => Box::new(
-                cros_codecs::decoders::h264::decoder::Decoder::new_vaapi(
+                cros_codecs::decoder::stateless::StatelessDecoder::<H264, _>::new_vaapi(
                     display,
-                    cros_codecs::decoders::BlockingMode::NonBlocking,
-                )
-                .map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
+                    cros_codecs::decoder::BlockingMode::NonBlocking,
+                ),
+            ),
+            Format::Hevc => Box::new(
+                cros_codecs::decoder::stateless::StatelessDecoder::<H265, _>::new_vaapi(
+                    display,
+                    cros_codecs::decoder::BlockingMode::NonBlocking,
+                ),
             ),
             _ => return Err(VideoError::InvalidFormat),
         };
@@ -1044,11 +1006,10 @@ impl DecoderBackend for VaapiDecoder {
         Ok(VaapiDecoderSession {
             codec,
             output_queue_state: OutputQueueState::AwaitingBufferCount,
-            ready_queue: Default::default(),
+            held_frames: Default::default(),
             submit_queue: Default::default(),
             event_queue: EventQueue::new().map_err(|e| VideoError::BackendFailure(anyhow!(e)))?,
             flushing: Default::default(),
-            last_display_order: Default::default(),
         })
     }
 }

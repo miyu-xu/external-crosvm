@@ -23,9 +23,10 @@ from impl.common import (
     run_main,
     sudo_is_passwordless,
     verbose,
+    Triple,
 )
-from impl.test_target import Triple
 from impl.test_config import ROOT_TESTS, DO_NOT_RUN, DO_NOT_RUN_AARCH64, DO_NOT_RUN_WIN64, E2E_TESTS
+from impl.test_config import DO_NOT_BUILD_RISCV64, DO_NOT_RUN_WINE64
 from impl import testvm
 
 rsync = cmd("rsync")
@@ -69,12 +70,15 @@ class TestFilter(object):
         yield quoted(self.expression)
 
 
-def configure_cargo(cmd: Command, triple: Triple, features: str):
+def configure_cargo(
+    cmd: Command, triple: Triple, features: Optional[str], no_default_features: bool
+):
     "Configures the provided cmd with cargo arguments and environment needed to build for triple."
     return (
         cmd.with_args(
             "--workspace",
-            f"--features={features}",
+            "--no-default-features" if no_default_features else None,
+            f"--features={features}" if features else None,
         )
         .with_color_flag()
         .with_envs(triple.get_cargo_env())
@@ -121,18 +125,35 @@ def check_host_prerequisites(run_root_tests: bool):
             sys.exit(1)
 
 
+def check_build_prerequisites(triple: Triple):
+    installed_toolchains = cmd("rustup target list --installed").lines()
+    if str(triple) not in installed_toolchains:
+        console.print(f"Your host is not configured to build for [green]{triple}[/green]")
+        console.print(f"[green]Tip:[/green] Run tests in the dev container with:")
+        console.print()
+        console.print(
+            f"  [blue]$ tools/dev_container tools/run_tests {' '.join(sys.argv[1:])}[/blue]"
+        )
+        sys.exit(1)
+
+
 def get_vm_arch(triple: Triple):
     if str(triple) == "x86_64-unknown-linux-gnu":
         return "x86_64"
     elif str(triple) == "aarch64-unknown-linux-gnu":
         return "aarch64"
+    elif str(triple) == "riscv64gc-unknown-linux-gnu":
+        return "riscv64"
     else:
         raise Exception(f"{triple} is not supported for running tests in a VM.")
 
 
 @argh.arg("--filter-expr", "-E", type=str, action="append", help="Nextest filter expression.")
-@argh.arg("--platform", "-p", help="Which platform to test. (x86_64, aarch64, armhw, mingw64)")
+@argh.arg(
+    "--platform", "-p", help="Which platform to test. (x86_64, aarch64, armhw, mingw64, riscv64)"
+)
 @argh.arg("--dut", help="Which device to test on. (vm or host)")
+@argh.arg("--no-default-features", help="Don't enable default features")
 @argh.arg("--no-run", "--build-only", help="Build only, do not run any tests.")
 @argh.arg("--no-unit-tests", help="Do not run unit tests.")
 @argh.arg("--no-integration-tests", help="Do not run integration tests.")
@@ -142,47 +163,46 @@ def get_vm_arch(triple: Triple):
     "--features",
     help=f"List of comma separated features to be passed to cargo. Defaults to `all-$platform`",
 )
-@argh.arg("--profile", help="Select nextest profile.")
 @argh.arg("--no-parallel", help="Do not parallelize integration tests. Slower but more stable.")
 @argh.arg("--repetitions", help="Repeat all tests, useful for checking test stability.")
 def main(
     filter_expr: List[str] = [],
     platform: Optional[str] = None,
     dut: Optional[str] = None,
+    no_default_features: bool = False,
     no_run: bool = False,
     no_unit_tests: bool = False,
     no_integration_tests: bool = False,
     no_strip: bool = False,
     run_root_tests: bool = False,
     features: Optional[str] = None,
-    profile: Optional[str] = None,
     no_parallel: bool = False,
     repetitions: int = 1,
 ):
     """
     Runs all crosvm tests
 
-    For details on how crosvm tests are organized, see https://crosvm.dev/book/testing.html
+    For details on how crosvm tests are organized, see https://crosvm.dev/book/testing/index.html
 
     # Basic Usage
 
     To run all unit tests for the hosts native architecture:
 
-    $ ./tools/run_tests2
+    $ ./tools/run_tests
 
     To run all unit tests for another supported architecture using an emulator (e.g. wine64,
     qemu user space emulation).
 
-    $ ./tools/run_tests2 -p aarch64
-    $ ./tools/run_tests2 -p armhw
-    $ ./tools/run_tests2 -p mingw64
+    $ ./tools/run_tests -p aarch64
+    $ ./tools/run_tests -p armhw
+    $ ./tools/run_tests -p mingw64
 
     # Integration Tests
 
     Integration tests can be run on a built-in virtual machine:
 
-    $ ./tools/run_tests2 --dut=vm
-    $ ./tools/run_tests2 --dut=vm -p aarch64
+    $ ./tools/run_tests --dut=vm
+    $ ./tools/run_tests --dut=vm -p aarch64
 
     The virtual machine is automatically started for the test process and can be managed via the
     `./tools/x86vm` or `./tools/aarch64vm` tools.
@@ -190,7 +210,7 @@ def main(
     Integration tests can be run on the host machine as well, but cannot be guaranteed to work on
     all configurations.
 
-    $ ./tools/run_tests2 --dut=host
+    $ ./tools/run_tests --dut=host
 
     # Test Filtering
 
@@ -198,7 +218,7 @@ def main(
 
     For example to run all tests in `my-crate` and all crates that depend on it:
 
-    $ ./tools/run_tests2 [--dut=] -E 'rdeps(my-crate)'
+    $ ./tools/run_tests [--dut=] -E 'rdeps(my-crate)'
     """
     chdir(CROSVM_ROOT)
 
@@ -211,7 +231,7 @@ def main(
 
     test_filter = TestFilter(join_filters(filter_expr, "|"))
 
-    if not features:
+    if not features and not no_default_features:
         features = triple.feature_flag
 
     if no_run:
@@ -242,16 +262,20 @@ def main(
             f"--dut={dut} is not supported. Options are --dut=host or --dut=vm (linux only)"
         )
 
-    features = features if features else triple.feature_flag
     skip_str = "[yellow]skip[/yellow]"
     unit_test_str = "Run on host" if not no_unit_tests else skip_str
     integration_test_str = dut_str if dut else skip_str
+    profile = os.environ.get("NEXTEST_PROFILE", "default")
     console.print(f"Running tests for [green]{triple}[/green]")
+    console.print(f"Profile: [green]{profile}[/green]")
     console.print(f"With features: [green]{features}[/green]")
+    console.print(f"no-default-features: [green]{no_default_features}[/green]")
     console.print()
     console.print(f"  Unit tests:        [bold]{unit_test_str}[/bold]")
     console.print(f"  Integration tests: [bold]{integration_test_str}[/bold]")
     console.print()
+
+    check_build_prerequisites(triple)
 
     # Print tips in certain configurations.
     if dut and not run_root_tests:
@@ -262,18 +286,29 @@ def main(
     if not dut:
         console.print(
             "[green]Tip:[/green] To run integration tests on a built-in VM: "
-            + "Use [bold]--dut=vm[/bold]"
+            + "Use [bold]--dut=vm[/bold] (preferred)"
         )
         console.print(
             "[green]Tip:[/green] To run integration tests on the host: Use "
-            + "[bold]--dut=host[/bold]"
+            + "[bold]--dut=host[/bold] (fast, but unreliable)"
+        )
+    if dut == "vm":
+        vm_arch = get_vm_arch(triple)
+        if vm_arch == "x86_64":
+            cli_tool = "tools/x86vm"
+        elif vm_arch == "aarch64":
+            cli_tool = "tools/aarch64vm"
+        else:
+            raise Exception(f"Unknown vm arch '{vm_arch}'")
+        console.print(
+            f"[green]Tip:[/green] The test VM will remain alive between tests. You can manage this VM with [bold]{cli_tool}[/bold]"
         )
 
     # Prepare the dut for test execution
     if dut == "host":
         check_host_prerequisites(run_root_tests)
     if dut == "vm":
-        testvm.build_if_needed(get_vm_arch(triple))
+        # Start VM ahead of time but don't wait for it to boot.
         testvm.up(get_vm_arch(triple))
 
     nextest_args = [
@@ -283,9 +318,14 @@ def main(
 
     console.print()
     console.rule("Building tests")
-    nextest_run = configure_cargo(cmd("cargo nextest run"), triple, features).with_args(
-        *nextest_args
-    )
+
+    if triple == Triple.from_shorthand("riscv64"):
+        nextest_args += ["--exclude=" + s for s in DO_NOT_BUILD_RISCV64]
+
+    nextest_run = configure_cargo(
+        cmd("cargo nextest run"), triple, features, no_default_features
+    ).with_args(*nextest_args)
+
     with record_time("Build"):
         returncode = nextest_run.with_args("--no-run").fg(
             style=Styles.live_truncated(), check=False
@@ -294,9 +334,9 @@ def main(
             sys.exit(returncode)
 
     if not no_unit_tests:
-        unit_test_filter = copy.deepcopy(test_filter)
-        unit_test_filter.include("kind(bench)")
-        unit_test_filter.exclude(*E2E_TESTS)
+        unit_test_filter = copy.deepcopy(test_filter).exclude(*E2E_TESTS).include("kind(bench)")
+        if triple == Triple.from_shorthand("mingw64") and os.name == "posix":
+            unit_test_filter = unit_test_filter.exclude(*DO_NOT_RUN_WINE64)
         console.print()
         console.rule("Running unit tests")
         with record_time("Unit Tests"):
@@ -313,13 +353,17 @@ def main(
     if dut:
         package_dir = triple.target_dir / PACKAGE_NAME
         package_archive = package_dir.with_suffix(".tar.zst")
-        nextest_package = configure_cargo(cmd(TOOLS_ROOT / "nextest_package"), triple, features)
+        nextest_package = configure_cargo(
+            cmd(TOOLS_ROOT / "nextest_package"), triple, features, no_default_features
+        )
 
         test_exclusions = [*DO_NOT_RUN]
         if not run_root_tests:
             test_exclusions += ROOT_TESTS
         if triple == Triple.from_shorthand("mingw64"):
             test_exclusions += DO_NOT_RUN_WIN64
+            if os.name == "posix":
+                test_exclusions += DO_NOT_RUN_WINE64
         if triple == Triple.from_shorthand("aarch64"):
             test_exclusions += DO_NOT_RUN_AARCH64
         test_filter = test_filter.exclude(*test_exclusions)
@@ -340,7 +384,7 @@ def main(
         if dut == "host":
             target = HostTarget(package_dir)
         elif dut == "vm":
-            testvm.wait(get_vm_arch(triple))
+            testvm.up(get_vm_arch(triple), wait=True)
             remote = Remote("localhost", testvm.ssh_opts(get_vm_arch(triple)))
             target = SshTarget(package_archive, remote)
 
@@ -362,6 +406,11 @@ def main(
                         console.print(
                             "[green]Tip:[/green] Tests may fail when run in parallel on some platforms. "
                             + "Try re-running with `--no-parallel`"
+                        )
+                    if dut == "host":
+                        console.print(
+                            f"[yellow]Tip:[/yellow] Running tests on the host may not be reliable. "
+                            "Prefer [bold]--dut=vm[/bold]."
                         )
                     sys.exit(returncode)
 

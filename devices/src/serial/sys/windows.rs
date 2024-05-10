@@ -15,11 +15,13 @@ use base::EventToken;
 use base::FileSync;
 use base::RawDescriptor;
 use base::Result;
+use base::TimerTrait;
 use base::WaitContext;
 use hypervisor::ProtectionType;
 
 use crate::bus::BusDevice;
 use crate::serial_device::SerialInput;
+use crate::serial_device::SerialOptions;
 use crate::sys::serial_device::SerialDevice;
 use crate::Serial;
 
@@ -83,7 +85,7 @@ impl SerialDevice for Serial {
         input: Option<Box<dyn SerialInput>>,
         out: Option<Box<dyn io::Write + Send>>,
         sync: Option<Box<dyn FileSync + Send>>,
-        out_timestamp: bool,
+        options: SerialOptions,
         _keep_rds: Vec<RawDescriptor>,
     ) -> Serial {
         let system_params = SystemSerialParams {
@@ -92,7 +94,13 @@ impl SerialDevice for Serial {
             sync_thread: None,
             kill_evt: None,
         };
-        Serial::new_common(interrupt_evt, input, out, out_timestamp, system_params)
+        Serial::new_common(
+            interrupt_evt,
+            input,
+            out,
+            options.out_timestamp,
+            system_params,
+        )
     }
 
     /// Constructs a Serial device connected to a named pipe for I/O
@@ -104,6 +112,7 @@ impl SerialDevice for Serial {
         interrupt_evt: Event,
         pipe_in: PipeConnection,
         pipe_out: PipeConnection,
+        _options: SerialOptions,
         _keep_rds: Vec<RawDescriptor>,
     ) -> Serial {
         let system_params = SystemSerialParams {
@@ -237,6 +246,7 @@ mod tests {
             event,
             pipe_in,
             pipe_out,
+            Default::default(),
             Vec::new(),
         );
 
@@ -248,6 +258,8 @@ mod tests {
         )
         .unwrap();
 
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             // Check that serial output is sent to the pipe
             device.write(serial_bus_address(DATA), &[b'T']);

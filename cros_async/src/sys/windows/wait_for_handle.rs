@@ -29,8 +29,6 @@ use winapi::um::winnt::WT_EXECUTEONLYONCE;
 
 use crate::sys::windows::handle_source::Error;
 use crate::sys::windows::handle_source::Result;
-use crate::sys::windows::HandleSource;
-use crate::IoSourceExt;
 
 /// Inner state shared between the future struct & the kernel invoked waiter callback.
 struct WaitForHandleInner {
@@ -59,11 +57,11 @@ enum WaitState {
     Failed,
 }
 
-/// Waits for a single handle valued HandleSource to be readable.
+/// Waits for an object with a handle to be readable.
 pub struct WaitForHandle<'a, T: AsRawDescriptor> {
     handle: Descriptor,
     inner: Mutex<WaitForHandleInner>,
-    _marker: PhantomData<&'a HandleSource<T>>,
+    _marker: PhantomData<&'a T>,
     _pinned_marker: PhantomPinned,
 }
 
@@ -71,9 +69,9 @@ impl<'a, T> WaitForHandle<'a, T>
 where
     T: AsRawDescriptor,
 {
-    pub fn new(handle_source: &'a HandleSource<T>) -> WaitForHandle<'a, T> {
+    pub fn new(source: &'a T) -> WaitForHandle<'a, T> {
         WaitForHandle {
-            handle: Descriptor(handle_source.as_source().as_raw_descriptor()),
+            handle: Descriptor(source.as_raw_descriptor()),
             inner: Mutex::new(WaitForHandleInner::new()),
             _marker: PhantomData,
             _pinned_marker: PhantomPinned,
@@ -92,6 +90,7 @@ where
         let mut inner = self.inner.lock();
         match inner.wait_state {
             WaitState::New => {
+                // SAFETY:
                 // Safe because:
                 //      a) the callback only runs when WaitForHandle is alive (we cancel it on
                 //         drop).
@@ -130,6 +129,7 @@ where
             WaitState::Woken => {
                 inner.wait_state = WaitState::Finished;
 
+                // SAFETY:
                 // Safe because:
                 // a) we know a wait was registered and hasn't been unregistered yet.
                 // b) the callback is not queued because we set WT_EXECUTEONLYONCE, and we know
@@ -163,13 +163,15 @@ where
             (inner.wait_state, inner.wait_object)
         };
 
-        // Safe because self.descriptor is valid in any state except New or Finished.
-        //
-        // Note: this method call is critical for supplying the safety guarantee relied upon by
-        // wait_for_handle_waker. Upon return, it ensures that wait_for_handle_waker is not running
-        // and won't be scheduled again, which makes it safe to drop self.inner_for_callback
-        // (wait_for_handle_waker has a non owning pointer to self.inner_for_callback).
         if current_state != WaitState::New && current_state != WaitState::Finished {
+            // SAFETY:
+            // Safe because self.descriptor is valid in any state except New or Finished.
+            //
+            // Note: this method call is critical for supplying the safety guarantee relied upon by
+            // wait_for_handle_waker. Upon return, it ensures that wait_for_handle_waker is not
+            // running and won't be scheduled again, which makes it safe to drop
+            // self.inner_for_callback (wait_for_handle_waker has a non owning pointer
+            // to self.inner_for_callback).
             unsafe { unregister_wait(wait_object) }
         }
     }

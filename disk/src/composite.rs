@@ -22,17 +22,17 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use base::open_file;
+use base::open_file_or_duplicate;
 use base::AsRawDescriptors;
 use base::FileAllocate;
 use base::FileReadWriteAtVolatile;
 use base::FileSetLen;
 use base::RawDescriptor;
+use base::VolatileSlice;
 use crc32fast::Hasher;
 use cros_async::BackingMemory;
 use cros_async::Executor;
-use cros_async::MemRegion;
-use data_model::VolatileSlice;
+use cros_async::MemRegionIter;
 use protobuf::Message;
 use protos::cdisk_spec;
 use protos::cdisk_spec::ComponentDisk;
@@ -88,7 +88,7 @@ pub enum Error {
     #[error("invalid partition path {0:?}")]
     InvalidPath(PathBuf),
     #[error("failed to parse specification proto: \"{0}\"")]
-    InvalidProto(protobuf::ProtobufError),
+    InvalidProto(protobuf::Error),
     #[error("invalid specification: \"{0}\"")]
     InvalidSpecification(String),
     #[error("no image files for partition {0:?}")]
@@ -106,7 +106,7 @@ pub enum Error {
     #[error("failed to write composite disk header: \"{0}\"")]
     WriteHeader(io::Error),
     #[error("failed to write specification proto: \"{0}\"")]
-    WriteProto(protobuf::ProtobufError),
+    WriteProto(protobuf::Error),
     #[error("failed to write zero filler: \"{0}\"")]
     WriteZeroFiller(io::Error),
 }
@@ -141,6 +141,9 @@ impl ComponentDiskPart {
 pub struct CompositeDiskFile {
     component_disks: Vec<ComponentDiskPart>,
 }
+
+// TODO(b/271381851): implement `try_clone`. It allows virtio-blk to run multiple workers.
+impl DiskFile for CompositeDiskFile {}
 
 fn ranges_overlap(a: &Range<u64>, b: &Range<u64>) -> bool {
     range_intersection(a, b).is_some()
@@ -199,29 +202,27 @@ impl CompositeDiskFile {
         }
         let proto: cdisk_spec::CompositeDisk =
             Message::parse_from_reader(&mut file).map_err(Error::InvalidProto)?;
-        if proto.get_version() > COMPOSITE_DISK_VERSION {
-            return Err(Error::UnknownVersion(proto.get_version()));
+        if proto.version > COMPOSITE_DISK_VERSION {
+            return Err(Error::UnknownVersion(proto.version));
         }
         let mut disks: Vec<ComponentDiskPart> = proto
-            .get_component_disks()
+            .component_disks
             .iter()
             .map(|disk| {
-                let writable =
-                    disk.get_read_write_capability() == cdisk_spec::ReadWriteCapability::READ_WRITE;
-                let component_path = PathBuf::from(disk.get_file_path());
-                let path = if component_path.is_relative() || proto.get_version() > 1 {
+                let writable = disk.read_write_capability
+                    == cdisk_spec::ReadWriteCapability::READ_WRITE.into();
+                let component_path = PathBuf::from(&disk.file_path);
+                let path = if component_path.is_relative() || proto.version > 1 {
                     image_path.parent().unwrap().join(component_path)
                 } else {
                     component_path
                 };
-                let comp_file = open_file(
+                let comp_file = open_file_or_duplicate(
                     &path,
-                    OpenOptions::new().read(true).write(
-                        disk.get_read_write_capability()
-                            == cdisk_spec::ReadWriteCapability::READ_WRITE,
-                    ), // TODO(b/190435784): add support for O_DIRECT.
+                    OpenOptions::new().read(true).write(writable), /* TODO(b/190435784): add
+                                                                    * support for O_DIRECT. */
                 )
-                .map_err(|e| Error::OpenFile(e.into(), disk.get_file_path().to_string()))?;
+                .map_err(|e| Error::OpenFile(e.into(), disk.file_path.to_string()))?;
 
                 // Note that a read-only parts of a composite disk should NOT be marked sparse,
                 // as the action of marking them sparse is a write. This may seem a little hacky,
@@ -237,7 +238,7 @@ impl CompositeDiskFile {
                         &path,
                     )
                     .map_err(|e| Error::DiskError(Box::new(e)))?,
-                    offset: disk.get_offset(),
+                    offset: disk.offset,
                     length: 0, // Assigned later
                     needs_fsync: false,
                 })
@@ -258,20 +259,16 @@ impl CompositeDiskFile {
             }
         }
         if let Some(last_disk) = disks.last_mut() {
-            if proto.get_length() <= last_disk.offset {
+            if proto.length <= last_disk.offset {
                 let text = format!(
                     "Full size of disk doesn't match last offset. {} <= {}",
-                    proto.get_length(),
-                    last_disk.offset
+                    proto.length, last_disk.offset
                 );
                 return Err(Error::InvalidSpecification(text));
             }
-            last_disk.length = proto.get_length() - last_disk.offset;
+            last_disk.length = proto.length - last_disk.offset;
         } else {
-            let text = format!(
-                "Unable to set last disk length to end at {}",
-                proto.get_length()
-            );
+            let text = format!("Unable to set last disk length to end at {}", proto.length);
             return Err(Error::InvalidSpecification(text));
         }
 
@@ -478,6 +475,11 @@ impl AsyncDisk for AsyncCompositeDiskFile {
         })
     }
 
+    async fn flush(&self) -> crate::Result<()> {
+        futures::future::try_join_all(self.component_disks.iter().map(|c| c.file.flush())).await?;
+        Ok(())
+    }
+
     async fn fsync(&self) -> crate::Result<()> {
         // TODO: handle the disks concurrently
         for disk in self.component_disks.iter() {
@@ -491,19 +493,27 @@ impl AsyncDisk for AsyncCompositeDiskFile {
         Ok(())
     }
 
+    async fn fdatasync(&self) -> crate::Result<()> {
+        // AsyncCompositeDiskFile does not implement fdatasync for now. Fallback to fsync.
+        self.fsync().await
+    }
+
     async fn read_to_mem<'a>(
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [MemRegion],
+        mem_offsets: MemRegionIter<'a>,
     ) -> crate::Result<usize> {
         let disk = self
             .disk_at_offset(file_offset)
             .map_err(crate::Error::ReadingData)?;
         let remaining_disk = disk.offset + disk.length - file_offset;
-        let mem_offsets = MemRegion::truncate(remaining_disk.try_into().unwrap(), mem_offsets);
         disk.file
-            .read_to_mem(file_offset - disk.offset, mem, &mem_offsets)
+            .read_to_mem(
+                file_offset - disk.offset,
+                mem,
+                mem_offsets.take_bytes(remaining_disk.try_into().unwrap()),
+            )
             .await
     }
 
@@ -511,16 +521,19 @@ impl AsyncDisk for AsyncCompositeDiskFile {
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [MemRegion],
+        mem_offsets: MemRegionIter<'a>,
     ) -> crate::Result<usize> {
         let disk = self
             .disk_at_offset(file_offset)
             .map_err(crate::Error::ReadingData)?;
         let remaining_disk = disk.offset + disk.length - file_offset;
-        let mem_offsets = MemRegion::truncate(remaining_disk.try_into().unwrap(), mem_offsets);
         let n = disk
             .file
-            .write_from_mem(file_offset - disk.offset, mem, &mem_offsets)
+            .write_from_mem(
+                file_offset - disk.offset,
+                mem,
+                mem_offsets.take_bytes(remaining_disk.try_into().unwrap()),
+            )
             .await?;
         disk.set_needs_fsync();
         Ok(n)
@@ -695,9 +708,9 @@ fn create_component_disks(
             .ok_or_else(|| Error::InvalidPath(partition.path.to_owned()))?
             .to_string(),
         read_write_capability: if partition.writable {
-            ReadWriteCapability::READ_WRITE
+            ReadWriteCapability::READ_WRITE.into()
         } else {
-            ReadWriteCapability::READ_ONLY
+            ReadWriteCapability::READ_ONLY.into()
         },
         ..ComponentDisk::new()
     }];
@@ -711,7 +724,7 @@ fn create_component_disks(
             component_disks.push(ComponentDisk {
                 offset: offset + partition.size,
                 file_path: zero_filler_path.to_owned(),
-                read_write_capability: ReadWriteCapability::READ_ONLY,
+                read_write_capability: ReadWriteCapability::READ_ONLY.into(),
                 ..ComponentDisk::new()
             });
         }
@@ -749,7 +762,7 @@ pub fn create_composite_disk(
     composite_proto.component_disks.push(ComponentDisk {
         file_path: header_path,
         offset: 0,
-        read_write_capability: ReadWriteCapability::READ_ONLY,
+        read_write_capability: ReadWriteCapability::READ_ONLY.into(),
         ..ComponentDisk::new()
     });
 
@@ -781,7 +794,7 @@ pub fn create_composite_disk(
     composite_proto.component_disks.push(ComponentDisk {
         file_path: footer_path,
         offset: secondary_table_offset,
-        read_write_capability: ReadWriteCapability::READ_ONLY,
+        read_write_capability: ReadWriteCapability::READ_ONLY.into(),
         ..ComponentDisk::new()
     });
 
@@ -1290,8 +1303,8 @@ mod tests {
             // Write to the RW part so that some fsync operation will occur.
             composite.write_zeroes_at(0, 20).await.unwrap();
 
-            // This is the test's assert. fsyncing should NOT touch a read-only disk part. On Windows,
-            // this would be an error.
+            // This is the test's assert. fsyncing should NOT touch a read-only disk part. On
+            // Windows, this would be an error.
             composite.fsync().await.expect(
                 "Failed to fsync composite disk. \
                      This can happen if the disk writable state is wrong.",

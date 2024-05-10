@@ -6,6 +6,7 @@
 
 connect: 1
 newfstatat: 1
+faccessat: 1
 getegid: 1
 geteuid: 1
 getgid: 1
@@ -14,7 +15,6 @@ getsockname: 1
 getuid: 1
 # ioctl: arg1 == DRM_IOCTL_*
 ioctl: arg1 & 0x6400
-memfd_create: 1
 openat: 1
 setpriority: 1
 socket: arg0 == AF_UNIX

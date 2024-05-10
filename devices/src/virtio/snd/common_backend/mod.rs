@@ -4,8 +4,10 @@
 
 // virtio-sound spec: https://github.com/oasis-tcs/virtio-spec/blob/master/virtio-sound.tex
 
+use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Context;
@@ -13,13 +15,15 @@ use audio_streams::BoxError;
 use base::debug;
 use base::error;
 use base::warn;
+use base::AsRawDescriptor;
+use base::Descriptor;
 use base::Error as SysError;
 use base::Event;
 use base::RawDescriptor;
 use base::WorkerThread;
 use cros_async::block_on;
 use cros_async::sync::Condvar;
-use cros_async::sync::Mutex as AsyncMutex;
+use cros_async::sync::RwLock as AsyncRwLock;
 use cros_async::AsyncError;
 use cros_async::EventAsync;
 use cros_async::Executor;
@@ -32,6 +36,8 @@ use futures::pin_mut;
 use futures::select;
 use futures::Future;
 use futures::FutureExt;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error as ThisError;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
@@ -41,7 +47,11 @@ use crate::virtio::copy_config;
 use crate::virtio::device_constants::snd::virtio_snd_config;
 use crate::virtio::snd::common_backend::async_funcs::*;
 use crate::virtio::snd::common_backend::stream_info::StreamInfo;
+use crate::virtio::snd::common_backend::stream_info::StreamInfoBuilder;
+use crate::virtio::snd::common_backend::stream_info::StreamInfoSnapshot;
 use crate::virtio::snd::constants::*;
+use crate::virtio::snd::file_backend::create_file_stream_source_generators;
+use crate::virtio::snd::file_backend::Error as FileError;
 use crate::virtio::snd::layout::*;
 use crate::virtio::snd::null_backend::create_null_stream_source_generators;
 use crate::virtio::snd::parameters::Parameters;
@@ -50,14 +60,12 @@ use crate::virtio::snd::sys::create_stream_source_generators as sys_create_strea
 use crate::virtio::snd::sys::set_audio_thread_priority;
 use crate::virtio::snd::sys::SysAsyncStreamObjects;
 use crate::virtio::snd::sys::SysAudioStreamSourceGenerator;
-use crate::virtio::snd::sys::SysBufferWriter;
-use crate::virtio::DescriptorError;
+use crate::virtio::snd::sys::SysDirectionOutput;
+use crate::virtio::DescriptorChain;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
-use crate::virtio::Writer;
-use crate::Suspendable;
 
 pub mod async_funcs;
 pub mod stream_info;
@@ -83,12 +91,11 @@ pub enum Error {
     /// Creating WaitContext failed.
     #[error("Failed to create wait context: {0}")]
     CreateWaitContext(SysError),
+    #[error("Failed to create file stream source generator")]
+    CreateFileStreamSourceGenerator(FileError),
     /// Cloning kill event failed.
     #[error("Failed to clone kill event: {0}")]
     CloneKillEvent(SysError),
-    /// Descriptor chain was invalid.
-    #[error("Failed to valildate descriptor chain: {0}")]
-    DescriptorChain(DescriptorError),
     // Future error.
     #[error("Unexpected error. Done was not triggered before dropped: {0}")]
     DoneNotTriggered(Canceled),
@@ -138,13 +145,10 @@ pub enum Error {
 
 pub enum DirectionalStream {
     Input(
-        Box<dyn audio_streams::capture::AsyncCaptureBufferStream>,
         usize, // `period_size` in `usize`
+        Box<dyn CaptureBufferReader>,
     ),
-    Output(
-        Box<dyn audio_streams::AsyncPlaybackBufferStream>,
-        Box<dyn PlaybackBufferWriter>,
-    ),
+    Output(SysDirectionOutput),
 }
 
 #[derive(Copy, Clone, std::cmp::PartialEq, Eq)]
@@ -155,16 +159,20 @@ pub enum WorkerStatus {
 }
 
 // Stores constant data
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct SndData {
-    jack_info: Vec<virtio_snd_jack_info>,
-    pcm_info: Vec<virtio_snd_pcm_info>,
-    chmap_info: Vec<virtio_snd_chmap_info>,
+    pub(crate) jack_info: Vec<virtio_snd_jack_info>,
+    pub(crate) pcm_info: Vec<virtio_snd_pcm_info>,
+    pub(crate) chmap_info: Vec<virtio_snd_chmap_info>,
 }
 
 impl SndData {
     pub fn pcm_info_len(&self) -> usize {
         self.pcm_info.len()
+    }
+
+    pub fn pcm_info_iter(&self) -> std::slice::Iter<'_, virtio_snd_pcm_info> {
+        self.pcm_info.iter()
     }
 }
 
@@ -182,50 +190,91 @@ const SUPPORTED_FRAME_RATES: u64 = 1 << VIRTIO_SND_PCM_RATE_8000
 
 // Response from pcm_worker to pcm_queue
 pub struct PcmResponse {
-    pub(crate) desc_index: u16,
+    pub(crate) desc_chain: DescriptorChain,
     pub(crate) status: virtio_snd_pcm_status, // response to the pcm message
-    pub(crate) writer: Writer,
     pub(crate) done: Option<oneshot::Sender<()>>, // when pcm response is written to the queue
 }
 
 pub struct VirtioSnd {
     cfg: virtio_snd_config,
     snd_data: SndData,
+    stream_info_builders: Vec<StreamInfoBuilder>,
     avail_features: u64,
     acked_features: u64,
     queue_sizes: Box<[u16]>,
-    worker_thread: Option<WorkerThread<()>>,
-    params: Parameters,
+    worker_thread: Option<WorkerThread<Result<WorkerReturn, String>>>,
+    keep_rds: Vec<Descriptor>,
+    streams_state: Option<Vec<StreamInfoSnapshot>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VirtioSndSnapshot {
+    avail_features: u64,
+    acked_features: u64,
+    queue_sizes: Vec<u16>,
+    streams_state: Option<Vec<StreamInfoSnapshot>>,
+    snd_data: SndData,
 }
 
 impl VirtioSnd {
     pub fn new(base_features: u64, params: Parameters) -> Result<VirtioSnd, Error> {
+        let params = resize_parameters_pcm_device_config(params);
         let cfg = hardcoded_virtio_snd_config(&params);
         let snd_data = hardcoded_snd_data(&params);
         let avail_features = base_features;
+        let mut keep_rds: Vec<RawDescriptor> = Vec::new();
+
+        let stream_info_builders = create_stream_info_builders(&params, &snd_data, &mut keep_rds)?;
 
         Ok(VirtioSnd {
             cfg,
             snd_data,
+            stream_info_builders,
             avail_features,
             acked_features: 0,
             queue_sizes: vec![MAX_VRING_LEN; MAX_QUEUE_NUM].into_boxed_slice(),
             worker_thread: None,
-            params,
+            keep_rds: keep_rds.iter().map(|rd| Descriptor(*rd)).collect(),
+            streams_state: None,
         })
     }
 }
 
-pub(crate) fn create_stream_source_generators(
+fn create_stream_source_generators(
     params: &Parameters,
     snd_data: &SndData,
-) -> Vec<SysAudioStreamSourceGenerator> {
-    match params.backend {
+    keep_rds: &mut Vec<RawDescriptor>,
+) -> Result<Vec<SysAudioStreamSourceGenerator>, Error> {
+    let generators = match params.backend {
         StreamSourceBackend::NULL => create_null_stream_source_generators(snd_data),
+        StreamSourceBackend::FILE => {
+            create_file_stream_source_generators(params, snd_data, keep_rds)
+                .map_err(Error::CreateFileStreamSourceGenerator)?
+        }
         StreamSourceBackend::Sys(backend) => {
             sys_create_stream_source_generators(backend, params, snd_data)
         }
-    }
+    };
+    Ok(generators)
+}
+
+/// Creates [`StreamInfoBuilder`]s by calling [`create_stream_source_generators()`] then zip
+/// them with [`crate::virtio::snd::parameters::PCMDeviceParameters`] from the params to set
+/// the parameters on each [`StreamInfoBuilder`] (e.g. effects).
+pub(crate) fn create_stream_info_builders(
+    params: &Parameters,
+    snd_data: &SndData,
+    keep_rds: &mut Vec<RawDescriptor>,
+) -> Result<Vec<StreamInfoBuilder>, Error> {
+    Ok(create_stream_source_generators(params, snd_data, keep_rds)?
+        .into_iter()
+        .map(Arc::new)
+        .zip(snd_data.pcm_info_iter())
+        .map(|(generator, pcm_info)| {
+            let device_params = params.get_device_params(pcm_info).unwrap_or_default();
+            StreamInfo::builder(generator).effects(device_params.effects.unwrap_or_default())
+        })
+        .collect())
 }
 
 // To be used with hardcoded_snd_data
@@ -333,9 +382,30 @@ pub fn hardcoded_snd_data(params: &Parameters) -> SndData {
     }
 }
 
+fn resize_parameters_pcm_device_config(mut params: Parameters) -> Parameters {
+    if params.output_device_config.len() > params.num_output_devices as usize {
+        warn!("Truncating output device config due to length > number of output devices");
+    }
+    params
+        .output_device_config
+        .resize_with(params.num_output_devices as usize, Default::default);
+
+    if params.input_device_config.len() > params.num_input_devices as usize {
+        warn!("Truncating input device config due to length > number of input devices");
+    }
+    params
+        .input_device_config
+        .resize_with(params.num_input_devices as usize, Default::default);
+
+    params
+}
+
 impl VirtioDevice for VirtioSnd {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
-        Vec::new()
+        self.keep_rds
+            .iter()
+            .map(|descr| descr.as_raw_descriptor())
+            .collect()
     }
 
     fn device_type(&self) -> DeviceType {
@@ -368,9 +438,9 @@ impl VirtioDevice for VirtioSnd {
 
     fn activate(
         &mut self,
-        guest_mem: GuestMemory,
+        _guest_mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != self.queue_sizes.len() {
             return Err(anyhow!(
@@ -381,35 +451,109 @@ impl VirtioDevice for VirtioSnd {
         }
 
         let snd_data = self.snd_data.clone();
-        let stream_source_generators = create_stream_source_generators(&self.params, &snd_data);
-
+        let stream_info_builders = self.stream_info_builders.to_vec();
+        let streams_state = self.streams_state.take();
         self.worker_thread = Some(WorkerThread::start("v_snd_common", move |kill_evt| {
-            set_audio_thread_priority();
-            if let Err(err_string) = run_worker(
+            let _thread_priority_handle = set_audio_thread_priority();
+            if let Err(e) = _thread_priority_handle {
+                warn!("Failed to set audio thread to real time: {}", e);
+            };
+            run_worker(
                 interrupt,
                 queues,
-                guest_mem,
                 snd_data,
                 kill_evt,
-                stream_source_generators,
-            ) {
-                error!("{}", err_string);
-            }
+                stream_info_builders,
+                streams_state,
+            )
         }));
 
         Ok(())
     }
 
-    fn reset(&mut self) -> bool {
+    fn reset(&mut self) -> anyhow::Result<()> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            worker_thread.stop();
+            let _ = worker_thread.stop();
         }
 
-        true
+        Ok(())
+    }
+
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let worker = worker_thread.stop().unwrap();
+            self.snd_data = worker.snd_data;
+            self.streams_state = Some(worker.streams_state);
+            return Ok(Some(BTreeMap::from_iter(
+                worker.queues.into_iter().enumerate(),
+            )));
+        }
+        Ok(None)
+    }
+
+    fn virtio_wake(
+        &mut self,
+        device_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
+    ) -> anyhow::Result<()> {
+        match device_state {
+            None => Ok(()),
+            Some((mem, interrupt, queues)) => {
+                // TODO: activate is just what we want at the moment, but we should probably move
+                // it into a "start workers" function to make it obvious that it isn't strictly
+                // used for activate events.
+                self.activate(mem, interrupt, queues)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        let streams_state = if let Some(states) = &self.streams_state {
+            let mut state_vec = Vec::new();
+            for state in states {
+                state_vec.push(state.clone());
+            }
+            Some(state_vec)
+        } else {
+            None
+        };
+        serde_json::to_value(VirtioSndSnapshot {
+            avail_features: self.avail_features,
+            acked_features: self.acked_features,
+            queue_sizes: self.queue_sizes.to_vec(),
+            streams_state,
+            snd_data: self.snd_data.clone(),
+        })
+        .context("failed to Serialize Sound device")
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let mut deser: VirtioSndSnapshot =
+            serde_json::from_value(data).context("failed to Deserialize Sound device")?;
+        anyhow::ensure!(
+            deser.avail_features == self.avail_features,
+            "avail features doesn't match on restore: expected: {}, got: {}",
+            deser.avail_features,
+            self.avail_features
+        );
+        anyhow::ensure!(
+            deser.queue_sizes == self.queue_sizes.to_vec(),
+            "queue sizes doesn't match on restore: expected: {:?}, got: {:?}",
+            deser.queue_sizes,
+            self.queue_sizes.to_vec()
+        );
+        self.acked_features = deser.acked_features;
+        anyhow::ensure!(
+            deser.snd_data == self.snd_data,
+            "snd data doesn't match on restore: expected: {:?}, got: {:?}",
+            deser.snd_data,
+            self.snd_data
+        );
+        self.acked_features = deser.acked_features;
+        self.streams_state = deser.streams_state.take();
+        Ok(())
     }
 }
-
-impl Suspendable for VirtioSnd {}
 
 #[derive(PartialEq)]
 enum LoopState {
@@ -419,30 +563,66 @@ enum LoopState {
 
 fn run_worker(
     interrupt: Interrupt,
-    queues: Vec<(Queue, Event)>,
-    mem: GuestMemory,
+    queues: BTreeMap<usize, Queue>,
     snd_data: SndData,
     kill_evt: Event,
-    stream_source_generators: Vec<SysAudioStreamSourceGenerator>,
-) -> Result<(), String> {
+    stream_info_builders: Vec<StreamInfoBuilder>,
+    streams_state: Option<Vec<StreamInfoSnapshot>>,
+) -> Result<WorkerReturn, String> {
     let ex = Executor::new().expect("Failed to create an executor");
 
-    if snd_data.pcm_info_len() != stream_source_generators.len() {
+    if snd_data.pcm_info_len() != stream_info_builders.len() {
         error!(
             "snd: expected {} streams, got {}",
             snd_data.pcm_info_len(),
-            stream_source_generators.len(),
+            stream_info_builders.len(),
         );
     }
-    let streams = stream_source_generators
+    let streams: Vec<AsyncRwLock<StreamInfo>> = stream_info_builders
         .into_iter()
-        .map(|generator| AsyncMutex::new(StreamInfo::new(generator)))
+        .map(StreamInfoBuilder::build)
+        .map(AsyncRwLock::new)
         .collect();
-    let streams = Rc::new(AsyncMutex::new(streams));
+
+    let (tx_send, mut tx_recv) = mpsc::unbounded();
+    let (rx_send, mut rx_recv) = mpsc::unbounded();
+    let tx_send_clone = tx_send.clone();
+    let rx_send_clone = rx_send.clone();
+    let restore_task = ex.spawn_local(async move {
+        if let Some(states) = &streams_state {
+            let ex = Executor::new().expect("Failed to create an executor");
+            for (stream, state) in streams.iter().zip(states.iter()) {
+                stream.lock().await.restore(state);
+                if state.state == VIRTIO_SND_R_PCM_START || state.state == VIRTIO_SND_R_PCM_PREPARE
+                {
+                    stream
+                        .lock()
+                        .await
+                        .prepare(&ex, &tx_send_clone, &rx_send_clone)
+                        .await
+                        .expect("failed to prepare PCM");
+                }
+                if state.state == VIRTIO_SND_R_PCM_START {
+                    stream
+                        .lock()
+                        .await
+                        .start()
+                        .await
+                        .expect("failed to start PCM");
+                }
+            }
+        }
+        streams
+    });
+    let streams = ex
+        .run_until(restore_task)
+        .expect("failed to restore streams");
+    let streams = Rc::new(AsyncRwLock::new(streams));
 
     let mut queues: Vec<(Queue, EventAsync)> = queues
-        .into_iter()
-        .map(|(q, e)| {
+        .into_values()
+        .map(|q| {
+            let e = q.event().try_clone().expect("Failed to clone queue event");
             (
                 q,
                 EventAsync::new(e, &ex).expect("Failed to create async event for queue"),
@@ -450,16 +630,14 @@ fn run_worker(
         })
         .collect();
 
-    let (mut ctrl_queue, mut ctrl_queue_evt) = queues.remove(0);
+    let (ctrl_queue, mut ctrl_queue_evt) = queues.remove(0);
+    let ctrl_queue = Rc::new(AsyncRwLock::new(ctrl_queue));
     let (_event_queue, _event_queue_evt) = queues.remove(0);
     let (tx_queue, tx_queue_evt) = queues.remove(0);
     let (rx_queue, rx_queue_evt) = queues.remove(0);
 
-    let tx_queue = Rc::new(AsyncMutex::new(tx_queue));
-    let rx_queue = Rc::new(AsyncMutex::new(rx_queue));
-
-    let (tx_send, mut tx_recv) = mpsc::unbounded();
-    let (rx_send, mut rx_recv) = mpsc::unbounded();
+    let tx_queue = Rc::new(AsyncRwLock::new(tx_queue));
+    let rx_queue = Rc::new(AsyncRwLock::new(rx_queue));
 
     let f_resample = async_utils::handle_irq_resample(&ex, interrupt.clone()).fuse();
 
@@ -472,18 +650,17 @@ fn run_worker(
         if run_worker_once(
             &ex,
             &streams,
-            &mem,
             interrupt.clone(),
             &snd_data,
             &mut f_kill,
             &mut f_resample,
-            &mut ctrl_queue,
+            ctrl_queue.clone(),
             &mut ctrl_queue_evt,
-            &tx_queue,
+            tx_queue.clone(),
             &tx_queue_evt,
             tx_send.clone(),
             &mut tx_recv,
-            &rx_queue,
+            rx_queue.clone(),
             &rx_queue_evt,
             rx_send.clone(),
             &mut rx_recv,
@@ -495,7 +672,6 @@ fn run_worker(
         if let Err(e) = reset_streams(
             &ex,
             &streams,
-            &mem,
             interrupt.clone(),
             &tx_queue,
             &mut tx_recv,
@@ -506,11 +682,44 @@ fn run_worker(
             break;
         }
     }
+    let streams_state_task = ex.spawn_local(async move {
+        let mut v = Vec::new();
+        for stream in streams.read_lock().await.iter() {
+            v.push(stream.read_lock().await.snapshot());
+        }
+        v
+    });
+    let streams_state = ex
+        .run_until(streams_state_task)
+        .expect("failed to save streams state");
+    let ctrl_queue = match Rc::try_unwrap(ctrl_queue) {
+        Ok(q) => q.into_inner(),
+        Err(_) => panic!("Too many refs to ctrl_queue"),
+    };
+    let tx_queue = match Rc::try_unwrap(tx_queue) {
+        Ok(q) => q.into_inner(),
+        Err(_) => panic!("Too many refs to tx_queue"),
+    };
+    let rx_queue = match Rc::try_unwrap(rx_queue) {
+        Ok(q) => q.into_inner(),
+        Err(_) => panic!("Too many refs to rx_queue"),
+    };
+    let queues = vec![ctrl_queue, _event_queue, tx_queue, rx_queue];
 
-    Ok(())
+    Ok(WorkerReturn {
+        queues,
+        snd_data,
+        streams_state,
+    })
 }
 
-async fn notify_reset_signal(reset_signal: &(AsyncMutex<bool>, Condvar)) {
+struct WorkerReturn {
+    queues: Vec<Queue>,
+    snd_data: SndData,
+    streams_state: Vec<StreamInfoSnapshot>,
+}
+
+async fn notify_reset_signal(reset_signal: &(AsyncRwLock<bool>, Condvar)) {
     let (lock, cvar) = reset_signal;
     *lock.lock().await = true;
     cvar.notify_all();
@@ -518,26 +727,26 @@ async fn notify_reset_signal(reset_signal: &(AsyncMutex<bool>, Condvar)) {
 
 /// Runs all workers once and exit if any worker exit.
 ///
-/// Returns [`LoopState::Break`] if the worker `f_kill` or `f_resample` exit, or something went wrong
-/// on shutdown process. The caller should not run the worker again and should exit the main loop.
+/// Returns [`LoopState::Break`] if the worker `f_kill` or `f_resample` exit, or something went
+/// wrong on shutdown process. The caller should not run the worker again and should exit the main
+/// loop.
 ///
-/// If this function returns [`LoopState::Continue`], the caller can continue the main loop by resetting
-/// the streams and run the worker again.
+/// If this function returns [`LoopState::Continue`], the caller can continue the main loop by
+/// resetting the streams and run the worker again.
 fn run_worker_once(
     ex: &Executor,
-    streams: &Rc<AsyncMutex<Vec<AsyncMutex<StreamInfo>>>>,
-    mem: &GuestMemory,
+    streams: &Rc<AsyncRwLock<Vec<AsyncRwLock<StreamInfo>>>>,
     interrupt: Interrupt,
     snd_data: &SndData,
     mut f_kill: &mut (impl Future<Output = anyhow::Result<()>> + FusedFuture + Unpin),
     mut f_resample: &mut (impl Future<Output = anyhow::Result<()>> + FusedFuture + Unpin),
-    ctrl_queue: &mut Queue,
+    ctrl_queue: Rc<AsyncRwLock<Queue>>,
     ctrl_queue_evt: &mut EventAsync,
-    tx_queue: &Rc<AsyncMutex<Queue>>,
+    tx_queue: Rc<AsyncRwLock<Queue>>,
     tx_queue_evt: &EventAsync,
     tx_send: mpsc::UnboundedSender<PcmResponse>,
     tx_recv: &mut mpsc::UnboundedReceiver<PcmResponse>,
-    rx_queue: &Rc<AsyncMutex<Queue>>,
+    rx_queue: Rc<AsyncRwLock<Queue>>,
     rx_queue_evt: &EventAsync,
     rx_send: mpsc::UnboundedSender<PcmResponse>,
     rx_recv: &mut mpsc::UnboundedReceiver<PcmResponse>,
@@ -545,11 +754,10 @@ fn run_worker_once(
     let tx_send2 = tx_send.clone();
     let rx_send2 = rx_send.clone();
 
-    let reset_signal = (AsyncMutex::new(false), Condvar::new());
+    let reset_signal = (AsyncRwLock::new(false), Condvar::new());
 
     let f_ctrl = handle_ctrl_queue(
         ex,
-        mem,
         streams,
         snd_data,
         ctrl_queue,
@@ -563,40 +771,31 @@ fn run_worker_once(
 
     // TODO(woodychow): Enable this when libcras sends jack connect/disconnect evts
     // let f_event = handle_event_queue(
-    //     &mem,
     //     snd_state,
     //     event_queue,
     //     event_queue_evt,
     //     interrupt,
     // );
     let f_tx = handle_pcm_queue(
-        mem,
         streams,
         tx_send2,
-        tx_queue,
+        tx_queue.clone(),
         tx_queue_evt,
         Some(&reset_signal),
     )
     .fuse();
-    let f_tx_response = send_pcm_response_worker(
-        mem,
-        tx_queue,
-        interrupt.clone(),
-        tx_recv,
-        Some(&reset_signal),
-    )
-    .fuse();
+    let f_tx_response =
+        send_pcm_response_worker(tx_queue, interrupt.clone(), tx_recv, Some(&reset_signal)).fuse();
     let f_rx = handle_pcm_queue(
-        mem,
         streams,
         rx_send2,
-        rx_queue,
+        rx_queue.clone(),
         rx_queue_evt,
         Some(&reset_signal),
     )
     .fuse();
     let f_rx_response =
-        send_pcm_response_worker(mem, rx_queue, interrupt, rx_recv, Some(&reset_signal)).fuse();
+        send_pcm_response_worker(rx_queue, interrupt, rx_recv, Some(&reset_signal)).fuse();
 
     pin_mut!(f_ctrl, f_tx, f_tx_response, f_rx, f_rx_response);
 
@@ -658,15 +857,14 @@ fn run_worker_once(
 
 fn reset_streams(
     ex: &Executor,
-    streams: &Rc<AsyncMutex<Vec<AsyncMutex<StreamInfo>>>>,
-    mem: &GuestMemory,
+    streams: &Rc<AsyncRwLock<Vec<AsyncRwLock<StreamInfo>>>>,
     interrupt: Interrupt,
-    tx_queue: &Rc<AsyncMutex<Queue>>,
+    tx_queue: &Rc<AsyncRwLock<Queue>>,
     tx_recv: &mut mpsc::UnboundedReceiver<PcmResponse>,
-    rx_queue: &Rc<AsyncMutex<Queue>>,
+    rx_queue: &Rc<AsyncRwLock<Queue>>,
     rx_recv: &mut mpsc::UnboundedReceiver<PcmResponse>,
 ) -> Result<(), AsyncError> {
-    let reset_signal = (AsyncMutex::new(false), Condvar::new());
+    let reset_signal = (AsyncRwLock::new(false), Condvar::new());
 
     let do_reset = async {
         let streams = streams.read_lock().await;
@@ -693,8 +891,7 @@ fn reset_streams(
     // Run these in a loop to ensure that they will survive until do_reset is finished
     let f_tx_response = async {
         while send_pcm_response_worker(
-            mem,
-            tx_queue,
+            tx_queue.clone(),
             interrupt.clone(),
             tx_recv,
             Some(&reset_signal),
@@ -706,8 +903,7 @@ fn reset_streams(
 
     let f_rx_response = async {
         while send_pcm_response_worker(
-            mem,
-            rx_queue,
+            rx_queue.clone(),
             interrupt.clone(),
             rx_recv,
             Some(&reset_signal),
@@ -722,4 +918,149 @@ fn reset_streams(
     };
 
     ex.run_until(reset)
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_update)]
+mod tests {
+    use audio_streams::StreamEffect;
+
+    use super::*;
+    use crate::virtio::snd::parameters::PCMDeviceParameters;
+
+    #[test]
+    fn test_virtio_snd_new() {
+        let params = Parameters {
+            num_output_devices: 3,
+            num_input_devices: 2,
+            num_output_streams: 3,
+            num_input_streams: 2,
+            output_device_config: vec![PCMDeviceParameters {
+                effects: Some(vec![StreamEffect::EchoCancellation]),
+                ..PCMDeviceParameters::default()
+            }],
+            input_device_config: vec![PCMDeviceParameters {
+                effects: Some(vec![StreamEffect::EchoCancellation]),
+                ..PCMDeviceParameters::default()
+            }],
+            ..Default::default()
+        };
+
+        let res = VirtioSnd::new(123, params).unwrap();
+
+        // Default values
+        assert_eq!(res.snd_data.jack_info.len(), 0);
+        assert_eq!(res.acked_features, 0);
+        assert_eq!(res.worker_thread.is_none(), true);
+
+        assert_eq!(res.avail_features, 123); // avail_features must be equal to the input
+        assert_eq!(res.cfg.jacks.to_native(), 0);
+        assert_eq!(res.cfg.streams.to_native(), 13); // (Output = 3*3) + (Input = 2*2)
+        assert_eq!(res.cfg.chmaps.to_native(), 11); // (Output = 3*3) + (Input = 2*1)
+
+        // Check snd_data.pcm_info
+        assert_eq!(res.snd_data.pcm_info.len(), 13);
+        // Check hda_fn_nid (PCM Device number)
+        let expected_hda_fn_nid = [0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 0, 1, 1];
+        for (i, pcm_info) in res.snd_data.pcm_info.iter().enumerate() {
+            assert_eq!(
+                pcm_info.hdr.hda_fn_nid.to_native(),
+                expected_hda_fn_nid[i],
+                "pcm_info index {} incorrect hda_fn_nid",
+                i
+            );
+        }
+        // First 9 devices must be OUTPUT
+        for i in 0..9 {
+            assert_eq!(
+                res.snd_data.pcm_info[i].direction, VIRTIO_SND_D_OUTPUT,
+                "pcm_info index {} incorrect direction",
+                i
+            );
+        }
+        // Next 4 devices must be INPUT
+        for i in 9..13 {
+            assert_eq!(
+                res.snd_data.pcm_info[i].direction, VIRTIO_SND_D_INPUT,
+                "pcm_info index {} incorrect direction",
+                i
+            );
+        }
+
+        // Check snd_data.chmap_info
+        assert_eq!(res.snd_data.chmap_info.len(), 11);
+        let expected_hda_fn_nid = [0, 1, 2, 0, 1, 0, 1, 2, 0, 1, 2];
+        // Check hda_fn_nid (PCM Device number)
+        for (i, chmap_info) in res.snd_data.chmap_info.iter().enumerate() {
+            assert_eq!(
+                chmap_info.hdr.hda_fn_nid.to_native(),
+                expected_hda_fn_nid[i],
+                "chmap_info index {} incorrect hda_fn_nid",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_resize_parameters_pcm_device_config_truncate() {
+        // If pcm_device_config is larger than number of devices, it will be truncated
+        let params = Parameters {
+            num_output_devices: 1,
+            num_input_devices: 1,
+            output_device_config: vec![PCMDeviceParameters::default(); 3],
+            input_device_config: vec![PCMDeviceParameters::default(); 3],
+            ..Parameters::default()
+        };
+        let params = resize_parameters_pcm_device_config(params);
+        assert_eq!(params.output_device_config.len(), 1);
+        assert_eq!(params.input_device_config.len(), 1);
+    }
+
+    #[test]
+    fn test_resize_parameters_pcm_device_config_extend() {
+        let params = Parameters {
+            num_output_devices: 3,
+            num_input_devices: 2,
+            num_output_streams: 3,
+            num_input_streams: 2,
+            output_device_config: vec![PCMDeviceParameters {
+                effects: Some(vec![StreamEffect::EchoCancellation]),
+                ..PCMDeviceParameters::default()
+            }],
+            input_device_config: vec![PCMDeviceParameters {
+                effects: Some(vec![StreamEffect::EchoCancellation]),
+                ..PCMDeviceParameters::default()
+            }],
+            ..Default::default()
+        };
+
+        let params = resize_parameters_pcm_device_config(params);
+
+        // Check output_device_config correctly extended
+        assert_eq!(
+            params.output_device_config,
+            vec![
+                PCMDeviceParameters {
+                    // Keep from the parameters
+                    effects: Some(vec![StreamEffect::EchoCancellation]),
+                    ..PCMDeviceParameters::default()
+                },
+                PCMDeviceParameters::default(), // Extended with default
+                PCMDeviceParameters::default(), // Extended with default
+            ]
+        );
+
+        // Check input_device_config correctly extended
+        assert_eq!(
+            params.input_device_config,
+            vec![
+                PCMDeviceParameters {
+                    // Keep from the parameters
+                    effects: Some(vec![StreamEffect::EchoCancellation]),
+                    ..PCMDeviceParameters::default()
+                },
+                PCMDeviceParameters::default(), // Extended with default
+            ]
+        );
+    }
 }

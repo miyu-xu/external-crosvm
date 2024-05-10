@@ -35,6 +35,7 @@ pub unsafe trait Terminal {
         let descriptor = self.terminal_descriptor();
         let mut orig_mode = 0;
 
+        // SAFETY:
         // Safe because we provide a valid descriptor and pointer and we check the return result.
         if unsafe { GetConsoleMode(descriptor, &mut orig_mode) } == 0 {
             return Err(Error::last());
@@ -43,7 +44,9 @@ pub unsafe trait Terminal {
         let new_mode = (orig_mode | ENABLE_VIRTUAL_TERMINAL_INPUT)
             & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
 
-        // Safe because the syscall will only read the extent of mode and we check the return result.
+        // SAFETY:
+        // Safe because the syscall will only read the extent of mode and we check the return
+        // result.
         if unsafe { SetConsoleMode(descriptor, new_mode) } == 0 {
             return Err(Error::last());
         }
@@ -53,7 +56,9 @@ pub unsafe trait Terminal {
 
     /// Set this terminal's mode to a previous state returned by `set_raw_mode()`.
     fn restore_mode(&self, mode: DWORD) -> Result<()> {
-        // Safe because the syscall will only read the extent of mode and we check the return result.
+        // SAFETY:
+        // Safe because the syscall will only read the extent of mode and we check the return
+        // result.
         if unsafe { SetConsoleMode(self.terminal_descriptor(), mode) } == 0 {
             Err(Error::last())
         } else {
@@ -62,6 +67,7 @@ pub unsafe trait Terminal {
     }
 }
 
+// SAFETY:
 // Safe because we return a genuine terminal descriptor that never changes and shares our lifetime.
 unsafe impl Terminal for Stdin {
     fn terminal_descriptor(&self) -> RawDescriptor {

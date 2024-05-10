@@ -19,12 +19,13 @@ use winapi::um::winbase::INFINITE;
 use winapi::um::winbase::WAIT_OBJECT_0;
 
 use super::errno_result;
-use super::win::nt_query_timer_resolution;
+use super::platform_timer_utils::nt_query_timer_resolution;
 use super::Result;
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::SafeDescriptor;
 use crate::timer::Timer;
+use crate::timer::TimerTrait;
 
 impl AsRawHandle for Timer {
     fn as_raw_handle(&self) -> RawHandle {
@@ -35,8 +36,9 @@ impl AsRawHandle for Timer {
 impl Timer {
     /// Creates a new timer.  The timer is initally disarmed and must be armed by calling
     /// `reset`. Note that this timer MAY wake/trigger early due to limitations on
-    /// SetWaitableTimer (see https://github.com/rust-lang/rust/issues/43376).
+    /// SetWaitableTimer (see <https://github.com/rust-lang/rust/issues/43376>).
     pub fn new() -> Result<Timer> {
+        // SAFETY:
         // Safe because this doesn't modify any memory and we check the return value.
         let handle = unsafe {
             CreateWaitableTimerA(
@@ -58,18 +60,17 @@ impl Timer {
             return errno_result();
         }
 
-        // Safe because we uniquely own the file descriptor.
         Ok(Timer {
+            // SAFETY:
+            // Safe because we uniquely own the file descriptor.
             handle: unsafe { SafeDescriptor::from_raw_descriptor(handle) },
             interval: None,
         })
     }
+}
 
-    /// Sets the timer to expire after `dur`. If `interval` is not `None` and non-zero
-    /// it represents the period for repeated expirations after the initial expiration.
-    /// Otherwise the timer will expire just once.  Cancels any existing duration and
-    /// repeating interval.
-    pub fn reset(&mut self, dur: Duration, mut interval: Option<Duration>) -> Result<()> {
+impl TimerTrait for Timer {
+    fn reset(&mut self, dur: Duration, mut interval: Option<Duration>) -> Result<()> {
         // If interval is 0 or None it means that this timer does not repeat. We
         // set self.interval to None in this case so it can easily be checked
         // in self.wait.
@@ -101,6 +102,7 @@ impl Timer {
             None => 0,
         };
 
+        // SAFETY:
         // Safe because this doesn't modify any memory and we check the return value.
         let ret = unsafe {
             SetWaitableTimer(
@@ -119,8 +121,8 @@ impl Timer {
         Ok(())
     }
 
-    /// Waits until the timer expires.
-    pub fn wait(&mut self) -> Result<()> {
+    fn wait(&mut self) -> Result<()> {
+        // SAFETY:
         // Safe because this doesn't modify any memory and we check the return value.
         let ret = unsafe { WaitForSingleObject(self.as_raw_descriptor(), INFINITE) };
 
@@ -132,20 +134,14 @@ impl Timer {
         }
     }
 
-    /// After a timer is triggered from an EventContext, mark the timer as having been waited for.
-    /// If a timer is not marked waited, it will immediately trigger the event context again. This
-    /// does not need to be called after calling Timer::wait.
-    ///
-    /// Returns true if the timer has been adjusted since the EventContext was triggered by this
-    /// timer.
-    pub fn mark_waited(&mut self) -> Result<bool> {
+    fn mark_waited(&mut self) -> Result<bool> {
         // We use a synchronization timer on windows, meaning waiting on the timer automatically
         // un-signals the timer. We assume this is atomic so the return value is always false.
         Ok(false)
     }
 
-    /// Disarms the timer.
-    pub fn clear(&mut self) -> Result<()> {
+    fn clear(&mut self) -> Result<()> {
+        // SAFETY:
         // Safe because this doesn't modify any memory and we check the return value.
         let ret = unsafe { CancelWaitableTimer(self.as_raw_descriptor()) };
 
@@ -157,8 +153,7 @@ impl Timer {
         Ok(())
     }
 
-    /// Returns the resolution of timers on the host.
-    pub fn resolution() -> Result<Duration> {
+    fn resolution(&self) -> Result<Duration> {
         nt_query_timer_resolution().map(|(current_res, _)| current_res)
     }
 }

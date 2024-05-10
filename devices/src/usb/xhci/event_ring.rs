@@ -13,7 +13,8 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 
-use super::xhci_abi::*;
+use super::xhci_abi::EventRingSegmentTableEntry;
+use super::xhci_abi::Trb;
 
 #[sorted]
 #[derive(Error, Debug)]
@@ -99,7 +100,7 @@ impl EventRing {
             .write_all_at_addr(cycle_bit_dword, address)
             .map_err(Error::MemoryWrite)?;
 
-        usb_debug!(
+        xhci_trace!(
             "event write to pointer {:#x}, trb_count {}, {}",
             self.enqueue_pointer.0,
             self.trb_count,
@@ -123,21 +124,21 @@ impl EventRing {
 
     /// Set segment table size.
     pub fn set_seg_table_size(&mut self, size: u16) -> Result<()> {
-        usb_debug!("event ring seg table size is set to {}", size);
+        xhci_trace!("set_seg_table_size({:#x})", size);
         self.segment_table_size = size;
         self.try_reconfigure_event_ring()
     }
 
     /// Set segment table base addr.
     pub fn set_seg_table_base_addr(&mut self, addr: GuestAddress) -> Result<()> {
-        usb_debug!("event ring seg table base addr is set to {:#x}", addr.0);
+        xhci_trace!("set_seg_table_base_addr({:#x})", addr.0);
         self.segment_table_base_address = addr;
         self.try_reconfigure_event_ring()
     }
 
     /// Set dequeue pointer.
     pub fn set_dequeue_pointer(&mut self, addr: GuestAddress) {
-        usb_debug!("event ring dequeue pointer set to {:#x}", addr.0);
+        xhci_trace!("set_dequeue_pointer({:#x})", addr.0);
         self.dequeue_pointer = addr;
     }
 
@@ -212,11 +213,13 @@ impl EventRing {
 mod test {
     use std::mem::size_of;
 
+    use base::pagesize;
+
     use super::*;
 
     #[test]
     fn test_uninited() {
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
         let mut er = EventRing::new(gm);
         let trb = Trb::new();
         match er.add_event(trb).err().unwrap() {
@@ -230,7 +233,7 @@ mod test {
     #[test]
     fn test_event_ring() {
         let trb_size = size_of::<Trb>() as u64;
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
         let mut er = EventRing::new(gm.clone());
         let mut st_entries = [EventRingSegmentTableEntry::new(); 3];
         st_entries[0].set_ring_segment_base_address(0x100);
@@ -313,7 +316,7 @@ mod test {
         assert_eq!(er.is_full().unwrap(), false);
         assert_eq!(er.is_empty(), false);
         let t: Trb = gm
-            .read_obj_from_addr(GuestAddress(0x200 + 2 * trb_size as u64))
+            .read_obj_from_addr(GuestAddress(0x200 + 2 * trb_size))
             .unwrap();
         assert_eq!(t.get_control(), 6);
         assert_eq!(t.get_cycle(), true);

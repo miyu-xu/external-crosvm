@@ -45,6 +45,7 @@ use crate::Datamatch;
 use crate::DeviceKind;
 use crate::Hypervisor;
 use crate::IoEventAddress;
+use crate::MemCacheType;
 use crate::MemSlot;
 use crate::VcpuX86_64;
 use crate::Vm;
@@ -61,9 +62,9 @@ pub struct HaxmVm {
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
     // HAXM's implementation of ioevents makes several assumptions about how crosvm uses ioevents:
-    //   1. All ioevents are registered during device setup, and thus can be cloned when the vm
-    //      is cloned instead of locked in an Arc<Mutex<>>. This will make handling ioevents in
-    //      each vcpu thread easier because no locks will need to be acquired.
+    //   1. All ioevents are registered during device setup, and thus can be cloned when the vm is
+    //      cloned instead of locked in an Arc<Mutex<>>. This will make handling ioevents in each
+    //      vcpu thread easier because no locks will need to be acquired.
     //   2. All ioevents use Datamatch::AnyLength. We don't bother checking the datamatch, which
     //      will make this faster.
     //   3. We only ever register one eventfd to each address. This simplifies our data structure.
@@ -74,6 +75,7 @@ impl HaxmVm {
     /// Constructs a new `HaxmVm` using the given `Haxm` instance.
     pub fn new(haxm: &Haxm, guest_mem: GuestMemory) -> Result<HaxmVm> {
         let mut vm_id: u32 = 0;
+        // SAFETY:
         // Safe because we know descriptor is a real haxm descriptor as this module is the only
         // one that can make Haxm objects.
         let ret = unsafe { ioctl_with_mut_ref(haxm, HAX_IOCTL_CREATE_VM(), &mut vm_id) };
@@ -84,18 +86,19 @@ impl HaxmVm {
         // Haxm creates additional device paths when VMs are created
         let vm_descriptor = open_haxm_vm_device(USE_GHAXM.load(Ordering::Relaxed), vm_id)?;
 
-        guest_mem.with_regions(|_, guest_addr, size, host_addr, _, _| {
+        for region in guest_mem.regions() {
+            // SAFETY:
+            // Safe because the guest regions are guaranteed not to overlap.
             unsafe {
-                // Safe because the guest regions are guaranteed not to overlap.
                 set_user_memory_region(
                     &vm_descriptor,
                     false,
-                    guest_addr.offset(),
-                    size as u64,
-                    MemoryRegionOp::Add(host_addr as *mut u8 as u64),
+                    region.guest_addr.offset(),
+                    region.size as u64,
+                    MemoryRegionOp::Add(region.host_addr as *mut u8 as u64),
                 )
-            }
-        })?;
+            }?;
+        }
 
         Ok(HaxmVm {
             vm_id,
@@ -111,6 +114,8 @@ impl HaxmVm {
     pub fn check_raw_capability(&self, cap: u32) -> bool {
         let mut capability_info = hax_capabilityinfo::default();
         let ret =
+            // SAFETY:
+            // Safe because we know that our file is a VM fd and we verify the return result.
             unsafe { ioctl_with_mut_ref(&self.haxm, HAX_IOCTL_CAPABILITY(), &mut capability_info) };
 
         if ret != 0 {
@@ -127,8 +132,9 @@ impl HaxmVm {
             let mut log_file = hax_log_file::default();
 
             // Although it would be more efficient to do this check prior to allocating the log_file
-            // struct, the code would be more complex and less maintainable. This is only ever called
-            // once per-vm so the extra temporary memory and time shouldn't be a problem.
+            // struct, the code would be more complex and less maintainable. This is only ever
+            // called once per-vm so the extra temporary memory and time shouldn't be a
+            // problem.
             if path.len() >= log_file.path.len() {
                 return Err(Error::new(E2BIG));
             }
@@ -136,6 +142,8 @@ impl HaxmVm {
             let wstring = &win32_wide_string(path);
             log_file.path[..wstring.len()].clone_from_slice(wstring);
 
+            // SAFETY:
+            // Safe because we know that our file is a VM fd and we verify the return result.
             let ret = unsafe { ioctl_with_ref(self, HAX_VM_IOCTL_REGISTER_LOG_FILE(), &log_file) };
 
             if ret != 0 {
@@ -184,6 +192,8 @@ unsafe fn set_user_memory_region(
         ..Default::default()
     };
 
+    // SAFETY:
+    // Safe because we know that our file is a VM fd and we verify the return result.
     let ret = ioctl_with_ref(descriptor, HAX_VM_IOCTL_SET_RAM2(), &ram_info);
     if ret != 0 {
         return errno_result();
@@ -208,8 +218,16 @@ impl Vm for HaxmVm {
         })
     }
 
-    fn check_capability(&self, _c: VmCap) -> bool {
-        false
+    fn check_capability(&self, c: VmCap) -> bool {
+        match c {
+            VmCap::DirtyLog => false,
+            VmCap::PvClock => false,
+            VmCap::Protected => false,
+            VmCap::EarlyInitCpuid => false,
+            VmCap::BusLockDetect => false,
+            VmCap::ReadOnlyMemoryRegion => false,
+            VmCap::MemNoncoherentDma => false,
+        }
     }
 
     fn get_memory(&self) -> &GuestMemory {
@@ -222,6 +240,7 @@ impl Vm for HaxmVm {
         mem: Box<dyn MappedRegion>,
         read_only: bool,
         _log_dirty_pages: bool,
+        _cache: MemCacheType,
     ) -> Result<MemSlot> {
         let size = mem.size() as u64;
         let end_addr = guest_addr.checked_add(size).ok_or(Error::new(EOVERFLOW))?;
@@ -235,6 +254,7 @@ impl Vm for HaxmVm {
             None => (regions.len() + self.guest_mem.num_regions() as usize) as MemSlot,
         };
 
+        // SAFETY:
         // Safe because we check that the given guest address is valid and has no overlaps. We also
         // know that the pointer and size are correct because the MemoryMapping interface ensures
         // this. We take ownership of the memory mapping so that it won't be unmapped until the slot
@@ -273,6 +293,7 @@ impl Vm for HaxmVm {
         let mut regions = self.mem_regions.lock();
 
         if let Some((guest_addr, mem)) = regions.get(&slot) {
+            // SAFETY:
             // Safe because the slot is checked against the list of memory slots.
             unsafe {
                 set_user_memory_region(
@@ -397,14 +418,7 @@ impl Vm for HaxmVm {
         }
     }
 
-    fn handle_deflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
-        // TODO(b/233773610): implement ballooning support in haxm
-        warn!("Memory ballooning attempted but not supported on haxm hypervisor");
-        // no-op
-        Ok(())
-    }
-
-    fn handle_inflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
+    fn handle_balloon_event(&mut self, _event: crate::BalloonEvent) -> Result<()> {
         // TODO(b/233773610): implement ballooning support in haxm
         warn!("Memory ballooning attempted but not supported on haxm hypervisor");
         // no-op
@@ -423,6 +437,7 @@ impl VmX86_64 for HaxmVm {
     }
 
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuX86_64>> {
+        // SAFETY:
         // Safe because we know that our file is a VM fd and we verify the return result.
         let fd = unsafe { ioctl_with_ref(self, HAX_VM_IOCTL_VCPU_CREATE(), &(id as u32)) };
         if fd < 0 {
@@ -434,6 +449,7 @@ impl VmX86_64 for HaxmVm {
 
         let mut tunnel_info = hax_tunnel_info::default();
 
+        // SAFETY:
         // Safe because we created tunnel_info and we check the return code for errors
         let ret = unsafe {
             ioctl_with_mut_ref(&descriptor, HAX_VCPU_IOCTL_SETUP_TUNNEL(), &mut tunnel_info)
@@ -448,7 +464,6 @@ impl VmX86_64 for HaxmVm {
             id,
             tunnel: tunnel_info.va as *mut hax_tunnel,
             io_buffer: tunnel_info.io_va as *mut c_void,
-            vcpu_run_handle_fingerprint: Default::default(),
         }))
     }
 
@@ -612,7 +627,13 @@ mod tests {
             .unwrap();
         let mem_ptr = mem.as_ptr();
         let slot = vm
-            .add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
+            .add_memory_region(
+                GuestAddress(0x1000),
+                Box::new(mem),
+                false,
+                false,
+                MemCacheType::CacheCoherent,
+            )
             .unwrap();
         let removed_mem = vm.remove_memory_region(slot).unwrap();
         assert_eq!(removed_mem.size(), mem_size);

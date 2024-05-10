@@ -9,18 +9,28 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::mem::size_of_val;
 use std::os::raw::c_int;
+use std::os::raw::c_uchar;
 use std::os::raw::c_uint;
 use std::os::raw::c_void;
 use std::sync::Arc;
+use std::sync::Weak;
 
+use base::error;
 use base::handle_eintr_errno;
+use base::warn;
 use base::AsRawDescriptor;
 use base::IoctlNr;
+use base::MappedRegion;
+use base::MemoryMapping;
+use base::MemoryMappingBuilder;
+use base::Protection;
 use base::RawDescriptor;
 use data_model::vec_with_array_field;
 use libc::EAGAIN;
 use libc::ENODEV;
 use libc::ENOENT;
+use libc::EPIPE;
+use sync::Mutex;
 
 use crate::control_request_type;
 use crate::descriptor;
@@ -30,14 +40,79 @@ use crate::ControlRequestRecipient;
 use crate::ControlRequestType;
 use crate::DeviceDescriptor;
 use crate::DeviceDescriptorTree;
+use crate::DeviceSpeed;
 use crate::Error;
 use crate::Result;
 use crate::StandardControlRequest;
+
+// This is the maximum block size observed during storage performance test
+const MMAP_SIZE: usize = 1024 * 1024;
+
+/// ManagedDmaBuffer represents the entire DMA buffer allocated by a device
+struct ManagedDmaBuffer {
+    /// The entire DMA buffer
+    buf: MemoryMapping,
+    /// A DMA buffer lent to a TransferBuffer. This is a part of the entire buffer.
+    used: Option<Arc<Mutex<DmaBuffer>>>,
+}
+
+/// DmaBuffer represents a DMA buffer lent by a device
+pub struct DmaBuffer {
+    /// Host virtual address of the buffer
+    addr: u64,
+    /// Size of the buffer
+    size: usize,
+}
+
+impl DmaBuffer {
+    pub fn address(&mut self) -> *mut c_void {
+        self.addr as *mut c_void
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY:
+        // Safe because the region has been lent by a device
+        unsafe { std::slice::from_raw_parts(self.addr as *const u8, self.size) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY:
+        // Safe because the region has been lent by a device
+        unsafe { std::slice::from_raw_parts_mut(self.addr as *mut u8, self.size) }
+    }
+}
+
+/// TransferBuffer is used for data transfer between crosvm and the host kernel
+#[derive(Clone)]
+pub enum TransferBuffer {
+    Vector(Vec<u8>),
+    Dma(Weak<Mutex<DmaBuffer>>),
+}
+
+impl TransferBuffer {
+    pub fn address(&mut self) -> Option<*mut c_void> {
+        match self {
+            TransferBuffer::Vector(v) => Some(v.as_mut_ptr() as *mut c_void),
+            TransferBuffer::Dma(buf) => buf.upgrade().map(|buf| buf.lock().address()),
+        }
+    }
+    pub fn size(&self) -> Option<usize> {
+        match self {
+            TransferBuffer::Vector(v) => Some(v.len()),
+            TransferBuffer::Dma(buf) => buf.upgrade().map(|buf| buf.lock().size()),
+        }
+    }
+}
 
 /// Device represents a USB device.
 pub struct Device {
     fd: Arc<File>,
     device_descriptor_tree: DeviceDescriptorTree,
+    dma_buffer: Option<ManagedDmaBuffer>,
 }
 
 /// Transfer contains the information necessary to submit a USB request
@@ -46,7 +121,7 @@ pub struct Transfer {
     // NOTE: This Vec is actually a single URB with a trailing
     // variable-length field created by vec_with_array_field().
     urb: Vec<usb_sys::usbdevfs_urb>,
-    pub buffer: Vec<u8>,
+    pub buffer: TransferBuffer,
     callback: Option<Box<dyn Fn(Transfer) + Send + Sync>>,
 }
 
@@ -59,12 +134,13 @@ pub struct TransferHandle {
     fd: std::sync::Weak<File>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum TransferStatus {
     Completed,
     Error,
     Cancelled,
     NoDevice,
+    Stalled,
 }
 
 impl Device {
@@ -77,10 +153,31 @@ impl Device {
             .map_err(Error::DescriptorRead)?;
         let device_descriptor_tree = descriptor::parse_usbfs_descriptors(&descriptor_data)?;
 
-        let device = Device {
+        let mut device = Device {
             fd: Arc::new(fd),
             device_descriptor_tree,
+            dma_buffer: None,
         };
+
+        let map = MemoryMappingBuilder::new(MMAP_SIZE)
+            .from_file(&device.fd)
+            .protection(Protection::read_write())
+            .build();
+        match map {
+            Ok(map) => {
+                device.dma_buffer = Some(ManagedDmaBuffer {
+                    buf: map,
+                    used: None,
+                });
+            }
+            Err(e) => {
+                // Ignore the error since we can process requests without DMA buffer
+                warn!(
+                    "mmap() failed. User-provided buffer will be used for data transfer. {}",
+                    e
+                );
+            }
+        }
         Ok(device)
     }
 
@@ -120,6 +217,36 @@ impl Device {
         Ok(ret)
     }
 
+    pub fn reserve_dma_buffer(&mut self, size: usize) -> Result<Weak<Mutex<DmaBuffer>>> {
+        if let Some(managed) = &mut self.dma_buffer {
+            if managed.used.is_none() {
+                let buf = Arc::new(Mutex::new(DmaBuffer {
+                    addr: managed.buf.as_ptr() as u64,
+                    size,
+                }));
+                let ret = Ok(Arc::downgrade(&buf));
+                managed.used = Some(buf);
+                return ret;
+            }
+        }
+        Err(Error::GetDmaBufferFailed(size))
+    }
+
+    pub fn release_dma_buffer(&mut self, dmabuf: Weak<Mutex<DmaBuffer>>) -> Result<()> {
+        if let Some(managed) = &mut self.dma_buffer {
+            if let Some(released) = dmabuf.upgrade() {
+                let addr = { released.lock().address() as u64 };
+                if let Some(lent) = &managed.used {
+                    if lent.lock().addr == addr {
+                        managed.used = None;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err(Error::ReleaseDmaBufferFailed)
+    }
+
     /// Submit a transfer to the device.
     /// The transfer will be processed asynchronously by the device.
     /// Call `poll_transfers()` on this device to check for completed transfers.
@@ -145,6 +272,7 @@ impl Device {
 
         let urb_ptr = rc_transfer.urb.as_ptr() as *mut usb_sys::usbdevfs_urb;
 
+        // SAFETY:
         // Safe because we control the lifetime of the URB via Arc::into_raw() and
         // Arc::from_raw() in poll_transfers().
         unsafe {
@@ -161,12 +289,13 @@ impl Device {
 
     /// Check for completed asynchronous transfers submitted via `submit_transfer()`.
     /// The callback for each completed transfer will be called.
-    pub fn poll_transfers(&self) -> Result<()> {
+    pub fn poll_transfers(&mut self) -> Result<()> {
         // Reap completed transfers until we get EAGAIN.
         loop {
             let mut urb_ptr: *mut usb_sys::usbdevfs_urb = std::ptr::null_mut();
-            // Safe because we provide a valid urb_ptr to be filled by the kernel.
             let result =
+        // SAFETY:
+            // Safe because we provide a valid urb_ptr to be filled by the kernel.
                 unsafe { self.ioctl_with_mut_ref(usb_sys::USBDEVFS_REAPURBNDELAY(), &mut urb_ptr) };
             match result {
                 // EAGAIN indicates no more completed transfers right now.
@@ -179,17 +308,29 @@ impl Device {
                 break;
             }
 
+            let rc_transfer: Arc<Transfer> =
+        // SAFETY:
             // Safe because the URB usercontext field is always set to the result of
             // Arc::into_raw() in submit_transfer().
-            let rc_transfer: Arc<Transfer> =
                 unsafe { Arc::from_raw((*urb_ptr).usercontext as *const Transfer) };
 
             // There should always be exactly one strong reference to rc_transfer,
             // so try_unwrap() should never fail.
             let mut transfer = Arc::try_unwrap(rc_transfer).map_err(|_| Error::RcUnwrapFailed)?;
 
+            let dmabuf = match &mut transfer.buffer {
+                TransferBuffer::Dma(buf) => Some(buf.clone()),
+                TransferBuffer::Vector(_) => None,
+            };
+
             if let Some(cb) = transfer.callback.take() {
                 cb(transfer);
+            }
+
+            if let Some(dmabuf) = dmabuf {
+                if self.release_dma_buffer(dmabuf).is_err() {
+                    warn!("failed to release dma buffer");
+                }
             }
         }
 
@@ -207,6 +348,7 @@ impl Device {
             _ => return Ok(()),
         }
 
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor.
         let result = unsafe { self.ioctl(usb_sys::USBDEVFS_RESET()) };
 
@@ -229,6 +371,7 @@ impl Device {
             flags: 0,
             driver: [0u8; 256],
         };
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to a usbdevs_disconnect_claim structure.
         unsafe {
@@ -241,6 +384,7 @@ impl Device {
     /// Release an interface previously claimed with `claim_interface()`.
     pub fn release_interface(&self, interface_number: u8) -> Result<()> {
         let ifnum: c_uint = interface_number.into();
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to unsigned int.
         unsafe {
@@ -260,6 +404,7 @@ impl Device {
             interface: interface_number.into(),
             altsetting: alternative_setting.into(),
         };
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to a usbdevfs_setinterface structure.
         unsafe {
@@ -271,6 +416,7 @@ impl Device {
     /// Set active configuration for this device.
     pub fn set_active_configuration(&mut self, config: u8) -> Result<()> {
         let config: c_int = config.into();
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to int.
         unsafe {
@@ -337,6 +483,7 @@ impl Device {
             timeout: 5000, // milliseconds
             data: &mut active_config as *mut u8 as *mut c_void,
         };
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to a usbdevfs_ctrltransfer structure.
         unsafe {
@@ -353,12 +500,66 @@ impl Device {
     /// Clear the halt/stall condition for an endpoint.
     pub fn clear_halt(&self, ep_addr: u8) -> Result<()> {
         let endpoint: c_uint = ep_addr.into();
+        // SAFETY:
         // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to unsigned int.
         unsafe {
             self.ioctl_with_ref(usb_sys::USBDEVFS_CLEAR_HALT(), &endpoint)?;
         }
 
+        Ok(())
+    }
+
+    /// Get speed of this device.
+    pub fn get_speed(&self) -> Result<Option<DeviceSpeed>> {
+        // SAFETY: args are valid and the return value is checked
+        let speed = unsafe { self.ioctl(usb_sys::USBDEVFS_GET_SPEED()) }?;
+        match speed {
+            1 => Ok(Some(DeviceSpeed::Low)),       // Low Speed
+            2 => Ok(Some(DeviceSpeed::Full)),      // Full Speed
+            3 => Ok(Some(DeviceSpeed::High)),      // High Speed
+            4 => Ok(Some(DeviceSpeed::High)),      // Wireless, treat as a High Speed device
+            5 => Ok(Some(DeviceSpeed::Super)),     // Super Speed
+            6 => Ok(Some(DeviceSpeed::SuperPlus)), // Super Speed Plus
+            _ => {
+                error!("unexpected speed: {:?}", speed);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Allocate streams for the endpoint
+    pub fn alloc_streams(&self, ep: u8, num_streams: u16) -> Result<()> {
+        let mut streams = vec_with_array_field::<usb_sys::usbdevfs_streams, c_uchar>(1);
+        streams[0].num_streams = num_streams as c_uint;
+        streams[0].num_eps = 1 as c_uint;
+        // SAFETY:
+        // Safe because we have allocated enough memory
+        let eps = unsafe { streams[0].eps.as_mut_slice(1) };
+        eps[0] = ep as c_uchar;
+        // SAFETY:
+        // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
+        // pointer to a usbdevfs_streams structure.
+        unsafe {
+            self.ioctl_with_ref(usb_sys::USBDEVFS_ALLOC_STREAMS(), &streams[0])?;
+        }
+        Ok(())
+    }
+
+    /// Free streams for the endpoint
+    pub fn free_streams(&self, ep: u8) -> Result<()> {
+        let mut streams = vec_with_array_field::<usb_sys::usbdevfs_streams, c_uchar>(1);
+        streams[0].num_eps = 1 as c_uint;
+        // SAFETY:
+        // Safe because we have allocated enough memory
+        let eps = unsafe { streams[0].eps.as_mut_slice(1) };
+        eps[0] = ep as c_uchar;
+        // SAFETY:
+        // Safe because self.fd is a valid usbdevfs file descriptor and we pass a valid
+        // pointer to a usbdevfs_streams structure.
+        unsafe {
+            self.ioctl_with_ref(usb_sys::USBDEVFS_FREE_STREAMS(), &streams[0])?;
+        }
         Ok(())
     }
 }
@@ -383,7 +584,7 @@ impl Transfer {
     fn new(
         transfer_type: u8,
         endpoint: u8,
-        buffer: Vec<u8>,
+        buffer: TransferBuffer,
         iso_packets: &[usb_sys::usbdevfs_iso_packet_desc],
     ) -> Result<Transfer> {
         let mut transfer = Transfer {
@@ -396,13 +597,15 @@ impl Transfer {
 
         transfer.urb_mut().urb_type = transfer_type;
         transfer.urb_mut().endpoint = endpoint;
-        transfer.urb_mut().buffer = transfer.buffer.as_mut_ptr() as *mut c_void;
+        transfer.urb_mut().buffer = transfer.buffer.address().ok_or(Error::InvalidBuffer)?;
         transfer.urb_mut().buffer_length = transfer
             .buffer
-            .len()
+            .size()
+            .ok_or(Error::InvalidBuffer)?
             .try_into()
             .map_err(Error::InvalidBufferLength)?;
 
+        // SAFETY:
         // Safe because we ensured there is enough space in transfer.urb to hold the number of
         // isochronous frames required.
         let iso_frame_desc = unsafe {
@@ -417,23 +620,31 @@ impl Transfer {
     }
 
     /// Create a control transfer.
-    pub fn new_control(buffer: Vec<u8>) -> Result<Transfer> {
+    pub fn new_control(buffer: TransferBuffer) -> Result<Transfer> {
         let endpoint = 0;
         Self::new(usb_sys::USBDEVFS_URB_TYPE_CONTROL, endpoint, buffer, &[])
     }
 
     /// Create an interrupt transfer.
-    pub fn new_interrupt(endpoint: u8, buffer: Vec<u8>) -> Result<Transfer> {
+    pub fn new_interrupt(endpoint: u8, buffer: TransferBuffer) -> Result<Transfer> {
         Self::new(usb_sys::USBDEVFS_URB_TYPE_INTERRUPT, endpoint, buffer, &[])
     }
 
     /// Create a bulk transfer.
-    pub fn new_bulk(endpoint: u8, buffer: Vec<u8>) -> Result<Transfer> {
-        Self::new(usb_sys::USBDEVFS_URB_TYPE_BULK, endpoint, buffer, &[])
+    pub fn new_bulk(
+        endpoint: u8,
+        buffer: TransferBuffer,
+        stream_id: Option<u16>,
+    ) -> Result<Transfer> {
+        let mut transfer = Self::new(usb_sys::USBDEVFS_URB_TYPE_BULK, endpoint, buffer, &[])?;
+        if let Some(stream_id) = stream_id {
+            transfer.urb_mut().number_of_packets_or_stream_id = stream_id as u32;
+        }
+        Ok(transfer)
     }
 
     /// Create an isochronous transfer.
-    pub fn new_isochronous(endpoint: u8, buffer: Vec<u8>) -> Result<Transfer> {
+    pub fn new_isochronous(endpoint: u8, buffer: TransferBuffer) -> Result<Transfer> {
         // TODO(dverkamp): allow user to specify iso descriptors
         Self::new(usb_sys::USBDEVFS_URB_TYPE_ISO, endpoint, buffer, &[])
     }
@@ -447,6 +658,8 @@ impl Transfer {
             TransferStatus::NoDevice
         } else if status == -ENOENT {
             TransferStatus::Cancelled
+        } else if status == -EPIPE {
+            TransferStatus::Stalled
         } else {
             TransferStatus::Error
         }
@@ -468,7 +681,7 @@ impl TransferHandle {
     /// Attempt to cancel the transfer associated with this `TransferHandle`.
     /// Safe to call even if the transfer has already completed;
     /// `Error::TransferAlreadyCompleted` will be returned in this case.
-    pub fn cancel(self) -> Result<()> {
+    pub fn cancel(&self) -> Result<()> {
         let rc_transfer = match self.weak_transfer.upgrade() {
             None => return Err(Error::TransferAlreadyCompleted),
             Some(rc_transfer) => rc_transfer,
@@ -480,6 +693,7 @@ impl TransferHandle {
             Some(fd) => fd,
         };
 
+        // SAFETY:
         // Safe because fd is a valid usbdevfs file descriptor and we pass a valid
         // pointer to a usbdevfs_urb structure.
         if unsafe {

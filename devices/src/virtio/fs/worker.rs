@@ -23,14 +23,12 @@ use fuse::filesystem::ZeroCopyWriter;
 use sync::Mutex;
 use vm_control::FsMappingRequest;
 use vm_control::VmResponse;
-use vm_memory::GuestMemory;
 
 use crate::virtio::fs::Error;
 use crate::virtio::fs::Result;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::Writer;
 
 impl fuse::Reader for Reader {}
@@ -99,7 +97,7 @@ impl fuse::Mapper for Mapper {
         size: usize,
         fd: &dyn AsRawFd,
         file_offset: u64,
-        prot: u32,
+        prot: Protection,
     ) -> io::Result<()> {
         let mem_offset: usize = mem_offset.try_into().map_err(|e| {
             error!("mem_offset {} is too big: {}", mem_offset, e);
@@ -113,7 +111,7 @@ impl fuse::Mapper for Mapper {
             fd,
             size,
             file_offset,
-            prot: Protection::from(prot as libc::c_int),
+            prot,
             mem_offset,
         };
 
@@ -141,7 +139,6 @@ impl fuse::Mapper for Mapper {
 }
 
 pub struct Worker<F: FileSystem + Sync> {
-    mem: GuestMemory,
     queue: Queue,
     server: Arc<fuse::Server<F>>,
     irq: Interrupt,
@@ -149,25 +146,20 @@ pub struct Worker<F: FileSystem + Sync> {
     slot: u32,
 }
 
-pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
-    mem: &GuestMemory,
-    interrupt: &I,
+pub fn process_fs_queue<F: FileSystem + Sync>(
+    interrupt: &Interrupt,
     queue: &mut Queue,
     server: &Arc<fuse::Server<F>>,
     tube: &Arc<Mutex<Tube>>,
     slot: u32,
 ) -> Result<()> {
     let mapper = Mapper::new(Arc::clone(tube), slot);
-    while let Some(avail_desc) = queue.pop(mem) {
-        let reader =
-            Reader::new(mem.clone(), avail_desc.clone()).map_err(Error::InvalidDescriptorChain)?;
-        let writer =
-            Writer::new(mem.clone(), avail_desc.clone()).map_err(Error::InvalidDescriptorChain)?;
+    while let Some(mut avail_desc) = queue.pop() {
+        let total =
+            server.handle_message(&mut avail_desc.reader, &mut avail_desc.writer, &mapper)?;
 
-        let total = server.handle_message(reader, writer, &mapper)?;
-
-        queue.add_used(mem, avail_desc.index, total as u32);
-        queue.trigger_interrupt(mem, interrupt);
+        queue.add_used(avail_desc, total as u32);
+        queue.trigger_interrupt(interrupt);
     }
 
     Ok(())
@@ -175,7 +167,6 @@ pub fn process_fs_queue<I: SignalableInterrupt, F: FileSystem + Sync>(
 
 impl<F: FileSystem + Sync> Worker<F> {
     pub fn new(
-        mem: GuestMemory,
         queue: Queue,
         server: Arc<fuse::Server<F>>,
         irq: Interrupt,
@@ -183,7 +174,6 @@ impl<F: FileSystem + Sync> Worker<F> {
         slot: u32,
     ) -> Worker<F> {
         Worker {
-            mem,
             queue,
             server,
             irq,
@@ -192,31 +182,45 @@ impl<F: FileSystem + Sync> Worker<F> {
         }
     }
 
-    pub fn run(
-        &mut self,
-        queue_evt: Event,
-        kill_evt: Event,
-        watch_resample_event: bool,
-    ) -> Result<()> {
-        // We need to set the no setuid fixup secure bit so that we don't drop capabilities when
-        // changing the thread uid/gid. Without this, creating new entries can fail in some corner
-        // cases.
-        const SECBIT_NO_SETUID_FIXUP: i32 = 1 << 2;
+    pub fn run(&mut self, kill_evt: Event, watch_resample_event: bool) -> Result<()> {
+        let mut ruid: libc::uid_t = 0;
+        let mut euid: libc::uid_t = 0;
+        let mut suid: libc::uid_t = 0;
+        // SAFETY: Safe because this doesn't modify any memory and we check the return value.
+        syscall!(unsafe { libc::getresuid(&mut ruid, &mut euid, &mut suid) })
+            .map_err(Error::GetResuid)?;
 
-        // Safe because this doesn't modify any memory and we check the return value.
-        let mut securebits = syscall!(unsafe { libc::prctl(libc::PR_GET_SECUREBITS) })
+        // Only need to set SECBIT_NO_SETUID_FIXUP for threads which could change uid.
+        if ruid == 0 || ruid != euid || ruid != suid {
+            // We need to set the no setuid fixup secure bit so that we don't drop capabilities when
+            // changing the thread uid/gid. Without this, creating new entries can fail in some
+            // corner cases.
+            const SECBIT_NO_SETUID_FIXUP: i32 = 1 << 2;
+
+            let mut securebits = syscall!(
+                // SAFETY:
+                // Safe because this doesn't modify any memory and we check the return value.
+                unsafe { libc::prctl(libc::PR_GET_SECUREBITS) }
+            )
             .map_err(Error::GetSecurebits)?;
 
-        securebits |= SECBIT_NO_SETUID_FIXUP;
+            securebits |= SECBIT_NO_SETUID_FIXUP;
 
-        // Safe because this doesn't modify any memory and we check the return value.
-        syscall!(unsafe { libc::prctl(libc::PR_SET_SECUREBITS, securebits) })
+            syscall!(
+                // SAFETY:
+                // Safe because this doesn't modify any memory and we check the return value.
+                unsafe { libc::prctl(libc::PR_SET_SECUREBITS, securebits) }
+            )
             .map_err(Error::SetSecurebits)?;
+        }
 
         // To avoid extra locking, unshare filesystem attributes from parent. This includes the
         // current working directory and umask.
-        // Safe because this doesn't modify any memory and we check the return value.
-        syscall!(unsafe { libc::unshare(libc::CLONE_FS) }).map_err(Error::UnshareFromParent)?;
+        syscall!(
+            // SAFETY: Safe because this doesn't modify any memory and we check the return value.
+            unsafe { libc::unshare(libc::CLONE_FS) }
+        )
+        .map_err(Error::UnshareFromParent)?;
 
         #[derive(EventToken)]
         enum Token {
@@ -228,9 +232,11 @@ impl<F: FileSystem + Sync> Worker<F> {
             Kill,
         }
 
-        let wait_ctx =
-            WaitContext::build_with(&[(&queue_evt, Token::QueueReady), (&kill_evt, Token::Kill)])
-                .map_err(Error::CreateWaitContext)?;
+        let wait_ctx = WaitContext::build_with(&[
+            (self.queue.event(), Token::QueueReady),
+            (&kill_evt, Token::Kill),
+        ])
+        .map_err(Error::CreateWaitContext)?;
 
         if watch_resample_event {
             if let Some(resample_evt) = self.irq.get_resample_evt() {
@@ -245,9 +251,8 @@ impl<F: FileSystem + Sync> Worker<F> {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueReady => {
-                        queue_evt.wait().map_err(Error::ReadQueueEvent)?;
+                        self.queue.event().wait().map_err(Error::ReadQueueEvent)?;
                         if let Err(e) = process_fs_queue(
-                            &self.mem,
                             &self.irq,
                             &mut self.queue,
                             &self.server,

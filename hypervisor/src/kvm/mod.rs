@@ -6,27 +6,25 @@
 mod aarch64;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use aarch64::*;
-use base::sys::BlockedSignal;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "riscv64")]
+mod riscv64;
+
+#[cfg(target_arch = "x86_64")]
 mod x86_64;
-use std::cell::RefCell;
+
 use std::cmp::min;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::convert::TryFrom;
 use std::ffi::CString;
-use std::mem::size_of;
-use std::mem::ManuallyDrop;
-use std::os::raw::c_int;
 use std::os::raw::c_ulong;
 use std::os::raw::c_void;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr::copy_nonoverlapping;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use base::errno_result;
@@ -35,8 +33,8 @@ use base::ioctl;
 use base::ioctl_with_mut_ref;
 use base::ioctl_with_ref;
 use base::ioctl_with_val;
+use base::linux::MemoryMappingBuilderUnix;
 use base::pagesize;
-use base::signal;
 use base::AsRawDescriptor;
 use base::Error;
 use base::Event;
@@ -44,7 +42,6 @@ use base::FromRawDescriptor;
 use base::MappedRegion;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
-use base::MemoryMappingBuilderUnix;
 use base::MmapError;
 use base::Protection;
 use base::RawDescriptor;
@@ -53,22 +50,24 @@ use base::SafeDescriptor;
 use data_model::vec_with_array_field;
 use kvm_sys::*;
 use libc::open64;
-use libc::sigset_t;
-use libc::EBUSY;
 use libc::EFAULT;
 use libc::EINVAL;
 use libc::EIO;
 use libc::ENOENT;
 use libc::ENOSPC;
+use libc::ENOSYS;
 use libc::EOVERFLOW;
 use libc::O_CLOEXEC;
 use libc::O_RDWR;
+#[cfg(target_arch = "riscv64")]
+use riscv64::*;
 use sync::Mutex;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub use x86_64::*;
 
+use crate::BalloonEvent;
 use crate::ClockState;
 use crate::Config;
 use crate::Datamatch;
@@ -82,22 +81,26 @@ use crate::IoParams;
 use crate::IrqRoute;
 use crate::IrqSource;
 use crate::MPState;
+use crate::MemCacheType;
 use crate::MemSlot;
 use crate::Vcpu;
 use crate::VcpuExit;
-use crate::VcpuRunHandle;
+use crate::VcpuSignalHandle;
+use crate::VcpuSignalHandleInner;
 use crate::Vm;
 use crate::VmCap;
 
 // Wrapper around KVM_SET_USER_MEMORY_REGION ioctl, which creates, modifies, or deletes a mapping
 // from guest physical to host user pages.
 //
+// SAFETY:
 // Safe when the guest regions are guaranteed not to overlap.
 unsafe fn set_user_memory_region(
     descriptor: &SafeDescriptor,
     slot: MemSlot,
     read_only: bool,
     log_dirty_pages: bool,
+    cache: MemCacheType,
     guest_addr: u64,
     memory_size: u64,
     userspace_addr: *mut u8,
@@ -105,6 +108,9 @@ unsafe fn set_user_memory_region(
     let mut flags = if read_only { KVM_MEM_READONLY } else { 0 };
     if log_dirty_pages {
         flags |= KVM_MEM_LOG_DIRTY_PAGES;
+    }
+    if cache == MemCacheType::CacheNonCoherent {
+        flags |= KVM_MEM_NON_COHERENT_DMA;
     }
     let region = kvm_userspace_memory_region {
         slot,
@@ -141,16 +147,35 @@ pub type KvmCap = kvm::Cap;
 
 impl Kvm {
     pub fn new_with_path(device_path: &Path) -> Result<Kvm> {
-        // Open calls are safe because we give a nul-terminated string and verify the result.
         let c_path = CString::new(device_path.as_os_str().as_bytes()).unwrap();
+        // SAFETY:
+        // Open calls are safe because we give a nul-terminated string and verify the result.
         let ret = unsafe { open64(c_path.as_ptr(), O_RDWR | O_CLOEXEC) };
         if ret < 0 {
             return errno_result();
         }
+        // SAFETY:
         // Safe because we verify that ret is valid and we own the fd.
-        Ok(Kvm {
-            kvm: unsafe { SafeDescriptor::from_raw_descriptor(ret) },
-        })
+        let kvm = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
+
+        // SAFETY:
+        // Safe because we know that the descriptor is valid and we verify the return result.
+        let version = unsafe { ioctl(&kvm, KVM_GET_API_VERSION()) };
+        if version < 0 {
+            return errno_result();
+        }
+
+        // Per the kernel KVM API documentation: "Applications should refuse to run if
+        // KVM_GET_API_VERSION returns a value other than 12."
+        if version as u32 != KVM_API_VERSION {
+            error!(
+                "KVM_GET_API_VERSION: expected {}, got {}",
+                KVM_API_VERSION, version,
+            );
+            return Err(Error::new(ENOSYS));
+        }
+
+        Ok(Kvm { kvm })
     }
 
     /// Opens `/dev/kvm/` and returns a Kvm object on success.
@@ -160,6 +185,7 @@ impl Kvm {
 
     /// Gets the size of the mmap required to use vcpu's `kvm_run` structure.
     pub fn get_vcpu_mmap_size(&self) -> Result<usize> {
+        // SAFETY:
         // Safe because we know that our file is a KVM fd and we verify the return result.
         let res = unsafe { ioctl(self, KVM_GET_VCPU_MMAP_SIZE()) };
         if res > 0 {
@@ -185,6 +211,7 @@ impl Hypervisor for Kvm {
 
     fn check_capability(&self, cap: HypervisorCap) -> bool {
         if let Ok(kvm_cap) = KvmCap::try_from(cap) {
+            // SAFETY:
             // this ioctl is safe because we know this kvm descriptor is valid,
             // and we are copying over the kvm capability (u32) as a c_ulong value.
             unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), kvm_cap as c_ulong) == 1 }
@@ -208,6 +235,7 @@ pub struct KvmVm {
 impl KvmVm {
     /// Constructs a new `KvmVm` using the given `Kvm` instance.
     pub fn new(kvm: &Kvm, guest_mem: GuestMemory, cfg: Config) -> Result<KvmVm> {
+        // SAFETY:
         // Safe because we know kvm is a real kvm fd as this module is the only one that can make
         // Kvm objects.
         let ret = unsafe {
@@ -220,22 +248,25 @@ impl KvmVm {
         if ret < 0 {
             return errno_result();
         }
+        // SAFETY:
         // Safe because we verify that ret is valid and we own the fd.
         let vm_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(ret) };
-        guest_mem.with_regions(|index, guest_addr, size, host_addr, _, _| {
+        for region in guest_mem.regions() {
+            // SAFETY:
+            // Safe because the guest regions are guaranteed not to overlap.
             unsafe {
-                // Safe because the guest regions are guaranteed not to overlap.
                 set_user_memory_region(
                     &vm_descriptor,
-                    index as MemSlot,
+                    region.index as MemSlot,
                     false,
                     false,
-                    guest_addr.offset(),
-                    size as u64,
-                    host_addr as *mut u8,
+                    MemCacheType::CacheCoherent,
+                    region.guest_addr.offset(),
+                    region.size as u64,
+                    region.host_addr as *mut u8,
                 )
-            }
-        })?;
+            }?;
+        }
 
         let vm = KvmVm {
             kvm: kvm.try_clone()?,
@@ -251,27 +282,36 @@ impl KvmVm {
     pub fn create_kvm_vcpu(&self, id: usize) -> Result<KvmVcpu> {
         let run_mmap_size = self.kvm.get_vcpu_mmap_size()?;
 
+        // SAFETY:
         // Safe because we know that our file is a VM fd and we verify the return result.
         let fd = unsafe { ioctl_with_val(self, KVM_CREATE_VCPU(), c_ulong::try_from(id).unwrap()) };
         if fd < 0 {
             return errno_result();
         }
 
+        // SAFETY:
         // Wrap the vcpu now in case the following ? returns early. This is safe because we verified
         // the value of the fd and we own the fd.
         let vcpu = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
 
+        // The VCPU mapping is held by an `Arc` inside `KvmVcpu`, and it can also be cloned by
+        // `signal_handle()` for use in `KvmVcpuSignalHandle`. The mapping will not be destroyed
+        // until all references are dropped, so it is safe to reference `kvm_run` fields via the
+        // `as_ptr()` function during either type's lifetime.
         let run_mmap = MemoryMappingBuilder::new(run_mmap_size)
             .from_descriptor(&vcpu)
             .build()
             .map_err(|_| Error::new(ENOSPC))?;
 
+        let cap_kvmclock_ctrl = self.check_raw_capability(KvmCap::KvmclockCtrl);
+
         Ok(KvmVcpu {
+            kvm: self.kvm.try_clone()?,
             vm: self.vm.try_clone()?,
             vcpu,
             id,
-            run_mmap,
-            vcpu_run_handle_fingerprint: Default::default(),
+            cap_kvmclock_ctrl,
+            run_mmap: Arc::new(run_mmap),
         })
     }
 
@@ -279,6 +319,7 @@ impl KvmVm {
     ///
     /// See the documentation on the KVM_CREATE_IRQCHIP ioctl.
     pub fn create_irq_chip(&self) -> Result<()> {
+        // SAFETY:
         // Safe because we know that our file is a VM fd and we verify the return result.
         let ret = unsafe { ioctl(self, KVM_CREATE_IRQCHIP()) };
         if ret == 0 {
@@ -294,6 +335,7 @@ impl KvmVm {
         irq_level.__bindgen_anon_1.irq = irq;
         irq_level.level = active.into();
 
+        // SAFETY:
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
         let ret = unsafe { ioctl_with_ref(self, KVM_IRQ_LINE(), &irq_level) };
@@ -323,6 +365,7 @@ impl KvmVm {
             irqfd.resamplefd = r_evt.as_raw_descriptor() as u32;
         }
 
+        // SAFETY:
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
         let ret = unsafe { ioctl_with_ref(self, KVM_IRQFD(), &irqfd) };
@@ -345,6 +388,7 @@ impl KvmVm {
             flags: KVM_IRQFD_FLAG_DEASSIGN,
             ..Default::default()
         };
+        // SAFETY:
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
         let ret = unsafe { ioctl_with_ref(self, KVM_IRQFD(), &irqfd) };
@@ -362,6 +406,7 @@ impl KvmVm {
             vec_with_array_field::<kvm_irq_routing, kvm_irq_routing_entry>(routes.len());
         irq_routing[0].nr = routes.len() as u32;
 
+        // SAFETY:
         // Safe because we ensured there is enough space in irq_routing to hold the number of
         // route entries.
         let irq_routes = unsafe { irq_routing[0].entries.as_mut_slice(routes.len()) };
@@ -369,6 +414,8 @@ impl KvmVm {
             *irq_route = kvm_irq_routing_entry::from(route);
         }
 
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl_with_ref(self, KVM_SET_GSI_ROUTING(), &irq_routing[0]) };
         if ret == 0 {
             Ok(())
@@ -399,7 +446,7 @@ impl KvmVm {
                 None => (false, 0, 4),
             },
             Datamatch::U64(v) => match v {
-                Some(u) => (true, u as u64, 8),
+                Some(u) => (true, u, 8),
                 None => (false, 0, 8),
             },
         };
@@ -417,13 +464,14 @@ impl KvmVm {
             datamatch: datamatch_value,
             len: datamatch_len,
             addr: match addr {
-                IoEventAddress::Pio(p) => p as u64,
+                IoEventAddress::Pio(p) => p,
                 IoEventAddress::Mmio(m) => m,
             },
             fd: evt.as_raw_descriptor(),
             flags,
             ..Default::default()
         };
+        // SAFETY:
         // Safe because we know that our file is a VM fd, we know the kernel will only read the
         // correct amount of memory from our pointer, and we verify the return result.
         let ret = unsafe { ioctl_with_ref(self, KVM_IOEVENTFD(), &ioeventfd) };
@@ -436,11 +484,12 @@ impl KvmVm {
 
     /// Checks whether a particular KVM-specific capability is available for this VM.
     pub fn check_raw_capability(&self, capability: KvmCap) -> bool {
+        // SAFETY:
         // Safe because we know that our file is a KVM fd, and if the cap is invalid KVM assumes
         // it's an unavailable extension and returns 0.
         let ret = unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), capability as c_ulong) };
         match capability {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             KvmCap::BusLockDetect => {
                 if ret > 0 {
                     ret as u32 & KVM_BUS_LOCK_DETECTION_EXIT == KVM_BUS_LOCK_DETECTION_EXIT
@@ -472,6 +521,7 @@ impl KvmVm {
             flags,
             ..Default::default()
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct, and because we assume the caller has allocated the args appropriately.
         let ret = ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap);
@@ -480,6 +530,19 @@ impl KvmVm {
         } else {
             errno_result()
         }
+    }
+
+    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
+        match self.guest_mem.remove_range(guest_address, size) {
+            Ok(_) => Ok(()),
+            Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
+            Err(_) => Err(Error::new(EIO)),
+        }
+    }
+
+    fn handle_deflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
+        // No-op, when the guest attempts to access the pages again, Linux/KVM will provide them.
+        Ok(())
     }
 }
 
@@ -501,22 +564,32 @@ impl Vm for KvmVm {
         match c {
             VmCap::DirtyLog => true,
             VmCap::PvClock => false,
-            VmCap::PvClockSuspend => self.check_raw_capability(KvmCap::KvmclockCtrl),
             VmCap::Protected => self.check_raw_capability(KvmCap::ArmProtectedVm),
             VmCap::EarlyInitCpuid => false,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VmCap::BusLockDetect => self.check_raw_capability(KvmCap::BusLockDetect),
+            // When pKVM is the hypervisor, read-only memslots aren't supported, even for
+            // non-protected VMs.
+            VmCap::ReadOnlyMemoryRegion => !self.is_pkvm(),
+            VmCap::MemNoncoherentDma => {
+                cfg!(feature = "noncoherent-dma")
+                    && self.check_raw_capability(KvmCap::MemNoncoherentDma)
+            }
         }
     }
 
     fn enable_capability(&self, c: VmCap, _flags: u32) -> Result<bool> {
         match c {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VmCap::BusLockDetect => {
                 let args = [KVM_BUS_LOCK_DETECTION_EXIT as u64, 0, 0, 0];
-                Ok(unsafe {
-                    self.enable_raw_capability(KvmCap::BusLockDetect, _flags, &args) == Ok(())
-                })
+                Ok(
+                    // TODO(b/315998194): Add safety comment
+                    #[allow(clippy::undocumented_unsafe_blocks)]
+                    unsafe {
+                        self.enable_raw_capability(KvmCap::BusLockDetect, _flags, &args) == Ok(())
+                    },
+                )
             }
             _ => Ok(false),
         }
@@ -536,6 +609,7 @@ impl Vm for KvmVm {
         mem: Box<dyn MappedRegion>,
         read_only: bool,
         log_dirty_pages: bool,
+        cache: MemCacheType,
     ) -> Result<MemSlot> {
         let pgsz = pagesize() as u64;
         // KVM require to set the user memory region with page size aligned size. Safe to extend
@@ -555,6 +629,13 @@ impl Vm for KvmVm {
             None => (regions.len() + self.guest_mem.num_regions() as usize) as MemSlot,
         };
 
+        let cache_type = if self.check_capability(VmCap::MemNoncoherentDma) {
+            cache
+        } else {
+            MemCacheType::CacheCoherent
+        };
+
+        // SAFETY:
         // Safe because we check that the given guest address is valid and has no overlaps. We also
         // know that the pointer and size are correct because the MemoryMapping interface ensures
         // this. We take ownership of the memory mapping so that it won't be unmapped until the slot
@@ -565,7 +646,8 @@ impl Vm for KvmVm {
                 slot,
                 read_only,
                 log_dirty_pages,
-                guest_addr.offset() as u64,
+                cache_type,
+                guest_addr.offset(),
                 size,
                 mem.as_ptr(),
             )
@@ -596,9 +678,19 @@ impl Vm for KvmVm {
         if !regions.contains_key(&slot) {
             return Err(Error::new(ENOENT));
         }
+        // SAFETY:
         // Safe because the slot is checked against the list of memory slots.
         unsafe {
-            set_user_memory_region(&self.vm, slot, false, false, 0, 0, std::ptr::null_mut())?;
+            set_user_memory_region(
+                &self.vm,
+                slot,
+                false,
+                false,
+                MemCacheType::CacheCoherent,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )?;
         }
         self.mem_slot_gaps.lock().push(Reverse(slot));
         // This remove will always succeed because of the contains_key check above.
@@ -616,18 +708,22 @@ impl Vm for KvmVm {
                     flags: 0,
                 },
 
-                // ARM has additional DeviceKinds, so it needs the catch-all pattern
-                #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+                // ARM and risc-v have additional DeviceKinds, so it needs the catch-all pattern
+                #[cfg(any(target_arch = "arm", target_arch = "aarch64", target_arch = "riscv64"))]
                 _ => return Err(Error::new(libc::ENXIO)),
             }
         };
 
+        // SAFETY:
         // Safe because we know that our file is a VM fd, we know the kernel will only write correct
         // amount of memory to our pointer, and we verify the return result.
         let ret = unsafe { base::ioctl_with_ref(self, KVM_CREATE_DEVICE(), &device) };
         if ret == 0 {
-            // Safe because we verify that ret is valid and we own the fd.
-            Ok(unsafe { SafeDescriptor::from_raw_descriptor(device.fd as i32) })
+            Ok(
+                // SAFETY:
+                // Safe because we verify that ret is valid and we own the fd.
+                unsafe { SafeDescriptor::from_raw_descriptor(device.fd as i32) },
+            )
         } else {
             errno_result()
         }
@@ -646,6 +742,7 @@ impl Vm for KvmVm {
             ..Default::default()
         };
         dirty_log_kvm.__bindgen_anon_1.dirty_bitmap = dirty_log.as_ptr() as *mut c_void;
+        // SAFETY:
         // Safe because the `dirty_bitmap` pointer assigned above is guaranteed to be valid (because
         // it's from a slice) and we checked that it will be large enough to hold the entire log.
         let ret = unsafe { ioctl_with_ref(self, KVM_GET_DIRTY_LOG(), &dirty_log_kvm) };
@@ -717,17 +814,12 @@ impl Vm for KvmVm {
         }
     }
 
-    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        match self.guest_mem.remove_range(guest_address, size) {
-            Ok(_) => Ok(()),
-            Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
-            Err(_) => Err(Error::new(EIO)),
+    fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()> {
+        match event {
+            BalloonEvent::Inflate(m) => self.handle_inflate(m.guest_address, m.size),
+            BalloonEvent::Deflate(m) => self.handle_deflate(m.guest_address, m.size),
+            BalloonEvent::BalloonTargetReached(_) => Ok(()),
         }
-    }
-
-    fn handle_deflate(&mut self, _guest_address: GuestAddress, _size: u64) -> Result<()> {
-        // No-op, when the guest attempts to access the pages again, Linux/KVM will provide them.
-        Ok(())
     }
 }
 
@@ -737,99 +829,48 @@ impl AsRawDescriptor for KvmVm {
     }
 }
 
+struct KvmVcpuSignalHandle {
+    run_mmap: Arc<MemoryMapping>,
+}
+
+impl VcpuSignalHandleInner for KvmVcpuSignalHandle {
+    fn signal_immediate_exit(&self) {
+        // SAFETY: we ensure `run_mmap` is a valid mapping of `kvm_run` at creation time, and the
+        // `Arc` ensures the mapping still exists while we hold a reference to it.
+        unsafe {
+            let run = self.run_mmap.as_ptr() as *mut kvm_run;
+            (*run).immediate_exit = 1;
+        }
+    }
+}
+
 /// A wrapper around using a KVM Vcpu.
 pub struct KvmVcpu {
+    kvm: Kvm,
     vm: SafeDescriptor,
     vcpu: SafeDescriptor,
     id: usize,
-    run_mmap: MemoryMapping,
-    vcpu_run_handle_fingerprint: Arc<AtomicU64>,
+    cap_kvmclock_ctrl: bool,
+    run_mmap: Arc<MemoryMapping>,
 }
-
-pub(super) struct VcpuThread {
-    run: *mut kvm_run,
-    signal_num: Option<c_int>,
-}
-
-thread_local!(static VCPU_THREAD: RefCell<Option<VcpuThread>> = RefCell::new(None));
 
 impl Vcpu for KvmVcpu {
     fn try_clone(&self) -> Result<Self> {
         let vm = self.vm.try_clone()?;
         let vcpu = self.vcpu.try_clone()?;
-        let run_mmap = MemoryMappingBuilder::new(self.run_mmap.size())
-            .from_descriptor(&vcpu)
-            .build()
-            .map_err(|_| Error::new(ENOSPC))?;
-        let vcpu_run_handle_fingerprint = self.vcpu_run_handle_fingerprint.clone();
 
         Ok(KvmVcpu {
+            kvm: self.kvm.try_clone()?,
             vm,
             vcpu,
+            cap_kvmclock_ctrl: self.cap_kvmclock_ctrl,
             id: self.id,
-            run_mmap,
-            vcpu_run_handle_fingerprint,
+            run_mmap: self.run_mmap.clone(),
         })
     }
 
     fn as_vcpu(&self) -> &dyn Vcpu {
         self
-    }
-
-    #[allow(clippy::cast_ptr_alignment)]
-    fn take_run_handle(&self, signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
-        fn vcpu_run_handle_drop() {
-            VCPU_THREAD.with(|v| {
-                // This assumes that a failure in `BlockedSignal::new` means the signal is already
-                // blocked and there it should not be unblocked on exit.
-                let _blocked_signal = &(*v.borrow())
-                    .as_ref()
-                    .and_then(|state| state.signal_num)
-                    .map(BlockedSignal::new);
-
-                *v.borrow_mut() = None;
-            });
-        }
-
-        // Prevent `vcpu_run_handle_drop` from being called until we actually setup the signal
-        // blocking. The handle needs to be made now so that we can use the fingerprint.
-        let vcpu_run_handle = ManuallyDrop::new(VcpuRunHandle::new(vcpu_run_handle_drop));
-
-        // AcqRel ordering is sufficient to ensure only one thread gets to set its fingerprint to
-        // this Vcpu and subsequent `run` calls will see the fingerprint.
-        if self
-            .vcpu_run_handle_fingerprint
-            .compare_exchange(
-                0,
-                vcpu_run_handle.fingerprint().as_u64(),
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return Err(Error::new(EBUSY));
-        }
-
-        // Block signal while we add -- if a signal fires (very unlikely,
-        // as this means something is trying to pause the vcpu before it has
-        // even started) it'll try to grab the read lock while this write
-        // lock is grabbed and cause a deadlock.
-        // Assuming that a failure to block means it's already blocked.
-        let _blocked_signal = signal_num.map(BlockedSignal::new);
-
-        VCPU_THREAD.with(|v| {
-            if v.borrow().is_none() {
-                *v.borrow_mut() = Some(VcpuThread {
-                    run: self.run_mmap.as_ptr() as *mut kvm_run,
-                    signal_num,
-                });
-                Ok(())
-            } else {
-                Err(Error::new(EBUSY))
-            }
-        })?;
-
-        Ok(ManuallyDrop::into_inner(vcpu_run_handle))
     }
 
     fn id(&self) -> usize {
@@ -838,6 +879,7 @@ impl Vcpu for KvmVcpu {
 
     #[allow(clippy::cast_ptr_alignment)]
     fn set_immediate_exit(&self, exit: bool) {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was. The pointer is page aligned so casting to a different
         // type is well defined, hence the clippy allow attribute.
@@ -845,57 +887,28 @@ impl Vcpu for KvmVcpu {
         run.immediate_exit = exit.into();
     }
 
-    fn set_local_immediate_exit(exit: bool) {
-        VCPU_THREAD.with(|v| {
-            if let Some(state) = &(*v.borrow()) {
-                unsafe {
-                    (*state.run).immediate_exit = exit.into();
-                };
+    fn signal_handle(&self) -> VcpuSignalHandle {
+        VcpuSignalHandle {
+            inner: Box::new(KvmVcpuSignalHandle {
+                run_mmap: self.run_mmap.clone(),
+            }),
+        }
+    }
+
+    fn on_suspend(&self) -> Result<()> {
+        // On KVM implementations that use a paravirtualized clock (e.g. x86), a flag must be set to
+        // indicate to the guest kernel that a vCPU was suspended. The guest kernel will use this
+        // flag to prevent the soft lockup detection from triggering when this vCPU resumes, which
+        // could happen days later in realtime.
+        if self.cap_kvmclock_ctrl {
+            // SAFETY:
+            // The ioctl is safe because it does not read or write memory in this process.
+            if unsafe { ioctl(self, KVM_KVMCLOCK_CTRL()) } != 0 {
+                return errno_result();
             }
-        });
-    }
-
-    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
-        extern "C" fn f() {
-            KvmVcpu::set_local_immediate_exit(true);
-        }
-        f
-    }
-
-    fn pvclock_ctrl(&self) -> Result<()> {
-        self.pvclock_ctrl_arch()
-    }
-
-    fn set_signal_mask(&self, signals: &[c_int]) -> Result<()> {
-        let sigset = signal::create_sigset(signals)?;
-
-        let mut kvm_sigmask = vec_with_array_field::<kvm_signal_mask, sigset_t>(1);
-        // Rust definition of sigset_t takes 128 bytes, but the kernel only
-        // expects 8-bytes structure, so we can't write
-        // kvm_sigmask.len  = size_of::<sigset_t>() as u32;
-        kvm_sigmask[0].len = 8;
-        // Ensure the length is not too big.
-        const _ASSERT: usize = size_of::<sigset_t>() - 8usize;
-
-        // Safe as we allocated exactly the needed space
-        unsafe {
-            copy_nonoverlapping(
-                &sigset as *const sigset_t as *const u8,
-                kvm_sigmask[0].sigset.as_mut_ptr(),
-                8,
-            );
         }
 
-        let ret = unsafe {
-            // The ioctl is safe because the kernel will only read from the
-            // kvm_signal_mask structure.
-            ioctl_with_ref(self, KVM_SET_SIGNAL_MASK(), &kvm_sigmask[0])
-        };
-        if ret == 0 {
-            Ok(())
-        } else {
-            errno_result()
-        }
+        Ok(())
     }
 
     unsafe fn enable_raw_capability(&self, cap: u32, args: &[u64; 4]) -> Result<()> {
@@ -904,6 +917,7 @@ impl Vcpu for KvmVcpu {
             args: *args,
             ..Default::default()
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct, and because we assume the caller has allocated the args appropriately.
         let ret = ioctl_with_ref(self, KVM_ENABLE_CAP(), &kvm_cap);
@@ -917,22 +931,15 @@ impl Vcpu for KvmVcpu {
     #[allow(clippy::cast_ptr_alignment)]
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
-    fn run(&mut self, run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
-        // Acquire is used to ensure this check is ordered after the `compare_exchange` in `run`.
-        if self
-            .vcpu_run_handle_fingerprint
-            .load(std::sync::atomic::Ordering::Acquire)
-            != run_handle.fingerprint().as_u64()
-        {
-            panic!("invalid VcpuRunHandle used to run Vcpu");
-        }
-
+    fn run(&mut self) -> Result<VcpuExit> {
+        // SAFETY:
         // Safe because we know that our file is a VCPU fd and we verify the return result.
         let ret = unsafe { ioctl(self, KVM_RUN()) };
         if ret != 0 {
             return errno_result();
         }
 
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
@@ -940,6 +947,7 @@ impl Vcpu for KvmVcpu {
             KVM_EXIT_IO => Ok(VcpuExit::Io),
             KVM_EXIT_MMIO => Ok(VcpuExit::Mmio),
             KVM_EXIT_IOAPIC_EOI => {
+                // SAFETY:
                 // Safe because the exit_reason (which comes from the kernel) told us which
                 // union field to use.
                 let vector = unsafe { run.__bindgen_anon_1.eoi.vector };
@@ -954,6 +962,7 @@ impl Vcpu for KvmVcpu {
             KVM_EXIT_IRQ_WINDOW_OPEN => Ok(VcpuExit::IrqWindowOpen),
             KVM_EXIT_SHUTDOWN => Ok(VcpuExit::Shutdown),
             KVM_EXIT_FAIL_ENTRY => {
+                // SAFETY:
                 // Safe because the exit_reason (which comes from the kernel) told us which
                 // union field to use.
                 let hardware_entry_failure_reason = unsafe {
@@ -980,16 +989,19 @@ impl Vcpu for KvmVcpu {
             KVM_EXIT_S390_TSCH => Ok(VcpuExit::S390Tsch),
             KVM_EXIT_EPR => Ok(VcpuExit::Epr),
             KVM_EXIT_SYSTEM_EVENT => {
+                // SAFETY:
                 // Safe because we know the exit reason told us this union
                 // field is valid
                 let event_type = unsafe { run.__bindgen_anon_1.system_event.type_ };
                 let event_flags =
+                    // SAFETY:
+                    // Safe because we know the exit reason told us this union
+                    // field is valid
                     unsafe { run.__bindgen_anon_1.system_event.__bindgen_anon_1.flags };
                 match event_type {
                     KVM_SYSTEM_EVENT_SHUTDOWN => Ok(VcpuExit::SystemEventShutdown),
                     KVM_SYSTEM_EVENT_RESET => self.system_event_reset(event_flags),
                     KVM_SYSTEM_EVENT_CRASH => Ok(VcpuExit::SystemEventCrash),
-                    KVM_SYSTEM_EVENT_S2IDLE => Ok(VcpuExit::SystemEventS2Idle),
                     _ => {
                         error!(
                             "Unknown KVM system event {} with flags {}",
@@ -1000,6 +1012,7 @@ impl Vcpu for KvmVcpu {
                 }
             }
             KVM_EXIT_X86_RDMSR => {
+                // SAFETY:
                 // Safe because the exit_reason (which comes from the kernel) told us which
                 // union field to use.
                 let msr = unsafe { &mut run.__bindgen_anon_1.msr };
@@ -1009,6 +1022,7 @@ impl Vcpu for KvmVcpu {
                 Ok(VcpuExit::RdMsr { index })
             }
             KVM_EXIT_X86_WRMSR => {
+                // SAFETY:
                 // Safe because the exit_reason (which comes from the kernel) told us which
                 // union field to use.
                 let msr = unsafe { &mut run.__bindgen_anon_1.msr };
@@ -1019,17 +1033,45 @@ impl Vcpu for KvmVcpu {
                 Ok(VcpuExit::WrMsr { index, data })
             }
             KVM_EXIT_X86_BUS_LOCK => Ok(VcpuExit::BusLock),
+            #[cfg(target_arch = "riscv64")]
+            KVM_EXIT_RISCV_SBI => {
+                // Safe because we trust the kernel to correctly fill in the union
+                let extension_id = unsafe { run.__bindgen_anon_1.riscv_sbi.extension_id };
+                let function_id = unsafe { run.__bindgen_anon_1.riscv_sbi.function_id };
+                let args = unsafe { run.__bindgen_anon_1.riscv_sbi.args };
+                Ok(VcpuExit::Sbi {
+                    extension_id,
+                    function_id,
+                    args,
+                })
+            }
+            #[cfg(target_arch = "riscv64")]
+            KVM_EXIT_RISCV_CSR => {
+                // Safe because we trust the kernel to correctly fill in the union
+                let csr_num = unsafe { run.__bindgen_anon_1.riscv_csr.csr_num };
+                let new_value = unsafe { run.__bindgen_anon_1.riscv_csr.new_value };
+                let write_mask = unsafe { run.__bindgen_anon_1.riscv_csr.write_mask };
+                let ret_value = unsafe { run.__bindgen_anon_1.riscv_csr.ret_value };
+                Ok(VcpuExit::RiscvCsr {
+                    csr_num,
+                    new_value,
+                    write_mask,
+                    ret_value,
+                })
+            }
             r => panic!("unknown kvm exit reason: {}", r),
         }
     }
 
     fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was. The pointer is page aligned so casting to a different
         // type is well defined, hence the clippy allow attribute.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         // Verify that the handler is called in the right context.
         assert!(run.exit_reason == KVM_EXIT_MMIO);
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let mmio = unsafe { &mut run.__bindgen_anon_1.mmio };
@@ -1055,48 +1097,59 @@ impl Vcpu for KvmVcpu {
     }
 
     fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was. The pointer is page aligned so casting to a different
         // type is well defined, hence the clippy allow attribute.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         // Verify that the handler is called in the right context.
         assert!(run.exit_reason == KVM_EXIT_IO);
-        let run_start = run as *mut kvm_run as *mut u8;
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let io = unsafe { run.__bindgen_anon_1.io };
-        let size = (io.count as usize) * (io.size as usize);
+        let size = usize::from(io.size);
+
+        // SAFETY:
+        // The data_offset is defined by the kernel to be some number of bytes into the kvm_run
+        // structure, which we have fully mmap'd.
+        let mut data_ptr = unsafe { (run as *mut kvm_run as *mut u8).add(io.data_offset as usize) };
+
         match io.direction as u32 {
             KVM_EXIT_IO_IN => {
-                if let Some(data) = handle_fn(IoParams {
-                    address: io.port.into(),
-                    size,
-                    operation: IoOperation::Read,
-                }) {
-                    // The data_offset is defined by the kernel to be some number of bytes
-                    // into the kvm_run structure, which we have fully mmap'd.
-                    unsafe {
-                        let data_ptr = run_start.offset(io.data_offset as isize);
-                        copy_nonoverlapping(data.as_ptr(), data_ptr, size);
+                for _ in 0..io.count {
+                    if let Some(data) = handle_fn(IoParams {
+                        address: io.port.into(),
+                        size,
+                        operation: IoOperation::Read,
+                    }) {
+                        // TODO(b/315998194): Add safety comment
+                        #[allow(clippy::undocumented_unsafe_blocks)]
+                        unsafe {
+                            copy_nonoverlapping(data.as_ptr(), data_ptr, size);
+                            data_ptr = data_ptr.add(size);
+                        }
+                    } else {
+                        return Err(Error::new(EINVAL));
                     }
-                    Ok(())
-                } else {
-                    Err(Error::new(EINVAL))
                 }
+                Ok(())
             }
             KVM_EXIT_IO_OUT => {
-                let mut data = [0; 8];
-                // The data_offset is defined by the kernel to be some number of bytes
-                // into the kvm_run structure, which we have fully mmap'd.
-                unsafe {
-                    let data_ptr = run_start.offset(io.data_offset as isize);
-                    copy_nonoverlapping(data_ptr, data.as_mut_ptr(), min(size, data.len()));
+                for _ in 0..io.count {
+                    let mut data = [0; 8];
+                    // TODO(b/315998194): Add safety comment
+                    #[allow(clippy::undocumented_unsafe_blocks)]
+                    unsafe {
+                        copy_nonoverlapping(data_ptr, data.as_mut_ptr(), min(size, data.len()));
+                        data_ptr = data_ptr.add(size);
+                    }
+                    handle_fn(IoParams {
+                        address: io.port.into(),
+                        size,
+                        operation: IoOperation::Write { data },
+                    });
                 }
-                handle_fn(IoParams {
-                    address: io.port.into(),
-                    size,
-                    operation: IoOperation::Write { data },
-                });
                 Ok(())
             }
             _ => Err(Error::new(EINVAL)),
@@ -1107,16 +1160,20 @@ impl Vcpu for KvmVcpu {
         &self,
         handle_fn: &mut dyn FnMut(HypervHypercall) -> u64,
     ) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         // Verify that the handler is called in the right context.
         assert!(run.exit_reason == KVM_EXIT_HYPERV);
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let hyperv = unsafe { &mut run.__bindgen_anon_1.hyperv };
-        match hyperv.type_ as u32 {
+        match hyperv.type_ {
             KVM_EXIT_HYPERV_SYNIC => {
+                // TODO(b/315998194): Add safety comment
+                #[allow(clippy::undocumented_unsafe_blocks)]
                 let synic = unsafe { &hyperv.u.synic };
                 handle_fn(HypervHypercall::HypervSynic {
                     msr: synic.msr,
@@ -1127,6 +1184,8 @@ impl Vcpu for KvmVcpu {
                 Ok(())
             }
             KVM_EXIT_HYPERV_HCALL => {
+                // TODO(b/315998194): Add safety comment
+                #[allow(clippy::undocumented_unsafe_blocks)]
                 let hcall = unsafe { &mut hyperv.u.hcall };
                 hcall.result = handle_fn(HypervHypercall::HypervHcall {
                     input: hcall.input,
@@ -1139,11 +1198,13 @@ impl Vcpu for KvmVcpu {
     }
 
     fn handle_rdmsr(&self, data: u64) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         // Verify that the handler is called in the right context.
         assert!(run.exit_reason == KVM_EXIT_X86_RDMSR);
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let msr = unsafe { &mut run.__bindgen_anon_1.msr };
@@ -1153,11 +1214,13 @@ impl Vcpu for KvmVcpu {
     }
 
     fn handle_wrmsr(&self) {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the kvm_run struct because the
         // kernel told us how large it was.
         let run = unsafe { &mut *(self.run_mmap.as_ptr() as *mut kvm_run) };
         // Verify that the handler is called in the right context.
         assert!(run.exit_reason == KVM_EXIT_X86_WRMSR);
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let msr = unsafe { &mut run.__bindgen_anon_1.msr };
@@ -1174,10 +1237,15 @@ impl KvmVcpu {
     /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
     /// to run crosvm on s390.
     pub fn get_mp_state(&self) -> Result<kvm_mp_state> {
-        // Safe because we know that our file is a VCPU fd, we know the kernel will only write the
-        // correct amount of memory to our pointer, and we verify the return result.
+        // SAFETY: trivially safe
         let mut state: kvm_mp_state = unsafe { std::mem::zeroed() };
-        let ret = unsafe { ioctl_with_mut_ref(self, KVM_GET_MP_STATE(), &mut state) };
+        let ret = {
+            // SAFETY:
+            // Safe because we know that our file is a VCPU fd, we know the kernel will only write
+            // the correct amount of memory to our pointer, and we verify the return
+            // result.
+            unsafe { ioctl_with_mut_ref(self, KVM_GET_MP_STATE(), &mut state) }
+        };
         if ret < 0 {
             return errno_result();
         }
@@ -1192,9 +1260,10 @@ impl KvmVcpu {
     /// Note that KVM defines the call for both x86 and s390 but we do not expect anyone
     /// to run crosvm on s390.
     pub fn set_mp_state(&self, state: &kvm_mp_state) -> Result<()> {
-        let ret = unsafe {
+        let ret = {
+            // SAFETY:
             // The ioctl is safe because the kernel will only read from the kvm_mp_state struct.
-            ioctl_with_ref(self, KVM_SET_MP_STATE(), state)
+            unsafe { ioctl_with_ref(self, KVM_SET_MP_STATE(), state) }
         };
         if ret < 0 {
             return errno_result();
@@ -1219,11 +1288,12 @@ impl TryFrom<HypervisorCap> for KvmCap {
             HypervisorCap::S390UserSigp => Ok(KvmCap::S390UserSigp),
             HypervisorCap::TscDeadlineTimer => Ok(KvmCap::TscDeadlineTimer),
             HypervisorCap::UserMemory => Ok(KvmCap::UserMemory),
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             HypervisorCap::Xcrs => Ok(KvmCap::Xcrs),
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             HypervisorCap::CalibratedTscLeafRequired => Err(Error::new(libc::EINVAL)),
             HypervisorCap::StaticSwiotlbAllocationRequired => Err(Error::new(libc::EINVAL)),
+            HypervisorCap::HypervisorInitializedBootContext => Err(Error::new(libc::EINVAL)),
         }
     }
 }

@@ -5,11 +5,9 @@
 use core::ffi::c_void;
 use std::arch::x86_64::CpuidResult;
 use std::cmp::min;
+use std::collections::BTreeMap;
 use std::intrinsics::copy_nonoverlapping;
 use std::mem::size_of;
-use std::os::raw::c_int;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
 
 use base::errno_result;
 use base::ioctl;
@@ -26,11 +24,10 @@ use data_model::vec_with_array_field;
 use libc::EINVAL;
 use libc::ENOENT;
 use libc::ENXIO;
+use libc::EOPNOTSUPP;
 use vm_memory::GuestAddress;
 
 use super::*;
-use crate::get_tsc_offset_from_msr;
-use crate::set_tsc_offset_via_msr;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
@@ -39,14 +36,13 @@ use crate::Fpu;
 use crate::HypervHypercall;
 use crate::IoOperation;
 use crate::IoParams;
-use crate::Register;
 use crate::Regs;
 use crate::Segment;
 use crate::Sregs;
 use crate::Vcpu;
 use crate::VcpuExit;
-use crate::VcpuRunHandle;
 use crate::VcpuX86_64;
+use crate::Xsave;
 
 // HAXM exit reasons
 // IO port request
@@ -87,10 +83,13 @@ pub struct HaxmVcpu {
     pub(super) id: usize,
     pub(super) tunnel: *mut hax_tunnel,
     pub(super) io_buffer: *mut c_void,
-    pub(super) vcpu_run_handle_fingerprint: Arc<AtomicU64>,
 }
 
+// TODO(b/315998194): Add safety comment
+#[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl Send for HaxmVcpu {}
+// TODO(b/315998194): Add safety comment
+#[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl Sync for HaxmVcpu {}
 
 impl AsRawDescriptor for HaxmVcpu {
@@ -103,36 +102,27 @@ impl HaxmVcpu {
     fn get_vcpu_state(&self) -> Result<VcpuState> {
         let mut state = vcpu_state_t::default();
 
+        // SAFETY: trivially safe with return value checked.
         let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_GET_REGS(), &mut state) };
         if ret != 0 {
             return errno_result();
         }
 
         // Also read efer MSR
-        let mut efer = vec![Register {
-            id: IA32_EFER,
-            value: 0,
-        }];
-
-        self.get_msrs(&mut efer)?;
-        state._efer = efer[0].value as u32;
+        state._efer = self.get_msr(IA32_EFER)? as u32;
 
         Ok(VcpuState { state })
     }
 
     fn set_vcpu_state(&self, state: &mut VcpuState) -> Result<()> {
+        // SAFETY: trivially safe with return value checked.
         let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_SET_REGS(), &mut state.state) };
         if ret != 0 {
             return errno_result();
         }
 
         // Also set efer MSR
-        let efer = vec![Register {
-            id: IA32_EFER,
-            value: state.state._efer as u64,
-        }];
-
-        self.set_msrs(&efer)
+        self.set_msr(IA32_EFER, state.state._efer as u64)
     }
 }
 
@@ -144,16 +134,11 @@ impl Vcpu for HaxmVcpu {
             id: self.id,
             tunnel: self.tunnel,
             io_buffer: self.io_buffer,
-            vcpu_run_handle_fingerprint: self.vcpu_run_handle_fingerprint.clone(),
         })
     }
 
     fn as_vcpu(&self) -> &dyn Vcpu {
         self
-    }
-
-    fn take_run_handle(&self, signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
-        take_run_handle(self, signal_num)
     }
 
     /// Returns the vcpu id.
@@ -163,6 +148,7 @@ impl Vcpu for HaxmVcpu {
 
     /// Sets the bit that requests an immediate exit.
     fn set_immediate_exit(&self, exit: bool) {
+        // SAFETY:
         // Safe because we know the tunnel is a pointer to a hax_tunnel and we know its size.
         // Crosvm's HAXM implementation does not use the _exit_reason, so it's fine if we
         // overwrite it.
@@ -171,31 +157,9 @@ impl Vcpu for HaxmVcpu {
         }
     }
 
-    /// Sets/clears the bit for immediate exit for the vcpu on the current thread.
-    fn set_local_immediate_exit(exit: bool) {
-        set_local_immediate_exit(exit)
-    }
-
-    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
-        extern "C" fn f() {
-            HaxmVcpu::set_local_immediate_exit(true);
-        }
-        f
-    }
-
-    /// Signals to the hypervisor that this guest is being paused by userspace.  Only works on Vms
-    /// that support `VmCapability::PvClockSuspend`.
-    fn pvclock_ctrl(&self) -> Result<()> {
-        Err(Error::new(libc::ENXIO))
-        // HaxmVcpu does not support VmCapability::PvClockSuspend
-    }
-
-    /// Specifies set of signals that are blocked during execution of `RunnableVcpu::run`.  Signals
-    /// that are not blocked will will cause run to return with `VcpuExit::Intr`. Only works on Vms
-    /// that support `VmCapability::SignalMask`.
-    fn set_signal_mask(&self, _signals: &[c_int]) -> Result<()> {
-        // HaxmVcpu does not support VmCapability::SignalMask
-        Err(Error::new(libc::ENXIO))
+    /// Signals to the hypervisor that this guest is being paused by userspace.
+    fn on_suspend(&self) -> Result<()> {
+        Ok(())
     }
 
     /// Enables a hypervisor-specific extension on this Vcpu.  `cap` is a constant defined by the
@@ -207,20 +171,22 @@ impl Vcpu for HaxmVcpu {
 
     /// This function should be called after `Vcpu::run` returns `VcpuExit::Mmio`.
     ///
-    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio exit,
-    /// call `handle_fn` with the respective IoOperation to perform the mmio read or write,
-    /// and set the return data in the vcpu so that the vcpu can resume running.
+    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio
+    /// exit, call `handle_fn` with the respective IoOperation to perform the mmio read or
+    /// write, and set the return data in the vcpu so that the vcpu can resume running.
     fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         // Verify that the handler is called for mmio context only.
         unsafe {
             assert!((*self.tunnel)._exit_status == HAX_EXIT_FAST_MMIO);
         }
-        // Safe because the exit_reason (which comes from the kernel) told us which
-        // union field to use.
         let mmio = self.io_buffer as *mut hax_fastmmio;
         let (address, size, direction) =
+            // SAFETY:
+            // Safe because the exit_reason (which comes from the kernel) told us which
+            // union field to use.
             unsafe { ((*mmio).gpa, (*mmio).size as usize, (*mmio).direction) };
 
         match direction {
@@ -230,23 +196,18 @@ impl Vcpu for HaxmVcpu {
                     size,
                     operation: IoOperation::Read,
                 }) {
+                    let data = u64::from_ne_bytes(data);
+                    // SAFETY:
                     // Safe because we know this is an mmio read, so we need to put data into the
-                    // "value" field of the hax_fastmmio. The "value" field is a u64, so casting
-                    // as a &mut [u8] of len 8 is safe.
-                    // TODO(b/250085118): remove this clippy allow as it's allowing potentially
-                    // problematic behavior.
-                    #[allow(unaligned_references)]
-                    let buffer = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            &mut (*mmio).__bindgen_anon_1.value as *mut u64 as *mut u8,
-                            8,
-                        )
-                    };
-                    buffer[..size].copy_from_slice(&data[..size]);
+                    // "value" field of the hax_fastmmio.
+                    unsafe {
+                        (*mmio).__bindgen_anon_1.value = data;
+                    }
                 }
                 Ok(())
             }
             HAX_EXIT_DIRECTION_MMIO_WRITE => {
+                // SAFETY:
                 // safe because we trust haxm to fill in the union properly.
                 let data = unsafe { (*mmio).__bindgen_anon_1.value };
                 handle_fn(IoParams {
@@ -269,12 +230,14 @@ impl Vcpu for HaxmVcpu {
     /// and set the return data in the vcpu so that the vcpu can resume running.
     #[allow(clippy::cast_ptr_alignment)]
     fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         // Verify that the handler is called for io context only.
         unsafe {
             assert!((*self.tunnel)._exit_status == HAX_EXIT_IO);
         }
+        // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let io = unsafe { (*self.tunnel).__bindgen_anon_1.io };
@@ -287,6 +250,7 @@ impl Vcpu for HaxmVcpu {
                     size,
                     operation: IoOperation::Read,
                 }) {
+                    // SAFETY:
                     // Safe because the exit_reason (which comes from the kernel) told us that
                     // this is port io, where the iobuf can be treated as a *u8
                     unsafe {
@@ -297,6 +261,7 @@ impl Vcpu for HaxmVcpu {
             }
             HAX_EXIT_DIRECTION_PIO_OUT => {
                 let mut data = [0; 8];
+                // SAFETY:
                 // safe because we check the size, from what the kernel told us is the max to copy.
                 unsafe {
                     copy_nonoverlapping(
@@ -339,22 +304,15 @@ impl Vcpu for HaxmVcpu {
     #[allow(clippy::cast_ptr_alignment)]
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
-    fn run(&mut self, run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
-        // Acquire is used to ensure this check is ordered after the `compare_exchange` in `run`.
-        if self
-            .vcpu_run_handle_fingerprint
-            .load(std::sync::atomic::Ordering::Acquire)
-            != run_handle.fingerprint().as_u64()
-        {
-            panic!("invalid VcpuRunHandle used to run Vcpu");
-        }
-
-        // Safe because we know that our file is a VCPU fd and we verify the return result.
+    fn run(&mut self) -> Result<VcpuExit> {
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl(self, HAX_VCPU_IOCTL_RUN()) };
         if ret != 0 {
             return errno_result();
         }
 
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         let exit_status = unsafe { (*self.tunnel)._exit_status };
@@ -378,6 +336,7 @@ impl VcpuX86_64 for HaxmVcpu {
     /// Sets or clears the flag that requests the VCPU to exit when it becomes possible to inject
     /// interrupts into the guest.
     fn set_interrupt_window_requested(&self, requested: bool) {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         unsafe {
@@ -387,6 +346,7 @@ impl VcpuX86_64 for HaxmVcpu {
 
     /// Checks if we can inject an interrupt into the VCPU.
     fn ready_for_interrupt(&self) -> bool {
+        // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         unsafe { (*self.tunnel).ready_for_interrupt_injection != 0 }
@@ -394,6 +354,8 @@ impl VcpuX86_64 for HaxmVcpu {
 
     /// Injects interrupt vector `irq` into the VCPU.
     fn interrupt(&self, irq: u32) -> Result<()> {
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_INTERRUPT(), &irq) };
         if ret != 0 {
             return errno_result();
@@ -436,6 +398,8 @@ impl VcpuX86_64 for HaxmVcpu {
     /// Gets the VCPU FPU registers.
     fn get_fpu(&self) -> Result<Fpu> {
         let mut fpu = fx_layout::default();
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU(), &mut fpu) };
 
         if ret != 0 {
@@ -448,6 +412,8 @@ impl VcpuX86_64 for HaxmVcpu {
     /// Sets the VCPU FPU registers.
     fn set_fpu(&self, fpu: &Fpu) -> Result<()> {
         let mut current_fpu = fx_layout::default();
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU(), &mut current_fpu) };
 
         if ret != 0 {
@@ -460,6 +426,8 @@ impl VcpuX86_64 for HaxmVcpu {
         // fpu state's mxcsr_mask matches its current value
         new_fpu.mxcsr_mask = current_fpu.mxcsr_mask;
 
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_SET_FPU(), &new_fpu) };
 
         if ret != 0 {
@@ -467,6 +435,22 @@ impl VcpuX86_64 for HaxmVcpu {
         }
 
         Ok(())
+    }
+
+    fn get_xsave(&self) -> Result<Xsave> {
+        Err(Error::new(EOPNOTSUPP))
+    }
+
+    fn set_xsave(&self, _xsave: &Xsave) -> Result<()> {
+        Err(Error::new(EOPNOTSUPP))
+    }
+
+    fn get_interrupt_state(&self) -> Result<serde_json::Value> {
+        Err(Error::new(EOPNOTSUPP))
+    }
+
+    fn set_interrupt_state(&self, _data: serde_json::Value) -> Result<()> {
+        Err(Error::new(EOPNOTSUPP))
     }
 
     /// Gets the VCPU debug registers.
@@ -483,70 +467,53 @@ impl VcpuX86_64 for HaxmVcpu {
     }
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
+        // Haxm does not support getting XCRs
+        Err(Error::new(libc::ENXIO))
+    }
+
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, _xcr_index: u32, _value: u64) -> Result<()> {
         // Haxm does not support setting XCRs
         Err(Error::new(libc::ENXIO))
     }
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, _xcrs: &[Register]) -> Result<()> {
-        // Haxm does not support setting XCRs
-        Err(Error::new(libc::ENXIO))
-    }
+    /// Gets the value of one model-specific register.
+    fn get_msr(&self, msr_index: u32) -> Result<u64> {
+        let mut msr_data = hax_msr_data {
+            nr_msr: 1,
+            ..Default::default()
+        };
+        msr_data.entries[0].entry = u64::from(msr_index);
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()> {
-        // HAX_VCPU_IOCTL_GET_MSRS only allows you to set HAX_MAX_MSR_ARRAY-1 msrs at a time
-        // TODO (b/163811378): the fact that you can only set HAX_MAX_MSR_ARRAY-1 seems like a
-        // bug with HAXM, since the entries array itself is HAX_MAX_MSR_ARRAY long
-        for chunk in msrs.chunks_mut((HAX_MAX_MSR_ARRAY - 1) as usize) {
-            let chunk_size = chunk.len();
-            let hax_chunk: Vec<vmx_msr> = chunk.iter().map(vmx_msr::from).collect();
-
-            let mut msr_data = hax_msr_data {
-                nr_msr: chunk_size as u16,
-                ..Default::default()
-            };
-
-            // Copy chunk into msr_data
-            msr_data.entries[..chunk_size].copy_from_slice(&hax_chunk);
-
-            let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_MSRS(), &mut msr_data) };
-            if ret != 0 {
-                return errno_result();
-            }
-
-            // copy values we got from kernel
-            for (i, item) in chunk.iter_mut().enumerate().take(chunk_size) {
-                item.value = msr_data.entries[i].value;
-            }
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_MSRS(), &mut msr_data) };
+        if ret != 0 {
+            return errno_result();
         }
 
-        Ok(())
+        Ok(msr_data.entries[0].value)
     }
 
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()> {
-        // HAX_VCPU_IOCTL_GET_MSRS only allows you to set HAX_MAX_MSR_ARRAY-1 msrs at a time
-        // TODO (b/163811378): the fact that you can only set HAX_MAX_MSR_ARRAY-1 seems like a
-        // bug with HAXM, since the entries array itself is HAX_MAX_MSR_ARRAY long
-        for chunk in msrs.chunks((HAX_MAX_MSR_ARRAY - 1) as usize) {
-            let chunk_size = chunk.len();
-            let hax_chunk: Vec<vmx_msr> = chunk.iter().map(vmx_msr::from).collect();
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
+        Err(Error::new(EOPNOTSUPP))
+    }
 
-            let mut msr_data = hax_msr_data {
-                nr_msr: chunk_size as u16,
-                ..Default::default()
-            };
+    /// Sets the value of one model-specific register.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()> {
+        let mut msr_data = hax_msr_data {
+            nr_msr: 1,
+            ..Default::default()
+        };
+        msr_data.entries[0].entry = u64::from(msr_index);
+        msr_data.entries[0].value = value;
 
-            // Copy chunk into msr_data
-            msr_data.entries[..chunk_size].copy_from_slice(&hax_chunk);
-
-            let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_SET_MSRS(), &mut msr_data) };
-            if ret != 0 {
-                return errno_result();
-            }
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_SET_MSRS(), &mut msr_data) };
+        if ret != 0 {
+            return errno_result();
         }
 
         Ok(())
@@ -557,11 +524,15 @@ impl VcpuX86_64 for HaxmVcpu {
         let total = cpuid.cpu_id_entries.len();
         let mut hax = vec_with_array_field::<hax_cpuid, hax_cpuid_entry>(total);
         hax[0].total = total as u32;
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let entries = unsafe { hax[0].entries.as_mut_slice(total) };
         for (i, e) in cpuid.cpu_id_entries.iter().enumerate() {
             entries[i] = hax_cpuid_entry::from(e);
         }
 
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let ret = unsafe {
             ioctl_with_ptr_sized(
                 self,
@@ -596,14 +567,19 @@ impl VcpuX86_64 for HaxmVcpu {
         Err(Error::new(ENOENT))
     }
 
-    fn get_tsc_offset(&self) -> Result<u64> {
-        // Use the default MSR-based implementation
-        get_tsc_offset_from_msr(self)
-    }
-
-    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
-        // Use the default MSR-based implementation
-        set_tsc_offset_via_msr(self, offset)
+    fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()> {
+        // HAXM sets TSC_OFFSET based on what we set TSC to; however, it does
+        // not yet handle syncing. This means it computes
+        // TSC_OFFSET = new_tsc - rdtsc(), so if we want to target the same
+        // offset value, we need new_tsc = rdtsc() + target_offset. This is what
+        // Self::set_tsc_offset does.
+        //
+        // TODO(b/311793539): haxm doesn't yet support syncing TSCs across VCPUs
+        // if the TSC value is non-zero. Once we have that support, we can
+        // switch to calling Self::set_tsc_value here with the common host
+        // reference moment. (Alternatively, we may just expose a way to set the
+        // offset directly.)
+        self.set_tsc_offset(tsc_offset)
     }
 }
 
@@ -613,6 +589,8 @@ struct VcpuState {
 
 impl VcpuState {
     fn get_regs(&self) -> Regs {
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             Regs {
                 rax: self
@@ -801,6 +779,8 @@ impl VcpuState {
 
 impl From<&segment_desc_t> for Segment {
     fn from(item: &segment_desc_t) -> Self {
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             Segment {
                 base: item.base,
@@ -828,6 +808,8 @@ impl From<&Segment> for segment_desc_t {
             ..Default::default()
         };
 
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             segment
                 .__bindgen_anon_1
@@ -894,7 +876,9 @@ impl From<&fx_layout> for Fpu {
             fsw: item.fsw,
             ftwx: item.ftw,
             last_opcode: item.fop,
+            // SAFETY: trivially safe
             last_ip: unsafe { item.__bindgen_anon_1.fpu_ip },
+            // SAFETY: trivially safe
             last_dp: unsafe { item.__bindgen_anon_2.fpu_dp },
             xmm: [[0; 16]; 16],
             mxcsr: item.mxcsr,
@@ -967,24 +951,6 @@ impl From<&CpuIdEntry> for hax_cpuid_entry {
     }
 }
 
-impl From<&vmx_msr> for Register {
-    fn from(item: &vmx_msr) -> Register {
-        Register {
-            id: item.entry as u32,
-            value: item.value,
-        }
-    }
-}
-
-impl From<&Register> for vmx_msr {
-    fn from(item: &Register) -> vmx_msr {
-        vmx_msr {
-            entry: item.id as u64,
-            value: item.value,
-        }
-    }
-}
-
 // TODO(b:241252288): Enable tests disabled with dummy feature flag - enable_haxm_tests.
 #[cfg(test)]
 #[cfg(feature = "enable_haxm_tests")]
@@ -1026,42 +992,25 @@ mod tests {
     }
 
     #[test]
-    fn set_many_msrs() {
+    fn set_msr() {
         let haxm = Haxm::new().expect("failed to instantiate HAXM");
         let mem =
             GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
         let vm = HaxmVm::new(&haxm, mem).expect("failed to create vm");
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut registers: Vec<Register> = Vec::new();
-        for id in 0x300..0x3ff {
-            registers.push(Register {
-                id: 38,
-                value: id as u64,
-            });
-        }
-
-        vcpu.set_msrs(&registers).expect("failed to set registers");
+        vcpu.set_msr(38, 0x300).expect("failed to set MSR");
     }
 
     #[test]
-    fn get_many_msrs() {
+    fn get_msr() {
         let haxm = Haxm::new().expect("failed to instantiate HAXM");
         let mem =
             GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
         let vm = HaxmVm::new(&haxm, mem).expect("failed to create vm");
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut registers: Vec<Register> = Vec::new();
-        for id in 0x300..0x3ff {
-            registers.push(Register {
-                id: 38,
-                value: id as u64,
-            });
-        }
-
-        vcpu.get_msrs(&mut registers)
-            .expect("failed to get registers");
+        let _value = vcpu.get_msr(38).expect("failed to get MSR");
     }
 
     #[test]
@@ -1111,21 +1060,17 @@ mod tests {
         assert_eq!(sregs.efer, EFER_LMA | EFER_LME);
 
         // IA32_EFER register value should match
-        let mut efer_reg = vec![Register {
-            id: IA32_EFER,
-            value: 0,
-        }];
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_LMA | EFER_LME);
+        let efer = vcpu.get_msr(IA32_EFER).expect("failed to get msr");
+        assert_eq!(efer, EFER_LMA | EFER_LME);
 
         // Enable SCE via set_msrs
-        efer_reg[0].value |= EFER_SCE;
-        vcpu.set_msrs(&efer_reg).expect("failed to set msrs");
+        vcpu.set_msr(IA32_EFER, efer | EFER_SCE)
+            .expect("failed to set msr");
 
         // Verify that setting stuck
         let sregs = vcpu.get_sregs().expect("failed to get sregs");
         assert_eq!(sregs.efer, EFER_SCE | EFER_LME | EFER_LMA);
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_SCE | EFER_LME | EFER_LMA);
+        let new_efer = vcpu.get_msr(IA32_EFER).expect("failed to get msrs");
+        assert_eq!(new_efer, EFER_SCE | EFER_LME | EFER_LMA);
     }
 }

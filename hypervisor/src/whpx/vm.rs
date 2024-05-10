@@ -46,6 +46,7 @@ use super::types::*;
 use super::*;
 use crate::host_phys_addr_bits;
 use crate::whpx::whpx_sys::*;
+use crate::BalloonEvent;
 use crate::ClockState;
 use crate::Datamatch;
 use crate::DeliveryMode;
@@ -53,6 +54,7 @@ use crate::DestinationMode;
 use crate::DeviceKind;
 use crate::IoEventAddress;
 use crate::LapicState;
+use crate::MemCacheType;
 use crate::MemSlot;
 use crate::TriggerMode;
 use crate::VcpuX86_64;
@@ -70,9 +72,9 @@ pub struct WhpxVm {
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
     // WHPX's implementation of ioevents makes several assumptions about how crosvm uses ioevents:
-    //   1. All ioevents are registered during device setup, and thus can be cloned when the vm
-    //      is cloned instead of locked in an Arc<Mutex<>>. This will make handling ioevents in
-    //      each vcpu thread easier because no locks will need to be acquired.
+    //   1. All ioevents are registered during device setup, and thus can be cloned when the vm is
+    //      cloned instead of locked in an Arc<Mutex<>>. This will make handling ioevents in each
+    //      vcpu thread easier because no locks will need to be acquired.
     //   2. All ioevents use Datamatch::AnyLength. We don't bother checking the datamatch, which
     //      will make this faster.
     //   3. We only ever register one eventfd to each address. This simplifies our data structure.
@@ -217,21 +219,20 @@ impl WhpxVm {
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
             .map_err(WhpxError::SetupPartition)?;
 
-        guest_mem
-            .with_regions(|_, guest_addr, size, host_addr, _, _| {
-                unsafe {
-                    // Safe because the guest regions are guaranteed not to overlap.
-                    set_user_memory_region(
-                        &partition,
-                        false, // read_only
-                        false, // track dirty pages
-                        guest_addr.offset(),
-                        size as u64,
-                        host_addr as *mut u8,
-                    )
-                }
-            })
+        for region in guest_mem.regions() {
+            unsafe {
+                // Safe because the guest regions are guaranteed not to overlap.
+                set_user_memory_region(
+                    &partition,
+                    false, // read_only
+                    false, // track dirty pages
+                    region.guest_addr.offset(),
+                    region.size as u64,
+                    region.host_addr as *mut u8,
+                )
+            }
             .map_err(WhpxError::MapGpaRange)?;
+        }
 
         Ok(WhpxVm {
             whpx: whpx.clone(),
@@ -334,6 +335,104 @@ impl WhpxVm {
             )
         })
     }
+
+    /// In order to fully unmap a memory range such that the host can reclaim the memory,
+    /// we unmap it from the hypervisor partition, and then mark crosvm's process as uninterested
+    /// in the memory.
+    ///
+    /// This will make crosvm unable to access the memory, and allow Windows to reclaim it for other
+    /// uses when memory is in demand.
+    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
+        info!(
+            "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
+            guest_address, size
+        );
+        // Safe because WHPX does proper error checking, even if an out-of-bounds address is
+        // provided.
+        unsafe {
+            check_whpx!(WHvUnmapGpaRange(
+                self.vm_partition.partition,
+                guest_address.offset(),
+                size,
+            ))?;
+        }
+
+        let host_address = self
+            .guest_mem
+            .get_host_address(guest_address)
+            .map_err(|_| Error::new(1))? as *mut c_void;
+
+        // Safe because we have just successfully unmapped this range from the
+        // guest partition, so we know it's unused.
+        let result =
+            unsafe { OfferVirtualMemory(host_address, size as usize, VmOfferPriorityBelowNormal) };
+
+        if result != ERROR_SUCCESS {
+            let err = Error::new(result);
+            error!("Freeing memory failed with error: {}", err);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Remap memory that has previously been unmapped with #handle_inflate. Note
+    /// that attempts to remap pages that were not previously unmapped, or addresses that are not
+    /// page-aligned, will result in failure.
+    ///
+    /// To do this, reclaim the memory from Windows first, then remap it into the hypervisor
+    /// partition. Remapped memory has no guarantee of content, and the guest should not expect
+    /// it to.
+    fn handle_deflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
+        info!(
+            "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
+            guest_address, size
+        );
+
+        let host_address = self
+            .guest_mem
+            .get_host_address(guest_address)
+            .map_err(|_| Error::new(1))? as *const c_void;
+
+        // Note that we aren't doing any validation here that this range was previously unmapped.
+        // However, we can avoid that expensive validation by relying on Windows error checking for
+        // ReclaimVirtualMemory. The call will fail if:
+        // - If the range is not currently "offered"
+        // - The range is outside of current guest mem (GuestMemory will fail to convert the
+        //   address)
+        // In short, security is guaranteed by ensuring the guest can never reclaim ranges it
+        // hadn't previously forfeited (and even then, the contents will be zeroed).
+        //
+        // Safe because the memory ranges in question are managed by Windows, not Rust.
+        // Also, ReclaimVirtualMemory has built-in error checking for bad parameters.
+        let result = unsafe { ReclaimVirtualMemory(host_address, size as usize) };
+
+        if result == ERROR_BUSY || result == ERROR_SUCCESS {
+            // In either of these cases, the contents of the reclaimed memory
+            // are preserved or undefined. Regardless, zero the memory
+            // to ensure no unintentional memory contents are shared.
+            //
+            // Safe because we just reclaimed the region in question and haven't yet remapped
+            // it to the guest partition, so we know it's unused.
+            unsafe { RtlZeroMemory(host_address as RawDescriptor, size as usize) };
+        } else {
+            let err = Error::new(result);
+            error!("Reclaiming memory failed with error: {}", err);
+            return Err(err);
+        }
+
+        // Safe because no-overlap is guaranteed by the success of ReclaimVirtualMemory,
+        // Which would fail if it was called on areas which were not unmapped.
+        unsafe {
+            set_user_memory_region(
+                &self.vm_partition,
+                false, // read_only
+                false, // track dirty pages
+                guest_address.offset(),
+                size,
+                host_address as *mut u8,
+            )
+        }
+    }
 }
 
 // Wrapper around WHvMapGpaRange, which creates, modifies, or deletes a mapping
@@ -412,13 +511,13 @@ impl Vm for WhpxVm {
                 }),
             // there is a pvclock like thing already done w/ hyperv, but we can't get the state.
             VmCap::PvClock => false,
-            // TODO: this isn't in capability features, but only available in 19H1 windows.
-            VmCap::PvClockSuspend => true,
             VmCap::Protected => false,
             // whpx initializes cpuid early during VM creation.
             VmCap::EarlyInitCpuid => true,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             VmCap::BusLockDetect => false,
+            VmCap::ReadOnlyMemoryRegion => true,
+            VmCap::MemNoncoherentDma => false,
         }
     }
 
@@ -432,6 +531,7 @@ impl Vm for WhpxVm {
         mem: Box<dyn MappedRegion>,
         read_only: bool,
         log_dirty_pages: bool,
+        _cache: MemCacheType,
     ) -> Result<MemSlot> {
         let size = mem.size() as u64;
         let end_addr = guest_addr.checked_add(size).ok_or(Error::new(EOVERFLOW))?;
@@ -637,101 +737,11 @@ impl Vm for WhpxVm {
         }
     }
 
-    /// In order to fully unmap a memory range such that the host can reclaim the memory,
-    /// we unmap it from the hypervisor partition, and then mark crosvm's process as uninterested
-    /// in the memory.
-    ///
-    /// This will make crosvm unable to access the memory, and allow Windows to reclaim it for other
-    /// uses when memory is in demand.
-    fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        info!(
-            "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
-            guest_address, size
-        );
-        // Safe because WHPX does proper error checking, even if an out-of-bounds address is
-        // provided.
-        unsafe {
-            check_whpx!(WHvUnmapGpaRange(
-                self.vm_partition.partition,
-                guest_address.offset(),
-                size,
-            ))?;
-        }
-
-        let host_address = self
-            .guest_mem
-            .get_host_address(guest_address)
-            .map_err(|_| Error::new(1))? as *mut c_void;
-
-        // Safe because we have just successfully unmapped this range from the
-        // guest partition, so we know it's unused.
-        let result =
-            unsafe { OfferVirtualMemory(host_address, size as usize, VmOfferPriorityBelowNormal) };
-
-        if result != ERROR_SUCCESS {
-            let err = Error::new(result);
-            error!("Freeing memory failed with error: {}", err);
-            return Err(err);
-        }
-        Ok(())
-    }
-
-    /// Remap memory that has previously been unmapped with #handle_inflate. Note
-    /// that attempts to remap pages that were not previously unmapped, or addresses that are not
-    /// page-aligned, will result in failure.
-    ///
-    /// To do this, reclaim the memory from Windows first, then remap it into the hypervisor
-    /// partition. Remapped memory has no guarantee of content, and the guest should not expect
-    /// it to.
-    fn handle_deflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        info!(
-            "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
-            guest_address, size
-        );
-
-        let host_address = self
-            .guest_mem
-            .get_host_address(guest_address)
-            .map_err(|_| Error::new(1))? as *const c_void;
-
-        // Note that we aren't doing any validation here that this range was previously unmapped.
-        // However, we can avoid that expensive validation by relying on Windows error checking for
-        // ReclaimVirtualMemory. The call will fail if:
-        // - If the range is not currently "offered"
-        // - The range is outside of current guest mem (GuestMemory will fail to convert the
-        //    address)
-        // In short, security is guaranteed by ensuring the guest can never reclaim ranges it
-        // hadn't previously forfeited (and even then, the contents will be zeroed).
-        //
-        // Safe because the memory ranges in question are managed by Windows, not Rust.
-        // Also, ReclaimVirtualMemory has built-in error checking for bad parameters.
-        let result = unsafe { ReclaimVirtualMemory(host_address, size as usize) };
-
-        if result == ERROR_BUSY || result == ERROR_SUCCESS {
-            // In either of these cases, the contents of the reclaimed memory
-            // are preserved or undefined. Regardless, zero the memory
-            // to ensure no unintentional memory contents are shared.
-            //
-            // Safe because we just reclaimed the region in question and haven't yet remapped
-            // it to the guest partition, so we know it's unused.
-            unsafe { RtlZeroMemory(host_address as RawDescriptor, size as usize) };
-        } else {
-            let err = Error::new(result);
-            error!("Reclaiming memory failed with error: {}", err);
-            return Err(err);
-        }
-
-        // Safe because no-overlap is guaranteed by the success of ReclaimVirtualMemory,
-        // Which would fail if it was called on areas which were not unmapped.
-        unsafe {
-            set_user_memory_region(
-                &self.vm_partition,
-                false, // read_only
-                false, // track dirty pages
-                guest_address.offset(),
-                size,
-                host_address as *mut u8,
-            )
+    fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()> {
+        match event {
+            BalloonEvent::Inflate(m) => self.handle_inflate(m.guest_address, m.size),
+            BalloonEvent::Deflate(m) => self.handle_deflate(m.guest_address, m.size),
+            BalloonEvent::BalloonTargetReached(_) => Ok(()),
         }
     }
 
@@ -754,19 +764,22 @@ impl VmX86_64 for WhpxVm {
     }
 
     /// Sets the address of the three-page region in the VM's address space.
-    /// This function is only necessary for unrestricted_guest_mode=0, which we do not support for WHPX.
+    /// This function is only necessary for unrestricted_guest_mode=0, which we do not support for
+    /// WHPX.
     fn set_tss_addr(&self, _addr: GuestAddress) -> Result<()> {
         Ok(())
     }
 
     /// Sets the address of a one-page region in the VM's address space.
-    /// This function is only necessary for unrestricted_guest_mode=0, which we do not support for WHPX.
+    /// This function is only necessary for unrestricted_guest_mode=0, which we do not support for
+    /// WHPX.
     fn set_identity_map_addr(&self, _addr: GuestAddress) -> Result<()> {
         Ok(())
     }
 }
 
-// NOTE: WHPX Tests need to be run serially as otherwise it barfs unless we map new regions of guest memory.
+// NOTE: WHPX Tests need to be run serially as otherwise it barfs unless we map new regions of guest
+// memory.
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -995,8 +1008,14 @@ mod tests {
             .from_shared_memory(&shm)
             .build()
             .unwrap();
-        vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), true, false)
-            .unwrap();
+        vm.add_memory_region(
+            GuestAddress(0x1000),
+            Box::new(mem),
+            true,
+            false,
+            MemCacheType::CacheCoherent,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1016,7 +1035,13 @@ mod tests {
             .unwrap();
         let mem_ptr = mem.as_ptr();
         let slot = vm
-            .add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
+            .add_memory_region(
+                GuestAddress(0x1000),
+                Box::new(mem),
+                false,
+                false,
+                MemCacheType::CacheCoherent,
+            )
             .unwrap();
         let removed_mem = vm.remove_memory_region(slot).unwrap();
         assert_eq!(removed_mem.size(), mem_size);
@@ -1051,7 +1076,13 @@ mod tests {
             .build()
             .unwrap();
         assert!(vm
-            .add_memory_region(GuestAddress(0x2000), Box::new(mem), false, false)
+            .add_memory_region(
+                GuestAddress(0x2000),
+                Box::new(mem),
+                false,
+                false,
+                MemCacheType::CacheCoherent
+            )
             .is_err());
     }
 
@@ -1071,7 +1102,13 @@ mod tests {
             .build()
             .unwrap();
         let slot = vm
-            .add_memory_region(GuestAddress(0x10000), Box::new(mem), false, false)
+            .add_memory_region(
+                GuestAddress(0x10000),
+                Box::new(mem),
+                false,
+                false,
+                MemCacheType::CacheCoherent,
+            )
             .unwrap();
         vm.msync_memory_region(slot, mem_size - 1, 0).unwrap();
         vm.msync_memory_region(slot, 0, mem_size).unwrap();

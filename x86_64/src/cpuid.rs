@@ -75,8 +75,6 @@ pub struct CpuIdContext {
     apic_frequency: u32,
     /// The TSC frequency in Hz, if it could be determined.
     tsc_frequency: Option<u64>,
-    /// Whether the hypervisor requires a calibrated TSC cpuid leaf (0x15).
-    calibrated_tsc_leaf_required: bool,
     /// CPU feature configurations.
     cpu_config: CpuConfigX86_64,
     /// __cpuid_count or a fake function for test.
@@ -103,8 +101,11 @@ impl CpuIdContext {
                 chip.check_capability(IrqChipCap::TscDeadlineTimer)
             }),
             apic_frequency: irq_chip.map_or(Apic::frequency(), |chip| chip.lapic_frequency()),
-            tsc_frequency: devices::tsc::tsc_frequency().ok(),
-            calibrated_tsc_leaf_required,
+            tsc_frequency: if calibrated_tsc_leaf_required || cpu_config.force_calibrated_tsc_leaf {
+                devices::tsc::tsc_frequency().ok()
+            } else {
+                None
+            },
             cpu_config,
             cpuid_count,
             cpuid,
@@ -144,6 +145,7 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
                 entry.cpuid.ebx |= EBX_CLFLUSH_CACHELINE << EBX_CLFLUSH_SIZE_SHIFT;
 
                 // Expose HT flag to Guest.
+                // SAFETY: trivially safe
                 let result = unsafe { (ctx.cpuid)(entry.function) };
                 entry.cpuid.edx |= result.edx & (1 << EDX_HTT_SHIFT);
                 return;
@@ -163,9 +165,13 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
         2 | // Cache and TLB Descriptor information
         0x80000002 | 0x80000003 | 0x80000004 | // Processor Brand String
         0x80000005 | 0x80000006 // L1 and L2 cache information
-            => entry.cpuid = unsafe { (ctx.cpuid)(entry.function) },
+            => entry.cpuid = {
+                // SAFETY: trivially safe
+                unsafe { (ctx.cpuid)(entry.function) }},
         4 => {
-            entry.cpuid = unsafe { (ctx.cpuid_count)(entry.function, entry.index) };
+            entry.cpuid = {
+                // SAFETY: trivially safe
+                unsafe { (ctx.cpuid_count)(entry.function, entry.index) }};
 
             if ctx.cpu_config.host_cpu_topology {
                 return;
@@ -184,9 +190,11 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
             }
         }
         6 => {
-            // Safe because we pass 6 for this call and the host
-            // supports the `cpuid` instruction
-            let result = unsafe { (ctx.cpuid)(entry.function) };
+            let result = {
+                // SAFETY:
+                // Safe because we pass 6 for this call and the host
+                // supports the `cpuid` instruction
+                unsafe { (ctx.cpuid)(entry.function) }};
 
             if ctx.cpu_config.enable_hwp {
                 entry.cpuid.eax |= result.eax & (1 << EAX_HWP_SHIFT);
@@ -198,17 +206,10 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
                     entry.cpuid.eax |= result.eax & (1 << EAX_ITMT_SHIFT);
                 }
             }
-
-            if ctx.cpu_config.enable_pnp_data {
-                // Expose core temperature, package temperature
-                // and APEF/MPERF to guest
-                entry.cpuid.eax |= result.eax & (1 << EAX_CORE_TEMP);
-                entry.cpuid.eax |= result.eax & (1 << EAX_PKG_TEMP);
-                entry.cpuid.ecx |= result.ecx & (1 << ECX_HCFC_PERF_SHIFT);
-            }
         }
         7 => {
             if ctx.cpu_config.host_cpu_topology && entry.index == 0 {
+                // SAFETY:
                 // Safe because we pass 7 and 0 for this call and the host supports the
                 // `cpuid` instruction
                 let result = unsafe { (ctx.cpuid_count)(entry.function, entry.index) };
@@ -219,27 +220,15 @@ pub fn adjust_cpuid(entry: &mut CpuIdEntry, ctx: &CpuIdContext) {
             }
         }
         0x15 => {
-            if ctx.calibrated_tsc_leaf_required
-                || ctx.cpu_config.force_calibrated_tsc_leaf {
-
-                let cpuid_15 = ctx
-                    .tsc_frequency
-                    .map(|tsc_freq| devices::tsc::fake_tsc_frequency_cpuid(
-                            tsc_freq, ctx.apic_frequency));
-
-                if let Some(new_entry) = cpuid_15 {
-                    entry.cpuid = new_entry.cpuid;
-                }
-            } else if ctx.cpu_config.enable_pnp_data {
-                // Expose TSC frequency to guest
-                // Safe because we pass 0x15 for this call and the host
-                // supports the `cpuid` instruction
-                entry.cpuid = unsafe { (ctx.cpuid)(entry.function) };
+            if let Some(tsc_freq) = ctx.tsc_frequency {
+                // A calibrated TSC is required by the hypervisor or was forced by the user.
+                entry.cpuid = devices::tsc::fake_tsc_frequency_cpuid(tsc_freq, ctx.apic_frequency);
             }
         }
         0x1A => {
             // Hybrid information leaf.
             if ctx.cpu_config.host_cpu_topology {
+                // SAFETY:
                 // Safe because we pass 0x1A for this call and the host supports the
                 // `cpuid` instruction
                 entry.cpuid = unsafe { (ctx.cpuid)(entry.function) };
@@ -375,6 +364,7 @@ const INTEL_EDX: u32 = u32::from_le_bytes([b'i', b'n', b'e', b'I']);
 const INTEL_ECX: u32 = u32::from_le_bytes([b'n', b't', b'e', b'l']);
 
 pub fn cpu_manufacturer() -> CpuManufacturer {
+    // SAFETY:
     // safe because MANUFACTURER_ID_FUNCTION is a well known cpuid function,
     // and we own the result value afterwards.
     let result = unsafe { __cpuid(MANUFACTURER_ID_FUNCTION) };
@@ -415,7 +405,6 @@ mod tests {
             force_calibrated_tsc_leaf: false,
             host_cpu_topology: true,
             enable_hwp: false,
-            enable_pnp_data: false,
             no_smt: false,
             itmt: false,
             hybrid_type: None,
@@ -428,7 +417,6 @@ mod tests {
             apic_frequency: 0,
             tsc_frequency: None,
             cpu_config,
-            calibrated_tsc_leaf_required: false,
             cpuid_count: fake_cpuid_count,
             cpuid: fake_cpuid,
         };

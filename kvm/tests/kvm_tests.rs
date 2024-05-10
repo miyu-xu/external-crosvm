@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#![cfg(unix)]
+#![cfg(any(target_os = "android", target_os = "linux"))]
 
 use base::pagesize;
 use base::Event;
+#[cfg(any(target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64"))]
 use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
 use base::MappedRegion;
 use base::MemoryMappingBuilder;
 use base::SIGRTMIN;
@@ -14,24 +16,24 @@ use kvm::dirty_log_bitmap_size;
 use kvm::Cap;
 use kvm::Datamatch;
 use kvm::IoeventAddress;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm::IrqRoute;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm::IrqSource;
 use kvm::Kvm;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm::PicId;
 use kvm::Vcpu;
 use kvm::Vm;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm_sys::kvm_enable_cap;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm_sys::kvm_msr_entry;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm_sys::KVM_CAP_HYPERV_SYNIC;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use kvm_sys::KVM_IRQCHIP_IOAPIC;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use libc::EINVAL;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
@@ -54,7 +56,7 @@ fn new() {
 #[test]
 fn create_vm() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     Vm::new(&kvm, gm).unwrap();
 }
 
@@ -69,7 +71,7 @@ fn check_extension() {
 #[test]
 fn check_vm_extension() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     assert!(vm.check_extension(Cap::UserMemory));
     // I assume nobody is testing this on s390
@@ -77,23 +79,23 @@ fn check_vm_extension() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn get_supported_cpuid() {
     let kvm = Kvm::new().unwrap();
     let mut cpuid = kvm.get_supported_cpuid().unwrap();
     let cpuid_entries = cpuid.mut_entries_slice();
-    assert!(cpuid_entries.len() > 0);
+    assert!(!cpuid_entries.is_empty());
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn get_emulated_cpuid() {
     let kvm = Kvm::new().unwrap();
     kvm.get_emulated_cpuid().unwrap();
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn get_msr_index_list() {
     let kvm = Kvm::new().unwrap();
     let msr_list = kvm.get_msr_index_list().unwrap();
@@ -103,39 +105,47 @@ fn get_msr_index_list() {
 #[test]
 fn add_memory() {
     let kvm = Kvm::new().unwrap();
-    let gm =
-        GuestMemory::new(&[(GuestAddress(0), 0x1000), (GuestAddress(0x5000), 0x5000)]).unwrap();
+    let gm = GuestMemory::new(&[
+        (GuestAddress(0), pagesize() as u64),
+        (GuestAddress(5 * pagesize() as u64), 5 * pagesize() as u64),
+    ])
+    .unwrap();
     let mut vm = Vm::new(&kvm, gm).unwrap();
-    let mem_size = 0x1000;
+    let mem_size = pagesize();
     let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
-    vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
+    vm.add_memory_region(GuestAddress(pagesize() as u64), Box::new(mem), false, false)
         .unwrap();
     let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
-    vm.add_memory_region(GuestAddress(0x10000), Box::new(mem), false, false)
-        .unwrap();
+    vm.add_memory_region(
+        GuestAddress(0x10 * pagesize() as u64),
+        Box::new(mem),
+        false,
+        false,
+    )
+    .unwrap();
 }
 
 #[test]
 fn add_memory_ro() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let mut vm = Vm::new(&kvm, gm).unwrap();
-    let mem_size = 0x1000;
+    let mem_size = pagesize();
     let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
-    vm.add_memory_region(GuestAddress(0x1000), Box::new(mem), true, false)
+    vm.add_memory_region(GuestAddress(pagesize() as u64), Box::new(mem), true, false)
         .unwrap();
 }
 
 #[test]
 fn remove_memory_region() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let mut vm = Vm::new(&kvm, gm).unwrap();
-    let mem_size = 0x1000;
+    let mem_size = pagesize();
     let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
     let mem_ptr = mem.as_ptr();
     let slot = vm
-        .add_memory_region(GuestAddress(0x1000), Box::new(mem), false, false)
+        .add_memory_region(GuestAddress(pagesize() as u64), Box::new(mem), false, false)
         .unwrap();
     let removed_mem = vm.remove_memory_region(slot).unwrap();
     assert_eq!(removed_mem.size(), mem_size);
@@ -145,7 +155,7 @@ fn remove_memory_region() {
 #[test]
 fn remove_invalid_memory() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let mut vm = Vm::new(&kvm, gm).unwrap();
     assert!(vm.remove_memory_region(0).is_err());
 }
@@ -153,19 +163,24 @@ fn remove_invalid_memory() {
 #[test]
 fn overlap_memory() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10 * pagesize() as u64)]).unwrap();
     let mut vm = Vm::new(&kvm, gm).unwrap();
-    let mem_size = 0x2000;
+    let mem_size = 2 * pagesize();
     let mem = MemoryMappingBuilder::new(mem_size).build().unwrap();
     assert!(vm
-        .add_memory_region(GuestAddress(0x2000), Box::new(mem), false, false)
+        .add_memory_region(
+            GuestAddress(2 * pagesize() as u64),
+            Box::new(mem),
+            false,
+            false
+        )
         .is_err());
 }
 
 #[test]
 fn get_memory() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let obj_addr = GuestAddress(0xf0);
     vm.get_memory().write_obj_at_addr(67u8, obj_addr).unwrap();
@@ -174,10 +189,10 @@ fn get_memory() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn clock_handling() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let mut clock_data = vm.get_clock().unwrap();
     clock_data.clock += 1000;
@@ -185,10 +200,10 @@ fn clock_handling() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn pic_handling() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     let pic_state = vm.get_pic_state(PicId::Secondary).unwrap();
@@ -196,10 +211,10 @@ fn pic_handling() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn ioapic_handling() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     let ioapic_state = vm.get_ioapic_state().unwrap();
@@ -207,10 +222,10 @@ fn ioapic_handling() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn pit_handling() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     vm.create_pit().unwrap();
@@ -221,7 +236,7 @@ fn pit_handling() {
 #[test]
 fn register_ioevent() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let evtfd = Event::new().unwrap();
     vm.register_ioevent(&evtfd, IoeventAddress::Pio(0xf4), Datamatch::AnyLength)
@@ -257,7 +272,7 @@ fn register_ioevent() {
 #[test]
 fn unregister_ioevent() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let evtfd = Event::new().unwrap();
     vm.register_ioevent(&evtfd, IoeventAddress::Pio(0xf4), Datamatch::AnyLength)
@@ -283,25 +298,32 @@ fn unregister_ioevent() {
 }
 
 #[test]
+#[cfg(any(target_arch = "x86_64", target_arch = "arm", target_arch = "aarch64"))]
 fn irqfd_resample() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let evtfd1 = Event::new().unwrap();
     let evtfd2 = Event::new().unwrap();
     vm.create_irq_chip().unwrap();
     vm.register_irqfd_resample(&evtfd1, &evtfd2, 4).unwrap();
     vm.unregister_irqfd(&evtfd1, 4).unwrap();
-    // Ensures the ioctl is actually reading the resamplefd.
-    vm.register_irqfd_resample(&evtfd1, unsafe { &Event::from_raw_descriptor(-1) }, 4)
+
+    // Ensures the ioctl is actually reading the resamplefd by providing an invalid fd and expecting
+    // an error. File descriptor numbers are allocated sequentially, so this very large fd should
+    // never practically be in use.
+    // SAFETY: This is a bad idea! Don't try this at home! Professional driver on a closed course.
+    let resample_evt = unsafe { Event::from_raw_descriptor(2147483647) };
+    vm.register_irqfd_resample(&evtfd1, &resample_evt, 4)
         .unwrap_err();
+    let _ = resample_evt.into_raw_descriptor(); // Don't try to close the invalid fd.
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn set_gsi_routing() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     vm.set_gsi_routing(&[]).unwrap();
@@ -343,16 +365,16 @@ fn set_gsi_routing() {
 #[test]
 fn create_vcpu() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     Vcpu::new(0, &kvm, &vm).unwrap();
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn debugregs() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
     let mut dregs = vcpu.get_debugregs().unwrap();
@@ -363,14 +385,14 @@ fn debugregs() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn xcrs() {
     let kvm = Kvm::new().unwrap();
     if !kvm.check_extension(Cap::Xcrs) {
         return;
     }
 
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
     let mut xcrs = vcpu.get_xcrs().unwrap();
@@ -381,10 +403,10 @@ fn xcrs() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn get_msrs() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
     let mut msrs = vec![
@@ -395,7 +417,7 @@ fn get_msrs() {
         },
         // This one will fail to fetch
         kvm_msr_entry {
-            index: 0x000003f1,
+            index: 0xffffffff,
             ..Default::default()
         },
     ];
@@ -404,10 +426,10 @@ fn get_msrs() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn get_hyperv_cpuid() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
     let cpuid = vcpu.get_hyperv_cpuid();
@@ -421,10 +443,10 @@ fn get_hyperv_cpuid() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn enable_feature() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
@@ -432,14 +454,16 @@ fn enable_feature() {
         cap: KVM_CAP_HYPERV_SYNIC,
         ..Default::default()
     };
+    // TODO(b/315998194): Add safety comment
+    #[allow(clippy::undocumented_unsafe_blocks)]
     unsafe { vcpu.kvm_enable_cap(&cap) }.unwrap();
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn mp_state() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     vm.create_irq_chip().unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
@@ -450,7 +474,7 @@ fn mp_state() {
 #[test]
 fn set_signal_mask() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
     let vcpu = Vcpu::new(0, &kvm, &vm).unwrap();
     vcpu.set_signal_mask(&[SIGRTMIN() + 0]).unwrap();
@@ -466,10 +490,11 @@ fn vcpu_mmap_size() {
 }
 
 #[test]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 fn set_identity_map_addr() {
     let kvm = Kvm::new().unwrap();
-    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 10 * pagesize() as u64)]).unwrap();
     let vm = Vm::new(&kvm, gm).unwrap();
-    vm.set_identity_map_addr(GuestAddress(0x20000)).unwrap();
+    vm.set_identity_map_addr(GuestAddress(20 * pagesize() as u64))
+        .unwrap();
 }

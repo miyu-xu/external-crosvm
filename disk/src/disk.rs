@@ -8,7 +8,6 @@ use std::cmp::min;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io;
-use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -21,11 +20,10 @@ use base::AsRawDescriptors;
 use base::FileAllocate;
 use base::FileReadWriteAtVolatile;
 use base::FileSetLen;
-use base::PunchHole;
-use cros_async::AllocateMode;
 use cros_async::BackingMemory;
 use cros_async::Executor;
-use cros_async::IoSourceExt;
+use cros_async::IoSource;
+use cros_async::MemRegionIter;
 use thiserror::Error as ThisError;
 
 mod asynchronous;
@@ -66,6 +64,7 @@ mod android_sparse;
 use android_sparse::AndroidSparse;
 #[cfg(feature = "android-sparse")]
 use android_sparse::SPARSE_HEADER_MAGIC;
+use sys::read_from_disk;
 
 /// Nesting depth limit for disk formats that can open other disk files.
 pub const MAX_NESTING_DEPTH: u32 = 10;
@@ -84,18 +83,26 @@ pub enum Error {
     CreateCompositeDisk(composite::Error),
     #[error("failure creating single file disk: {0}")]
     CreateSingleFileDisk(cros_async::AsyncError),
-    #[error("failure with fallocate: {0}")]
-    Fallocate(cros_async::AsyncError),
+    #[error("failure with fdatasync: {0}")]
+    Fdatasync(cros_async::AsyncError),
     #[error("failure with fsync: {0}")]
     Fsync(cros_async::AsyncError),
+    #[error("failure with fdatasync: {0}")]
+    IoFdatasync(io::Error),
+    #[error("failure with flush: {0}")]
+    IoFlush(io::Error),
     #[error("failure with fsync: {0}")]
     IoFsync(io::Error),
+    #[error("failure to punch hole: {0}")]
+    IoPunchHole(io::Error),
     #[error("checking host fs type: {0}")]
     HostFsType(base::Error),
     #[error("maximum disk nesting depth exceeded")]
     MaxNestingDepthExceeded,
     #[error("failure to punch hole: {0}")]
-    PunchHole(io::Error),
+    PunchHole(cros_async::AsyncError),
+    #[error("failure to punch hole for block device file: {0}")]
+    PunchHoleBlockDeviceFile(base::Error),
     #[cfg(feature = "qcow")]
     #[error("failure in qcow: {0}")]
     QcowError(qcow::Error),
@@ -141,21 +148,10 @@ pub trait DiskGetLen {
 impl DiskGetLen for File {
     fn get_len(&self) -> io::Result<u64> {
         let mut s = self;
-        let orig_seek = s.seek(SeekFrom::Current(0))?;
-        let end = s.seek(SeekFrom::End(0))? as u64;
+        let orig_seek = s.stream_position()?;
+        let end = s.seek(SeekFrom::End(0))?;
         s.seek(SeekFrom::Start(orig_seek))?;
         Ok(end)
-    }
-}
-
-pub trait PunchHoleMut {
-    /// Replace a range of bytes with a hole.
-    fn punch_hole_mut(&mut self, offset: u64, length: u64) -> io::Result<()>;
-}
-
-impl<T: PunchHole> PunchHoleMut for T {
-    fn punch_hole_mut(&mut self, offset: u64, length: u64) -> io::Result<()> {
-        self.punch_hole(offset, length)
     }
 }
 
@@ -163,17 +159,18 @@ impl<T: PunchHole> PunchHoleMut for T {
 pub trait DiskFile:
     FileSetLen + DiskGetLen + FileReadWriteAtVolatile + ToAsyncDisk + Send + AsRawDescriptors + Debug
 {
-}
-impl<
-        D: FileSetLen
-            + DiskGetLen
-            + FileReadWriteAtVolatile
-            + ToAsyncDisk
-            + Send
-            + AsRawDescriptors
-            + Debug,
-    > DiskFile for D
-{
+    /// Creates a new DiskFile instance that shares the same underlying disk file image. IO
+    /// operations to a DiskFile should affect all DiskFile instances with the same underlying disk
+    /// file image.
+    ///
+    /// `try_clone()` returns [`io::ErrorKind::Unsupported`] Error if a DiskFile does not support
+    /// creating an instance with the same underlying disk file image.
+    fn try_clone(&self) -> io::Result<Box<dyn DiskFile>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unsupported operation",
+        ))
+    }
 }
 
 /// A `DiskFile` that can be converted for asychronous access.
@@ -208,11 +205,10 @@ fn log_host_fs_type(file: &File) -> Result<()> {
 }
 
 /// Detect the type of an image file by checking for a valid header of the supported formats.
-pub fn detect_image_type(file: &File) -> Result<ImageType> {
+pub fn detect_image_type(file: &File, overlapped_mode: bool) -> Result<ImageType> {
     let mut f = file;
     let disk_size = f.get_len().map_err(Error::SeekingFile)?;
-    let orig_seek = f.seek(SeekFrom::Current(0)).map_err(Error::SeekingFile)?;
-    f.seek(SeekFrom::Start(0)).map_err(Error::SeekingFile)?;
+    let orig_seek = f.stream_position().map_err(Error::SeekingFile)?;
 
     info!("disk size {}, ", disk_size);
     log_host_fs_type(f)?;
@@ -233,8 +229,7 @@ pub fn detect_image_type(file: &File) -> Result<ImageType> {
         disk_size as usize
     };
 
-    f.read_exact(&mut magic.data[0..magic_read_len])
-        .map_err(Error::ReadingHeader)?;
+    read_from_disk(f, 0, &mut magic.data[0..magic_read_len], overlapped_mode)?;
     f.seek(SeekFrom::Start(orig_seek))
         .map_err(Error::SeekingFile)?;
 
@@ -260,14 +255,38 @@ pub fn detect_image_type(file: &File) -> Result<ImageType> {
     Ok(ImageType::Raw)
 }
 
+impl DiskFile for File {
+    fn try_clone(&self) -> io::Result<Box<dyn DiskFile>> {
+        Ok(Box::new(self.try_clone()?))
+    }
+}
+
 /// Inspect the image file type and create an appropriate disk file to match it.
 pub fn create_disk_file(
+    raw_image: File,
+    is_sparse_file: bool,
+    max_nesting_depth: u32,
+    image_path: &Path,
+) -> Result<Box<dyn DiskFile>> {
+    let image_type = detect_image_type(&raw_image, false)?;
+    create_disk_file_of_type(
+        raw_image,
+        is_sparse_file,
+        max_nesting_depth,
+        image_path,
+        image_type,
+    )
+}
+
+/// create an appropriate disk file to match give image type.
+pub fn create_disk_file_of_type(
     raw_image: File,
     is_sparse_file: bool,
     // max_nesting_depth is only used if the composite-disk or qcow features are enabled.
     #[allow(unused_variables)] mut max_nesting_depth: u32,
     // image_path is only used if the composite-disk feature is enabled.
     #[allow(unused_variables)] image_path: &Path,
+    image_type: ImageType,
 ) -> Result<Box<dyn DiskFile>> {
     if max_nesting_depth == 0 {
         return Err(Error::MaxNestingDepthExceeded);
@@ -277,7 +296,6 @@ pub fn create_disk_file(
         max_nesting_depth -= 1;
     }
 
-    let image_type = detect_image_type(&raw_image)?;
     Ok(match image_type {
         ImageType::Raw => {
             sys::apply_raw_disk_file_options(&raw_image, is_sparse_file)?;
@@ -317,8 +335,15 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
     /// Returns the inner file consuming self.
     fn into_inner(self: Box<Self>) -> Box<dyn DiskFile>;
 
+    /// Flush intermediary buffers and/or dirty state to file. fsync not required.
+    async fn flush(&self) -> Result<()>;
+
     /// Asynchronously fsyncs any completed operations to the disk.
     async fn fsync(&self) -> Result<()>;
+
+    /// Asynchronously fdatasyncs any completed operations to the disk.
+    /// Note that an implementation may simply call fsync for fdatasync.
+    async fn fdatasync(&self) -> Result<()>;
 
     /// Reads from the file at 'file_offset' into memory `mem` at `mem_offsets`.
     /// `mem_offsets` is similar to an iovec except relative to the start of `mem`.
@@ -326,7 +351,7 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize>;
 
     /// Writes to the file at 'file_offset' from memory `mem` at `mem_offsets`.
@@ -334,7 +359,7 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize>;
 
     /// Replaces a range of bytes with a hole.
@@ -353,7 +378,11 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
             len: buf.len(),
         };
         let n = self
-            .read_to_mem(file_offset, backing_mem.clone(), &[region])
+            .read_to_mem(
+                file_offset,
+                backing_mem.clone(),
+                MemRegionIter::new(&[region]),
+            )
             .await?;
         backing_mem
             .get_volatile_slice(region)
@@ -373,22 +402,21 @@ pub trait AsyncDisk: DiskGetLen + FileSetLen + FileAllocate {
             offset: 0,
             len: buf.len(),
         };
-        self.write_from_mem(file_offset, backing_mem, &[region])
-            .await
+        self.write_from_mem(
+            file_offset,
+            backing_mem,
+            cros_async::MemRegionIter::new(&[region]),
+        )
+        .await
     }
 }
 
 /// A disk backed by a single file that implements `AsyncDisk` for access.
 pub struct SingleFileDisk {
-    inner: Box<dyn IoSourceExt<File>>,
-}
-
-impl SingleFileDisk {
-    pub fn new(disk: File, ex: &Executor) -> Result<Self> {
-        ex.async_from(disk)
-            .map_err(Error::CreateSingleFileDisk)
-            .map(|inner| SingleFileDisk { inner })
-    }
+    inner: IoSource<File>,
+    // Whether the backed file is a block device since the punch-hole needs different operation.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    is_block_device_file: bool,
 }
 
 impl DiskGetLen for SingleFileDisk {
@@ -415,15 +443,24 @@ impl AsyncDisk for SingleFileDisk {
         Box::new(self.inner.into_source())
     }
 
+    async fn flush(&self) -> Result<()> {
+        // Nothing to flush, all file mutations are immediately sent to the OS.
+        Ok(())
+    }
+
     async fn fsync(&self) -> Result<()> {
         self.inner.fsync().await.map_err(Error::Fsync)
+    }
+
+    async fn fdatasync(&self) -> Result<()> {
+        self.inner.fdatasync().await.map_err(Error::Fdatasync)
     }
 
     async fn read_to_mem<'a>(
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize> {
         self.inner
             .read_to_mem(Some(file_offset), mem, mem_offsets)
@@ -435,7 +472,7 @@ impl AsyncDisk for SingleFileDisk {
         &'a self,
         file_offset: u64,
         mem: Arc<dyn BackingMemory + Send + Sync>,
-        mem_offsets: &'a [cros_async::MemRegion],
+        mem_offsets: cros_async::MemRegionIter<'a>,
     ) -> Result<usize> {
         self.inner
             .write_from_mem(Some(file_offset), mem, mem_offsets)
@@ -444,23 +481,28 @@ impl AsyncDisk for SingleFileDisk {
     }
 
     async fn punch_hole(&self, file_offset: u64, length: u64) -> Result<()> {
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        if self.is_block_device_file {
+            return base::linux::discard_block(self.inner.as_source(), file_offset, length)
+                .map_err(Error::PunchHoleBlockDeviceFile);
+        }
         self.inner
-            .fallocate(file_offset, length, AllocateMode::PunchHole)
+            .punch_hole(file_offset, length)
             .await
-            .map_err(Error::Fallocate)
+            .map_err(Error::PunchHole)
     }
 
     async fn write_zeroes_at(&self, file_offset: u64, length: u64) -> Result<()> {
         if self
             .inner
-            .fallocate(file_offset, length, AllocateMode::ZeroRange)
+            .write_zeroes_at(file_offset, length)
             .await
             .is_ok()
         {
             return Ok(());
         }
 
-        // Fall back to writing zeros if fallocate doesn't work.
+        // Fall back to filling zeros if more efficient write_zeroes_at doesn't work.
         let buf_size = min(length, 0x10000);
         let mut nwritten = 0;
         while nwritten < length {
@@ -469,7 +511,7 @@ impl AsyncDisk for SingleFileDisk {
             let buf = vec![0u8; write_size];
             nwritten += self
                 .inner
-                .write_from_vec(Some(file_offset + nwritten as u64), buf)
+                .write_from_vec(Some(file_offset + nwritten), buf)
                 .await
                 .map(|(n, _)| n as u64)
                 .map_err(Error::WriteFromVec)?;

@@ -16,6 +16,10 @@ if ! [ -f rootfs ]; then
     virt-builder ubuntu-20.04 \
         --run-command "useradd -m -g sudo -p '' $USER ; chage -d 0 $USER" \
         -o ./rootfs
+    # Packages can be pre-installed to the image using
+    # --install PACKAGE_NAME
+    # Ex: virt-builder ubuntu-20.04 ... --install openssh-server,ncat
+    # In this example, the ubuntu image will come pre-installed with OpenSSH-server and with Ncat.
     # ANCHOR_END: build
 
     # ANCHOR: kernel
@@ -23,12 +27,24 @@ if ! [ -f rootfs ]; then
     # ANCHOR_END: kernel
 fi
 
+if [ "$(groups | grep kvm -c)" -eq 0 ]; then
+    echo "Adding user $USER to the kvm group to grant access to /dev/kvm"
+    # ANCHOR: kvm
+    sudo adduser "$USER" kvm
+    # ANCHOR_END: kvm
+    echo "Please logout and log back in to reflect the kvm group."
+    exit 1
+fi
+
 # ANCHOR: run
-# Run crosvm without sandboxing.
+# Create `/var/empty` where crosvm can do chroot for jailing each virtio device.
+# Devices can't be jailed if /var/empty doesn't exist.
+# You can change this directory(/var/empty) by setting the environment variable: DEFAULT_PIVOT_ROOT
+sudo mkdir -p /var/empty
+# Run crosvm.
 # The rootfs is an image of a partitioned hard drive, so we need to tell
 # the kernel which partition to use (vda5 in case of ubuntu-20.04).
 cargo run --no-default-features -- run \
-    --disable-sandbox \
     --rwdisk ./rootfs \
     --initrd ./initrd.img-* \
     -p "root=/dev/vda5" \

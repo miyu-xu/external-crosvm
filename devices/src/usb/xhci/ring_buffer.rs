@@ -6,6 +6,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::mem::size_of;
 
+use base::debug;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestAddress;
@@ -88,14 +89,14 @@ impl RingBuffer {
                 }
             };
 
-            usb_debug!(
+            xhci_trace!(
                 "{}: adding trb to td {}",
                 self.name.as_str(),
                 addressed_trb.trb
             );
             td.push(addressed_trb);
             if !addressed_trb.trb.get_chain_bit().map_err(Error::TrbChain)? {
-                usb_debug!("trb chain is false returning");
+                debug!("xhci: trb chain is false returning");
                 break;
             }
         }
@@ -112,16 +113,26 @@ impl RingBuffer {
         Ok(Some(td))
     }
 
+    /// Get dequeue pointer of the ring buffer.
+    pub fn get_dequeue_pointer(&self) -> GuestAddress {
+        self.dequeue_pointer
+    }
+
     /// Set dequeue pointer of the ring buffer.
     pub fn set_dequeue_pointer(&mut self, addr: GuestAddress) {
-        usb_debug!("{}: set dequeue pointer {:x}", self.name.as_str(), addr.0);
+        xhci_trace!("{}: set dequeue pointer {:x}", self.name.as_str(), addr.0);
 
         self.dequeue_pointer = addr;
     }
 
+    /// Get consumer cycle state of the ring buffer.
+    pub fn get_consumer_cycle_state(&self) -> bool {
+        self.consumer_cycle_state
+    }
+
     /// Set consumer cycle state of the ring buffer.
     pub fn set_consumer_cycle_state(&mut self, state: bool) {
-        usb_debug!("{}: set consumer cycle state {}", self.name.as_str(), state);
+        xhci_trace!("{}: set consumer cycle state {}", self.name.as_str(), state);
         self.consumer_cycle_state = state;
     }
 
@@ -131,12 +142,12 @@ impl RingBuffer {
             .mem
             .read_obj_from_addr(self.dequeue_pointer)
             .map_err(Error::ReadGuestMemory)?;
-        usb_debug!("{}: trb read from memory {:?}", self.name.as_str(), trb);
+        xhci_trace!("{}: trb read from memory {:?}", self.name.as_str(), trb);
         // If cycle bit of trb does not equal consumer cycle state, the ring is empty.
         // This trb is invalid.
         if trb.get_cycle() != self.consumer_cycle_state {
-            usb_debug!(
-                "cycle bit does not match, self cycle {}",
+            debug!(
+                "xhci: cycle bit does not match, self cycle {}",
                 self.consumer_cycle_state
             );
             Ok(None)
@@ -151,13 +162,15 @@ impl RingBuffer {
 
 #[cfg(test)]
 mod test {
+    use base::pagesize;
+
     use super::*;
     use crate::usb::xhci::xhci_abi::*;
 
     #[test]
     fn ring_test_dequeue() {
         let trb_size = size_of::<Trb>() as u64;
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
         let mut transfer_ring = RingBuffer::new(String::new(), gm.clone());
 
         // Structure of ring buffer:
@@ -235,7 +248,7 @@ mod test {
     #[test]
     fn transfer_ring_test_dequeue_failure() {
         let trb_size = size_of::<Trb>() as u64;
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
         let mut transfer_ring = RingBuffer::new(String::new(), gm.clone());
 
         let mut trb = NormalTrb::new();
@@ -269,7 +282,7 @@ mod test {
     #[test]
     fn ring_test_toggle_cycle() {
         let trb_size = size_of::<Trb>() as u64;
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
         let mut transfer_ring = RingBuffer::new(String::new(), gm.clone());
 
         let mut trb = NormalTrb::new();

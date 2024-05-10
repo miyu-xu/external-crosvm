@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use base::MemoryMappingBuilder;
 use base::SharedMemory;
@@ -13,7 +13,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_remove_memory() {
     use hypervisor::kvm::*;
     test_remove_memory(|guest_mem| {
@@ -24,7 +24,7 @@ fn test_kvm_remove_memory() {
 }
 
 #[test]
-#[cfg(feature = "haxm")]
+#[cfg(all(windows, feature = "haxm"))]
 fn test_haxm_remove_memory() {
     use hypervisor::haxm::*;
     test_remove_memory(|guest_mem| {
@@ -95,7 +95,7 @@ where
     vcpu.set_sregs(&vcpu_sregs).expect("set sregs failed");
 
     let vcpu_regs = Regs {
-        rip: load_addr.offset() as u64,
+        rip: load_addr.offset(),
         rflags: 2,
         ..Default::default()
     };
@@ -110,6 +110,7 @@ where
         ),
         false,
         false,
+        MemCacheType::CacheCoherent,
     )
     .expect("failed to register memory");
 
@@ -134,16 +135,14 @@ where
             ),
             false,
             false,
+            MemCacheType::CacheCoherent,
         )
         .expect("failed to register memory");
 
     // We do our initial run of our program, it should load the value of 0x55
     // from guest address 0x3000 into rax
-    let run_handle = vcpu
-        .take_run_handle(None)
-        .expect("failed to take run handle");
     loop {
-        match vcpu.run(&run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             // Continue on external interrupt or signal
             VcpuExit::Intr => continue,
             VcpuExit::Hlt => break,
@@ -164,7 +163,7 @@ where
         .expect("failed to remove memory region");
 
     loop {
-        match vcpu.run(&run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             // Continue on external interrupt or signal
             VcpuExit::Intr => continue,
             VcpuExit::Hlt => break,

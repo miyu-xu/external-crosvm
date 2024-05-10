@@ -5,7 +5,6 @@
 use std::convert::TryFrom;
 use std::mem;
 use std::result;
-use std::slice;
 
 use devices::PciAddress;
 use devices::PciInterruptPin;
@@ -14,6 +13,7 @@ use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
 
 use crate::mpspec::*;
 
@@ -77,11 +77,9 @@ const CPU_FEATURE_APIC: u32 = 0x200;
 const CPU_FEATURE_FPU: u32 = 0x001;
 const MPTABLE_START: u64 = 0x400 * 639; // Last 1k of Linux's 640k base RAM.
 
-fn compute_checksum<T: Copy>(v: &T) -> u8 {
-    // Safe because we are only reading the bytes within the size of the `T` reference `v`.
-    let v_slice = unsafe { slice::from_raw_parts(v as *const T as *const u8, mem::size_of::<T>()) };
+fn compute_checksum<T: AsBytes>(v: &T) -> u8 {
     let mut checksum: u8 = 0;
-    for i in v_slice {
+    for i in v.as_bytes() {
         checksum = checksum.wrapping_add(*i);
     }
     checksum
@@ -231,7 +229,7 @@ pub fn setup_mptable(
     }
     let sci_irq = super::X86_64_SCI_IRQ as u8;
     // Per kvm_setup_default_irq_routing() in kernel
-    for i in 0..sci_irq {
+    for i in (0..sci_irq).chain(std::iter::once(devices::cmos::RTC_IRQ)) {
         let size = mem::size_of::<mpc_intsrc>();
         let mpc_intsrc = mpc_intsrc {
             type_: MP_INTSRC as u8,
@@ -298,9 +296,9 @@ pub fn setup_mptable(
             irqtype: mp_irq_source_types_mp_INT as u8,
             irqflag: MP_IRQDIR_DEFAULT as u16,
             srcbus: isa_bus_id,
-            srcbusirq: i as u8,
+            srcbusirq: i,
             dstapic: ioapicid,
-            dstirq: i as u8,
+            dstirq: i,
         };
         mem.write_obj_at_addr(mpc_intsrc, base_mp)
             .map_err(|_| Error::WriteMpcIntsrc)?;

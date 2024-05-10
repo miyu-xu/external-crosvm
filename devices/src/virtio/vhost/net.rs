@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::mem;
 use std::path::Path;
 
@@ -14,10 +15,13 @@ use base::Event;
 use base::RawDescriptor;
 use base::Tube;
 use base::WorkerThread;
+use net_util::MacAddress;
 use net_util::TapT;
 use vhost::NetT as VhostNetT;
+use virtio_sys::virtio_config::VIRTIO_F_RING_PACKED;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
+use zerocopy::AsBytes;
 
 use super::control_socket::*;
 use super::worker::Worker;
@@ -30,9 +34,7 @@ use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
-use crate::Suspendable;
-use net_util::MacAddress;
-use zerocopy::AsBytes;
+use crate::PciAddress;
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 2;
@@ -48,6 +50,7 @@ pub struct Net<T: TapT + 'static, U: VhostNetT<T> + 'static> {
     acked_features: u64,
     request_tube: Tube,
     response_tube: Option<Tube>,
+    pci_address: Option<PciAddress>,
 }
 
 impl<T, U> Net<T, U>
@@ -62,6 +65,8 @@ where
         base_features: u64,
         tap: T,
         mac_addr: Option<MacAddress>,
+        use_packed_queue: bool,
+        pci_address: Option<PciAddress>,
     ) -> Result<Net<T, U>> {
         // Set offload flags to match the virtio features below.
         tap.set_offload(
@@ -70,7 +75,7 @@ where
         .map_err(Error::TapSetOffload)?;
 
         // We declare VIRTIO_NET_F_MRG_RXBUF, so set the vnet hdr size to match.
-        let vnet_hdr_size = mem::size_of::<virtio_net::virtio_net_hdr_mrg_rxbuf>() as i32;
+        let vnet_hdr_size = mem::size_of::<virtio_net::virtio_net_hdr_mrg_rxbuf>();
         tap.set_vnet_hdr_size(vnet_hdr_size)
             .map_err(Error::TapSetVnetHdrSize)?;
 
@@ -84,6 +89,10 @@ where
             | 1 << virtio_net::VIRTIO_NET_F_HOST_TSO4
             | 1 << virtio_net::VIRTIO_NET_F_HOST_UFO
             | 1 << virtio_net::VIRTIO_NET_F_MRG_RXBUF;
+
+        if use_packed_queue {
+            avail_features |= 1 << VIRTIO_F_RING_PACKED;
+        }
 
         if mac_addr.is_some() {
             avail_features |= 1 << virtio_net::VIRTIO_NET_F_MAC;
@@ -106,6 +115,7 @@ where
             acked_features: 0u64,
             request_tube,
             response_tube: Some(response_tube),
+            pci_address,
         })
     }
 }
@@ -178,7 +188,7 @@ where
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != NUM_QUEUES {
             return Err(anyhow!(
@@ -210,7 +220,6 @@ where
             interrupt,
             acked_features,
             socket,
-            self.supports_iommu(),
         );
         let activate_vqs = |handle: &U| -> Result<()> {
             for idx in 0..NUM_QUEUES {
@@ -221,7 +230,7 @@ where
             Ok(())
         };
         worker
-            .init(mem, QUEUE_SIZES, activate_vqs)
+            .init(mem, QUEUE_SIZES, activate_vqs, None)
             .context("net worker init exited with error")?;
         self.worker_thread = Some(WorkerThread::start("vhost_net", move |kill_evt| {
             let cleanup_vqs = |handle: &U| -> Result<()> {
@@ -240,6 +249,10 @@ where
         }));
 
         Ok(())
+    }
+
+    fn pci_address(&self) -> Option<PciAddress> {
+        self.pci_address
     }
 
     fn on_device_sandboxed(&mut self) {
@@ -302,24 +315,16 @@ where
         }
     }
 
-    fn reset(&mut self) -> bool {
+    fn reset(&mut self) -> anyhow::Result<()> {
         if let Some(worker_thread) = self.worker_thread.take() {
             let (worker, tap) = worker_thread.stop();
             self.vhost_net_handle = Some(worker.vhost_handle);
             self.tap = Some(tap);
             self.vhost_interrupt = Some(worker.vhost_interrupt);
             self.response_tube = worker.response_tube;
-            return true;
         }
-        false
+        Ok(())
     }
-}
-
-impl<T, U> Suspendable for Net<T, U>
-where
-    T: TapT + 'static,
-    U: VhostNetT<T> + 'static,
-{
 }
 
 #[cfg(test)]
@@ -328,8 +333,10 @@ pub mod tests {
     use std::path::PathBuf;
     use std::result;
 
+    use base::pagesize;
     use hypervisor::ProtectionType;
-    use net_util::sys::unix::fakes::FakeTap;
+    use net_util::sys::linux::fakes::FakeTap;
+    use net_util::TapTCommon;
     use vhost::net::fakes::FakeNet;
     use vm_memory::GuestAddress;
     use vm_memory::GuestMemory;
@@ -337,14 +344,15 @@ pub mod tests {
 
     use super::*;
     use crate::virtio::base_features;
-    use crate::virtio::VIRTIO_MSI_NO_VECTOR;
-    use crate::IrqLevelEvent;
-    use net_util::TapTCommon;
+    use crate::virtio::QueueConfig;
 
     fn create_guest_memory() -> result::Result<GuestMemory, GuestMemoryError> {
         let start_addr1 = GuestAddress(0x0);
-        let start_addr2 = GuestAddress(0x1000);
-        GuestMemory::new(&[(start_addr1, 0x1000), (start_addr2, 0x4000)])
+        let start_addr2 = GuestAddress(pagesize() as u64);
+        GuestMemory::new(&[
+            (start_addr1, pagesize() as u64),
+            (start_addr2, 4 * pagesize() as u64),
+        ])
     }
 
     fn create_net_common() -> Net<FakeTap, FakeNet<FakeTap>> {
@@ -360,7 +368,15 @@ pub mod tests {
         tap.enable().unwrap();
 
         let features = base_features(ProtectionType::Unprotected);
-        Net::<FakeTap, FakeNet<FakeTap>>::new(&PathBuf::from(""), features, tap, Some(mac)).unwrap()
+        Net::<FakeTap, FakeNet<FakeTap>>::new(
+            &PathBuf::from(""),
+            features,
+            tap,
+            Some(mac),
+            false,
+            None,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -406,14 +422,24 @@ pub mod tests {
     fn activate() {
         let mut net = create_net_common();
         let guest_memory = create_guest_memory().unwrap();
+
+        let mut q0 = QueueConfig::new(1, 0);
+        q0.set_ready(true);
+        let q0 = q0
+            .activate(&guest_memory, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
+        let mut q1 = QueueConfig::new(1, 0);
+        q1.set_ready(true);
+        let q1 = q1
+            .activate(&guest_memory, Event::new().unwrap())
+            .expect("QueueConfig::activate");
+
         // Just testing that we don't panic, for now
         let _ = net.activate(
             guest_memory,
-            Interrupt::new(IrqLevelEvent::new().unwrap(), None, VIRTIO_MSI_NO_VECTOR),
-            vec![
-                (Queue::new(1), Event::new().unwrap()),
-                (Queue::new(1), Event::new().unwrap()),
-            ],
+            Interrupt::new_for_test(),
+            BTreeMap::from([(0, q0), (1, q1)]),
         );
     }
 }

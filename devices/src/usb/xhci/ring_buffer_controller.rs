@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::MutexGuard;
 
 use anyhow::Context;
+use base::debug;
 use base::error;
+use base::info;
 use base::Error as SysError;
 use base::Event;
 use base::EventType;
@@ -20,7 +22,7 @@ use vm_memory::GuestMemory;
 
 use super::ring_buffer::RingBuffer;
 use super::ring_buffer_stop_cb::RingBufferStopCallback;
-use super::xhci_abi::*;
+use super::xhci_abi::TransferDescriptor;
 use crate::utils;
 use crate::utils::EventHandler;
 use crate::utils::EventLoop;
@@ -126,23 +128,33 @@ where
         self.ring_buffer.lock()
     }
 
+    /// Get dequeue pointer of the internal ring buffer.
+    pub fn get_dequeue_pointer(&self) -> GuestAddress {
+        self.lock_ring_buffer().get_dequeue_pointer()
+    }
+
     /// Set dequeue pointer of the internal ring buffer.
     pub fn set_dequeue_pointer(&self, ptr: GuestAddress) {
-        usb_debug!("{}: set dequeue pointer: {:x}", self.name, ptr.0);
+        xhci_trace!("{}: set_dequeue_pointer({:x})", self.name, ptr.0);
         // Fast because this should only happen during xhci setup.
         self.lock_ring_buffer().set_dequeue_pointer(ptr);
     }
 
+    /// Get consumer cycle state.
+    pub fn get_consumer_cycle_state(&self) -> bool {
+        self.lock_ring_buffer().get_consumer_cycle_state()
+    }
+
     /// Set consumer cycle state.
     pub fn set_consumer_cycle_state(&self, state: bool) {
-        usb_debug!("{}: set consumer cycle state: {}", self.name, state);
+        xhci_trace!("{}: set consumer cycle state: {}", self.name, state);
         // Fast because this should only happen during xhci setup.
         self.lock_ring_buffer().set_consumer_cycle_state(state);
     }
 
     /// Start the ring buffer.
     pub fn start(&self) {
-        usb_debug!("{} started", self.name);
+        xhci_trace!("start {}", self.name);
         let mut state = self.state.lock();
         if *state != RingBufferState::Running {
             *state = RingBufferState::Running;
@@ -154,10 +166,10 @@ where
 
     /// Stop the ring buffer asynchronously.
     pub fn stop(&self, callback: RingBufferStopCallback) {
-        usb_debug!("{} being stopped", self.name);
+        xhci_trace!("stop {}", self.name);
         let mut state = self.state.lock();
         if *state == RingBufferState::Stopped {
-            usb_debug!("{} is already stopped", self.name);
+            info!("xhci: {} is already stopped", self.name);
             return;
         }
         if self.handler.lock().stop() {
@@ -196,7 +208,7 @@ where
         match *state {
             RingBufferState::Stopped => return Ok(()),
             RingBufferState::Stopping => {
-                usb_debug!("{}: stopping ring buffer controller", self.name);
+                debug!("xhci: {}: stopping ring buffer controller", self.name);
                 *state = RingBufferState::Stopped;
                 self.stop_callback.lock().clear();
                 return Ok(());
@@ -231,6 +243,12 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::sync::mpsc::Sender;
 
+    use base::pagesize;
+
+    use super::super::xhci_abi::LinkTrb;
+    use super::super::xhci_abi::NormalTrb;
+    use super::super::xhci_abi::Trb;
+    use super::super::xhci_abi::TrbType;
     use super::*;
 
     struct TestHandler {
@@ -254,7 +272,7 @@ mod tests {
 
     fn setup_mem() -> GuestMemory {
         let trb_size = size_of::<Trb>() as u64;
-        let gm = GuestMemory::new(&[(GuestAddress(0), 0x1000)]).unwrap();
+        let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
 
         // Structure of ring buffer:
         //  0x100  --> 0x200  --> 0x300

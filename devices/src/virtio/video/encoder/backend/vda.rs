@@ -16,7 +16,7 @@ use libvda::encode::VeaImplType;
 use libvda::encode::VeaInstance;
 
 use super::*;
-use crate::virtio::video::encoder::encoder::*;
+use crate::virtio::video::encoder::*;
 use crate::virtio::video::error::VideoError;
 use crate::virtio::video::error::VideoResult;
 use crate::virtio::video::format::Bitrate;
@@ -62,7 +62,7 @@ impl LibvdaEncoder {
             output_formats,
         } = instance.get_capabilities();
 
-        if input_formats.len() == 0 || output_formats.len() == 0 {
+        if input_formats.is_empty() || output_formats.is_empty() {
             error!("No input or output formats.");
             return Err(VideoError::InvalidFormat);
         }
@@ -121,7 +121,8 @@ impl LibvdaEncoder {
         let mut parsed_formats: BTreeMap<Format, ParsedFormat> = BTreeMap::new();
 
         for output_format in output_formats.iter() {
-            // TODO(alexlau): Consider using `max_framerate_numerator` and `max_framerate_denominator`.
+            // TODO(alexlau): Consider using `max_framerate_numerator` and
+            // `max_framerate_denominator`.
             let libvda::encode::OutputProfile {
                 profile: libvda_profile,
                 max_width,

@@ -29,18 +29,34 @@ impl<T> __IncompleteArrayField<T> {
     pub fn new() -> Self {
         __IncompleteArrayField(::std::marker::PhantomData)
     }
+    /// # Safety
+    ///
+    /// Caller must ensure that Self's size and alignment requirements matches
+    /// those of `T`s.
     #[inline]
     pub unsafe fn as_ptr(&self) -> *const T {
         ::std::mem::transmute(self)
     }
+    /// # Safety
+    ///
+    /// Caller must ensure that Self's size and alignment requirements matches
+    /// those of `T`s.
     #[inline]
     pub unsafe fn as_mut_ptr(&mut self) -> *mut T {
         ::std::mem::transmute(self)
     }
+    /// # Safety
+    ///
+    /// Caller must ensure that Self's size and alignment requirements matches
+    /// those of `T`s.
     #[inline]
     pub unsafe fn as_slice(&self, len: usize) -> &[T] {
         ::std::slice::from_raw_parts(self.as_ptr(), len)
     }
+    /// # Safety
+    ///
+    /// Caller must ensure that Self's size and alignment requirements matches
+    /// those of `T`s.
     #[inline]
     pub unsafe fn as_mut_slice(&mut self, len: usize) -> &mut [T] {
         ::std::slice::from_raw_parts_mut(self.as_mut_ptr(), len)
@@ -144,12 +160,16 @@ pub struct usbdevfs_urb {
 
 impl Default for usbdevfs_urb {
     fn default() -> Self {
+        // SAFETY: trivially safe
         unsafe { ::std::mem::zeroed() }
     }
 }
 
+// SAFETY:
 // The structure that embeds this should ensure that this is safe.
 unsafe impl Send for usbdevfs_urb {}
+// SAFETY:
+// The structure that embeds this should ensure that this is safe.
 unsafe impl Sync for usbdevfs_urb {}
 
 #[repr(C)]
@@ -190,7 +210,14 @@ pub struct usbdevfs_disconnect_claim {
 pub struct usbdevfs_streams {
     pub num_streams: c_uint,
     pub num_eps: c_uint,
-    pub eps: __IncompleteArrayField<c_char>,
+    pub eps: __IncompleteArrayField<c_uchar>,
+}
+
+impl Default for usbdevfs_streams {
+    fn default() -> Self {
+        // SAFETY: trivially safe
+        unsafe { ::std::mem::zeroed() }
+    }
 }
 
 const U: u32 = 'U' as u32;

@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use std::arch::x86_64::_rdtsc;
 
@@ -28,7 +28,7 @@ macro_rules! assert_wrapping_close {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_tsc_offsets() {
     use hypervisor::kvm::*;
     test_tsc_offsets(|guest_mem| {
@@ -39,7 +39,7 @@ fn test_kvm_tsc_offsets() {
 }
 
 #[test]
-#[cfg(feature = "haxm")]
+#[cfg(all(windows, feature = "haxm"))]
 fn test_haxm_tsc_offsets() {
     use hypervisor::haxm::*;
     test_tsc_offsets(|guest_mem| {
@@ -112,12 +112,10 @@ where
 
     vcpu.set_sregs(&vcpu_sregs).expect("set sregs failed");
 
-    let run_handle = vcpu.take_run_handle(None).unwrap();
-
     // basic case, we set MSR to 0
+    // SAFETY: trivially safe
     let tsc_now = unsafe { _rdtsc() };
     test_tsc_offset_run(
-        &run_handle,
         &mut vcpu,
         &mem_clone,
         load_addr,
@@ -127,22 +125,14 @@ where
         0,
     );
     // set offset to 0
+    // SAFETY: trivially safe
     let tsc_now = unsafe { _rdtsc() };
-    test_tsc_offset_run(
-        &run_handle,
-        &mut vcpu,
-        &mem_clone,
-        load_addr,
-        None,
-        Some(0),
-        0,
-        tsc_now,
-    );
+    test_tsc_offset_run(&mut vcpu, &mem_clone, load_addr, None, Some(0), 0, tsc_now);
     // some moderately sized offset
+    // SAFETY: trivially safe
     let tsc_now = unsafe { _rdtsc() };
     let ten_seconds = 2_500_000_000 * 10;
     test_tsc_offset_run(
-        &run_handle,
         &mut vcpu,
         &mem_clone,
         load_addr,
@@ -152,9 +142,9 @@ where
         tsc_now + ten_seconds,
     );
     // set offset to u64::MAX - tsc_now + 1
+    // SAFETY: trivially safe
     let tsc_now = unsafe { _rdtsc() };
     test_tsc_offset_run(
-        &run_handle,
         &mut vcpu,
         &mem_clone,
         load_addr,
@@ -166,7 +156,6 @@ where
 }
 
 fn test_tsc_offset_run(
-    run_handle: &VcpuRunHandle,
     vcpu: &mut Box<dyn hypervisor::VcpuX86_64>,
     mem_clone: &GuestMemory,
     load_addr: GuestAddress,
@@ -180,7 +169,7 @@ fn test_tsc_offset_run(
     let threshold = 250_000_000;
 
     let vcpu_regs = Regs {
-        rip: load_addr.offset() as u64,
+        rip: load_addr.offset(),
         rflags: 2,
         rcx: 0x3000,
         ..Default::default()
@@ -188,11 +177,8 @@ fn test_tsc_offset_run(
     vcpu.set_regs(&vcpu_regs).expect("set regs failed");
 
     if let Some(value) = set_msr {
-        vcpu.set_msrs(&[Register {
-            id: 0x00000010,
-            value,
-        }])
-        .expect("set_msrs should not fail");
+        vcpu.set_msr(0x00000010, value)
+            .expect("set_msr should not fail");
     }
 
     if let Some(offset) = set_offset {
@@ -201,7 +187,7 @@ fn test_tsc_offset_run(
     }
 
     loop {
-        match vcpu.run(run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             VcpuExit::Hlt => {
                 break;
             }

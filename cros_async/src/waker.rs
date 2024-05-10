@@ -10,7 +10,7 @@ use std::task::RawWakerVTable;
 use std::task::Waker;
 
 /// Wrapper around a usize used as a token to uniquely identify a pending waker.
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub(crate) struct WakerToken(pub(crate) usize);
 
 /// Like `futures::task::ArcWake` but uses `Weak<T>` instead of `Arc<T>`.
@@ -62,6 +62,8 @@ unsafe fn drop_weak_raw<W: WeakWake>(data: *const ()) {
 }
 
 pub(crate) fn new_waker<W: WeakWake>(w: Weak<W>) -> Waker {
+    // TODO(b/315998194): Add safety comment
+    #[allow(clippy::undocumented_unsafe_blocks)]
     unsafe {
         Waker::from_raw(RawWaker::new(
             w.into_raw() as *const (),

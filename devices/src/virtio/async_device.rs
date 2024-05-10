@@ -8,10 +8,10 @@
 
 use anyhow::bail;
 use anyhow::Context;
-use async_task::Task;
 use base::warn;
 use cros_async::AsyncResult;
 use cros_async::Executor;
+use cros_async::TaskHandle;
 use futures::future::AbortHandle;
 use futures::future::Abortable;
 use futures::future::Pending;
@@ -26,7 +26,7 @@ pub enum AsyncQueueState<T: 'static> {
     Stopped(T),
     /// Queue is being processed as a `Task` on an `Executor`, and can be stopped by aborting the
     /// `AbortHandle`.
-    Running((Task<T>, Executor, AbortHandle)),
+    Running((TaskHandle<T>, Executor, AbortHandle)),
     /// Something terrible happened and this queue is in a non-recoverable state.
     Broken,
 }
@@ -78,11 +78,33 @@ impl<T: 'static> AsyncQueueState<T> {
     ///
     /// Returns `true` if the queue was running, `false` if it wasn't.
     pub fn stop(&mut self) -> AsyncResult<bool> {
+        // TODO: schuffelen - All callers should use stop_async instead.
         match std::mem::replace(self, AsyncQueueState::Broken) {
             AsyncQueueState::Running((task, ex, handle)) => {
                 // Abort the task and run it to completion to retrieve the queue's resource.
                 handle.abort();
                 let resource = ex.run_until(task)?;
+                *self = AsyncQueueState::Stopped(resource);
+                Ok(true)
+            }
+            state => {
+                *self = state;
+                Ok(false)
+            }
+        }
+    }
+    /// Stops a previously started queue.
+    ///
+    /// The executor on which the task has been started will be run if needed in order to retrieve
+    /// the queue's resource.
+    ///
+    /// Returns `true` if the queue was running, `false` if it wasn't.
+    pub async fn stop_async(&mut self) -> AsyncResult<bool> {
+        match std::mem::replace(self, AsyncQueueState::Broken) {
+            AsyncQueueState::Running((task, _, handle)) => {
+                // Abort the task and run it to completion to retrieve the queue's resource.
+                handle.abort();
+                let resource = task.await;
                 *self = AsyncQueueState::Stopped(resource);
                 Ok(true)
             }

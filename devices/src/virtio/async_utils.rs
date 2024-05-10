@@ -11,7 +11,6 @@ use cros_async::EventAsync;
 use cros_async::Executor;
 
 use super::Interrupt;
-use super::SignalableInterrupt;
 
 /// Async task that waits for a signal from `event`.  Once this event is readable, exit. Exiting
 /// this future will cause the main loop to break and the worker thread to exit.
@@ -23,18 +22,17 @@ pub async fn await_and_exit(ex: &Executor, event: Event) -> Result<()> {
 
 /// Async task that resamples the status of the interrupt when the guest sends a request by
 /// signalling the resample event associated with the interrupt.
+///
+/// When called on a vhost-user `Interrupt` (i.e. from a vhost-user backend), this function does
+/// nothing, which is the correct behavior because irq resampling is handled by the frontend.
 pub async fn handle_irq_resample(ex: &Executor, interrupt: Interrupt) -> Result<()> {
     // Clone resample_evt if interrupt has one.
-    let resample_evt = if let Some(resample_evt) = interrupt.get_resample_evt() {
+    if let Some(resample_evt) = interrupt.get_resample_evt() {
         let resample_evt = resample_evt
             .try_clone()
             .context("resample_evt.try_clone() failed")?;
-        Some(EventAsync::new(resample_evt, ex).context("failed to create async resample event")?)
-    } else {
-        None
-    };
-
-    if let Some(resample_evt) = resample_evt {
+        let resample_evt =
+            EventAsync::new(resample_evt, ex).context("failed to create async resample event")?;
         loop {
             let _ = resample_evt
                 .next_val()
@@ -44,7 +42,7 @@ pub async fn handle_irq_resample(ex: &Executor, interrupt: Interrupt) -> Result<
         }
     } else {
         // No resample event; park the future.
-        futures::future::pending::<()>().await;
+        std::future::pending::<()>().await;
+        Ok(())
     }
-    Ok(())
 }

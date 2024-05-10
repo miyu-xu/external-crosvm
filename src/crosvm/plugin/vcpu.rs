@@ -19,7 +19,6 @@ use std::sync::RwLock;
 
 use base::error;
 use base::LayoutAllocation;
-use data_model::DataInit;
 use kvm::CpuId;
 use kvm::Vcpu;
 use kvm_sys::kvm_debugregs;
@@ -41,10 +40,13 @@ use libc::EPERM;
 use libc::EPIPE;
 use libc::EPROTO;
 use protobuf::CodedOutputStream;
+use protobuf::EnumOrUnknown;
 use protobuf::Message;
 use protos::plugin::*;
 use static_assertions::const_assert;
 use sync::Mutex;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
 
 use super::*;
 
@@ -74,85 +76,79 @@ impl Ord for Range {
 
 impl PartialOrd for Range {
     fn partial_cmp(&self, other: &Range) -> Option<cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 
-// Wrapper types to make the kvm register structs DataInit
-#[derive(Copy, Clone)]
-struct VcpuRegs(kvm_regs);
-unsafe impl DataInit for VcpuRegs {}
-#[derive(Copy, Clone)]
-struct VcpuSregs(kvm_sregs);
-unsafe impl DataInit for VcpuSregs {}
-#[derive(Copy, Clone)]
-struct VcpuFpu(kvm_fpu);
-unsafe impl DataInit for VcpuFpu {}
-#[derive(Copy, Clone)]
-struct VcpuDebugregs(kvm_debugregs);
-unsafe impl DataInit for VcpuDebugregs {}
-#[derive(Copy, Clone)]
-struct VcpuXcregs(kvm_xcrs);
-unsafe impl DataInit for VcpuXcregs {}
-#[derive(Copy, Clone)]
-struct VcpuLapicState(kvm_lapic_state);
-unsafe impl DataInit for VcpuLapicState {}
-#[derive(Copy, Clone)]
-struct VcpuMpState(kvm_mp_state);
-unsafe impl DataInit for VcpuMpState {}
-#[derive(Copy, Clone)]
-struct VcpuEvents(kvm_vcpu_events);
-unsafe impl DataInit for VcpuEvents {}
+fn get_vcpu_state_enum_or_unknown(
+    vcpu: &Vcpu,
+    state_set: EnumOrUnknown<vcpu_request::StateSet>,
+) -> SysResult<Vec<u8>> {
+    get_vcpu_state(
+        vcpu,
+        state_set.enum_value().map_err(|_| SysError::new(EINVAL))?,
+    )
+}
 
-fn get_vcpu_state(vcpu: &Vcpu, state_set: VcpuRequest_StateSet) -> SysResult<Vec<u8>> {
+fn get_vcpu_state(vcpu: &Vcpu, state_set: vcpu_request::StateSet) -> SysResult<Vec<u8>> {
     Ok(match state_set {
-        VcpuRequest_StateSet::REGS => VcpuRegs(vcpu.get_regs()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::SREGS => VcpuSregs(vcpu.get_sregs()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::FPU => VcpuFpu(vcpu.get_fpu()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::DEBUGREGS => VcpuDebugregs(vcpu.get_debugregs()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::XCREGS => VcpuXcregs(vcpu.get_xcrs()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::LAPIC => VcpuLapicState(vcpu.get_lapic()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::MP => VcpuMpState(vcpu.get_mp_state()?).as_slice().to_vec(),
-        VcpuRequest_StateSet::EVENTS => VcpuEvents(vcpu.get_vcpu_events()?).as_slice().to_vec(),
+        vcpu_request::StateSet::REGS => vcpu.get_regs()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::SREGS => vcpu.get_sregs()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::FPU => vcpu.get_fpu()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::DEBUGREGS => vcpu.get_debugregs()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::XCREGS => vcpu.get_xcrs()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::LAPIC => vcpu.get_lapic()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::MP => vcpu.get_mp_state()?.as_bytes().to_vec(),
+        vcpu_request::StateSet::EVENTS => vcpu.get_vcpu_events()?.as_bytes().to_vec(),
     })
 }
 
-fn set_vcpu_state(vcpu: &Vcpu, state_set: VcpuRequest_StateSet, state: &[u8]) -> SysResult<()> {
+fn set_vcpu_state_enum_or_unknown(
+    vcpu: &Vcpu,
+    state_set: EnumOrUnknown<vcpu_request::StateSet>,
+    state: &[u8],
+) -> SysResult<()> {
+    set_vcpu_state(
+        vcpu,
+        state_set.enum_value().map_err(|_| SysError::new(EINVAL))?,
+        state,
+    )
+}
+
+fn set_vcpu_state(vcpu: &Vcpu, state_set: vcpu_request::StateSet, state: &[u8]) -> SysResult<()> {
     match state_set {
-        VcpuRequest_StateSet::REGS => {
-            vcpu.set_regs(&VcpuRegs::from_slice(state).ok_or(SysError::new(EINVAL))?.0)
+        vcpu_request::StateSet::REGS => {
+            let regs = kvm_regs::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_regs(&regs)
         }
-        VcpuRequest_StateSet::SREGS => {
-            vcpu.set_sregs(&VcpuSregs::from_slice(state).ok_or(SysError::new(EINVAL))?.0)
+        vcpu_request::StateSet::SREGS => {
+            let sregs = kvm_sregs::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_sregs(&sregs)
         }
-        VcpuRequest_StateSet::FPU => {
-            vcpu.set_fpu(&VcpuFpu::from_slice(state).ok_or(SysError::new(EINVAL))?.0)
+        vcpu_request::StateSet::FPU => {
+            let fpu = kvm_fpu::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_fpu(&fpu)
         }
-        VcpuRequest_StateSet::DEBUGREGS => vcpu.set_debugregs(
-            &VcpuDebugregs::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        VcpuRequest_StateSet::XCREGS => vcpu.set_xcrs(
-            &VcpuXcregs::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        VcpuRequest_StateSet::LAPIC => vcpu.set_lapic(
-            &VcpuLapicState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        VcpuRequest_StateSet::MP => vcpu.set_mp_state(
-            &VcpuMpState::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
-        VcpuRequest_StateSet::EVENTS => vcpu.set_vcpu_events(
-            &VcpuEvents::from_slice(state)
-                .ok_or(SysError::new(EINVAL))?
-                .0,
-        ),
+        vcpu_request::StateSet::DEBUGREGS => {
+            let debugregs = kvm_debugregs::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_debugregs(&debugregs)
+        }
+        vcpu_request::StateSet::XCREGS => {
+            let xcrs = kvm_xcrs::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_xcrs(&xcrs)
+        }
+        vcpu_request::StateSet::LAPIC => {
+            let lapic_state = kvm_lapic_state::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_lapic(&lapic_state)
+        }
+        vcpu_request::StateSet::MP => {
+            let mp_state = kvm_mp_state::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_mp_state(&mp_state)
+        }
+        vcpu_request::StateSet::EVENTS => {
+            let vcpu_events = kvm_vcpu_events::read_from(state).ok_or(SysError::new(EINVAL))?;
+            vcpu.set_vcpu_events(&vcpu_events)
+        }
     }
 }
 
@@ -370,7 +366,7 @@ pub struct PluginVcpu {
     per_vcpu_state: Arc<Mutex<PerVcpuState>>,
     read_pipe: File,
     write_pipe: File,
-    wait_reason: Cell<Option<VcpuResponse_Wait>>,
+    wait_reason: Cell<Option<vcpu_response::Wait>>,
     request_buffer: RefCell<Vec<u8>>,
     response_buffer: RefCell<Vec<u8>>,
 }
@@ -398,7 +394,7 @@ impl PluginVcpu {
     ///
     /// This should be called for each VCPU before the first run of any of the VCPUs in the VM.
     pub fn init(&self, vcpu: &Vcpu) -> SysResult<()> {
-        let mut wait_reason = VcpuResponse_Wait::new();
+        let mut wait_reason = vcpu_response::Wait::new();
         wait_reason.mut_init();
         self.wait_reason.set(Some(wait_reason));
         self.handle_until_resume(vcpu)?;
@@ -414,7 +410,7 @@ impl PluginVcpu {
         };
 
         if let Some(user_data) = request {
-            let mut wait_reason = VcpuResponse_Wait::new();
+            let mut wait_reason = vcpu_response::Wait::new();
             wait_reason.mut_user().user = user_data;
             self.wait_reason.set(Some(wait_reason));
             self.handle_until_resume(vcpu)?;
@@ -443,12 +439,13 @@ impl PluginVcpu {
                     return false;
                 }
 
-                let mut wait_reason = VcpuResponse_Wait::new();
+                let mut wait_reason = vcpu_response::Wait::new();
                 let io = wait_reason.mut_io();
                 io.space = match io_space {
                     IoSpace::Ioport => AddressSpace::IOPORT,
                     IoSpace::Mmio => AddressSpace::MMIO,
-                };
+                }
+                .into();
                 io.address = addr;
                 io.is_write = data.is_write();
                 io.data = data.as_slice().to_vec();
@@ -456,14 +453,15 @@ impl PluginVcpu {
                 if !async_write && vcpu_state_lock.matches_hint(io_space, addr, io.is_write) {
                     if let Ok(regs) = vcpu.get_regs() {
                         let (has_sregs, has_debugregs) = vcpu_state_lock.check_hint_details(&regs);
-                        io.regs = VcpuRegs(regs).as_slice().to_vec();
+                        io.regs = regs.as_bytes().to_vec();
                         if has_sregs {
-                            if let Ok(state) = get_vcpu_state(vcpu, VcpuRequest_StateSet::SREGS) {
+                            if let Ok(state) = get_vcpu_state(vcpu, vcpu_request::StateSet::SREGS) {
                                 io.sregs = state;
                             }
                         }
                         if has_debugregs {
-                            if let Ok(state) = get_vcpu_state(vcpu, VcpuRequest_StateSet::DEBUGREGS)
+                            if let Ok(state) =
+                                get_vcpu_state(vcpu, vcpu_request::StateSet::DEBUGREGS)
                             {
                                 io.debugregs = state;
                             }
@@ -486,6 +484,7 @@ impl PluginVcpu {
                                 Ok(_) => {}
                                 Err(e) => error!("failed to flush to vec: {}", e),
                             }
+                            drop(stream);
                             let mut write_pipe = &self.write_pipe;
                             match write_pipe.write(&response_buffer[..]) {
                                 Ok(_) => {}
@@ -530,7 +529,7 @@ impl PluginVcpu {
 
     /// Has the plugin process handle a hyper-v call.
     pub fn hyperv_call(&self, input: u64, params: [u64; 2], data: &mut [u8], vcpu: &Vcpu) -> bool {
-        let mut wait_reason = VcpuResponse_Wait::new();
+        let mut wait_reason = vcpu_response::Wait::new();
         let hv = wait_reason.mut_hyperv_call();
         hv.input = input;
         hv.params0 = params[0];
@@ -559,7 +558,7 @@ impl PluginVcpu {
         msg_page: u64,
         vcpu: &Vcpu,
     ) -> bool {
-        let mut wait_reason = VcpuResponse_Wait::new();
+        let mut wait_reason = vcpu_response::Wait::new();
         let hv = wait_reason.mut_hyperv_synic();
         hv.msr = msr;
         hv.control = control;
@@ -623,30 +622,27 @@ impl PluginVcpu {
                     None => Err(SysError::new(EPROTO)),
                 }
             } else if wait_reason.is_some() {
-                // Any request other than getting the wait_reason while there is one pending is invalid.
+                // Any request other than getting the wait_reason while there is one pending is
+                // invalid.
                 self.wait_reason.set(wait_reason);
                 Err(SysError::new(EPROTO))
             } else if request.has_resume() {
                 send_response = false;
-                let resume = request.get_resume();
-                if !resume.get_regs().is_empty() {
-                    set_vcpu_state(vcpu, VcpuRequest_StateSet::REGS, resume.get_regs())?;
+                let resume = request.take_resume();
+                if !resume.regs.is_empty() {
+                    set_vcpu_state(vcpu, vcpu_request::StateSet::REGS, &resume.regs)?;
                 }
-                if !resume.get_sregs().is_empty() {
-                    set_vcpu_state(vcpu, VcpuRequest_StateSet::SREGS, resume.get_sregs())?;
+                if !resume.sregs.is_empty() {
+                    set_vcpu_state(vcpu, vcpu_request::StateSet::SREGS, &resume.sregs)?;
                 }
-                if !resume.get_debugregs().is_empty() {
-                    set_vcpu_state(
-                        vcpu,
-                        VcpuRequest_StateSet::DEBUGREGS,
-                        resume.get_debugregs(),
-                    )?;
+                if !resume.debugregs.is_empty() {
+                    set_vcpu_state(vcpu, vcpu_request::StateSet::DEBUGREGS, &resume.debugregs)?;
                 }
-                resume_data = Some(request.take_resume().take_data());
+                resume_data = Some(resume.data);
                 Ok(())
             } else if request.has_get_state() {
                 let response_state = response.mut_get_state();
-                match get_vcpu_state(vcpu, request.get_get_state().set) {
+                match get_vcpu_state_enum_or_unknown(vcpu, request.get_state().set) {
                     Ok(state) => {
                         response_state.state = state;
                         Ok(())
@@ -655,8 +651,8 @@ impl PluginVcpu {
                 }
             } else if request.has_set_state() {
                 response.mut_set_state();
-                let set_state = request.get_set_state();
-                set_vcpu_state(vcpu, set_state.set, set_state.get_state())
+                let set_state = request.set_state();
+                set_vcpu_state_enum_or_unknown(vcpu, set_state.set, &set_state.state)
             } else if request.has_get_hyperv_cpuid() {
                 let cpuid_response = &mut response.mut_get_hyperv_cpuid().entries;
                 match vcpu.get_hyperv_cpuid() {
@@ -670,7 +666,7 @@ impl PluginVcpu {
                 }
             } else if request.has_get_msrs() {
                 let entry_data = &mut response.mut_get_msrs().entry_data;
-                let entry_indices = &request.get_get_msrs().entry_indices;
+                let entry_indices = &request.get_msrs().entry_indices;
                 let mut msr_entries = Vec::with_capacity(entry_indices.len());
                 for &index in entry_indices {
                     msr_entries.push(kvm_msr_entry {
@@ -694,22 +690,24 @@ impl PluginVcpu {
                 const_assert!(ALIGN_OF_MSRS >= mem::align_of::<kvm_msr_entry>());
 
                 response.mut_set_msrs();
-                let request_entries = &request.get_set_msrs().entries;
+                let request_entries = &request.set_msrs().entries;
 
                 let size = SIZE_OF_MSRS + request_entries.len() * SIZE_OF_ENTRY;
                 let layout =
                     Layout::from_size_align(size, ALIGN_OF_MSRS).expect("impossible layout");
                 let mut allocation = LayoutAllocation::zeroed(layout);
 
+                // SAFETY:
                 // Safe to obtain an exclusive reference because there are no other
                 // references to the allocation yet and all-zero is a valid bit
                 // pattern.
                 let kvm_msrs = unsafe { allocation.as_mut::<kvm_msrs>() };
 
+                // SAFETY:
+                // Mapping the unsized array to a slice is unsafe becase the length isn't known.
+                // Providing the length used to create the struct guarantees the entire slice is
+                // valid.
                 unsafe {
-                    // Mapping the unsized array to a slice is unsafe becase the length isn't known.
-                    // Providing the length used to create the struct guarantees the entire slice is
-                    // valid.
                     let kvm_msr_entries: &mut [kvm_msr_entry] =
                         kvm_msrs.entries.as_mut_slice(request_entries.len());
                     for (msr_entry, entry) in kvm_msr_entries.iter_mut().zip(request_entries) {
@@ -721,7 +719,7 @@ impl PluginVcpu {
                 vcpu.set_msrs(kvm_msrs)
             } else if request.has_set_cpuid() {
                 response.mut_set_cpuid();
-                let request_entries = &request.get_set_cpuid().entries;
+                let request_entries = &request.set_cpuid().entries;
                 let mut cpuid = CpuId::new(request_entries.len());
                 let cpuid_entries = cpuid.mut_entries_slice();
                 for (request_entry, cpuid_entry) in request_entries.iter().zip(cpuid_entries) {
@@ -738,7 +736,7 @@ impl PluginVcpu {
                 vcpu.set_cpuid2(&cpuid)
             } else if request.has_enable_capability() {
                 response.mut_enable_capability();
-                let capability = request.get_enable_capability().capability;
+                let capability = request.enable_capability().capability;
                 if capability != kvm_sys::KVM_CAP_HYPERV_SYNIC
                     && capability != kvm_sys::KVM_CAP_HYPERV_SYNIC2
                 {
@@ -748,6 +746,7 @@ impl PluginVcpu {
                         cap: capability,
                         ..Default::default()
                     };
+                    // SAFETY:
                     // Safe because the allowed capabilities don't take pointer arguments.
                     unsafe { vcpu.kvm_enable_cap(&cap) }
                 }
@@ -767,11 +766,13 @@ impl PluginVcpu {
         if send_response {
             let mut response_buffer = self.response_buffer.borrow_mut();
             response_buffer.clear();
-            let mut stream = CodedOutputStream::vec(&mut response_buffer);
-            response
-                .write_length_delimited_to(&mut stream)
-                .map_err(proto_to_sys_err)?;
-            stream.flush().map_err(proto_to_sys_err)?;
+            {
+                let mut stream = CodedOutputStream::vec(&mut response_buffer);
+                response
+                    .write_length_delimited_to(&mut stream)
+                    .map_err(proto_to_sys_err)?;
+                stream.flush().map_err(proto_to_sys_err)?;
+            }
             let mut write_pipe = &self.write_pipe;
             write_pipe
                 .write(&response_buffer[..])

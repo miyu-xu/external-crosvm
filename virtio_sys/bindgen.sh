@@ -31,13 +31,14 @@ bindgen_generate \
 VIRTIO_FS_EXTRA="// Added by virtio_sys/bindgen.sh
 use data_model::Le32;
 use zerocopy::AsBytes;
-use zerocopy::FromBytes;"
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;"
 
 bindgen_generate \
     --raw-line "${VIRTIO_FS_EXTRA}" \
     --allowlist-var='VIRTIO_FS_.*' \
     --allowlist-type='virtio_fs_.*' \
-    --with-derive-custom "virtio_fs_config=FromBytes,AsBytes" \
+    --with-derive-custom "virtio_fs_config=FromZeroes,FromBytes,AsBytes" \
     "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_fs.h" \
     -- \
     -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
@@ -50,10 +51,8 @@ VIRTIO_IDS_EXTRAS="
 //! from 63) are nonstandard and not defined by the virtio specification.
 
 // Added by virtio_sys/bindgen.sh - do not edit the generated file.
-// TODO(abhishekbh): Fix this after this device is accepted upstream.
-pub const VIRTIO_ID_VHOST_USER: u32 = 61;
 // TODO(b/236144983): Fix this id when an official virtio-id is assigned to this device.
-pub const VIRTIO_ID_PVCLOCK: u32 = 60;
+pub const VIRTIO_ID_PVCLOCK: u32 = 61;
 "
 
 bindgen_generate \
@@ -69,15 +68,16 @@ bindgen_generate \
 
 VIRTIO_NET_EXTRA="// Added by virtio_sys/bindgen.sh
 use zerocopy::AsBytes;
-use zerocopy::FromBytes;"
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;"
 
 bindgen_generate \
     --raw-line "${VIRTIO_NET_EXTRA}" \
     --allowlist-var='VIRTIO_NET_.*' \
     --allowlist-type='virtio_net_.*' \
     --blocklist-type='virtio_net_ctrl_mac' \
-    --with-derive-custom "virtio_net_hdr=FromBytes,AsBytes" \
-    --with-derive-custom "virtio_net_hdr_mrg_rxbuf=FromBytes,AsBytes" \
+    --with-derive-custom "virtio_net_hdr=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_net_hdr_mrg_rxbuf=FromZeroes,FromBytes,AsBytes" \
     "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_net.h" \
     -- \
     -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
@@ -102,3 +102,45 @@ bindgen_generate \
     -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
     | replace_linux_int_types \
     > virtio_sys/src/virtio_mmio.rs
+
+VIRTIO_VSOCK_EXTRA="// Added by virtio_sys/bindgen.sh
+use data_model::Le16;
+use data_model::Le32;
+use data_model::Le64;
+use zerocopy::AsBytes;"
+
+bindgen_generate \
+    --raw-line "${VIRTIO_VSOCK_EXTRA}" \
+    --allowlist-var='VIRTIO_VSOCK_.*' \
+    --allowlist-type='virtio_vsock_.*' \
+    --with-derive-custom "virtio_vsock_event=AsBytes" \
+    "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_vsock.h" \
+    -- \
+    -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
+    | replace_linux_int_types \
+    | replace_linux_endian_types \
+    > virtio_sys/src/virtio_vsock.rs
+
+VIRTIO_SCSI_EXTRA="// Added by virtio_sys/bindgen.sh
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;"
+
+bindgen_generate \
+    --raw-line "${VIRTIO_SCSI_EXTRA}" \
+    --allowlist-var='VIRTIO_SCSI_.*' \
+    --allowlist-type='virtio_scsi_.*' \
+    --blocklist-type='virtio_scsi_cmd_req_pi' \
+    --with-derive-custom "virtio_scsi_config=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_cmd_req=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_cmd_resp=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_ctrl_tmf_req=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_ctrl_an_req=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_ctrl_tmf_resp=FromZeroes,FromBytes,AsBytes" \
+    --with-derive-custom "virtio_scsi_ctrl_an_resp=FromZeroes,FromBytes,AsBytes" \
+    "${BINDGEN_LINUX_X86_HEADERS}/include/linux/virtio_scsi.h" \
+    -- \
+    -isystem "${BINDGEN_LINUX_X86_HEADERS}/include" \
+    | replace_linux_int_types \
+    | replace_linux_endian_types \
+    > virtio_sys/src/virtio_scsi.rs

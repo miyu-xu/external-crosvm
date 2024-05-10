@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use super::constants::*;
+use linux_input_sys::constants::*;
+
 use super::virtio_input_absinfo;
 use super::virtio_input_bitmap;
 use super::virtio_input_device_ids;
@@ -18,10 +19,18 @@ fn name_with_index(device_name: &[u8], idx: u32) -> Vec<u8> {
 
 /// Instantiates a VirtioInputConfig object with the default configuration for a trackpad. It
 /// supports touch, left button and right button events, as well as X and Y axis.
-pub fn new_trackpad_config(idx: u32, width: u32, height: u32) -> VirtioInputConfig {
+pub fn new_trackpad_config(
+    idx: u32,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+) -> VirtioInputConfig {
+    let name = name
+        .map(|name| name.as_bytes().to_vec())
+        .unwrap_or(name_with_index(b"Crosvm Virtio Trackpad ", idx));
     VirtioInputConfig::new(
         virtio_input_device_ids::new(0, 0, 0, 0),
-        name_with_index(b"Crosvm Virtio Trackpad ", idx),
+        name,
         name_with_index(b"virtio-trackpad-", idx),
         virtio_input_bitmap::new([0u8; 128]),
         default_trackpad_events(),
@@ -55,7 +64,8 @@ pub fn new_keyboard_config(idx: u32) -> VirtioInputConfig {
     )
 }
 
-/// Instantiates a VirtioInputConfig object with the default configuration for a collection of switches.
+/// Instantiates a VirtioInputConfig object with the default configuration for a collection of
+/// switches.
 pub fn new_switches_config(idx: u32) -> VirtioInputConfig {
     VirtioInputConfig::new(
         virtio_input_device_ids::new(0, 0, 0, 0),
@@ -67,12 +77,33 @@ pub fn new_switches_config(idx: u32) -> VirtioInputConfig {
     )
 }
 
-/// Instantiates a VirtioInputConfig object with the default configuration for a touchscreen (no
-/// multitouch support).
-pub fn new_single_touch_config(idx: u32, width: u32, height: u32) -> VirtioInputConfig {
+/// Instantiates a VirtioInputConfig object with the default configuration for a collection of
+/// rotary.
+pub fn new_rotary_config(idx: u32) -> VirtioInputConfig {
     VirtioInputConfig::new(
         virtio_input_device_ids::new(0, 0, 0, 0),
-        name_with_index(b"Crosvm Virtio Touchscreen ", idx),
+        name_with_index(b"Crosvm Virtio Rotary ", idx),
+        name_with_index(b"virtio-rotary-", idx),
+        virtio_input_bitmap::new([0u8; 128]),
+        default_rotary_events(),
+        BTreeMap::new(),
+    )
+}
+
+/// Instantiates a VirtioInputConfig object with the default configuration for a touchscreen (no
+/// multitouch support).
+pub fn new_single_touch_config(
+    idx: u32,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+) -> VirtioInputConfig {
+    let name = name
+        .map(|name| name.as_bytes().to_vec())
+        .unwrap_or(name_with_index(b"Crosvm Virtio Touchscreen ", idx));
+    VirtioInputConfig::new(
+        virtio_input_device_ids::new(0, 0, 0, 0),
+        name,
         name_with_index(b"virtio-touchscreen-", idx),
         virtio_input_bitmap::from_bits(&[INPUT_PROP_DIRECT]),
         default_touchscreen_events(),
@@ -82,10 +113,21 @@ pub fn new_single_touch_config(idx: u32, width: u32, height: u32) -> VirtioInput
 
 /// Instantiates a VirtioInputConfig object with the default configuration for a multitouch
 /// touchscreen.
-pub fn new_multi_touch_config(idx: u32, width: u32, height: u32) -> VirtioInputConfig {
+pub fn new_multi_touch_config(
+    idx: u32,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+) -> VirtioInputConfig {
+    let name = name
+        .map(|name| name.as_bytes().to_vec())
+        .unwrap_or(name_with_index(
+            b"Crosvm Virtio Multitouch Touchscreen ",
+            idx,
+        ));
     VirtioInputConfig::new(
         virtio_input_device_ids::new(0, 0, 0, 0),
-        name_with_index(b"Crosvm Virtio Multitouch Touchscreen ", idx),
+        name,
         name_with_index(b"virtio-touchscreen-", idx),
         virtio_input_bitmap::from_bits(&[INPUT_PROP_DIRECT]),
         default_multitouchscreen_events(),
@@ -320,6 +362,12 @@ fn default_switch_events() -> BTreeMap<u16, virtio_input_bitmap> {
             SW_MACHINE_COVER,
         ]),
     );
+    supported_events
+}
+
+fn default_rotary_events() -> BTreeMap<u16, virtio_input_bitmap> {
+    let mut supported_events: BTreeMap<u16, virtio_input_bitmap> = BTreeMap::new();
+    supported_events.insert(EV_REL, virtio_input_bitmap::from_bits(&[REL_WHEEL]));
     supported_events
 }
 

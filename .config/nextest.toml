@@ -3,11 +3,12 @@
 slow-timeout = { period = "20s", terminate-after = 3 }
 # Always finish running all tests instead of terminating after the first failure.
 fail-fast = false
-
-[profile.presubmit]
 # Retry tests in case they are flaky.
 retries = 2
 
 [profile.postsubmit]
 # Do not retry tests in postsubmit to detect flaky tests.
 retries = 0
+
+[profile.presubmit]
+# Use default settings for presubmit

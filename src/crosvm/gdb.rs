@@ -9,6 +9,8 @@ use std::time::Duration;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use aarch64::AArch64 as CrosvmArch;
 use anyhow::Context;
+use arch::GdbArch;
+use arch::VcpuArch;
 use base::error;
 use base::info;
 use base::Tube;
@@ -21,7 +23,7 @@ use gdbstub::stub::run_blocking;
 use gdbstub::stub::run_blocking::BlockingEventLoop;
 use gdbstub::stub::SingleThreadStopReason;
 use gdbstub::target::ext::base::single_register_access::SingleRegisterAccess;
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 use gdbstub::target::ext::base::single_register_access::SingleRegisterAccessOps;
 use gdbstub::target::ext::base::singlethread::SingleThreadBase;
 use gdbstub::target::ext::base::singlethread::SingleThreadResume;
@@ -36,15 +38,9 @@ use gdbstub::target::ext::breakpoints::HwBreakpointOps;
 use gdbstub::target::Target;
 use gdbstub::target::TargetError::NonFatal;
 use gdbstub::target::TargetResult;
-#[cfg(target_arch = "aarch64")]
-use gdbstub_arch::aarch64::AArch64 as GdbArch;
-#[cfg(target_arch = "x86_64")]
-use gdbstub_arch::x86::X86_64_SSE as GdbArch;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-use hypervisor::VcpuAArch64 as VcpuArch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use hypervisor::VcpuX86_64 as VcpuArch;
 use remain::sorted;
+#[cfg(target_arch = "riscv64")]
+use riscv64::Riscv64 as CrosvmArch;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 use vm_control::VcpuControl;
@@ -55,7 +51,7 @@ use vm_control::VmRequest;
 use vm_control::VmResponse;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as CrosvmArch;
 
 pub fn gdb_thread(mut gdbstub: GdbStub, port: u32) {
@@ -91,7 +87,7 @@ pub fn gdb_thread(mut gdbstub: GdbStub, port: u32) {
     }
 
     // Resume the VM when GDB session is disconnected.
-    if let Err(e) = gdbstub.vm_request(VmRequest::Resume) {
+    if let Err(e) = gdbstub.vm_request(VmRequest::ResumeVcpus) {
         error!("Failed to resume the VM after GDB disconnected: {}", e);
     }
 }
@@ -248,7 +244,7 @@ impl SingleThreadBase for GdbStub {
         &mut self,
         start_addr: <Self::Arch as Arch>::Usize,
         data: &mut [u8],
-    ) -> TargetResult<(), Self> {
+    ) -> TargetResult<usize, Self> {
         match self.vcpu_request(VcpuControl::Debug(VcpuDebug::ReadMem(
             GuestAddress(start_addr),
             data.len(),
@@ -257,7 +253,7 @@ impl SingleThreadBase for GdbStub {
                 for (dst, v) in data.iter_mut().zip(r.iter()) {
                     *dst = *v;
                 }
-                Ok(())
+                Ok(data.len())
             }
             Ok(s) => {
                 error!("Unexpected vCPU response for ReadMem: {:?}", s);
@@ -296,7 +292,7 @@ impl SingleThreadBase for GdbStub {
         Some(self)
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     #[inline(always)]
     fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<(), Self>> {
         Some(self)
@@ -307,7 +303,7 @@ impl SingleThreadResume for GdbStub {
     fn resume(&mut self, _signal: Option<Signal>) -> Result<(), Self::Error> {
         // TODO: Handle any incoming signal.
 
-        self.vm_request(VmRequest::Resume).map_err(|e| {
+        self.vm_request(VmRequest::ResumeVcpus).map_err(|e| {
             error!("Failed to resume the target: {}", e);
             "Failed to resume the target"
         })
@@ -337,7 +333,7 @@ impl SingleThreadSingleStep for GdbStub {
             }
         };
 
-        self.vm_request(VmRequest::Resume).map_err(|e| {
+        self.vm_request(VmRequest::ResumeVcpus).map_err(|e| {
             error!("Failed to resume the target: {}", e);
             "Failed to resume the target"
         })?;
@@ -528,7 +524,7 @@ impl BlockingEventLoop for GdbStubEventLoop {
     fn on_interrupt(
         target: &mut Self::Target,
     ) -> Result<Option<Self::StopReason>, <Self::Target as Target>::Error> {
-        target.vm_request(VmRequest::Suspend).map_err(|e| {
+        target.vm_request(VmRequest::SuspendVcpus).map_err(|e| {
             error!("Failed to suspend the target: {}", e);
             "Failed to suspend the target"
         })?;
@@ -588,7 +584,7 @@ where
         }
         VcpuDebug::ReadMem(vaddr, len) => VcpuDebugStatus::MemoryRegion(
             <CrosvmArch as arch::GdbOps<V>>::read_memory(vcpu as &V, guest_mem, vaddr, len)
-                .unwrap_or(Vec::new()),
+                .unwrap_or_default(),
         ),
         VcpuDebug::WriteMem(vaddr, buf) => {
             <CrosvmArch as arch::GdbOps<V>>::write_memory(vcpu as &V, guest_mem, vaddr, &buf)

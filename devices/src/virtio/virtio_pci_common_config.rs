@@ -5,6 +5,8 @@
 use std::convert::TryInto;
 
 use base::warn;
+use serde::Deserialize;
+use serde::Serialize;
 use vm_memory::GuestAddress;
 
 use super::*;
@@ -31,6 +33,7 @@ use super::*;
 /// le64 queue_desc;                // read-write
 /// le64 queue_avail;               // read-write
 /// le64 queue_used;                // read-write
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct VirtioPciCommonConfig {
     pub driver_status: u8,
     pub config_generation: u8,
@@ -45,7 +48,7 @@ impl VirtioPciCommonConfig {
         &mut self,
         offset: u64,
         data: &mut [u8],
-        queues: &mut [Queue],
+        queues: &mut [QueueConfig],
         device: &mut dyn VirtioDevice,
     ) {
         match data.len() {
@@ -73,7 +76,7 @@ impl VirtioPciCommonConfig {
         &mut self,
         offset: u64,
         data: &[u8],
-        queues: &mut [Queue],
+        queues: &mut [QueueConfig],
         device: &mut dyn VirtioDevice,
     ) {
         match data.len() {
@@ -117,7 +120,7 @@ impl VirtioPciCommonConfig {
         }
     }
 
-    fn read_common_config_word(&self, offset: u64, queues: &[Queue]) -> u16 {
+    fn read_common_config_word(&self, offset: u64, queues: &[QueueConfig]) -> u16 {
         match offset {
             0x10 => self.msix_config,
             0x12 => queues.len() as u16, // num_queues
@@ -133,7 +136,7 @@ impl VirtioPciCommonConfig {
         }
     }
 
-    fn write_common_config_word(&mut self, offset: u64, value: u16, queues: &mut [Queue]) {
+    fn write_common_config_word(&mut self, offset: u64, value: u16, queues: &mut [QueueConfig]) {
         match offset {
             0x10 => self.msix_config = value,
             0x16 => self.queue_select = value,
@@ -167,7 +170,7 @@ impl VirtioPciCommonConfig {
         &mut self,
         offset: u64,
         value: u32,
-        queues: &mut [Queue],
+        queues: &mut [QueueConfig],
         device: &mut dyn VirtioDevice,
     ) {
         macro_rules! hi {
@@ -214,7 +217,7 @@ impl VirtioPciCommonConfig {
         0 // Assume the guest has no reason to read write-only registers.
     }
 
-    fn write_common_config_qword(&mut self, offset: u64, value: u64, queues: &mut [Queue]) {
+    fn write_common_config_qword(&mut self, offset: u64, value: u64, queues: &mut [QueueConfig]) {
         match offset {
             0x20 => self.with_queue_mut(queues, |q| q.set_desc_table(GuestAddress(value))),
             0x28 => self.with_queue_mut(queues, |q| q.set_avail_ring(GuestAddress(value))),
@@ -225,14 +228,14 @@ impl VirtioPciCommonConfig {
         }
     }
 
-    fn with_queue<U, F>(&self, queues: &[Queue], f: F) -> Option<U>
+    fn with_queue<U, F>(&self, queues: &[QueueConfig], f: F) -> Option<U>
     where
-        F: FnOnce(&Queue) -> U,
+        F: FnOnce(&QueueConfig) -> U,
     {
         queues.get(self.queue_select as usize).map(f)
     }
 
-    fn with_queue_mut<F: FnOnce(&mut Queue)>(&self, queues: &mut [Queue], f: F) {
+    fn with_queue_mut<F: FnOnce(&mut QueueConfig)>(&self, queues: &mut [QueueConfig], f: F) {
         if let Some(queue) = queues.get_mut(self.queue_select as usize) {
             f(queue);
         }
@@ -241,12 +244,12 @@ impl VirtioPciCommonConfig {
 
 #[cfg(test)]
 mod tests {
-    use base::Event;
+    use std::collections::BTreeMap;
+
     use base::RawDescriptor;
     use vm_memory::GuestMemory;
 
     use super::*;
-    use crate::Suspendable;
 
     struct DummyDevice(DeviceType);
     const QUEUE_SIZE: u16 = 256;
@@ -266,7 +269,7 @@ mod tests {
             &mut self,
             _mem: GuestMemory,
             _interrupt: Interrupt,
-            _queues: Vec<(Queue, Event)>,
+            _queues: BTreeMap<usize, Queue>,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -274,8 +277,6 @@ mod tests {
             DUMMY_FEATURES
         }
     }
-
-    impl Suspendable for DummyDevice {}
 
     #[test]
     fn write_base_regs() {

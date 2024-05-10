@@ -16,8 +16,9 @@ use base::set_rt_prio_limit;
 use base::set_rt_round_robin;
 use base::warn;
 use data_model::Le32;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
-use vm_memory::GuestMemory;
 
 use super::Error as VioSError;
 use super::Result;
@@ -29,8 +30,6 @@ use crate::virtio::snd::layout::*;
 use crate::virtio::DescriptorChain;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
-use crate::virtio::Reader;
-use crate::virtio::Writer;
 
 /// Messages that the worker can send to the stream (thread).
 pub enum StreamMsg {
@@ -43,7 +42,8 @@ pub enum StreamMsg {
     Break,
 }
 
-enum StreamState {
+#[derive(Clone, Serialize, Deserialize)]
+pub enum StreamState {
     New,
     ParamsSet,
     Prepared,
@@ -54,9 +54,8 @@ enum StreamState {
 
 pub struct Stream {
     stream_id: u32,
-    receiver: Receiver<StreamMsg>,
-    vios_client: Arc<VioSClient>,
-    guest_memory: GuestMemory,
+    receiver: Receiver<Box<StreamMsg>>,
+    vios_client: Arc<Mutex<VioSClient>>,
     control_queue: Arc<Mutex<Queue>>,
     io_queue: Arc<Mutex<Queue>>,
     interrupt: Interrupt,
@@ -68,41 +67,75 @@ pub struct Stream {
     buffer_queue: VecDeque<DescriptorChain>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StreamSnapshot {
+    pub current_state: StreamState,
+    pub period: Duration,
+    pub next_buffer: Duration,
+}
+
 impl Stream {
     /// Start a new stream thread and return its handler.
     pub fn try_new(
         stream_id: u32,
-        vios_client: Arc<VioSClient>,
-        guest_memory: GuestMemory,
+        vios_client: Arc<Mutex<VioSClient>>,
         interrupt: Interrupt,
         control_queue: Arc<Mutex<Queue>>,
         io_queue: Arc<Mutex<Queue>>,
         capture: bool,
+        stream_state: Option<StreamSnapshot>,
     ) -> Result<StreamProxy> {
-        let (sender, receiver): (Sender<StreamMsg>, Receiver<StreamMsg>) = channel();
+        let (sender, receiver): (Sender<Box<StreamMsg>>, Receiver<Box<StreamMsg>>) = channel();
         let thread = thread::Builder::new()
             .name(format!("v_snd_stream:{stream_id}"))
             .spawn(move || {
                 try_set_real_time_priority();
+                let (current_state, period, next_buffer) =
+                    if let Some(stream_state) = stream_state.clone() {
+                        (
+                            stream_state.current_state,
+                            stream_state.period,
+                            stream_state.next_buffer,
+                        )
+                    } else {
+                        (
+                            StreamState::New,
+                            Duration::from_millis(0),
+                            Duration::from_millis(0),
+                        )
+                    };
 
                 let mut stream = Stream {
                     stream_id,
                     receiver,
-                    vios_client,
-                    guest_memory,
+                    vios_client: vios_client.clone(),
                     control_queue,
                     io_queue,
                     interrupt,
                     capture,
-                    current_state: StreamState::New,
-                    period: Duration::from_millis(0),
+                    current_state,
+                    period,
                     start_time: Instant::now(),
-                    next_buffer: Duration::from_millis(0),
+                    next_buffer,
                     buffer_queue: VecDeque::new(),
                 };
 
+                if let Some(stream_state) = stream_state {
+                    if let Err(e) = vios_client
+                        .lock()
+                        .restore_stream(stream_id, stream_state.current_state)
+                    {
+                        error!("failed to restore stream params: {}", e);
+                    };
+                }
                 if let Err(e) = stream.stream_loop() {
                     error!("virtio-snd: Error in stream {}: {}", stream_id, e);
+                }
+                let state = stream.current_state.clone();
+                StreamSnapshot {
+                    current_state: state,
+                    period: stream.period,
+                    next_buffer: stream.next_buffer,
                 }
             })
             .map_err(SoundError::CreateThread)?;
@@ -124,13 +157,13 @@ impl Stream {
 
     fn recv_msg(&mut self) -> Result<bool> {
         let msg = self.receiver.recv().map_err(SoundError::StreamThreadRecv)?;
-        let (code, desc, next_state) = match msg {
+        let (code, desc, next_state) = match *msg {
             StreamMsg::SetParams(desc, params) => {
-                let code = match self.vios_client.set_stream_parameters_raw(params) {
+                let code = match self.vios_client.lock().set_stream_parameters_raw(params) {
                     Ok(()) => {
                         let frame_rate = from_virtio_frame_rate(params.rate).unwrap_or(0) as u64;
-                        self.period = Duration::from_millis(
-                            (params.period_bytes.to_native() as u64 * 1000u64)
+                        self.period = Duration::from_nanos(
+                            (params.period_bytes.to_native() as u64 * 1_000_000_000u64)
                                 / frame_rate
                                 / params.channels as u64
                                 / bytes_per_sample(params.format) as u64,
@@ -148,7 +181,7 @@ impl Stream {
                 (code, desc, StreamState::ParamsSet)
             }
             StreamMsg::Prepare(desc) => {
-                let code = match self.vios_client.prepare_stream(self.stream_id) {
+                let code = match self.vios_client.lock().prepare_stream(self.stream_id) {
                     Ok(()) => VIRTIO_SND_S_OK,
                     Err(e) => {
                         error!(
@@ -161,7 +194,7 @@ impl Stream {
                 (code, desc, StreamState::Prepared)
             }
             StreamMsg::Start(desc) => {
-                let code = match self.vios_client.start_stream(self.stream_id) {
+                let code = match self.vios_client.lock().start_stream(self.stream_id) {
                     Ok(()) => VIRTIO_SND_S_OK,
                     Err(e) => {
                         error!(
@@ -176,7 +209,7 @@ impl Stream {
                 (code, desc, StreamState::Started)
             }
             StreamMsg::Stop(desc) => {
-                let code = match self.vios_client.stop_stream(self.stream_id) {
+                let code = match self.vios_client.lock().stop_stream(self.stream_id) {
                     Ok(()) => VIRTIO_SND_S_OK,
                     Err(e) => {
                         error!(
@@ -189,7 +222,7 @@ impl Stream {
                 (code, desc, StreamState::Stopped)
             }
             StreamMsg::Release(desc) => {
-                let code = match self.vios_client.release_stream(self.stream_id) {
+                let code = match self.vios_client.lock().release_stream(self.stream_id) {
                     Ok(()) => VIRTIO_SND_S_OK,
                     Err(e) => {
                         error!(
@@ -216,13 +249,7 @@ impl Stream {
                 return Ok(false);
             }
         };
-        reply_control_op_status(
-            code,
-            desc,
-            &self.guest_memory,
-            &self.control_queue,
-            &self.interrupt,
-        )?;
+        reply_control_op_status(code, desc, &self.control_queue, &self.interrupt)?;
         self.current_state = next_state;
         Ok(true)
     }
@@ -230,24 +257,22 @@ impl Stream {
     fn maybe_process_queued_buffers(&mut self) -> Result<()> {
         match self.current_state {
             StreamState::Started => {
-                while let Some(desc) = self.buffer_queue.pop_front() {
-                    let mut reader = Reader::new(self.guest_memory.clone(), desc.clone())
-                        .map_err(SoundError::CreateReader)?;
+                while let Some(mut desc) = self.buffer_queue.pop_front() {
+                    let reader = &mut desc.reader;
                     // Ignore the first buffer, it was already read by the time this thread
                     // receives the descriptor
                     reader.consume(std::mem::size_of::<virtio_snd_pcm_xfer>());
-                    let desc_index = desc.index;
-                    let mut writer = Writer::new(self.guest_memory.clone(), desc)
-                        .map_err(SoundError::CreateWriter)?;
+                    let writer = &mut desc.writer;
                     let io_res = if self.capture {
                         let buffer_size =
                             writer.available_bytes() - std::mem::size_of::<virtio_snd_pcm_status>();
-                        self.vios_client
-                            .request_audio_data(self.stream_id, buffer_size, |vslice| {
-                                writer.write_from_volatile_slice(*vslice)
-                            })
+                        self.vios_client.lock().request_audio_data(
+                            self.stream_id,
+                            buffer_size,
+                            |vslice| writer.write_from_volatile_slice(*vslice),
+                        )
                     } else {
-                        self.vios_client.inject_audio_data(
+                        self.vios_client.lock().inject_audio_data(
                             self.stream_id,
                             reader.available_bytes(),
                             |vslice| reader.read_to_volatile_slice(vslice),
@@ -281,14 +306,11 @@ impl Stream {
                         // release the buffer if the sound server client returned too soon.
                         std::thread::sleep(self.next_buffer - elapsed);
                     }
+                    let len = writer.bytes_written() as u32;
                     {
                         let mut io_queue_lock = self.io_queue.lock();
-                        io_queue_lock.add_used(
-                            &self.guest_memory,
-                            desc_index,
-                            writer.bytes_written() as u32,
-                        );
-                        io_queue_lock.trigger_interrupt(&self.guest_memory, &self.interrupt);
+                        io_queue_lock.add_used(desc, len);
+                        io_queue_lock.trigger_interrupt(&self.interrupt);
                     }
                 }
             }
@@ -304,7 +326,6 @@ impl Stream {
                         VIRTIO_SND_S_OK,
                         0,
                         desc,
-                        &self.guest_memory,
                         &self.io_queue,
                         &self.interrupt,
                     )?;
@@ -312,7 +333,7 @@ impl Stream {
             }
             StreamState::Prepared => {} // Do nothing, any buffers will be processed after start
             _ => {
-                if self.buffer_queue.len() > 0 {
+                if !self.buffer_queue.is_empty() {
                     warn!("virtio-snd: Buffers received while in unexpected state");
                 }
             }
@@ -323,10 +344,10 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
-        // Try to stop and release the stream in case it was playing, these operations will fail if the
-        // stream is already released, just ignore that failure
-        let _ = self.vios_client.stop_stream(self.stream_id);
-        let _ = self.vios_client.release_stream(self.stream_id);
+        // Try to stop and release the stream in case it was playing, these operations will fail if
+        // the stream is already released, just ignore that failure
+        let _ = self.vios_client.lock().stop_stream(self.stream_id);
+        let _ = self.vios_client.lock().release_stream(self.stream_id);
 
         // Also release any pending buffer
         while let Some(desc) = self.buffer_queue.pop_front() {
@@ -334,7 +355,6 @@ impl Drop for Stream {
                 VIRTIO_SND_S_IO_ERR,
                 0,
                 desc,
-                &self.guest_memory,
                 &self.io_queue,
                 &self.interrupt,
             ) {
@@ -349,19 +369,21 @@ impl Drop for Stream {
 
 /// Basically a proxy to the thread handling a particular stream.
 pub struct StreamProxy {
-    sender: Sender<StreamMsg>,
-    thread: Option<thread::JoinHandle<()>>,
+    sender: Sender<Box<StreamMsg>>,
+    thread: Option<thread::JoinHandle<StreamSnapshot>>,
 }
 
 impl StreamProxy {
     /// Access the underlying sender to clone it or send messages
-    pub fn msg_sender(&self) -> &Sender<StreamMsg> {
+    pub fn msg_sender(&self) -> &Sender<Box<StreamMsg>> {
         &self.sender
     }
 
     /// Send a message to the stream thread on the other side of this sender
-    pub fn send_msg(sender: &Sender<StreamMsg>, msg: StreamMsg) -> Result<()> {
-        sender.send(msg).map_err(SoundError::StreamThreadSend)
+    pub fn send_msg(sender: &Sender<Box<StreamMsg>>, msg: StreamMsg) -> Result<()> {
+        sender
+            .send(Box::new(msg))
+            .map_err(SoundError::StreamThreadSend)
     }
 
     /// Convenience function to send a message to this stream's thread
@@ -369,24 +391,31 @@ impl StreamProxy {
         Self::send_msg(&self.sender, msg)
     }
 
-    fn stop_thread(&mut self) {
-        if let Err(e) = self.send(StreamMsg::Break) {
-            error!(
-                "virtio-snd: Failed to send Break msg to stream thread: {}",
-                e
-            );
-        }
+    pub fn stop_thread(mut self) -> StreamSnapshot {
+        self.stop_thread_inner().unwrap()
+    }
+
+    fn stop_thread_inner(&mut self) -> Option<StreamSnapshot> {
         if let Some(th) = self.thread.take() {
-            if let Err(e) = th.join() {
-                error!("virtio-snd: Panic detected on stream thread: {:?}", e);
+            if let Err(e) = self.send(StreamMsg::Break) {
+                error!(
+                    "virtio-snd: Failed to send Break msg to stream thread: {}",
+                    e
+                );
             }
+            match th.join() {
+                Ok(state) => Some(state),
+                Err(e) => panic!("virtio-snd: Panic detected on stream thread: {:?}", e),
+            }
+        } else {
+            None
         }
     }
 }
 
 impl Drop for StreamProxy {
     fn drop(&mut self) {
-        self.stop_thread();
+        let _ = self.stop_thread_inner();
     }
 }
 
@@ -412,22 +441,21 @@ pub fn vios_error_to_status_code(e: VioSError) -> u32 {
 /// Encapsulates sending the virtio_snd_hdr struct back to the driver.
 pub fn reply_control_op_status(
     code: u32,
-    desc: DescriptorChain,
-    guest_memory: &GuestMemory,
+    mut desc: DescriptorChain,
     queue: &Arc<Mutex<Queue>>,
     interrupt: &Interrupt,
 ) -> Result<()> {
-    let desc_index = desc.index;
-    let mut writer = Writer::new(guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+    let writer = &mut desc.writer;
     writer
         .write_obj(virtio_snd_hdr {
             code: Le32::from(code),
         })
         .map_err(SoundError::QueueIO)?;
+    let len = writer.bytes_written() as u32;
     {
         let mut queue_lock = queue.lock();
-        queue_lock.add_used(guest_memory, desc_index, writer.bytes_written() as u32);
-        queue_lock.trigger_interrupt(guest_memory, interrupt);
+        queue_lock.add_used(desc, len);
+        queue_lock.trigger_interrupt(interrupt);
     }
     Ok(())
 }
@@ -436,13 +464,11 @@ pub fn reply_control_op_status(
 pub fn reply_pcm_buffer_status(
     status: u32,
     latency_bytes: u32,
-    desc: DescriptorChain,
-    guest_memory: &GuestMemory,
+    mut desc: DescriptorChain,
     queue: &Arc<Mutex<Queue>>,
     interrupt: &Interrupt,
 ) -> Result<()> {
-    let desc_index = desc.index;
-    let mut writer = Writer::new(guest_memory.clone(), desc).map_err(SoundError::Descriptor)?;
+    let writer = &mut desc.writer;
     if writer.available_bytes() > std::mem::size_of::<virtio_snd_pcm_status>() {
         writer
             .consume_bytes(writer.available_bytes() - std::mem::size_of::<virtio_snd_pcm_status>());
@@ -453,10 +479,11 @@ pub fn reply_pcm_buffer_status(
             latency_bytes: Le32::from(latency_bytes),
         })
         .map_err(SoundError::QueueIO)?;
+    let len = writer.bytes_written() as u32;
     {
         let mut queue_lock = queue.lock();
-        queue_lock.add_used(guest_memory, desc_index, writer.bytes_written() as u32);
-        queue_lock.trigger_interrupt(guest_memory, interrupt);
+        queue_lock.add_used(desc, len);
+        queue_lock.trigger_interrupt(interrupt);
     }
     Ok(())
 }

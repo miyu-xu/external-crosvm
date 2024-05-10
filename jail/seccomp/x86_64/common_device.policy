@@ -2,10 +2,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# This is an allow list of syscalls for most of crosvm devices.
+#
+# Note that some device policy files don't depend on this policy file
+# because of some conflicts such as gpu_common.policy.
+# If you want to modify policies for all the devices, please modify
+# not only this file but also other *_common.policy files.
+
 @frequency ./common_device.frequency
 brk: 1
 clock_gettime: 1
-clone: arg0 & CLONE_THREAD
+# ANDROID: modified to 1 because of duplicate error with jail_warden
+clone: 1
 clone3: 1
 close: 1
 dup2: 1
@@ -17,6 +25,7 @@ epoll_wait: 1
 eventfd2: 1
 exit: 1
 exit_group: 1
+ftruncate: 1
 futex: 1
 getcwd: 1
 getpid: 1
@@ -27,10 +36,14 @@ io_uring_register: 1
 io_uring_enter: 1
 kill: 1
 lseek: 1
-madvise: arg2 == MADV_DONTNEED || arg2 == MADV_DONTDUMP || arg2 == MADV_REMOVE || arg2 == MADV_MERGEABLE || arg2 == MADV_FREE
+# ANDROID: modified to 1 because of duplicate error with jail_warden
+madvise: 1
 membarrier: 1
-mmap: arg2 in ~PROT_EXEC
-mprotect: arg2 in ~PROT_EXEC
+memfd_create: 1
+# ANDROID: added PROT_WRITE because of duplicate error with jail_warden
+mmap: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
+# ANDROID: added PROT_WRITE because of duplicate error with jail_warden
+mprotect: arg2 in ~PROT_EXEC || arg2 in ~PROT_WRITE
 mremap: 1
 munmap: 1
 nanosleep: 1
@@ -55,12 +68,15 @@ sendmsg: 1
 sendto: 1
 set_robust_list: 1
 sigaltstack: 1
+# arg2 == SIGABRT -- ANDROID(b/270404912): modified to 1 - duplicate error.
+tgkill: 1
 write: 1
 writev: 1
 fcntl: 1
 uname: 1
 
-## Rules for vmm-swap
-userfaultfd: 1
-# 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
-ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00
+# ANDROID(b/271625758): disabled to fix duplicate syscall error.
+# ## Rules for vmm-swap
+# userfaultfd: 1
+# # 0xc018aa3f == UFFDIO_API, 0xaa00 == USERFAULTFD_IOC_NEW
+# ioctl: arg1 == 0xc018aa3f || arg1 == 0xaa00

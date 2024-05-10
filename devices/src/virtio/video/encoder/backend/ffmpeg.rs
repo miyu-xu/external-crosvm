@@ -30,11 +30,11 @@ use ffmpeg::AV_PKT_FLAG_KEY;
 
 use crate::virtio::video::encoder::backend::Encoder;
 use crate::virtio::video::encoder::backend::EncoderSession;
-use crate::virtio::video::encoder::encoder::EncoderCapabilities;
-use crate::virtio::video::encoder::encoder::EncoderEvent;
-use crate::virtio::video::encoder::encoder::InputBufferId;
-use crate::virtio::video::encoder::encoder::OutputBufferId;
-use crate::virtio::video::encoder::encoder::SessionConfig;
+use crate::virtio::video::encoder::EncoderCapabilities;
+use crate::virtio::video::encoder::EncoderEvent;
+use crate::virtio::video::encoder::InputBufferId;
+use crate::virtio::video::encoder::OutputBufferId;
+use crate::virtio::video::encoder::SessionConfig;
 use crate::virtio::video::error::VideoError;
 use crate::virtio::video::error::VideoResult;
 use crate::virtio::video::ffmpeg::TryAsAvFrameExt;
@@ -84,6 +84,10 @@ impl AvBufferSource for InputBuffer {
     fn len(&self) -> usize {
         self.mapping.size()
     }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 enum CodecJob {
@@ -101,9 +105,9 @@ pub struct FfmpegEncoderSession {
     output_queue: VecDeque<(OutputBufferId, MemoryMappingArena)>,
     /// `true` if a flush is pending. While a pending flush exist, input buffers are temporarily
     /// held on and not sent to the encoder. An actual flush call will be issued when we run out of
-    /// output buffers (to defend against FFmpeg bugs), and we'll try to receive outputs again until
-    /// we receive another code indicating the flush has completed, at which point this flag will
-    /// be reset.
+    /// output buffers (to defend against FFmpeg bugs), and we'll try to receive outputs again
+    /// until we receive another code indicating the flush has completed, at which point this
+    /// flag will be reset.
     is_flushing: bool,
 
     /// The libav context for this session.
@@ -201,6 +205,7 @@ impl FfmpegEncoderSession {
                         "encoded packet does not fit in output buffer"
                     )));
                 }
+                // SAFETY:
                 // Safe because packet.as_ref().data and out_buf.as_ptr() are valid references and
                 // we did bound check above.
                 unsafe {
@@ -342,7 +347,6 @@ impl FfmpegEncoder {
     pub fn new() -> Self {
         // Find all the encoders supported by libav and store them.
         let codecs = AvCodecIterator::new()
-            .into_iter()
             .filter_map(|codec| {
                 if !codec.is_encoder() {
                     return None;

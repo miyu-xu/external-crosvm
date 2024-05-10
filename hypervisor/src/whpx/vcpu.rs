@@ -4,26 +4,23 @@
 
 use core::ffi::c_void;
 use std::arch::x86_64::CpuidResult;
-use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::mem::size_of;
-use std::os::raw::c_int;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use base::Error;
 use base::Result;
-use libc::EBUSY;
 use libc::EINVAL;
+use libc::EIO;
 use libc::ENOENT;
 use libc::ENXIO;
 use vm_memory::GuestAddress;
 use winapi::shared::winerror::E_UNEXPECTED;
+use windows::Win32::Foundation::WHV_E_INSUFFICIENT_BUFFER;
 
 use super::types::*;
 use super::*;
-use crate::get_tsc_offset_from_msr;
-use crate::set_tsc_offset_via_msr;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
@@ -31,13 +28,12 @@ use crate::Fpu;
 use crate::HypervHypercall;
 use crate::IoOperation;
 use crate::IoParams;
-use crate::Register;
 use crate::Regs;
 use crate::Sregs;
 use crate::Vcpu;
 use crate::VcpuExit;
-use crate::VcpuRunHandle;
 use crate::VcpuX86_64;
+use crate::Xsave;
 
 const WHPX_EXIT_DIRECTION_MMIO_READ: u8 = 0;
 const WHPX_EXIT_DIRECTION_MMIO_WRITE: u8 = 1;
@@ -66,7 +62,8 @@ impl SafeInstructionEmulator {
             WHvEmulatorTranslateGvaPage: Some(SafeInstructionEmulator::translate_gva_page_cb),
         };
         let mut handle: WHV_EMULATOR_HANDLE = std::ptr::null_mut();
-        // safe because pass in valid callbacks and a emulator handle for the kernel to place the allocated handle into.
+        // safe because pass in valid callbacks and a emulator handle for the kernel to place the
+        // allocated handle into.
         check_whpx!(unsafe { WHvEmulatorCreateEmulator(&EMULATOR_CALLBACKS, &mut handle) })?;
 
         Ok(SafeInstructionEmulator { handle })
@@ -294,14 +291,6 @@ impl Drop for SafeInstructionEmulator {
 unsafe impl Send for SafeInstructionEmulator {}
 unsafe impl Sync for SafeInstructionEmulator {}
 
-/// VCPU Thread contains basic vcpu info, for cancelling the vcpu requests without a vcpu handle.
-pub(super) struct VcpuThread {
-    vm_partition: Arc<SafePartition>,
-    index: u32,
-}
-
-thread_local!(static VCPU_THREAD: RefCell<Option<VcpuThread>> = RefCell::new(None));
-
 struct SafeVirtualProcessor {
     vm_partition: Arc<SafePartition>,
     index: u32,
@@ -329,7 +318,6 @@ impl Drop for SafeVirtualProcessor {
 pub struct WhpxVcpu {
     index: u32,
     safe_virtual_processor: Arc<SafeVirtualProcessor>,
-    vcpu_run_handle_fingerprint: Arc<AtomicU64>,
     vm_partition: Arc<SafePartition>,
     last_exit_context: Arc<WHV_RUN_VP_EXIT_CONTEXT>,
     // must be arc, since we cannot "dupe" an instruction emulator similar to a handle.
@@ -348,7 +336,6 @@ impl WhpxVcpu {
         Ok(WhpxVcpu {
             index,
             safe_virtual_processor: Arc::new(safe_virtual_processor),
-            vcpu_run_handle_fingerprint: Default::default(),
             vm_partition,
             last_exit_context: Arc::new(Default::default()),
             instruction_emulator: Arc::new(instruction_emulator),
@@ -515,7 +502,6 @@ impl Vcpu for WhpxVcpu {
         Ok(WhpxVcpu {
             index: self.index,
             safe_virtual_processor: self.safe_virtual_processor.clone(),
-            vcpu_run_handle_fingerprint: self.vcpu_run_handle_fingerprint.clone(),
             vm_partition: self.vm_partition.clone(),
             last_exit_context: self.last_exit_context.clone(),
             instruction_emulator: self.instruction_emulator.clone(),
@@ -528,47 +514,6 @@ impl Vcpu for WhpxVcpu {
         self
     }
 
-    fn take_run_handle(&self, _signal_num: Option<c_int>) -> Result<VcpuRunHandle> {
-        fn vcpu_run_handle_drop() {
-            VCPU_THREAD.with(|v| {
-                *v.borrow_mut() = None;
-            });
-        }
-
-        let vcpu_run_handle = VcpuRunHandle::new(vcpu_run_handle_drop);
-
-        // AcqRel ordering is sufficient to ensure only one thread gets to set its fingerprint to
-        // this Vcpu and subsequent `run` calls will see the fingerprint.
-        if self
-            .vcpu_run_handle_fingerprint
-            .compare_exchange(
-                0,
-                vcpu_run_handle.fingerprint().as_u64(),
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            // Prevent `vcpu_run_handle_drop` from being called.
-            std::mem::forget(vcpu_run_handle);
-            return Err(Error::new(EBUSY));
-        }
-
-        VCPU_THREAD.with(|v| {
-            if v.borrow().is_none() {
-                *v.borrow_mut() = Some(VcpuThread {
-                    vm_partition: self.vm_partition.clone(),
-                    index: self.index,
-                });
-                Ok(())
-            } else {
-                Err(Error::new(EBUSY))
-            }
-        })?;
-
-        Ok(vcpu_run_handle)
-    }
-
     /// Returns the vcpu id.
     fn id(&self) -> usize {
         self.index.try_into().unwrap()
@@ -577,48 +522,19 @@ impl Vcpu for WhpxVcpu {
     /// Exits the vcpu immediately if exit is true
     fn set_immediate_exit(&self, exit: bool) {
         if exit {
-            // safe because we own this whpx virtual processor index, and assume the vm partition is still valid
+            // safe because we own this whpx virtual processor index, and assume the vm partition is
+            // still valid
             unsafe {
                 WHvCancelRunVirtualProcessor(self.vm_partition.partition, self.index, 0);
             }
         }
     }
 
-    ///  Exits the vcpu immediately if exit is true for the vcpu on the current thread.
-    fn set_local_immediate_exit(exit: bool) {
-        if exit {
-            VCPU_THREAD.with(|v| {
-                if let Some(state) = &(*v.borrow()) {
-                    // safe because we own the vcpu index and assume the vm partition is still valid.
-                    unsafe {
-                        WHvCancelRunVirtualProcessor(state.vm_partition.partition, state.index, 0);
-                    }
-                }
-            });
-        }
-    }
-
-    fn set_local_immediate_exit_fn(&self) -> extern "C" fn() {
-        extern "C" fn f() {
-            WhpxVcpu::set_local_immediate_exit(true);
-        }
-        f
-    }
-
-    /// Signals to the hypervisor that this guest is being paused by userspace.  Only works on Vms
-    /// that support `VmCapability::PvClockSuspend`. This suspends the entire VM, not just this VCPU.
-    /// NO virtual processor may be running when this is called.
-    fn pvclock_ctrl(&self) -> Result<()> {
-        // safe because we asssume the vm partition is still valid.
-        check_whpx!(unsafe { WHvSuspendPartitionTime(self.vm_partition.partition) })
-    }
-
-    /// Specifies set of signals that are blocked during execution of `RunnableVcpu::run`.  Signals
-    /// that are not blocked will cause run to return with `VcpuExit::Intr`.  Only works on Vms that
-    /// support `VmCapability::SignalMask`.
-    fn set_signal_mask(&self, _signals: &[c_int]) -> Result<()> {
-        // Whpx does not support VmCapability::SignalMask
-        Err(Error::new(ENXIO))
+    /// Signals to the hypervisor that this guest is being paused by userspace. On some hypervisors,
+    /// this is used to control the pvclock. On WHPX, we handle it separately with virtio-pvclock.
+    /// So the correct implementation here is to do nothing.
+    fn on_suspend(&self) -> Result<()> {
+        Ok(())
     }
 
     /// Enables a hypervisor-specific extension on this Vcpu.  `cap` is a constant defined by the
@@ -630,9 +546,9 @@ impl Vcpu for WhpxVcpu {
 
     /// This function should be called after `Vcpu::run` returns `VcpuExit::Mmio`.
     ///
-    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio exit,
-    /// call `handle_fn` with the respective IoOperation to perform the mmio read or write,
-    /// and set the return data in the vcpu so that the vcpu can resume running.
+    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio
+    /// exit, call `handle_fn` with the respective IoOperation to perform the mmio read or
+    /// write, and set the return data in the vcpu so that the vcpu can resume running.
     fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         let mut status: WHV_EMULATOR_STATUS = Default::default();
         let mut ctx = InstructionEmulatorContext {
@@ -714,17 +630,9 @@ impl Vcpu for WhpxVcpu {
     }
 
     #[allow(non_upper_case_globals)]
-    fn run(&mut self, run_handle: &VcpuRunHandle) -> Result<VcpuExit> {
-        // Acquire is used to ensure this check is ordered after the `compare_exchange` in `run`.
-        if self
-            .vcpu_run_handle_fingerprint
-            .load(std::sync::atomic::Ordering::Acquire)
-            != run_handle.fingerprint().as_u64()
-        {
-            panic!("invalid VcpuRunHandle used to run Vcpu");
-        }
-
-        // safe because we own this whpx virtual processor index, and assume the vm partition is still valid
+    fn run(&mut self) -> Result<VcpuExit> {
+        // safe because we own this whpx virtual processor index, and assume the vm partition is
+        // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
         check_whpx!(unsafe {
             WHvRunVirtualProcessor(
@@ -1047,6 +955,97 @@ impl VcpuX86_64 for WhpxVcpu {
         })
     }
 
+    /// Gets the VCPU XSAVE.
+    fn get_xsave(&self) -> Result<Xsave> {
+        let mut empty_buffer = [0u8; 1];
+        let mut needed_buf_size: u32 = 0;
+
+        // Find out how much space is needed for XSAVEs.
+        let res = unsafe {
+            WHvGetVirtualProcessorXsaveState(
+                self.vm_partition.partition,
+                self.index,
+                empty_buffer.as_mut_ptr() as *mut _,
+                0,
+                &mut needed_buf_size,
+            )
+        };
+        if res != WHV_E_INSUFFICIENT_BUFFER.0 {
+            // This should always work, so if it doesn't, we'll return unsupported.
+            error!("failed to get size of vcpu xsave");
+            return Err(Error::new(EIO));
+        }
+
+        let mut xsave = Xsave::new(needed_buf_size as usize);
+        // SAFETY: xsave_data is valid for the duration of the FFI call, and we pass its length in
+        // bytes so writes are bounded within the buffer.
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorXsaveState(
+                self.vm_partition.partition,
+                self.index,
+                xsave.as_mut_ptr(),
+                xsave.len() as u32,
+                &mut needed_buf_size,
+            )
+        })?;
+        Ok(xsave)
+    }
+
+    /// Sets the VCPU XSAVE.
+    fn set_xsave(&self, xsave: &Xsave) -> Result<()> {
+        // SAFETY: the xsave buffer is valid for the duration of the FFI call, and we pass its
+        // length in bytes so reads are bounded within the buffer.
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorXsaveState(
+                self.vm_partition.partition,
+                self.index,
+                xsave.as_ptr(),
+                xsave.len() as u32,
+            )
+        })
+    }
+
+    fn get_interrupt_state(&self) -> Result<serde_json::Value> {
+        let mut whpx_interrupt_regs: WhpxInterruptRegs = Default::default();
+        let reg_names = WhpxInterruptRegs::get_register_names();
+        // SAFETY: we have enough space for all the registers & the memory lives for the duration
+        // of the FFI call.
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                reg_names as *const WHV_REGISTER_NAME,
+                reg_names.len() as u32,
+                whpx_interrupt_regs.as_mut_ptr(),
+            )
+        })?;
+
+        serde_json::to_value(whpx_interrupt_regs.into_serializable()).map_err(|e| {
+            error!("failed to serialize interrupt state: {:?}", e);
+            Error::new(EIO)
+        })
+    }
+
+    fn set_interrupt_state(&self, data: serde_json::Value) -> Result<()> {
+        let whpx_interrupt_regs =
+            WhpxInterruptRegs::from_serializable(serde_json::from_value(data).map_err(|e| {
+                error!("failed to serialize interrupt state: {:?}", e);
+                Error::new(EIO)
+            })?);
+        let reg_names = WhpxInterruptRegs::get_register_names();
+        // SAFETY: we have enough space for all the registers & the memory lives for the duration
+        // of the FFI call.
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                reg_names as *const WHV_REGISTER_NAME,
+                reg_names.len() as u32,
+                whpx_interrupt_regs.as_ptr(),
+            )
+        })
+    }
+
     /// Gets the VCPU debug registers.
     fn get_debugregs(&self) -> Result<DebugRegs> {
         let mut whpx_debugregs: WhpxDebugRegs = Default::default();
@@ -1081,103 +1080,118 @@ impl VcpuX86_64 for WhpxVcpu {
     }
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
-        const REG_NAMES: [WHV_REGISTER_NAME; 1] = [WHV_REGISTER_NAME_WHvX64RegisterXCr0];
-        let mut xcrs: [WHV_REGISTER_VALUE; 1] = Default::default();
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
+        const REG_NAME: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterXCr0;
+        let mut reg_value = WHV_REGISTER_VALUE::default();
         // safe because we have enough space for all the registers in whpx_regs
         check_whpx!(unsafe {
             WHvGetVirtualProcessorRegisters(
                 self.vm_partition.partition,
                 self.index,
-                &REG_NAMES as *const WHV_REGISTER_NAME,
-                REG_NAMES.len() as u32,
-                xcrs.as_mut_ptr(),
+                &REG_NAME,
+                /* RegisterCount */ 1,
+                &mut reg_value,
             )
         })?;
-        let reg = Register {
-            id: 0, // whpx only supports xcr0
-            // safe because the union value, reg64, is safe to pull out assuming
-            // kernel filled in the xcrs properly.
-            value: unsafe { xcrs[0].Reg64 },
-        };
-        Ok(vec![reg])
+
+        // safe because the union value, reg64, is safe to pull out assuming
+        // kernel filled in the xcrs properly.
+        let xcr0 = unsafe { reg_value.Reg64 };
+
+        // whpx only supports xcr0
+        let xcrs = BTreeMap::from([(0, xcr0)]);
+        Ok(xcrs)
     }
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, xcrs: &[Register]) -> Result<()> {
-        const REG_NAMES: [WHV_REGISTER_NAME; 1] = [WHV_REGISTER_NAME_WHvX64RegisterXCr0];
-        let whpx_xcrs = xcrs
-            .iter()
-            .filter_map(|reg| match reg.id {
-                0 => Some(WHV_REGISTER_VALUE { Reg64: reg.value }),
-                _ => None,
-            })
-            .collect::<Vec<WHV_REGISTER_VALUE>>();
-        if !whpx_xcrs.is_empty() {
-            // safe because we have enough space for all the registers in whpx_xcrs
-            check_whpx!(unsafe {
-                WHvSetVirtualProcessorRegisters(
-                    self.vm_partition.partition,
-                    self.index,
-                    &REG_NAMES as *const WHV_REGISTER_NAME,
-                    REG_NAMES.len() as u32,
-                    whpx_xcrs.as_ptr(),
-                )
-            })
-        } else {
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, xcr_index: u32, value: u64) -> Result<()> {
+        if xcr_index != 0 {
             // invalid xcr register provided
-            Err(Error::new(ENXIO))
+            return Err(Error::new(EINVAL));
         }
-    }
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()> {
-        let msr_names = get_msr_names(msrs);
-        let mut buffer: Vec<WHV_REGISTER_VALUE> = vec![Default::default(); msr_names.len()];
-        // safe because we have enough space for all the registers in whpx_regs
-        check_whpx!(unsafe {
-            WHvGetVirtualProcessorRegisters(
-                self.vm_partition.partition,
-                self.index,
-                msr_names.as_ptr(),
-                msr_names.len() as u32,
-                buffer.as_mut_ptr(),
-            )
-        })?;
-
-        msrs.retain(|&msr| VALID_MSRS.contains_key(&msr.id));
-        if buffer.len() != msrs.len() {
-            panic!("mismatch of valid whpx msr registers and returned registers");
-        }
-        for (i, msr) in msrs.iter_mut().enumerate() {
-            // safe because Reg64 will be a valid union value for all msrs
-            msr.value = unsafe { buffer[i].Reg64 };
-        }
-        Ok(())
-    }
-
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()> {
-        let msr_names = get_msr_names(msrs);
-        let whpx_msrs = msrs
-            .iter()
-            .filter_map(|msr| {
-                if VALID_MSRS.contains_key(&msr.id) {
-                    Some(WHV_REGISTER_VALUE { Reg64: msr.value })
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<WHV_REGISTER_VALUE>>();
-
+        const REG_NAME: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterXCr0;
+        let reg_value = WHV_REGISTER_VALUE { Reg64: value };
+        // safe because we have enough space for all the registers in whpx_xcrs
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
                 self.vm_partition.partition,
                 self.index,
-                msr_names.as_ptr(),
-                msr_names.len() as u32,
-                whpx_msrs.as_ptr(),
+                &REG_NAME,
+                /* RegisterCount */ 1,
+                &reg_value,
+            )
+        })
+    }
+
+    /// Gets the value of a single model-specific register.
+    fn get_msr(&self, msr_index: u32) -> Result<u64> {
+        let msr_name = get_msr_name(msr_index).ok_or(Error::new(libc::ENOENT))?;
+        let mut msr_value = WHV_REGISTER_VALUE::default();
+        // safe because we have enough space for all the registers in whpx_regs
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                &msr_name,
+                /* RegisterCount */ 1,
+                &mut msr_value,
+            )
+        })?;
+
+        // safe because Reg64 will be a valid union value
+        let value = unsafe { msr_value.Reg64 };
+        Ok(value)
+    }
+
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
+        // Note that some members of VALID_MSRS cannot be fetched from WHPX with
+        // WHvGetVirtualProcessorRegisters per the HTLFS, so we enumerate all of
+        // permitted MSRs here.
+        //
+        // We intentionally exclude WHvRegisterPendingInterruption and
+        // WHvRegisterInterruptState because they are included in
+        // get_interrupt_state.
+        //
+        // We intentionally exclude MSR_TSC because in snapshotting it is
+        // handled by the generic x86_64 VCPU snapshot/restore. Non snapshot
+        // consumers should use get/set_tsc_adjust to access the adjust register
+        // if needed.
+        const MSRS_TO_SAVE: &[u32] = &[
+            MSR_EFER,
+            MSR_KERNEL_GS_BASE,
+            MSR_APIC_BASE,
+            MSR_SYSENTER_CS,
+            MSR_SYSENTER_EIP,
+            MSR_SYSENTER_ESP,
+            MSR_STAR,
+            MSR_LSTAR,
+            MSR_CSTAR,
+            MSR_SFMASK,
+        ];
+
+        let registers = MSRS_TO_SAVE
+            .iter()
+            .map(|msr_index| {
+                let value = self.get_msr(*msr_index)?;
+                Ok((*msr_index, value))
+            })
+            .collect::<Result<BTreeMap<u32, u64>>>()?;
+
+        Ok(registers)
+    }
+
+    /// Sets the value of a single model-specific register.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()> {
+        let msr_name = get_msr_name(msr_index).ok_or(Error::new(libc::ENOENT))?;
+        let msr_value = WHV_REGISTER_VALUE { Reg64: value };
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                &msr_name,
+                /* RegisterCount */ 1,
+                &msr_value,
             )
         })
     }
@@ -1250,42 +1264,18 @@ impl VcpuX86_64 for WhpxVcpu {
         Err(Error::new(ENOENT))
     }
 
-    fn get_tsc_offset(&self) -> Result<u64> {
-        // Although WHPX has the WHV_REGISTER_NAME_WHvX64RegisterTscVirtualOffset register, calling
-        // WHvGetVirtualProcessorRegisters always returns 0 for it.
-        get_tsc_offset_from_msr(self)
-    }
-
-    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
-        const REG_NAMES: [WHV_REGISTER_NAME; 1] =
-            [WHV_REGISTER_NAME_WHvX64RegisterTscVirtualOffset];
-
-        let values = vec![WHV_REGISTER_VALUE { Reg64: offset }];
-
-        // Try to use the built-in API for setting the TSC offset
-        if check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition,
-                self.index,
-                &REG_NAMES as *const WHV_REGISTER_NAME,
-                REG_NAMES.len() as u32,
-                values.as_ptr() as *const WHV_REGISTER_VALUE,
-            )
-        })
-        .is_ok()
-        {
-            return Ok(());
-        }
-
-        // Use the default MSR-based implementation
-        set_tsc_offset_via_msr(self, offset)
+    fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()> {
+        // Set the guest TSC such that it has the same TSC_OFFSET as it did at
+        // the moment it was snapshotted. This is required for virtio-pvclock
+        // to function correctly. (virtio-pvclock assumes the offset is fixed,
+        // and adjusts CLOCK_BOOTTIME accordingly. It also hides the TSC jump
+        // from CLOCK_MONOTONIC by setting the timebase.)
+        self.set_tsc_value(host_tsc_reference_moment.wrapping_add(tsc_offset))
     }
 }
 
-fn get_msr_names(msrs: &[Register]) -> Vec<WHV_REGISTER_NAME> {
-    msrs.iter()
-        .filter_map(|reg| VALID_MSRS.get(&reg.id).copied())
-        .collect::<Vec<WHV_REGISTER_NAME>>()
+fn get_msr_name(msr_index: u32) -> Option<WHV_REGISTER_NAME> {
+    VALID_MSRS.get(&msr_index).copied()
 }
 
 // run calls are tested with the integration tests since the full vcpu needs to be setup for it.
@@ -1447,15 +1437,14 @@ mod tests {
             return;
         }
 
-        let mut xcrs = vcpu.get_xcrs().unwrap();
-        xcrs[0].value = 1;
-        vcpu.set_xcrs(&xcrs).unwrap();
-        let xcrs2 = vcpu.get_xcrs().unwrap();
-        assert_eq!(xcrs[0].value, xcrs2[0].value);
+        vcpu.set_xcr(0, 1).unwrap();
+        let xcrs = vcpu.get_xcrs().unwrap();
+        let xcr0 = xcrs.get(&0).unwrap();
+        assert_eq!(*xcr0, 1);
     }
 
     #[test]
-    fn set_msrs() {
+    fn set_msr() {
         if !Whpx::is_enabled() {
             return;
         }
@@ -1465,21 +1454,14 @@ mod tests {
         let vm = new_vm(cpu_count, mem);
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut msrs = vec![Register {
-            id: MSR_KERNEL_GS_BASE,
-            value: 42,
-        }];
-        vcpu.set_msrs(&msrs).unwrap();
+        vcpu.set_msr(MSR_KERNEL_GS_BASE, 42).unwrap();
 
-        msrs[0].value = 0;
-        vcpu.get_msrs(&mut msrs).unwrap();
-        assert_eq!(msrs.len(), 1);
-        assert_eq!(msrs[0].id, MSR_KERNEL_GS_BASE);
-        assert_eq!(msrs[0].value, 42);
+        let gs_base = vcpu.get_msr(MSR_KERNEL_GS_BASE).unwrap();
+        assert_eq!(gs_base, 42);
     }
 
     #[test]
-    fn get_msrs() {
+    fn get_msr() {
         if !Whpx::is_enabled() {
             return;
         }
@@ -1489,20 +1471,12 @@ mod tests {
         let vm = new_vm(cpu_count, mem);
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut msrs = vec![
-            // This one should succeed
-            Register {
-                id: MSR_TSC,
-                ..Default::default()
-            },
-            // This one will fail to fetch
-            Register {
-                id: MSR_TSC + 1,
-                ..Default::default()
-            },
-        ];
-        vcpu.get_msrs(&mut msrs).unwrap();
-        assert_eq!(msrs.len(), 1);
+        // This one should succeed
+        let _value = vcpu.get_msr(MSR_TSC).unwrap();
+
+        // This one will fail to fetch
+        vcpu.get_msr(MSR_TSC + 1)
+            .expect_err("invalid MSR index should fail");
     }
 
     #[test]
@@ -1542,21 +1516,70 @@ mod tests {
         assert_eq!(sregs.cr0 & X86_CR0_PG, X86_CR0_PG);
         assert_eq!(sregs.cr4 & X86_CR4_PAE, X86_CR4_PAE);
 
-        let mut efer_reg = vec![Register {
-            id: MSR_EFER,
-            value: 0,
-        }];
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_LMA | EFER_LME);
+        let efer = vcpu.get_msr(MSR_EFER).expect("failed to get msr");
+        assert_eq!(efer, EFER_LMA | EFER_LME);
 
         // Enable SCE via set_msrs
-        efer_reg[0].value |= EFER_SCE;
-        vcpu.set_msrs(&efer_reg).expect("failed to set msrs");
+        vcpu.set_msr(MSR_EFER, efer | EFER_SCE)
+            .expect("failed to set msr");
 
         // Verify that setting stuck
         let sregs = vcpu.get_sregs().expect("failed to get sregs");
         assert_eq!(sregs.efer, EFER_SCE | EFER_LME | EFER_LMA);
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_SCE | EFER_LME | EFER_LMA);
+        let new_efer = vcpu.get_msr(MSR_EFER).expect("failed to get msr");
+        assert_eq!(new_efer, EFER_SCE | EFER_LME | EFER_LMA);
+    }
+
+    #[test]
+    fn get_and_set_xsave_smoke() {
+        if !Whpx::is_enabled() {
+            return;
+        }
+        let cpu_count = 1;
+        let mem =
+            GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
+        let vm = new_vm(cpu_count, mem);
+        let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
+
+        // XSAVE is essentially opaque for our purposes. We just want to make sure our syscalls
+        // succeed.
+        let xsave = vcpu.get_xsave().unwrap();
+        vcpu.set_xsave(&xsave).unwrap();
+    }
+
+    #[test]
+    fn get_and_set_interrupt_state_smoke() {
+        if !Whpx::is_enabled() {
+            return;
+        }
+        let cpu_count = 1;
+        let mem =
+            GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
+        let vm = new_vm(cpu_count, mem);
+        let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
+
+        // For the sake of snapshotting, interrupt state is essentially opaque. We just want to make
+        // sure our syscalls succeed.
+        let interrupt_state = vcpu.get_interrupt_state().unwrap();
+        vcpu.set_interrupt_state(interrupt_state).unwrap();
+    }
+
+    #[test]
+    fn get_all_msrs() {
+        if !Whpx::is_enabled() {
+            return;
+        }
+        let cpu_count = 1;
+        let mem =
+            GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
+        let vm = new_vm(cpu_count, mem);
+        let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
+
+        let all_msrs = vcpu.get_all_msrs().unwrap();
+
+        // Our MSR buffer is init'ed to zeros in the registers. The APIC base will be non-zero, so
+        // by asserting that we know the MSR fetch actually did get us data.
+        let apic_base = all_msrs.get(&MSR_APIC_BASE).unwrap();
+        assert_ne!(*apic_base, 0);
     }
 }

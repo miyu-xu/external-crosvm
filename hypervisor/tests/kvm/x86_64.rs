@@ -25,7 +25,6 @@ use hypervisor::PitChannelState;
 use hypervisor::PitRWMode;
 use hypervisor::PitRWState;
 use hypervisor::PitState;
-use hypervisor::Register;
 use hypervisor::TriggerMode;
 use hypervisor::Vm;
 use hypervisor::VmCap;
@@ -39,14 +38,14 @@ use vm_memory::GuestMemory;
 fn get_supported_cpuid() {
     let hypervisor = Kvm::new().unwrap();
     let cpuid = hypervisor.get_supported_cpuid().unwrap();
-    assert!(cpuid.cpu_id_entries.len() > 0);
+    assert!(!cpuid.cpu_id_entries.is_empty());
 }
 
 #[test]
 fn get_emulated_cpuid() {
     let hypervisor = Kvm::new().unwrap();
     let cpuid = hypervisor.get_emulated_cpuid().unwrap();
-    assert!(cpuid.cpu_id_entries.len() > 0);
+    assert!(!cpuid.cpu_id_entries.is_empty());
 }
 
 #[test]
@@ -146,7 +145,7 @@ fn ioapic_state() {
         ioregsel: 2,
         ioapicid: 4,
         current_interrupt_level_bitmap: 8,
-        redirect_table: [noredir; 120],
+        redirect_table: [noredir; 24],
     };
 
     // Initialize first 24 (kvm_state limit) redirection entries
@@ -162,7 +161,13 @@ fn ioapic_state() {
     assert_eq!(kvm_state.pad, 0);
     // check first 24 entries
     for i in 0..24 {
-        assert_eq!(unsafe { kvm_state.redirtbl[i].bits }, bit_repr);
+        assert_eq!(
+            {
+                // SAFETY: trivially safe
+                unsafe { kvm_state.redirtbl[i].bits }
+            },
+            bit_repr
+        );
     }
 
     // compare with a conversion back
@@ -317,6 +322,7 @@ fn enable_feature() {
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
     vm.create_irq_chip().unwrap();
     let vcpu = vm.create_vcpu(0).unwrap();
+    // SAFETY: trivially safe
     unsafe { vcpu.enable_raw_capability(kvm_sys::KVM_CAP_HYPERV_SYNIC, &[0; 4]) }.unwrap();
 }
 
@@ -358,54 +364,51 @@ fn xcrs() {
     let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
     let vcpu = vm.create_vcpu(0).unwrap();
-    let mut xcrs = vcpu.get_xcrs().unwrap();
-    xcrs[0].value = 1;
-    vcpu.set_xcrs(&xcrs).unwrap();
-    let xcrs2 = vcpu.get_xcrs().unwrap();
-    assert_eq!(xcrs[0].value, xcrs2[0].value);
+    vcpu.set_xcr(0, 1).unwrap();
+    let xcrs = vcpu.get_xcrs().unwrap();
+    let xcr0 = xcrs.get(&0).unwrap();
+    assert_eq!(*xcr0, 1);
 }
 
 #[test]
-fn get_msrs() {
+fn get_msr() {
     let kvm = Kvm::new().unwrap();
     let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
     let vcpu = vm.create_vcpu(0).unwrap();
-    let mut msrs = vec![
-        // This one should succeed
-        Register {
-            id: 0x0000011e,
-            ..Default::default()
-        },
-        // This one will fail to fetch
-        Register {
-            id: 0x000003f1,
-            ..Default::default()
-        },
-    ];
-    vcpu.get_msrs(&mut msrs).unwrap();
-    assert_eq!(msrs.len(), 1);
+
+    // This one should succeed
+    let _value = vcpu.get_msr(0x0000011e).unwrap();
+
+    // This one will fail to fetch
+    vcpu.get_msr(0xffffffff)
+        .expect_err("invalid MSR index should fail");
 }
 
 #[test]
-fn set_msrs() {
+fn set_msr() {
     let kvm = Kvm::new().unwrap();
     let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
     let vcpu = vm.create_vcpu(0).unwrap();
 
     const MSR_TSC_AUX: u32 = 0xc0000103;
-    let mut msrs = vec![Register {
-        id: MSR_TSC_AUX,
-        value: 42,
-    }];
-    vcpu.set_msrs(&msrs).unwrap();
+    vcpu.set_msr(MSR_TSC_AUX, 42).unwrap();
+    let msr_tsc_aux = vcpu.get_msr(MSR_TSC_AUX).unwrap();
+    assert_eq!(msr_tsc_aux, 42);
+}
 
-    msrs[0].value = 0;
-    vcpu.get_msrs(&mut msrs).unwrap();
-    assert_eq!(msrs.len(), 1);
-    assert_eq!(msrs[0].id, MSR_TSC_AUX);
-    assert_eq!(msrs[0].value, 42);
+#[test]
+fn set_msr_unsupported() {
+    let kvm = Kvm::new().unwrap();
+    let gm = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
+    let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
+    let vcpu = vm.create_vcpu(0).unwrap();
+
+    assert_eq!(
+        vcpu.set_msr(u32::MAX, u64::MAX),
+        Err(base::Error::new(libc::EPERM))
+    );
 }
 
 #[test]

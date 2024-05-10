@@ -8,11 +8,18 @@ use anyhow::Context;
 use anyhow::Result;
 use gpu_display::GpuDisplay;
 use gpu_display::SurfaceType;
+use vm_control::gpu::DisplayMode;
+use vm_control::gpu::DisplayParameters;
 
 fn run() -> Result<()> {
     let mut disp = GpuDisplay::open_x(None::<&str>).context("open_x")?;
     let surface_id = disp
-        .create_surface(None, 1280, 1024, SurfaceType::Scanout)
+        .create_surface(
+            None,
+            /* scanout_id= */ Some(0),
+            &DisplayParameters::default_with_mode(DisplayMode::Windowed(1280, 1024)),
+            SurfaceType::Scanout,
+        )
         .context("create_surface")?;
 
     let mem = disp.framebuffer(surface_id).context("framebuffer")?;

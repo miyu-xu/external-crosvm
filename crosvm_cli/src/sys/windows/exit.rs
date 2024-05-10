@@ -126,6 +126,52 @@ impl<T> ExitContextAnyhow<T> for anyhow::Result<T> {
     }
 }
 
+/// Trait for attaching context with process exit codes to an Option.
+pub trait ExitContextOption<T> {
+    fn exit_code<X>(self, exit_code: X) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>;
+
+    fn exit_context<X, C>(self, exit_code: X, context: C) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>,
+        C: Display + Send + Sync + 'static;
+
+    fn with_exit_context<X, C, F>(self, exit_code: X, f: F) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>,
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C;
+}
+
+impl<T> ExitContextOption<T> for std::option::Option<T> {
+    fn exit_code<X>(self, exit_code: X) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>,
+    {
+        self.context(ExitCodeWrapper(exit_code.into()))
+    }
+
+    fn exit_context<X, C>(self, exit_code: X, context: C) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>,
+        C: Display + Send + Sync + 'static,
+    {
+        self.context(ExitCodeWrapper(exit_code.into()))
+            .context(context)
+    }
+
+    fn with_exit_context<X, C, F>(self, exit_code: X, f: F) -> anyhow::Result<T>
+    where
+        X: Into<ExitCode>,
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.context(ExitCodeWrapper(exit_code.into()))
+            .with_context(f)
+    }
+}
+
 #[macro_export]
 macro_rules! bail_exit_code {
     ($exit_code:literal, $msg:literal $(,)?) => {
@@ -214,7 +260,6 @@ pub enum Exit {
     CloneEvent = 0xE000000A,
     CloneVcpu = 0xE000000B,
     ConfigureVcpu = 0xE000000C,
-    CreateAc97 = 0xE000000D,
     CreateConsole = 0xE000000E,
     CreateDisk = 0xE000000F,
     CreateEvent = 0xE0000010,
@@ -342,6 +387,9 @@ pub enum Exit {
     StartSpu = 0xE000009C,
     SandboxCreateProcessAccessDenied = 0xE000009D,
     SandboxCreateProcessElevationRequired = 0xE000009E,
+    BalloonSizeInvalid = 0xE000009F,
+    VhostUserSndDeviceNew = 0xE00000A0,
+    FailedToCreateControlServer = 0xE00000A1,
 }
 
 impl From<Exit> for ExitCode {
@@ -367,7 +415,7 @@ use bitmasks::*;
 
 /// If you are looking for a fun interview question, you have come to the right place. To
 /// understand the details of NTSTATUS, which you'll want to do before reading further, visit
-/// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/87fba13e-bf06-450e-83b1-9241dc81e781.
+/// <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/87fba13e-bf06-450e-83b1-9241dc81e781>.
 ///
 /// This function is unfortunately what happens when you only have six bits to store auxiliary
 /// information, and have to fit in with an existing bitfield's schema.
@@ -379,10 +427,10 @@ use bitmasks::*;
 ///
 /// This function packs bits in NTSTATUS results (generally what a Windows exit code should be).
 /// There are three primary cases it deals with:
-///   1. Vendor specific exits. These are error codes we generate explicitly in crosvm. We will
-///      pack these codes with the lower 6 "facility" bits ([21, 16]) set so they can't collide
-///      with the other cases (this makes our facility value > FACILITY_MAXIMUM_VALUE). The top
-///      6 bits of the facility field ([27, 22]) will be clear at this point.
+///   1. Vendor specific exits. These are error codes we generate explicitly in crosvm. We will pack
+///      these codes with the lower 6 "facility" bits ([21, 16]) set so they can't collide with the
+///      other cases (this makes our facility value > FACILITY_MAXIMUM_VALUE). The top 6 bits of the
+///      facility field ([27, 22]) will be clear at this point.
 ///
 ///   2. Non vendor NTSTATUS exits. These are error codes which come from Windows. We flip the
 ///      vendor bit on these because we're going to pack the facility field, and leaving it unset
@@ -392,9 +440,8 @@ use bitmasks::*;
 ///      however, if for some reason we see a non vendor code with any of those bits set, we will
 ///      fall through to case #3.
 ///
-///   3. Non NTSTATUS errors. We detect these with two heuristics:
-///      a) Reserved field is set.
-///      b) The facility field has exceeded the bottom six bits ([21, 16]).
+///   3. Non NTSTATUS errors. We detect these with two heuristics: a) Reserved field is set. b) The
+///      facility field has exceeded the bottom six bits ([21, 16]).
 ///
 ///      For such cases, we pack as much of the error as we can into the lower 6 bits of the
 ///      facility field, and code field (2 bytes). In this case, the most significant bit of the

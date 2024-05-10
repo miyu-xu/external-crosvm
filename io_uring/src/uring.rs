@@ -16,18 +16,16 @@ use std::pin::Pin;
 use std::ptr::null;
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicU32;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use base::AsRawDescriptor;
 use base::EventType;
+use base::IoBufMut;
 use base::MappedRegion;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
 use base::Protection;
 use base::RawDescriptor;
-use data_model::IoBufMut;
 use libc::c_void;
 use remain::sorted;
 use sync::Mutex;
@@ -78,18 +76,9 @@ impl From<Error> for io::Error {
     }
 }
 
-/// Basic statistics about the operations that have been submitted to the uring.
-#[derive(Default)]
-pub struct URingStats {
-    total_enter_calls: AtomicU64, // Number of times the uring has been entered.
-    pub total_ops: AtomicU64,     // Total ops submitted to io_uring.
-    total_complete: AtomicU64,    // Total ops completed by io_uring.
-}
-
 pub struct SubmitQueue {
     submit_ring: SubmitQueueState,
     submit_queue_entries: SubmitQueueEntries,
-    io_vecs: Pin<Box<[IoBufMut<'static>]>>,
     submitting: usize, // The number of ops in the process of being submitted.
     pub added: usize,  // The number of ops added since the last call to `io_uring_enter`.
     num_sqes: usize,   // The total number of sqes allocated in shared memory.
@@ -139,7 +128,7 @@ impl SubmitQueue {
     // After `f` returns, the sqe is appended to the kernel's queue.
     fn prep_next_sqe<F>(&mut self, mut f: F) -> Result<()>
     where
-        F: FnMut(&mut io_uring_sqe, &mut libc::iovec),
+        F: FnMut(&mut io_uring_sqe),
     {
         if self.added == self.num_sqes {
             return Err(Error::NoSpace);
@@ -157,7 +146,7 @@ impl SubmitQueue {
         let index = (tail & self.submit_ring.ring_mask) as usize;
         let sqe = self.submit_queue_entries.get_mut(index).unwrap();
 
-        f(sqe, self.io_vecs[index].as_mut());
+        f(sqe);
 
         // Tells the kernel to use the new index when processing the entry at that index.
         self.submit_ring.set_array_entry(index, index as u32);
@@ -192,32 +181,6 @@ impl SubmitQueue {
         debug_assert!(count <= self.submitting);
         self.submitting -= count;
         self.added -= count;
-    }
-
-    unsafe fn add_rw_op(
-        &mut self,
-        ptr: *const u8,
-        len: usize,
-        fd: RawFd,
-        offset: Option<u64>,
-        user_data: UserData,
-        op: u8,
-    ) -> Result<()> {
-        self.prep_next_sqe(|sqe, iovec| {
-            iovec.iov_base = ptr as *const libc::c_void as *mut _;
-            iovec.iov_len = len;
-            sqe.opcode = op;
-            sqe.set_addr(iovec as *const _ as *const libc::c_void as u64);
-            sqe.len = 1;
-            sqe.set_off(file_offset_to_raw_offset(offset));
-            sqe.set_buf_index(0);
-            sqe.ioprio = 0;
-            sqe.user_data = user_data;
-            sqe.flags = 0;
-            sqe.fd = fd;
-        })?;
-
-        Ok(())
     }
 }
 
@@ -297,7 +260,7 @@ impl URingAllowlist {
 ///
 /// # Example polling an FD for readable status.
 ///
-/// ```
+/// ```no_run
 /// # use std::fs::File;
 /// # use std::os::unix::io::AsRawFd;
 /// # use std::path::Path;
@@ -311,14 +274,11 @@ impl URingAllowlist {
 /// let (user_data, res) = uring.wait().unwrap().next().unwrap();
 /// assert_eq!(user_data, 454 as io_uring::UserData);
 /// assert_eq!(res.unwrap(), 1 as u32);
-///
 /// ```
 pub struct URingContext {
     ring_file: File, // Holds the io_uring context FD returned from io_uring_setup.
     pub submit_ring: Mutex<SubmitQueue>,
     pub complete_ring: CompleteQueueState,
-    in_flight: AtomicUsize, // The number of pending operations.
-    pub stats: URingStats,
 }
 
 impl URingContext {
@@ -332,6 +292,7 @@ impl URingContext {
             ring_params.flags |= IORING_SETUP_R_DISABLED;
         }
 
+        // SAFETY:
         // The below unsafe block isolates the creation of the URingContext. Each step on it's own
         // is unsafe. Using the uring FD for the mapping and the offsets returned by the kernel for
         // base addresses maintains safety guarantees assuming the kernel API guarantees are
@@ -344,8 +305,8 @@ impl URingContext {
 
             // Register the restrictions if it's given
             if let Some(restrictions) = allowlist {
-                // safe because IORING_REGISTER_RESTRICTIONS does not modify the memory and `restrictions`
-                // contains a valid pointer and length.
+                // safe because IORING_REGISTER_RESTRICTIONS does not modify the memory and
+                // `restrictions` contains a valid pointer and length.
                 io_uring_register(
                     fd,
                     IORING_REGISTER_RESTRICTIONS,
@@ -410,67 +371,13 @@ impl URingContext {
                 submit_ring: Mutex::new(SubmitQueue {
                     submit_ring,
                     submit_queue_entries,
-                    io_vecs: Pin::from(vec![IoBufMut::new(&mut []); num_sqe].into_boxed_slice()),
                     submitting: 0,
                     added: 0,
                     num_sqes: ring_params.sq_entries as usize,
                 }),
                 complete_ring,
-                in_flight: AtomicUsize::new(0),
-                stats: Default::default(),
             })
         }
-    }
-
-    /// Asynchronously writes to `fd` from the address given in `ptr`.
-    /// # Safety
-    /// `add_write` will write up to `len` bytes of data from the address given by `ptr`. This is
-    /// only safe if the caller guarantees that the memory lives until the transaction is complete
-    /// and that completion has been returned from the `wait` function. In addition there must not
-    /// be other references to the data pointed to by `ptr` until the operation completes.  Ensure
-    /// that the fd remains open until the op completes as well.
-    pub unsafe fn add_write(
-        &self,
-        ptr: *const u8,
-        len: usize,
-        fd: RawFd,
-        offset: Option<u64>,
-        user_data: UserData,
-    ) -> Result<()> {
-        self.submit_ring.lock().add_rw_op(
-            ptr,
-            len,
-            fd,
-            offset,
-            user_data,
-            io_uring_op_IORING_OP_WRITEV as u8,
-        )
-    }
-
-    /// Asynchronously reads from `fd` to the address given in `ptr`.
-    /// # Safety
-    /// `add_read` will write up to `len` bytes of data to the address given by `ptr`. This is only
-    /// safe if the caller guarantees there are no other references to that memory and that the
-    /// memory lives until the transaction is complete and that completion has been returned from
-    /// the `wait` function.  In addition there must not be any mutable references to the data
-    /// pointed to by `ptr` until the operation completes.  Ensure that the fd remains open until
-    /// the op completes as well.
-    pub unsafe fn add_read(
-        &self,
-        ptr: *mut u8,
-        len: usize,
-        fd: RawFd,
-        offset: Option<u64>,
-        user_data: UserData,
-    ) -> Result<()> {
-        self.submit_ring.lock().add_rw_op(
-            ptr,
-            len,
-            fd,
-            offset,
-            user_data,
-            io_uring_op_IORING_OP_READV as u8,
-        )
     }
 
     /// # Safety
@@ -517,7 +424,7 @@ impl URingContext {
         offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_WRITEV as u8;
             sqe.set_addr(iovecs.as_ptr() as *const _ as *const libc::c_void as u64);
             sqe.len = iovecs.len() as u32;
@@ -576,7 +483,7 @@ impl URingContext {
         offset: Option<u64>,
         user_data: UserData,
     ) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_READV as u8;
             sqe.set_addr(iovecs.as_ptr() as *const _ as *const libc::c_void as u64);
             sqe.len = iovecs.len() as u32;
@@ -594,7 +501,7 @@ impl URingContext {
     /// Add a no-op operation that doesn't perform any IO. Useful for testing the performance of the
     /// io_uring itself and for waking up a thread that's blocked inside a wait() call.
     pub fn add_nop(&self, user_data: UserData) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_NOP as u8;
             sqe.fd = -1;
             sqe.user_data = user_data;
@@ -612,7 +519,7 @@ impl URingContext {
     /// Syncs all completed operations, the ordering with in-flight async ops is not
     /// defined.
     pub fn add_fsync(&self, fd: RawFd, user_data: UserData) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_FSYNC as u8;
             sqe.fd = fd;
             sqe.user_data = user_data;
@@ -638,7 +545,7 @@ impl URingContext {
     ) -> Result<()> {
         // Note that len for fallocate in passed in the addr field of the sqe and the mode uses the
         // len field.
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_FALLOCATE as u8;
 
             sqe.fd = fd;
@@ -660,7 +567,7 @@ impl URingContext {
     /// Note that io_uring is always a one shot poll. After the fd is returned, it must be re-added
     /// to get future events.
     pub fn add_poll_fd(&self, fd: RawFd, events: EventType, user_data: UserData) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_POLL_ADD as u8;
             sqe.fd = fd;
             sqe.user_data = user_data;
@@ -677,7 +584,7 @@ impl URingContext {
 
     /// Removes an FD that was previously added with `add_poll_fd`.
     pub fn remove_poll_fd(&self, fd: RawFd, events: EventType, user_data: UserData) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_POLL_REMOVE as u8;
             sqe.fd = fd;
             sqe.user_data = user_data;
@@ -700,7 +607,7 @@ impl URingContext {
     /// are interruptible (like socket IO) will get cancelled, while disk IO requests cannot be
     /// cancelled if already started.
     pub fn async_cancel(&self, addr: UserData, user_data: UserData) -> Result<()> {
-        self.submit_ring.lock().prep_next_sqe(|sqe, _iovec| {
+        self.submit_ring.lock().prep_next_sqe(|sqe| {
             sqe.opcode = io_uring_op_IORING_OP_ASYNC_CANCEL as u8;
             sqe.user_data = user_data;
             sqe.set_addr(addr);
@@ -717,66 +624,46 @@ impl URingContext {
     // Calls io_uring_enter, submitting any new sqes that have been added to the submit queue and
     // waiting for `wait_nr` operations to complete.
     fn enter(&self, wait_nr: u64) -> Result<()> {
-        let completed = self.complete_ring.num_completed();
-        self.stats
-            .total_complete
-            .fetch_add(completed as u64, Ordering::Relaxed);
-        self.in_flight.fetch_sub(completed, Ordering::Relaxed);
-
         let added = self.submit_ring.lock().prepare_submit();
         if added == 0 && wait_nr == 0 {
             return Ok(());
         }
 
-        self.stats.total_enter_calls.fetch_add(1, Ordering::Relaxed);
         let flags = if wait_nr > 0 {
             IORING_ENTER_GETEVENTS
         } else {
             0
         };
-        let res = unsafe {
+        let res =
+            // SAFETY:
             // Safe because the only memory modified is in the completion queue.
-            io_uring_enter(self.ring_file.as_raw_fd(), added as u64, wait_nr, flags)
-        };
+            unsafe { io_uring_enter(self.ring_file.as_raw_fd(), added as u64, wait_nr, flags) };
+
+        // An EINTR means we did successfully submit the events.
+        if res.is_ok() || res == Err(libc::EINTR) {
+            self.submit_ring.lock().complete_submit(added);
+        } else {
+            self.submit_ring.lock().fail_submit(added);
+        }
 
         match res {
-            Ok(_) => {
-                self.submit_ring.lock().complete_submit(added);
-                self.stats
-                    .total_ops
-                    .fetch_add(added as u64, Ordering::Relaxed);
-
-                // Release store synchronizes with acquire load above.
-                self.in_flight.fetch_add(added, Ordering::Release);
-            }
-            Err(e) => {
-                // An EBUSY return means that some completed events must be processed before
-                // submitting more, so wait for some to finish without pushing the new sqes in
-                // that case.
-                // An EINTR means we successfully submitted the events but were interrupted while
-                // waiting, so just wait again.
-                // Any other error should be propagated up.
-
-                if e != libc::EINTR {
-                    self.submit_ring.lock().fail_submit(added);
-                }
-
-                if wait_nr == 0 || (e != libc::EBUSY && e != libc::EINTR) {
-                    return Err(Error::RingEnter(e));
-                }
-
+            Ok(()) => Ok(()),
+            // EBUSY means that some completed events need to be processed before more can
+            // be submitted, so wait for some sqes to finish without submitting new ones.
+            // EINTR means we were interrupted while waiting, so start waiting again.
+            Err(libc::EBUSY) | Err(libc::EINTR) if wait_nr != 0 => {
                 loop {
-                    // Safe because the only memory modified is in the completion queue.
                     let res =
+                        // SAFETY:
+                        // Safe because the only memory modified is in the completion queue.
                         unsafe { io_uring_enter(self.ring_file.as_raw_fd(), 0, wait_nr, flags) };
                     if res != Err(libc::EINTR) {
                         return res.map_err(Error::RingEnter);
                     }
                 }
             }
+            Err(e) => Err(Error::RingEnter(e)),
         }
-
-        Ok(())
     }
 
     /// Sends operations added with the `add_*` functions to the kernel.
@@ -784,10 +671,10 @@ impl URingContext {
         self.enter(0)
     }
 
-    /// Sends operations added with the `add_*` functions to the kernel and return an iterator to any
-    /// completed operations. `wait` blocks until at least one completion is ready.  If called
-    /// without any new events added, this simply waits for any existing events to complete and
-    /// returns as soon an one or more is ready.
+    /// Sends operations added with the `add_*` functions to the kernel and return an iterator to
+    /// any completed operations. `wait` blocks until at least one completion is ready.  If
+    /// called without any new events added, this simply waits for any existing events to
+    /// complete and returns as soon an one or more is ready.
     pub fn wait(&self) -> Result<impl Iterator<Item = (UserData, std::io::Result<u32>)> + '_> {
         // We only want to wait for events if there aren't already events in the completion queue.
         let wait_nr = if self.complete_ring.num_ready() > 0 {
@@ -830,11 +717,10 @@ impl SubmitQueueEntries {
         if index >= self.len {
             return None;
         }
-        let mut_ref = unsafe {
-            // Safe because the mut borrow of self resticts to one mutable reference at a time and
-            // we trust that the kernel has returned enough memory in io_uring_setup and mmap.
-            &mut *(self.mmap.as_ptr() as *mut io_uring_sqe).add(index)
-        };
+        // SAFETY:
+        // Safe because the mut borrow of self resticts to one mutable reference at a time and
+        // we trust that the kernel has returned enough memory in io_uring_setup and mmap.
+        let mut_ref = unsafe { &mut *(self.mmap.as_ptr() as *mut io_uring_sqe).add(index) };
         // Clear any state.
         *mut_ref = io_uring_sqe::default();
         Some(mut_ref)
@@ -871,17 +757,17 @@ impl SubmitQueueState {
 
     // Sets the kernel's array entry at the given `index` to `value`.
     fn set_array_entry(&self, index: usize, value: u32) {
+        // SAFETY:
         // Safe because self being constructed from the correct mmap guaratees that the memory is
         // valid to written.
         unsafe {
-            std::ptr::write_volatile(self.array.load(Ordering::Relaxed).add(index), value as u32);
+            std::ptr::write_volatile(self.array.load(Ordering::Relaxed).add(index), value);
         }
     }
 }
 
 #[derive(Default)]
 struct CompleteQueueData {
-    completed: usize,
     //For ops that pass in arrays of iovecs, they need to be valid for the duration of the
     //operation because the kernel might read them at any time.
     pending_op_addrs: BTreeMap<UserData, Pin<Box<[IoBufMut<'static>]>>>,
@@ -918,9 +804,10 @@ impl CompleteQueueState {
     }
 
     fn get_cqe(&self, head: u32) -> &io_uring_cqe {
+        // SAFETY:
+        // Safe because we trust that the kernel has returned enough memory in io_uring_setup
+        // and mmap and index is checked within range by the ring_mask.
         unsafe {
-            // Safe because we trust that the kernel has returned enough memory in io_uring_setup
-            // and mmap and index is checked within range by the ring_mask.
             let cqes = (self.mmap.as_ptr() as *const u8).add(self.cqes_offset as usize)
                 as *const io_uring_cqe;
 
@@ -937,11 +824,6 @@ impl CompleteQueueState {
         tail.saturating_sub(head)
     }
 
-    fn num_completed(&self) -> usize {
-        let mut data = self.data.lock();
-        ::std::mem::replace(&mut data.completed, 0)
-    }
-
     fn pop_front(&self) -> Option<(UserData, std::io::Result<u32>)> {
         // Take the lock on self.data first so that 2 threads don't try to pop the same completed op
         // from the queue.
@@ -955,8 +837,6 @@ impl CompleteQueueState {
         if head == self.pointers.tail(Ordering::Acquire) {
             return None;
         }
-
-        data.completed += 1;
 
         let cqe = self.get_cqe(head);
         let user_data = cqe.user_data;
@@ -992,14 +872,17 @@ struct QueuePointers {
     tail: *const AtomicU32,
 }
 
+// SAFETY:
 // Rust pointers don't implement Send or Sync but in this case both fields are atomics and so it's
 // safe to send the pointers between threads or access them concurrently from multiple threads.
 unsafe impl Send for QueuePointers {}
+// SAFETY: See safety comments for impl Send
 unsafe impl Sync for QueuePointers {}
 
 impl QueuePointers {
     // Loads the tail pointer atomically with the given ordering.
     fn tail(&self, ordering: Ordering) -> u32 {
+        // SAFETY:
         // Safe because self being constructed from the correct mmap guaratees that the memory is
         // valid to read.
         unsafe { (*self.tail).load(ordering) }
@@ -1009,6 +892,7 @@ impl QueuePointers {
     // processing entries that have been added up until the given tail pointer.
     // Always stores with release ordering as that is the only valid way to use the pointer.
     fn set_tail(&self, next_tail: u32) {
+        // SAFETY:
         // Safe because self being constructed from the correct mmap guaratees that the memory is
         // valid to read and it's used as an atomic to cover mutability concerns.
         unsafe { (*self.tail).store(next_tail, Ordering::Release) }
@@ -1016,6 +900,7 @@ impl QueuePointers {
 
     // Loads the head pointer atomically with the given ordering.
     fn head(&self, ordering: Ordering) -> u32 {
+        // SAFETY:
         // Safe because self being constructed from the correct mmap guaratees that the memory is
         // valid to read.
         unsafe { (*self.head).load(ordering) }
@@ -1025,6 +910,7 @@ impl QueuePointers {
     // processing entries that have been added up until the given head pointer.
     // Always stores with release ordering as that is the only valid way to use the pointer.
     fn set_head(&self, next_head: u32) {
+        // SAFETY:
         // Safe because self being constructed from the correct mmap guaratees that the memory is
         // valid to read and it's used as an atomic to cover mutability concerns.
         unsafe { (*self.head).store(next_head, Ordering::Release) }

@@ -2,11 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+//! Data structures and traits for the fuse filesystem.
+
+#![deny(missing_docs)]
+
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::fs::File;
 use std::io;
 use std::mem;
+use std::mem::MaybeUninit;
 use std::time::Duration;
 
 use crate::server::Mapper;
@@ -22,6 +27,7 @@ pub use crate::sys::ROOT_ID;
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
 
 /// Information about a path in the filesystem.
+#[derive(Debug)]
 pub struct Entry {
     /// An `Inode` that uniquely identifies this path. During `lookup`, setting this to `0` means a
     /// negative entry. Returning `ENOENT` also means a negative entry but setting this to `0`
@@ -65,11 +71,37 @@ impl From<Entry> for sys::EntryOut {
     }
 }
 
+impl Entry {
+    /// Creates a new negative cache entry. A negative d_entry has an inode number of 0, and is
+    /// valid for the duration of `negative_timeout`.
+    ///
+    /// # Arguments
+    ///
+    /// * `negative_timeout` - The duration for which this negative d_entry should be considered
+    ///   valid. After the timeout expires, the d_entry will be invalidated.
+    ///
+    /// # Returns
+    ///
+    /// A new negative entry with provided entry timeout and 0 attr timeout.
+    pub fn new_negative(negative_timeout: Duration) -> Entry {
+        let attr = MaybeUninit::<libc::stat64>::zeroed();
+        Entry {
+            inode: 0, // Using 0 for negative entry
+            entry_timeout: negative_timeout,
+            // Zero-fill other fields that won't be used.
+            attr_timeout: Duration::from_secs(0),
+            generation: 0,
+            // SAFETY: zero-initialized `stat64` is a valid value.
+            attr: unsafe { attr.assume_init() },
+        }
+    }
+}
+
 /// Represents information about an entry in a directory.
 pub struct DirEntry<'a> {
     /// The inode number for this entry. This does NOT have to be the same as the `Inode` for this
-    /// directory entry. However, it must be the same as the `attr.st_ino` field of the `Entry` that
-    /// would be returned by a `lookup` request in the parent directory for `name`.
+    /// directory entry. However, it must be the same as the `attr.st_ino` field of the `Entry`
+    /// that would be returned by a `lookup` request in the parent directory for `name`.
     pub ino: libc::ino64_t,
 
     /// Any non-zero value that the kernel can use to identify the current point in the directory
@@ -94,8 +126,8 @@ pub enum GetxattrReply {
 
     /// The size of the buffer needed to hold the value of the requested extended attribute. Should
     /// be returned when the `size` parameter is 0. Callers should note that it is still possible
-    /// for the size of the value to change in between `getxattr` calls and should not assume that a
-    /// subsequent call to `getxattr` with the returned count will always succeed.
+    /// for the size of the value to change in between `getxattr` calls and should not assume that
+    /// a subsequent call to `getxattr` with the returned count will always succeed.
     Count(u32),
 }
 
@@ -109,17 +141,17 @@ pub enum ListxattrReply {
     /// This size of the buffer needed to hold the full list of extended attribute names associated
     /// with this `Inode`. Should be returned when the `size` parameter is 0. Callers should note
     /// that it is still possible for the set of extended attributes to change between `listxattr`
-    /// calls and so should not assume that a subsequent call to `listxattr` with the returned count
-    /// will always succeed.
+    /// calls and so should not assume that a subsequent call to `listxattr` with the returned
+    /// count will always succeed.
     Count(u32),
 }
 
 /// A reply to an `ioctl` method call.
 pub enum IoctlReply {
     /// Indicates that the ioctl should be retried. This is only a valid reply when the `flags`
-    /// field of the ioctl request contains `IoctlFlags::UNRESTRICTED`. The kernel will read in data
-    /// and prepare output buffers as specified in the `input` and `output` fields before re-sending
-    /// the ioctl message.
+    /// field of the ioctl request contains `IoctlFlags::UNRESTRICTED`. The kernel will read in
+    /// data and prepare output buffers as specified in the `input` and `output` fields before
+    /// re-sending the ioctl message.
     Retry {
         /// Data that should be read by the kernel module and sent to the server when the ioctl is
         /// retried.
@@ -501,6 +533,7 @@ pub trait FileSystem {
         linkname: &CStr,
         parent: Self::Inode,
         name: &CStr,
+        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -524,6 +557,7 @@ pub trait FileSystem {
         mode: u32,
         rdev: u32,
         umask: u32,
+        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -543,6 +577,7 @@ pub trait FileSystem {
         name: &CStr,
         mode: u32,
         umask: u32,
+        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -554,6 +589,7 @@ pub trait FileSystem {
         parent: Self::Inode,
         mode: u32,
         umask: u32,
+        security_ctx: Option<&CStr>,
     ) -> io::Result<Entry> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -688,6 +724,7 @@ pub trait FileSystem {
         mode: u32,
         flags: u32,
         umask: u32,
+        security_ctx: Option<&CStr>,
     ) -> io::Result<(Entry, Option<Self::Handle>, OpenOptions)> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
@@ -866,7 +903,7 @@ pub trait FileSystem {
 
     /// Get information about the file system.
     fn statfs(&self, ctx: Context, inode: Self::Inode) -> io::Result<libc::statvfs64> {
-        // Safe because we are zero-initializing a struct with only POD fields.
+        // SAFETY: zero-initializing a struct with only POD fields.
         let mut st: libc::statvfs64 = unsafe { mem::zeroed() };
 
         // This matches the behavior of libfuse as it returns these values if the
@@ -992,7 +1029,6 @@ pub trait FileSystem {
     ///
     /// The lookup count for `Inode`s associated with the returned directory entries is **NOT**
     /// affected by this method.
-    ///
     fn readdir(
         &self,
         ctx: Context,
@@ -1191,6 +1227,65 @@ pub trait FileSystem {
     /// Used to tear down file mappings in DAX window. This method must be supported when
     /// `set_up_mapping` is supported.
     fn remove_mapping<M: Mapper>(&self, msgs: &[RemoveMappingOne], mapper: M) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::ENOSYS))
+    }
+
+    /// Lookup and open/create the file
+    ///
+    /// In this call, program first do a lookup on the file. Then depending upon
+    /// flags combination, either do create + open, open only or return error.
+    /// In all successful cases, it will return the dentry. For return value's
+    /// handle and open options atomic_open should apply same rules to handle
+    /// flags and configuration in open/create system call.
+    ///
+    /// This function is called when the client supports FUSE_OPEN_ATOMIC.
+    /// Implementing atomic_open is optional. When the it's not implemented,
+    /// the client fall back to send lookup and open requests separately.
+    ///
+    ///  # Specification
+    ///
+    /// If file was indeed newly created (as a result of O_CREAT), then set
+    /// `FOPEN_FILE_CREATED` bit in `struct OpenOptions open`. This bit is used by
+    ///  crosvm to inform the fuse client to set `FILE_CREATED` bit in `struct
+    /// fuse_file_info'.
+    ///
+    /// All flags applied to open/create should be handled samely in atomic open,
+    /// only the following are exceptions:
+    /// * The O_NOCTTY is filtered out by fuse client.
+    /// * O_TRUNC is filtered out by VFS for O_CREAT, O_EXCL combination.
+    ///
+    /// # Implementation
+    ///
+    /// To implement this API, you need to handle the following cases:
+    ///
+    /// a) File does not exist
+    ///  - O_CREAT:
+    ///    - Create file with specified mode
+    ///    - Set `FOPEN_FILE_CREATED` bit in `struct OpenOptions open`
+    ///    - Open the file
+    ///    - Return d_entry and file handler
+    ///  - ~O_CREAT:
+    ///    - ENOENT
+    ///
+    /// b) File exist already (exception is O_EXCL)
+    ///    - O_CREAT:
+    ///     - Open the file
+    ///     - Return d_entry and file handler
+    ///    - O_EXCL:
+    ///      - EEXIST
+    ///
+    /// c) File is symbol link
+    ///    - Return dentry and file handler
+    fn atomic_open(
+        &self,
+        ctx: Context,
+        parent: Self::Inode,
+        name: &CStr,
+        mode: u32,
+        flags: u32,
+        umask: u32,
+        security_ctx: Option<&CStr>,
+    ) -> io::Result<(Entry, Option<Self::Handle>, OpenOptions)> {
         Err(io::Error::from_raw_os_error(libc::ENOSYS))
     }
 }

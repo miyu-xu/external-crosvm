@@ -18,14 +18,16 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use base::named_pipes;
 use base::PipeConnection;
+use delegate::wire_format::DelegateMessage;
 use rand::Rng;
+use serde_json::StreamDeserializer;
 
 use crate::utils::find_crosvm_binary;
-use crate::vm::kernel_path;
-use crate::vm::rootfs_path;
+use crate::vm::local_path_from_url;
 use crate::vm::Config;
 
 const GUEST_EARLYCON: &str = "guest_earlycon.log";
@@ -123,9 +125,18 @@ fn create_client_pipe_helper(from_guest_pipe: &str, logs_dir: &str) -> PipeConne
 }
 
 pub struct TestVmSys {
-    pub(crate) from_guest_reader: Arc<Mutex<BufReader<PipeConnection>>>,
+    pub(crate) from_guest_reader: Arc<
+        Mutex<
+            StreamDeserializer<
+                'static,
+                serde_json::de::IoRead<BufReader<PipeConnection>>,
+                DelegateMessage,
+            >,
+        >,
+    >,
     pub(crate) to_guest: Arc<Mutex<PipeConnection>>,
-    pub(crate) process: Option<Child>, // Use `Option` to allow taking the ownership in `Drop::drop()`.
+    pub(crate) process: Option<Child>, /* Use `Option` to allow taking the ownership in
+                                        * `Drop::drop()`. */
 }
 
 impl TestVmSys {
@@ -138,10 +149,14 @@ impl TestVmSys {
     }
 
     // Adds 2 serial devices:
-    // - ttyS0: Console device which prints kernel log / debug output of the
-    //          delegate binary.
+    // - ttyS0: Console device which prints kernel log / debug output of the delegate binary.
     // - ttyS1: Serial device attached to the named pipes.
-    fn configure_serial_devices(command: &mut Command, from_guest_pipe: &Path, logs_dir: &Path) {
+    fn configure_serial_devices(
+        command: &mut Command,
+        stdout_hardware_type: &str,
+        from_guest_pipe: &Path,
+        logs_dir: &Path,
+    ) {
         let earlycon_path = Path::new(logs_dir).join(GUEST_EARLYCON);
         let earlycon_str = earlycon_path.to_str().unwrap();
 
@@ -154,7 +169,9 @@ impl TestVmSys {
         let console_str = console_path.to_str().unwrap();
         command.args([
             r"--serial",
-            &format!("hardware=virtio-console,num=1,type=file,path={console_str},console=true"),
+            &format!(
+                "hardware={stdout_hardware_type},num=1,type=file,path={console_str},console=true"
+            ),
         ]);
 
         // Setup channel for communication with the delegate.
@@ -166,16 +183,18 @@ impl TestVmSys {
     }
 
     /// Configures the VM rootfs to load from the guest_under_test assets.
-    fn configure_rootfs(command: &mut Command, _o_direct: bool) {
-        let rootfs_and_option =
-            format!("{},ro,root,sparse=false", rootfs_path().to_str().unwrap(),);
+    fn configure_rootfs(command: &mut Command, _o_direct: bool, path: &Path) {
+        let rootfs_and_option = format!(
+            "{},ro,root,sparse=false",
+            path.as_os_str().to_str().unwrap(),
+        );
         command.args(["--root", &rootfs_and_option]).args([
             "--params",
             "init=/bin/delegate noxsaves noxsave nopat nopti tsc=reliable",
         ]);
     }
 
-    pub fn new_generic<F>(f: F, cfg: Config) -> Result<TestVmSys>
+    pub fn new_generic<F>(f: F, cfg: Config, _sudo: bool) -> Result<TestVmSys>
     where
         F: FnOnce(&mut Command, &SerialArgs, &Config) -> Result<()>,
     {
@@ -218,7 +237,9 @@ impl TestVmSys {
         let from_guest_reader = BufReader::new(to_guest.try_clone().unwrap());
 
         Ok(TestVmSys {
-            from_guest_reader: Arc::new(Mutex::new(from_guest_reader)),
+            from_guest_reader: Arc::new(Mutex::new(
+                serde_json::Deserializer::from_reader(from_guest_reader).into_iter(),
+            )),
             to_guest: Arc::new(Mutex::new(to_guest)),
             process,
         })
@@ -232,12 +253,22 @@ impl TestVmSys {
     ) -> Result<()> {
         TestVmSys::configure_serial_devices(
             command,
+            &cfg.console_hardware,
             &serial_args.from_guest_pipe,
             &serial_args.logs_dir,
         );
-        TestVmSys::configure_rootfs(command, cfg.o_direct);
+        if let Some(rootfs_url) = &cfg.rootfs_url {
+            TestVmSys::configure_rootfs(command, cfg.o_direct, &local_path_from_url(rootfs_url));
+        };
+
+        // Set initrd if being requested
+        if let Some(initrd_url) = &cfg.initrd_url {
+            command.arg("--initrd");
+            command.arg(local_path_from_url(initrd_url));
+        }
+
         // Set kernel as the last argument.
-        command.arg(kernel_path());
+        command.arg(local_path_from_url(&cfg.kernel_url));
 
         Ok(())
     }
@@ -246,15 +277,16 @@ impl TestVmSys {
     fn generate_json_config_file(
         from_guest_pipe: &Path,
         logs_path: &Path,
-        _cfg: &Config,
+        cfg: &Config,
     ) -> Result<PathBuf> {
         let config_file_path = logs_path.join(VM_JSON_CONFIG_FILE);
         let mut config_file = File::create(&config_file_path)?;
 
+        writeln!(config_file, "{{")?;
+
         writeln!(
             config_file,
             r#"
-            {{
               "params": [ "init=/bin/delegate noxsaves noxsave nopat nopti tsc=reliable" ],
               "serial": [
                 {{
@@ -277,35 +309,61 @@ impl TestVmSys {
                     "type": "namedpipe",
                     "path": "{}",
                 }},
-              ],
-              "root": [
+              ]
+            }}
+            "#,
+            logs_path.join(GUEST_EARLYCON).display(),
+            logs_path.join(GUEST_CONSOLE).display(),
+            from_guest_pipe.display()
+        )?;
+
+        if let Some(rootfs_url) = &cfg.rootfs_url {
+            writeln!(
+                config_file,
+                r#"
+                ,"root": [
                 {{
                   "path": "{}",
                   "ro": true,
                   "root": true,
                   "sparse": false
                 }}
-              ],
-              "logs-directory": "{}",
-              "kernel-log-file": "{},
-              "hypervisor": "{}"
-              {},
-              {}
-            }}
-            "#,
-            logs_path.join(GUEST_EARLYCON).display(),
-            logs_path.join(GUEST_CONSOLE).display(),
-            from_guest_pipe.display(),
-            rootfs_path().to_str().unwrap(),
+              ]
+                  "#,
+                local_path_from_url(rootfs_url)
+                    .to_str()
+                    .context("invalid rootfs path")?,
+            )?;
+        };
+        if let Some(initrd_url) = &cfg.initrd_url {
+            writeln!(
+                config_file,
+                r#"",initrd": "{}""#,
+                local_path_from_url(initrd_url)
+                    .to_str()
+                    .context("invalid initrd path")?
+            )?;
+        };
+
+        writeln!(
+            config_file,
+            r#"
+        ,"logs-directory": "{}",
+        "kernel-log-file": "{},
+        "hypervisor": "{}"
+        {},
+        {}"#,
             logs_path.display(),
             logs_path.join(HYPERVISOR_LOG).display(),
             get_hypervisor(),
-            kernel_path().display(),
+            local_path_from_url(&cfg.kernel_url).display(),
             &get_irqchip(&get_hypervisor()).map_or("".to_owned(), |irqchip| format!(
                 r#","irqchip": "{}""#,
                 irqchip
             ))
         )?;
+
+        writeln!(config_file, "}}")?;
 
         Ok(config_file_path)
     }
@@ -326,7 +384,12 @@ impl TestVmSys {
         Ok(())
     }
 
-    pub fn crosvm_command(&mut self, _command: &str, mut _args: Vec<String>) -> Result<()> {
+    pub fn crosvm_command(
+        &mut self,
+        _command: &str,
+        mut _args: Vec<String>,
+        _sudo: bool,
+    ) -> Result<Vec<u8>> {
         unimplemented!()
     }
 }

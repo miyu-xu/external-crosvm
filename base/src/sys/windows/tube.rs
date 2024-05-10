@@ -11,20 +11,21 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::RawHandle;
 use std::time::Duration;
 
-use data_model::DataInit;
-use once_cell::sync::Lazy;
+use log::warn;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 use winapi::shared::winerror::ERROR_MORE_DATA;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::SafeDescriptor;
-use crate::platform::deserialize_with_descriptors;
-use crate::platform::RawDescriptor;
-use crate::platform::SerializeDescriptors;
+use crate::descriptor_reflection::deserialize_with_descriptors;
+use crate::descriptor_reflection::SerializeDescriptors;
 use crate::tube::Error;
 use crate::tube::RecvTube;
 use crate::tube::Result;
@@ -33,6 +34,8 @@ use crate::BlockingMode;
 use crate::CloseNotifier;
 use crate::EventToken;
 use crate::FramingMode;
+use crate::PipeConnection;
+use crate::RawDescriptor;
 use crate::ReadNotifier;
 use crate::StreamChannel;
 
@@ -78,19 +81,15 @@ where
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 struct MsgHeader {
     msg_json_size: usize,
     descriptor_json_size: usize,
 }
 
-// Safe because it only has data and has no implicit padding.
-unsafe impl DataInit for MsgHeader {}
-
-static DH_TUBE: Lazy<sync::Mutex<Option<DuplicateHandleTube>>> =
-    Lazy::new(|| sync::Mutex::new(None));
-static ALIAS_PID: Lazy<sync::Mutex<Option<u32>>> = Lazy::new(|| sync::Mutex::new(None));
+static DH_TUBE: sync::Mutex<Option<DuplicateHandleTube>> = sync::Mutex::new(None);
+static ALIAS_PID: sync::Mutex<Option<u32>> = sync::Mutex::new(None);
 
 /// Set a tube to delegate duplicate handle calls.
 pub fn set_duplicate_handle_tube(dh_tube: DuplicateHandleTube) {
@@ -136,7 +135,7 @@ impl Tube {
         }
     }
 
-    pub(super) fn try_clone(&self) -> Result<Self> {
+    pub(crate) fn try_clone(&self) -> Result<Self> {
         Ok(Tube {
             socket: self.socket.try_clone().map_err(Error::Clone)?,
             target_pid: self.target_pid,
@@ -151,22 +150,24 @@ impl Tube {
             Cursor::new(Vec::with_capacity(mem::size_of::<usize>() + size_header));
         data_packet
             .write(&size_header.to_le_bytes())
-            .map_err(Error::SendIoBuf)?;
+            .map_err(Error::from_send_io_buf_error)?;
         data_packet.write(&bytes).map_err(Error::SendIoBuf)?;
         self.socket
             .write_immutable(&data_packet.into_inner())
-            .map_err(Error::SendIo)?;
+            .map_err(Error::from_send_error)?;
 
         Ok(())
     }
 
     fn recv_proto<M: protobuf::Message>(&self) -> Result<M> {
         let mut header_bytes = [0u8; mem::size_of::<usize>()];
-        perform_read(&|buf| (&self.socket).read(buf), &mut header_bytes).map_err(Error::Recv)?;
+        perform_read(&mut |buf| (&self.socket).read(buf), &mut header_bytes)
+            .map_err(Error::from_recv_io_error)?;
         let size_header = usize::from_le_bytes(header_bytes);
 
         let mut proto_bytes = vec![0u8; size_header];
-        perform_read(&|buf| (&self.socket).read(buf), &mut proto_bytes).map_err(Error::Recv)?;
+        perform_read(&mut |buf| (&self.socket).read(buf), &mut proto_bytes)
+            .map_err(Error::from_recv_io_error)?;
         protobuf::Message::parse_from_bytes(&proto_bytes).map_err(Error::Proto)
     }
 
@@ -238,10 +239,10 @@ pub fn serialize_and_send<T: Serialize, F: Fn(&[u8]) -> io::Result<usize>>(
     };
 
     let mut data_packet = Cursor::new(Vec::with_capacity(
-        header.as_slice().len() + header.msg_json_size + header.descriptor_json_size,
+        header.as_bytes().len() + header.msg_json_size + header.descriptor_json_size,
     ));
     data_packet
-        .write(header.as_slice())
+        .write(header.as_bytes())
         .map_err(Error::SendIoBuf)?;
     data_packet
         .write(msg_json.as_slice())
@@ -255,7 +256,7 @@ pub fn serialize_and_send<T: Serialize, F: Fn(&[u8]) -> io::Result<usize>>(
     // Multiple writers (producers) are safe because each write is atomic.
     let data_bytes = data_packet.into_inner();
 
-    write_fn(&data_bytes).map_err(Error::SendIo)?;
+    write_fn(&data_bytes).map_err(Error::from_send_error)?;
     Ok(())
 }
 
@@ -272,15 +273,15 @@ fn duplicate_handle(desc: RawHandle, target_pid: Option<u32>) -> Result<RawHandl
 }
 
 /// Reads a part of a Tube packet asserting that it was correctly read. This means:
-/// * Treats partial "message" (transport framing) reads are Ok, as long as we filled our buffer.
-///   We use this to ignore errors when reading the message header, which has the lengths we need
-///   to allocate our buffers for the remainder of the message.
+/// * Treats partial "message" (transport framing) reads are Ok, as long as we filled our buffer. We
+///   use this to ignore errors when reading the message header, which has the lengths we need to
+///   allocate our buffers for the remainder of the message.
 /// * We filled the supplied buffer.
-fn perform_read<F: Fn(&mut [u8]) -> io::Result<usize>>(
-    read_fn: &F,
+fn perform_read<F: FnMut(&mut [u8]) -> io::Result<usize>>(
+    read_fn: &mut F,
     buf: &mut [u8],
 ) -> io::Result<usize> {
-    let res = match read_fn(buf) {
+    let bytes_read = match read_fn(buf) {
         Ok(s) => Ok(s),
         Err(e)
             if e.raw_os_error()
@@ -289,13 +290,16 @@ fn perform_read<F: Fn(&mut [u8]) -> io::Result<usize>>(
             Ok(buf.len())
         }
         Err(e) => Err(e),
-    };
+    }?;
 
-    let bytes_read = res?;
     if bytes_read != buf.len() {
         Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
-            "failed to fill whole buffer",
+            format!(
+                "failed to fill whole buffer, expected {} got {}",
+                buf.len(),
+                bytes_read
+            ),
         ))
     } else {
         Ok(bytes_read)
@@ -304,19 +308,14 @@ fn perform_read<F: Fn(&mut [u8]) -> io::Result<usize>>(
 
 /// Deserializes a Tube packet by calling the supplied read function. This function MUST
 /// assert that the buffer was filled.
-pub fn deserialize_and_recv<T: DeserializeOwned, F: Fn(&mut [u8]) -> io::Result<usize>>(
-    read_fn: F,
+pub fn deserialize_and_recv<T: DeserializeOwned, F: FnMut(&mut [u8]) -> io::Result<usize>>(
+    mut read_fn: F,
 ) -> Result<T> {
-    let mut header_bytes = vec![0u8; mem::size_of::<MsgHeader>()];
-    perform_read(&read_fn, header_bytes.as_mut_slice()).map_err(Error::Recv)?;
-
-    // Safe because the header is always written by the send function, and only that function
-    // writes to this channel.
-    let header =
-        MsgHeader::from_slice(header_bytes.as_slice()).expect("Tube header failed to deserialize.");
+    let mut header = MsgHeader::default();
+    perform_read(&mut read_fn, header.as_bytes_mut()).map_err(Error::from_recv_io_error)?;
 
     let mut msg_json = vec![0u8; header.msg_json_size];
-    perform_read(&read_fn, msg_json.as_mut_slice()).map_err(Error::Recv)?;
+    perform_read(&mut read_fn, msg_json.as_mut_slice()).map_err(Error::from_recv_io_error)?;
 
     if msg_json.is_empty() {
         // This means we got a message header, but there is no json body (due to a zero size in
@@ -325,37 +324,23 @@ pub fn deserialize_and_recv<T: DeserializeOwned, F: Fn(&mut [u8]) -> io::Result<
         return Err(Error::RecvUnexpectedEmptyBody);
     }
 
-    let msg_descriptors: Vec<RawDescriptor> = if header.descriptor_json_size > 0 {
+    let descriptor_usizes: Vec<usize> = if header.descriptor_json_size > 0 {
         let mut msg_descriptors_json = vec![0u8; header.descriptor_json_size];
-        perform_read(&read_fn, msg_descriptors_json.as_mut_slice()).map_err(Error::Recv)?;
-        let descriptor_usizes: Vec<usize> =
-            serde_json::from_slice(msg_descriptors_json.as_slice()).map_err(Error::Json)?;
-
-        // Safe because the usizes are RawDescriptors that were converted to usize in the send
-        // method.
-        descriptor_usizes
-            .iter()
-            .map(|item| *item as RawDescriptor)
-            .collect()
+        perform_read(&mut read_fn, msg_descriptors_json.as_mut_slice())
+            .map_err(Error::from_recv_io_error)?;
+        serde_json::from_slice(msg_descriptors_json.as_slice()).map_err(Error::Json)?
     } else {
         Vec::new()
     };
 
-    let mut msg_descriptors_safe = msg_descriptors
-        .into_iter()
-        .map(|v| {
-            Some(unsafe {
-                // Safe because the socket returns new fds that are owned locally by this scope.
-                SafeDescriptor::from_raw_descriptor(v)
-            })
-        })
-        .collect();
+    let msg_descriptors = descriptor_usizes.into_iter().map(|item| {
+        // SAFETY: the usizes are RawDescriptors that were duplicated and converted to usize in the
+        // send method.
+        unsafe { SafeDescriptor::from_raw_descriptor(item as RawDescriptor) }
+    });
 
-    deserialize_with_descriptors(
-        || serde_json::from_slice(&msg_json),
-        &mut msg_descriptors_safe,
-    )
-    .map_err(Error::Json)
+    deserialize_with_descriptors(|| serde_json::from_slice(&msg_json), msg_descriptors)
+        .map_err(Error::Json)
 }
 
 #[derive(EventToken, Eq, PartialEq, Copy, Clone)]
@@ -396,6 +381,18 @@ impl AsRawDescriptor for SendTube {
 impl AsRawDescriptor for RecvTube {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.0.as_raw_descriptor()
+    }
+}
+
+impl CloseNotifier for SendTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
+        self.0.get_close_notifier()
+    }
+}
+
+impl CloseNotifier for RecvTube {
+    fn get_close_notifier(&self) -> &dyn AsRawDescriptor {
+        self.0.get_close_notifier()
     }
 }
 
@@ -441,9 +438,14 @@ impl DuplicateHandleTube {
 
 /// Wrapper for Tube used for sending and recving protos. The main usecase is to send a message
 /// without serialization bloat caused from `serde-json`.
+#[derive(Serialize, Deserialize)]
 pub struct ProtoTube(Tube);
 
 impl ProtoTube {
+    pub fn pair() -> Result<(ProtoTube, ProtoTube)> {
+        Tube::pair().map(|(t1, t2)| (ProtoTube(t1), ProtoTube(t2)))
+    }
+
     pub fn pair_with_buffer_size(size: usize) -> Result<(ProtoTube, ProtoTube)> {
         Tube::pair_with_buffer_size(size).map(|(t1, t2)| (ProtoTube(t1), ProtoTube(t2)))
     }
@@ -460,5 +462,82 @@ impl ProtoTube {
 impl ReadNotifier for ProtoTube {
     fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
         self.0.get_read_notifier()
+    }
+}
+
+impl AsRawDescriptor for ProtoTube {
+    fn as_raw_descriptor(&self) -> RawDescriptor {
+        self.0.as_raw_descriptor()
+    }
+}
+
+/// A wrapper around a named pipe that uses Tube serialization.
+///
+/// This limited form of `Tube` offers absolutely no notifier support, and can only send/recv
+/// blocking messages.
+pub struct PipeTube {
+    pipe: PipeConnection,
+
+    // Default target_pid to current PID on serialization (see `Tube` comment header for details).
+    target_pid: Option<u32>,
+}
+
+impl PipeTube {
+    pub fn from(pipe: PipeConnection, target_pid: Option<u32>) -> Self {
+        Self { pipe, target_pid }
+    }
+
+    pub fn send<T: Serialize>(&self, msg: &T) -> Result<()> {
+        serialize_and_send(|buf| self.pipe.write(buf), msg, self.target_pid)
+    }
+
+    pub fn recv<T: DeserializeOwned>(&self) -> Result<T> {
+        deserialize_and_recv(|buf| {
+            // SAFETY:
+            // 1. We are reading bytes, so no matter what data is on the pipe, it is representable
+            //    as bytes.
+            // 2. A read is quantized in bytes, so no partial reads are possible.
+            unsafe { self.pipe.read(buf) }
+        })
+    }
+}
+
+/// Wrapper around a Tube which is known to be the server end of a named pipe. This wrapper ensures
+/// that the Tube is flushed before it is dropped.
+pub struct FlushOnDropTube(pub Tube);
+
+impl FlushOnDropTube {
+    pub fn from(tube: Tube) -> Self {
+        Self(tube)
+    }
+}
+
+impl Drop for FlushOnDropTube {
+    fn drop(&mut self) {
+        if let Err(e) = self.0.flush_blocking() {
+            warn!("failed to flush Tube: {}", e)
+        }
+    }
+}
+
+impl Error {
+    fn map_io_error(e: io::Error, err_ctor: fn(io::Error) -> Error) -> Error {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            Error::Disconnected
+        } else {
+            err_ctor(e)
+        }
+    }
+
+    fn from_recv_io_error(e: io::Error) -> Error {
+        Self::map_io_error(e, Error::Recv)
+    }
+
+    fn from_send_error(e: io::Error) -> Error {
+        Self::map_io_error(e, Error::Send)
+    }
+
+    fn from_send_io_buf_error(e: io::Error) -> Error {
+        Self::map_io_error(e, Error::SendIoBuf)
     }
 }

@@ -4,32 +4,36 @@
 
 use data_model::Le32;
 use data_model::Le64;
+use serde::Deserialize;
+use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
+use crate::virtio::snd::constants::StatusCode;
 use crate::virtio::snd::constants::VIRTIO_SND_CHMAP_MAX_SIZE;
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes, Serialize, Deserialize)]
 #[repr(C)]
 pub struct virtio_snd_hdr {
     pub code: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_jack_hdr {
     pub hdr: virtio_snd_hdr,
     pub jack_id: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_event {
     pub hdr: virtio_snd_hdr,
     pub data: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_query_info {
     pub hdr: virtio_snd_hdr,
@@ -38,13 +42,37 @@ pub struct virtio_snd_query_info {
     pub size: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 #[repr(C)]
 pub struct virtio_snd_info {
     pub hda_fn_nid: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 #[repr(C)]
 pub struct virtio_snd_pcm_info {
     pub hdr: virtio_snd_info,
@@ -58,14 +86,14 @@ pub struct virtio_snd_pcm_info {
     pub padding: [u8; 5],
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes, Serialize, Deserialize)]
 #[repr(C)]
 pub struct virtio_snd_pcm_hdr {
     pub hdr: virtio_snd_hdr,
     pub stream_id: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes, Serialize, Deserialize)]
 #[repr(C)]
 pub struct virtio_snd_pcm_set_params {
     pub hdr: virtio_snd_pcm_hdr,
@@ -78,20 +106,41 @@ pub struct virtio_snd_pcm_set_params {
     pub padding: u8,
 }
 
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_pcm_xfer {
     pub stream_id: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_pcm_status {
     pub status: Le32,
     pub latency_bytes: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+impl virtio_snd_pcm_status {
+    pub fn new(status: StatusCode, latency_bytes: u32) -> Self {
+        Self {
+            status: Le32::from(status as u32),
+            latency_bytes: Le32::from(latency_bytes),
+        }
+    }
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 #[repr(C)]
 pub struct virtio_snd_jack_info {
     pub hdr: virtio_snd_info,
@@ -102,7 +151,7 @@ pub struct virtio_snd_jack_info {
     pub padding: [u8; 7],
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct virtio_snd_jack_remap {
     pub hdr: virtio_snd_jack_hdr, /* .code = VIRTIO_SND_R_JACK_REMAP */
@@ -110,7 +159,19 @@ pub struct virtio_snd_jack_remap {
     pub sequence: Le32,
 }
 
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 #[repr(C)]
 pub struct virtio_snd_chmap_info {
     pub hdr: virtio_snd_info,

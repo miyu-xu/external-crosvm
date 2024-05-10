@@ -3,22 +3,27 @@
 // found in the LICENSE file.
 
 //! rutabaga_core: Cross-platform, Rust-based, Wayland and Vulkan centric GPU virtualization.
-
 use std::collections::BTreeMap as Map;
+use std::convert::TryInto;
+use std::io::IoSliceMut;
+use std::io::Read;
+use std::io::Write;
 use std::sync::Arc;
 
-use crate::base_internal::SafeDescriptor;
-use data_model::VolatileSlice;
-
-#[cfg(not(target_os = "fuchsia"))]
 use crate::cross_domain::CrossDomain;
-
 #[cfg(feature = "gfxstream")]
 use crate::gfxstream::Gfxstream;
 use crate::rutabaga_2d::Rutabaga2D;
+use crate::rutabaga_os::MemoryMapping;
+use crate::rutabaga_os::SafeDescriptor;
+use crate::rutabaga_snapshot::RutabagaResourceSnapshot;
+use crate::rutabaga_snapshot::RutabagaSnapshot;
 use crate::rutabaga_utils::*;
 #[cfg(feature = "virgl_renderer")]
 use crate::virgl_renderer::VirglRenderer;
+
+const RUTABAGA_DEFAULT_WIDTH: u32 = 1280;
+const RUTABAGA_DEFAULT_HEIGHT: u32 = 1024;
 
 /// Information required for 2D functionality.
 pub struct Rutabaga2DInfo {
@@ -41,7 +46,9 @@ pub struct RutabagaResource {
     pub backing_iovecs: Option<Vec<RutabagaIovec>>,
 
     /// Bitmask of components that have already imported this resource
-    pub import_mask: u32,
+    pub component_mask: u8,
+    pub size: u64,
+    pub mapping: Option<MemoryMapping>,
 }
 
 /// A RutabagaComponent is a building block of the Virtual Graphics Interface (VGI).  Each component
@@ -101,7 +108,9 @@ pub trait RutabagaComponent {
             info_3d: None,
             vulkan_info: None,
             backing_iovecs: None,
-            import_mask: 0,
+            component_mask: 0,
+            size: 0,
+            mapping: None,
         })
     }
 
@@ -138,7 +147,7 @@ pub trait RutabagaComponent {
         _ctx_id: u32,
         _resource: &mut RutabagaResource,
         _transfer: Transfer3D,
-        _buf: Option<VolatileSlice>,
+        _buf: Option<IoSliceMut>,
     ) -> RutabagaResult<()> {
         Ok(())
     }
@@ -174,7 +183,7 @@ pub trait RutabagaComponent {
     }
 
     /// Implementations must return a RutabagaHandle of the fence on success.
-    fn export_fence(&self, _fence_id: u32) -> RutabagaResult<RutabagaHandle> {
+    fn export_fence(&self, _fence_id: u64) -> RutabagaResult<RutabagaHandle> {
         Err(RutabagaError::Unsupported)
     }
 
@@ -188,6 +197,16 @@ pub trait RutabagaComponent {
         _context_name: Option<&str>,
         _fence_handler: RutabagaFenceHandler,
     ) -> RutabagaResult<Box<dyn RutabagaContext>> {
+        Err(RutabagaError::Unsupported)
+    }
+
+    /// Implementations must snapshot to the specified directory
+    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
+        Err(RutabagaError::Unsupported)
+    }
+
+    /// Implementations must restore from the specified directory
+    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 }
@@ -204,7 +223,7 @@ pub trait RutabagaContext {
     }
 
     /// Implementations must handle the context-specific command stream.
-    fn submit_cmd(&mut self, _commands: &mut [u8]) -> RutabagaResult<()>;
+    fn submit_cmd(&mut self, _commands: &mut [u8], _fence_ids: &[u64]) -> RutabagaResult<()>;
 
     /// Implementations may use `resource` in this context's command stream.
     fn attach(&mut self, _resource: &mut RutabagaResource);
@@ -229,7 +248,7 @@ struct RutabagaCapsetInfo {
     pub name: &'static str,
 }
 
-const RUTABAGA_CAPSETS: [RutabagaCapsetInfo; 6] = [
+const RUTABAGA_CAPSETS: [RutabagaCapsetInfo; 9] = [
     RutabagaCapsetInfo {
         capset_id: RUTABAGA_CAPSET_VIRGL,
         component: RutabagaComponentType::VirglRenderer,
@@ -241,9 +260,9 @@ const RUTABAGA_CAPSETS: [RutabagaCapsetInfo; 6] = [
         name: "virgl2",
     },
     RutabagaCapsetInfo {
-        capset_id: RUTABAGA_CAPSET_GFXSTREAM,
+        capset_id: RUTABAGA_CAPSET_GFXSTREAM_VULKAN,
         component: RutabagaComponentType::Gfxstream,
-        name: "gfxstream",
+        name: "gfxstream-vulkan",
     },
     RutabagaCapsetInfo {
         capset_id: RUTABAGA_CAPSET_VENUS,
@@ -260,25 +279,54 @@ const RUTABAGA_CAPSETS: [RutabagaCapsetInfo; 6] = [
         component: RutabagaComponentType::VirglRenderer,
         name: "drm",
     },
+    RutabagaCapsetInfo {
+        capset_id: RUTABAGA_CAPSET_GFXSTREAM_MAGMA,
+        component: RutabagaComponentType::Gfxstream,
+        name: "gfxstream-magma",
+    },
+    RutabagaCapsetInfo {
+        capset_id: RUTABAGA_CAPSET_GFXSTREAM_GLES,
+        component: RutabagaComponentType::Gfxstream,
+        name: "gfxstream-gles",
+    },
+    RutabagaCapsetInfo {
+        capset_id: RUTABAGA_CAPSET_GFXSTREAM_COMPOSER,
+        component: RutabagaComponentType::Gfxstream,
+        name: "gfxstream-composer",
+    },
 ];
 
-pub fn calculate_context_mask(context_names: Vec<String>) -> u64 {
-    let mut context_mask = 0;
-    context_names.into_iter().for_each(|name| {
+pub fn calculate_capset_mask<'a, I: Iterator<Item = &'a str>>(context_names: I) -> u64 {
+    let mut capset_mask = 0;
+    for name in context_names {
         if let Some(capset) = RUTABAGA_CAPSETS.iter().find(|capset| capset.name == name) {
-            context_mask |= 1 << capset.capset_id;
+            capset_mask |= 1 << capset.capset_id;
         };
-    });
+    }
 
-    context_mask
+    capset_mask
 }
 
-pub fn calculate_context_types(context_mask: u64) -> Vec<String> {
+pub fn calculate_capset_names(capset_mask: u64) -> Vec<String> {
     RUTABAGA_CAPSETS
         .iter()
-        .filter(|capset| context_mask & (1 << capset.capset_id) != 0)
+        .filter(|capset| capset_mask & (1 << capset.capset_id) != 0)
         .map(|capset| capset.name.to_string())
         .collect()
+}
+
+fn calculate_component(component_mask: u8) -> RutabagaResult<RutabagaComponentType> {
+    if component_mask.count_ones() != 1 {
+        return Err(RutabagaError::SpecViolation("can't infer single component"));
+    }
+
+    match component_mask.trailing_zeros() {
+        0 => Ok(RutabagaComponentType::Rutabaga2D),
+        1 => Ok(RutabagaComponentType::VirglRenderer),
+        2 => Ok(RutabagaComponentType::Gfxstream),
+        3 => Ok(RutabagaComponentType::CrossDomain),
+        _ => Err(RutabagaError::InvalidComponent),
+    }
 }
 
 /// The global libary handle used to query capability sets, create resources and contexts.
@@ -299,6 +347,115 @@ pub struct Rutabaga {
 }
 
 impl Rutabaga {
+    /// Take a snapshot of Rutabaga's current state. The snapshot is serialized into an opaque byte
+    /// stream and written to `w`.
+    pub fn snapshot(&self, w: &mut impl Write, directory: &str) -> RutabagaResult<()> {
+        if self.default_component == RutabagaComponentType::Gfxstream {
+            let component = self
+                .components
+                .get(&self.default_component)
+                .ok_or(RutabagaError::InvalidComponent)?;
+
+            component.snapshot(directory)
+        } else if self.default_component == RutabagaComponentType::Rutabaga2D {
+            let snapshot = RutabagaSnapshot {
+                resources: self
+                    .resources
+                    .iter()
+                    .map(|(i, r)| {
+                        let info = r.info_2d.as_ref().ok_or(RutabagaError::Unsupported)?;
+                        assert_eq!(
+                            usize::try_from(info.width * info.height * 4).unwrap(),
+                            info.host_mem.len()
+                        );
+                        assert_eq!(usize::try_from(r.size).unwrap(), info.host_mem.len());
+                        let s = RutabagaResourceSnapshot {
+                            resource_id: r.resource_id,
+                            width: info.width,
+                            height: info.height,
+                        };
+                        Ok((*i, s))
+                    })
+                    .collect::<RutabagaResult<_>>()?,
+            };
+
+            return snapshot.serialize_to(w).map_err(RutabagaError::IoError);
+        } else {
+            Err(RutabagaError::Unsupported)
+        }
+    }
+
+    /// Restore Rutabaga to a previously snapshot'd state.
+    ///
+    /// Snapshotting on one host machine and then restoring on another ("host migration") might
+    /// work for very similar machines but isn't explicitly supported yet.
+    ///
+    /// Rutabaga will recreate resources internally, but it's the VMM's responsibility to re-attach
+    /// backing iovecs and re-map the memory after re-creation. Specifically:
+    ///
+    /// * Mode2D
+    ///    * The VMM must call `Rutabaga::attach_backing` calls for all resources that had backing
+    ///      memory at the time of the snapshot.
+    /// * ModeVirglRenderer
+    ///    * Not supported.
+    /// * ModeGfxstream
+    ///    * WiP support.
+    ///
+    /// NOTES: This is required because the pointers to backing memory aren't stable, help from the
+    /// VMM is necessary. In an alternative approach, the VMM could supply Rutabaga with callbacks
+    /// to translate to/from stable guest physical addresses, but it is unclear how well that
+    /// approach would scale to support 3D modes, which have others problems that require VMM help,
+    /// like resource handles.
+    pub fn restore(&mut self, r: &mut impl Read, directory: &str) -> RutabagaResult<()> {
+        if self.default_component == RutabagaComponentType::Gfxstream {
+            let component = self
+                .components
+                .get_mut(&self.default_component)
+                .ok_or(RutabagaError::InvalidComponent)?;
+
+            component.restore(directory)
+        } else if self.default_component == RutabagaComponentType::Rutabaga2D {
+            let snapshot = RutabagaSnapshot::deserialize_from(r).map_err(RutabagaError::IoError)?;
+
+            self.resources = snapshot
+                .resources
+                .into_iter()
+                .map(|(i, s)| {
+                    let size = u64::from(s.width * s.height * 4);
+                    let r = RutabagaResource {
+                        resource_id: s.resource_id,
+                        handle: None,
+                        blob: false,
+                        blob_mem: 0,
+                        blob_flags: 0,
+                        map_info: None,
+                        info_2d: Some(Rutabaga2DInfo {
+                            width: s.width,
+                            height: s.height,
+                            host_mem: vec![0; usize::try_from(size).unwrap()],
+                        }),
+                        info_3d: None,
+                        vulkan_info: None,
+                        // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because the
+                        // pointers won't be valid at restore time, see the `Rutabaga::restore` doc.
+                        // If the client doesn't attach new iovecs, the restored resource will
+                        // behave as if they had been detached (instead of segfaulting on the stale
+                        // iovec pointers).
+                        backing_iovecs: None,
+                        component_mask: 1 << (RutabagaComponentType::Rutabaga2D as u8),
+                        size,
+                        mapping: None,
+                    };
+                    (i, r)
+                })
+                .collect();
+
+            return Ok(());
+        } else {
+            Err(RutabagaError::Unsupported)
+        }
+    }
+
     fn capset_id_to_component_type(&self, capset_id: u32) -> RutabagaResult<RutabagaComponentType> {
         let component = self
             .capset_info
@@ -348,6 +505,11 @@ impl Rutabaga {
             .ok_or(RutabagaError::InvalidComponent)?;
 
         Ok(component.get_capset(capset_id, version))
+    }
+
+    /// Gets the number of capsets
+    pub fn get_num_capsets(&self) -> u32 {
+        self.capset_info.len() as u32
     }
 
     /// Forces context zero for the default rutabaga component.
@@ -425,7 +587,7 @@ impl Rutabaga {
             .get_mut(&self.default_component)
             .ok_or(RutabagaError::InvalidComponent)?;
 
-        let mut resource = self
+        let resource = self
             .resources
             .get_mut(&resource_id)
             .ok_or(RutabagaError::InvalidResourceId)?;
@@ -497,7 +659,7 @@ impl Rutabaga {
         ctx_id: u32,
         resource_id: u32,
         transfer: Transfer3D,
-        buf: Option<VolatileSlice>,
+        buf: Option<IoSliceMut>,
     ) -> RutabagaResult<()> {
         let component = self
             .components
@@ -573,29 +735,70 @@ impl Rutabaga {
     }
 
     /// Returns a memory mapping of the blob resource.
-    pub fn map(&self, resource_id: u32) -> RutabagaResult<RutabagaMapping> {
+    pub fn map(&mut self, resource_id: u32) -> RutabagaResult<RutabagaMapping> {
+        let resource = self
+            .resources
+            .get_mut(&resource_id)
+            .ok_or(RutabagaError::InvalidResourceId)?;
+
+        let component_type = calculate_component(resource.component_mask)?;
+        if component_type == RutabagaComponentType::CrossDomain {
+            let handle_opt = resource.handle.take();
+            match handle_opt {
+                Some(handle) => {
+                    if handle.handle_type != RUTABAGA_MEM_HANDLE_TYPE_SHM {
+                        return Err(RutabagaError::SpecViolation(
+                            "expected a shared memory handle",
+                        ));
+                    }
+
+                    let clone = handle.try_clone()?;
+                    let resource_size: usize = resource.size.try_into()?;
+                    let map_info = resource
+                        .map_info
+                        .ok_or(RutabagaError::SpecViolation("no map info available"))?;
+
+                    // Creating the mapping closes the cloned descriptor.
+                    let mapping = MemoryMapping::from_safe_descriptor(
+                        clone.os_handle,
+                        resource_size,
+                        map_info,
+                    )?;
+                    let rutabaga_mapping = mapping.as_rutabaga_mapping();
+                    resource.handle = Some(handle);
+                    resource.mapping = Some(mapping);
+
+                    return Ok(rutabaga_mapping);
+                }
+                None => return Err(RutabagaError::SpecViolation("expected a handle to map")),
+            }
+        }
+
         let component = self
             .components
-            .get(&self.default_component)
+            .get(&component_type)
             .ok_or(RutabagaError::InvalidComponent)?;
-
-        if !self.resources.contains_key(&resource_id) {
-            return Err(RutabagaError::InvalidResourceId);
-        }
 
         component.map(resource_id)
     }
 
     /// Unmaps the blob resource from the default component
-    pub fn unmap(&self, resource_id: u32) -> RutabagaResult<()> {
+    pub fn unmap(&mut self, resource_id: u32) -> RutabagaResult<()> {
+        let resource = self
+            .resources
+            .get_mut(&resource_id)
+            .ok_or(RutabagaError::InvalidResourceId)?;
+
+        let component_type = calculate_component(resource.component_mask)?;
+        if component_type == RutabagaComponentType::CrossDomain {
+            resource.mapping = None;
+            return Ok(());
+        }
+
         let component = self
             .components
-            .get(&self.default_component)
+            .get(&component_type)
             .ok_or(RutabagaError::InvalidComponent)?;
-
-        if !self.resources.contains_key(&resource_id) {
-            return Err(RutabagaError::InvalidResourceId);
-        }
 
         component.unmap(resource_id)
     }
@@ -666,7 +869,7 @@ impl Rutabaga {
     }
 
     /// Exports the given fence for import into other processes.
-    pub fn export_fence(&self, fence_id: u32) -> RutabagaResult<RutabagaHandle> {
+    pub fn export_fence(&self, fence_id: u64) -> RutabagaResult<RutabagaHandle> {
         let component = self
             .components
             .get(&self.default_component)
@@ -675,7 +878,7 @@ impl Rutabaga {
         component.export_fence(fence_id)
     }
 
-    /// Creates a context with the given `ctx_id` and `context_init` variable.
+    /// Creates snapshotth the given `ctx_id` and `context_init` variable.
     /// `context_init` is used to determine which rutabaga component creates the context.
     pub fn create_context(
         &mut self,
@@ -749,56 +952,65 @@ impl Rutabaga {
         Ok(())
     }
 
-    /// Submits `commands` to the context given by `ctx_id`.
-    pub fn submit_command(&mut self, ctx_id: u32, commands: &mut [u8]) -> RutabagaResult<()> {
+    /// submits `commands` to the context given by `ctx_id`.
+    pub fn submit_command(
+        &mut self,
+        ctx_id: u32,
+        commands: &mut [u8],
+        fence_ids: &[u64],
+    ) -> RutabagaResult<()> {
         let ctx = self
             .contexts
             .get_mut(&ctx_id)
             .ok_or(RutabagaError::InvalidContextId)?;
 
-        ctx.submit_cmd(commands)
+        ctx.submit_cmd(commands, fence_ids)
     }
 }
 
 /// Rutabaga Builder, following the Rust builder pattern.
+#[derive(Clone)]
 pub struct RutabagaBuilder {
-    display_width: Option<u32>,
-    display_height: Option<u32>,
+    display_width: u32,
+    display_height: u32,
     default_component: RutabagaComponentType,
     gfxstream_flags: GfxstreamFlags,
     virglrenderer_flags: VirglRendererFlags,
-    context_mask: u64,
+    capset_mask: u64,
     channels: Option<Vec<RutabagaChannel>>,
+    debug_handler: Option<RutabagaDebugHandler>,
+    renderer_features: Option<String>,
 }
 
 impl RutabagaBuilder {
     /// Create new a RutabagaBuilder.
-    pub fn new(default_component: RutabagaComponentType, context_mask: u64) -> RutabagaBuilder {
+    pub fn new(default_component: RutabagaComponentType, capset_mask: u64) -> RutabagaBuilder {
         let virglrenderer_flags = VirglRendererFlags::new()
             .use_thread_sync(true)
             .use_async_fence_cb(true);
-        let gfxstream_flags = GfxstreamFlags::new().use_async_fence_cb(true);
-
+        let gfxstream_flags = GfxstreamFlags::new();
         RutabagaBuilder {
-            display_width: None,
-            display_height: None,
+            display_width: RUTABAGA_DEFAULT_WIDTH,
+            display_height: RUTABAGA_DEFAULT_HEIGHT,
             default_component,
             gfxstream_flags,
             virglrenderer_flags,
-            context_mask,
+            capset_mask,
             channels: None,
+            debug_handler: None,
+            renderer_features: None,
         }
     }
 
     /// Set display width for the RutabagaBuilder
     pub fn set_display_width(mut self, display_width: u32) -> RutabagaBuilder {
-        self.display_width = Some(display_width);
+        self.display_width = display_width;
         self
     }
 
     /// Set display height for the RutabagaBuilder
     pub fn set_display_height(mut self, display_height: u32) -> RutabagaBuilder {
-        self.display_height = Some(display_height);
+        self.display_height = display_height;
         self
     }
 
@@ -837,18 +1049,6 @@ impl RutabagaBuilder {
         self
     }
 
-    /// Set use guest ANGLE in gfxstream
-    pub fn set_use_guest_angle(mut self, v: bool) -> RutabagaBuilder {
-        self.gfxstream_flags = self.gfxstream_flags.use_guest_angle(v);
-        self
-    }
-
-    /// Set enable GLES 3.1 support in gfxstream
-    pub fn set_support_gles31(mut self, v: bool) -> RutabagaBuilder {
-        self.gfxstream_flags = self.gfxstream_flags.support_gles31(v);
-        self
-    }
-
     /// Sets use external blob in gfxstream + virglrenderer.
     pub fn set_use_external_blob(mut self, v: bool) -> RutabagaBuilder {
         self.gfxstream_flags = self.gfxstream_flags.use_external_blob(v);
@@ -869,7 +1069,7 @@ impl RutabagaBuilder {
     }
 
     /// Use the Vulkan swapchain to draw on the host window for gfxstream.
-    pub fn set_wsi(mut self, v: Option<&RutabagaWsi>) -> RutabagaBuilder {
+    pub fn set_wsi(mut self, v: RutabagaWsi) -> RutabagaBuilder {
         self.gfxstream_flags = self.gfxstream_flags.set_wsi(v);
         self
     }
@@ -883,6 +1083,21 @@ impl RutabagaBuilder {
         self
     }
 
+    /// Set debug handler for the RutabagaBuilder
+    pub fn set_debug_handler(
+        mut self,
+        debug_handler: Option<RutabagaDebugHandler>,
+    ) -> RutabagaBuilder {
+        self.debug_handler = debug_handler;
+        self
+    }
+
+    /// Set renderer features for the RutabagaBuilder
+    pub fn set_renderer_features(mut self, renderer_features: Option<String>) -> RutabagaBuilder {
+        self.renderer_features = renderer_features;
+        self
+    }
+
     /// Builds Rutabaga and returns a handle to it.
     ///
     /// This should be only called once per every virtual machine instance.  Rutabaga tries to
@@ -891,7 +1106,7 @@ impl RutabagaBuilder {
     pub fn build(
         mut self,
         fence_handler: RutabagaFenceHandler,
-        #[cfg(feature = "virgl_renderer_next")] render_server_fd: Option<SafeDescriptor>,
+        #[allow(unused_variables)] rutabaga_server_descriptor: Option<SafeDescriptor>,
     ) -> RutabagaResult<Rutabaga> {
         let mut rutabaga_components: Map<RutabagaComponentType, Box<dyn RutabagaComponent>> =
             Default::default();
@@ -900,27 +1115,30 @@ impl RutabagaBuilder {
         let mut rutabaga_capsets: Vec<RutabagaCapsetInfo> = Default::default();
 
         let capset_enabled =
-            |capset_id: u32| -> bool { (self.context_mask & (1 << capset_id)) != 0 };
+            |capset_id: u32| -> bool { (self.capset_mask & (1 << capset_id)) != 0 };
 
         let mut push_capset = |capset_id: u32| {
             if let Some(capset) = RUTABAGA_CAPSETS
                 .iter()
                 .find(|capset| capset_id == capset.capset_id)
             {
-                if self.context_mask != 0 {
+                if self.capset_mask != 0 {
                     if capset_enabled(capset.capset_id) {
                         rutabaga_capsets.push(*capset);
                     }
                 } else {
-                    // Unconditionally push capset -- this should eventually be deleted when context types are
-                    // always specified by crosvm launchers.
+                    // Unconditionally push capset -- this should eventually be deleted when context
+                    // types are always specified by crosvm launchers.
                     rutabaga_capsets.push(*capset);
                 }
             };
         };
 
-        if self.context_mask != 0 {
-            let supports_gfxstream = capset_enabled(RUTABAGA_CAPSET_GFXSTREAM);
+        if self.capset_mask != 0 {
+            let supports_gfxstream = capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_VULKAN)
+                | capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_MAGMA)
+                | capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_GLES)
+                | capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_COMPOSER);
             let supports_virglrenderer = capset_enabled(RUTABAGA_CAPSET_VIRGL2)
                 | capset_enabled(RUTABAGA_CAPSET_VENUS)
                 | capset_enabled(RUTABAGA_CAPSET_DRM);
@@ -938,6 +1156,11 @@ impl RutabagaBuilder {
                 .use_virgl(capset_enabled(RUTABAGA_CAPSET_VIRGL2))
                 .use_venus(capset_enabled(RUTABAGA_CAPSET_VENUS))
                 .use_drm(capset_enabled(RUTABAGA_CAPSET_DRM));
+
+            self.gfxstream_flags = self
+                .gfxstream_flags
+                .use_gles(capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_GLES))
+                .use_vulkan(capset_enabled(RUTABAGA_CAPSET_GFXSTREAM_VULKAN))
         }
 
         // Make sure that disabled components are not used as default.
@@ -960,13 +1183,10 @@ impl RutabagaBuilder {
         } else {
             #[cfg(feature = "virgl_renderer")]
             if self.default_component == RutabagaComponentType::VirglRenderer {
-                #[cfg(not(feature = "virgl_renderer_next"))]
-                let render_server_fd = None;
-
                 let virgl = VirglRenderer::init(
                     self.virglrenderer_flags,
                     fence_handler.clone(),
-                    render_server_fd,
+                    rutabaga_server_descriptor,
                 )?;
                 rutabaga_components.insert(RutabagaComponentType::VirglRenderer, virgl);
 
@@ -978,34 +1198,26 @@ impl RutabagaBuilder {
 
             #[cfg(feature = "gfxstream")]
             if self.default_component == RutabagaComponentType::Gfxstream {
-                let display_width = self
-                    .display_width
-                    .ok_or(RutabagaError::InvalidRutabagaBuild("missing display width"))?;
-                let display_height =
-                    self.display_height
-                        .ok_or(RutabagaError::InvalidRutabagaBuild(
-                            "missing display height",
-                        ))?;
-
                 let gfxstream = Gfxstream::init(
-                    display_width,
-                    display_height,
+                    self.display_width,
+                    self.display_height,
                     self.gfxstream_flags,
+                    self.renderer_features,
                     fence_handler.clone(),
+                    self.debug_handler.clone(),
                 )?;
 
                 rutabaga_components.insert(RutabagaComponentType::Gfxstream, gfxstream);
 
-                push_capset(RUTABAGA_CAPSET_GFXSTREAM);
+                push_capset(RUTABAGA_CAPSET_GFXSTREAM_VULKAN);
+                push_capset(RUTABAGA_CAPSET_GFXSTREAM_MAGMA);
+                push_capset(RUTABAGA_CAPSET_GFXSTREAM_GLES);
+                push_capset(RUTABAGA_CAPSET_GFXSTREAM_COMPOSER);
             }
 
-            cfg_if::cfg_if! {
-                   if #[cfg(not(target_os = "fuchsia"))] {
-                      let cross_domain = CrossDomain::init(self.channels)?;
-                      rutabaga_components.insert(RutabagaComponentType::CrossDomain, cross_domain);
-                      push_capset(RUTABAGA_CAPSET_CROSS_DOMAIN);
-                   }
-            }
+            let cross_domain = CrossDomain::init(self.channels, fence_handler.clone())?;
+            rutabaga_components.insert(RutabagaComponentType::CrossDomain, cross_domain);
+            push_capset(RUTABAGA_CAPSET_CROSS_DOMAIN);
         }
 
         Ok(Rutabaga {
@@ -1016,5 +1228,78 @@ impl RutabagaBuilder {
             capset_info: rutabaga_capsets,
             fence_handler,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    fn new_2d() -> Rutabaga {
+        RutabagaBuilder::new(RutabagaComponentType::Rutabaga2D, 0)
+            .build(RutabagaHandler::new(|_| {}), None)
+            .unwrap()
+    }
+
+    #[test]
+    fn snapshot_restore_2d_no_resources() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+
+        let rutabaga1 = new_2d();
+        rutabaga1.snapshot(&mut buffer, "").unwrap();
+
+        let mut rutabaga1 = new_2d();
+        rutabaga1.restore(&mut &buffer.get_ref()[..], "").unwrap();
+    }
+
+    #[test]
+    fn snapshot_restore_2d_one_resource() {
+        let resource_id = 123;
+        let resource_create_3d = ResourceCreate3D {
+            target: RUTABAGA_PIPE_TEXTURE_2D,
+            format: 1,
+            bind: RUTABAGA_PIPE_BIND_RENDER_TARGET,
+            width: 100,
+            height: 200,
+            depth: 1,
+            array_size: 1,
+            last_level: 0,
+            nr_samples: 0,
+            flags: 0,
+        };
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+
+        let mut rutabaga1 = new_2d();
+        rutabaga1
+            .resource_create_3d(resource_id, resource_create_3d)
+            .unwrap();
+        rutabaga1
+            .attach_backing(
+                resource_id,
+                vec![RutabagaIovec {
+                    base: std::ptr::null_mut(),
+                    len: 456,
+                }],
+            )
+            .unwrap();
+        rutabaga1.snapshot(&mut buffer, "").unwrap();
+
+        let mut rutabaga2 = new_2d();
+        rutabaga2.restore(&mut &buffer.get_ref()[..], "").unwrap();
+
+        assert_eq!(rutabaga2.resources.len(), 1);
+        let rutabaga_resource = rutabaga2.resources.get(&resource_id).unwrap();
+        assert_eq!(rutabaga_resource.resource_id, resource_id);
+        assert_eq!(
+            rutabaga_resource.info_2d.as_ref().unwrap().width,
+            resource_create_3d.width
+        );
+        assert_eq!(
+            rutabaga_resource.info_2d.as_ref().unwrap().height,
+            resource_create_3d.height
+        );
+        // NOTE: We attached an backing iovec, but it should be gone post-restore.
+        assert!(rutabaga_resource.backing_iovecs.is_none());
     }
 }

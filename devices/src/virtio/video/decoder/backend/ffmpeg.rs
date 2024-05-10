@@ -55,8 +55,8 @@ struct InputBuffer {
     mapping: MemoryMappingArena,
     /// Resource ID that we will signal using `NotifyEndOfBitstreamBuffer` upon destruction.
     resource_id: u32,
-    /// Pointer to the event queue to send the `NotifyEndOfBitstreamBuffer` event to. The event will
-    /// not be sent if the pointer becomes invalid.
+    /// Pointer to the event queue to send the `NotifyEndOfBitstreamBuffer` event to. The event
+    /// will not be sent if the pointer becomes invalid.
     event_queue: Weak<SyncEventQueue<DecoderEvent>>,
 }
 
@@ -81,6 +81,10 @@ impl AvBufferSource for InputBuffer {
 
     fn len(&self) -> usize {
         self.mapping.size()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -435,7 +439,7 @@ impl DecoderSession for FfmpegDecoderSession {
                     format_converter: SwConverter::new(
                         avcontext.width as usize,
                         avcontext.height as usize,
-                        avcontext.pix_fmt as i32,
+                        avcontext.pix_fmt,
                         dst_pix_format.pix_fmt(),
                     )
                     .context("while setting output parameters")
@@ -602,7 +606,6 @@ impl FfmpegDecoder {
     pub fn new() -> Self {
         // Find all the decoders supported by libav and store them.
         let codecs = AvCodecIterator::new()
-            .into_iter()
             .filter_map(|codec| {
                 if !codec.is_decoder() {
                     return None;

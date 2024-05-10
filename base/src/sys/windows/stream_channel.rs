@@ -61,7 +61,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 50 * 1024;
 /// The ReadNotifier will return an event handle that is set when data is in the channel.
 ///
 /// In message mode, single writes larger than
-/// `crate::platform::named_pipes::DEFAULT_BUFFER_SIZE` are not permitted.
+/// `crate::windows::named_pipes::DEFAULT_BUFFER_SIZE` are not permitted.
 ///
 /// # Notes for maintainers
 /// 1. This struct contains extremely subtle thread safety considerations.
@@ -183,11 +183,17 @@ impl StreamChannel {
         })
     }
 
+    /// Gets the readable byte count. Returns zero for broken pipes since that will cause the read
+    /// notifier to be set, and for the consumer to quickly discover the broken pipe.
     fn get_readable_byte_count(&self) -> io::Result<u32> {
-        self.pipe_conn.get_available_byte_count().map_err(|e| {
-            error!("StreamChannel failed to get readable byte count: {}", e);
-            e
-        })
+        match self.pipe_conn.get_available_byte_count() {
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(0),
+            Err(e) => {
+                error!("StreamChannel failed to get readable byte count: {}", e);
+                Err(e)
+            }
+            Ok(byte_count) => Ok(byte_count),
+        }
     }
 
     pub(super) fn inner_read(&self, buf: &mut [u8]) -> io::Result<usize> {
@@ -197,11 +203,10 @@ impl StreamChannel {
         // could stall readers.)
         let _read_lock = self.read_lock.lock();
 
-        let res = unsafe {
-            // Safe because no partial reads are possible, and the underlying code bounds the
-            // read by buf's size.
-            self.pipe_conn.read(buf)
-        };
+        // SAFETY:
+        // Safe because no partial reads are possible, and the underlying code bounds the
+        // read by buf's size.
+        let res = unsafe { self.pipe_conn.read(buf) };
 
         // The entire goal of this complex section is to avoid the need for shared memory between
         // each channel end to synchronize the notification state. It is very subtle, modify with
@@ -214,8 +219,8 @@ impl StreamChannel {
             // the notifier though, then we have to be sure, so we'll proceed to the next section.
             let byte_count = self.get_readable_byte_count()?;
             if byte_count > 0 {
-                // It's always safe to set the read notifier here because we know there is data in the
-                // pipe, and no one else could read it out from under us.
+                // It's always safe to set the read notifier here because we know there is data in
+                // the pipe, and no one else could read it out from under us.
                 self.read_notify.signal().map_err(|e| {
                     io::Error::new(
                         io::ErrorKind::Other,

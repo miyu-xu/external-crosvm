@@ -10,32 +10,34 @@ use std::mem;
 use std::os::windows::fs::OpenOptionsExt;
 use std::process;
 use std::ptr;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
+use sync::Mutex;
+use win_util::fail_if_zero;
 use win_util::SecurityAttributes;
 use win_util::SelfRelativeSecurityDescriptor;
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::minwindef::FALSE;
-use winapi::shared::minwindef::LPCVOID;
-use winapi::shared::minwindef::LPVOID;
 use winapi::shared::minwindef::TRUE;
 use winapi::shared::winerror::ERROR_IO_INCOMPLETE;
 use winapi::shared::winerror::ERROR_IO_PENDING;
+use winapi::shared::winerror::ERROR_MORE_DATA;
 use winapi::shared::winerror::ERROR_NO_DATA;
 use winapi::shared::winerror::ERROR_PIPE_CONNECTED;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::fileapi::FlushFileBuffers;
-use winapi::um::fileapi::ReadFile;
-use winapi::um::fileapi::WriteFile;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::ioapiset::CancelIoEx;
 use winapi::um::ioapiset::GetOverlappedResult;
 use winapi::um::minwinbase::OVERLAPPED;
 use winapi::um::namedpipeapi::ConnectNamedPipe;
+use winapi::um::namedpipeapi::DisconnectNamedPipe;
 use winapi::um::namedpipeapi::GetNamedPipeInfo;
 use winapi::um::namedpipeapi::PeekNamedPipe;
 use winapi::um::namedpipeapi::SetNamedPipeHandleState;
@@ -58,20 +60,22 @@ use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::IntoRawDescriptor;
 use crate::descriptor::SafeDescriptor;
 use crate::Event;
+use crate::EventToken;
+use crate::WaitContext;
 
 /// The default buffer size for all named pipes in the system. If this size is too small, writers
 /// on named pipes that expect not to block *can* block until the reading side empties the buffer.
 ///
 /// The general rule is this should be *at least* as big as the largest message, otherwise
 /// unexpected blocking behavior can result; for example, if too small, this can interact badly with
-/// crate::platform::StreamChannel, which expects to be able to make a complete write before releasing
-/// a lock that the opposite side needs to complete a read. This means that if the buffer is too
-/// small:
+/// crate::windows::StreamChannel, which expects to be able to make a complete write before
+/// releasing a lock that the opposite side needs to complete a read. This means that if the buffer
+/// is too small:
 ///     * The writer can't complete its write and release the lock because the buffer is too small.
-///     * The reader can't start reading because the lock is held by the writer, so it can't
-///       relieve buffer pressure. Note that for message pipes, the reader couldn't do anything
-///       to help anyway, because a message mode pipe should NOT have a partial read (which is
-///       what we would need to relieve pressure).
+///     * The reader can't start reading because the lock is held by the writer, so it can't relieve
+///       buffer pressure. Note that for message pipes, the reader couldn't do anything to help
+///       anyway, because a message mode pipe should NOT have a partial read (which is what we would
+///       need to relieve pressure).
 ///     * Conditions for deadlock are met, and both the reader & writer enter circular waiting.
 pub const DEFAULT_BUFFER_SIZE: usize = 50 * 1024;
 
@@ -85,12 +89,22 @@ pub struct PipeConnection {
     blocking_mode: BlockingMode,
 }
 
+/// `OVERLAPPED` is allocated on the heap because it must not move while performing I/O operations.
+///
+/// Defined as a separate type so that we can mark it as `Send` and `Sync`.
+pub struct BoxedOverlapped(pub Box<OVERLAPPED>);
+
+// SAFETY: `OVERLAPPED` is not automatically `Send` because it contains a `HANDLE`, which is a raw
+// pointer, but `HANDLE`s are safe to move between threads and thus so is `OVERLAPPED`.
+unsafe impl Send for BoxedOverlapped {}
+
+// SAFETY: See the argument for `Send` above. `HANDLE`s are also safe to share between threads.
+unsafe impl Sync for BoxedOverlapped {}
+
 /// Wraps the OVERLAPPED structure. Also keeps track of whether OVERLAPPED is being used by a
 /// Readfile or WriteFile operation and holds onto the event object so it doesn't get dropped.
 pub struct OverlappedWrapper {
-    // Allocated on the heap so that the OVERLAPPED struct doesn't move when performing I/O
-    // operations.
-    overlapped: Box<OVERLAPPED>,
+    overlapped: BoxedOverlapped,
     // This field prevents the event handle from being dropped too early and allows callers to
     // be notified when a read or write overlapped operation has completed.
     h_event: Option<Event>,
@@ -118,27 +132,31 @@ impl OverlappedWrapper {
         } else {
             None
         };
-        overlapped.hEvent = h_event.as_ref().unwrap().as_raw_descriptor();
+
+        overlapped.hEvent = if let Some(event) = h_event.as_ref() {
+            event.as_raw_descriptor()
+        } else {
+            0 as RawDescriptor
+        };
+
         Ok(OverlappedWrapper {
-            overlapped: Box::new(overlapped),
+            overlapped: BoxedOverlapped(Box::new(overlapped)),
             h_event,
             in_use: false,
         })
     }
 }
 
-// Safe because all of the contained fields may be safely sent to another thread.
-unsafe impl Send for OverlappedWrapper {}
-
 pub trait WriteOverlapped {
     /// Perform an overlapped write operation with the specified buffer and overlapped wrapper.
     /// If successful, the write operation will complete asynchronously, and
     /// `write_result()` should be called to get the result.
     ///
-    /// NOTE: `buf` and `overlapped_wrapper` will be in use for the duration of
-    /// the overlapped operation. These should not be reused until
-    /// `write_result()` is called.
-    fn write_overlapped(
+    /// # Safety
+    /// `buf` and `overlapped_wrapper` will be in use for the duration of
+    /// the overlapped operation. These must not be reused and must live until
+    /// after `write_result()` has been called.
+    unsafe fn write_overlapped(
         &mut self,
         buf: &mut [u8],
         overlapped_wrapper: &mut OverlappedWrapper,
@@ -164,10 +182,11 @@ pub trait ReadOverlapped {
     /// If successful, the read operation will complete asynchronously, and
     /// `read_result()` should be called to get the result.
     ///
-    /// NOTE: `buf` and `overlapped_wrapper` will be in use for the duration of
-    /// the overlapped operation. These should not be reused until
-    /// `read_result()` is called.
-    fn read_overlapped(
+    /// # Safety
+    /// `buf` and `overlapped_wrapper` will be in use for the duration of
+    /// the overlapped operation. These must not be reused and must live until
+    /// after `read_result()` has been called.
+    unsafe fn read_overlapped(
         &mut self,
         buf: &mut [u8],
         overlapped_wrapper: &mut OverlappedWrapper,
@@ -230,6 +249,7 @@ impl From<&BlockingMode> for DWORD {
 }
 
 /// Sets the handle state for a named pipe in a rust friendly way.
+/// SAFETY:
 /// This is safe if the pipe handle is open.
 unsafe fn set_named_pipe_handle_state(
     pipe_handle: RawDescriptor,
@@ -274,17 +294,15 @@ pub fn pair(
 /// # Arguments
 ///
 /// * `framing_mode`  - Whether the system should provide a simple byte stream (Byte) or an
-///                     automatically framed sequence of messages (Message). In message mode it's an
-///                     error to read fewer bytes than were sent in a message from the other end of
-///                     the pipe.
+///   automatically framed sequence of messages (Message). In message mode it's an error to read
+///   fewer bytes than were sent in a message from the other end of the pipe.
 /// * `blocking_mode` - Whether the system should wait on read() until data is available (Wait) or
-///                     return immediately if there is nothing available (NoWait).
-/// * `timeout`       - A timeout to apply for socket operations, in milliseconds.
-///                     Setting this to zero will create sockets with the system
-///                     default timeout.
+///   return immediately if there is nothing available (NoWait).
+/// * `timeout`       - A timeout to apply for socket operations, in milliseconds. Setting this to
+///   zero will create sockets with the system default timeout.
 /// * `buffer_size`   - The default buffer size for the named pipe. The system should expand the
-///                     buffer automatically as needed, except in the case of NOWAIT pipes, where
-///                     it will just fail writes that don't fit in the buffer.
+///   buffer automatically as needed, except in the case of NOWAIT pipes, where it will just fail
+///   writes that don't fit in the buffer.
 /// # Return value
 ///
 /// Returns a pair of pipes, of the form (server, client). Note that for some winapis, such as
@@ -334,19 +352,17 @@ pub fn pair_with_buffer_size(
 /// # Arguments
 ///
 /// * `pipe_name`     - The path of the named pipe to create. Should be in the form
-///                     `\\.\pipe\<some-name>`.
+///   `\\.\pipe\<some-name>`.
 /// * `framing_mode`  - Whether the system should provide a simple byte stream (Byte) or an
-///                     automatically framed sequence of messages (Message). In message mode it's an
-///                     error to read fewer bytes than were sent in a message from the other end of
-///                     the pipe.
+///   automatically framed sequence of messages (Message). In message mode it's an error to read
+///   fewer bytes than were sent in a message from the other end of the pipe.
 /// * `blocking_mode` - Whether the system should wait on read() until data is available (Wait) or
-///                     return immediately if there is nothing available (NoWait).
-/// * `timeout`       - A timeout to apply for socket operations, in milliseconds.
-///                     Setting this to zero will create sockets with the system
-///                     default timeout.
+///   return immediately if there is nothing available (NoWait).
+/// * `timeout`       - A timeout to apply for socket operations, in milliseconds. Setting this to
+///   zero will create sockets with the system default timeout.
 /// * `buffer_size`   - The default buffer size for the named pipe. The system should expand the
-///                     buffer automatically as needed, except in the case of NOWAIT pipes, where
-///                     it will just fail writes that don't fit in the buffer.
+///   buffer automatically as needed, except in the case of NOWAIT pipes, where it will just fail
+///   writes that don't fit in the buffer.
 /// * `overlapped`    - Sets whether overlapped mode is set on the pipe.
 pub fn create_server_pipe(
     pipe_name: &str,
@@ -365,9 +381,10 @@ pub fn create_server_pipe(
 
     // This sets flags so there will be an error if >1 instance (server end)
     // of this pipe name is opened because we expect exactly one.
+    // SAFETY:
+    // Safe because security attributes are valid, pipe_name is valid C string,
+    // and we're checking the return code
     let server_handle = unsafe {
-        // Safe because security attributes are valid, pipe_name is valid C string,
-        // and we're checking the return code
         CreateNamedPipeA(
             c_pipe_name.as_ptr(),
             /* dwOpenMode= */
@@ -393,6 +410,7 @@ pub fn create_server_pipe(
     if server_handle == INVALID_HANDLE_VALUE {
         Err(io::Error::last_os_error())
     } else {
+        // SAFETY: Safe because server_handle is valid.
         unsafe {
             Ok(PipeConnection {
                 handle: SafeDescriptor::from_raw_descriptor(server_handle),
@@ -411,13 +429,12 @@ pub fn create_server_pipe(
 /// # Arguments
 ///
 /// * `pipe_name`     - The path of the named pipe to create. Should be in the form
-///                     `\\.\pipe\<some-name>`.
+///   `\\.\pipe\<some-name>`.
 /// * `framing_mode`  - Whether the system should provide a simple byte stream (Byte) or an
-///                     automatically framed sequence of messages (Message). In message mode it's an
-///                     error to read fewer bytes than were sent in a message from the other end of
-///                     the pipe.
+///   automatically framed sequence of messages (Message). In message mode it's an error to read
+///   fewer bytes than were sent in a message from the other end of the pipe.
 /// * `blocking_mode` - Whether the system should wait on read() until data is available (Wait) or
-///                     return immediately if there is nothing available (NoWait).
+///   return immediately if there is nothing available (NoWait).
 /// * `overlapped`    - Sets whether the pipe is opened in overlapped mode.
 pub fn create_client_pipe(
     pipe_name: &str,
@@ -436,12 +453,14 @@ pub fn create_client_pipe(
 
     let mut client_mode = framing_mode.to_readmode() | DWORD::from(blocking_mode);
 
+    // SAFETY:
     // Safe because client_handle's open() call did not return an error.
     unsafe {
         set_named_pipe_handle_state(client_handle, &mut client_mode)?;
     }
 
     Ok(PipeConnection {
+        // SAFETY:
         // Safe because client_handle is valid
         handle: unsafe { SafeDescriptor::from_raw_descriptor(client_handle) },
         framing_mode: *framing_mode,
@@ -546,7 +565,7 @@ impl PipeConnection {
             &self.handle,
             self.blocking_mode,
             buf,
-            Some(&mut overlapped_wrapper.overlapped),
+            Some(&mut overlapped_wrapper.overlapped.0),
         )?;
         Ok(())
     }
@@ -561,50 +580,88 @@ impl PipeConnection {
         buf: &mut [T],
         overlapped: Option<&mut OVERLAPPED>,
     ) -> Result<usize> {
-        let max_bytes_to_read: DWORD = mem::size_of_val(buf) as DWORD;
-        // Used to verify if ERROR_IO_PENDING should be an error.
-        let is_overlapped = overlapped.is_some();
-
-        // Safe because we cap the size of the read to the size of the buffer
-        // and check the return code
-        let mut bytes_read: DWORD = 0;
-        let success_flag = ReadFile(
-            handle.as_raw_descriptor(),
-            buf.as_ptr() as LPVOID,
-            max_bytes_to_read,
-            match overlapped {
-                Some(_) => std::ptr::null_mut(),
-                None => &mut bytes_read,
-            },
-            match overlapped {
-                Some(v) => v,
-                None => std::ptr::null_mut(),
-            },
+        let res = crate::windows::read_file(
+            handle,
+            buf.as_mut_ptr() as *mut u8,
+            mem::size_of_val(buf),
+            overlapped,
         );
-
-        if success_flag == 0 {
-            let e = io::Error::last_os_error();
-            match e.raw_os_error() {
-                Some(error_code)
-                    if blocking_mode == BlockingMode::NoWait
-                        && error_code == ERROR_NO_DATA as i32 =>
-                {
-                    // A NOWAIT pipe will return ERROR_NO_DATA when no data is available; however,
-                    // this code is interpreted as a std::io::ErrorKind::BrokenPipe, which is not
-                    // correct. For further details see:
-                    // https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
-                    // https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipe-type-read-and-wait-modes
-                    Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, e))
-                }
-                // ERROR_IO_PENDING, according the to docs, isn't really an error. This just means
-                // that the ReadFile operation hasn't completed. In this case,
-                // `get_overlapped_result` will wait until the operation is completed.
-                Some(error_code) if error_code == ERROR_IO_PENDING as i32 && is_overlapped => Ok(0),
-                _ => Err(e),
+        match res {
+            Ok(bytes_read) => Ok(bytes_read),
+            Err(e)
+                if blocking_mode == BlockingMode::NoWait
+                    && e.raw_os_error() == Some(ERROR_NO_DATA as i32) =>
+            {
+                // A NOWAIT pipe will return ERROR_NO_DATA when no data is available; however,
+                // this code is interpreted as a std::io::ErrorKind::BrokenPipe, which is not
+                // correct. For further details see:
+                // https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+                // https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipe-type-read-and-wait-modes
+                Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, e))
             }
-        } else {
-            Ok(bytes_read as usize)
+            Err(e) => Err(e),
         }
+    }
+
+    /// Blockingly reads a `buf` bytes from the pipe. The blocking read can be interrupted
+    /// by an event on `exit_event`.
+    pub fn read_overlapped_blocking<T: PipeSendable>(
+        &mut self,
+        buf: &mut [T],
+        overlapped_wrapper: &mut OverlappedWrapper,
+        exit_event: &Event,
+    ) -> Result<()> {
+        // SAFETY:
+        // Safe because we are providing a valid buffer slice and also providing a valid
+        // overlapped struct.
+        match unsafe { self.read_overlapped(buf, overlapped_wrapper) } {
+            // More data isn't necessarily an error as long as we've filled the provided buffer,
+            // as is checked later in this function.
+            Err(e) if e.raw_os_error() == Some(ERROR_MORE_DATA as i32) => Ok(()),
+            Err(e) => Err(e),
+            Ok(()) => Ok(()),
+        }?;
+
+        #[derive(EventToken)]
+        enum Token {
+            ReadOverlapped,
+            Exit,
+        }
+
+        let wait_ctx = WaitContext::build_with(&[
+            (
+                overlapped_wrapper.get_h_event_ref().unwrap(),
+                Token::ReadOverlapped,
+            ),
+            (exit_event, Token::Exit),
+        ])?;
+
+        let events = wait_ctx.wait()?;
+        for event in events {
+            match event.token {
+                Token::ReadOverlapped => {
+                    let size_read_in_bytes =
+                        self.get_overlapped_result(overlapped_wrapper)? as usize;
+
+                    // If this error shows, most likely the overlapped named pipe was set up
+                    // incorrectly.
+                    if size_read_in_bytes != buf.len() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "Short read",
+                        ));
+                    }
+                }
+                Token::Exit => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "IO canceled on exit request",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Gets the size in bytes of data in the pipe.
@@ -614,9 +671,10 @@ impl PipeConnection {
     pub fn get_available_byte_count(&self) -> io::Result<u32> {
         let mut total_bytes_avail: DWORD = 0;
 
+        // SAFETY:
         // Safe because the underlying pipe handle is guaranteed to be open, and the output values
         // live at valid memory locations.
-        let res = unsafe {
+        fail_if_zero!(unsafe {
             PeekNamedPipe(
                 self.as_raw_descriptor(),
                 ptr::null_mut(),
@@ -625,19 +683,16 @@ impl PipeConnection {
                 &mut total_bytes_avail,
                 ptr::null_mut(),
             )
-        };
+        });
 
-        if res == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(total_bytes_avail)
-        }
+        Ok(total_bytes_avail)
     }
 
     /// Writes the bytes from a slice into the pipe. Returns the number of bytes written, which
     /// callers should check to ensure that it was the number expected.
     pub fn write<T: PipeSendable>(&self, buf: &[T]) -> Result<usize> {
-        PipeConnection::write_internal(&self.handle, buf, None)
+        // SAFETY: overlapped is None so this is safe.
+        unsafe { PipeConnection::write_internal(&self.handle, buf, None) }
     }
 
     /// Similar to `PipeConnection::write` except it also allows:
@@ -649,10 +704,13 @@ impl PipeConnection {
     /// (can be created with `OverlappedWrapper::new`) will be passed into
     /// `WriteFile`. That event will be triggered when the write operation is complete.
     ///
-    /// In order to get how many bytes were written, call `get_overlapped_result`. That function will
-    /// also help with waiting until the write operation is complete. The pipe must be opened in
-    /// overlapped otherwise there may be unexpected behavior.
-    pub fn write_overlapped<T: PipeSendable>(
+    /// In order to get how many bytes were written, call `get_overlapped_result`. That function
+    /// will also help with waiting until the write operation is complete. The pipe must be
+    /// opened in overlapped otherwise there may be unexpected behavior.
+    ///
+    /// # Safety
+    /// * buf & overlapped_wrapper MUST live until the overlapped operation is complete.
+    pub unsafe fn write_overlapped<T: PipeSendable>(
         &mut self,
         buf: &[T],
         overlapped_wrapper: &mut OverlappedWrapper,
@@ -668,48 +726,33 @@ impl PipeConnection {
         PipeConnection::write_internal(
             &self.handle,
             buf,
-            Some(&mut overlapped_wrapper.overlapped),
+            Some(&mut overlapped_wrapper.overlapped.0),
         )?;
         Ok(())
     }
 
     /// Helper for `write_overlapped` and `write`.
-    fn write_internal<T: PipeSendable>(
+    ///
+    /// # Safety
+    /// * Safe if overlapped is None.
+    /// * Safe if overlapped is Some and:
+    ///   + buf lives until the overlapped operation is complete.
+    ///   + overlapped lives until the overlapped operation is complete.
+    unsafe fn write_internal<T: PipeSendable>(
         handle: &SafeDescriptor,
         buf: &[T],
         overlapped: Option<&mut OVERLAPPED>,
     ) -> Result<usize> {
-        let bytes_to_write: DWORD = mem::size_of_val(buf) as DWORD;
-        let is_overlapped = overlapped.is_some();
-
-        // Safe because buf points to a valid region of memory whose size we have computed,
-        // pipe has not been closed (as it's managed by this object), and we check the return
-        // value for any errors
+        // SAFETY:
+        // Safe because buf points to memory valid until the write completes and we pass a valid
+        // length for that memory.
         unsafe {
-            let mut bytes_written: DWORD = 0;
-            let success_flag = WriteFile(
-                handle.as_raw_descriptor(),
-                buf.as_ptr() as LPCVOID,
-                bytes_to_write,
-                match overlapped {
-                    Some(_) => std::ptr::null_mut(),
-                    None => &mut bytes_written,
-                },
-                match overlapped {
-                    Some(v) => v,
-                    None => std::ptr::null_mut(),
-                },
-            );
-
-            if success_flag == 0 {
-                let err = io::Error::last_os_error().raw_os_error().unwrap() as u32;
-                if err == ERROR_IO_PENDING && is_overlapped {
-                    return Ok(0);
-                }
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(bytes_written as usize)
-            }
+            crate::windows::write_file(
+                handle,
+                buf.as_ptr() as *const u8,
+                mem::size_of_val(buf),
+                overlapped,
+            )
         }
     }
 
@@ -718,21 +761,115 @@ impl PipeConnection {
         let mut client_mode = DWORD::from(blocking_mode) | self.framing_mode.to_readmode();
         self.blocking_mode = *blocking_mode;
 
+        // SAFETY:
         // Safe because the pipe has not been closed (it is managed by this object).
         unsafe { set_named_pipe_handle_state(self.handle.as_raw_descriptor(), &mut client_mode) }
     }
 
-    /// For a server named pipe, waits for a client to connect
+    /// For a server named pipe, waits for a client to connect (blocking).
     pub fn wait_for_client_connection(&self) -> Result<()> {
+        let mut overlapped_wrapper = OverlappedWrapper::new(/* include_event = */ true)?;
+        self.wait_for_client_connection_internal(
+            &mut overlapped_wrapper,
+            /* should_block = */ true,
+        )
+    }
+
+    /// Interruptable blocking wait for a client to connect.
+    pub fn wait_for_client_connection_overlapped_blocking(
+        &mut self,
+        exit_event: &Event,
+    ) -> Result<()> {
+        let mut overlapped_wrapper = OverlappedWrapper::new(/* include_event = */ true)?;
+        self.wait_for_client_connection_internal(
+            &mut overlapped_wrapper,
+            /* should_block = */ false,
+        )?;
+
+        #[derive(EventToken)]
+        enum Token {
+            Connected,
+            Exit,
+        }
+
+        let wait_ctx = WaitContext::build_with(&[
+            (
+                overlapped_wrapper.get_h_event_ref().unwrap(),
+                Token::Connected,
+            ),
+            (exit_event, Token::Exit),
+        ])?;
+
+        let events = wait_ctx.wait()?;
+        if let Some(event) = events.into_iter().next() {
+            return match event.token {
+                Token::Connected => Ok(()),
+                Token::Exit => {
+                    // We must cancel IO here because it is unsafe to free the overlapped wrapper
+                    // while the IO operation is active.
+                    self.cancel_io()?;
+
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "IO canceled on exit request",
+                    ))
+                }
+            };
+        }
+        unreachable!("wait cannot return Ok with zero events");
+    }
+
+    /// For a server named pipe, waits for a client to connect using the given overlapped wrapper
+    /// to signal connection.
+    pub fn wait_for_client_connection_overlapped(
+        &self,
+        overlapped_wrapper: &mut OverlappedWrapper,
+    ) -> Result<()> {
+        self.wait_for_client_connection_internal(
+            overlapped_wrapper,
+            /* should_block = */ false,
+        )
+    }
+
+    fn wait_for_client_connection_internal(
+        &self,
+        overlapped_wrapper: &mut OverlappedWrapper,
+        should_block: bool,
+    ) -> Result<()> {
+        // SAFETY:
         // Safe because the handle is valid and we're checking the return
         // code according to the documentation
+        //
+        // TODO(b/279669296) this safety statement is incomplete, and as such incorrect in one case:
+        //      overlapped_wrapper must live until the overlapped operation is complete; however,
+        //      if should_block is false, nothing guarantees that lifetime and so overlapped_wrapper
+        //      could be freed while the operation is still running.
         unsafe {
             let success_flag = ConnectNamedPipe(
                 self.as_raw_descriptor(),
-                /* lpOverlapped= */ ptr::null_mut(),
+                // Note: The overlapped structure is only used if the pipe was opened in
+                // OVERLAPPED mode, but is necessary in that case.
+                &mut *overlapped_wrapper.overlapped.0,
             );
-            if success_flag == 0 && GetLastError() != ERROR_PIPE_CONNECTED {
-                return Err(io::Error::last_os_error());
+            if success_flag == 0 {
+                return match GetLastError() {
+                    ERROR_PIPE_CONNECTED => {
+                        if !should_block {
+                            // If async, make sure the event is signalled to indicate the client
+                            // is ready.
+                            overlapped_wrapper.get_h_event_ref().unwrap().signal()?;
+                        }
+
+                        Ok(())
+                    }
+                    ERROR_IO_PENDING => {
+                        if should_block {
+                            overlapped_wrapper.get_h_event_ref().unwrap().wait()?;
+                        }
+                        Ok(())
+                    }
+                    err => Err(io::Error::from_raw_os_error(err as i32)),
+                };
             }
         }
         Ok(())
@@ -790,37 +927,35 @@ impl PipeConnection {
             ));
         }
         let mut size_transferred = 0;
+        // SAFETY:
         // Safe as long as `overlapped_struct` isn't copied and also contains a valid event.
         // Also the named pipe handle must created with `FILE_FLAG_OVERLAPPED`.
-        let res = unsafe {
+        fail_if_zero!(unsafe {
             GetOverlappedResult(
                 self.handle.as_raw_descriptor(),
-                &mut *overlapped_wrapper.overlapped,
+                &mut *overlapped_wrapper.overlapped.0,
                 &mut size_transferred,
                 if wait { TRUE } else { FALSE },
             )
-        };
-        if res == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(size_transferred)
-        }
+        });
+
+        Ok(size_transferred)
     }
 
     /// Cancels I/O Operations in the current process. Since `lpOverlapped` is null, this will
     /// cancel all I/O requests for the file handle passed in.
     pub fn cancel_io(&mut self) -> Result<()> {
-        let res = unsafe {
-            CancelIoEx(
-                self.handle.as_raw_descriptor(),
-                /* lpOverlapped= */ std::ptr::null_mut(),
-            )
-        };
-        if res == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        fail_if_zero!(
+            // SAFETY: descriptor is valid and the return value is checked.
+            unsafe {
+                CancelIoEx(
+                    self.handle.as_raw_descriptor(),
+                    /* lpOverlapped= */ std::ptr::null_mut(),
+                )
+            }
+        );
+
+        Ok(())
     }
 
     /// Get the framing mode of the pipe.
@@ -829,43 +964,28 @@ impl PipeConnection {
     }
 
     /// Returns metadata about the connected NamedPipe.
-    pub fn get_info(&self, is_server_connection: bool) -> Result<NamedPipeInfo> {
+    pub fn get_info(&self) -> Result<NamedPipeInfo> {
         let mut flags: u32 = 0;
-        // Marked mutable because they are mutated in a system call
-        #[allow(unused_mut)]
         let mut incoming_buffer_size: u32 = 0;
-        #[allow(unused_mut)]
         let mut outgoing_buffer_size: u32 = 0;
-        #[allow(unused_mut)]
         let mut max_instances: u32 = 0;
-        // Client side with BYTE type are default flags
-        if is_server_connection {
-            flags |= 0x00000001 /* PIPE_SERVER_END */
-        }
-        if self.framing_mode == FramingMode::Message {
-            flags |= 0x00000004 /* PIPE_TYPE_MESSAGE */
-        }
-        // Safe because we have allocated all pointers and own
-        // them as mutable.
-        let res = unsafe {
+        // SAFETY: all pointers are valid
+        fail_if_zero!(unsafe {
             GetNamedPipeInfo(
                 self.as_raw_descriptor(),
-                flags as *mut u32,
-                outgoing_buffer_size as *mut u32,
-                incoming_buffer_size as *mut u32,
-                max_instances as *mut u32,
+                &mut flags,
+                &mut outgoing_buffer_size,
+                &mut incoming_buffer_size,
+                &mut max_instances,
             )
-        };
+        });
 
-        if res == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(NamedPipeInfo {
-                outgoing_buffer_size,
-                incoming_buffer_size,
-                max_instances,
-            })
-        }
+        Ok(NamedPipeInfo {
+            outgoing_buffer_size,
+            incoming_buffer_size,
+            max_instances,
+            flags,
+        })
     }
 
     /// For a server pipe, flush the pipe contents. This will
@@ -873,14 +993,20 @@ impl PipeConnection {
     /// call this if you are sure the client is reading the
     /// data!
     pub fn flush_data_blocking(&self) -> Result<()> {
+        // SAFETY:
         // Safe because the only buffers interacted with are
         // outside of Rust memory
-        let res = unsafe { FlushFileBuffers(self.as_raw_descriptor()) };
-        if res == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        fail_if_zero!(unsafe { FlushFileBuffers(self.as_raw_descriptor()) });
+        Ok(())
+    }
+
+    /// For a server pipe, disconnect all clients, discarding any buffered data.
+    pub fn disconnect_clients(&self) -> Result<()> {
+        // SAFETY:
+        // Safe because we own the handle passed in and know it will remain valid for the duration
+        // of the call. Discarded buffers are not managed by rust.
+        fail_if_zero!(unsafe { DisconnectNamedPipe(self.as_raw_descriptor()) });
+        Ok(())
     }
 }
 
@@ -896,11 +1022,14 @@ impl IntoRawDescriptor for PipeConnection {
     }
 }
 
+// SAFETY: Send safety is ensured by inner fields.
 unsafe impl Send for PipeConnection {}
+// SAFETY: Sync safety is ensured by inner fields.
 unsafe impl Sync for PipeConnection {}
 
 impl io::Read for PipeConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // SAFETY:
         // This is safe because PipeConnection::read is always safe for u8
         unsafe { PipeConnection::read(self, buf) }
     }
@@ -918,14 +1047,200 @@ impl io::Write for PipeConnection {
 
 /// A simple data struct representing
 /// metadata about a NamedPipe.
+#[derive(Debug, PartialEq, Eq)]
 pub struct NamedPipeInfo {
     pub outgoing_buffer_size: u32,
     pub incoming_buffer_size: u32,
     pub max_instances: u32,
+    pub flags: u32,
+}
+
+/// This is a wrapper around PipeConnection. This allows a read and a write operations
+/// to run in parallel but not multiple reads or writes in parallel.
+///
+/// Reason: The message from/to service are two-parts - a fixed size header that
+/// contains the size of the actual message. By allowing only one write at a time
+/// we ensure that the variable size message is written/read right after writing/reading
+/// fixed size header. For example it avoid sending or receiving in messages in order like
+/// H1, H2, M1, M2
+///   - where header H1 and its message M1 are sent by one event loop and H2 and its message M2 are
+///     sent by another event loop.
+///
+/// Do not expose direct access to reader or writer pipes.
+///
+/// The struct is clone-able so that different event loops can talk to the other end.
+#[derive(Clone)]
+pub struct MultiPartMessagePipe {
+    // Lock protected pipe to receive messages.
+    reader: Arc<Mutex<PipeConnection>>,
+    // Lock protected pipe to send messages.
+    writer: Arc<Mutex<PipeConnection>>,
+    // Whether this end is created as server or client. The variable helps to
+    // decide if something meanigful should be done when `wait_for_connection` is called.
+    is_server: bool,
+    // Always true if pipe is created as client.
+    // Defaults to false on server. Updated to true on calling `wait_for_connection`
+    // after a client connects.
+    is_connected: Arc<AtomicBool>,
+}
+
+impl MultiPartMessagePipe {
+    fn create_from_pipe(pipe: PipeConnection, is_server: bool) -> Result<Self> {
+        Ok(Self {
+            reader: Arc::new(Mutex::new(pipe.try_clone()?)),
+            writer: Arc::new(Mutex::new(pipe)),
+            is_server,
+            is_connected: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Create server side of MutiPartMessagePipe.
+    /// # Safety
+    /// `pipe` must be a server named pipe.
+    #[deny(unsafe_op_in_unsafe_fn)]
+    pub unsafe fn create_from_server_pipe(pipe: PipeConnection) -> Result<Self> {
+        Self::create_from_pipe(pipe, true)
+    }
+
+    /// Create client side of MutiPartMessagePipe.
+    pub fn create_as_client(pipe_name: &str) -> Result<Self> {
+        let pipe = create_client_pipe(
+            &format!(r"\\.\pipe\{}", pipe_name),
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            /* overlapped= */ true,
+        )?;
+        Self::create_from_pipe(pipe, false)
+    }
+
+    /// Create server side of MutiPartMessagePipe.
+    pub fn create_as_server(pipe_name: &str) -> Result<Self> {
+        let pipe = create_server_pipe(
+            &format!(r"\\.\pipe\{}", pipe_name,),
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            0,
+            1024 * 1024,
+            true,
+        )?;
+        // SAFETY: `pipe` is a server named pipe.
+        unsafe { Self::create_from_server_pipe(pipe) }
+    }
+
+    /// If the struct is created as a server then waits for client connection to arrive.
+    /// It only waits on reader as reader and writer are clones.
+    pub fn wait_for_connection(&self) -> Result<()> {
+        if self.is_server && !self.is_connected.load(Ordering::Relaxed) {
+            self.reader.lock().wait_for_client_connection()?;
+            self.is_connected.store(true, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    fn write_overlapped_blocking_message_internal<T: PipeSendable>(
+        pipe: &mut PipeConnection,
+        buf: &[T],
+        overlapped_wrapper: &mut OverlappedWrapper,
+    ) -> Result<()> {
+        // Safety:
+        // `buf` and `overlapped_wrapper` will be in use for the duration of
+        // the overlapped operation. These must not be reused and must live until
+        // after `get_overlapped_result()` has been called which is done right
+        // after this call.
+        unsafe {
+            pipe.write_overlapped(buf, overlapped_wrapper)?;
+        }
+
+        let size_written_in_bytes = pipe.get_overlapped_result(overlapped_wrapper)?;
+
+        if size_written_in_bytes as usize != buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!(
+                    "Short write expected:{} found:{}",
+                    size_written_in_bytes,
+                    buf.len(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+    /// Sends, blockingly,`buf` over the pipe in its entirety. Partial write is considered
+    pub fn write_overlapped_blocking_message<T: PipeSendable>(
+        &self,
+        header: &[T],
+        message: &[T],
+        overlapped_wrapper: &mut OverlappedWrapper,
+    ) -> Result<()> {
+        let mut writer = self.writer.lock();
+        Self::write_overlapped_blocking_message_internal(&mut writer, header, overlapped_wrapper)?;
+        Self::write_overlapped_blocking_message_internal(&mut writer, message, overlapped_wrapper)
+    }
+
+    /// Reads a variable size message and returns the message on success.
+    /// The size of the message is expected to proceed the message in
+    /// the form of `header_size` message.
+    ///
+    /// `parse_message_size` lets caller parse the header to extract
+    /// message size.
+    ///
+    /// Event on `exit_event` is used to interrupt the blocked read.
+    pub fn read_overlapped_blocking_message<F: FnOnce(&[u8]) -> usize>(
+        &self,
+        header_size: usize,
+        parse_message_size: F,
+        overlapped_wrapper: &mut OverlappedWrapper,
+        exit_event: &Event,
+    ) -> Result<Vec<u8>> {
+        let mut pipe = self.reader.lock();
+        let mut header = vec![0; header_size];
+        header.resize_with(header_size, Default::default);
+        pipe.read_overlapped_blocking(&mut header, overlapped_wrapper, exit_event)?;
+        let message_size = parse_message_size(&header);
+        if message_size == 0 {
+            return Ok(vec![]);
+        }
+        let mut buf = vec![];
+        buf.resize_with(message_size, Default::default);
+        pipe.read_overlapped_blocking(&mut buf, overlapped_wrapper, exit_event)?;
+        Ok(buf)
+    }
+
+    /// Returns the inner named pipe if the current struct is the sole owner of the underlying
+    /// named pipe.
+    ///
+    /// Otherwise, [`None`] is returned and the struct is dropped.
+    ///
+    /// Note that this has a similar race condition like [`Arc::try_unwrap`]: if multiple threads
+    /// call this function simultaneously on the same clone of [`MultiPartMessagePipe`], it is
+    /// possible that all of them will result in [`None`]. This is Due to Rust version
+    /// restriction(1.68.2) when this function is introduced). This race condition can be resolved
+    /// once we upgrade to 1.70.0 or higher by using [`Arc::into_inner`].
+    ///
+    /// If the underlying named pipe is a server named pipe, this method allows the caller to
+    /// terminate the connection by first flushing the named pipe then disconnecting the clients
+    /// idiomatically per
+    /// https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-operations#:~:text=When%20a%20client,of%20the%20pipe.
+    pub fn into_inner_pipe(self) -> Option<PipeConnection> {
+        let piper = Arc::clone(&self.reader);
+        drop(self);
+        Arc::try_unwrap(piper).ok().map(Mutex::into_inner)
+    }
+}
+
+impl TryFrom<PipeConnection> for MultiPartMessagePipe {
+    type Error = std::io::Error;
+    fn try_from(pipe: PipeConnection) -> Result<Self> {
+        Self::create_from_pipe(pipe, false)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -933,6 +1248,7 @@ mod tests {
         let (p1, p2) = pair(&FramingMode::Byte, &BlockingMode::Wait, 0).unwrap();
 
         // Test both forward and reverse direction since the underlying APIs are a bit asymmetrical
+        // SAFETY: trivially safe with pipe created and return value checked.
         unsafe {
             for (dir, sender, receiver) in [("1 -> 2", &p1, &p2), ("2 -> 1", &p2, &p1)].iter() {
                 println!("{}", dir);
@@ -988,6 +1304,7 @@ mod tests {
         let (p1, p2) = pair(&FramingMode::Message, &BlockingMode::Wait, 0).unwrap();
 
         // Test both forward and reverse direction since the underlying APIs are a bit asymmetrical
+        // SAFETY: trivially safe with pipe created and return value checked.
         unsafe {
             for (dir, sender, receiver) in [("1 -> 2", &p1, &p2), ("2 -> 1", &p2, &p1)].iter() {
                 println!("{}", dir);
@@ -1014,6 +1331,7 @@ mod tests {
         let mut recv_buffer: [u8; 1] = [0; 1];
 
         // Test both forward and reverse direction since the underlying APIs are a bit asymmetrical
+        // SAFETY: trivially safe with PipeConnection created and return value checked.
         unsafe {
             for (dir, sender, receiver) in [("1 -> 2", &p1, &p2), ("2 -> 1", &p2, &p1)].iter() {
                 println!("{}", dir);
@@ -1066,6 +1384,7 @@ mod tests {
         )
         .unwrap();
 
+        // SAFETY:
         // Safe because `read_overlapped` can be called since overlapped struct is created.
         unsafe {
             let mut p1_overlapped_wrapper =
@@ -1117,13 +1436,21 @@ mod tests {
         let res = p1.get_overlapped_result(&mut overlapped_wrapper);
         assert!(res.is_err());
 
-        let res = p1.write_overlapped(&[75, 77, 54, 82, 76, 65], &mut overlapped_wrapper);
+        let data = vec![75, 77, 54, 82, 76, 65];
+        // SAFETY: safe because: data & overlapped wrapper live until the
+        // operation is verified completed below.
+        let res = unsafe { p1.write_overlapped(&data, &mut overlapped_wrapper) };
         assert!(res.is_ok());
 
-        let res = p2.write_overlapped(&[75, 77, 54, 82, 76, 65], &mut overlapped_wrapper);
+        let res =
+            // SAFETY: safe because we know the unsafe re-use of overlapped wrapper
+            // will error out.
+            unsafe { p2.write_overlapped(&[75, 77, 54, 82, 76, 65], &mut overlapped_wrapper) };
         assert!(res.is_err());
 
         let mut recv_buffer: [u8; 6] = [0; 6];
+        // SAFETY: safe because we know the unsafe re-use of overlapped wrapper
+        // will error out.
         let res = unsafe { p2.read_overlapped(&mut recv_buffer, &mut overlapped_wrapper) };
         assert!(res.is_err());
 
@@ -1131,7 +1458,11 @@ mod tests {
         assert!(res.is_ok());
 
         let mut recv_buffer: [u8; 6] = [0; 6];
+        // SAFETY: safe because recv_buffer & overlapped_wrapper live until the
+        // operation is verified completed below.
         let res = unsafe { p2.read_overlapped(&mut recv_buffer, &mut overlapped_wrapper) };
+        assert!(res.is_ok());
+        let res = p2.get_overlapped_result(&mut overlapped_wrapper);
         assert!(res.is_ok());
     }
 
@@ -1140,5 +1471,165 @@ mod tests {
             r"\\.\pipe\test-ipc-pipe-name.rand{}",
             rand::thread_rng().gen::<u64>(),
         )
+    }
+
+    fn send_receive_msgs(pipe: MultiPartMessagePipe, msg_count: u32) -> JoinHandle<()> {
+        let messages = ["a", "bb", "ccc", "dddd", "eeeee", "ffffff"];
+        std::thread::spawn(move || {
+            let mut overlapped_wrapper = OverlappedWrapper::new(/* include_event= */ true).unwrap();
+            let exit_event = Event::new().unwrap();
+            for _i in 0..msg_count {
+                let message = *messages
+                    .get(rand::thread_rng().gen::<usize>() % messages.len())
+                    .unwrap();
+                pipe.write_overlapped_blocking_message(
+                    &message.len().to_be_bytes(),
+                    message.as_bytes(),
+                    &mut overlapped_wrapper,
+                )
+                .unwrap();
+            }
+            for _i in 0..msg_count {
+                let message = pipe
+                    .read_overlapped_blocking_message(
+                        size_of::<usize>(),
+                        |bytes: &[u8]| {
+                            assert_eq!(bytes.len(), size_of::<usize>());
+                            usize::from_be_bytes(
+                                bytes.try_into().expect("failed to get array from slice"),
+                            )
+                        },
+                        &mut overlapped_wrapper,
+                        &exit_event,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    *messages.get(message.len() - 1).unwrap(),
+                    std::str::from_utf8(&message).unwrap(),
+                );
+            }
+        })
+    }
+
+    #[test]
+    fn multipart_message_smoke_test() {
+        let pipe_name = generate_pipe_name();
+        let server = MultiPartMessagePipe::create_as_server(&pipe_name).unwrap();
+        let client = MultiPartMessagePipe::create_as_client(&pipe_name).unwrap();
+        let handles = [
+            send_receive_msgs(server.clone(), 100),
+            send_receive_msgs(client.clone(), 100),
+            send_receive_msgs(server, 100),
+            send_receive_msgs(client, 100),
+        ];
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn multipart_message_into_inner_pipe() {
+        let pipe_name = generate_pipe_name();
+        let mut pipe = create_server_pipe(
+            &format!(r"\\.\pipe\{}", pipe_name),
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            0,
+            1024 * 1024,
+            true,
+        )
+        .expect("should create the server pipe with success");
+        let server1 = {
+            let pipe = pipe
+                .try_clone()
+                .expect("should duplicate the named pipe with success");
+            // SAFETY: `pipe` is a server named pipe.
+            unsafe { MultiPartMessagePipe::create_from_server_pipe(pipe) }
+                .expect("should create the multipart message pipe with success")
+        };
+        let server2 = server1.clone();
+        assert!(
+            server2.into_inner_pipe().is_none(),
+            "not the last reference, should be None"
+        );
+        let inner_pipe = server1
+            .into_inner_pipe()
+            .expect("the last reference, should return the underlying pipe");
+        // CompareObjectHandles is a Windows 10 API and is not available in mingw, so we can't use
+        // that API to compare if 2 handles are the same.
+        pipe.set_blocking(&BlockingMode::NoWait)
+            .expect("should set the blocking mode on the original pipe with success");
+        assert_eq!(
+            pipe.get_info()
+                .expect("should get the pipe information on the original pipe successfully"),
+            inner_pipe
+                .get_info()
+                .expect("should get the pipe information on the inner pipe successfully")
+        );
+        pipe.set_blocking(&BlockingMode::Wait)
+            .expect("should set the blocking mode on the original pipe with success");
+        assert_eq!(
+            pipe.get_info()
+                .expect("should get the pipe information on the original pipe successfully"),
+            inner_pipe
+                .get_info()
+                .expect("should get the pipe information on the inner pipe successfully")
+        );
+    }
+
+    #[test]
+    fn test_wait_for_connection_blocking() {
+        let pipe_name = generate_pipe_name();
+
+        let mut server_pipe = create_server_pipe(
+            &pipe_name,
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            /* timeout= */ 0,
+            /* buffer_size= */ 1000,
+            /* overlapped= */ true,
+        )
+        .unwrap();
+
+        let server = crate::thread::spawn_with_timeout(move || {
+            let exit_event = Event::new().unwrap();
+            server_pipe
+                .wait_for_client_connection_overlapped_blocking(&exit_event)
+                .unwrap();
+        });
+
+        let _client = create_client_pipe(
+            &pipe_name,
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            /* overlapped= */ true,
+        )
+        .unwrap();
+        server.try_join(Duration::from_secs(10)).unwrap();
+    }
+
+    #[test]
+    fn test_wait_for_connection_blocking_exit_triggered() {
+        let pipe_name = generate_pipe_name();
+
+        let mut server_pipe = create_server_pipe(
+            &pipe_name,
+            &FramingMode::Message,
+            &BlockingMode::Wait,
+            /* timeout= */ 0,
+            /* buffer_size= */ 1000,
+            /* overlapped= */ true,
+        )
+        .unwrap();
+
+        let exit_event = Event::new().unwrap();
+        let exit_event_for_server = exit_event.try_clone().unwrap();
+        let server = crate::thread::spawn_with_timeout(move || {
+            assert!(server_pipe
+                .wait_for_client_connection_overlapped_blocking(&exit_event_for_server)
+                .is_err());
+        });
+        exit_event.signal().unwrap();
+        server.try_join(Duration::from_secs(10)).unwrap();
     }
 }

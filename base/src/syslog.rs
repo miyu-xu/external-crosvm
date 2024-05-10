@@ -30,20 +30,11 @@
 //! use std::io::Write;
 //!
 //! let mut cfg = LogConfig::default();
-//! cfg.pipe_formatter = Some(|buf, rec| {
-//!     let mut level_style = buf.style();
-//!     level_style.set_color(fmt::Color::Green);
-//!     let mut style = buf.style();
-//!     style.set_color(fmt::Color::Red).set_bold(true);
-//!     writeln!(buf, "{}:{}", level_style.value(rec.level()), style.value(rec.args()))
-//! });
-//! cfg.stderr = true;
-//! cfg.filter = "info,base=debug,base::syslog=error,serial_console=false";
+//! cfg.log_args.stderr = true;
+//! cfg.log_args.filter = String::from("info,base=debug,base::syslog=error,serial_console=false");
 //!
 //! init_with(cfg).unwrap();
 //! error!("something went horribly wrong: {}", "out of RAMs");
-//!
-//!
 //! ```
 //!
 //!
@@ -54,12 +45,11 @@ use std::io;
 use std::io::Write;
 use std::sync::MutexGuard;
 
-use chrono::Local;
+use chrono::Utc;
 pub use env_logger::fmt;
 pub use env_logger::{self};
 pub use log::*;
 use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
@@ -73,8 +63,8 @@ use crate::platform::RawDescriptor;
 /// The priority (i.e. severity) of a syslog message.
 ///
 /// See syslog man pages for information on their semantics.
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) enum Priority {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Priority {
     Emergency = 0,
     Alert = 1,
     Critical = 2,
@@ -116,9 +106,6 @@ impl From<log::Level> for Priority {
     }
 }
 
-pub const FORMATTER_NONE: Option<fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()>> =
-    None;
-
 impl TryFrom<&str> for Priority {
     type Error = &'static str;
 
@@ -139,7 +126,7 @@ impl TryFrom<&str> for Priority {
 /// The facility of a syslog message.
 ///
 /// See syslog man pages for information on their semantics.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, serde::Deserialize, serde::Serialize)]
 pub enum Facility {
     Kernel = 0,
     User = 1 << 3,
@@ -221,24 +208,15 @@ impl Log for LoggingFacade {
     }
 }
 
-pub struct LogConfig<'a, F: 'static>
-where
-    F: Fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
-{
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct LogArgs {
     /// A filter for log messages. Please see
     /// module level documentation and [`env_logger` crate](https://docs.rs/env_logger)
     ///
     /// Example: `off`, `trace`, `trace,crosvm=error,base::syslog=debug`
-    pub filter: &'a str,
+    pub filter: String,
     /// If set to true will duplicate output to stderr
     pub stderr: bool,
-    /// If specified will output to given Sink
-    pub pipe: Option<Box<dyn io::Write + Send>>,
-    /// descriptor to preserve on forks (intended to be used with pipe)
-    pub pipe_fd: Option<RawDescriptor>,
-    /// A formatter to use with the pipe. (Syslog has hardcoded format)
-    /// see module level documentation and [`env_logger` crate](https://docs.rs/env_logger)
-    pub pipe_formatter: Option<F>,
     /// TAG to use for syslog output
     pub proc_name: String,
     /// Enable/disable platform's "syslog"
@@ -247,32 +225,39 @@ where
     pub syslog_facility: Facility,
 }
 
-impl<'a> Default
-    for LogConfig<'a, fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()>>
-{
+impl Default for LogArgs {
     fn default() -> Self {
         Self {
-            filter: "info",
+            filter: String::from("info"),
             stderr: true,
-            pipe: None,
             proc_name: String::from("crosvm"),
             syslog: true,
             syslog_facility: Facility::User,
-            pipe_formatter: FORMATTER_NONE,
-            pipe_fd: None,
         }
     }
 }
 
+#[derive(Default)]
+pub struct LogConfig {
+    /// Logging configuration arguments.
+    pub log_args: LogArgs,
+    /// If specified will output to given Sink
+    pub pipe: Option<Box<dyn io::Write + Send>>,
+    /// descriptor to preserve on forks (intended to be used with pipe)
+    pub pipe_fd: Option<RawDescriptor>,
+    /// A formatter to use with the pipe. (Syslog has hardcoded format)
+    /// see module level documentation and [`env_logger` crate](https://docs.rs/env_logger)
+    pub pipe_formatter: Option<
+        Box<dyn Fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send>,
+    >,
+}
+
 impl State {
-    pub fn new<F: 'static>(cfg: LogConfig<'_, F>) -> Result<Self, Error>
-    where
-        F: Fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
-    {
+    pub fn new(cfg: LogConfig) -> Result<Self, Error> {
         let mut loggers: Vec<Box<dyn Log + Send>> = vec![];
         let mut descriptors = vec![];
         let mut builder = env_logger::filter::Builder::new();
-        builder.parse(cfg.filter);
+        builder.parse(&cfg.log_args.filter);
         let filter = builder.build();
 
         let create_formatted_builder = || {
@@ -283,7 +268,7 @@ impl State {
                 writeln!(
                     buf,
                     "[{} {:5} {}] {}",
-                    Local::now().format("%Y-%m-%dT%H:%M:%S%.9f%:z"),
+                    Utc::now().format("%Y-%m-%dT%H:%M:%S%.9f%:z"),
                     record.level(),
                     record.module_path().unwrap_or("<missing module path>"),
                     record.args()
@@ -292,7 +277,7 @@ impl State {
             builder
         };
 
-        if cfg.stderr {
+        if cfg.log_args.stderr {
             let mut builder = create_formatted_builder();
             builder.filter_level(log::LevelFilter::Trace);
             builder.target(env_logger::Target::Stderr);
@@ -317,8 +302,8 @@ impl State {
             loggers.push(Box::new(builder.build()));
         }
 
-        if cfg.syslog {
-            match PlatformSyslog::new(cfg.proc_name, cfg.syslog_facility) {
+        if cfg.log_args.syslog {
+            match PlatformSyslog::new(cfg.log_args.proc_name, cfg.log_args.syslog_facility) {
                 Ok((mut logger, fd)) => {
                     if let Some(fd) = fd {
                         descriptors.push(fd);
@@ -345,13 +330,19 @@ impl State {
     }
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self::new(Default::default()).unwrap()
+    }
+}
+
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| {
     let mut state = State::new(LogConfig::default()).expect("failed to configure minimal logging");
     state.early_init = true;
     Mutex::new(state)
 });
 static LOGGING_FACADE: LoggingFacade = LoggingFacade {};
-static EARLY_INIT_CALLED: OnceCell<()> = OnceCell::new();
+static EARLY_INIT_CALLED: Mutex<bool> = Mutex::new(false);
 
 /// Initialize the syslog connection and internal variables.
 ///
@@ -371,16 +362,13 @@ pub fn init() -> Result<(), Error> {
 ///
 /// Arguments:
 /// * filter: See <https://docs.rs/env_logger/0.9/env_logger/index.html> for example filter
-///     specifications
+///   specifications
 /// * stderr: If set will output to stderr (in addition)
 /// * file:  If set will output to this file (in addition)
 /// * proc_name: proc name for Syslog implementation
 /// * syslog_facility: syslog facility
 /// * file_formatter: custom formatter for file output. See env_logger docs
-pub fn init_with<F: 'static>(cfg: LogConfig<'_, F>) -> Result<(), Error>
-where
-    F: Fn(&mut fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
-{
+pub fn init_with(cfg: LogConfig) -> Result<(), Error> {
     let mut state = STATE.lock();
     if !state.early_init {
         panic!("double-init of the logging system is not permitted.");
@@ -396,15 +384,10 @@ where
 /// Performs early (as in, moment of process start) logging initialization. Any logging prior to
 /// this call will be SILENTLY discarded. Calling more than once per process will panic.
 pub fn early_init() {
-    let mut first_init = false;
-    let _ = EARLY_INIT_CALLED
-        .get_or_try_init(|| -> Result<(), ()> {
-            first_init = true;
-            Ok(())
-        })
-        .unwrap();
-    if first_init {
+    let mut early_init_called = EARLY_INIT_CALLED.lock();
+    if !*early_init_called {
         apply_logging_state(&LOGGING_FACADE);
+        *early_init_called = true;
     } else {
         panic!("double early init of the logging system is not permitted.");
     }
@@ -413,17 +396,11 @@ pub fn early_init() {
 /// Test only function that ensures logging has been configured. Since tests
 /// share module state, we need a way to make sure it has been initialized
 /// with *some* configuration.
-#[cfg(test)]
-pub(crate) fn ensure_inited() -> Result<(), Error> {
-    let mut first_init = false;
-    let _ = EARLY_INIT_CALLED
-        .get_or_try_init(|| -> Result<(), ()> {
-            first_init = true;
-            Ok(())
-        })
-        .unwrap();
-    if first_init {
+pub fn test_only_ensure_inited() -> Result<(), Error> {
+    let mut early_init_called = EARLY_INIT_CALLED.lock();
+    if !*early_init_called {
         apply_logging_state(&LOGGING_FACADE);
+        *early_init_called = true;
     }
     Ok(())
 }
@@ -466,7 +443,7 @@ impl Log for State {
 
 // Struct that implements io::Write to be used for writing directly to the syslog
 pub struct Syslogger<'a> {
-    buf: String,
+    buf: Vec<u8>,
     level: log::Level,
     get_state_fn: Box<dyn Fn() -> MutexGuard<'a, State> + Send + 'a>,
 }
@@ -474,18 +451,17 @@ pub struct Syslogger<'a> {
 impl<'a> Syslogger<'a> {
     pub fn new(level: log::Level) -> Syslogger<'a> {
         Syslogger {
-            buf: String::new(),
+            buf: Vec::new(),
             level,
             get_state_fn: Box::new(|| STATE.lock()),
         }
     }
-    #[cfg(test)]
-    fn from_state<F: 'a + Fn() -> MutexGuard<'a, State> + Send>(
+    pub fn test_only_from_state<F: 'a + Fn() -> MutexGuard<'a, State> + Send>(
         level: log::Level,
         get_state_fn: F,
     ) -> Syslogger<'a> {
         Syslogger {
-            buf: String::new(),
+            buf: Vec::new(),
             level,
             get_state_fn: Box::new(get_state_fn),
         }
@@ -495,16 +471,20 @@ impl<'a> Syslogger<'a> {
 impl<'a> io::Write for Syslogger<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let state = (self.get_state_fn)();
-        let parsed_str = String::from_utf8_lossy(buf);
-        self.buf.push_str(&parsed_str);
+        self.buf.extend_from_slice(buf);
 
-        if let Some(last_newline_idx) = self.buf.rfind('\n') {
-            for line in self.buf[..last_newline_idx].lines() {
+        if let Some(last_newline_idx) = self.buf.iter().rposition(|&x| x == b'\n') {
+            for line in (self.buf[..last_newline_idx]).split(|&x| x == b'\n') {
+                // Also drop CR+LF line endings.
+                let send_line = match line.split_last() {
+                    Some((b'\r', trimmed)) => trimmed,
+                    _ => line,
+                };
                 // Match is to explicitly limit lifetime of args
                 // https://github.com/rust-lang/rust/issues/92698
                 // https://github.com/rust-lang/rust/issues/15023
                 #[allow(clippy::match_single_binding)]
-                match format_args!("{}", line) {
+                match format_args!("{}", String::from_utf8_lossy(send_line)) {
                     args => {
                         let mut record_builder = log::Record::builder();
                         record_builder.level(self.level);
@@ -524,297 +504,5 @@ impl<'a> io::Write for Syslogger<'a> {
     fn flush(&mut self) -> io::Result<()> {
         STATE.lock().flush();
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::field_reassign_with_default)]
-    use std::io::Write;
-
-    use super::*;
-
-    impl Default for State {
-        fn default() -> Self {
-            Self::new(Default::default()).unwrap()
-        }
-    }
-
-    use std::sync::Arc;
-    #[derive(Clone)]
-    struct MockWrite {
-        buffer: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl MockWrite {
-        fn new() -> Self {
-            Self {
-                buffer: Arc::new(Mutex::new(vec![])),
-            }
-        }
-
-        fn into_inner(self) -> Vec<u8> {
-            Arc::try_unwrap(self.buffer).unwrap().into_inner()
-        }
-    }
-
-    impl Write for MockWrite {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.buffer.lock().write(buf)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn syslog_log() {
-        let state = State::default();
-        state.log(
-            &log::RecordBuilder::new()
-                .level(Level::Error)
-                .file(Some(file!()))
-                .line(Some(line!()))
-                .args(format_args!("hello syslog"))
-                .build(),
-        );
-    }
-
-    #[test]
-    fn proc_name() {
-        let state = State::new(LogConfig {
-            proc_name: String::from("syslog-test"),
-            ..Default::default()
-        })
-        .unwrap();
-        state.log(
-            &log::RecordBuilder::new()
-                .level(Level::Error)
-                .file(Some(file!()))
-                .line(Some(line!()))
-                .args(format_args!("hello syslog"))
-                .build(),
-        );
-    }
-
-    #[test]
-    fn macros() {
-        ensure_inited().unwrap();
-        log::error!("this is an error {}", 3);
-        log::warn!("this is a warning {}", "uh oh");
-        log::info!("this is info {}", true);
-        log::debug!("this is debug info {:?}", Some("helpful stuff"));
-    }
-
-    fn pipe_formatter(buf: &mut fmt::Formatter, record: &Record<'_>) -> io::Result<()> {
-        writeln!(buf, "{}", record.args())
-    }
-
-    #[test]
-    fn syslogger_char() {
-        let output = MockWrite::new();
-        let mut cfg = LogConfig::default();
-        cfg.pipe_formatter = Some(pipe_formatter);
-        cfg.pipe = Some(Box::new(output.clone()));
-        let state = Mutex::new(State::new(cfg).unwrap());
-
-        let mut syslogger = Syslogger::from_state(Level::Info, || state.lock());
-
-        let string = "chars";
-        for c in string.chars() {
-            syslogger.write_all(&[c as u8]).expect("error writing char");
-        }
-
-        syslogger
-            .write_all(&[b'\n'])
-            .expect("error writing newline char");
-
-        std::mem::drop(syslogger);
-        std::mem::drop(state);
-        assert_eq!(
-            format!("{}\n", string),
-            String::from_utf8_lossy(&output.into_inner()[..])
-        );
-    }
-
-    #[test]
-    fn syslogger_line() {
-        let output = MockWrite::new();
-        let mut cfg = LogConfig::default();
-        cfg.pipe_formatter = Some(pipe_formatter);
-        cfg.pipe = Some(Box::new(output.clone()));
-        let state = Mutex::new(State::new(cfg).unwrap());
-
-        let mut syslogger = Syslogger::from_state(Level::Info, || state.lock());
-
-        let s = "Writing string to syslog\n";
-        syslogger
-            .write_all(s.as_bytes())
-            .expect("error writing string");
-
-        std::mem::drop(syslogger);
-        std::mem::drop(state);
-        assert_eq!(s, String::from_utf8_lossy(&output.into_inner()[..]));
-    }
-
-    #[test]
-    fn syslogger_partial() {
-        let output = MockWrite::new();
-        let state = Mutex::new(
-            State::new(LogConfig {
-                pipe: Some(Box::new(output.clone())),
-                ..Default::default()
-            })
-            .unwrap(),
-        );
-
-        let mut syslogger = Syslogger::from_state(Level::Info, || state.lock());
-
-        let s = "Writing partial string";
-        // Should not log because there is no newline character
-        syslogger
-            .write_all(s.as_bytes())
-            .expect("error writing string");
-
-        std::mem::drop(syslogger);
-        std::mem::drop(state);
-        assert_eq!(Vec::<u8>::new(), output.into_inner());
-    }
-
-    #[test]
-    fn log_priority_try_from_number() {
-        assert_eq!("0".try_into(), Ok(Priority::Emergency));
-        assert!(Priority::try_from("100").is_err());
-    }
-
-    #[test]
-    fn log_priority_try_from_words() {
-        assert_eq!("EMERGENCY".try_into(), Ok(Priority::Emergency));
-        assert!(Priority::try_from("_EMERGENCY").is_err());
-    }
-
-    #[test]
-    fn log_should_always_be_enabled_for_level_show_all() {
-        let state = State::new(LogConfig {
-            filter: "trace",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .build()
-                .metadata(),
-        ));
-    }
-
-    #[test]
-    fn log_should_always_be_disabled_for_level_silent() {
-        let state = State::new(LogConfig {
-            filter: "off",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(!state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .build()
-                .metadata(),
-        ));
-    }
-
-    #[test]
-    fn log_should_be_enabled_if_filter_level_has_a_lower_or_equal_priority() {
-        let state = State::new(LogConfig {
-            filter: "info",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Info)
-                .build()
-                .metadata(),
-        ));
-        assert!(state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Warn)
-                .build()
-                .metadata(),
-        ));
-    }
-
-    #[test]
-    fn log_should_be_disabled_if_filter_level_has_a_higher_priority() {
-        let state = State::new(LogConfig {
-            filter: "info",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(!state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .build()
-                .metadata(),
-        ));
-    }
-
-    #[test]
-    fn path_overides_should_apply_to_logs() {
-        let state = State::new(LogConfig {
-            filter: "info,test=debug",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(!state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .build()
-                .metadata(),
-        ));
-        assert!(state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .target("test")
-                .build()
-                .metadata(),
-        ));
-    }
-
-    #[test]
-    fn longest_path_prefix_match_should_apply_if_multiple_filters_match() {
-        let state = State::new(LogConfig {
-            filter: "info,test=debug,test::silence=off",
-            ..Default::default()
-        })
-        .unwrap();
-
-        assert!(!state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .build()
-                .metadata(),
-        ));
-
-        assert!(state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Debug)
-                .target("test")
-                .build()
-                .metadata(),
-        ));
-        assert!(!state.enabled(
-            log::RecordBuilder::new()
-                .level(Level::Error)
-                .target("test::silence")
-                .build()
-                .metadata(),
-        ));
     }
 }

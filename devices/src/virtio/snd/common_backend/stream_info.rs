@@ -4,15 +4,21 @@
 
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 use audio_streams::SampleFormat;
+use audio_streams::StreamEffect;
 use base::error;
-use cros_async::sync::Mutex as AsyncMutex;
+use base::warn;
+use cros_async::sync::Condvar;
+use cros_async::sync::RwLock as AsyncRwLock;
 use cros_async::Executor;
 use futures::channel::mpsc;
 use futures::Future;
 use futures::TryFutureExt;
-use vm_memory::GuestMemory;
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::Error;
 use super::PcmResponse;
@@ -21,7 +27,6 @@ use crate::virtio::snd::common::*;
 use crate::virtio::snd::common_backend::async_funcs::*;
 use crate::virtio::snd::common_backend::DirectionalStream;
 use crate::virtio::snd::common_backend::SysAsyncStreamObjects;
-use crate::virtio::snd::common_backend::SysBufferWriter;
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::sys::SysAudioStreamSource;
 use crate::virtio::snd::sys::SysAudioStreamSourceGenerator;
@@ -38,10 +43,47 @@ pub struct SetParams {
     pub dir: u8,
 }
 
+/// StreamInfoBuilder builds a [`StreamInfo`]. It is used when we want to store the parameters to
+/// create a [`StreamInfo`] beforehand and actually create it later. (as is the case with VirtioSnd)
+///
+/// To create a new StreamInfoBuilder, see [`StreamInfo::builder()`].
+#[derive(Clone)]
+pub struct StreamInfoBuilder {
+    stream_source_generator: Arc<SysAudioStreamSourceGenerator>,
+    effects: Vec<StreamEffect>,
+}
+
+impl StreamInfoBuilder {
+    /// Creates a StreamInfoBuilder with minimal required fields:
+    ///
+    /// * `stream_source_generator`: Generator which generates stream source in
+    ///   [`StreamInfo::prepare()`].
+    pub fn new(stream_source_generator: Arc<SysAudioStreamSourceGenerator>) -> Self {
+        StreamInfoBuilder {
+            stream_source_generator,
+            effects: vec![],
+        }
+    }
+
+    /// Set the [`StreamEffect`]s to use when creating a stream from the stream source in
+    /// [`StreamInfo::prepare()`]. The default value is no effects.
+    pub fn effects(mut self, effects: Vec<StreamEffect>) -> Self {
+        self.effects = effects;
+        self
+    }
+
+    /// Builds a [`StreamInfo`].
+    pub fn build(self) -> StreamInfo {
+        self.into()
+    }
+}
+
 /// StreamInfo represents a virtio snd stream.
+///
+/// To create a StreamInfo, see [`StreamInfo::builder()`] and [`StreamInfoBuilder::build()`].
 pub struct StreamInfo {
     pub(crate) stream_source: Option<SysAudioStreamSource>,
-    stream_source_generator: SysAudioStreamSourceGenerator,
+    stream_source_generator: Arc<SysAudioStreamSourceGenerator>,
     pub(crate) channels: u8,
     pub(crate) format: SampleFormat,
     pub(crate) frame_rate: u32,
@@ -49,16 +91,37 @@ pub struct StreamInfo {
     pub(crate) period_bytes: usize,
     direction: u8,  // VIRTIO_SND_D_*
     pub state: u32, // VIRTIO_SND_R_PCM_SET_PARAMS -> VIRTIO_SND_R_PCM_STOP, or 0 (uninitialized)
+    // Stream effects to use when creating a new stream on [`prepare()`].
+    pub(crate) effects: Vec<StreamEffect>,
 
     // just_reset set to true after reset. Make invalid state transition return Ok. Set to false
     // after a valid state transition to SET_PARAMS or PREPARE.
     pub just_reset: bool,
 
     // Worker related
-    pub status_mutex: Rc<AsyncMutex<WorkerStatus>>,
+    pub status_mutex: Rc<AsyncRwLock<WorkerStatus>>,
     pub sender: Option<mpsc::UnboundedSender<DescriptorChain>>,
     worker_future: Option<Box<dyn Future<Output = Result<(), Error>> + Unpin>>,
+    release_signal: Option<Rc<(AsyncRwLock<bool>, Condvar)>>, // Signal worker on release
     ex: Option<Executor>, // Executor provided on `prepare()`. Used on `drop()`.
+    #[cfg(windows)]
+    pub(crate) playback_stream_cache: Option<(
+        Arc<AsyncRwLock<Box<dyn audio_streams::AsyncPlaybackBufferStream>>>,
+        Rc<AsyncRwLock<Box<dyn PlaybackBufferWriter>>>,
+    )>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StreamInfoSnapshot {
+    pub(crate) channels: u8,
+    pub(crate) format: SampleFormat,
+    pub(crate) frame_rate: u32,
+    buffer_bytes: usize,
+    pub(crate) period_bytes: usize,
+    direction: u8,  // VIRTIO_SND_D_*
+    pub state: u32, // VIRTIO_SND_R_PCM_SET_PARAMS -> VIRTIO_SND_R_PCM_STOP, or 0 (uninitialized)
+    effects: Vec<StreamEffect>,
+    pub just_reset: bool,
 }
 
 impl fmt::Debug for StreamInfo {
@@ -71,6 +134,7 @@ impl fmt::Debug for StreamInfo {
             .field("period_bytes", &self.period_bytes)
             .field("direction", &get_virtio_direction_name(self.direction))
             .field("state", &get_virtio_snd_r_pcm_cmd_name(self.state))
+            .field("effects", &self.effects)
             .finish()
     }
 }
@@ -96,14 +160,11 @@ impl Drop for StreamInfo {
     }
 }
 
-impl StreamInfo {
-    /// Creates a new [`StreamInfo`].
-    ///
-    /// * `stream_source_generator`: Generator which generates stream source in [`StreamInfo::prepare()`].
-    pub fn new(stream_source_generator: SysAudioStreamSourceGenerator) -> Self {
+impl From<StreamInfoBuilder> for StreamInfo {
+    fn from(builder: StreamInfoBuilder) -> Self {
         StreamInfo {
             stream_source: None,
-            stream_source_generator,
+            stream_source_generator: builder.stream_source_generator,
             channels: 0,
             format: SampleFormat::U8,
             frame_rate: 0,
@@ -111,12 +172,26 @@ impl StreamInfo {
             period_bytes: 0,
             direction: 0,
             state: 0,
+            effects: builder.effects,
             just_reset: false,
-            status_mutex: Rc::new(AsyncMutex::new(WorkerStatus::Pause)),
+            status_mutex: Rc::new(AsyncRwLock::new(WorkerStatus::Pause)),
             sender: None,
             worker_future: None,
+            release_signal: None,
             ex: None,
+            #[cfg(windows)]
+            playback_stream_cache: None,
         }
+    }
+}
+
+impl StreamInfo {
+    /// Creates a minimal [`StreamInfoBuilder`]. See [`StreamInfoBuilder::new()`] for
+    /// the description of each parameter.
+    pub fn builder(
+        stream_source_generator: Arc<SysAudioStreamSourceGenerator>,
+    ) -> StreamInfoBuilder {
+        StreamInfoBuilder::new(stream_source_generator)
     }
 
     /// Sets parameters of the stream, putting it into [`VIRTIO_SND_R_PCM_SET_PARAMS`] state.
@@ -137,7 +212,7 @@ impl StreamInfo {
         }
 
         // Only required for PREPARE -> SET_PARAMS
-        self.release_worker().await?;
+        self.release_worker().await;
 
         self.channels = params.channels;
         self.format = params.format;
@@ -153,13 +228,11 @@ impl StreamInfo {
     /// Prepares the stream, putting it into [`VIRTIO_SND_R_PCM_PREPARE`] state.
     ///
     /// * `ex`: [`Executor`] to run the pcm worker.
-    /// * `mem`: [`GuestMemory`] to read or write stream data in descriptor chain.
     /// * `tx_send`: Sender for sending `PcmResponse` for tx queue. (playback stream)
     /// * `rx_send`: Sender for sending `PcmResponse` for rx queue. (capture stream)
     pub async fn prepare(
         &mut self,
         ex: &Executor,
-        mem: GuestMemory,
         tx_send: &mpsc::UnboundedSender<PcmResponse>,
         rx_send: &mpsc::UnboundedSender<PcmResponse>,
     ) -> Result<(), Error> {
@@ -179,61 +252,27 @@ impl StreamInfo {
         }
         self.just_reset = false;
         if self.state == VIRTIO_SND_R_PCM_PREPARE {
-            self.release_worker().await?;
+            self.release_worker().await;
         }
         let frame_size = self.channels as usize * self.format.sample_bytes();
         if self.period_bytes % frame_size != 0 {
             error!("period_bytes must be divisible by frame size");
             return Err(Error::OperationNotSupported);
         }
-        if self.stream_source.is_none() {
-            self.stream_source = Some(
-                self.stream_source_generator
-                    .generate()
-                    .map_err(Error::GenerateStreamSource)?,
-            );
-        }
-        let SysAsyncStreamObjects { stream, pcm_sender } = match self.direction {
-            VIRTIO_SND_D_OUTPUT => {
-                let sys_async_stream = self.set_up_async_playback_stream(frame_size, ex).await?;
-
-                let buffer_writer = SysBufferWriter::new(
-                    self.period_bytes,
-                    #[cfg(windows)]
-                    frame_size,
-                    #[cfg(windows)]
-                    usize::try_from(self.frame_rate).expect("Failed to cast from u32 to usize"),
-                    #[cfg(windows)]
-                    usize::try_from(self.channels).expect("Failed to cast from u32 to usize"),
-                    #[cfg(windows)]
-                    sys_async_stream.audio_shared_format,
-                );
-                SysAsyncStreamObjects {
-                    stream: DirectionalStream::Output(
-                        sys_async_stream.async_playback_buffer_stream,
-                        Box::new(buffer_writer),
-                    ),
-                    pcm_sender: tx_send.clone(),
-                }
-            }
+        self.stream_source = Some(
+            self.stream_source_generator
+                .generate()
+                .map_err(Error::GenerateStreamSource)?,
+        );
+        let stream_objects = match self.direction {
+            VIRTIO_SND_D_OUTPUT => SysAsyncStreamObjects {
+                stream: self.create_directionstream_output(frame_size, ex).await?,
+                pcm_sender: tx_send.clone(),
+            },
             VIRTIO_SND_D_INPUT => {
-                let async_stream = self
-                    .stream_source
-                    .as_mut()
-                    .ok_or(Error::EmptyStreamSource)?
-                    .async_new_async_capture_stream(
-                        self.channels as usize,
-                        self.format,
-                        self.frame_rate,
-                        self.period_bytes / frame_size,
-                        &[],
-                        ex,
-                    )
-                    .await
-                    .map_err(Error::CreateStream)?
-                    .1;
+                let buffer_reader = self.set_up_async_capture_stream(frame_size, ex).await?;
                 SysAsyncStreamObjects {
-                    stream: DirectionalStream::Input(async_stream, self.period_bytes),
+                    stream: DirectionalStream::Input(self.period_bytes, Box::new(buffer_reader)),
                     pcm_sender: rx_send.clone(),
                 }
             }
@@ -244,14 +283,20 @@ impl StreamInfo {
         self.sender = Some(sender);
         self.state = VIRTIO_SND_R_PCM_PREPARE;
 
-        self.status_mutex = Rc::new(AsyncMutex::new(WorkerStatus::Pause));
+        self.status_mutex = Rc::new(AsyncRwLock::new(WorkerStatus::Pause));
+        let period_dur = Duration::from_secs_f64(
+            self.period_bytes as f64 / frame_size as f64 / self.frame_rate as f64,
+        );
+        let release_signal = Rc::new((AsyncRwLock::new(false), Condvar::new()));
+        self.release_signal = Some(release_signal.clone());
         let f = start_pcm_worker(
             ex.clone(),
-            stream,
+            stream_objects.stream,
             receiver,
             self.status_mutex.clone(),
-            mem,
-            pcm_sender,
+            stream_objects.pcm_sender,
+            period_dur,
+            release_signal,
         );
         self.worker_future = Some(Box::new(ex.spawn_local(f).into_future()));
         self.ex = Some(ex.clone());
@@ -315,34 +360,66 @@ impl StreamInfo {
         }
         self.state = VIRTIO_SND_R_PCM_RELEASE;
         self.stream_source = None;
-        self.release_worker().await?;
+        self.release_worker().await;
         Ok(())
     }
 
-    async fn release_worker(&mut self) -> Result<(), Error> {
+    async fn release_worker(&mut self) {
         *self.status_mutex.lock().await = WorkerStatus::Quit;
         if let Some(s) = self.sender.take() {
             s.close_channel();
         }
+
+        if let Some(release_signal) = self.release_signal.take() {
+            let (lock, cvar) = &*release_signal;
+            let mut signalled = lock.lock().await;
+            *signalled = true;
+            cvar.notify_all();
+        }
+
         if let Some(f) = self.worker_future.take() {
-            f.await?;
+            f.await
+                .map_err(|error| warn!("Failure on releasing the worker_future: {}", error))
+                .ok();
         }
         self.ex.take(); // Remove ex as the worker is finished
-        Ok(())
+    }
+
+    pub fn snapshot(&self) -> StreamInfoSnapshot {
+        StreamInfoSnapshot {
+            channels: self.channels,
+            format: self.format,
+            frame_rate: self.frame_rate,
+            buffer_bytes: self.buffer_bytes,
+            period_bytes: self.period_bytes,
+            direction: self.direction, // VIRTIO_SND_D_*
+            // VIRTIO_SND_R_PCM_SET_PARAMS -> VIRTIO_SND_R_PCM_STOP, or 0 (uninitialized)
+            state: self.state,
+            effects: self.effects.clone(),
+            just_reset: self.just_reset,
+        }
+    }
+
+    pub fn restore(&mut self, state: &StreamInfoSnapshot) {
+        self.channels = state.channels;
+        self.format = state.format;
+        self.frame_rate = state.frame_rate;
+        self.buffer_bytes = state.buffer_bytes;
+        self.period_bytes = state.period_bytes;
+        self.direction = state.direction;
+        self.effects = state.effects.clone();
+        self.just_reset = state.just_reset;
     }
 }
 
-// TODO(b/246997900): Get these new tests to run on Windows.
 #[cfg(test)]
 mod tests {
     use audio_streams::NoopStreamSourceGenerator;
-    #[cfg(windows)]
-    use vm_memory::GuestAddress;
 
     use super::*;
 
     fn new_stream() -> StreamInfo {
-        StreamInfo::new(Box::new(NoopStreamSourceGenerator::new()))
+        StreamInfo::builder(Arc::new(Box::new(NoopStreamSourceGenerator::new()))).build()
     }
 
     fn stream_set_params(
@@ -370,14 +447,10 @@ mod tests {
         expected_ok: bool,
         expected_state: u32,
     ) -> StreamInfo {
-        #[cfg(windows)]
-        let mem = GuestMemory::new(&[(GuestAddress(0), 0x10000)]).unwrap();
-        #[cfg(unix)]
-        let mem = GuestMemory::new(&[]).unwrap();
         let (tx_send, _) = mpsc::unbounded();
         let (rx_send, _) = mpsc::unbounded();
 
-        let result = ex.run_until(stream.prepare(ex, mem, &tx_send, &rx_send));
+        let result = ex.run_until(stream.prepare(ex, &tx_send, &rx_send));
         assert_eq!(result.unwrap().is_ok(), expected_ok);
         assert_eq!(stream.state, expected_state);
         stream
@@ -641,5 +714,14 @@ mod tests {
         stream_start(new_stream_release(), &ex, true, VIRTIO_SND_R_PCM_RELEASE);
         stream_stop(new_stream_release(), &ex, true, VIRTIO_SND_R_PCM_RELEASE);
         stream_release(new_stream_release(), &ex, true, VIRTIO_SND_R_PCM_RELEASE);
+    }
+
+    #[test]
+    fn test_stream_info_builder() {
+        let builder = StreamInfo::builder(Arc::new(Box::new(NoopStreamSourceGenerator::new())))
+            .effects(vec![StreamEffect::EchoCancellation]);
+
+        let stream = builder.build();
+        assert_eq!(stream.effects, vec![StreamEffect::EchoCancellation]);
     }
 }

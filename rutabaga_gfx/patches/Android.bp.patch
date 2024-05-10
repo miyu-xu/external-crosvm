@@ -1,71 +1,95 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index 05d589ae..77c154be 100644
+index 3384aee72..0c64f2ef2 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -33,13 +33,25 @@ rust_library {
-         "libthiserror",
+@@ -22,7 +22,6 @@ rust_library {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -34,14 +33,59 @@ rust_library {
+         "libzerocopy",
      ],
      proc_macros: ["libremain"],
--    static_libs: [
--        "libgbm",
--        "libvirglrenderer",
--    ],
--    shared_libs: [
++    cfgs: [
++        "gfxstream_unstable",
++    ],
+     shared_libs: [
 -        "libdrm",
--        "libepoxy",
--    ],
++        "libc++",
++        "libbase",
++    ],
 +    target: {
-+        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
 +        android: {
 +            shared_libs: [
++                "libnativewindow",
 +                "libcutils",
-+                "libdrm",
-+            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
++                "liblog",
 +            ],
 +        },
 +    },
++    static_libs: [
+         "libepoxy",
+         "libgbm",
++        "libdrm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
+     ],
  }
-
-@@ -71,12 +95,24 @@ rust_test {
-         "libthiserror",
+ 
++rust_library {
++    name: "librutabaga_gfx_gfxstream",
++    defaults: ["crosvm_inner_defaults"],
++    host_supported: true,
++    vendor_available: true,
++    crate_name: "rutabaga_gfx",
++    cargo_env_compat: true,
++    cargo_pkg_version: "0.1.2",
++    srcs: ["src/lib.rs"],
++    edition: "2021",
++    rustlibs: [
++        "libcfg_if",
++        "liblibc",
++        "liblog_rust",
++        "libnix",
++        "libthiserror",
++        "libzerocopy",
++    ],
++    proc_macros: ["libremain"],
++    cfgs: [
++        "gfxstream_unstable",
++    ],
++    features: ["gfxstream"],
++    shared_libs: [
++        "libgfxstream_backend",
++    ],
++}
++
+ rust_test {
+     name: "rutabaga_gfx_test_src_lib",
+     defaults: ["crosvm_inner_defaults"],
+@@ -58,7 +102,6 @@ rust_test {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -71,9 +114,12 @@ rust_test {
      ],
      proc_macros: ["libremain"],
--    static_libs: [
--        "libgbm",
--        "libvirglrenderer",
--    ],
--    shared_libs: [
+     shared_libs: [
 -        "libdrm",
--        "libepoxy",
--    ],
-+    target: {
-+        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
-+        android: {
-+            shared_libs: [
-+                "libcutils",
-+                "libdrm",
-+            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
-+            ],
-+        },
-+    },
+         "libepoxy",
+         "libgbm",
++        "libgfxstream_backend",
+         "libvirglrenderer",
+     ],
++    static_libs: [
++        "libdrm",
++    ],
  }

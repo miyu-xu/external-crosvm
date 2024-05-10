@@ -4,7 +4,6 @@
 
 pub mod ipc_memory_mapper;
 pub mod memory_mapper;
-pub mod memory_util;
 pub mod protocol;
 pub(crate) mod sys;
 
@@ -19,14 +18,14 @@ use std::rc::Rc;
 use std::result;
 use std::sync::Arc;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
 use anyhow::anyhow;
 use anyhow::Context;
 use base::debug;
 use base::error;
 use base::pagesize;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -55,39 +54,37 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use crate::pci::PciAddress;
 use crate::virtio::async_utils;
 use crate::virtio::copy_config;
-use crate::virtio::iommu::ipc_memory_mapper::*;
 use crate::virtio::iommu::memory_mapper::*;
 use crate::virtio::iommu::protocol::*;
 use crate::virtio::DescriptorChain;
-use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
 use crate::virtio::VirtioDevice;
+#[cfg(target_arch = "x86_64")]
 use crate::virtio::Writer;
-use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 256;
 const NUM_QUEUES: usize = 2;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
 
 // Size of struct virtio_iommu_probe_property
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const IOMMU_PROBE_SIZE: usize = size_of::<virtio_iommu_probe_resv_mem>();
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const VIRTIO_IOMMU_VIOT_NODE_PCI_RANGE: u8 = 1;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const VIRTIO_IOMMU_VIOT_NODE_VIRTIO_IOMMU_PCI: u8 = 3;
 
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 struct VirtioIommuViotHeader {
     node_count: u16,
@@ -95,7 +92,7 @@ struct VirtioIommuViotHeader {
     reserved: [u8; 8],
 }
 
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 struct VirtioIommuViotVirtioPciNode {
     type_: u8,
@@ -106,7 +103,7 @@ struct VirtioIommuViotVirtioPciNode {
     reserved2: [u8; 8],
 }
 
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 struct VirtioIommuViotPciRangeNode {
     type_: u8,
@@ -129,12 +126,8 @@ type Result<T> = result::Result<T, IommuError>;
 pub enum IommuError {
     #[error("async executor error: {0}")]
     AsyncExec(AsyncError),
-    #[error("failed to create reader: {0}")]
-    CreateReader(DescriptorError),
     #[error("failed to create wait context: {0}")]
     CreateWaitContext(SysError),
-    #[error("failed to create writer: {0}")]
-    CreateWriter(DescriptorError),
     #[error("failed getting host address: {0}")]
     GetHostAddress(GuestMemoryError),
     #[error("failed to read from guest address: {0}")]
@@ -417,14 +410,14 @@ impl State {
             };
 
             let vfio_map_result = match dmabuf_map {
-                // Safe because [dmabuf_map, dmabuf_map + size) refers to an external mmap'ed region.
+                // SAFETY:
+                // Safe because [dmabuf_map, dmabuf_map + size) refers to an external mmap'ed
+                // region.
                 Some(dmabuf_map) => unsafe {
-                    mapper.1.lock().vfio_dma_map(
-                        req.virt_start.into(),
-                        dmabuf_map as u64,
-                        size,
-                        prot,
-                    )
+                    mapper
+                        .1
+                        .lock()
+                        .vfio_dma_map(req.virt_start.into(), dmabuf_map, size, prot)
                 },
                 None => mapper.1.lock().add_map(MappingInfo {
                     iova: req.virt_start.into(),
@@ -485,7 +478,7 @@ impl State {
         Ok((0, fault_resolved_event))
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn process_probe_request(
         &mut self,
         reader: &mut Reader,
@@ -549,12 +542,10 @@ impl State {
 
     fn execute_request(
         &mut self,
-        avail_desc: &DescriptorChain,
+        avail_desc: &mut DescriptorChain,
     ) -> Result<(usize, Option<EventAsync>)> {
-        let mut reader =
-            Reader::new(self.mem.clone(), avail_desc.clone()).map_err(IommuError::CreateReader)?;
-        let mut writer =
-            Writer::new(self.mem.clone(), avail_desc.clone()).map_err(IommuError::CreateWriter)?;
+        let reader = &mut avail_desc.reader;
+        let writer = &mut avail_desc.writer;
 
         // at least we need space to write VirtioIommuReqTail
         if writer.available_bytes() < size_of::<virtio_iommu_req_tail>() {
@@ -570,15 +561,12 @@ impl State {
         };
 
         let (reply_len, fault_resolved_event) = match req_head.type_ {
-            VIRTIO_IOMMU_T_ATTACH => self.process_attach_request(&mut reader, &mut tail)?,
-            VIRTIO_IOMMU_T_DETACH => self.process_detach_request(&mut reader, &mut tail)?,
-            VIRTIO_IOMMU_T_MAP => (self.process_dma_map_request(&mut reader, &mut tail)?, None),
-            VIRTIO_IOMMU_T_UNMAP => self.process_dma_unmap_request(&mut reader, &mut tail)?,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            VIRTIO_IOMMU_T_PROBE => (
-                self.process_probe_request(&mut reader, &mut writer, &mut tail)?,
-                None,
-            ),
+            VIRTIO_IOMMU_T_ATTACH => self.process_attach_request(reader, &mut tail)?,
+            VIRTIO_IOMMU_T_DETACH => self.process_detach_request(reader, &mut tail)?,
+            VIRTIO_IOMMU_T_MAP => (self.process_dma_map_request(reader, &mut tail)?, None),
+            VIRTIO_IOMMU_T_UNMAP => self.process_dma_unmap_request(reader, &mut tail)?,
+            #[cfg(target_arch = "x86_64")]
+            VIRTIO_IOMMU_T_PROBE => (self.process_probe_request(reader, writer, &mut tail)?, None),
             _ => return Err(IommuError::UnexpectedDescriptor),
         };
 
@@ -586,27 +574,26 @@ impl State {
             .write_all(tail.as_bytes())
             .map_err(IommuError::GuestMemoryWrite)?;
         Ok((
-            (reply_len as usize) + size_of::<virtio_iommu_req_tail>(),
+            reply_len + size_of::<virtio_iommu_req_tail>(),
             fault_resolved_event,
         ))
     }
 }
 
-async fn request_queue<I: SignalableInterrupt>(
+async fn request_queue(
     state: &Rc<RefCell<State>>,
     mut queue: Queue,
     mut queue_event: EventAsync,
-    interrupt: I,
+    interrupt: Interrupt,
 ) -> Result<()> {
     loop {
-        let mem = state.borrow().mem.clone();
-        let avail_desc = queue
-            .next_async(&mem, &mut queue_event)
+        let mut avail_desc = queue
+            .next_async(&mut queue_event)
             .await
             .map_err(IommuError::ReadAsyncDesc)?;
-        let desc_index = avail_desc.index;
 
-        let (len, fault_resolved_event) = match state.borrow_mut().execute_request(&avail_desc) {
+        let (len, fault_resolved_event) = match state.borrow_mut().execute_request(&mut avail_desc)
+        {
             Ok(res) => res,
             Err(e) => {
                 error!("execute_request failed: {}", e);
@@ -626,15 +613,15 @@ async fn request_queue<I: SignalableInterrupt>(
             debug!("iommu fault resolved");
         }
 
-        queue.add_used(&mem, desc_index, len as u32);
-        queue.trigger_interrupt(&mem, &interrupt);
+        queue.add_used(avail_desc, len as u32);
+        queue.trigger_interrupt(&interrupt);
     }
 }
 
 fn run(
     state: State,
     iommu_device_tube: Tube,
-    mut queues: Vec<(Queue, Event)>,
+    mut queues: BTreeMap<usize, Queue>,
     kill_evt: Event,
     interrupt: Interrupt,
     translate_response_senders: Option<BTreeMap<u32, Tube>>,
@@ -643,7 +630,11 @@ fn run(
     let state = Rc::new(RefCell::new(state));
     let ex = Executor::new().expect("Failed to create an executor");
 
-    let (req_queue, req_evt) = queues.remove(0);
+    let req_queue = queues.remove(&0).unwrap();
+    let req_evt = req_queue
+        .event()
+        .try_clone()
+        .expect("Failed to clone queue event");
     let req_evt = EventAsync::new(req_evt, &ex).expect("Failed to create async event for queue");
 
     let f_resample = async_utils::handle_irq_resample(&ex, interrupt.clone());
@@ -738,7 +729,7 @@ impl Iommu {
         let config = virtio_iommu_config {
             page_size_mask: page_size_mask.into(),
             input_range,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             probe_size: (IOMMU_PROBE_SIZE as u32).into(),
             ..Default::default()
         };
@@ -748,7 +739,7 @@ impl Iommu {
             | 1 << VIRTIO_IOMMU_F_INPUT_RANGE
             | 1 << VIRTIO_IOMMU_F_MMIO;
 
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+        if cfg!(target_arch = "x86_64") {
             avail_features |= 1 << VIRTIO_IOMMU_F_PROBE;
         }
 
@@ -810,7 +801,7 @@ impl VirtioDevice for Iommu {
         &mut self,
         mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
@@ -860,7 +851,7 @@ impl VirtioDevice for Iommu {
         Ok(())
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     fn generate_acpi(
         &mut self,
         pci_address: &Option<PciAddress>,
@@ -936,5 +927,3 @@ impl VirtioDevice for Iommu {
         Some(sdts)
     }
 }
-
-impl Suspendable for Iommu {}

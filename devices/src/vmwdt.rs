@@ -24,8 +24,10 @@ use base::Event;
 use base::EventToken;
 use base::SendTube;
 use base::Timer;
+use base::TimerTrait;
 use base::VmEventType;
 use base::WaitContext;
+use base::WorkerThread;
 use remain::sorted;
 use sync::Mutex;
 use thiserror::Error;
@@ -35,7 +37,6 @@ use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
 use crate::Suspendable;
-use base::WorkerThread;
 
 // Registers offsets
 const VMWDT_REG_STATUS: u32 = 0x00;
@@ -153,13 +154,17 @@ impl Vmwdt {
                     }
                     Token::Timer(cpu_id) => {
                         let mut wdts_locked = vm_wdts.lock();
-                        let mut watchdog = &mut wdts_locked[cpu_id];
+                        let watchdog = &mut wdts_locked[cpu_id];
                         if let Err(_e) = watchdog.timer.wait() {
                             error!("error waiting for timer event on vcpu {}", cpu_id);
                         }
 
-                        let current_guest_time_ms =
+                        let current_guest_time_ms_result =
                             Vmwdt::get_guest_time_ms(watchdog.ppid, watchdog.pid);
+                        let current_guest_time_ms = match current_guest_time_ms_result {
+                            Ok(value) => value,
+                            Err(_e) => return,
+                        };
                         let remaining_time_ms = watchdog.next_expiration_interval_ms
                             - (current_guest_time_ms - watchdog.last_guest_time_ms);
 
@@ -204,26 +209,26 @@ impl Vmwdt {
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub fn get_guest_time_ms(ppid: u32, pid: u32) -> i64 {
+    pub fn get_guest_time_ms(ppid: u32, pid: u32) -> Result<i64, SysError> {
         // TODO: @sebastianene check if we can avoid open-read-close on each call
         let stat_path = format!("/proc/{}/task/{}/stat", ppid, pid);
-        let contents = fs::read_to_string(stat_path).expect("error reading the stat");
+        let contents = fs::read_to_string(stat_path)?;
 
-        let coll: Vec<_> = contents.split_whitespace().collect();
-        let guest_time = coll[PROCSTAT_GUEST_TIME_INDX].parse::<u64>();
-        let gtime_ticks = match guest_time {
-            Err(_e) => 0,
-            Ok(f) => f,
-        };
+        let gtime_ticks = contents
+            .split_whitespace()
+            .nth(PROCSTAT_GUEST_TIME_INDX)
+            .and_then(|guest_time| guest_time.parse::<u64>().ok())
+            .unwrap_or(0);
 
+        // SAFETY:
         // Safe because this just returns an integer
         let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
-        (gtime_ticks * 1000 / ticks_per_sec) as i64
+        Ok((gtime_ticks * 1000 / ticks_per_sec) as i64)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    pub fn get_guest_time_ms(ppid: u32, pid: u32) -> i64 {
-        0
+    pub fn get_guest_time_ms(ppid: u32, pid: u32) -> Result<i64, SysError> {
+        Ok(0)
     }
 }
 
@@ -260,14 +265,13 @@ impl BusDevice for Vmwdt {
             VMWDT_REG_STATUS => {
                 self.ensure_started();
                 let mut wdts_locked = self.vm_wdts.lock();
-                let mut cpu_watchdog = &mut wdts_locked[cpu_index];
+                let cpu_watchdog = &mut wdts_locked[cpu_index];
 
                 cpu_watchdog.is_enabled = reg_val != 0;
 
                 if reg_val != 0 {
                     let due = Duration::from_nanos(1);
-                    let interval =
-                        Duration::from_millis((1000 / cpu_watchdog.timer_freq_hz) as u64);
+                    let interval = Duration::from_millis(1000 / cpu_watchdog.timer_freq_hz);
                     cpu_watchdog.timer.reset(due, Some(interval)).unwrap();
                 } else {
                     cpu_watchdog.timer.clear().unwrap();
@@ -276,9 +280,14 @@ impl BusDevice for Vmwdt {
             VMWDT_REG_LOAD_CNT => {
                 let ppid = process::id();
                 let pid = gettid();
-                let guest_time_ms = Vmwdt::get_guest_time_ms(ppid, pid as u32);
+                let guest_time_ms_result = Vmwdt::get_guest_time_ms(ppid, pid as u32);
+                let guest_time_ms = match guest_time_ms_result {
+                    Ok(time) => time,
+                    Err(_e) => return,
+                };
+
                 let mut wdts_locked = self.vm_wdts.lock();
-                let mut cpu_watchdog = &mut wdts_locked[cpu_index];
+                let cpu_watchdog = &mut wdts_locked[cpu_index];
                 let next_expiration_interval_ms =
                     reg_val as u64 * 1000 / cpu_watchdog.timer_freq_hz;
 
@@ -301,7 +310,7 @@ impl BusDevice for Vmwdt {
             }
             VMWDT_REG_CLOCK_FREQ_HZ => {
                 let mut wdts_locked = self.vm_wdts.lock();
-                let mut cpu_watchdog = &mut wdts_locked[cpu_index];
+                let cpu_watchdog = &mut wdts_locked[cpu_index];
 
                 debug!(
                     "CPU:{:x} wrote VMWDT_REG_CLOCK_FREQ_HZ {:x}",
@@ -334,6 +343,7 @@ impl Suspendable for Vmwdt {
 mod tests {
     use std::thread::sleep;
 
+    use base::poll_assert;
     use base::Tube;
 
     use super::*;
@@ -369,14 +379,13 @@ mod tests {
             vmwdt_locked[0].next_expiration_interval_ms
         };
 
-        sleep(Duration::from_millis(100));
-
-        // Verify that our timer expired and the next_expiration_interval_ms changed
-        let vmwdt_locked = device.vm_wdts.lock();
-        assert_eq!(
-            vmwdt_locked[0].next_expiration_interval_ms != next_expiration_ms,
-            true
-        );
+        // Poll multiple times as we don't get a signal when the watchdog thread has run.
+        poll_assert!(10, || {
+            sleep(Duration::from_millis(50));
+            let vmwdt_locked = device.vm_wdts.lock();
+            // Verify that our timer expired and the next_expiration_interval_ms changed
+            vmwdt_locked[0].next_expiration_interval_ms != next_expiration_ms
+        });
     }
 
     #[test]
@@ -395,16 +404,13 @@ mod tests {
         // the function get_guest_time() returns 0
         device.vm_wdts.lock()[0].last_guest_time_ms = -100;
 
-        sleep(Duration::from_millis(100));
-
-        // Verify that our timer expired and the next_expiration_interval_ms changed
-        match vm_evt_rdtube.recv::<VmEventType>() {
-            Ok(vm_event) => {
-                assert!(vm_event == VmEventType::WatchdogReset);
+        // Poll multiple times as we don't get a signal when the watchdog thread has run.
+        poll_assert!(10, || {
+            sleep(Duration::from_millis(50));
+            match vm_evt_rdtube.recv::<VmEventType>() {
+                Ok(vm_event) => vm_event == VmEventType::WatchdogReset,
+                Err(_e) => false,
             }
-            Err(_e) => {
-                panic!();
-            }
-        };
+        });
     }
 }

@@ -30,15 +30,14 @@
 
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap as Map;
-use std::collections::BTreeSet as Set;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::convert::From;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fs::File;
 use std::io;
-use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -62,34 +61,44 @@ use base::error;
 use base::ioctl_iow_nr;
 use base::ioctl_iowr_nr;
 use base::ioctl_with_ref;
+use base::linux::SharedMemoryLinux;
 use base::pagesize;
 use base::pipe;
 use base::round_up_to_page_size;
+use base::unix::FileFlags;
 use base::warn;
 use base::AsRawDescriptor;
 use base::Error;
 use base::Event;
 use base::EventToken;
 use base::EventType;
-use base::FileFlags;
 use base::FromRawDescriptor;
 #[cfg(feature = "gpu")]
 use base::IntoRawDescriptor;
+#[cfg(feature = "minigbm")]
+use base::MemoryMappingBuilder;
+#[cfg(feature = "minigbm")]
+use base::MmapError;
 use base::Protection;
 use base::RawDescriptor;
 use base::Result;
 use base::SafeDescriptor;
 use base::ScmSocket;
 use base::SharedMemory;
-use base::SharedMemoryUnix;
 use base::Tube;
 use base::TubeError;
+use base::VolatileMemoryError;
 use base::WaitContext;
-use data_model::*;
+use base::WorkerThread;
+use data_model::Le32;
+use data_model::Le64;
+use hypervisor::MemCacheType;
 #[cfg(feature = "minigbm")]
 use libc::EBADF;
 #[cfg(feature = "minigbm")]
 use libc::EINVAL;
+#[cfg(feature = "minigbm")]
+use libc::ENOSYS;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
 use resources::AddressRange;
@@ -101,11 +110,19 @@ use rutabaga_gfx::ImageAllocationInfo;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::ImageMemoryRequirements;
 #[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaDescriptor;
+#[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaError;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGralloc;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGrallocFlags;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaIntoRawDescriptor;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
 use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
@@ -113,6 +130,7 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 #[cfg(feature = "gpu")]
 use super::resource_bridge::get_resource_info;
@@ -130,17 +148,14 @@ use super::Queue;
 use super::Reader;
 use super::SharedMemoryMapper;
 use super::SharedMemoryRegion;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
 use super::Writer;
-use crate::virtio::device_constants::wl::QUEUE_SIZES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_SEND_FENCES;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_TRANS_FLAGS;
 use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
-use crate::virtio::virtio_device::Error as VirtioError;
-use crate::virtio::VirtioDeviceSaved;
-use crate::Suspendable;
-use base::WorkerThread;
+
+const QUEUE_SIZE: u16 = 256;
+const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
 const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
@@ -185,6 +200,10 @@ const VIRTIO_WL_VFD_DMABUF_SYNC_VALID_FLAG_MASK: u32 = 0x7;
 
 #[cfg(feature = "minigbm")]
 const DMA_BUF_IOCTL_BASE: c_uint = 0x62;
+#[cfg(feature = "minigbm")]
+const DMA_BUF_SYNC_WRITE: c_uint = 0x2;
+#[cfg(feature = "minigbm")]
+const DMA_BUF_SYNC_END: c_uint = 0x4;
 
 #[cfg(feature = "minigbm")]
 #[repr(C)]
@@ -211,6 +230,7 @@ ioctl_iowr_nr!(SYNC_IOC_FILE_INFO, 0x3e, 4, sync_file_info);
 
 fn is_fence(f: &File) -> bool {
     let info = sync_file_info::default();
+    // SAFETY:
     // Safe as f is a valid file
     unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO(), &info) == 0 }
 }
@@ -369,6 +389,8 @@ enum WlError {
     DmabufSync(io::Error),
     #[error("failed to create shared memory from descriptor: {0}")]
     FromSharedMemory(Error),
+    #[error("failed to get seals: {0}")]
+    GetSeals(Error),
     #[error("gralloc error: {0}")]
     #[cfg(feature = "minigbm")]
     GrallocError(#[from] RutabagaError),
@@ -385,9 +407,9 @@ enum WlError {
     #[error("failed to read a pipe: {0}")]
     ReadPipe(io::Error),
     #[error("failed to recv on a socket: {0}")]
-    RecvVfd(Error),
+    RecvVfd(io::Error),
     #[error("failed to send on a socket: {0}")]
-    SendVfd(Error),
+    SendVfd(io::Error),
     #[error("shmem mapper failure: {0}")]
     ShmemMapperError(anyhow::Error),
     #[error("failed to connect socket: {0}")]
@@ -424,7 +446,7 @@ struct VmRequesterState {
     address_allocator: AddressAllocator,
 
     // Map of existing mappings in the shm address space
-    allocs: Map<u64 /* offset */, Alloc>,
+    allocs: BTreeMap<u64 /* offset */, Alloc>,
 
     // The id for the next shmem allocation
     next_alloc: usize,
@@ -433,6 +455,14 @@ struct VmRequesterState {
 #[derive(Clone)]
 struct VmRequester {
     state: Rc<RefCell<VmRequesterState>>,
+}
+
+// The following are wrappers to avoid base dependencies in the rutabaga crate
+#[cfg(feature = "minigbm")]
+fn to_safe_descriptor(r: RutabagaDescriptor) -> SafeDescriptor {
+    // SAFETY:
+    // Safe because we own the SafeDescriptor at this point.
+    unsafe { SafeDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
 }
 
 impl VmRequester {
@@ -451,7 +481,7 @@ impl VmRequester {
                     None,
                 )
                 .expect("failed to create allocator"),
-                allocs: Map::new(),
+                allocs: BTreeMap::new(),
                 next_alloc: 0,
             })),
         }
@@ -507,29 +537,55 @@ impl VmRequester {
             .map_err(WlError::GrallocError)?;
         drop(state);
 
+        let safe_descriptor = to_safe_descriptor(handle.os_handle);
         self.register_memory(
-            handle
-                .os_handle
+            safe_descriptor
                 .try_clone()
                 .context("failed to dup gfx handle")
                 .map_err(WlError::ShmemMapperError)?,
             reqs.size,
+            Protection::read_write(),
         )
-        .map(|info| (info, handle.os_handle, reqs))
+        .map(|info| (info, safe_descriptor, reqs))
     }
 
     fn register_shmem(&self, shm: &SharedMemory) -> WlResult<u64> {
+        let prot = match FileFlags::from_file(shm) {
+            Ok(FileFlags::Read) => Protection::read(),
+            Ok(FileFlags::Write) => Protection::write(),
+            Ok(FileFlags::ReadWrite) => {
+                let seals = shm.get_seals().map_err(WlError::GetSeals)?;
+                if seals.write_seal() {
+                    Protection::read()
+                } else {
+                    Protection::read_write()
+                }
+            }
+            Err(e) => {
+                return Err(WlError::ShmemMapperError(anyhow!(
+                    "failed to get file descriptor flags with error: {:?}",
+                    e
+                )))
+            }
+        };
         self.register_memory(
             SafeDescriptor::try_from(shm as &dyn AsRawDescriptor)
                 .context("failed to create safe descriptor")
                 .map_err(WlError::ShmemMapperError)?,
             shm.size(),
+            prot,
         )
     }
 
-    fn register_memory(&self, descriptor: SafeDescriptor, size: u64) -> WlResult<u64> {
+    fn register_memory(
+        &self,
+        descriptor: SafeDescriptor,
+        size: u64,
+        prot: Protection,
+    ) -> WlResult<u64> {
         let mut state = self.state.borrow_mut();
         let size = round_up_to_page_size(size as usize) as u64;
+
         let source = VmMemorySource::Descriptor {
             descriptor,
             offset: 0,
@@ -545,7 +601,7 @@ impl VmRequester {
 
         match state
             .mapper
-            .add_mapping(source, offset, Protection::read_write())
+            .add_mapping(source, offset, prot, MemCacheType::CacheCoherent)
         {
             Ok(()) => {
                 state.allocs.insert(offset, alloc);
@@ -564,14 +620,14 @@ impl VmRequester {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlHeader {
     type_: Le32,
     flags: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Default, FromZeroes, FromBytes, AsBytes)]
 struct CtrlVfdNew {
     hdr: CtrlHeader,
     id: Le32,
@@ -582,7 +638,7 @@ struct CtrlVfdNew {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromBytes)]
+#[derive(Copy, Clone, Default, FromZeroes, FromBytes)]
 struct CtrlVfdNewCtxNamed {
     hdr: CtrlHeader,
     id: Le32,
@@ -593,7 +649,7 @@ struct CtrlVfdNewCtxNamed {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[cfg(feature = "minigbm")]
 struct CtrlVfdNewDmabuf {
     hdr: CtrlHeader,
@@ -614,7 +670,7 @@ struct CtrlVfdNewDmabuf {
 
 #[cfg(feature = "minigbm")]
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 #[cfg(feature = "minigbm")]
 struct CtrlVfdDmabufSync {
     hdr: CtrlHeader,
@@ -623,7 +679,7 @@ struct CtrlVfdDmabufSync {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdRecv {
     hdr: CtrlHeader,
     id: Le32,
@@ -631,14 +687,14 @@ struct CtrlVfdRecv {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfd {
     hdr: CtrlHeader,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdSend {
     hdr: CtrlHeader,
     id: Le32,
@@ -647,21 +703,21 @@ struct CtrlVfdSend {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct CtrlVfdSendVfd {
     kind: Le32,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromBytes)]
+#[derive(Copy, Clone, FromZeroes, FromBytes)]
 union CtrlVfdSendVfdV2Payload {
     id: Le32,
     seqno: Le64,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromBytes)]
+#[derive(Copy, Clone, FromZeroes, FromBytes)]
 struct CtrlVfdSendVfdV2 {
     kind: Le32,
     payload: CtrlVfdSendVfdV2Payload,
@@ -673,11 +729,13 @@ impl CtrlVfdSendVfdV2 {
             self.kind == VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL
                 || self.kind == VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU
         );
+        // SAFETY: trivially safe given we assert kind
         unsafe { self.payload.id }
     }
     #[cfg(feature = "gpu")]
     fn seqno(&self) -> Le64 {
         assert!(self.kind == VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_FENCE);
+        // SAFETY: trivially safe given we assert kind
         unsafe { self.payload.seqno }
     }
 }
@@ -746,13 +804,15 @@ impl<'a> WlResp<'a> {
 
 #[derive(Default)]
 struct WlVfd {
-    socket: Option<UnixStream>,
+    socket: Option<ScmSocket<UnixStream>>,
     guest_shared_memory: Option<SharedMemory>,
     remote_pipe: Option<File>,
     local_pipe: Option<(u32 /* flags */, File)>,
     slot: Option<(u64 /* offset */, VmRequester)>,
     #[cfg(feature = "minigbm")]
     is_dmabuf: bool,
+    #[cfg(feature = "minigbm")]
+    map_info: u32,
     fence: Option<File>,
     is_fence: bool,
 }
@@ -776,11 +836,30 @@ impl fmt::Debug for WlVfd {
     }
 }
 
+#[cfg(feature = "minigbm")]
+fn flush_shared_memory(shared_memory: &SharedMemory) -> Result<()> {
+    let mmap = match MemoryMappingBuilder::new(shared_memory.size as usize)
+        .from_shared_memory(shared_memory)
+        .build()
+    {
+        Ok(v) => v,
+        Err(_) => return Err(Error::new(EINVAL)),
+    };
+    if let Err(err) = mmap.flush_all() {
+        base::error!("failed to flush shared memory: {}", err);
+        return match err {
+            MmapError::NotImplemented(_) => Err(Error::new(ENOSYS)),
+            _ => Err(Error::new(EINVAL)),
+        };
+    }
+    Ok(())
+}
+
 impl WlVfd {
     fn connect<P: AsRef<Path>>(path: P) -> WlResult<WlVfd> {
         let socket = UnixStream::connect(path).map_err(WlError::SocketConnect)?;
         let mut vfd = WlVfd::default();
-        vfd.socket = Some(socket);
+        vfd.socket = Some(socket.try_into().map_err(WlError::SocketConnect)?);
         Ok(vfd)
     }
 
@@ -807,7 +886,7 @@ impl WlVfd {
         let (offset, desc, reqs) = vm.allocate_and_register_gpu_memory(width, height, format)?;
         let mut vfd = WlVfd::default();
         let vfd_shm =
-            SharedMemory::from_safe_descriptor(desc, Some(reqs.size)).map_err(WlError::NewAlloc)?;
+            SharedMemory::from_safe_descriptor(desc, reqs.size).map_err(WlError::NewAlloc)?;
 
         let mut desc = GpuMemoryDesc::default();
         for i in 0..3 {
@@ -820,6 +899,7 @@ impl WlVfd {
         vfd.guest_shared_memory = Some(vfd_shm);
         vfd.slot = Some((offset, vm));
         vfd.is_dmabuf = true;
+        vfd.map_info = reqs.map_info;
         Ok((vfd, desc))
     }
 
@@ -834,19 +914,35 @@ impl WlVfd {
                 let sync = dma_buf_sync {
                     flags: flags as u64,
                 };
+                // SAFETY:
                 // Safe as descriptor is a valid dmabuf and incorrect flags will return an error.
                 if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC(), &sync) } < 0 {
-                    Err(WlError::DmabufSync(io::Error::last_os_error()))
-                } else {
-                    Ok(())
+                    return Err(WlError::DmabufSync(io::Error::last_os_error()));
                 }
+
+                // virtio-wl kernel driver always maps dmabufs with WB memory type, regardless of
+                // the host memory type (which is wrong). However, to avoid changing the protocol,
+                // assume that all guest writes are cached and ensure clflush-like ops on all mapped
+                // cachelines if the host mapping is not cached.
+                const END_WRITE_MASK: u32 = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+                if (flags & END_WRITE_MASK) == END_WRITE_MASK
+                    && (self.map_info & RUTABAGA_MAP_CACHE_MASK) != RUTABAGA_MAP_CACHE_CACHED
+                {
+                    if let Err(err) = flush_shared_memory(descriptor) {
+                        base::warn!("failed to flush cached dmabuf mapping: {:?}", err);
+                        return Err(WlError::DmabufSync(io::Error::from_raw_os_error(
+                            err.errno(),
+                        )));
+                    }
+                }
+                Ok(())
             }
             None => Err(WlError::DmabufSync(io::Error::from_raw_os_error(EBADF))),
         }
     }
 
     fn pipe_remote_read_local_write() -> WlResult<WlVfd> {
-        let (read_pipe, write_pipe) = pipe(true).map_err(WlError::NewPipe)?;
+        let (read_pipe, write_pipe) = pipe().map_err(WlError::NewPipe)?;
         let mut vfd = WlVfd::default();
         vfd.remote_pipe = Some(read_pipe);
         vfd.local_pipe = Some((VIRTIO_WL_VFD_WRITE, write_pipe));
@@ -854,7 +950,7 @@ impl WlVfd {
     }
 
     fn pipe_remote_write_local_read() -> WlResult<WlVfd> {
-        let (read_pipe, write_pipe) = pipe(true).map_err(WlError::NewPipe)?;
+        let (read_pipe, write_pipe) = pipe().map_err(WlError::NewPipe)?;
         let mut vfd = WlVfd::default();
         vfd.remote_pipe = Some(write_pipe);
         vfd.local_pipe = Some((VIRTIO_WL_VFD_READ, read_pipe));
@@ -953,7 +1049,7 @@ impl WlVfd {
     fn send(&mut self, rds: &[RawDescriptor], data: &mut Reader) -> WlResult<WlResp> {
         if let Some(socket) = &self.socket {
             socket
-                .send_with_fds(&data.get_remaining(), rds)
+                .send_vectored_with_fds(&data.get_remaining(), rds)
                 .map_err(WlError::SendVfd)?;
             // All remaining data in `data` is now considered consumed.
             data.consume(::std::usize::MAX);
@@ -975,29 +1071,21 @@ impl WlVfd {
     fn recv(&mut self, in_file_queue: &mut Vec<File>) -> WlResult<Vec<u8>> {
         if let Some(socket) = self.socket.take() {
             let mut buf = vec![0; IN_BUFFER_LEN];
-            let mut fd_buf = [0; VIRTWL_SEND_MAX_ALLOCS];
             // If any errors happen, the socket will get dropped, preventing more reading.
-            let (len, file_count) = socket
-                .recv_with_fds(IoSliceMut::new(&mut buf), &mut fd_buf)
+            let (len, descriptors) = socket
+                .recv_with_fds(&mut buf, VIRTWL_SEND_MAX_ALLOCS)
                 .map_err(WlError::RecvVfd)?;
             // If any data gets read, the put the socket back for future recv operations.
-            if len != 0 || file_count != 0 {
+            if len != 0 || !descriptors.is_empty() {
                 buf.truncate(len);
                 buf.shrink_to_fit();
                 self.socket = Some(socket);
-                // Safe because the first file_counts fds from recv_with_fds are owned by us and
-                // valid.
-                in_file_queue.extend(
-                    fd_buf[..file_count]
-                        .iter()
-                        .map(|&descriptor| unsafe { File::from_raw_descriptor(descriptor) }),
-                );
+                in_file_queue.extend(descriptors.into_iter().map(File::from));
                 return Ok(buf);
             }
             Ok(Vec::new())
         } else if let Some((flags, mut local_pipe)) = self.local_pipe.take() {
-            let mut buf = Vec::new();
-            buf.resize(IN_BUFFER_LEN, 0);
+            let mut buf = vec![0; IN_BUFFER_LEN];
             let len = local_pipe.read(&mut buf[..]).map_err(WlError::ReadPipe)?;
             if len != 0 {
                 buf.truncate(len);
@@ -1042,12 +1130,12 @@ enum WlRecv {
 }
 
 pub struct WlState {
-    wayland_paths: Map<String, PathBuf>,
+    wayland_paths: BTreeMap<String, PathBuf>,
     vm: VmRequester,
     resource_bridge: Option<Tube>,
     use_transition_flags: bool,
     wait_ctx: WaitContext<u32>,
-    vfds: Map<u32, WlVfd>,
+    vfds: BTreeMap<u32, WlVfd>,
     next_vfd_id: u32,
     in_file_queue: Vec<File>,
     in_queue: VecDeque<(u32 /* vfd_id */, WlRecv)>,
@@ -1062,7 +1150,7 @@ pub struct WlState {
 impl WlState {
     /// Create a new `WlState` instance for running a virtio-wl device.
     pub fn new(
-        wayland_paths: Map<String, PathBuf>,
+        wayland_paths: BTreeMap<String, PathBuf>,
         mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
@@ -1080,7 +1168,7 @@ impl WlState {
             resource_bridge,
             wait_ctx: WaitContext::new().expect("failed to create WaitContext"),
             use_transition_flags,
-            vfds: Map::new(),
+            vfds: BTreeMap::new(),
             next_vfd_id: NEXT_VFD_ID_BASE,
             in_file_queue: Vec::new(),
             in_queue: VecDeque::new(),
@@ -1267,7 +1355,7 @@ impl WlState {
     }
 
     fn close(&mut self, vfd_id: u32) -> WlResult<WlResp> {
-        let mut to_delete = Set::new();
+        let mut to_delete = BTreeSet::new();
         for (dest_vfd_id, q) in &self.in_queue {
             if *dest_vfd_id == vfd_id {
                 if let WlRecv::Vfd { id } = q {
@@ -1402,6 +1490,7 @@ impl WlState {
                     match self.signaled_fence.as_ref().unwrap().try_clone() {
                         Ok(dup) => {
                             *descriptor = dup.into_raw_descriptor();
+                            // SAFETY:
                             // Safe because the fd comes from a valid SafeDescriptor.
                             let file = unsafe { File::from_raw_descriptor(*descriptor) };
                             bridged_files.push(file);
@@ -1469,6 +1558,11 @@ impl WlState {
                     .add(wait_descriptor, self.next_vfd_id)
                     .map_err(WlError::WaitContextAdd)?;
             }
+            // Only necessary if we somehow wrap the id counter. The try_insert
+            // API would be nicer, but that's currently experimental.
+            while self.vfds.contains_key(&self.next_vfd_id) {
+                self.next_vfd_id += 1;
+            }
             self.vfds.insert(self.next_vfd_id, vfd);
             self.in_queue.push_back((
                 vfd_id,
@@ -1484,10 +1578,7 @@ impl WlState {
     }
 
     fn execute(&mut self, reader: &mut Reader) -> WlResult<WlResp> {
-        let type_ = {
-            let mut type_reader = reader.clone();
-            type_reader.read_obj::<Le32>().map_err(WlError::ParseDesc)?
-        };
+        let type_: Le32 = reader.peek_obj::<Le32>().map_err(WlError::ParseDesc)?;
         match type_.into() {
             VIRTIO_WL_CMD_VFD_NEW => {
                 let ctrl = reader
@@ -1671,10 +1762,9 @@ impl WlState {
 pub struct DescriptorsExhausted;
 
 /// Handle incoming events and forward them to the VM over the input queue.
-pub fn process_in_queue<I: SignalableInterrupt>(
-    interrupt: &I,
+pub fn process_in_queue(
+    interrupt: &Interrupt,
     in_queue: &mut Queue,
-    mem: &GuestMemory,
     state: &mut WlState,
 ) -> ::std::result::Result<(), DescriptorsExhausted> {
     state.process_wait_context();
@@ -1682,37 +1772,27 @@ pub fn process_in_queue<I: SignalableInterrupt>(
     let mut needs_interrupt = false;
     let mut exhausted_queue = false;
     loop {
-        let desc = if let Some(d) = in_queue.peek(mem) {
+        let mut desc = if let Some(d) = in_queue.peek() {
             d
         } else {
             exhausted_queue = true;
             break;
         };
 
-        let index = desc.index;
         let mut should_pop = false;
         if let Some(in_resp) = state.next_recv() {
-            let bytes_written = match Writer::new(mem.clone(), desc) {
-                Ok(mut writer) => {
-                    match encode_resp(&mut writer, in_resp) {
-                        Ok(()) => {
-                            should_pop = true;
-                        }
-                        Err(e) => {
-                            error!("failed to encode response to descriptor chain: {}", e);
-                        }
-                    };
-                    writer.bytes_written() as u32
+            match encode_resp(&mut desc.writer, in_resp) {
+                Ok(()) => {
+                    should_pop = true;
                 }
                 Err(e) => {
-                    error!("invalid descriptor: {}", e);
-                    0
+                    error!("failed to encode response to descriptor chain: {}", e);
                 }
-            };
-
+            }
+            let bytes_written = desc.writer.bytes_written() as u32;
             needs_interrupt = true;
-            in_queue.pop_peeked(mem);
-            in_queue.add_used(mem, index, bytes_written);
+            let desc = desc.pop();
+            in_queue.add_used(desc, bytes_written);
         } else {
             break;
         }
@@ -1722,7 +1802,7 @@ pub fn process_in_queue<I: SignalableInterrupt>(
     }
 
     if needs_interrupt {
-        in_queue.trigger_interrupt(mem, interrupt);
+        in_queue.trigger_interrupt(interrupt);
     }
 
     if exhausted_queue {
@@ -1733,65 +1813,44 @@ pub fn process_in_queue<I: SignalableInterrupt>(
 }
 
 /// Handle messages from the output queue and forward them to the display sever, if necessary.
-pub fn process_out_queue<I: SignalableInterrupt>(
-    interrupt: &I,
-    out_queue: &mut Queue,
-    mem: &GuestMemory,
-    state: &mut WlState,
-) {
+pub fn process_out_queue(interrupt: &Interrupt, out_queue: &mut Queue, state: &mut WlState) {
     let mut needs_interrupt = false;
-    while let Some(desc) = out_queue.pop(mem) {
-        let desc_index = desc.index;
-        match (
-            Reader::new(mem.clone(), desc.clone()),
-            Writer::new(mem.clone(), desc),
-        ) {
-            (Ok(mut reader), Ok(mut writer)) => {
-                let resp = match state.execute(&mut reader) {
-                    Ok(r) => r,
-                    Err(e) => WlResp::Err(Box::new(e)),
-                };
+    while let Some(mut desc) = out_queue.pop() {
+        let resp = match state.execute(&mut desc.reader) {
+            Ok(r) => r,
+            Err(e) => WlResp::Err(Box::new(e)),
+        };
 
-                match encode_resp(&mut writer, resp) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        error!("failed to encode response to descriptor chain: {}", e);
-                    }
-                }
-
-                out_queue.add_used(mem, desc_index, writer.bytes_written() as u32);
-                needs_interrupt = true;
-            }
-            (_, Err(e)) | (Err(e), _) => {
-                error!("invalid descriptor: {}", e);
-                out_queue.add_used(mem, desc_index, 0);
-                needs_interrupt = true;
+        match encode_resp(&mut desc.writer, resp) {
+            Ok(()) => {}
+            Err(e) => {
+                error!("failed to encode response to descriptor chain: {}", e);
             }
         }
+
+        let len = desc.writer.bytes_written() as u32;
+        out_queue.add_used(desc, len);
+        needs_interrupt = true;
     }
 
     if needs_interrupt {
-        out_queue.trigger_interrupt(mem, interrupt);
+        out_queue.trigger_interrupt(interrupt);
     }
 }
 
 struct Worker {
     interrupt: Interrupt,
-    mem: GuestMemory,
     in_queue: Queue,
-    in_queue_evt: Event,
     out_queue: Queue,
-    out_queue_evt: Event,
     state: WlState,
 }
 
 impl Worker {
     fn new(
-        mem: GuestMemory,
         interrupt: Interrupt,
-        in_queue: (Queue, Event),
-        out_queue: (Queue, Event),
-        wayland_paths: Map<String, PathBuf>,
+        in_queue: Queue,
+        out_queue: Queue,
+        wayland_paths: BTreeMap<String, PathBuf>,
         mapper: Box<dyn SharedMemoryMapper>,
         use_transition_flags: bool,
         use_send_vfd_v2: bool,
@@ -1801,11 +1860,8 @@ impl Worker {
     ) -> Worker {
         Worker {
             interrupt,
-            mem,
-            in_queue: in_queue.0,
-            in_queue_evt: in_queue.1,
-            out_queue: out_queue.0,
-            out_queue_evt: out_queue.1,
+            in_queue,
+            out_queue,
             state: WlState::new(
                 wayland_paths,
                 mapper,
@@ -1819,7 +1875,7 @@ impl Worker {
         }
     }
 
-    fn run(mut self, kill_evt: Event) -> anyhow::Result<VirtioDeviceSaved> {
+    fn run(mut self, kill_evt: Event) -> anyhow::Result<Vec<Queue>> {
         #[derive(EventToken)]
         enum Token {
             InQueue,
@@ -1830,8 +1886,8 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.in_queue_evt, Token::InQueue),
-            (&self.out_queue_evt, Token::OutQueue),
+            (self.in_queue.event(), Token::InQueue),
+            (self.out_queue.event(), Token::OutQueue),
             (&kill_evt, Token::Kill),
             (&self.state.wait_ctx, Token::State),
         ])
@@ -1856,7 +1912,7 @@ impl Worker {
             for event in &events {
                 match event.token {
                     Token::InQueue => {
-                        let _ = self.in_queue_evt.wait();
+                        let _ = self.in_queue.event().wait();
                         if !watching_state_ctx {
                             if let Err(e) =
                                 wait_ctx.modify(&self.state.wait_ctx, EventType::Read, Token::State)
@@ -1868,22 +1924,14 @@ impl Worker {
                         }
                     }
                     Token::OutQueue => {
-                        let _ = self.out_queue_evt.wait();
-                        process_out_queue(
-                            &self.interrupt,
-                            &mut self.out_queue,
-                            &self.mem,
-                            &mut self.state,
-                        );
+                        let _ = self.out_queue.event().wait();
+                        process_out_queue(&self.interrupt, &mut self.out_queue, &mut self.state);
                     }
                     Token::Kill => break 'wait,
                     Token::State => {
-                        if let Err(DescriptorsExhausted) = process_in_queue(
-                            &self.interrupt,
-                            &mut self.in_queue,
-                            &self.mem,
-                            &mut self.state,
-                        ) {
+                        if let Err(DescriptorsExhausted) =
+                            process_in_queue(&self.interrupt, &mut self.in_queue, &mut self.state)
+                        {
                             if let Err(e) =
                                 wait_ctx.modify(&self.state.wait_ctx, EventType::None, Token::State)
                             {
@@ -1903,21 +1951,20 @@ impl Worker {
             }
         }
 
-        Ok(VirtioDeviceSaved {
-            queues: vec![self.in_queue, self.out_queue],
-        })
+        let in_queue = self.in_queue;
+        let out_queue = self.out_queue;
+
+        Ok(vec![in_queue, out_queue])
     }
 }
 
 pub struct Wl {
-    worker_thread: Option<WorkerThread<anyhow::Result<VirtioDeviceSaved>>>,
-    wayland_paths: Map<String, PathBuf>,
+    worker_thread: Option<WorkerThread<anyhow::Result<Vec<Queue>>>>,
+    wayland_paths: BTreeMap<String, PathBuf>,
     mapper: Option<Box<dyn SharedMemoryMapper>>,
     resource_bridge: Option<Tube>,
-    use_transition_flags: bool,
-    use_send_vfd_v2: bool,
-    use_shmem: bool,
     base_features: u64,
+    acked_features: u64,
     #[cfg(feature = "minigbm")]
     gralloc: Option<RutabagaGralloc>,
     address_offset: Option<u64>,
@@ -1926,7 +1973,7 @@ pub struct Wl {
 impl Wl {
     pub fn new(
         base_features: u64,
-        wayland_paths: Map<String, PathBuf>,
+        wayland_paths: BTreeMap<String, PathBuf>,
         resource_bridge: Option<Tube>,
     ) -> Result<Wl> {
         Ok(Wl {
@@ -1934,10 +1981,8 @@ impl Wl {
             wayland_paths,
             mapper: None,
             resource_bridge,
-            use_transition_flags: false,
-            use_send_vfd_v2: false,
-            use_shmem: false,
             base_features,
+            acked_features: 0,
             #[cfg(feature = "minigbm")]
             gralloc: None,
             address_offset: None,
@@ -1988,22 +2033,14 @@ impl VirtioDevice for Wl {
     }
 
     fn ack_features(&mut self, value: u64) {
-        if value & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0 {
-            self.use_transition_flags = true;
-        }
-        if value & (1 << VIRTIO_WL_F_SEND_FENCES) != 0 {
-            self.use_send_vfd_v2 = true;
-        }
-        if value & (1 << VIRTIO_WL_F_USE_SHMEM) != 0 {
-            self.use_shmem = true;
-        }
+        self.acked_features |= value;
     }
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != QUEUE_SIZES.len() {
             return Err(anyhow!(
@@ -2016,15 +2053,16 @@ impl VirtioDevice for Wl {
         let mapper = self.mapper.take().context("missing mapper")?;
 
         let wayland_paths = self.wayland_paths.clone();
-        let use_transition_flags = self.use_transition_flags;
-        let use_send_vfd_v2 = self.use_send_vfd_v2;
+        let use_transition_flags = self.acked_features & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0;
+        let use_send_vfd_v2 = self.acked_features & (1 << VIRTIO_WL_F_SEND_FENCES) != 0;
+        let use_shmem = self.acked_features & (1 << VIRTIO_WL_F_USE_SHMEM) != 0;
         let resource_bridge = self.resource_bridge.take();
         #[cfg(feature = "minigbm")]
         let gralloc = self
             .gralloc
             .take()
             .expect("gralloc already passed to worker");
-        let address_offset = if !self.use_shmem {
+        let address_offset = if !use_shmem {
             self.address_offset
         } else {
             None
@@ -2032,10 +2070,9 @@ impl VirtioDevice for Wl {
 
         self.worker_thread = Some(WorkerThread::start("v_wl", move |kill_evt| {
             Worker::new(
-                mem,
                 interrupt,
-                queues.remove(0),
-                queues.remove(0),
+                queues.pop_first().unwrap().1,
+                queues.pop_first().unwrap().1,
                 wayland_paths,
                 mapper,
                 use_transition_flags,
@@ -2066,13 +2103,44 @@ impl VirtioDevice for Wl {
         self.mapper = Some(mapper);
     }
 
-    fn stop(&mut self) -> std::result::Result<Option<VirtioDeviceSaved>, VirtioError> {
+    fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
         if let Some(worker_thread) = self.worker_thread.take() {
-            let state = worker_thread.stop().map_err(VirtioError::InThreadFailure)?;
-            return Ok(Some(state));
+            let queues = worker_thread.stop()?;
+            return Ok(Some(BTreeMap::from_iter(queues.into_iter().enumerate())));
         }
         Ok(None)
     }
-}
 
-impl Suspendable for Wl {}
+    fn virtio_wake(
+        &mut self,
+        device_state: Option<(GuestMemory, Interrupt, BTreeMap<usize, Queue>)>,
+    ) -> anyhow::Result<()> {
+        match device_state {
+            None => Ok(()),
+            Some((mem, interrupt, queues)) => {
+                // TODO: activate is just what we want at the moment, but we should probably move
+                // it into a "start workers" function to make it obvious that it isn't strictly
+                // used for activate events.
+                self.activate(mem, interrupt, queues)?;
+                Ok(())
+            }
+        }
+    }
+
+    // ANDROID: Add empty implementations for successful snapshot taking. Change to full
+    // implementation as part of b/266514618
+    // virtio-wl is not used, but is created. As such, virtio_snapshot/restore will be called when
+    // cuttlefish attempts to take a snapshot.
+    fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data == serde_json::Value::Null,
+            "unexpected snapshot data: should be null, got {}",
+            data,
+        );
+        Ok(())
+    }
+}

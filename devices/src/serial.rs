@@ -12,6 +12,8 @@ use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use base::error;
@@ -20,6 +22,9 @@ use base::Event;
 use base::EventToken;
 use base::Result;
 use base::WaitContext;
+use base::WorkerThread;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::bus::BusAccessInfo;
 use crate::pci::CrosvmDeviceId;
@@ -28,10 +33,6 @@ use crate::suspendable::DeviceState;
 use crate::suspendable::Suspendable;
 use crate::BusDevice;
 use crate::DeviceId;
-use base::WorkerThread;
-
-use serde::Deserialize;
-use serde::Serialize;
 
 const LOOP_SIZE: usize = 0x40;
 
@@ -205,6 +206,7 @@ impl Serial {
                         return rx;
                     }
                 };
+                let mut kill_timeout = None;
                 loop {
                     let events = match wait_ctx.wait() {
                         Ok(events) => events,
@@ -216,7 +218,28 @@ impl Serial {
                     for event in events.iter() {
                         match event.token {
                             Token::Kill => {
-                                return rx;
+                                // Ignore the kill event until there are no other events to process
+                                // so that we drain `rx` as much as possible. The next
+                                // `wait_ctx.wait()` call will immediately re-entry this case since
+                                // we don't call `kill_evt.wait()`.
+                                if events.iter().all(|e| matches!(e.token, Token::Kill)) {
+                                    return rx;
+                                }
+                                const TIMEOUT_DURATION: Duration = Duration::from_millis(500);
+                                match kill_timeout {
+                                    None => {
+                                        kill_timeout = Some(Instant::now() + TIMEOUT_DURATION);
+                                    }
+                                    Some(t) => {
+                                        if Instant::now() >= t {
+                                            error!(
+                                                "failed to drain serial input within {:?}, giving up",
+                                                TIMEOUT_DURATION
+                                            );
+                                            return rx;
+                                        }
+                                    }
+                                }
                             }
                             Token::SerialEvent => {
                                 // Matches both is_readable and is_hungup.
@@ -240,7 +263,8 @@ impl Serial {
                                         }
                                     }
                                     Err(e) => {
-                                        // Being interrupted is not an error, but everything else is.
+                                        // Being interrupted is not an error, but everything else
+                                        // is.
                                         if e.kind() != io::ErrorKind::Interrupted {
                                             error!(
                                                 "failed to read for bytes to queue into serial device: {}",
@@ -296,6 +320,10 @@ impl Serial {
         (self.interrupt_enable.load(Ordering::SeqCst) & IER_THR_BIT) != 0
     }
 
+    fn is_thr_intr_changed(&self, bit: u8) -> bool {
+        (self.interrupt_enable.load(Ordering::SeqCst) ^ bit) & IER_FIFO_BITS != 0
+    }
+
     fn is_loop(&self) -> bool {
         (self.modem_control & MCR_LOOP_BIT) != 0
     }
@@ -340,12 +368,16 @@ impl Serial {
         self.line_status |= LSR_DATA_BIT;
     }
 
+    fn is_data_avaiable(&self) -> bool {
+        (self.line_status & LSR_DATA_BIT) != 0
+    }
+
     fn iir_reset(&mut self) {
         self.interrupt_identification = DEFAULT_INTERRUPT_IDENTIFICATION;
     }
 
     fn handle_write(&mut self, offset: u8, v: u8) -> Result<()> {
-        match offset as u8 {
+        match offset {
             DLAB_LOW if self.is_dlab_set() => {
                 self.baud_divisor = (self.baud_divisor & 0xff00) | v as u16
             }
@@ -364,9 +396,19 @@ impl Serial {
                     self.trigger_thr_empty()?;
                 }
             }
-            IER => self
-                .interrupt_enable
-                .store(v & IER_FIFO_BITS, Ordering::SeqCst),
+            IER => {
+                let tx_changed = self.is_thr_intr_changed(v);
+                self.interrupt_enable
+                    .store(v & IER_FIFO_BITS, Ordering::SeqCst);
+
+                if self.is_data_avaiable() {
+                    self.trigger_recv_interrupt()?;
+                }
+
+                if tx_changed {
+                    self.trigger_thr_empty()?;
+                }
+            }
             LCR => self.line_control = v,
             MCR => self.modem_control = v,
             SCR => self.scratch = v,
@@ -383,7 +425,7 @@ impl Serial {
         };
 
         if self.out_timestamp && self.last_write_was_newline {
-            write!(out, "{}", chrono::Local::now().format(TIMESTAMP_PREFIX_FMT))?;
+            write!(out, "{}", chrono::Utc::now().format(TIMESTAMP_PREFIX_FMT))?;
         }
 
         self.last_write_was_newline = v == b'\n';
@@ -500,7 +542,12 @@ struct SerialSnapshot {
 }
 
 impl Suspendable for Serial {
-    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        self.spawn_input_thread();
+        if let Some(worker) = self.worker.take() {
+            self.input = Some(worker.stop());
+        }
+        self.drain_in_channel();
         let snap = SerialSnapshot {
             interrupt_enable: self.interrupt_enable.load(Ordering::SeqCst),
             interrupt_identification: self.interrupt_identification,
@@ -516,7 +563,7 @@ impl Suspendable for Serial {
             last_write_was_newline: self.last_write_was_newline,
         };
 
-        let serialized = serde_json::to_value(&snap).context("error serializing")?;
+        let serialized = serde_json::to_value(snap).context("error serializing")?;
         Ok(serialized)
     }
 
@@ -571,11 +618,12 @@ mod tests {
     use std::io;
     use std::sync::Arc;
 
-    use crate::suspendable_tests;
     use hypervisor::ProtectionType;
     use sync::Mutex;
 
     use super::*;
+    use crate::serial_device::SerialOptions;
+    use crate::suspendable_tests;
     pub use crate::sys::serial_device::SerialDevice;
 
     #[derive(Clone)]
@@ -627,7 +675,7 @@ mod tests {
             None,
             Some(Box::new(serial_out.clone())),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -648,7 +696,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -676,7 +724,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -725,7 +773,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -764,7 +812,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -811,7 +859,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -847,7 +895,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -871,7 +919,7 @@ mod tests {
             None,
             Some(Box::new(serial_out)),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         );
 
@@ -911,7 +959,7 @@ mod tests {
             None,
             Some(Box::new(SharedBuffer::new())),
             None,
-            false,
+            Default::default(),
             Vec::new(),
         ),
         modify_device
@@ -944,7 +992,10 @@ mod tests {
             None,
             Some(Box::new(serial_out.clone())),
             None,
-            true,
+            SerialOptions {
+                out_timestamp: true,
+                ..Default::default()
+            },
             Vec::new(),
         );
 

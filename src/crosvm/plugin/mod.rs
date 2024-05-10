@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+mod config;
 mod process;
 mod vcpu;
 
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io;
 use std::io::Read;
@@ -34,7 +36,6 @@ use base::geteuid;
 use base::info;
 use base::pipe;
 use base::register_rt_signal_handler;
-use base::validate_raw_descriptor;
 use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
@@ -78,9 +79,7 @@ use libc::F_SETPIPE_SZ;
 use libc::O_NONBLOCK;
 use libc::SIGCHLD;
 use libc::SOCK_SEQPACKET;
-use net_util::sys::unix::Tap;
-use net_util::TapTCommon;
-use protobuf::ProtobufError;
+use net_util::sys::linux::Tap;
 use remain::sorted;
 use thiserror::Error;
 use vm_memory::GuestMemory;
@@ -89,6 +88,10 @@ use vm_memory::MemoryPolicy;
 use self::process::*;
 use self::vcpu::*;
 use crate::crosvm::config::Executable;
+use crate::crosvm::config::HypervisorKind;
+pub use crate::crosvm::plugin::config::parse_plugin_mount_option;
+pub use crate::crosvm::plugin::config::BindMount;
+pub use crate::crosvm::plugin::config::GidMap;
 use crate::Config;
 
 const MAX_DATAGRAM_SIZE: usize = 4096;
@@ -100,9 +103,9 @@ const MAX_OPEN_FILES: u64 = 32768;
 #[derive(Error, Debug)]
 pub enum CommError {
     #[error("failed to decode plugin request: {0}")]
-    DecodeRequest(ProtobufError),
+    DecodeRequest(protobuf::Error),
     #[error("failed to encode plugin response: {0}")]
-    EncodeResponse(ProtobufError),
+    EncodeResponse(protobuf::Error),
     #[error("plugin request socket has been hung up")]
     PluginSocketHup,
     #[error("failed to recv from plugin request socket: {0}")]
@@ -113,6 +116,7 @@ pub enum CommError {
 
 fn new_seqpacket_pair() -> SysResult<(UnixDatagram, UnixDatagram)> {
     let mut fds = [0, 0];
+    // SAFETY: trivially safe as we check the return value
     unsafe {
         let ret = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds.as_mut_ptr());
         if ret == 0 {
@@ -135,11 +139,12 @@ struct VcpuPipe {
 }
 
 fn new_pipe_pair() -> SysResult<VcpuPipe> {
-    let to_crosvm = pipe(true)?;
-    let to_plugin = pipe(true)?;
+    let to_crosvm = pipe()?;
+    let to_plugin = pipe()?;
     // Increasing the pipe size can be a nice-to-have to make sure that
     // messages get across atomically (and made sure that writes don't block),
     // though it's not necessary a hard requirement for things to work.
+    // SAFETY: safe because no memory is modified and we check return value.
     let flags = unsafe {
         fcntl(
             to_crosvm.0.as_raw_descriptor(),
@@ -154,6 +159,7 @@ fn new_pipe_pair() -> SysResult<VcpuPipe> {
             SysError::last()
         );
     }
+    // SAFETY: safe because no memory is modified and we check return value.
     let flags = unsafe {
         fcntl(
             to_plugin.0.as_raw_descriptor(),
@@ -176,11 +182,8 @@ fn new_pipe_pair() -> SysResult<VcpuPipe> {
     })
 }
 
-fn proto_to_sys_err(e: ProtobufError) -> SysError {
-    match e {
-        ProtobufError::IoError(e) => SysError::new(e.raw_os_error().unwrap_or(EINVAL)),
-        _ => SysError::new(EINVAL),
-    }
+fn proto_to_sys_err(e: protobuf::Error) -> SysError {
+    io_to_sys_err(io::Error::from(e))
 }
 
 fn io_to_sys_err(e: io::Error) -> SysError {
@@ -200,7 +203,6 @@ fn mmap_to_sys_err(e: MmapError) -> SysError {
 /// Each such object has an ID associated with it that exists in an ID space shared by every variant
 /// of `PluginObject`. This allows all the objects to be indexed in a single map, and allows for a
 /// common destroy method.
-///
 
 /// In addition to the destory method, each object may have methods specific to its variant type.
 /// These variant methods must be done by matching the variant to the expected type for that method.
@@ -242,7 +244,7 @@ impl PluginObject {
                 1 => vm.unregister_ioevent(&evt, addr, Datamatch::U8(Some(datamatch as u8))),
                 2 => vm.unregister_ioevent(&evt, addr, Datamatch::U16(Some(datamatch as u16))),
                 4 => vm.unregister_ioevent(&evt, addr, Datamatch::U32(Some(datamatch as u32))),
-                8 => vm.unregister_ioevent(&evt, addr, Datamatch::U64(Some(datamatch as u64))),
+                8 => vm.unregister_ioevent(&evt, addr, Datamatch::U64(Some(datamatch))),
                 _ => Err(SysError::new(EINVAL)),
             },
             PluginObject::Memory { slot, .. } => vm.remove_memory_region(slot).and(Ok(())),
@@ -279,9 +281,10 @@ pub fn run_vcpus(
     // SIGRTMIN each time it runs the VM, so this mode should be avoided.
 
     if use_kvm_signals {
+        // SAFETY:
+        // Our signal handler does nothing and is trivially async signal safe.
         unsafe {
             extern "C" fn handle_signal(_: c_int) {}
-            // Our signal handler does nothing and is trivially async signal safe.
             // We need to install this signal handler even though we do block
             // the signal below, to ensure that this signal will interrupt
             // execution of KVM_RUN (this is implementation issue).
@@ -291,6 +294,7 @@ pub fn run_vcpus(
         // We do not really want the signal handler to run...
         block_signal(SIGRTMIN() + 0).expect("failed to block signal");
     } else {
+        // SAFETY: trivially safe as we check return value.
         unsafe {
             extern "C" fn handle_signal(_: c_int) {
                 Vcpu::set_local_immediate_exit(true);
@@ -374,7 +378,7 @@ pub fn run_vcpus(
                                     VcpuExit::MmioRead { address, size } => {
                                         let mut data = [0; 8];
                                         vcpu_plugin.mmio_read(
-                                            address as u64,
+                                            address,
                                             &mut data[..size],
                                             &vcpu,
                                         );
@@ -387,7 +391,7 @@ pub fn run_vcpus(
                                         data,
                                     } => {
                                         vcpu_plugin.mmio_write(
-                                            address as u64,
+                                            address,
                                             &data[..size],
                                             &vcpu,
                                         );
@@ -483,7 +487,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
     let sigchld_fd = SignalFd::new(SIGCHLD).context("failed to create signalfd")?;
 
     // Create a pipe to capture error messages from plugin and minijail.
-    let (mut stderr_rd, stderr_wr) = pipe(true).context("failed to create stderr pipe")?;
+    let (mut stderr_rd, stderr_wr) = pipe().context("failed to create stderr pipe")?;
     add_fd_flags(stderr_rd.as_raw_descriptor(), O_NONBLOCK)
         .context("error marking stderr nonblocking")?;
 
@@ -496,13 +500,15 @@ pub fn run_config(cfg: Config) -> Result<()> {
         config.bind_mounts = true;
         let uid_map = format!("0 {} 1", geteuid());
         let gid_map = format!("0 {} 1", getegid());
-        let gid_map = if cfg.plugin_gid_maps.len() > 0 {
+        let gid_map = if !cfg.plugin_gid_maps.is_empty() {
             gid_map
                 + &cfg
                     .plugin_gid_maps
                     .into_iter()
-                    .map(|m| format!(",{} {} {}", m.inner, m.outer, m.count))
-                    .collect::<String>()
+                    .fold(String::new(), |mut output, m| {
+                        let _ = write!(output, ",{} {} {}", m.inner, m.outer, m.count);
+                        output
+                    })
         } else {
             gid_map
         };
@@ -546,31 +552,59 @@ pub fn run_config(cfg: Config) -> Result<()> {
         None
     };
 
+    #[allow(unused_mut)]
     let mut tap_interfaces: Vec<Tap> = Vec::new();
-    if let Some(host_ip) = cfg.host_ip {
-        if let Some(netmask) = cfg.netmask {
-            if let Some(mac_address) = cfg.mac_address {
+    #[cfg(feature = "net")]
+    for net_params in cfg.net {
+        use devices::virtio::NetParametersMode;
+        use net_util::TapTCommon;
+
+        if net_params.vhost_net.is_some() {
+            bail!("vhost-net not supported with plugin");
+        }
+
+        match net_params.mode {
+            NetParametersMode::RawConfig {
+                host_ip,
+                netmask,
+                mac,
+            } => {
                 let tap = Tap::new(false, false).context("error opening tap device")?;
                 tap.set_ip_addr(host_ip).context("error setting tap ip")?;
                 tap.set_netmask(netmask)
                     .context("error setting tap netmask")?;
-                tap.set_mac_address(mac_address)
+                tap.set_mac_address(mac)
                     .context("error setting tap mac address")?;
 
                 tap.enable().context("error enabling tap device")?;
                 tap_interfaces.push(tap);
             }
+            NetParametersMode::TapName { tap_name, mac } => {
+                let tap = Tap::new_with_name(tap_name.as_bytes(), true, false)
+                    .context("failed to create tap device from name")?;
+                if let Some(mac) = mac {
+                    tap.set_mac_address(mac)
+                        .context("error setting tap mac addres")?;
+                }
+                tap_interfaces.push(tap);
+            }
+            NetParametersMode::TapFd { tap_fd, mac } => {
+                // SAFETY:
+                // Safe because we ensure that we get a unique handle to the fd.
+                let tap = unsafe {
+                    Tap::from_raw_descriptor(
+                        base::validate_raw_descriptor(tap_fd)
+                            .context("failed to validate raw tap fd")?,
+                    )
+                    .context("failed to create tap device from raw fd")?
+                };
+                if let Some(mac) = mac {
+                    tap.set_mac_address(mac)
+                        .context("error setting tap mac addres")?;
+                }
+                tap_interfaces.push(tap);
+            }
         }
-    }
-    for tap_fd in cfg.tap_fd {
-        // Safe because we ensure that we get a unique handle to the fd.
-        let tap = unsafe {
-            Tap::from_raw_descriptor(
-                validate_raw_descriptor(tap_fd).context("failed to validate raw tap fd")?,
-            )
-            .context("failed to create tap device from raw fd")?
-        };
-        tap_interfaces.push(tap);
     }
 
     let plugin_args: Vec<&str> = cfg.params.iter().map(|s| &s[..]).collect();
@@ -586,7 +620,15 @@ pub fn run_config(cfg: Config) -> Result<()> {
         mem_policy |= MemoryPolicy::USE_HUGEPAGES;
     }
     mem.set_memory_policy(mem_policy);
-    let kvm = Kvm::new_with_path(&cfg.kvm_device_path).context("error creating Kvm")?;
+
+    let kvm_device_path = if let Some(HypervisorKind::Kvm { device }) = &cfg.hypervisor {
+        device.as_deref()
+    } else {
+        None
+    };
+
+    let kvm_device_path = kvm_device_path.unwrap_or(Path::new("/dev/kvm"));
+    let kvm = Kvm::new_with_path(kvm_device_path).context("error creating Kvm")?;
     let mut vm = Vm::new(&kvm, mem).context("error creating vm")?;
     vm.create_irq_chip()
         .context("failed to create kvm irqchip")?;

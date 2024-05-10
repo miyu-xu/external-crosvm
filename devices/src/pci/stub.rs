@@ -29,6 +29,7 @@ use crate::pci::pci_configuration::PciSubclass;
 use crate::pci::pci_device::PciDevice;
 use crate::pci::pci_device::Result;
 use crate::pci::PciAddress;
+use crate::pci::PciBarIndex;
 use crate::pci::PciDeviceError;
 use crate::Suspendable;
 
@@ -59,7 +60,7 @@ impl<'de> Deserialize<'de> for PciClassParameters {
         let class_numeric = u32::deserialize(deserializer)?;
 
         let class_code = (class_numeric >> 16) as u8;
-        let class = PciClassCode::try_from(class_code as u8).map_err(|_| {
+        let class = PciClassCode::try_from(class_code).map_err(|_| {
             serde::de::Error::custom(format!("Unknown class code {:#x}", class_code))
         })?;
 
@@ -192,15 +193,33 @@ impl PciDevice for StubPciDevice {
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.config_regs.write_reg(reg_idx, offset, data)
+        self.config_regs.write_reg(reg_idx, offset, data);
     }
 
-    fn read_bar(&mut self, _addr: u64, _data: &mut [u8]) {}
+    fn read_bar(&mut self, _bar_index: PciBarIndex, _offset: u64, _data: &mut [u8]) {}
 
-    fn write_bar(&mut self, _addr: u64, _data: &[u8]) {}
+    fn write_bar(&mut self, _bar_index: PciBarIndex, _offset: u64, _data: &[u8]) {}
 }
 
-impl Suspendable for StubPciDevice {}
+impl Suspendable for StubPciDevice {
+    fn sleep(&mut self) -> anyhow::Result<()> {
+        // There are no workers to sleep/wake.
+        Ok(())
+    }
+
+    fn wake(&mut self) -> anyhow::Result<()> {
+        // There are no workers to sleep/wake.
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        self.config_regs.snapshot()
+    }
+
+    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        self.config_regs.restore(data)
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -354,5 +373,55 @@ mod test {
         assert_eq!(params.class.subclass, 0x23);
         assert_eq!(params.class.programming_interface, 0x45);
         assert_eq!(params.revision, 52);
+    }
+
+    #[test]
+    fn stub_pci_device_snapshot_restore() -> anyhow::Result<()> {
+        let mut device = StubPciDevice::new(&CONFIG);
+        let init_reg_value = device.read_config_register(1);
+        let snapshot_init = device.snapshot().unwrap();
+
+        // Modify config reg 1 and make sure it went through.
+        let new_reg_value: u32 = 0xCAFE;
+        device.write_config_register(1, 0, &new_reg_value.to_le_bytes());
+        assert_eq!(device.read_config_register(1), new_reg_value);
+
+        // Capture a snapshot after the modification.
+        let mut snapshot_modified = device.snapshot().unwrap();
+        assert_ne!(snapshot_init, snapshot_modified);
+
+        // Modify the same register and verify that it's restored correctly.
+        device.write_config_register(1, 0, &[0xBA, 0xBA]);
+        assert_ne!(device.read_config_register(1), new_reg_value);
+        assert_ne!(device.read_config_register(1), init_reg_value);
+        device.restore(snapshot_init.clone())?;
+        assert_eq!(device.read_config_register(1), init_reg_value);
+
+        // Capture a snapshot after restoring the initial snapshot.
+        let mut snapshot_restored = device.snapshot().unwrap();
+        assert_eq!(snapshot_init, snapshot_restored);
+
+        // Restore to the first modification and verify the values.
+        device.restore(snapshot_modified.clone())?;
+        assert_eq!(device.read_config_register(1), new_reg_value);
+        snapshot_restored = device.snapshot().unwrap();
+        assert_eq!(snapshot_modified, snapshot_restored);
+
+        /*
+        Restore the initial snapshot and verify that addresses are not encoded.
+        The addresses are only configurable during VM creation so they never
+        change afterwards and are not part of the snapshot. Force a change
+        to requested_address to confirm that.
+        */
+        device.restore(snapshot_init.clone())?;
+        device.requested_address = PciAddress {
+            bus: 0x0d,
+            dev: 0x0e,
+            func: 0x4,
+        };
+        snapshot_modified = device.snapshot().unwrap();
+        assert_eq!(snapshot_init, snapshot_modified);
+
+        Ok(())
     }
 }

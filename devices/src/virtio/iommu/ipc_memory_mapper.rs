@@ -71,6 +71,14 @@ pub struct IpcMemoryMapper {
     endpoint_id: u32,
 }
 
+impl std::fmt::Debug for IpcMemoryMapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("IpcMemoryMapper")
+            .field("endpoint_id", &self.endpoint_id)
+            .finish()
+    }
+}
+
 fn map_bad_resp(resp: IommuResponse) -> anyhow::Error {
     match resp {
         IommuResponse::Err(e) => anyhow!("remote error {}", e),
@@ -161,9 +169,8 @@ pub struct CreateIpcMapperRet {
 /// # Arguments
 ///
 /// * `endpoint_id` - For the remote iommu to identify the device/ipc mapper.
-/// * `request_tx` - A tube to send `TranslateRequest` to a remote iommu. This
-///                  should be cloned and shared between different ipc mappers
-///                  with different `endpoint_id`s.
+/// * `request_tx` - A tube to send `TranslateRequest` to a remote iommu. This should be cloned and
+///   shared between different ipc mappers with different `endpoint_id`s.
 pub fn create_ipc_mapper(endpoint_id: u32, request_tx: Tube) -> CreateIpcMapperRet {
     let (response_tx, response_rx) = Tube::pair().expect("failed to create tube pair");
     CreateIpcMapperRet {
@@ -172,6 +179,7 @@ pub fn create_ipc_mapper(endpoint_id: u32, request_tx: Tube) -> CreateIpcMapperR
     }
 }
 
+#[derive(Debug)]
 struct ExportedRegionInner {
     regions: Vec<MemRegion>,
     iova: u64,
@@ -188,7 +196,7 @@ impl Drop for ExportedRegionInner {
 }
 
 /// A region exported from the virtio-iommu.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExportedRegion {
     inner: Arc<Mutex<ExportedRegionInner>>,
 }
@@ -313,7 +321,7 @@ impl ExportedRegion {
             .lock()
             .regions
             .iter()
-            .all(|r| mem.range_overlap(r.gpa, r.gpa.unchecked_add(r.len as u64)))
+            .all(|r| mem.range_overlap(r.gpa, r.gpa.unchecked_add(r.len)))
     }
 
     /// Gets the list of guest physical regions for the exported region.

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use base::error;
 use base::AsRawDescriptor;
 use base::RawDescriptor;
+use base::SharedMemory;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
@@ -30,11 +31,10 @@ use crate::pci::PciProgrammingInterface;
 use crate::pci::PciSerialBusSubClass;
 use crate::register_space::Register;
 use crate::register_space::RegisterSpace;
-use crate::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
-use crate::usb::xhci::xhci::Xhci;
 use crate::usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use crate::usb::xhci::xhci_regs::init_xhci_mmio_space_and_regs;
 use crate::usb::xhci::xhci_regs::XhciRegs;
+use crate::usb::xhci::Xhci;
 use crate::utils::FailHandle;
 use crate::IrqLevelEvent;
 use crate::Suspendable;
@@ -95,10 +95,10 @@ impl FailHandle for XhciFailHandle {
 enum XhciControllerState {
     Unknown,
     Created {
-        device_provider: HostBackendDeviceProvider,
+        device_provider: Box<dyn XhciBackendDeviceProvider>,
     },
     IrqAssigned {
-        device_provider: HostBackendDeviceProvider,
+        device_provider: Box<dyn XhciBackendDeviceProvider>,
         irq_evt: IrqLevelEvent,
     },
     Initialized {
@@ -120,10 +120,10 @@ pub struct XhciController {
 
 impl XhciController {
     /// Create new xhci controller.
-    pub fn new(mem: GuestMemory, usb_provider: HostBackendDeviceProvider) -> Self {
+    pub fn new(mem: GuestMemory, usb_provider: Box<dyn XhciBackendDeviceProvider>) -> Self {
         let config_regs = PciConfiguration::new(
             0x01b73, // fresco logic, (google = 0x1ae0)
-            0x1000,  // fresco logic pdk. This chip has broken msi. See kernel xhci-pci.c
+            0x1400,  // fresco logic fl1400. This chip has broken msi. See kernel xhci-pci.c
             PciClassCode::SerialBusController,
             &PciSerialBusSubClass::Usb,
             Some(&UsbControllerProgrammingInterface::Usb3HostController),
@@ -285,18 +285,30 @@ impl PciDevice for XhciController {
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.config_regs.write_reg(reg_idx, offset, data)
+        self.config_regs.write_reg(reg_idx, offset, data);
     }
 
-    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        let bar0 = self.config_regs.get_bar_addr(0);
-        if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
+    fn setup_pci_config_mapping(
+        &mut self,
+        shmem: &SharedMemory,
+        base: usize,
+        len: usize,
+    ) -> Result<bool, PciDeviceError> {
+        self.config_regs
+            .setup_mapping(shmem, base, len)
+            .map(|_| true)
+            .map_err(PciDeviceError::MmioSetup)
+    }
+
+    fn read_bar(&mut self, bar_index: usize, offset: u64, data: &mut [u8]) {
+        if bar_index != 0 {
             return;
         }
+
         match &self.state {
             XhciControllerState::Initialized { mmio, .. } => {
                 // Read bar would still work even if it's already failed.
-                mmio.read(addr - bar0, data);
+                mmio.read(offset, data);
             }
             _ => {
                 error!("xhci controller is in a wrong state");
@@ -304,17 +316,17 @@ impl PciDevice for XhciController {
         }
     }
 
-    fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let bar0 = self.config_regs.get_bar_addr(0);
-        if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
+    fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
+        if bar_index != 0 {
             return;
         }
+
         match &self.state {
             XhciControllerState::Initialized {
                 mmio, fail_handle, ..
             } => {
                 if !fail_handle.failed() {
-                    mmio.write(addr - bar0, data);
+                    mmio.write(offset, data);
                 }
             }
             _ => {

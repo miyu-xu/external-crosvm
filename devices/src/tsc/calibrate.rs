@@ -34,7 +34,7 @@ pub enum TscCalibrationError {
     SetCpuAffinityError { core: usize, err: base::Error },
 }
 
-/// Get the standard deviation of a Vec<T>.
+/// Get the standard deviation of a `Vec<T>`.
 pub fn standard_deviation<T: num_traits::ToPrimitive + num_traits::Num + Copy>(items: &[T]) -> f64 {
     let sum: T = items.iter().fold(T::zero(), |acc: T, elem| acc + *elem);
     let count = items.len();
@@ -186,7 +186,7 @@ fn calibrate_tsc_frequency(
     }
 
     Ok((
-        good_samples.iter().map(|&x| x as i128).sum::<i128>() / good_samples.len() as i128,
+        good_samples.iter().sum::<i128>() / good_samples.len() as i128,
         Vec::from_iter(good_end_moments),
     ))
 }
@@ -239,8 +239,7 @@ fn measure_tsc_offset(
         }
     }
 
-    let average_diff =
-        good_samples.iter().map(|&x| x as i128).sum::<i128>() / good_samples.len() as i128;
+    let average_diff = good_samples.iter().sum::<i128>() / good_samples.len() as i128;
 
     // Convert the diff to nanoseconds using the tsc_frequency
     Ok(average_diff * 1_000_000_000 / tsc_frequency as i128)
@@ -396,7 +395,7 @@ fn calibrate_tsc_state_inner(rdtsc: fn() -> u64, cores: Vec<usize>) -> Result<Ts
         }
     }
 
-    TscState::new(freq as u64, offsets, TSC_OFFSET_GROUPING_THRESHOLD)
+    TscState::new(freq, offsets, TSC_OFFSET_GROUPING_THRESHOLD)
 }
 
 #[cfg(test)]
@@ -451,6 +450,7 @@ mod tests {
         }
 
         fn rdtsc_frequency_higher_than_u32() -> u64 {
+            // SAFETY: trivially safe
             unsafe { _rdtsc() }.wrapping_mul(1000)
         }
 
@@ -472,6 +472,7 @@ mod tests {
     fn test_offset_identification_core_0() {
         fn rdtsc_with_core_0_offset_by_100_000() -> u64 {
             let mut id = 0u32;
+            // SAFETY: trivially safe
             let mut value = unsafe { __rdtscp(&mut id as *mut u32) };
             if id == 0 {
                 value += 100_000;
@@ -514,6 +515,7 @@ mod tests {
     fn test_offset_identification_core_1() {
         fn rdtsc_with_core_1_offset_by_100_000() -> u64 {
             let mut id = 0u32;
+            // SAFETY: trivially safe
             let mut value = unsafe { __rdtscp(&mut id as *mut u32) };
             if id == 1 {
                 value += 100_000;

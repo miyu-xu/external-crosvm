@@ -15,8 +15,7 @@ These commits can be found in
 The crosvm team is submitting these merges through the ChromeOS CQ regularly, which happens
 **roughly once per week**, but time can vary depending on CQ health.
 
-Googlers can find more information on the merge process at
-[go/crosvm/playbook](http://go/crosvm/playbook)
+Googlers can find more information on the merge process at [go/crosvm-uprev-playbook].
 
 ## Building crosvm for ChromeOS
 
@@ -24,28 +23,32 @@ crosvm on ChromeOS is usually built with Portage, so it follows the same general
 `cros_workon` package. The full package name is `chromeos-base/crosvm`.
 
 The developer guide section on
-[Make your Changes](https://chromium.googlesource.com/chromiumos/docs/+/main/developer_guide.md#make-your-changes)
-applies to crosvm as well. You can build crosvm with `cros_workon_make`:
+[Make your Changes](https://www.chromium.org/chromium-os/developer-library/guides/development/developer-guide/#make-your-changes)
+applies to crosvm as well. You can specify the development version to be built with cros_workon, and
+build with cros build-packages. Consecutive builds without changes to dependency can be done with
+emerge.
 
 ```bash
-cros_workon --board=${BOARD} start crosvm
-cros_workon_make --board=${BOARD} crosvm
+(chroot)$ cros_workon --board=${BOARD} start chromeos-base/crosvm
+(chroot or host)$ cros build-packages --board=${BOARD} chromeos-base/crosvm
+(chroot)$ emerge-${BOARD} chromeos-base/crosvm -j 10
 ```
 
 Deploy it via `cros deploy`:
 
 ```bash
-cros_workon_make --board=${BOARD} --install crosvm
-cros deploy ${IP} crosvm
+(chroot)$ cros deploy ${IP} crosvm
 ```
 
 Iterative test runs can be done as well:
 
 ```bash
-cros_workon_make --board=${BOARD} --test crosvm
+(chroot)$ FEATURES=test emerge-${BOARD} chromeos-base/crosvm -j 10
 ```
 
-Warning: `cros_workon_make` patches the local Cargo.toml file. Please do not submit these changes.
+Warning: Using `cros_workon_make` is possible but patches the local Cargo.toml file and some
+configuration files. Please do not submit these changes. Also something makes it rebuild a lot of
+the files.
 
 ### Rebuilding all crosvm dependencies
 
@@ -54,7 +57,7 @@ Crosvm has a lot of rust dependencies that are installed into a registry inside 
 up to date, run:
 
 ```bash
-emerge-${BOARD} --update --deep -j$(nproc) crosvm
+(chroot or host)$ cros build-packages --board=${BOARD} chromeos-base/crosvm
 ```
 
 ## Building crosvm for Linux
@@ -63,8 +66,8 @@ emerge-${BOARD} --update --deep -j$(nproc) crosvm
 prefer to use standard cargo workflows used upstream.
 
 Just make sure to initialize git submodules (`git submodules update --init`), which is not done by
-repo. After that, you can use the workflows as outlined in [Building Crosvm](../building_crosvm.md)
-**outside** of cros_sdk.
+repo. After that, you can use the workflows as outlined in
+[Building Crosvm](../building_crosvm/linux.md) **outside** of cros_sdk.
 
 Note: You can **not** build or test ChromeOS specific features this way.
 
@@ -86,8 +89,7 @@ have been merged into the [chromiumos/platform/crosvm] repository.
 The merge will also contain all `BUG=` references that will notify your bugs about when the change
 is submitted.
 
-For more details on the process, please see [go/crosvm-playbook](http://go/crosvm-playbook) (Google
-only).
+For more details on the process, please see [go/crosvm-uprev-playbook] (Googlers only).
 
 ## Cq-Depend
 
@@ -103,6 +105,8 @@ If it cannot be avoided at all, please follow this process:
 
 ## Cherry-picking
 
+### Cherry-picking without the usual merge process
+
 If you need your changes faster than the usual merge frequency, please follow this process:
 
 1. Upload and submit your change to upstream crosvm.
@@ -112,5 +116,34 @@ If you need your changes faster than the usual merge frequency, please follow th
 **Never** submit code just to ChromeOS, as it will cause upstream to diverge and result in merge
 conflicts down the road.
 
+### Cherry-picking to release branch
+
+Your change need to be merged into [chromiumos/platform/crosvm] to cherry-pick it to a release
+branch. You should follow
+[ChromiumOS Merge Workflow](https://www.chromium.org/chromium-os/developer-library/guides/development/work-on-branch/)
+to cherry-pick your changes. Since changes are merged from [crosvm/crosvm] to
+[chromiumos/platform/crosvm] through [the merge process](#the-merge-process), you can't use gerrit
+to cherry-pick your changes but need to use git command locally.
+
+```
+$ cd chromiumos/src/platform/crosvm
+$ git branch -a | grep remotes/cros/release-R120
+  remotes/cros/release-R120-15662.B
+$ git checkout -b my-cherry-pick cros/release-R120-15662.B
+$ git cherry-pick -x $COMMIT
+$ git push cros HEAD:refs/for/release-R120-15662.B
+```
+
+`$COMMIT` is the commit hash of the original change you want to cherry-pick not the merge commit.
+Note that you push to special gerrit `refs/for/`, not pushing directly to the release branch.
+
+Also note that release branch cherry picks don't get CQ tested at all - they are submitted directly
+once you CQ+2 - so it is very important to test locally first.
+
+## Running a Tryjob
+
+For googlers, see go/cdg-site
+
 [chromiumos/platform/crosvm]: https://chromium.googlesource.com/chromiumos/platform/crosvm
 [crosvm/crosvm]: https://chromium.googlesource.com/crosvm/crosvm
+[go/crosvm-uprev-playbook]: http://go/crosvm-uprev-playbook

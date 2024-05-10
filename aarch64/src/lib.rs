@@ -7,16 +7,18 @@
 #![cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
 use arch::get_serial_cmdline;
+use arch::CpuSet;
+use arch::DtbOverlay;
 use arch::GetSerialCmdlineError;
-use arch::MsrConfig;
-use arch::MsrExitHandlerError;
 use arch::RunnableLinuxVm;
+use arch::VcpuAffinity;
 use arch::VmComponents;
 use arch::VmImage;
 use base::Event;
@@ -29,6 +31,7 @@ use devices::vmwdt::VMWDT_DEFAULT_TIMEOUT_SEC;
 use devices::Bus;
 use devices::BusDeviceObj;
 use devices::BusError;
+use devices::BusType;
 use devices::IrqChip;
 use devices::IrqChipAArch64;
 use devices::IrqEventSource;
@@ -37,14 +40,17 @@ use devices::PciConfigMmio;
 use devices::PciDevice;
 use devices::PciRootCommand;
 use devices::Serial;
-#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use devices::VirtCpufreq;
+#[cfg(feature = "gdb")]
 use gdbstub::arch::Arch;
-#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
+#[cfg(feature = "gdb")]
 use gdbstub_arch::aarch64::AArch64 as GdbArch;
 use hypervisor::CpuConfigAArch64;
 use hypervisor::DeviceKind;
 use hypervisor::Hypervisor;
 use hypervisor::HypervisorCap;
+use hypervisor::MemCacheType;
 use hypervisor::ProtectionType;
 use hypervisor::VcpuAArch64;
 use hypervisor::VcpuFeature;
@@ -55,20 +61,23 @@ use hypervisor::VmAArch64;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
 use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use sync::Condvar;
 use sync::Mutex;
 use thiserror::Error;
 use vm_control::BatControl;
 use vm_control::BatteryType;
 use vm_memory::GuestAddress;
-#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
+use vm_memory::MemoryRegionOptions;
+use vm_memory::MemoryRegionPurpose;
 
 mod fdt;
 
@@ -164,8 +173,6 @@ fn get_swiotlb_addr(
     }
 }
 
-// Serial device requires 8 bytes of registers;
-const AARCH64_SERIAL_SIZE: u64 = 0x8;
 // This was the speed kvmtool used, not sure if it matters.
 const AARCH64_SERIAL_SPEED: u32 = 1843200;
 // The serial device gets the first interrupt line
@@ -199,6 +206,11 @@ const AARCH64_MMIO_SIZE: u64 = 0x2000000;
 // Virtio devices start at SPI interrupt number 4
 const AARCH64_IRQ_BASE: u32 = 4;
 
+// Virtual CPU Frequency Device.
+const AARCH64_VIRTFREQ_BASE: u64 = 0x1040000;
+const AARCH64_VIRTFREQ_SIZE: u64 = 0x8;
+const AARCH64_VIRTFREQ_MAXSIZE: u64 = 0x10000;
+
 // PMU PPI interrupt, same as qemu
 const AARCH64_PMU_IRQ: u32 = 7;
 
@@ -217,6 +229,10 @@ pub enum Error {
     CloneIrqChip(base::Error),
     #[error("the given kernel command line was invalid: {0}")]
     Cmdline(kernel_cmdline::Error),
+    #[error("failed to configure CPU Frequencies: {0}")]
+    CpuFrequencies(base::Error),
+    #[error("failed to configure CPU topology: {0}")]
+    CpuTopology(base::Error),
     #[error("unable to create battery devices: {0}")]
     CreateBatDevices(arch::DeviceRegistrationError),
     #[error("unable to make an Event: {0}")]
@@ -253,6 +269,8 @@ pub enum Error {
     InitPvtimeError(base::Error),
     #[error("initrd could not be loaded: {0}")]
     InitrdLoadFailure(arch::LoadImageError),
+    #[error("failed to initialize virtual machine {0}")]
+    InitVmError(base::Error),
     #[error("kernel could not be loaded: {0}")]
     KernelLoadFailure(kernel_loader::Error),
     #[error("error loading Kernel from Elf image: {0}")]
@@ -273,6 +291,8 @@ pub enum Error {
     RegisterIrqfd(base::Error),
     #[error("error registering PCI bus: {0}")]
     RegisterPci(BusError),
+    #[error("error registering virtual cpufreq device: {0}")]
+    RegisterVirtCpufreq(BusError),
     #[error("error registering virtual socket device: {0}")]
     RegisterVsock(arch::DeviceRegistrationError),
     #[error("failed to set device attr: {0}")]
@@ -316,7 +336,47 @@ fn fdt_address(memory_end: GuestAddress, has_bios: bool) -> GuestAddress {
     }
 }
 
+fn load_kernel(
+    guest_mem: &GuestMemory,
+    kernel_start: GuestAddress,
+    mut kernel_image: &mut File,
+) -> Result<LoadedKernel> {
+    if let Ok(elf_kernel) = kernel_loader::load_elf(
+        guest_mem,
+        kernel_start,
+        &mut kernel_image,
+        AARCH64_PHYS_MEM_START,
+    ) {
+        return Ok(elf_kernel);
+    }
+
+    if let Ok(lz4_kernel) =
+        kernel_loader::load_arm64_kernel_lz4(guest_mem, kernel_start, &mut kernel_image)
+    {
+        return Ok(lz4_kernel);
+    }
+
+    kernel_loader::load_arm64_kernel(guest_mem, kernel_start, kernel_image)
+        .map_err(Error::KernelLoadFailure)
+}
+
 pub struct AArch64;
+
+fn get_block_size() -> u64 {
+    let page_size = base::pagesize();
+    // Each PTE entry being 8 bytes long, we can fit in one page (page_size / 8)
+    // entries.
+    let ptes_per_page = page_size / 8;
+    let block_size = page_size * ptes_per_page;
+
+    block_size as u64
+}
+
+fn get_vcpu_mpidr_aff<Vcpu: VcpuAArch64>(vcpus: &[Vcpu], index: usize) -> Option<u64> {
+    const MPIDR_AFF_MASK: u64 = 0xff_00ff_ffff;
+
+    Some(vcpus.get(index)?.get_mpidr().ok()? & MPIDR_AFF_MASK)
+}
 
 impl arch::LinuxArch for AArch64 {
     type Error = Error;
@@ -326,21 +386,29 @@ impl arch::LinuxArch for AArch64 {
     fn guest_memory_layout(
         components: &VmComponents,
         hypervisor: &impl Hypervisor,
-    ) -> std::result::Result<Vec<(GuestAddress, u64)>, Self::Error> {
-        let mut memory_regions =
-            vec![(GuestAddress(AARCH64_PHYS_MEM_START), components.memory_size)];
+    ) -> std::result::Result<Vec<(GuestAddress, u64, MemoryRegionOptions)>, Self::Error> {
+        let mut memory_regions = vec![(
+            GuestAddress(AARCH64_PHYS_MEM_START),
+            components.memory_size,
+            MemoryRegionOptions::new().align(get_block_size()),
+        )];
 
         // Allocate memory for the pVM firmware.
         if components.hv_cfg.protection_type.runs_firmware() {
             memory_regions.push((
                 GuestAddress(AARCH64_PROTECTED_VM_FW_START),
                 AARCH64_PROTECTED_VM_FW_MAX_SIZE,
+                MemoryRegionOptions::new().purpose(MemoryRegionPurpose::ProtectedFirmwareRegion),
             ));
         }
 
         if let Some(size) = components.swiotlb {
             if let Some(addr) = get_swiotlb_addr(components.memory_size, hypervisor) {
-                memory_regions.push((addr, size));
+                memory_regions.push((
+                    addr,
+                    size,
+                    MemoryRegionOptions::new().purpose(MemoryRegionPurpose::StaticSwiotlbRegion),
+                ));
             }
         }
 
@@ -368,7 +436,11 @@ impl arch::LinuxArch for AArch64 {
         vcpu_ids: &mut Vec<usize>,
         dump_device_tree_blob: Option<PathBuf>,
         _debugcon_jail: Option<Minijail>,
-        #[cfg(feature = "swap")] swap_controller: Option<&swap::SwapController>,
+        #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] _guest_suspended_cvar: Option<
+            Arc<(Mutex<bool>, Condvar)>,
+        >,
+        device_tree_overlays: Vec<DtbOverlay>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmAArch64,
@@ -391,17 +463,7 @@ impl arch::LinuxArch for AArch64 {
                 }
             }
             VmImage::Kernel(ref mut kernel_image) => {
-                let loaded_kernel = if let Ok(elf_kernel) = kernel_loader::load_elf(
-                    &mem,
-                    get_kernel_addr(),
-                    kernel_image,
-                    AARCH64_PHYS_MEM_START,
-                ) {
-                    elf_kernel
-                } else {
-                    kernel_loader::load_arm64_kernel(&mem, get_kernel_addr(), kernel_image)
-                        .map_err(Error::KernelLoadFailure)?
-                };
+                let loaded_kernel = load_kernel(&mem, get_kernel_addr(), kernel_image)?;
                 let kernel_end = loaded_kernel.address_range.end;
                 initrd = match components.initrd_image {
                     Some(initrd_file) => {
@@ -438,12 +500,21 @@ impl arch::LinuxArch for AArch64 {
                 .map_err(Error::CreateVcpu)?
                 .downcast::<Vcpu>()
                 .map_err(|_| Error::DowncastVcpu)?;
-            let per_vcpu_init = Self::vcpu_init(
-                vcpu_id,
-                &payload,
-                fdt_offset,
-                components.hv_cfg.protection_type,
-            );
+            let per_vcpu_init = if vm
+                .get_hypervisor()
+                .check_capability(HypervisorCap::HypervisorInitializedBootContext)
+            {
+                // No registers are initialized: VcpuInitAArch64.regs is an empty BTreeMap
+                Default::default()
+            } else {
+                Self::vcpu_init(
+                    vcpu_id,
+                    &payload,
+                    fdt_offset,
+                    components.hv_cfg.protection_type,
+                    components.boot_cpu,
+                )
+            };
             has_pvtime &= vcpu.has_pvtime_support();
             vcpus.push(vcpu);
             vcpu_ids.push(vcpu_id);
@@ -452,7 +523,7 @@ impl arch::LinuxArch for AArch64 {
 
         // Initialize Vcpus after all Vcpu objects have been created.
         for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
-            vcpu.init(&Self::vcpu_features(vcpu_id, use_pmu))
+            vcpu.init(&Self::vcpu_features(vcpu_id, use_pmu, components.boot_cpu))
                 .map_err(Error::VcpuInit)?;
         }
 
@@ -467,6 +538,7 @@ impl arch::LinuxArch for AArch64 {
                 Box::new(pvtime_mem),
                 false,
                 false,
+                MemCacheType::CacheCoherent,
             )
             .map_err(Error::MapPvtimeError)?;
         }
@@ -498,10 +570,10 @@ impl arch::LinuxArch for AArch64 {
             }
         }
 
-        let mmio_bus = Arc::new(devices::Bus::new());
+        let mmio_bus = Arc::new(devices::Bus::new(BusType::Mmio));
 
         // ARM doesn't really use the io bus like x86, so just create an empty bus.
-        let io_bus = Arc::new(devices::Bus::new());
+        let io_bus = Arc::new(devices::Bus::new(BusType::Io));
 
         // Event used by PMDevice to notify crosvm that
         // guest OS is trying to suspend.
@@ -515,19 +587,22 @@ impl arch::LinuxArch for AArch64 {
             .into_iter()
             .map(|(dev, jail_orig)| (dev.into_pci_device().unwrap(), jail_orig))
             .collect();
-        let (pci, pci_irqs, mut pid_debug_label_map, _amls) = arch::generate_pci_root(
-            pci_devices,
-            irq_chip.as_irq_chip_mut(),
-            mmio_bus.clone(),
-            io_bus.clone(),
-            system_allocator,
-            &mut vm,
-            (devices::AARCH64_GIC_NR_SPIS - AARCH64_IRQ_BASE) as usize,
-            None,
-            #[cfg(feature = "swap")]
-            swap_controller,
-        )
-        .map_err(Error::CreatePciRoot)?;
+        let (pci, pci_irqs, mut pid_debug_label_map, _amls, _gpe_scope_amls) =
+            arch::generate_pci_root(
+                pci_devices,
+                irq_chip.as_irq_chip_mut(),
+                mmio_bus.clone(),
+                GuestAddress(AARCH64_PCI_CFG_BASE),
+                8,
+                io_bus.clone(),
+                system_allocator,
+                &mut vm,
+                (devices::AARCH64_GIC_NR_SPIS - AARCH64_IRQ_BASE) as usize,
+                None,
+                #[cfg(feature = "swap")]
+                swap_controller,
+            )
+            .map_err(Error::CreatePciRoot)?;
 
         let pci_root = Arc::new(Mutex::new(pci));
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci_root.clone(), 8)));
@@ -539,14 +614,16 @@ impl arch::LinuxArch for AArch64 {
             .into_iter()
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
-        let (platform_devices, mut platform_pid_debug_label_map) =
-            arch::sys::unix::generate_platform_bus(
+        let (platform_devices, mut platform_pid_debug_label_map, dev_resources) =
+            arch::sys::linux::generate_platform_bus(
                 platform_devices,
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,
                 system_allocator,
+                &mut vm,
                 #[cfg(feature = "swap")]
                 swap_controller,
+                components.hv_cfg.protection_type,
             )
             .map_err(Error::CreatePlatformBus)?;
         pid_debug_label_map.append(&mut platform_pid_debug_label_map);
@@ -560,11 +637,11 @@ impl arch::LinuxArch for AArch64 {
 
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let com_evt_2_4 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
-        arch::add_serial_devices(
+        let serial_devices = arch::add_serial_devices(
             components.hv_cfg.protection_type,
             &mmio_bus,
-            com_evt_1_3.get_trigger(),
-            com_evt_2_4.get_trigger(),
+            (AARCH64_SERIAL_1_3_IRQ, com_evt_1_3.get_trigger()),
+            (AARCH64_SERIAL_2_4_IRQ, com_evt_2_4.get_trigger()),
             serial_parameters,
             serial_jail,
             #[cfg(feature = "swap")]
@@ -588,8 +665,42 @@ impl arch::LinuxArch for AArch64 {
             .insert(pci_bus, AARCH64_PCI_CFG_BASE, AARCH64_PCI_CFG_SIZE)
             .map_err(Error::RegisterPci)?;
 
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        if !components.cpu_frequencies.is_empty() {
+            // TODO: Revisit and optimization after benchmarking
+            let socket = components
+                .virt_cpufreq_socket
+                .map(|s| Arc::new(Mutex::new(s)));
+            for vcpu in 0..vcpu_count {
+                let vcpu_affinity = match components.vcpu_affinity.clone() {
+                    Some(VcpuAffinity::Global(v)) => v,
+                    Some(VcpuAffinity::PerVcpu(mut m)) => m.remove(&vcpu).unwrap_or_default(),
+                    None => panic!("vcpu_affinity needs to be set for VirtCpufreq"),
+                };
+
+                let virt_cpufreq = Arc::new(Mutex::new(VirtCpufreq::new(
+                    vcpu_affinity[0].try_into().unwrap(),
+                    socket.clone(),
+                )));
+
+                if vcpu as u64 * AARCH64_VIRTFREQ_SIZE + AARCH64_VIRTFREQ_SIZE
+                    > AARCH64_VIRTFREQ_MAXSIZE
+                {
+                    panic!("Exceeded maximum number of virt cpufreq devices");
+                }
+
+                mmio_bus
+                    .insert(
+                        virt_cpufreq,
+                        AARCH64_VIRTFREQ_BASE + (vcpu as u64 * AARCH64_VIRTFREQ_SIZE),
+                        AARCH64_VIRTFREQ_SIZE,
+                    )
+                    .map_err(Error::RegisterVirtCpufreq)?;
+            }
+        }
+
         let mut cmdline = Self::get_base_linux_cmdline();
-        get_serial_cmdline(&mut cmdline, serial_parameters, "mmio")
+        get_serial_cmdline(&mut cmdline, serial_parameters, "mmio", &serial_devices)
             .map_err(Error::GetSerialCmdline)?;
         for param in components.extra_kernel_params {
             cmdline.insert_str(&param).map_err(Error::Cmdline)?;
@@ -625,7 +736,7 @@ impl arch::LinuxArch for AArch64 {
 
                 // a dummy AML buffer. Aarch64 crosvm doesn't use ACPI.
                 let mut amls = Vec::new();
-                let (control_tube, mmio_base) = arch::sys::unix::add_goldfish_battery(
+                let (control_tube, mmio_base) = arch::sys::linux::add_goldfish_battery(
                     &mut amls,
                     bat_jail,
                     &mmio_bus,
@@ -660,9 +771,12 @@ impl arch::LinuxArch for AArch64 {
             pci_irqs,
             pci_cfg,
             &pci_ranges,
+            dev_resources,
             vcpu_count as u32,
+            &|n| get_vcpu_mpidr_aff(&vcpus, n),
             components.cpu_clusters,
             components.cpu_capacity,
+            components.cpu_frequencies,
             fdt_offset,
             cmdline.as_str(),
             (payload.entry(), payload.size() as usize),
@@ -680,8 +794,19 @@ impl arch::LinuxArch for AArch64 {
             bat_mmio_base_and_irq,
             vmwdt_cfg,
             dump_device_tree_blob,
+            &|writer, phandles| vm.create_fdt(writer, phandles),
+            components.dynamic_power_coefficient,
+            device_tree_overlays,
+            &serial_devices,
         )
         .map_err(Error::CreateFdt)?;
+
+        vm.init_arch(
+            payload.entry(),
+            fdt_offset,
+            AARCH64_FDT_MAX_SIZE.try_into().unwrap(),
+        )
+        .map_err(Error::InitVmError)?;
 
         Ok(RunnableLinuxVm {
             vm,
@@ -691,7 +816,6 @@ impl arch::LinuxArch for AArch64 {
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
             irq_chip: irq_chip.try_box_clone().map_err(Error::CloneIrqChip)?,
-            has_bios,
             io_bus,
             mmio_bus,
             pid_debug_label_map,
@@ -699,7 +823,7 @@ impl arch::LinuxArch for AArch64 {
             rt_cpus: components.rt_cpus,
             delay_rt: components.delay_rt,
             bat_control,
-            #[cfg(all(target_arch = "aarch64", feature = "gdb"))]
+            #[cfg(feature = "gdb")]
             gdb: components.gdb,
             pm: None,
             resume_notify_devices: Vec::new(),
@@ -707,6 +831,7 @@ impl arch::LinuxArch for AArch64 {
             platform_devices,
             hotplug_bus: BTreeMap::new(),
             devices_thread: None,
+            vm_request_tube: None,
         })
     }
 
@@ -718,7 +843,6 @@ impl arch::LinuxArch for AArch64 {
         vcpu_init: VcpuInitAArch64,
         _vcpu_id: usize,
         _num_cpus: usize,
-        _has_bios: bool,
         _cpu_config: Option<CpuConfigAArch64>,
     ) -> std::result::Result<(), Self::Error> {
         for (reg, value) in vcpu_init.regs.iter() {
@@ -733,14 +857,55 @@ impl arch::LinuxArch for AArch64 {
         _minijail: Option<Minijail>,
         _resources: &mut SystemAllocator,
         _tube: &mpsc::Sender<PciRootCommand>,
-        #[cfg(feature = "swap")] _swap_controller: Option<&swap::SwapController>,
+        #[cfg(feature = "swap")] _swap_controller: &mut Option<swap::SwapController>,
     ) -> std::result::Result<PciAddress, Self::Error> {
         // hotplug function isn't verified on AArch64, so set it unsupported here.
         Err(Error::Unsupported)
     }
+
+    fn get_host_cpu_frequencies_khz() -> std::result::Result<BTreeMap<usize, Vec<u32>>, Self::Error>
+    {
+        Ok(
+            Self::collect_for_each_cpu(base::logical_core_frequencies_khz)
+                .map_err(Error::CpuFrequencies)?
+                .into_iter()
+                .enumerate()
+                .collect(),
+        )
+    }
+
+    // Returns a (cpu_id -> value) map of the DMIPS/MHz capacities of logical cores
+    // in the host system.
+    fn get_host_cpu_capacity() -> std::result::Result<BTreeMap<usize, u32>, Self::Error> {
+        Ok(Self::collect_for_each_cpu(base::logical_core_capacity)
+            .map_err(Error::CpuTopology)?
+            .into_iter()
+            .enumerate()
+            .collect())
+    }
+
+    // Creates CPU cluster mask for each CPU in the host system.
+    fn get_host_cpu_clusters() -> std::result::Result<Vec<CpuSet>, Self::Error> {
+        let cluster_ids = Self::collect_for_each_cpu(base::logical_core_cluster_id)
+            .map_err(Error::CpuTopology)?;
+        let mut unique_clusters: Vec<CpuSet> = cluster_ids
+            .iter()
+            .map(|&vcpu_cluster_id| {
+                cluster_ids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &cpu_cluster_id)| vcpu_cluster_id == cpu_cluster_id)
+                    .map(|(cpu_id, _)| cpu_id)
+                    .collect()
+            })
+            .collect();
+        unique_clusters.sort_unstable();
+        unique_clusters.dedup();
+        Ok(unique_clusters)
+    }
 }
 
-#[cfg(all(target_arch = "aarch64", feature = "gdb"))]
+#[cfg(feature = "gdb")]
 impl<T: VcpuAArch64> arch::GdbOps<T> for AArch64 {
     type Error = Error;
 
@@ -900,13 +1065,13 @@ impl AArch64 {
     ///
     /// * `vcpu_id` - The VM's index for `vcpu`.
     /// * `use_pmu` - Should `vcpu` be configured to use the Performance Monitor Unit.
-    fn vcpu_features(vcpu_id: usize, use_pmu: bool) -> Vec<VcpuFeature> {
+    fn vcpu_features(vcpu_id: usize, use_pmu: bool, boot_cpu: usize) -> Vec<VcpuFeature> {
         let mut features = vec![VcpuFeature::PsciV0_2];
         if use_pmu {
             features.push(VcpuFeature::PmuV3);
         }
         // Non-boot cpus are powered off initially
-        if vcpu_id != 0 {
+        if vcpu_id != boot_cpu {
             features.push(VcpuFeature::PowerOff);
         }
 
@@ -923,6 +1088,7 @@ impl AArch64 {
         payload: &PayloadType,
         fdt_address: GuestAddress,
         protection_type: ProtectionType,
+        boot_cpu: usize,
     ) -> VcpuInitAArch64 {
         let mut regs: BTreeMap<VcpuRegAArch64, u64> = Default::default();
 
@@ -931,7 +1097,7 @@ impl AArch64 {
         regs.insert(VcpuRegAArch64::Pstate, pstate);
 
         // Other cpus are powered off initially
-        if vcpu_id == 0 {
+        if vcpu_id == boot_cpu {
             let entry_addr = if protection_type.loads_firmware() {
                 Some(AARCH64_PROTECTED_VM_FW_START)
             } else if protection_type.runs_firmware() {
@@ -959,30 +1125,12 @@ impl AArch64 {
 
         VcpuInitAArch64 { regs }
     }
-}
 
-pub struct MsrHandlers;
-
-impl MsrHandlers {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub fn read(&self, _index: u32) -> Option<u64> {
-        None
-    }
-
-    pub fn write(&self, _index: u32, _data: u64) -> Option<()> {
-        None
-    }
-
-    pub fn add_handler(
-        &mut self,
-        _index: u32,
-        _msr_config: MsrConfig,
-        _cpu_id: usize,
-    ) -> std::result::Result<(), MsrExitHandlerError> {
-        Ok(())
+    fn collect_for_each_cpu<F, T>(func: F) -> std::result::Result<Vec<T>, base::Error>
+    where
+        F: Fn(usize) -> std::result::Result<T, base::Error>,
+    {
+        (0..base::number_of_logical_cores()?).map(func).collect()
     }
 }
 
@@ -1000,7 +1148,7 @@ mod tests {
         let fdt_address = GuestAddress(0x1234);
         let prot = ProtectionType::Unprotected;
 
-        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot);
+        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot, 0);
 
         // PC: kernel image entry point
         assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::Pc), Some(&0x8080_0000));
@@ -1018,7 +1166,7 @@ mod tests {
         let fdt_address = GuestAddress(0x1234);
         let prot = ProtectionType::Unprotected;
 
-        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot);
+        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot, 0);
 
         // PC: bios image entry point
         assert_eq!(vcpu_init.regs.get(&VcpuRegAArch64::Pc), Some(&0x8020_0000));
@@ -1037,7 +1185,7 @@ mod tests {
         let fdt_address = GuestAddress(0x1234);
         let prot = ProtectionType::Protected;
 
-        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot);
+        let vcpu_init = AArch64::vcpu_init(0, &payload, fdt_address, prot, 0);
 
         // The hypervisor provides the initial value of PC, so PC should not be present in the
         // vcpu_init register map.

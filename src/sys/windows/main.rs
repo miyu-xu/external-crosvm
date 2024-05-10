@@ -13,6 +13,7 @@ use argh::FromArgs;
 use argh::SubCommand;
 use base::info;
 use base::syslog;
+use base::syslog::LogArgs;
 use base::syslog::LogConfig;
 use base::FromRawDescriptor;
 use base::RawDescriptor;
@@ -21,10 +22,8 @@ use broker_ipc::CommonChildStartupArgs;
 use crosvm_cli::sys::windows::exit::Exit;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
-use metrics::protos::event_details::EmulatorDllDetails;
-use metrics::protos::event_details::RecordDetails;
 use metrics::MetricEventType;
-#[cfg(all(feature = "slirp"))]
+#[cfg(feature = "slirp")]
 use net_util::slirp::sys::windows::SlirpStartupConfig;
 use tube_transporter::TubeToken;
 use tube_transporter::TubeTransporterReader;
@@ -35,20 +34,21 @@ use crate::crosvm::cmdline::RunCommand;
 use crate::crosvm::sys::cmdline::Commands;
 use crate::crosvm::sys::cmdline::DeviceSubcommand;
 use crate::crosvm::sys::cmdline::RunMainCommand;
-#[cfg(all(feature = "slirp"))]
+#[cfg(feature = "slirp")]
 use crate::crosvm::sys::cmdline::RunSlirpCommand;
 use crate::sys::windows::product::run_metrics;
 use crate::CommandStatus;
 use crate::Config;
 
-#[cfg(all(feature = "slirp"))]
+#[cfg(feature = "slirp")]
 pub(crate) fn run_slirp(args: RunSlirpCommand) -> Result<()> {
     let raw_transport_tube = args.bootstrap as RawDescriptor;
 
-    // Safe because we know that raw_transport_tube is valid (passed by inheritance),
-    // and that the blocking & framing modes are accurate because we create them ourselves
-    // in the broker.
     let tube_transporter =
+        // SAFETY:
+        // Safe because we know that raw_transport_tube is valid (passed by inheritance),
+        // and that the blocking & framing modes are accurate because we create them ourselves
+        // in the broker.
         unsafe { TubeTransporterReader::from_raw_descriptor(raw_transport_tube) };
 
     let mut tube_data_list = tube_transporter
@@ -76,15 +76,15 @@ pub(crate) fn run_slirp(args: RunSlirpCommand) -> Result<()> {
     net_util::Slirp::run_slirp_process(
         slirp_config.slirp_pipe,
         slirp_config.shutdown_event,
-        #[cfg(feature = "slirp-ring-capture")]
+        #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
         slirp_config.slirp_capture_file,
     );
     Ok(())
 }
 
-pub fn run_broker_impl(cfg: Config) -> Result<()> {
+pub fn run_broker_impl(cfg: Config, log_args: LogArgs) -> Result<()> {
     cros_tracing::init();
-    crate::crosvm::sys::windows::broker::run(cfg)
+    crate::crosvm::sys::windows::broker::run(cfg, log_args)
 }
 
 #[cfg(feature = "sandbox")]
@@ -108,11 +108,7 @@ pub fn sandbox_lower_token() -> Result<()> {
 }
 
 fn report_dll_loaded(dll_name: String) {
-    let mut dll_load_details = EmulatorDllDetails::new();
-    dll_load_details.set_dll_base_name(dll_name);
-    let mut details = RecordDetails::new();
-    details.set_emulator_dll_details(dll_load_details);
-    metrics::log_event_with_details(MetricEventType::DllLoaded, &details);
+    metrics::log_event(MetricEventType::DllLoaded(dll_name));
 }
 
 pub fn get_library_watcher(
@@ -147,35 +143,32 @@ pub(crate) fn run_vm_for_broker(args: RunMainCommand) -> Result<()> {
 
 pub(crate) fn cleanup() {
     // We've already cleaned everything up by waiting for all the vcpu threads on windows.
-    // TODO: b/142733266. When we sandbox each device, have a way to terminate the other sandboxed processes.
+    // TODO: b/142733266. When we sandbox each device, have a way to terminate the other sandboxed
+    // processes.
 }
 
-fn run_broker(cmd: RunCommand) -> Result<()> {
+fn run_broker(cmd: RunCommand, log_args: LogArgs) -> Result<()> {
     match TryInto::<Config>::try_into(cmd) {
-        Ok(cfg) => run_broker_impl(cfg),
+        Ok(cfg) => run_broker_impl(cfg, log_args),
         Err(e) => Err(anyhow!("{}", e)),
     }
 }
 
-pub(crate) fn run_command(cmd: Commands) -> anyhow::Result<()> {
+pub(crate) fn run_command(cmd: Commands, log_args: LogArgs) -> anyhow::Result<()> {
     match cmd {
         Commands::RunMetrics(cmd) => run_metrics(cmd),
-        Commands::RunMP(cmd) => run_broker(cmd.run),
+        Commands::RunMP(cmd) => run_broker(cmd.run, log_args),
         Commands::RunMain(cmd) => run_vm_for_broker(cmd),
         #[cfg(feature = "slirp")]
         Commands::RunSlirp(cmd) => run_slirp(cmd),
     }
 }
 
-pub(crate) fn init_log<F: 'static>(log_config: LogConfig<F>, cfg: &Config) -> Result<()>
-where
-    F: Fn(&mut base::syslog::fmt::Formatter, &log::Record<'_>) -> std::io::Result<()> + Sync + Send,
-{
+pub(crate) fn init_log(log_config: LogConfig, cfg: &Config) -> Result<()> {
     if let Err(e) = syslog::init_with(LogConfig {
-        proc_name: if let Some(ref tag) = cfg.syslog_tag {
-            tag.to_string()
-        } else {
-            String::from("crosvm")
+        log_args: LogArgs {
+            stderr: cfg.log_file.is_none(),
+            ..log_config.log_args
         },
         pipe: if let Some(log_file_path) = &cfg.log_file {
             let file = OpenOptions::new()
@@ -189,7 +182,6 @@ where
         } else {
             None
         },
-        stderr: if cfg.log_file.is_some() { false } else { true },
         ..log_config
     }) {
         eprintln!("failed to initialize syslog: {}", e);

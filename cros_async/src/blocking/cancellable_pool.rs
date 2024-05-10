@@ -5,11 +5,11 @@
 //! Provides an async blocking pool whose tasks can be cancelled.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use async_task::Task;
 use once_cell::sync::Lazy;
 use sync::Condvar;
 use sync::Mutex;
@@ -22,26 +22,20 @@ use crate::BlockingPool;
 /// This is convenient, though not preferred. Pros/cons:
 /// + It avoids passing executor all the way to each call sites.
 /// + The call site can assume that executor will never shutdown.
-/// + Provides similar functionality as async_task with a few improvements
-///   around ability to cancel.
+/// + Provides similar functionality as async_task with a few improvements around ability to cancel.
 /// - Globals are harder to reason about.
 static EXECUTOR: Lazy<CancellableBlockingPool> =
     Lazy::new(|| CancellableBlockingPool::new(256, Duration::from_secs(10)));
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(PartialEq, Eq, PartialOrd)]
+#[derive(PartialEq, Eq, PartialOrd, Default)]
 enum WindDownStates {
+    #[default]
     Armed,
     Disarmed,
     ShuttingDown,
     ShutDown,
-}
-
-impl Default for WindDownStates {
-    fn default() -> Self {
-        WindDownStates::Armed
-    }
 }
 
 #[derive(Default)]
@@ -83,7 +77,7 @@ struct Inner {
 }
 
 impl Inner {
-    pub fn spawn<F, R>(self: &Arc<Self>, f: F) -> Task<R>
+    pub fn spawn<F, R>(self: &Arc<Self>, f: F) -> impl Future<Output = R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -169,6 +163,7 @@ impl CancellableBlockingPool {
     /// Spawn a task to run in the `CancellableBlockingPool`.
     ///
     /// Callers may `await` the returned `Task` to be notified when the work is completed.
+    /// Dropping the future will not cancel the task.
     ///
     /// `cancel` helps to cancel a queued or in-flight operation `f`.
     /// `cancel` may be called more than once if `f` doesn't respond to `cancel`.
@@ -207,7 +202,7 @@ impl CancellableBlockingPool {
     ///    assert_eq!(*shared3.0.lock().unwrap(), cancelled);
     /// # }
     /// ```
-    pub fn spawn<F, R, G>(&self, f: F, cancel: G) -> Task<R>
+    pub fn spawn<F, R, G>(&self, f: F, cancel: G) -> impl Future<Output = R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -283,7 +278,6 @@ impl CancellableBlockingPool {
     /// This will block until all work that has been started by the worker threads is finished. Any
     /// work that was added to the `CancellableBlockingPool` but not yet picked up by a worker
     /// thread will not complete and `await`ing on the `Task` for that work will panic.
-    ///
     pub fn shutdown(&self) -> Result<(), Error> {
         self.shutdown_with_timeout(DEFAULT_SHUTDOWN_TIMEOUT)
     }
@@ -322,7 +316,9 @@ impl Default for CancellableBlockingPool {
 
 impl Drop for CancellableBlockingPool {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if let Err(e) = self.shutdown() {
+            base::error!("CancellableBlockingPool::shutdown failed: {}", e);
+        }
     }
 }
 
@@ -335,7 +331,7 @@ impl Drop for CancellableBlockingPool {
 /// Callers may `await` the returned `Task` to be notified when the work is completed.
 ///
 /// See also: `spawn`.
-pub fn unblock<F, R, G>(f: F, cancel: G) -> Task<R>
+pub fn unblock<F, R, G>(f: F, cancel: G) -> impl Future<Output = R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
@@ -365,8 +361,6 @@ mod test {
     use crate::blocking::Error;
     use crate::CancellableBlockingPool;
 
-    const TEST_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(100);
-
     #[test]
     fn disarm_with_pending_work() {
         // Create a pool with only one thread.
@@ -380,7 +374,7 @@ mod test {
         let task_mu = mu.clone();
         let task_cv = cv.clone();
         let task_blocker_is_running = blocker_is_running.clone();
-        pool.spawn(
+        let _blocking_task = pool.spawn(
             move || {
                 task_blocker_is_running.wait();
                 let mut ready = task_mu.lock();
@@ -389,8 +383,7 @@ mod test {
                 }
             },
             move || {},
-        )
-        .detach();
+        );
 
         // Wait for the worker to start running the blocking thread.
         blocker_is_running.wait();
@@ -410,32 +403,32 @@ mod test {
         assert_eq!(block_on(unfinished), 0);
 
         // Now the pool is empty and can be shutdown without blocking.
-        pool.shutdown_with_timeout(TEST_SHUTDOWN_TIMEOUT).unwrap();
+        pool.shutdown().unwrap();
     }
 
     #[test]
-    fn shutdown_with_blocked_work_should_panic() {
+    fn shutdown_with_blocked_work_should_timeout() {
         let pool = CancellableBlockingPool::new(1, Duration::from_secs(10));
 
         let running = Arc::new((Mutex::new(false), Condvar::new()));
         let running1 = running.clone();
-        pool.spawn(
+        let _blocking_task = pool.spawn(
             move || {
                 *running1.0.lock() = true;
                 running1.1.notify_one();
                 thread::sleep(Duration::from_secs(10000));
             },
             move || {},
-        )
-        .detach();
+        );
 
         let mut is_running = running.0.lock();
         while !*is_running {
             is_running = running.1.wait(is_running);
         }
 
+        // This shutdown will wait for the full timeout period, so use a short timeout.
         assert_eq!(
-            pool.shutdown_with_timeout(TEST_SHUTDOWN_TIMEOUT),
+            pool.shutdown_with_timeout(Duration::from_millis(1)),
             Err(Error::Timedout)
         );
     }
@@ -444,10 +437,7 @@ mod test {
     fn multiple_shutdown_returns_error() {
         let pool = CancellableBlockingPool::new(1, Duration::from_secs(10));
         let _ = pool.shutdown();
-        assert_eq!(
-            pool.shutdown_with_timeout(TEST_SHUTDOWN_TIMEOUT),
-            Err(Error::AlreadyShutdown)
-        );
+        assert_eq!(pool.shutdown(), Err(Error::AlreadyShutdown));
     }
 
     #[test]
@@ -456,15 +446,14 @@ mod test {
 
         let running = Arc::new((Mutex::new(false), Condvar::new()));
         let running1 = running.clone();
-        pool.spawn(
+        let _blocking_task = pool.spawn(
             move || {
                 *running1.0.lock() = true;
                 running1.1.notify_one();
                 thread::sleep(Duration::from_secs(10000));
             },
             move || {},
-        )
-        .detach();
+        );
 
         let mut is_running = running.0.lock();
         while !*is_running {
@@ -474,13 +463,14 @@ mod test {
         let pool_clone = pool.clone();
         thread::spawn(move || {
             while !pool_clone.inner.blocking_pool.shutting_down() {}
-            assert_eq!(
-                pool_clone.shutdown_with_timeout(TEST_SHUTDOWN_TIMEOUT),
-                Err(Error::ShutdownInProgress)
-            );
+            assert_eq!(pool_clone.shutdown(), Err(Error::ShutdownInProgress));
         });
+
+        // This shutdown will wait for the full timeout period, so use a short timeout.
+        // However, it also needs to wait long enough for the thread spawned above to observe the
+        // shutting_down state, so don't make it too short.
         assert_eq!(
-            pool.shutdown_with_timeout(TEST_SHUTDOWN_TIMEOUT),
+            pool.shutdown_with_timeout(Duration::from_millis(200)),
             Err(Error::Timedout)
         );
     }

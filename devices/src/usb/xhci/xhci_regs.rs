@@ -70,6 +70,10 @@ pub const PORTSC_PORT_LINK_STATE_MASK: u32 = 0x000001E0;
 /// Bitmask for portsc register, see spec 5.4.8.
 pub const PORTSC_PORT_POWER: u32 = 1u32 << 9;
 /// Bitmask for portsc register, see spec 5.4.8.
+pub const PORTSC_PORT_SPEED_MASK: u32 = 0x00003C00;
+/// Bitmask for portsc register, see spec 5.4.8.
+pub const PORTSC_PORT_SPEED_SHIFT: u32 = 10;
+/// Bitmask for portsc register, see spec 5.4.8.
 pub const PORTSC_CONNECT_STATUS_CHANGE: u32 = 1u32 << 17;
 /// Bitmask for portsc register, see spec 5.4.8.
 pub const PORTSC_PORT_ENABLED_DISABLED_CHANGE: u32 = 1u32 << 18;
@@ -122,10 +126,26 @@ pub const SPCAP_PORT_COUNT_MASK: u32 = 0xFF00;
 /// Offset of port count.
 pub const SPCAP_PORT_COUNT_OFFSET: u32 = 8;
 
+/// Bitmask for hccparams1 register, see spec 5.3.6.
+pub const HCCPARAMS1_MAX_PSA_SIZE_OFFSET: u32 = 12;
+/// Maximum primary stream array size, support up to 16 (2^(MAX_PSA_SIZE+1)) streams
+pub const MAX_PSA_SIZE: u32 = 3;
+
 /// Helper function for validating slot_id.
 pub fn valid_slot_id(slot_id: u8) -> bool {
     // slot id count from 1.
     slot_id > 0 && slot_id <= MAX_SLOTS
+}
+
+/// Helper function for validating max_pstreams.
+pub fn valid_max_pstreams(max_pstreams: u8) -> bool {
+    max_pstreams <= MAX_PSA_SIZE as u8
+}
+
+/// Helper function for validating stream_id. (assuming Linear Stream Array)
+pub fn valid_stream_id(stream_id: u16) -> bool {
+    // stream id 0 is reserved
+    stream_id > 0 && stream_id < (1 << (MAX_PSA_SIZE + 1))
 }
 
 /// XhciRegs hold all xhci registers.
@@ -207,9 +227,9 @@ pub fn init_xhci_mmio_space_and_regs() -> (RegisterSpace, XhciRegs) {
         ty: u32,
         offset: 0x10,
         // Supports 64 bit addressing
-        // Max primary stream array size = 0 (streams not supported).
+        // Max primary stream array size = 3 (support up to 16 streams).
         // Extended capabilities pointer = 0xC000 offset from base.
-        value: 0x30000501,
+        value: 0x30000501 | (MAX_PSA_SIZE << HCCPARAMS1_MAX_PSA_SIZE_OFFSET),
         ),
     );
     mmio.add_register(
@@ -365,7 +385,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (RegisterSpace, XhciRegs) {
         guest_write_1_to_clear_mask: 0,);
     mmio.add_register_array(&doorbells);
 
-    /*Runtime Registers */
+    /* Runtime Registers */
 
     mmio.add_register(
         // mfindex

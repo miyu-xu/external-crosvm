@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::ensure;
 use anyhow::Context;
@@ -44,12 +43,13 @@ use base::RawDescriptor;
 use base::SafeDescriptor;
 use base::SharedMemory;
 use base::Timer;
+use base::TimerTrait;
 use base::Tube;
 use base::TubeError;
 use base::WaitContext;
 use base::WorkerThread;
-use data_model::DataInit;
 use hypervisor::Datamatch;
+use hypervisor::MemCacheType;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
@@ -59,14 +59,14 @@ use serde::Serialize;
 use serde_keyvalue::FromKeyValues;
 use sync::Mutex;
 use thiserror::Error as ThisError;
+use vm_control::api::VmMemoryClient;
 use vm_control::VmMemoryDestination;
-use vm_control::VmMemoryRequest;
-use vm_control::VmMemoryResponse;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::pci::pci_configuration::PciBarConfiguration;
 use crate::pci::pci_configuration::PciBarPrefetchable;
@@ -81,6 +81,7 @@ use crate::pci::pci_device::BarRange;
 use crate::pci::pci_device::PciDevice;
 use crate::pci::pci_device::Result as PciResult;
 use crate::pci::PciAddress;
+use crate::pci::PciBarIndex;
 use crate::pci::PciDeviceError;
 use crate::vfio::VfioContainer;
 use crate::Suspendable;
@@ -94,9 +95,9 @@ const COIOMMU_CMD_ACTIVATE: u64 = 1;
 const COIOMMU_CMD_PARK_UNPIN: u64 = 2;
 const COIOMMU_CMD_UNPARK_UNPIN: u64 = 3;
 const COIOMMU_REVISION_ID: u8 = 0x10;
-const COIOMMU_MMIO_BAR: u8 = 0;
+const COIOMMU_MMIO_BAR: PciBarIndex = 0;
 const COIOMMU_MMIO_BAR_SIZE: u64 = 0x2000;
-const COIOMMU_NOTIFYMAP_BAR: u8 = 2;
+const COIOMMU_NOTIFYMAP_BAR: PciBarIndex = 2;
 const COIOMMU_NOTIFYMAP_SIZE: usize = 0x2000;
 const COIOMMU_TOPOLOGYMAP_BAR: u8 = 4;
 const COIOMMU_TOPOLOGYMAP_SIZE: usize = 0x2000;
@@ -115,25 +116,18 @@ enum Error {
     CreateSharedMemory,
     #[error("Failed to get DTT entry")]
     GetDTTEntry,
-    #[error("Tube error")]
-    TubeError,
 }
 
 //default interval is 60s
 const UNPIN_DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 const UNPIN_GEN_DEFAULT_THRES: u64 = 10;
 /// Holds the coiommu unpin policy
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CoIommuUnpinPolicy {
+    #[default]
     Off,
     Lru,
-}
-
-impl Default for CoIommuUnpinPolicy {
-    fn default() -> Self {
-        CoIommuUnpinPolicy::Off
-    }
 }
 
 impl fmt::Display for CoIommuUnpinPolicy {
@@ -276,15 +270,13 @@ fn vfio_unmap(vfio_container: &Arc<Mutex<VfioContainer>>, iova: u64, size: u64) 
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, FromBytes, AsBytes)]
+#[derive(Default, Debug, Copy, Clone, FromZeroes, FromBytes, AsBytes)]
 #[repr(C)]
 struct PinPageInfo {
     bdf: u16,
     pad: [u16; 3],
     nr_pages: u64,
 }
-// Safe because the PinPageInfo structure is raw data
-unsafe impl DataInit for PinPageInfo {}
 
 const COIOMMU_UPPER_LEVEL_STRIDE: u64 = 9;
 const COIOMMU_UPPER_LEVEL_MASK: u64 = (1 << COIOMMU_UPPER_LEVEL_STRIDE) - 1;
@@ -370,22 +362,25 @@ fn gfn_to_dtt_pte(
 
         mem.get_host_address(GuestAddress(pt_gpa + index))
             .context(Error::GetDTTEntry)?
-    } else {
+    } else if gfn > dtt_iter.gfn {
+        // SAFETY:
         // Safe because we checked that dtt_iter.ptr is valid and that the dtt_pte
         // for gfn lies on the same dtt page as the dtt_pte for dtt_iter.gfn, which
         // means the calculated ptr will point to the same page as dtt_iter.ptr
-        if gfn > dtt_iter.gfn {
-            unsafe {
-                dtt_iter
-                    .ptr
-                    .add(mem::size_of::<AtomicU32>() * (gfn - dtt_iter.gfn) as usize)
-            }
-        } else {
-            unsafe {
-                dtt_iter
-                    .ptr
-                    .sub(mem::size_of::<AtomicU32>() * (dtt_iter.gfn - gfn) as usize)
-            }
+        unsafe {
+            dtt_iter
+                .ptr
+                .add(mem::size_of::<AtomicU32>() * (gfn - dtt_iter.gfn) as usize)
+        }
+    } else {
+        // SAFETY:
+        // Safe because we checked that dtt_iter.ptr is valid and that the dtt_pte
+        // for gfn lies on the same dtt page as the dtt_pte for dtt_iter.gfn, which
+        // means the calculated ptr will point to the same page as dtt_iter.ptr
+        unsafe {
+            dtt_iter
+                .ptr
+                .sub(mem::size_of::<AtomicU32>() * (dtt_iter.gfn - gfn) as usize)
         }
     };
 
@@ -407,11 +402,12 @@ fn pin_page(
 ) -> Result<()> {
     let leaf_entry = gfn_to_dtt_pte(mem, dtt_level, dtt_root, dtt_iter, gfn)?;
 
-    let gpa = (gfn << PAGE_SHIFT_4K) as u64;
+    let gpa = gfn << PAGE_SHIFT_4K;
     let host_addr = mem
         .get_host_address_range(GuestAddress(gpa), PAGE_SIZE_4K as usize)
         .context("failed to get host address")? as u64;
 
+    // SAFETY:
     // Safe because ptr is valid and guaranteed by the gfn_to_dtt_pte.
     // Test PINNED flag
     if (unsafe { (*leaf_entry).load(Ordering::Relaxed) } & DTTE_PINNED_FLAG) != 0 {
@@ -419,9 +415,11 @@ fn pin_page(
         return Ok(());
     }
 
+    // SAFETY:
     // Safe because the gpa is valid from the gfn_to_dtt_pte and the host_addr
     // is guaranteed by MemoryMapping interface.
     if unsafe { vfio_map(vfio_container, gpa, PAGE_SIZE_4K, host_addr) } {
+        // SAFETY:
         // Safe because ptr is valid and guaranteed by the gfn_to_dtt_pte.
         // set PINNED flag
         unsafe { (*leaf_entry).fetch_or(DTTE_PINNED_FLAG, Ordering::SeqCst) };
@@ -476,6 +474,7 @@ fn unpin_page(
     };
 
     if force {
+        // SAFETY:
         // Safe because leaf_entry is valid and guaranteed by the gfn_to_dtt_pte.
         // This case is for balloon to evict pages so these pages should
         // already been locked by balloon and no device driver in VM is
@@ -484,6 +483,7 @@ fn unpin_page(
         unsafe { (*leaf_entry).fetch_and(!DTTE_ACCESSED_FLAG, Ordering::SeqCst) };
     }
 
+    // SAFETY:
     // Safe because leaf_entry is valid and guaranteed by the gfn_to_dtt_pte.
     if let Err(entry) = unsafe {
         (*leaf_entry).compare_exchange(DTTE_PINNED_FLAG, 0, Ordering::SeqCst, Ordering::SeqCst)
@@ -497,6 +497,7 @@ fn unpin_page(
             UnpinResult::NotPinned
         } else {
             if !force {
+                // SAFETY:
                 // Safe because leaf_entry is valid and guaranteed by the gfn_to_dtt_pte.
                 // The ACCESSED_FLAG is set by the guest if guest requires DMA map for
                 // this page. It represents whether or not this page is touched by the
@@ -531,10 +532,11 @@ fn unpin_page(
         // The compare_exchange success as the original leaf entry is
         // DTTE_PINNED_FLAG and the new leaf entry is 0 now. Unpin the
         // page.
-        let gpa = (gfn << PAGE_SHIFT_4K) as u64;
+        let gpa = gfn << PAGE_SHIFT_4K;
         if vfio_unmap(vfio_container, gpa, PAGE_SIZE_4K) {
             UnpinResult::Unpinned
         } else {
+            // SAFETY:
             // Safe because leaf_entry is valid and guaranteed by the gfn_to_dtt_pte.
             // make sure the pinned flag is set
             unsafe { (*leaf_entry).fetch_or(DTTE_PINNED_FLAG, Ordering::SeqCst) };
@@ -605,7 +607,7 @@ impl PinWorker {
                 match event.token {
                     Token::Kill => break 'wait,
                     Token::Pin { index } => {
-                        let offset = index * mem::size_of::<u64>() as usize;
+                        let offset = index * mem::size_of::<u64>();
                         if let Some(event) = self.ioevents.get(index) {
                             if let Err(e) = event.wait() {
                                 error!(
@@ -1025,7 +1027,7 @@ pub struct CoIommuDev {
     topologymap_mem: SafeDescriptor,
     topologymap_addr: Option<u64>,
     mmapped: bool,
-    device_tube: Tube,
+    vm_memory_client: VmMemoryClient,
     pin_thread: Option<WorkerThread<PinWorker>>,
     unpin_thread: Option<WorkerThread<UnpinWorker>>,
     unpin_tube: Option<Tube>,
@@ -1039,7 +1041,7 @@ impl CoIommuDev {
     pub fn new(
         mem: GuestMemory,
         vfio_container: Arc<Mutex<VfioContainer>>,
-        device_tube: Tube,
+        vm_memory_client: VmMemoryClient,
         unpin_tube: Option<Tube>,
         endpoints: Vec<u16>,
         vcpu_count: u64,
@@ -1104,7 +1106,7 @@ impl CoIommuDev {
             topologymap_mem: topologymap_mem.into(),
             topologymap_addr: None,
             mmapped: false,
-            device_tube,
+            vm_memory_client,
             pin_thread: None,
             unpin_thread: None,
             unpin_tube,
@@ -1120,16 +1122,6 @@ impl CoIommuDev {
         })
     }
 
-    fn send_msg(&self, msg: &VmMemoryRequest) -> Result<()> {
-        self.device_tube.send(msg).context(Error::TubeError)?;
-        let res = self.device_tube.recv().context(Error::TubeError)?;
-        match res {
-            VmMemoryResponse::RegisterMemory { .. } => Ok(()),
-            VmMemoryResponse::Err(e) => Err(anyhow!("Receive msg err {}", e)),
-            _ => Err(anyhow!("Msg cannot be handled")),
-        }
-    }
-
     fn register_mmap(
         &self,
         descriptor: SafeDescriptor,
@@ -1138,16 +1130,20 @@ impl CoIommuDev {
         gpa: u64,
         prot: Protection,
     ) -> Result<()> {
-        let request = VmMemoryRequest::RegisterMemory {
-            source: VmMemorySource::Descriptor {
-                descriptor,
-                offset,
-                size: size as u64,
-            },
-            dest: VmMemoryDestination::GuestPhysicalAddress(gpa),
-            prot,
-        };
-        self.send_msg(&request)
+        let _region = self
+            .vm_memory_client
+            .register_memory(
+                VmMemorySource::Descriptor {
+                    descriptor,
+                    offset,
+                    size: size as u64,
+                },
+                VmMemoryDestination::GuestPhysicalAddress(gpa),
+                prot,
+                MemCacheType::CacheCoherent,
+            )
+            .context("register_mmap register_memory failed")?;
+        Ok(())
     }
 
     fn mmap(&mut self) {
@@ -1204,11 +1200,24 @@ impl CoIommuDev {
         let notifymap_mmap = self.notifymap_mmap.clone();
         let dtt_root = self.coiommu_reg.dtt_root;
         let dtt_level = self.coiommu_reg.dtt_level;
-        let ioevents = self
+        let ioevents: Vec<Event> = self
             .ioevents
             .iter()
             .map(|e| e.try_clone().unwrap())
             .collect();
+
+        let bar0 = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR);
+        let notify_base = bar0 + mem::size_of::<CoIommuReg>() as u64;
+        for (i, evt) in self.ioevents.iter().enumerate() {
+            self.vm_memory_client
+                .register_io_event(
+                    evt.try_clone().expect("failed to clone event"),
+                    notify_base + i as u64,
+                    Datamatch::AnyLength,
+                )
+                .expect("failed to register ioevent");
+        }
+
         let vfio_container = self.vfio_container.clone();
         let pinstate = self.pinstate.clone();
         let params = self.params;
@@ -1291,15 +1300,11 @@ impl CoIommuDev {
         Ok(addr)
     }
 
-    fn read_mmio(&mut self, addr: u64, data: &mut [u8]) {
-        let bar = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR as usize);
-        let offset = addr - bar;
+    fn read_mmio(&mut self, offset: u64, data: &mut [u8]) {
         if offset >= mem::size_of::<CoIommuReg>() as u64 {
             error!(
-                "{}: read_mmio: invalid addr 0x{:x} bar 0x{:x} offset 0x{:x}",
+                "{}: read_mmio: invalid offset 0x{:x}",
                 self.debug_label(),
-                addr,
-                bar,
                 offset
             );
             return;
@@ -1326,10 +1331,8 @@ impl CoIommuDev {
         data.copy_from_slice(&v.to_ne_bytes());
     }
 
-    fn write_mmio(&mut self, addr: u64, data: &[u8]) {
-        let bar = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR as usize);
+    fn write_mmio(&mut self, offset: u64, data: &[u8]) {
         let mmio_len = mem::size_of::<CoIommuReg>() as u64;
-        let offset = addr - bar;
         if offset >= mmio_len {
             if data.len() != 1 {
                 error!(
@@ -1347,13 +1350,19 @@ impl CoIommuDev {
             // be used by the frontend driver. In case the frontend driver
             // went here, do a simple handle to make sure the frontend driver
             // will not be blocked, and through an error log.
-            let index = (offset - mmio_len) as usize * mem::size_of::<u64>();
-            self.notifymap_mmap.write_obj::<u64>(0, index).unwrap();
-            error!(
-                "{}: No page will be pinned as driver is accessing unused trigger register: offset 0x{:x}",
-                self.debug_label(),
-                offset
-            );
+            let index = (offset - mmio_len) as usize;
+            if let Some(event) = self.ioevents.get(index) {
+                let _ = event.signal();
+            } else {
+                self.notifymap_mmap
+                    .write_obj::<u64>(0, index * mem::size_of::<u64>())
+                    .unwrap();
+                error!(
+                    "{}: No page will be pinned as driver is accessing unused trigger register: offset 0x{:x}",
+                    self.debug_label(),
+                    offset
+                );
+            }
             return;
         }
 
@@ -1459,8 +1468,8 @@ impl PciDevice for CoIommuDev {
         let mmio_addr = self.allocate_bar_address(
             resources,
             address,
-            COIOMMU_MMIO_BAR_SIZE as u64,
-            COIOMMU_MMIO_BAR,
+            COIOMMU_MMIO_BAR_SIZE,
+            COIOMMU_MMIO_BAR as u8,
             "coiommu-mmiobar",
         )?;
 
@@ -1501,7 +1510,7 @@ impl PciDevice for CoIommuDev {
             resources,
             address,
             COIOMMU_NOTIFYMAP_SIZE as u64,
-            COIOMMU_NOTIFYMAP_BAR,
+            COIOMMU_NOTIFYMAP_BAR as u8,
             "coiommu-notifymap",
         )?;
         self.notifymap_addr = Some(notifymap_addr);
@@ -1533,26 +1542,21 @@ impl PciDevice for CoIommuDev {
     fn keep_rds(&self) -> Vec<RawDescriptor> {
         let mut rds = vec![
             self.vfio_container.lock().as_raw_descriptor(),
-            self.device_tube.as_raw_descriptor(),
+            self.vm_memory_client.as_raw_descriptor(),
             self.notifymap_mem.as_raw_descriptor(),
             self.topologymap_mem.as_raw_descriptor(),
         ];
         if let Some(unpin_tube) = &self.unpin_tube {
             rds.push(unpin_tube.as_raw_descriptor());
         }
+        rds.extend(self.ioevents.iter().map(Event::as_raw_descriptor));
         rds
     }
 
-    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        let mmio_bar = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR as usize);
-        let notifymap = self
-            .config_regs
-            .get_bar_addr(COIOMMU_NOTIFYMAP_BAR as usize);
-        match addr {
-            o if mmio_bar <= o && o < mmio_bar + COIOMMU_MMIO_BAR_SIZE as u64 => {
-                self.read_mmio(addr, data);
-            }
-            o if notifymap <= o && o < notifymap + COIOMMU_NOTIFYMAP_SIZE as u64 => {
+    fn read_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &mut [u8]) {
+        match bar_index {
+            COIOMMU_MMIO_BAR => self.read_mmio(offset, data),
+            COIOMMU_NOTIFYMAP_BAR => {
                 // With coiommu device activated, the accessing the notifymap bar
                 // won't cause vmexit. If goes here, means the coiommu device is
                 // deactivated, and will not do the pin/unpin work. Thus no need
@@ -1562,16 +1566,10 @@ impl PciDevice for CoIommuDev {
         }
     }
 
-    fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let mmio_bar = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR as usize);
-        let notifymap = self
-            .config_regs
-            .get_bar_addr(COIOMMU_NOTIFYMAP_BAR as usize);
-        match addr {
-            o if mmio_bar <= o && o < mmio_bar + COIOMMU_MMIO_BAR_SIZE as u64 => {
-                self.write_mmio(addr, data);
-            }
-            o if notifymap <= o && o < notifymap + COIOMMU_NOTIFYMAP_SIZE as u64 => {
+    fn write_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &[u8]) {
+        match bar_index {
+            COIOMMU_MMIO_BAR => self.write_mmio(offset, data),
+            COIOMMU_NOTIFYMAP_BAR => {
                 // With coiommu device activated, the accessing the notifymap bar
                 // won't cause vmexit. If goes here, means the coiommu device is
                 // deactivated, and will not do the pin/unpin work. Thus no need
@@ -1579,16 +1577,6 @@ impl PciDevice for CoIommuDev {
             }
             _ => {}
         }
-    }
-
-    fn ioevents(&self) -> Vec<(&Event, u64, Datamatch)> {
-        let bar0 = self.config_regs.get_bar_addr(COIOMMU_MMIO_BAR as usize);
-        let notify_base = bar0 + mem::size_of::<CoIommuReg>() as u64;
-        self.ioevents
-            .iter()
-            .enumerate()
-            .map(|(i, event)| (event, notify_base + i as u64, Datamatch::AnyLength))
-            .collect()
     }
 
     fn get_bar_configuration(&self, bar_num: usize) -> Option<PciBarConfiguration> {

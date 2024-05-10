@@ -4,19 +4,19 @@
 
 //! rutabaga_utils: Utility enums, structs, and implementations needed by the rest of the crate.
 
+use std::ffi::NulError;
+use std::fmt;
 use std::io::Error as IoError;
 use std::num::TryFromIntError;
+use std::os::raw::c_char;
 use std::os::raw::c_void;
 use std::path::PathBuf;
 use std::str::Utf8Error;
+use std::sync::Arc;
 
-use crate::base_internal::Error as BaseError;
-use crate::base_internal::SafeDescriptor;
-
-use data_model::VolatileMemoryError;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use nix::Error as NixError;
 use remain::sorted;
-use serde::Deserialize;
-use serde::Serialize;
 use thiserror::Error;
 #[cfg(feature = "vulkano")]
 use vulkano::device::DeviceCreationError;
@@ -33,6 +33,8 @@ use vulkano::LoadingError;
 #[cfg(feature = "vulkano")]
 use vulkano::VulkanError;
 
+use crate::rutabaga_os::SafeDescriptor;
+
 /// Represents a buffer.  `base` contains the address of a buffer, while `len` contains the length
 /// of the buffer.
 #[repr(C)]
@@ -42,7 +44,10 @@ pub struct RutabagaIovec {
     pub len: usize,
 }
 
+// SAFETY: trivially safe
 unsafe impl Send for RutabagaIovec {}
+
+// SAFETY: trivially safe
 unsafe impl Sync for RutabagaIovec {}
 
 /// 3D resource creation parameters.  Also used to create 2D resource.  Constants based on Mesa's
@@ -82,6 +87,8 @@ pub struct ResourceCreateBlob {
     pub size: u64,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
 pub struct RutabagaMapping {
     pub ptr: u64,
     pub size: u64,
@@ -96,12 +103,12 @@ pub struct Resource3DInfo {
     pub strides: [u32; 4],
     pub offsets: [u32; 4],
     pub modifier: u64,
+    /// Whether the buffer can be accessed by the guest CPU.
+    pub guest_cpu_mappable: bool,
 }
 
 /// A unique identifier for a device.
-#[derive(
-    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeviceId {
     pub device_uuid: [u8; 16],
     pub driver_uuid: [u8; 16],
@@ -120,6 +127,7 @@ pub const RUTABAGA_CONTEXT_INIT_CAPSET_ID_MASK: u32 = 0x00ff;
 /// Rutabaga flags for creating fences.
 pub const RUTABAGA_FLAG_FENCE: u32 = 1 << 0;
 pub const RUTABAGA_FLAG_INFO_RING_IDX: u32 = 1 << 1;
+pub const RUTABAGA_FLAG_FENCE_SHAREABLE: u32 = 1 << 2;
 
 /// Convenience struct for Rutabaga fences
 #[repr(C)]
@@ -131,18 +139,51 @@ pub struct RutabagaFence {
     pub ring_idx: u8,
 }
 
+/// Rutabaga debug types
+pub const RUTABAGA_DEBUG_ERROR: u32 = 0x01;
+pub const RUTABAGA_DEBUG_WARNING: u32 = 0x02;
+pub const RUTABAGA_DEBUG_INFO: u32 = 0x03;
+
+/// Convenience struct for debug data
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct RutabagaDebug {
+    pub debug_type: u32,
+    pub message: *const c_char,
+}
+
+// SAFETY:
+// This is sketchy, since `message` is a C-string and there's no locking + atomics.  However,
+// the current use case is to mirror the C-API.  If the `RutabagaDebugHandler` is used with
+// by Rust code, a different struct should be used.
+unsafe impl Send for RutabagaDebug {}
+// SAFETY:
+// This is sketchy, since `message` is a C-string and there's no locking + atomics.  However,
+// the current use case is to mirror the C-API.  If the `RutabagaDebugHandler` is used with
+// by Rust code, a different struct should be used.
+unsafe impl Sync for RutabagaDebug {}
+
 /// Mapped memory caching flags (see virtio_gpu spec)
+pub const RUTABAGA_MAP_CACHE_MASK: u32 = 0x0f;
 pub const RUTABAGA_MAP_CACHE_CACHED: u32 = 0x01;
 pub const RUTABAGA_MAP_CACHE_UNCACHED: u32 = 0x02;
 pub const RUTABAGA_MAP_CACHE_WC: u32 = 0x03;
+/// Access flags (not in virtio_gpu spec)
+pub const RUTABAGA_MAP_ACCESS_MASK: u32 = 0xf0;
+pub const RUTABAGA_MAP_ACCESS_READ: u32 = 0x10;
+pub const RUTABAGA_MAP_ACCESS_WRITE: u32 = 0x20;
+pub const RUTABAGA_MAP_ACCESS_RW: u32 = 0x30;
 
 /// Rutabaga capsets.
 pub const RUTABAGA_CAPSET_VIRGL: u32 = 1;
 pub const RUTABAGA_CAPSET_VIRGL2: u32 = 2;
-pub const RUTABAGA_CAPSET_GFXSTREAM: u32 = 3;
+pub const RUTABAGA_CAPSET_GFXSTREAM_VULKAN: u32 = 3;
 pub const RUTABAGA_CAPSET_VENUS: u32 = 4;
 pub const RUTABAGA_CAPSET_CROSS_DOMAIN: u32 = 5;
 pub const RUTABAGA_CAPSET_DRM: u32 = 6;
+pub const RUTABAGA_CAPSET_GFXSTREAM_MAGMA: u32 = 7;
+pub const RUTABAGA_CAPSET_GFXSTREAM_GLES: u32 = 8;
+pub const RUTABAGA_CAPSET_GFXSTREAM_COMPOSER: u32 = 9;
 
 /// An error generated while using this crate.
 #[sorted]
@@ -152,9 +193,6 @@ pub enum RutabagaError {
     /// is allowed.
     #[error("attempted to use a rutabaga asset already in use")]
     AlreadyInUse,
-    /// Base error returned as a result of rutabaga library operation.
-    #[error("rutabaga received a base error: {0}")]
-    BaseError(BaseError),
     /// Checked Arithmetic error
     #[error("arithmetic failed: {}({}) {op} {}({})", .field1.0, .field1.1, .field2.0, .field2.1)]
     CheckedArithmetic {
@@ -237,6 +275,12 @@ pub enum RutabagaError {
     /// The mapping failed.
     #[error("The mapping failed with library error: {0}")]
     MappingFailed(i32),
+    /// Nix crate error.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[error("The errno is {0}")]
+    NixError(NixError),
+    #[error("Nul Error occured {0}")]
+    NulError(NulError),
     /// Violation of the Rutabaga spec occured.
     #[error("violation of the rutabaga spec: {0}")]
     SpecViolation(&'static str),
@@ -277,20 +321,24 @@ pub enum RutabagaError {
     #[cfg(feature = "vulkano")]
     #[error("vulkano memory map failure {0}")]
     VkMemoryMapError(MemoryMapError),
-    /// Volatile memory error
-    #[error("noticed a volatile memory error {0}")]
-    VolatileMemoryError(VolatileMemoryError),
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+impl From<NixError> for RutabagaError {
+    fn from(e: NixError) -> RutabagaError {
+        RutabagaError::NixError(e)
+    }
+}
+
+impl From<NulError> for RutabagaError {
+    fn from(e: NulError) -> RutabagaError {
+        RutabagaError::NulError(e)
+    }
 }
 
 impl From<IoError> for RutabagaError {
     fn from(e: IoError) -> RutabagaError {
         RutabagaError::IoError(e)
-    }
-}
-
-impl From<BaseError> for RutabagaError {
-    fn from(e: BaseError) -> RutabagaError {
-        RutabagaError::BaseError(e)
     }
 }
 
@@ -303,12 +351,6 @@ impl From<TryFromIntError> for RutabagaError {
 impl From<Utf8Error> for RutabagaError {
     fn from(e: Utf8Error) -> RutabagaError {
         RutabagaError::Utf8Error(e)
-    }
-}
-
-impl From<VolatileMemoryError> for RutabagaError {
-    fn from(e: VolatileMemoryError) -> RutabagaError {
-        RutabagaError::VolatileMemoryError(e)
     }
 }
 
@@ -426,29 +468,25 @@ impl VirglRendererFlags {
 }
 
 /// Flags for the gfxstream renderer.
-const GFXSTREAM_RENDERER_FLAGS_USE_EGL: u32 = 1 << 0;
+const STREAM_RENDERER_FLAGS_USE_EGL: u32 = 1 << 0;
 #[allow(dead_code)]
-const GFXSTREAM_RENDERER_FLAGS_THREAD_SYNC: u32 = 1 << 1;
-const GFXSTREAM_RENDERER_FLAGS_USE_GLX: u32 = 1 << 2;
-const GFXSTREAM_RENDERER_FLAGS_USE_SURFACELESS: u32 = 1 << 3;
-const GFXSTREAM_RENDERER_FLAGS_USE_GLES: u32 = 1 << 4;
-const GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT: u32 = 1 << 5;
-const GFXSTREAM_RENDERER_FLAGS_ENABLE_GLES31_BIT: u32 = 1 << 9;
-const GFXSTREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB: u32 = 1 << 10;
-const GFXSTREAM_RENDERER_FLAGS_USE_SYSTEM_BLOB: u32 = 1 << 11;
-const GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE: u32 = 1 << 21;
-const GFXSTREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT: u32 = 1 << 22;
-const GFXSTREAM_RENDERER_FLAGS_ASYNC_FENCE_CB: u32 = 1 << 23;
+const STREAM_RENDERER_FLAGS_THREAD_SYNC: u32 = 1 << 1;
+const STREAM_RENDERER_FLAGS_USE_GLX: u32 = 1 << 2;
+const STREAM_RENDERER_FLAGS_USE_SURFACELESS: u32 = 1 << 3;
+const STREAM_RENDERER_FLAGS_USE_GLES: u32 = 1 << 4;
+const STREAM_RENDERER_FLAGS_USE_VK_BIT: u32 = 1 << 5;
+const STREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB: u32 = 1 << 6;
+const STREAM_RENDERER_FLAGS_USE_SYSTEM_BLOB: u32 = 1 << 7;
+const STREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT: u32 = 1 << 8;
 
 /// gfxstream flag struct.
 #[derive(Copy, Clone, Default)]
 pub struct GfxstreamFlags(u32);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Debug)]
 pub enum RutabagaWsi {
-    #[serde(alias = "vk")]
-    Vulkan,
+    Surfaceless,
+    VulkanSwapchain,
 }
 
 impl GfxstreamFlags {
@@ -467,61 +505,46 @@ impl GfxstreamFlags {
 
     /// Use EGL for context creation.
     pub fn use_egl(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_EGL, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_EGL, v)
     }
 
     /// Use GLX for context creation.
     pub fn use_glx(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_GLX, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_GLX, v)
     }
 
     /// No surfaces required when creating context.
     pub fn use_surfaceless(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_SURFACELESS, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_SURFACELESS, v)
     }
 
     /// Use GLES drivers.
     pub fn use_gles(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_GLES, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_GLES, v)
     }
 
     /// Support using Vulkan.
     pub fn use_vulkan(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_NO_VK_BIT, !v)
-    }
-
-    /// Use ANGLE as the guest GLES driver.
-    pub fn use_guest_angle(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_GUEST_USES_ANGLE, v)
-    }
-
-    /// Use async fence completion callback.
-    pub fn use_async_fence_cb(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_ASYNC_FENCE_CB, v)
-    }
-
-    /// Enable GLES 3.1 support.
-    pub fn support_gles31(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_ENABLE_GLES31_BIT, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_VK_BIT, v)
     }
 
     /// Use the Vulkan swapchain to draw on the host window.
-    pub fn set_wsi(self, v: Option<&RutabagaWsi>) -> GfxstreamFlags {
-        let use_vulkan_swapchain = matches!(v, Some(RutabagaWsi::Vulkan));
+    pub fn set_wsi(self, v: RutabagaWsi) -> GfxstreamFlags {
+        let use_vulkan_swapchain = matches!(v, RutabagaWsi::VulkanSwapchain);
         self.set_flag(
-            GFXSTREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT,
+            STREAM_RENDERER_FLAGS_VULKAN_NATIVE_SWAPCHAIN_BIT,
             use_vulkan_swapchain,
         )
     }
 
     /// Use external blob when creating resources.
     pub fn use_external_blob(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_EXTERNAL_BLOB, v)
     }
 
     /// Use system blob when creating resources.
     pub fn use_system_blob(self, v: bool) -> GfxstreamFlags {
-        self.set_flag(GFXSTREAM_RENDERER_FLAGS_USE_SYSTEM_BLOB, v)
+        self.set_flag(STREAM_RENDERER_FLAGS_USE_SYSTEM_BLOB, v)
     }
 }
 
@@ -596,6 +619,7 @@ pub struct RutabagaChannel {
 }
 
 /// Enumeration of possible rutabaga components.
+#[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum RutabagaComponentType {
     Rutabaga2D,
@@ -609,9 +633,12 @@ pub const RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD: u32 = 0x0001;
 pub const RUTABAGA_MEM_HANDLE_TYPE_DMABUF: u32 = 0x0002;
 pub const RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_WIN32: u32 = 0x0003;
 pub const RUTABAGA_MEM_HANDLE_TYPE_SHM: u32 = 0x0004;
-pub const RUTABAGA_FENCE_HANDLE_TYPE_OPAQUE_FD: u32 = 0x0010;
-pub const RUTABAGA_FENCE_HANDLE_TYPE_SYNC_FD: u32 = 0x0011;
-pub const RUTABAGA_FENCE_HANDLE_TYPE_OPAQUE_WIN32: u32 = 0x0012;
+pub const RUTABAGA_MEM_HANDLE_TYPE_ZIRCON: u32 = 0x0005;
+
+pub const RUTABAGA_FENCE_HANDLE_TYPE_OPAQUE_FD: u32 = 0x0006;
+pub const RUTABAGA_FENCE_HANDLE_TYPE_SYNC_FD: u32 = 0x0007;
+pub const RUTABAGA_FENCE_HANDLE_TYPE_OPAQUE_WIN32: u32 = 0x0008;
+pub const RUTABAGA_FENCE_HANDLE_TYPE_ZIRCON: u32 = 0x0009;
 
 /// Handle to OS-specific memory or synchronization objects.
 pub struct RutabagaHandle {
@@ -633,45 +660,32 @@ impl RutabagaHandle {
     }
 }
 
-/// Trait for fence completion handlers
-pub trait RutabagaFenceCallback: Send {
-    fn call(&self, data: RutabagaFence);
-    fn clone_box(&self) -> RutabagaFenceHandler;
-}
-
-/// Wrapper type to allow cloning while respecting object-safety
-pub type RutabagaFenceHandler = Box<dyn RutabagaFenceCallback>;
-
-impl Clone for RutabagaFenceHandler {
-    fn clone(&self) -> Self {
-        self.clone_box()
-    }
-}
-
-/// Fence handler implementation that wraps a closure
 #[derive(Clone)]
-pub struct RutabagaFenceClosure<T> {
-    closure: T,
+pub struct RutabagaHandler<S> {
+    closure: Arc<dyn Fn(S) + Send + Sync>,
 }
 
-impl<T> RutabagaFenceClosure<T>
+impl<S> RutabagaHandler<S>
 where
-    T: Fn(RutabagaFence) + Clone + Send + 'static,
+    S: Send + Sync + Clone + 'static,
 {
-    pub fn new(closure: T) -> RutabagaFenceHandler {
-        Box::new(RutabagaFenceClosure { closure })
+    pub fn new(closure: impl Fn(S) + Send + Sync + 'static) -> RutabagaHandler<S> {
+        RutabagaHandler {
+            closure: Arc::new(closure),
+        }
     }
-}
 
-impl<T> RutabagaFenceCallback for RutabagaFenceClosure<T>
-where
-    T: Fn(RutabagaFence) + Clone + Send + 'static,
-{
-    fn call(&self, data: RutabagaFence) {
+    pub fn call(&self, data: S) {
         (self.closure)(data)
     }
+}
 
-    fn clone_box(&self) -> RutabagaFenceHandler {
-        Box::new(self.clone())
+impl<S> fmt::Debug for RutabagaHandler<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Closure debug").finish()
     }
 }
+
+pub type RutabagaFenceHandler = RutabagaHandler<RutabagaFence>;
+
+pub type RutabagaDebugHandler = RutabagaHandler<RutabagaDebug>;

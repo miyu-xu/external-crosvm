@@ -7,7 +7,11 @@ use crate::JobLevel;
 use crate::Semantics;
 use crate::SubSystem;
 use crate::TokenLevel;
+use crate::JOB_OBJECT_UILIMIT_DESKTOP;
+use crate::JOB_OBJECT_UILIMIT_DISPLAYSETTINGS;
+use crate::JOB_OBJECT_UILIMIT_EXITWINDOWS;
 use crate::JOB_OBJECT_UILIMIT_READCLIPBOARD;
+use crate::JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS;
 use crate::JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
 
 /// Policy struct for describing how a sandbox `TargetPolicy` should be
@@ -122,10 +126,33 @@ pub const GPU: Policy = Policy {
     delayed_integrity_level: IntegrityLevel::INTEGRITY_LEVEL_LOW,
     // Needed for access to UI APIs.
     job_level: JobLevel::JOB_LIMITED_USER,
-    ui_exceptions: JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    // needed for copy and paste. READ_CLIPBOARD/WRITE_CLIPBOARD are already implicit in
+    // JOB_LIMITED_USER. It's not clear why these are needed for copy&paste, but verified that
+    // removing any one of these UILIMITS break paste into the emulator.
+    ui_exceptions: JOB_OBJECT_UILIMIT_DESKTOP
+        | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+        | JOB_OBJECT_UILIMIT_EXITWINDOWS
+        | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
     // Needed to display window on main desktop.
     alternate_desktop: false,
     alternate_winstation: false,
+    exceptions: vec![],
+    dll_blocklist: vec![],
+};
+
+/// Policy for the sound process.
+pub const SND: Policy = Policy {
+    // Needed for CoInitializeEx.
+    initial_token_level: TokenLevel::USER_RESTRICTED_SAME_ACCESS,
+    // Needed for subsequent CoCreateInstance requests.
+    lockdown_token_level: TokenLevel::USER_RESTRICTED_NON_ADMIN,
+    // Needed for access to audio APIs.
+    integrity_level: IntegrityLevel::INTEGRITY_LEVEL_LOW,
+    delayed_integrity_level: IntegrityLevel::INTEGRITY_LEVEL_LOW,
+    job_level: JobLevel::JOB_LOCKDOWN,
+    ui_exceptions: 0,
+    alternate_desktop: true,
+    alternate_winstation: true,
     exceptions: vec![],
     dll_blocklist: vec![],
 };

@@ -7,10 +7,8 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Error as IOError;
 use std::io::ErrorKind as IOErrorKind;
-use std::io::IoSliceMut;
 use std::io::Seek;
 use std::io::SeekFrom;
-use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -33,19 +31,23 @@ use base::RawDescriptor;
 use base::SafeDescriptor;
 use base::ScmSocket;
 use base::UnixSeqpacket;
+use base::VolatileMemory;
+use base::VolatileMemoryError;
+use base::VolatileSlice;
 use base::WaitContext;
 use base::WorkerThread;
-use data_model::VolatileMemory;
-use data_model::VolatileMemoryError;
-use data_model::VolatileSlice;
 use remain::sorted;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error as ThisError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::virtio::snd::constants::*;
 use crate::virtio::snd::layout::*;
+use crate::virtio::snd::vios_backend::streams::StreamState;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -87,7 +89,7 @@ pub enum Error {
     #[error("Failed to connect to VioS server {1}: {0:?}")]
     ServerConnectionError(IOError, PathBuf),
     #[error("Failed to communicate with VioS server: {0:?}")]
-    ServerError(BaseError),
+    ServerError(IOError),
     #[error("Failed to communicate with VioS server: {0:?}")]
     ServerIOError(IOError),
     #[error("Error accessing VioS server's shared memory: {0}")]
@@ -104,6 +106,8 @@ pub enum Error {
     WaitError(BaseError),
     #[error("Invalid operation for stream direction: {0}")]
     WrongDirection(u8),
+    #[error("Set saved params should only be used while restoring the device")]
+    WrongSetParams,
 }
 
 #[derive(ThisError, Debug)]
@@ -146,31 +150,33 @@ pub struct VioSClient {
     rx_subscribers: Arc<Mutex<HashMap<usize, Sender<BufferReleaseMsg>>>>,
     recv_thread_state: Arc<Mutex<ThreadFlags>>,
     recv_thread: Mutex<Option<WorkerThread<Result<()>>>>,
+    // Params are required to be stored for snapshot/restore. On restore, we don't have the params
+    // locally available as the VM is started anew, so they need to be restored.
+    params: HashMap<u32, virtio_snd_pcm_set_params>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VioSClientSnapshot {
+    config: VioSConfig,
+    jacks: Vec<virtio_snd_jack_info>,
+    streams: Vec<virtio_snd_pcm_info>,
+    chmaps: Vec<virtio_snd_chmap_info>,
+    params: HashMap<u32, virtio_snd_pcm_set_params>,
 }
 
 impl VioSClient {
     /// Create a new client given the path to the audio server's socket.
     pub fn try_new<P: AsRef<Path>>(server: P) -> Result<VioSClient> {
-        let client_socket = UnixSeqpacket::connect(server.as_ref())
-            .map_err(|e| Error::ServerConnectionError(e, server.as_ref().into()))?;
+        let client_socket = ScmSocket::try_from(
+            UnixSeqpacket::connect(server.as_ref())
+                .map_err(|e| Error::ServerConnectionError(e, server.as_ref().into()))?,
+        )
+        .map_err(|e| Error::ServerConnectionError(e, server.as_ref().into()))?;
         let mut config: VioSConfig = Default::default();
-        let mut fds: Vec<RawFd> = Vec::new();
         const NUM_FDS: usize = 5;
-        fds.resize(NUM_FDS, 0);
-        let (recv_size, fd_count) = client_socket
-            .recv_with_fds(IoSliceMut::new(config.as_bytes_mut()), &mut fds)
+        let (recv_size, mut safe_fds) = client_socket
+            .recv_with_fds(config.as_bytes_mut(), NUM_FDS)
             .map_err(Error::ServerError)?;
-
-        // Resize the vector to the actual number of file descriptors received and wrap them in
-        // SafeDescriptors to prevent leaks
-        fds.resize(fd_count, -1);
-        let mut safe_fds: Vec<SafeDescriptor> = fds
-            .into_iter()
-            .map(|fd| unsafe {
-                // safe because the SafeDescriptor object completely assumes ownership of the fd.
-                SafeDescriptor::from_raw_descriptor(fd)
-            })
-            .collect();
 
         if recv_size != std::mem::size_of::<VioSConfig>() {
             return Err(Error::ProtocolError(
@@ -189,8 +195,9 @@ impl VioSClient {
             expected: usize,
             received: usize,
         ) -> Result<T> {
+            // SAFETY:
+            // Safe because we transfer ownership from the SafeDescriptor to T
             unsafe {
-                // Safe because we transfer ownership from the SafeDescriptor to T
                 Ok(T::from_raw_descriptor(
                     safe_fds
                         .pop()
@@ -204,6 +211,7 @@ impl VioSClient {
             }
         }
 
+        let fd_count = safe_fds.len();
         let rx_shm_file = pop::<File>(&mut safe_fds, NUM_FDS, fd_count)?;
         let tx_shm_file = pop::<File>(&mut safe_fds, NUM_FDS, fd_count)?;
         let rx_socket = pop::<UnixSeqpacket>(&mut safe_fds, NUM_FDS, fd_count)?;
@@ -229,7 +237,7 @@ impl VioSClient {
             jacks: Vec::new(),
             streams: Vec::new(),
             chmaps: Vec::new(),
-            control_socket: Mutex::new(client_socket),
+            control_socket: Mutex::new(client_socket.into_inner()),
             event_socket,
             tx: IoBufferQueue::new(tx_socket, tx_shm_file)?,
             rx: IoBufferQueue::new(rx_socket, rx_shm_file)?,
@@ -239,6 +247,7 @@ impl VioSClient {
             rx_subscribers,
             recv_thread_state,
             recv_thread: Mutex::new(None),
+            params: HashMap::new(),
         };
         client.request_and_cache_info()?;
         Ok(client)
@@ -352,18 +361,29 @@ impl VioSClient {
     }
 
     /// Configures a stream with the given parameters.
-    pub fn set_stream_parameters(&self, stream_id: u32, params: VioSStreamParams) -> Result<()> {
+    pub fn set_stream_parameters(
+        &mut self,
+        stream_id: u32,
+        params: VioSStreamParams,
+    ) -> Result<()> {
         self.streams
             .get(stream_id as usize)
             .ok_or(Error::InvalidStreamId(stream_id))?;
         let raw_params: virtio_snd_pcm_set_params = (stream_id, params).into();
+        // Old value is not needed and is dropped
+        let _ = self.params.insert(stream_id, raw_params);
         let control_socket_lock = self.control_socket.lock();
         send_cmd(&control_socket_lock, raw_params)
     }
 
     /// Configures a stream with the given parameters.
-    pub fn set_stream_parameters_raw(&self, raw_params: virtio_snd_pcm_set_params) -> Result<()> {
+    pub fn set_stream_parameters_raw(
+        &mut self,
+        raw_params: virtio_snd_pcm_set_params,
+    ) -> Result<()> {
         let stream_id = raw_params.hdr.stream_id.to_native();
+        // Old value is not needed and is dropped
+        let _ = self.params.insert(stream_id, raw_params);
         self.streams
             .get(stream_id as usize)
             .ok_or(Error::InvalidStreamId(stream_id))?;
@@ -513,13 +533,7 @@ impl VioSClient {
         }
         Ok(reply[status_size..]
             .chunks(info_size)
-            .map(|info_buffer| {
-                let mut info: T = Default::default();
-                // Need to use copy_from_slice instead of T::from_slice because the info_buffer may
-                // not be aligned correctly
-                info.as_bytes_mut().copy_from_slice(info_buffer);
-                info
-            })
+            .map(|info_buffer| T::read_from(info_buffer).unwrap())
             .collect())
     }
 
@@ -548,6 +562,52 @@ impl VioSClient {
         }
         self.chmaps = self.request_info(VIRTIO_SND_R_CHMAP_INFO, num_chmaps)?;
         Ok(())
+    }
+
+    pub fn snapshot(&self) -> VioSClientSnapshot {
+        VioSClientSnapshot {
+            config: self.config,
+            jacks: self.jacks.clone(),
+            streams: self.streams.clone(),
+            chmaps: self.chmaps.clone(),
+            params: self.params.clone(),
+        }
+    }
+
+    // Function called `restore` to signify it will happen as part of the snapshot/restore flow. No
+    // data is actually restored in the case of VioSClient.
+    pub fn restore(&mut self, data: VioSClientSnapshot) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            data.config == self.config,
+            "config doesn't match on restore: expected: {:?}, got: {:?}",
+            data.config,
+            self.config
+        );
+        self.jacks = data.jacks;
+        self.streams = data.streams;
+        self.chmaps = data.chmaps;
+        self.params = data.params;
+        Ok(())
+    }
+
+    pub fn restore_stream(&mut self, stream_id: u32, state: StreamState) -> Result<()> {
+        if let Some(params) = self.params.get(&stream_id).cloned() {
+            self.set_stream_parameters_raw(params)?;
+        }
+        match state {
+            StreamState::Started => {
+                // If state != prepared, start will always fail.
+                // As such, it is fine to only print the first error without returning, as the
+                // second action will then fail.
+                if let Err(e) = self.prepare_stream(stream_id) {
+                    error!("failed to prepare stream: {}", e);
+                };
+                self.start_stream(stream_id)
+            }
+            StreamState::Prepared => self.prepare_stream(stream_id),
+            // Nothing to do here
+            _ => Ok(()),
+        }
     }
 }
 
@@ -811,7 +871,19 @@ fn seq_socket_send<T: AsBytes>(socket: &UnixSeqpacket, data: T) -> Result<()> {
 const VIOS_VERSION: u32 = 2;
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(
+    Copy,
+    Clone,
+    Default,
+    AsBytes,
+    FromZeroes,
+    FromBytes,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Debug,
+)]
 struct VioSConfig {
     version: u32,
     jacks: u32,
@@ -826,7 +898,7 @@ struct BufferReleaseMsg {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, AsBytes, FromBytes)]
+#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
 struct IoTransferMsg {
     io_xfer: virtio_snd_pcm_xfer,
     buffer_offset: u32,
@@ -846,7 +918,7 @@ impl IoTransferMsg {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromBytes)]
+#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
 struct IoStatusMsg {
     status: virtio_snd_pcm_status,
     buffer_offset: u32,

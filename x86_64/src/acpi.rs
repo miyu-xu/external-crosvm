@@ -25,6 +25,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 pub struct AcpiDevResource {
     pub amls: Vec<u8>,
@@ -35,7 +36,7 @@ pub struct AcpiDevResource {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, FromBytes, AsBytes)]
+#[derive(Clone, Copy, Default, FromZeroes, FromBytes, AsBytes)]
 struct GenericAddress {
     _space_id: u8,
     _bit_width: u8,
@@ -55,7 +56,7 @@ struct LocalApic {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, FromBytes, AsBytes)]
+#[derive(Clone, Copy, Default, FromZeroes, FromBytes, AsBytes)]
 struct Ioapic {
     _type: u8,
     _length: u8,
@@ -66,7 +67,7 @@ struct Ioapic {
 }
 
 #[repr(C, packed)]
-#[derive(Clone, Copy, Default, FromBytes, AsBytes)]
+#[derive(Clone, Copy, Default, FromZeroes, FromBytes, AsBytes)]
 struct IoapicInterruptSourceOverride {
     _type: u8,
     _length: u8,
@@ -77,7 +78,7 @@ struct IoapicInterruptSourceOverride {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default, FromBytes, AsBytes)]
+#[derive(Clone, Copy, Default, FromZeroes, FromBytes, AsBytes)]
 struct Localx2Apic {
     _type: u8,
     _length: u8,
@@ -122,6 +123,9 @@ const FADT_FIELD_PM_TMR_LEN: usize = 91;
 const FADT_FIELD_GPE0_BLK_LEN: usize = 92;
 const FADT_FIELD_GPE1_BLK_LEN: usize = 93;
 const FADT_FIELD_GPE1_BASE: usize = 94;
+const FADT_FIELD_RTC_DAY_ALARM: usize = 106;
+const FADT_FIELD_RTC_MONTH_ALARM: usize = 107;
+const FADT_FIELD_RTC_CENTURY: usize = 108;
 const FADT_FIELD_FLAGS: usize = 112;
 const FADT_FIELD_RESET_REGISTER: usize = 116;
 const FADT_FIELD_RESET_VALUE: usize = 128;
@@ -175,6 +179,7 @@ const SSDT_REVISION: u8 = 2;
 pub fn create_customize_ssdt(
     pci_root: Arc<Mutex<PciRoot>>,
     amls: BTreeMap<PciAddress, Vec<u8>>,
+    gpe_scope_amls: BTreeMap<PciAddress, Vec<u8>>,
 ) -> Option<SDT> {
     if amls.is_empty() {
         return None;
@@ -193,6 +198,10 @@ pub fn create_customize_ssdt(
         if let Some(path) = pci_root.lock().acpi_path(&address) {
             ssdt.append_slice(&aml::Scope::raw((*path).into(), children));
         }
+    }
+
+    for children in gpe_scope_amls.values() {
+        ssdt.append_slice(children);
     }
 
     Some(ssdt)
@@ -239,6 +248,13 @@ fn create_facp_table(sci_irq: u16, force_s2idle: bool) -> SDT {
     facp.write(FADT_FIELD_MINOR_REVISION, FADT_MINOR_REVISION); // FADT minor version
     facp.write(FADT_FIELD_HYPERVISOR_ID, *b"CROSVM"); // Hypervisor Vendor Identity
 
+    facp.write::<u8>(FADT_FIELD_RTC_CENTURY, devices::cmos::RTC_REG_CENTURY);
+    facp.write::<u8>(FADT_FIELD_RTC_DAY_ALARM, devices::cmos::RTC_REG_ALARM_DAY);
+    facp.write::<u8>(
+        FADT_FIELD_RTC_MONTH_ALARM,
+        devices::cmos::RTC_REG_ALARM_MONTH,
+    );
+
     facp
 }
 
@@ -258,8 +274,8 @@ fn write_facp_overrides(
     facp.write(FADT_FIELD_SMI_COMMAND, 0u32);
     facp.write(FADT_FIELD_FACS_ADDR32, 0u32);
     facp.write(FADT_FIELD_DSDT_ADDR32, 0u32);
-    facp.write(FADT_FIELD_FACS_ADDR, facs_offset.0 as u64);
-    facp.write(FADT_FIELD_DSDT_ADDR, dsdt_offset.0 as u64);
+    facp.write(FADT_FIELD_FACS_ADDR, facs_offset.0);
+    facp.write(FADT_FIELD_DSDT_ADDR, dsdt_offset.0);
 
     // PM1A Event Block Address
     facp.write(FADT_FIELD_PM1A_EVENT_BLK_ADDR, pm_iobase);
@@ -392,7 +408,7 @@ fn write_facp_overrides(
             _space_id: ADR_SPACE_SYSTEM_IO,
             _bit_width: 8,
             _bit_offset: 0,
-            _access_width: 8,
+            _access_width: 1,
             _address: reset_port.into(),
         },
     );
@@ -430,11 +446,13 @@ fn sync_acpi_id_from_cpuid(
             return Err(e);
         }
 
+        // SAFETY:
         // Safe because we pass 0 and 0 for this call and the host supports the
         // `cpuid` instruction
         let mut cpuid_entry: CpuidResult = unsafe { __cpuid_count(0, 0) };
 
         if cpuid_entry.eax >= 0xB {
+            // SAFETY:
             // Safe because we pass 0xB and 0 for this call and the host supports the
             // `cpuid` instruction
             cpuid_entry = unsafe { __cpuid_count(0xB, 0) };
@@ -472,6 +490,7 @@ fn sync_acpi_id_from_cpuid(
 
         if !has_leafb {
             if !get_apic_id {
+                // SAFETY:
                 // Safe because we pass 1 for this call and the host supports the
                 // `cpuid` instruction
                 cpuid_entry = unsafe { __cpuid(1) };
@@ -504,20 +523,16 @@ fn sync_acpi_id_from_cpuid(
 ///
 /// * `guest_mem` - The guest memory where the tables will be stored.
 /// * `num_cpus` - Used to construct the MADT.
-/// * `sci_irq` - Used to fill the FACP SCI_INTERRUPT field, which
-///               is going to be used by the ACPI drivers to register
-///               sci handler.
+/// * `sci_irq` - Used to fill the FACP SCI_INTERRUPT field, which is going to be used by the ACPI
+///   drivers to register sci handler.
 /// * `acpi_dev_resource` - resouces needed by the ACPI devices for creating tables.
-/// * `host_cpus` - The CPU affinity per CPU used to get corresponding CPUs' apic
-///                 id and set these apic id in MADT if `--host-cpu-topology`
-///                 option is set.
+/// * `host_cpus` - The CPU affinity per CPU used to get corresponding CPUs' apic id and set these
+///   apic id in MADT if `--host-cpu-topology` option is set.
 /// * `apic_ids` - The apic id for vCPU will be sent to KVM by KVM_CREATE_VCPU ioctl.
-/// * `pci_rqs` - PCI device to IRQ number assignments as returned by
-///               `arch::generate_pci_root()` (device address, IRQ number, and PCI
-///               interrupt pin assignment).
+/// * `pci_rqs` - PCI device to IRQ number assignments as returned by `arch::generate_pci_root()`
+///   (device address, IRQ number, and PCI interrupt pin assignment).
 /// * `pcie_cfg_mmio` - Base address for the pcie enhanced configuration access mechanism
-/// *  `max_bus` - Max bus number in MCFG table
-///
+/// * `max_bus` - Max bus number in MCFG table
 
 pub fn create_acpi_tables(
     guest_mem: &GuestMemory,
@@ -616,7 +631,7 @@ pub fn create_acpi_tables(
     );
     madt.write(
         MADT_FIELD_LAPIC_ADDR,
-        super::mptable::APIC_DEFAULT_PHYS_BASE as u32,
+        super::mptable::APIC_DEFAULT_PHYS_BASE,
     );
     // Our IrqChip implementations (the KVM in-kernel irqchip and the split irqchip) expose a pair
     // of PC-compatible 8259 PICs.
@@ -722,4 +737,36 @@ pub fn create_acpi_tables(
     guest_mem.write_at_addr(rsdp.as_bytes(), rsdp_offset).ok()?;
 
     Some(rsdp_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::acpi::*;
+
+    #[test]
+    fn facp_table_creation() {
+        let sci_irq: u16 = 5;
+        let force_s2idle = true;
+        let facp = create_facp_table(sci_irq, force_s2idle);
+
+        assert_eq!(facp.read::<u32>(FADT_FIELD_FLAGS), FADT_LOW_POWER_S2IDLE);
+        assert_eq!(facp.read::<u16>(FADT_FIELD_SCI_INTERRUPT), sci_irq);
+        assert_eq!(
+            facp.read::<u8>(FADT_FIELD_MINOR_REVISION),
+            FADT_MINOR_REVISION
+        );
+        assert_eq!(facp.read::<[u8; 6]>(FADT_FIELD_HYPERVISOR_ID), *b"CROSVM");
+        assert_eq!(
+            facp.read::<u8>(FADT_FIELD_RTC_CENTURY),
+            devices::cmos::RTC_REG_CENTURY
+        );
+        assert_eq!(
+            facp.read::<u8>(FADT_FIELD_RTC_DAY_ALARM),
+            devices::cmos::RTC_REG_ALARM_DAY
+        );
+        assert_eq!(
+            facp.read::<u8>(FADT_FIELD_RTC_MONTH_ALARM),
+            devices::cmos::RTC_REG_ALARM_MONTH
+        );
+    }
 }

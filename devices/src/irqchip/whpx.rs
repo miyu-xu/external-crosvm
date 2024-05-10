@@ -5,6 +5,9 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use anyhow::Context;
+use serde::Deserialize;
+use serde::Serialize;
 use sync::Mutex;
 
 cfg_if::cfg_if! {
@@ -386,8 +389,8 @@ impl IrqChip for WhpxSplitIrqChip {
             vcpu.interrupt(vector as u32)?;
         }
 
-        // The second interrupt request should be handled immediately, so ask vCPU to exit as soon as
-        // possible.
+        // The second interrupt request should be handled immediately, so ask vCPU to exit as soon
+        // as possible.
         if self.interrupt_requested(vcpu_id) {
             vcpu.set_interrupt_window_requested(true);
         }
@@ -539,8 +542,14 @@ impl IrqChip for WhpxSplitIrqChip {
             IrqChipCap::TscDeadlineTimer => false,
             // TODO(b/180966070): Figure out how to query x2apic support.
             IrqChipCap::X2Apic => false,
+            IrqChipCap::MpStateGetSet => false,
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct WhpxSplitIrqChipSnapshot {
+    routes: Vec<IrqRoute>,
 }
 
 impl IrqChipX86_64 for WhpxSplitIrqChip {
@@ -607,5 +616,19 @@ impl IrqChipX86_64 for WhpxSplitIrqChip {
     /// devices::Pit uses 0x61.
     fn pit_uses_speaker_port(&self) -> bool {
         true
+    }
+
+    fn snapshot_chip_specific(&self) -> anyhow::Result<serde_json::Value> {
+        serde_json::to_value(&WhpxSplitIrqChipSnapshot {
+            routes: self.routes.lock().get_routes(),
+        })
+        .context("failed to snapshot WhpxSplitIrqChip")
+    }
+
+    fn restore_chip_specific(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let mut deser: WhpxSplitIrqChipSnapshot =
+            serde_json::from_value(data).context("failed to deserialize WhpxSplitIrqChip")?;
+        self.set_irq_routes(deser.routes.as_slice())?;
+        Ok(())
     }
 }

@@ -12,10 +12,10 @@ use std::io::stdout;
 use std::path::PathBuf;
 
 use base::error;
-use base::open_file;
-#[cfg(windows)]
-use base::platform::Console as WinConsole;
+use base::open_file_or_duplicate;
 use base::syslog;
+#[cfg(windows)]
+use base::windows::Console as WinConsole;
 use base::AsRawDescriptor;
 use base::Event;
 use base::FileSync;
@@ -30,6 +30,7 @@ use thiserror::Error as ThisError;
 
 pub use crate::sys::serial_device::SerialDevice;
 use crate::sys::serial_device::*;
+use crate::PciAddress;
 
 #[sorted]
 #[derive(ThisError, Debug)]
@@ -103,9 +104,10 @@ impl Display for SerialType {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SerialHardware {
-    Serial,        // Standard PC-style (8250/16550 compatible) UART
-    VirtioConsole, // virtio-console device
-    Debugcon,      // Bochs style debug port
+    Serial,              // Standard PC-style (8250/16550 compatible) UART
+    VirtioConsole,       // virtio-console device (AsyncConsole)
+    Debugcon,            // Bochs style debug port
+    LegacyVirtioConsole, // legacy virtio-console device (Console)
 }
 
 impl Default for SerialHardware {
@@ -120,6 +122,7 @@ impl Display for SerialHardware {
             SerialHardware::Serial => "serial".to_string(),
             SerialHardware::VirtioConsole => "virtio-console".to_string(),
             SerialHardware::Debugcon => "debugcon".to_string(),
+            SerialHardware::LegacyVirtioConsole => "legacy-virtio-console".to_string(),
         };
 
         write!(f, "{}", s)
@@ -141,6 +144,7 @@ pub struct SerialParameters {
     #[serde(rename = "type")]
     pub type_: SerialType,
     pub hardware: SerialHardware,
+    pub name: Option<String>,
     pub path: Option<PathBuf>,
     pub input: Option<PathBuf>,
     #[serde(default = "serial_parameters_default_num")]
@@ -155,6 +159,17 @@ pub struct SerialParameters {
         default = "serial_parameters_default_debugcon_port"
     )]
     pub debugcon_port: u16,
+    pub pci_address: Option<PciAddress>,
+}
+
+/// Temporary structure containing the parameters of a serial port for easy passing to
+/// `SerialDevice::new`.
+#[derive(Default)]
+pub struct SerialOptions {
+    pub name: Option<String>,
+    pub out_timestamp: bool,
+    pub console: bool,
+    pub pci_address: Option<PciAddress>,
 }
 
 impl SerialParameters {
@@ -163,7 +178,7 @@ impl SerialParameters {
     /// # Arguments
     /// * `evt` - event used for interrupt events
     /// * `keep_rds` - Vector of FDs required by this device if it were sandboxed in a child
-    ///                process. `evt` will always be added to this vector by this function.
+    ///   process. `evt` will always be added to this vector by this function.
     pub fn create_serial_device<T: SerialDevice>(
         &self,
         protection_type: ProtectionType,
@@ -173,10 +188,11 @@ impl SerialParameters {
         let evt = evt.try_clone().map_err(Error::CloneEvent)?;
         keep_rds.push(evt.as_raw_descriptor());
         cros_tracing::push_descriptors!(keep_rds);
+        metrics::push_descriptors(keep_rds);
         let input: Option<Box<dyn SerialInput>> = if let Some(input_path) = &self.input {
             let input_path = input_path.as_path();
 
-            let input_file = open_file(input_path, OpenOptions::new().read(true))
+            let input_file = open_file_or_duplicate(input_path, OpenOptions::new().read(true))
                 .map_err(|e| Error::FileOpen(e.into(), input_path.into()))?;
 
             keep_rds.push(input_file.as_raw_descriptor());
@@ -205,8 +221,9 @@ impl SerialParameters {
             }
             SerialType::File => match &self.path {
                 Some(path) => {
-                    let file = open_file(path, OpenOptions::new().append(true).create(true))
-                        .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
+                    let file =
+                        open_file_or_duplicate(path, OpenOptions::new().append(true).create(true))
+                            .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
                     let sync = file.try_clone().map_err(Error::FileClone)?;
 
                     keep_rds.push(file.as_raw_descriptor());
@@ -232,7 +249,12 @@ impl SerialParameters {
             input,
             output,
             sync,
-            self.out_timestamp,
+            SerialOptions {
+                name: self.name.clone(),
+                out_timestamp: self.out_timestamp,
+                console: self.console,
+                pci_address: self.pci_address,
+            },
             keep_rds.to_vec(),
         ))
     }
@@ -257,6 +279,7 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Sink,
                 hardware: SerialHardware::Serial,
+                name: None,
                 path: None,
                 input: None,
                 num: 1,
@@ -265,6 +288,7 @@ mod tests {
                 stdin: false,
                 out_timestamp: false,
                 debugcon_port: 0x402,
+                pci_address: None,
             }
         );
 
@@ -277,7 +301,7 @@ mod tests {
         assert_eq!(params.type_, SerialType::Sink);
         let params = from_serial_arg("type=syslog").unwrap();
         assert_eq!(params.type_, SerialType::Syslog);
-        #[cfg(unix)]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let opt = "type=unix";
         #[cfg(windows)]
         let opt = "type=namedpipe";
@@ -359,12 +383,13 @@ mod tests {
         assert_eq!(params.debugcon_port, 1026);
 
         // all together
-        let params = from_serial_arg("type=stdout,path=/some/path,hardware=virtio-console,num=5,earlycon,console,stdin,input=/some/input,out_timestamp,debugcon_port=12").unwrap();
+        let params = from_serial_arg("type=stdout,path=/some/path,hardware=virtio-console,num=5,earlycon,console,stdin,input=/some/input,out_timestamp,debugcon_port=12,pci-address=00:0e.0").unwrap();
         assert_eq!(
             params,
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
+                name: None,
                 path: Some("/some/path".into()),
                 input: Some("/some/input".into()),
                 num: 5,
@@ -373,6 +398,11 @@ mod tests {
                 stdin: true,
                 out_timestamp: true,
                 debugcon_port: 12,
+                pci_address: Some(PciAddress {
+                    bus: 0,
+                    dev: 14,
+                    func: 0
+                }),
             }
         );
 

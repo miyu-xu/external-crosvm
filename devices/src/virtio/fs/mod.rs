@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 
@@ -10,7 +11,6 @@ use base::error;
 use base::warn;
 use base::AsRawDescriptor;
 use base::Error as SysError;
-use base::Event;
 use base::RawDescriptor;
 use base::Tube;
 use base::WorkerThread;
@@ -33,26 +33,29 @@ use crate::pci::PciBarRegionType;
 use crate::pci::PciCapability;
 use crate::virtio::copy_config;
 use crate::virtio::device_constants::fs::FS_MAX_TAG_LEN;
-use crate::virtio::device_constants::fs::QUEUE_SIZE;
-use crate::virtio::DescriptorError;
 use crate::virtio::DeviceType;
 use crate::virtio::Interrupt;
 use crate::virtio::PciCapabilityType;
 use crate::virtio::Queue;
 use crate::virtio::VirtioDevice;
 use crate::virtio::VirtioPciShmCap;
-use crate::Suspendable;
 
 mod caps;
+mod config;
+mod expiring_map;
 mod multikey;
 pub mod passthrough;
 mod read_dir;
 mod worker;
 
+pub use config::CachePolicy;
+pub use config::Config;
 use fuse::Server;
 use passthrough::PassthroughFs;
 pub use worker::process_fs_queue;
 use worker::Worker;
+
+const QUEUE_SIZE: u16 = 1024;
 
 const FS_BAR_NUM: u8 = 4;
 const FS_BAR_OFFSET: u64 = 0;
@@ -71,12 +74,12 @@ pub enum Error {
     /// Error happened in FUSE.
     #[error("fuse error: {0}")]
     FuseError(fuse::Error),
+    /// Failed to get the uids for the worker thread.
+    #[error("failed to get uids for the worker thread: {0}")]
+    GetResuid(SysError),
     /// Failed to get the securebits for the worker thread.
     #[error("failed to get securebits for the worker thread: {0}")]
     GetSecurebits(SysError),
-    /// The `len` field of the header is too small.
-    #[error("DescriptorChain is invalid: {0}")]
-    InvalidDescriptorChain(DescriptorError),
     /// A request is missing readable descriptors.
     #[error("request does not have any readable descriptors")]
     NoReadableDescriptors,
@@ -128,7 +131,7 @@ impl Fs {
         base_features: u64,
         tag: &str,
         num_workers: usize,
-        fs_cfg: passthrough::Config,
+        fs_cfg: Config,
         tube: Tube,
     ) -> Result<Fs> {
         if tag.len() > FS_MAX_TAG_LEN {
@@ -143,7 +146,7 @@ impl Fs {
             num_request_queues: Le32::from(num_workers as u32),
         };
 
-        let fs = PassthroughFs::new(fs_cfg).map_err(Error::CreateFs)?;
+        let fs = PassthroughFs::new(tag, fs_cfg).map_err(Error::CreateFs)?;
 
         // There is always a high priority queue in addition to the request queues.
         let num_queues = num_workers + 1;
@@ -168,7 +171,7 @@ impl VirtioDevice for Fs {
             .fs
             .as_ref()
             .map(PassthroughFs::keep_rds)
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
         if let Some(rd) = self.tube.as_ref().map(|s| s.as_raw_descriptor()) {
             fds.push(rd);
         }
@@ -206,9 +209,9 @@ impl VirtioDevice for Fs {
 
     fn activate(
         &mut self,
-        guest_mem: GuestMemory,
+        _guest_mem: GuestMemory,
         interrupt: Interrupt,
-        queues: Vec<(Queue, Event)>,
+        queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != self.queue_sizes.len() {
             return Err(anyhow!(
@@ -227,7 +230,7 @@ impl VirtioDevice for Fs {
 
         // Set up shared memory for DAX.
         // TODO(b/176129399): Remove cfg! once DAX is supported on ARM.
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) && use_dax {
+        if cfg!(target_arch = "x86_64") && use_dax {
             // Create the shared memory region now before we start processing requests.
             let request = FsMappingRequest::AllocateSharedMemoryRegion(
                 self.pci_bar.as_ref().cloned().expect("No pci_bar"),
@@ -250,17 +253,15 @@ impl VirtioDevice for Fs {
 
         self.workers = queues
             .into_iter()
-            .enumerate()
-            .map(|(idx, (queue, evt))| {
-                let mem = guest_mem.clone();
+            .map(|(idx, queue)| {
                 let server = server.clone();
                 let irq = interrupt.clone();
                 let socket = Arc::clone(&socket);
 
                 let worker =
                     WorkerThread::start(format!("v_fs:{}:{}", self.tag, idx), move |kill_evt| {
-                        let mut worker = Worker::new(mem, queue, server, irq, socket, slot);
-                        worker.run(evt, kill_evt, watch_resample_event)
+                        let mut worker = Worker::new(queue, server, irq, socket, slot);
+                        worker.run(kill_evt, watch_resample_event)
                     });
 
                 if watch_resample_event {
@@ -307,5 +308,3 @@ impl VirtioDevice for Fs {
         ))]
     }
 }
-
-impl Suspendable for Fs {}

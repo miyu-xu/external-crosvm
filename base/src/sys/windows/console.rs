@@ -25,6 +25,7 @@ impl Console {
 impl Read for Console {
     fn read(&mut self, out: &mut [u8]) -> Result<usize> {
         let mut num_of_bytes_read: u32 = 0;
+        // SAFETY:
         // Safe because `out` is guarenteed to be a valid mutable array
         // and `num_of_bytes_read` is a valid u32.
         let res = unsafe {
@@ -48,5 +49,11 @@ impl Read for Console {
 impl ReadNotifier for Console {
     fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
         &self.0
+    }
+}
+
+impl Default for Console {
+    fn default() -> Self {
+        Self::new()
     }
 }

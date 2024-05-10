@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::io::Write;
 use std::mem;
@@ -22,15 +23,10 @@ use thiserror::Error;
 use vm_memory::GuestMemory;
 
 use super::copy_config;
-use super::DescriptorError;
+use super::queue::Queue;
 use super::DeviceType;
 use super::Interrupt;
-use super::Queue;
-use super::Reader;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
-use super::Writer;
-use crate::Suspendable;
 
 const QUEUE_SIZE: u16 = 128;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE];
@@ -51,9 +47,6 @@ pub enum P9Error {
     /// An internal I/O error occurred.
     #[error("P9 internal server error: {0}")]
     Internal(io::Error),
-    /// A DescriptorChain contains invalid data.
-    #[error("DescriptorChain contains invalid data: {0}")]
-    InvalidDescriptorChain(DescriptorError),
     /// A request is missing readable descriptors.
     #[error("request does not have any readable descriptors")]
     NoReadableDescriptors,
@@ -78,28 +71,22 @@ pub type P9Result<T> = result::Result<T, P9Error>;
 
 struct Worker {
     interrupt: Interrupt,
-    mem: GuestMemory,
     queue: Queue,
-    queue_evt: Event,
     server: p9::Server,
 }
 
 impl Worker {
     fn process_queue(&mut self) -> P9Result<()> {
-        while let Some(avail_desc) = self.queue.pop(&self.mem) {
-            let mut reader = Reader::new(self.mem.clone(), avail_desc.clone())
-                .map_err(P9Error::InvalidDescriptorChain)?;
-            let mut writer = Writer::new(self.mem.clone(), avail_desc.clone())
-                .map_err(P9Error::InvalidDescriptorChain)?;
-
+        while let Some(mut avail_desc) = self.queue.pop() {
             self.server
-                .handle_message(&mut reader, &mut writer)
+                .handle_message(&mut avail_desc.reader, &mut avail_desc.writer)
                 .map_err(P9Error::Internal)?;
 
-            self.queue
-                .add_used(&self.mem, avail_desc.index, writer.bytes_written() as u32);
+            let len = avail_desc.writer.bytes_written() as u32;
+
+            self.queue.add_used(avail_desc, len);
         }
-        self.queue.trigger_interrupt(&self.mem, &self.interrupt);
+        self.queue.trigger_interrupt(&self.interrupt);
 
         Ok(())
     }
@@ -116,7 +103,7 @@ impl Worker {
         }
 
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (&self.queue_evt, Token::QueueReady),
+            (self.queue.event(), Token::QueueReady),
             (&kill_evt, Token::Kill),
         ])
         .map_err(P9Error::CreateWaitContext)?;
@@ -131,7 +118,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueReady => {
-                        self.queue_evt.wait().map_err(P9Error::ReadQueueEvent)?;
+                        self.queue.event().wait().map_err(P9Error::ReadQueueEvent)?;
                         self.process_queue()?;
                     }
                     Token::InterruptResample => {
@@ -182,7 +169,7 @@ impl VirtioDevice for P9 {
         self.server
             .as_ref()
             .map(p9::Server::keep_fds)
-            .unwrap_or_else(Vec::new)
+            .unwrap_or_default()
     }
 
     fn device_type(&self) -> DeviceType {
@@ -217,24 +204,22 @@ impl VirtioDevice for P9 {
 
     fn activate(
         &mut self,
-        guest_mem: GuestMemory,
+        _guest_mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != 1 {
             return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
 
-        let (queue, queue_evt) = queues.remove(0);
+        let queue = queues.remove(&0).unwrap();
 
         let server = self.server.take().context("missing server")?;
 
         self.worker = Some(WorkerThread::start("v_9p", move |kill_evt| {
             let mut worker = Worker {
                 interrupt,
-                mem: guest_mem,
                 queue,
-                queue_evt,
                 server,
             };
 
@@ -244,5 +229,3 @@ impl VirtioDevice for P9 {
         Ok(())
     }
 }
-
-impl Suspendable for P9 {}

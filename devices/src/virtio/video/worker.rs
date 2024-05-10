@@ -11,8 +11,6 @@ use base::clone_descriptor;
 use base::error;
 use base::info;
 use base::Event;
-use base::FromRawDescriptor;
-use base::SafeDescriptor;
 use base::WaitContext;
 use cros_async::select3;
 use cros_async::AsyncWrapper;
@@ -20,10 +18,7 @@ use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::SelectResult;
 use futures::FutureExt;
-use vm_memory::GuestMemory;
 
-use crate::virtio::queue::DescriptorChain;
-use crate::virtio::queue::Queue;
 use crate::virtio::video::async_cmd_desc_map::AsyncCmdDescMap;
 use crate::virtio::video::command::QueueType;
 use crate::virtio::video::command::VideoCmd;
@@ -40,22 +35,20 @@ use crate::virtio::video::response;
 use crate::virtio::video::response::Response;
 use crate::virtio::video::Error;
 use crate::virtio::video::Result;
-use crate::virtio::Reader;
-use crate::virtio::SignalableInterrupt;
-use crate::virtio::Writer;
+use crate::virtio::DescriptorChain;
+use crate::virtio::Interrupt;
+use crate::virtio::Queue;
 
 /// Worker that takes care of running the virtio video device.
-pub struct Worker<I: SignalableInterrupt> {
-    /// Memory region of the guest VM
-    mem: GuestMemory,
+pub struct Worker {
     /// VirtIO queue for Command queue
     cmd_queue: Queue,
     /// Device-to-driver notification for command queue
-    cmd_queue_interrupt: I,
+    cmd_queue_interrupt: Interrupt,
     /// VirtIO queue for Event queue
     event_queue: Queue,
     /// Device-to-driver notification for the event queue.
-    event_queue_interrupt: I,
+    event_queue_interrupt: Interrupt,
     /// Stores descriptor chains in which responses for asynchronous commands will be written
     desc_map: AsyncCmdDescMap,
 }
@@ -63,16 +56,14 @@ pub struct Worker<I: SignalableInterrupt> {
 /// Pair of a descriptor chain and a response to be written.
 type WritableResp = (DescriptorChain, response::CmdResponse);
 
-impl<I: SignalableInterrupt> Worker<I> {
+impl Worker {
     pub fn new(
-        mem: GuestMemory,
         cmd_queue: Queue,
-        cmd_queue_interrupt: I,
+        cmd_queue_interrupt: Interrupt,
         event_queue: Queue,
-        event_queue_interrupt: I,
+        event_queue_interrupt: Interrupt,
     ) -> Self {
         Self {
-            mem,
             cmd_queue,
             cmd_queue_interrupt,
             event_queue,
@@ -86,41 +77,34 @@ impl<I: SignalableInterrupt> Worker<I> {
         if responses.is_empty() {
             return Ok(());
         }
-        while let Some((desc, response)) = responses.pop_front() {
-            let desc_index = desc.index;
-            let mut writer =
-                Writer::new(self.mem.clone(), desc).map_err(Error::InvalidDescriptorChain)?;
-            if let Err(e) = response.write(&mut writer) {
+        while let Some((mut desc, response)) = responses.pop_front() {
+            if let Err(e) = response.write(&mut desc.writer) {
                 error!(
                     "failed to write a command response for {:?}: {}",
                     response, e
                 );
             }
-            self.cmd_queue
-                .add_used(&self.mem, desc_index, writer.bytes_written() as u32);
+            let len = desc.writer.bytes_written() as u32;
+            self.cmd_queue.add_used(desc, len);
         }
-        self.cmd_queue
-            .trigger_interrupt(&self.mem, &self.cmd_queue_interrupt);
+        self.cmd_queue.trigger_interrupt(&self.cmd_queue_interrupt);
         Ok(())
     }
 
     /// Writes a `VideoEvt` into the event queue.
     fn write_event(&mut self, event: event::VideoEvt) -> Result<()> {
-        let desc = self
+        let mut desc = self
             .event_queue
-            .pop(&self.mem)
+            .pop()
             .ok_or(Error::DescriptorNotAvailable)?;
 
-        let desc_index = desc.index;
-        let mut writer =
-            Writer::new(self.mem.clone(), desc).map_err(Error::InvalidDescriptorChain)?;
         event
-            .write(&mut writer)
+            .write(&mut desc.writer)
             .map_err(|error| Error::WriteEventFailure { event, error })?;
+        let len = desc.writer.bytes_written() as u32;
+        self.event_queue.add_used(desc, len);
         self.event_queue
-            .add_used(&self.mem, desc_index, writer.bytes_written() as u32);
-        self.event_queue
-            .trigger_interrupt(&self.mem, &self.event_queue_interrupt);
+            .trigger_interrupt(&self.event_queue_interrupt);
         Ok(())
     }
 
@@ -195,20 +179,17 @@ impl<I: SignalableInterrupt> Worker<I> {
     /// # Arguments
     ///
     /// * `device` - Instance of backend device
-    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
-    ///   to `wait_ctx`
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session to
+    ///   `wait_ctx`
     /// * `desc` - `DescriptorChain` to handle
     fn handle_command_desc(
         &mut self,
         device: &mut dyn Device,
         wait_ctx: &WaitContext<Token>,
-        desc: DescriptorChain,
+        mut desc: DescriptorChain,
     ) -> Result<VecDeque<WritableResp>> {
         let mut responses: VecDeque<WritableResp> = Default::default();
-        let mut reader =
-            Reader::new(self.mem.clone(), desc.clone()).map_err(Error::InvalidDescriptorChain)?;
-
-        let cmd = VideoCmd::from_reader(&mut reader).map_err(Error::ReadFailure)?;
+        let cmd = VideoCmd::from_reader(&mut desc.reader).map_err(Error::ReadFailure)?;
 
         // If a destruction command comes, cancel pending requests.
         // TODO(b/161774071): Allow `process_cmd` to return multiple responses and move this
@@ -283,14 +264,14 @@ impl<I: SignalableInterrupt> Worker<I> {
     /// # Arguments
     ///
     /// * `device` - Instance of backend device
-    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
-    ///   to `wait_ctx`
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session to
+    ///   `wait_ctx`
     fn handle_command_queue(
         &mut self,
         device: &mut dyn Device,
         wait_ctx: &WaitContext<Token>,
     ) -> Result<()> {
-        while let Some(desc) = self.cmd_queue.pop(&self.mem) {
+        while let Some(desc) = self.cmd_queue.pop() {
             let mut resps = self.handle_command_desc(device, wait_ctx, desc)?;
             self.write_responses(&mut resps)?;
         }
@@ -303,8 +284,36 @@ impl<I: SignalableInterrupt> Worker<I> {
     ///
     /// * `device` - Instance of backend device
     /// * `stream_id` - Stream session ID of the event
-    fn handle_event(&mut self, device: &mut dyn Device, stream_id: u32) -> Result<()> {
-        if let Some(event_responses) = device.process_event(&mut self.desc_map, stream_id) {
+    /// * `wait_ctx` - `device` may register a new `Token::Buffer` for a new stream session to
+    ///   `wait_ctx`
+    fn handle_event(
+        &mut self,
+        device: &mut dyn Device,
+        stream_id: u32,
+        wait_ctx: &WaitContext<Token>,
+    ) -> Result<()> {
+        if let Some(event_responses) = device.process_event(&mut self.desc_map, stream_id, wait_ctx)
+        {
+            self.write_event_responses(event_responses, stream_id)?;
+        }
+        Ok(())
+    }
+
+    /// Handles a completed buffer barrier.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Instance of backend device
+    /// * `stream_id` - Stream session ID of the event
+    /// * `wait_ctx` - `device` may deregister the completed `Token::BufferBarrier` from
+    /// `wait_ctx`.
+    fn handle_buffer_barrier(
+        &mut self,
+        device: &mut dyn Device,
+        stream_id: u32,
+        wait_ctx: &WaitContext<Token>,
+    ) -> Result<()> {
+        if let Some(event_responses) = device.process_buffer_barrier(stream_id, wait_ctx) {
             self.write_event_responses(event_responses, stream_id)?;
         }
         Ok(())
@@ -315,19 +324,11 @@ impl<I: SignalableInterrupt> Worker<I> {
     /// # Arguments
     ///
     /// * `device` - Instance of backend device
-    /// * `cmd_evt` - Driver-to-device kick event for the command queue
-    /// * `event_evt` - Driver-to-device kick event for the event queue
     /// * `kill_evt` - `Event` notified to make `run` stop and return
-    pub fn run(
-        &mut self,
-        mut device: Box<dyn Device>,
-        cmd_evt: &Event,
-        event_evt: &Event,
-        kill_evt: &Event,
-    ) -> Result<()> {
+    pub fn run(&mut self, mut device: Box<dyn Device>, kill_evt: &Event) -> Result<()> {
         let wait_ctx: WaitContext<Token> = WaitContext::build_with(&[
-            (cmd_evt, Token::CmdQueue),
-            (event_evt, Token::EventQueue),
+            (self.cmd_queue.event(), Token::CmdQueue),
+            (self.event_queue.event(), Token::EventQueue),
             (kill_evt, Token::Kill),
         ])
         .and_then(|wc| {
@@ -346,14 +347,17 @@ impl<I: SignalableInterrupt> Worker<I> {
             for wait_event in wait_events.iter().filter(|e| e.is_readable) {
                 match wait_event.token {
                     Token::CmdQueue => {
-                        let _ = cmd_evt.wait();
+                        let _ = self.cmd_queue.event().wait();
                         self.handle_command_queue(device.as_mut(), &wait_ctx)?;
                     }
                     Token::EventQueue => {
-                        let _ = event_evt.wait();
+                        let _ = self.event_queue.event().wait();
                     }
                     Token::Event { id } => {
-                        self.handle_event(device.as_mut(), id)?;
+                        self.handle_event(device.as_mut(), id, &wait_ctx)?;
+                    }
+                    Token::BufferBarrier { id } => {
+                        self.handle_buffer_barrier(device.as_mut(), id, &wait_ctx)?;
                     }
                     Token::InterruptResample => {
                         // Clear the event. `expect` is ok since the token fires if and only if
@@ -380,6 +384,7 @@ impl<I: SignalableInterrupt> Worker<I> {
     /// * `ex` - Instance of `Executor` of asynchronous operations
     /// * `cmd_evt` - Driver-to-device kick event for the command queue
     /// * `event_evt` - Driver-to-device kick event for the event queue
+    #[allow(dead_code)]
     pub async fn run_async(
         mut self,
         mut device: Box<dyn Device>,
@@ -396,10 +401,7 @@ impl<I: SignalableInterrupt> Worker<I> {
         let device_wait_ctx = WaitContext::new().map_err(Error::WaitContextCreationFailed)?;
         let device_evt = ex
             .async_from(AsyncWrapper::new(
-                clone_descriptor(&device_wait_ctx)
-                        // Safe because we just created this fd.
-                        .map(|fd| unsafe { SafeDescriptor::from_raw_descriptor(fd) })
-                        .map_err(Error::CloneDescriptorFailed)?,
+                clone_descriptor(&device_wait_ctx).map_err(Error::CloneDescriptorFailed)?,
             ))
             .map_err(Error::EventAsyncCreationFailed)?;
 
@@ -431,7 +433,7 @@ impl<I: SignalableInterrupt> Worker<I> {
                 for device_event in device_events {
                     // A Device must trigger only Token::Event. See [`Device::process_cmd()`].
                     if let Token::Event { id } = device_event.token {
-                        self.handle_event(device.as_mut(), id)?;
+                        self.handle_event(device.as_mut(), id, &device_wait_ctx)?;
                     } else {
                         error!(
                             "invalid event is triggered by a device {:?}",

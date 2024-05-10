@@ -10,9 +10,9 @@ pub enum HypervisorCap {
     S390UserSigp,
     TscDeadlineTimer,
     UserMemory,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     Xcrs,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     /// CPUID leaf 0x15 is available on some Intel chips and contains the TSC
     /// frequency, which can be used to calibrate the guest's TSC clocksource;
     /// however, it is not typically accurate enough (being off by 1-2% is a
@@ -30,6 +30,12 @@ pub enum HypervisorCap {
     // If this capability is declared, then instead crosvm will allocate space for the swiotlb
     // outside of guest physical memory and specify both the address and size in the device tree.
     StaticSwiotlbAllocationRequired,
+    /// Some hypervisors (presently: Gunyah) will configure initial boot-time registers
+    /// for vCPUs without need for CrosVM to specify.
+    ///
+    /// If this capability is declared, then crosvm will not try to initialize vcpu
+    /// registers when creating the VM.
+    HypervisorInitializedBootContext,
 }
 
 /// A capability the `Vm` can possibly expose.
@@ -39,13 +45,15 @@ pub enum VmCap {
     DirtyLog,
     /// Paravirtualized clock device
     PvClock,
-    /// PV clock can be notified when guest is being paused
-    PvClockSuspend,
     /// VM can be run in protected mode, where the host does not have access to its memory.
     Protected,
     /// VM completes initialization of CPUID at creation time, not required after.
     EarlyInitCpuid,
     /// VM can detect the bus lock
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     BusLockDetect,
+    /// Supports read-only memory regions.
+    ReadOnlyMemoryRegion,
+    /// VM can set guest memory cache noncoherent DMA flag
+    MemNoncoherentDma,
 }

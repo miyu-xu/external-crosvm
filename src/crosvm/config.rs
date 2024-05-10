@@ -2,57 +2,52 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::__cpuid;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::__cpuid_count;
 use std::collections::BTreeMap;
-use std::net;
-use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use arch::set_default_serial_parameters;
 use arch::CpuSet;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrAction;
-use arch::MsrConfig;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrFilter;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use arch::MsrRWType;
-use arch::MsrValueFrom;
 use arch::Pstore;
+#[cfg(target_arch = "x86_64")]
+use arch::SmbiosOptions;
 use arch::VcpuAffinity;
 use base::debug;
 use base::pagesize;
 use cros_async::ExecutorKind;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
-use devices::virtio::block::block::DiskOption;
+use devices::virtio::block::DiskOption;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::device_constants::video::VideoDeviceConfig;
 #[cfg(feature = "gpu")]
 use devices::virtio::gpu::GpuParameters;
+use devices::virtio::scsi::ScsiOption;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 #[cfg(all(windows, feature = "gpu"))]
 use devices::virtio::vhost::user::device::gpu::sys::windows::GpuBackendConfig;
 #[cfg(all(windows, feature = "gpu"))]
 use devices::virtio::vhost::user::device::gpu::sys::windows::GpuVmmConfig;
+#[cfg(all(windows, feature = "gpu"))]
+use devices::virtio::vhost::user::device::gpu::sys::windows::InputEventSplitConfig;
+#[cfg(all(windows, feature = "gpu"))]
+use devices::virtio::vhost::user::device::gpu::sys::windows::WindowProcedureThreadSplitConfig;
 #[cfg(all(windows, feature = "audio"))]
 use devices::virtio::vhost::user::device::snd::sys::windows::SndSplitConfig;
+use devices::virtio::vsock::VsockConfig;
+use devices::virtio::DeviceType;
+#[cfg(feature = "net")]
 use devices::virtio::NetParameters;
-#[cfg(feature = "audio")]
-use devices::Ac97Backend;
-#[cfg(feature = "audio")]
-use devices::Ac97Parameters;
-#[cfg(feature = "direct")]
-use devices::BusRange;
+use devices::FwCfgParameters;
 use devices::PciAddress;
 use devices::PflashParameters;
 use devices::StubPciParameters;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use hypervisor::CpuHybridType;
 use hypervisor::ProtectionType;
 use jail::JailConfig;
@@ -60,42 +55,39 @@ use resources::AddressRange;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_keyvalue::FromKeyValues;
-use uuid::Uuid;
 use vm_control::BatteryType;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::check_host_hybrid_support;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use x86_64::set_enable_pnp_data_msr_config;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 use x86_64::CpuIdCall;
 
 pub(crate) use super::sys::HypervisorKind;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use crate::crosvm::sys::config::SharedDir;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
-        use std::time::Duration;
-        use base::RawDescriptor;
-        use devices::virtio::fs::passthrough;
+    if #[cfg(any(target_os = "android", target_os = "linux"))] {
         #[cfg(feature = "gpu")]
         use crate::crosvm::sys::GpuRenderServerParameters;
-        use libc::{getegid, geteuid};
 
-        static KVM_PATH: &str = "/dev/kvm";
-        static VHOST_NET_PATH: &str = "/dev/vhost-net";
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        static VHOST_SCMI_PATH: &str = "/dev/vhost-scmi";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
-
-        use crate::crosvm::sys::windows::config::IrqChipKind;
     }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const ONE_MB: u64 = 1 << 20;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const MB_ALIGNED: u64 = ONE_MB - 1;
 // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
+
+// by default, if enabled, the balloon WS features will use 4 bins.
+#[cfg(feature = "balloon")]
+const VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS: u8 = 4;
 
 /// Indicates the location and kind of executable kernel for a VM.
 #[allow(dead_code)]
@@ -109,9 +101,20 @@ pub enum Executable {
     Plugin(PathBuf),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub enum IrqChipKind {
+    /// All interrupt controllers are emulated in the kernel.
+    Kernel,
+    /// APIC is emulated in the kernel.  All other interrupt controllers are in userspace.
+    Split,
+    /// All interrupt controllers are emulated in userspace.
+    Userspace,
+}
+
 /// The core types in hybrid architecture.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CpuCoreType {
     /// Intel Atom.
@@ -120,7 +123,7 @@ pub struct CpuCoreType {
     pub core: CpuSet,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, FromKeyValues)]
+#[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize, FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CpuOptions {
     /// Number of CPU cores.
@@ -130,11 +133,25 @@ pub struct CpuOptions {
     #[serde(default)]
     pub clusters: Vec<CpuSet>,
     /// Core Type of CPUs.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub core_types: Option<CpuCoreType>,
+    /// Select which CPU to boot from.
+    #[serde(default)]
+    pub boot_cpu: Option<usize>,
 }
 
-#[derive(Debug, Default, Deserialize, FromKeyValues)]
+/// Device tree overlay configuration.
+#[derive(Debug, Default, Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct DtboOption {
+    /// Overlay file to apply to the base device tree.
+    pub path: PathBuf,
+    /// Whether to only apply device tree nodes which belong to a VFIO device.
+    #[serde(rename = "filter", default)]
+    pub filter_devs: bool,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, FromKeyValues, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MemOptions {
     /// Amount of guest memory in MiB.
@@ -142,29 +159,50 @@ pub struct MemOptions {
     pub size: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VhostUserOption {
     pub socket: PathBuf,
+
+    /// Maximum number of entries per queue (default: 32768)
+    pub max_queue_size: Option<u16>,
 }
 
-impl FromStr for VhostUserOption {
-    type Err = <PathBuf as FromStr>::Err;
+#[derive(Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct VhostUserFrontendOption {
+    /// Device type
+    #[serde(rename = "type")]
+    pub type_: devices::virtio::DeviceType,
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self { socket: s.parse()? })
-    }
+    /// Path to the vhost-user backend socket to connect to
+    pub socket: PathBuf,
+
+    /// Maximum number of entries per queue (default: 32768)
+    pub max_queue_size: Option<u16>,
+
+    /// Preferred PCI address
+    pub pci_address: Option<PciAddress>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VhostUserFsOption {
     pub socket: PathBuf,
-    pub tag: String,
+    pub tag: Option<String>,
+
+    /// Maximum number of entries per queue (default: 32768)
+    pub max_queue_size: Option<u16>,
 }
 
-impl FromStr for VhostUserFsOption {
-    type Err = &'static str;
-
-    fn from_str(param: &str) -> Result<Self, Self::Err> {
+pub fn parse_vhost_user_fs_option(param: &str) -> Result<VhostUserFsOption, String> {
+    // Allow the previous `--vhost-user-fs /path/to/socket:fs-tag` format for compatibility.
+    // This will unfortunately prevent parsing of valid comma-separated FromKeyValues options that
+    // contain a ":" character (e.g. in a socket filename), but those were not supported in the old
+    // format either, so we can live with it until the deprecated format is removed.
+    // TODO(b/218223240): Remove support for the deprecated format (and use `FromKeyValues`
+    // directly instead of `from_str_fn`) once enough time has passed.
+    if param.contains(':') {
         // (socket:tag)
         let mut components = param.split(':');
         let socket = PathBuf::from(
@@ -177,371 +215,120 @@ impl FromStr for VhostUserFsOption {
             .ok_or("missing tag for `vhost-user-fs`")?
             .to_owned();
 
-        Ok(Self { socket, tag })
-    }
-}
+        log::warn!(
+            "`--vhost-user-fs` with colon-separated options is deprecated; \
+            please use `--vhost-user-fs {},tag={}` instead",
+            socket.display(),
+            tag,
+        );
 
-/// Options for virtio-vhost-user proxy device.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, serde_keyvalue::FromKeyValues)]
-pub struct VvuOption {
-    pub socket: PathBuf,
-    pub addr: Option<PciAddress>,
-    pub uuid: Option<Uuid>,
-}
-
-/// A bind mount for directories in the plugin process.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BindMount {
-    pub src: PathBuf,
-    pub dst: PathBuf,
-    pub writable: bool,
-}
-
-impl FromStr for BindMount {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let components: Vec<&str> = value.split(':').collect();
-        if components.is_empty() || components.len() > 3 || components[0].is_empty() {
-            return Err(invalid_value_err(
-                value,
-                "`plugin-mount` should be in a form of: <src>[:[<dst>][:<writable>]]",
-            ));
-        }
-
-        let src = PathBuf::from(components[0]);
-        if src.is_relative() {
-            return Err(invalid_value_err(
-                components[0],
-                "the source path for `plugin-mount` must be absolute",
-            ));
-        }
-        if !src.exists() {
-            return Err(invalid_value_err(
-                components[0],
-                "the source path for `plugin-mount` does not exist",
-            ));
-        }
-
-        let dst = PathBuf::from(match components.get(1) {
-            None | Some(&"") => components[0],
-            Some(path) => path,
-        });
-        if dst.is_relative() {
-            return Err(invalid_value_err(
-                components[1],
-                "the destination path for `plugin-mount` must be absolute",
-            ));
-        }
-
-        let writable: bool = match components.get(2) {
-            None => false,
-            Some(s) => s.parse().map_err(|_| {
-                invalid_value_err(
-                    components[2],
-                    "the <writable> component for `plugin-mount` is not valid bool",
-                )
-            })?,
-        };
-
-        Ok(BindMount { src, dst, writable })
-    }
-}
-
-/// A mapping of linux group IDs for the plugin process.
-#[cfg(feature = "plugin")]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct GidMap {
-    pub inner: base::platform::Gid,
-    pub outer: base::platform::Gid,
-    pub count: u32,
-}
-
-#[cfg(feature = "plugin")]
-impl FromStr for GidMap {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let components: Vec<&str> = value.split(':').collect();
-        if components.is_empty() || components.len() > 3 || components[0].is_empty() {
-            return Err(invalid_value_err(
-                value,
-                "`plugin-gid-map` must have exactly 3 components: <inner>[:[<outer>][:<count>]]",
-            ));
-        }
-
-        let inner: base::platform::Gid = components[0].parse().map_err(|_| {
-            invalid_value_err(
-                components[0],
-                "the <inner> component for `plugin-gid-map` is not valid gid",
-            )
-        })?;
-
-        let outer: base::platform::Gid = match components.get(1) {
-            None | Some(&"") => inner,
-            Some(s) => s.parse().map_err(|_| {
-                invalid_value_err(
-                    components[1],
-                    "the <outer> component for `plugin-gid-map` is not valid gid",
-                )
-            })?,
-        };
-
-        let count: u32 = match components.get(2) {
-            None => 1,
-            Some(s) => s.parse().map_err(|_| {
-                invalid_value_err(
-                    components[2],
-                    "the <count> component for `plugin-gid-map` is not valid number",
-                )
-            })?,
-        };
-
-        Ok(GidMap {
-            inner,
-            outer,
-            count,
+        Ok(VhostUserFsOption {
+            socket,
+            tag: Some(tag),
+            max_queue_size: None,
         })
+    } else {
+        from_key_values::<VhostUserFsOption>(param)
     }
-}
-
-/// Direct IO forwarding options
-#[cfg(feature = "direct")]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DirectIoOption {
-    pub path: PathBuf,
-    pub ranges: Vec<BusRange>,
 }
 
 pub const DEFAULT_TOUCH_DEVICE_HEIGHT: u32 = 1024;
 pub const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 1280;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, FromKeyValues)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TouchDeviceOption {
-    path: PathBuf,
-    width: Option<u32>,
-    height: Option<u32>,
-    default_width: u32,
-    default_height: u32,
+    pub path: PathBuf,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub name: Option<String>,
 }
 
-impl TouchDeviceOption {
-    pub fn new(path: PathBuf) -> TouchDeviceOption {
-        TouchDeviceOption {
-            path,
-            width: None,
-            height: None,
-            default_width: DEFAULT_TOUCH_DEVICE_WIDTH,
-            default_height: DEFAULT_TOUCH_DEVICE_HEIGHT,
+/// Try to parse a colon-separated touch device option.
+///
+/// The expected format is "PATH:WIDTH:HEIGHT:NAME", with all fields except PATH being optional.
+fn parse_touch_device_option_legacy(s: &str) -> Option<TouchDeviceOption> {
+    let mut it = s.split(':');
+    let path = PathBuf::from(it.next()?.to_owned());
+    let width = if let Some(width) = it.next() {
+        Some(width.trim().parse().ok()?)
+    } else {
+        None
+    };
+    let height = if let Some(height) = it.next() {
+        Some(height.trim().parse().ok()?)
+    } else {
+        None
+    };
+    let name = it.next().map(|name| name.trim().to_string());
+    if it.next().is_some() {
+        return None;
+    }
+
+    Some(TouchDeviceOption {
+        path,
+        width,
+        height,
+        name,
+    })
+}
+
+/// Parse virtio-input touch device options from a string.
+///
+/// This function only exists to enable the use of the deprecated colon-separated form
+/// ("PATH:WIDTH:HEIGHT:NAME"); once the deprecation period is over, this function should be removed
+/// in favor of using the derived `FromKeyValues` function directly.
+pub fn parse_touch_device_option(s: &str) -> Result<TouchDeviceOption, String> {
+    if s.contains(':') {
+        if let Some(touch_spec) = parse_touch_device_option_legacy(s) {
+            log::warn!(
+                "colon-separated touch device options are deprecated; \
+                please use --input instead"
+            );
+            return Ok(touch_spec);
         }
     }
 
-    /// Getter for the path to the input event streams.
-    #[cfg_attr(windows, allow(unused))]
-    pub fn get_path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    /// When a user specifies the parameters for a touch device, width and height are optional.
-    /// If the width and height are missing, default values are used. Default values can be set
-    /// dynamically, for example from the display sizes specified by the gpu argument.
-    #[cfg(feature = "gpu")]
-    pub fn set_default_size(&mut self, width: u32, height: u32) {
-        self.default_width = width;
-        self.default_height = height;
-    }
-
-    /// Setter for the width specified by the user.
-    pub fn set_width(&mut self, width: u32) {
-        self.width.replace(width);
-    }
-
-    /// Setter for the height specified by the user.
-    pub fn set_height(&mut self, height: u32) {
-        self.height.replace(height);
-    }
-
-    /// If the user specifies the size, use it. Otherwise, use the default values.
-    #[cfg(any(unix, feature = "gpu"))]
-    pub fn get_size(&self) -> (u32, u32) {
-        (
-            self.width.unwrap_or(self.default_width),
-            self.height.unwrap_or(self.default_height),
-        )
-    }
+    from_key_values::<TouchDeviceOption>(s)
 }
 
-impl FromStr for TouchDeviceOption {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut it = s.split(':');
-        let mut touch_spec = TouchDeviceOption::new(PathBuf::from(it.next().unwrap().to_owned()));
-        if let Some(width) = it.next() {
-            touch_spec.set_width(width.trim().parse().unwrap());
-        }
-        if let Some(height) = it.next() {
-            touch_spec.set_height(height.trim().parse().unwrap());
-        }
-        Ok(touch_spec)
-    }
-}
-
-#[derive(Eq, PartialEq, Serialize, Deserialize)]
-pub enum SharedDirKind {
-    FS,
-    P9,
-}
-
-impl FromStr for SharedDirKind {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use SharedDirKind::*;
-        match s {
-            "fs" | "FS" => Ok(FS),
-            "9p" | "9P" | "p9" | "P9" => Ok(P9),
-            _ => Err("invalid file system type"),
-        }
-    }
-}
-
-impl Default for SharedDirKind {
-    fn default() -> SharedDirKind {
-        SharedDirKind::P9
-    }
-}
-
-#[cfg(unix)]
-pub struct SharedDir {
-    pub src: PathBuf,
-    pub tag: String,
-    pub kind: SharedDirKind,
-    pub uid_map: String,
-    pub gid_map: String,
-    pub fs_cfg: passthrough::Config,
-    pub p9_cfg: p9::Config,
-}
-
-#[cfg(unix)]
-impl Default for SharedDir {
-    fn default() -> SharedDir {
-        SharedDir {
-            src: Default::default(),
-            tag: Default::default(),
-            kind: Default::default(),
-            uid_map: format!("0 {} 1", unsafe { geteuid() }),
-            gid_map: format!("0 {} 1", unsafe { getegid() }),
-            fs_cfg: Default::default(),
-            p9_cfg: Default::default(),
-        }
-    }
-}
-
-#[cfg(unix)]
-impl FromStr for SharedDir {
-    type Err = &'static str;
-
-    fn from_str(param: &str) -> Result<Self, Self::Err> {
-        // This is formatted as multiple fields, each separated by ":". The first 2 fields are
-        // fixed (src:tag).  The rest may appear in any order:
-        //
-        // * type=TYPE - must be one of "p9" or "fs" (default: p9)
-        // * uidmap=UIDMAP - a uid map in the format "inner outer count[,inner outer count]"
-        //   (default: "0 <current euid> 1")
-        // * gidmap=GIDMAP - a gid map in the same format as uidmap
-        //   (default: "0 <current egid> 1")
-        // * privileged_quota_uids=UIDS - Space-separated list of privileged uid values. When
-        //   performing quota-related operations, these UIDs are treated as if they have
-        //   CAP_FOWNER.
-        // * timeout=TIMEOUT - a timeout value in seconds, which indicates how long attributes
-        //   and directory contents should be considered valid (default: 5)
-        // * cache=CACHE - one of "never", "always", or "auto" (default: auto)
-        // * writeback=BOOL - indicates whether writeback caching should be enabled (default: false)
-        let mut components = param.split(':');
-        let src = PathBuf::from(
-            components
-                .next()
-                .ok_or("missing source path for `shared-dir`")?,
-        );
-        let tag = components
-            .next()
-            .ok_or("missing tag for `shared-dir`")?
-            .to_owned();
-
-        if !src.is_dir() {
-            return Err("source path for `shared-dir` must be a directory");
-        }
-
-        let mut shared_dir = SharedDir {
-            src,
-            tag,
-            ..Default::default()
-        };
-        for opt in components {
-            let mut o = opt.splitn(2, '=');
-            let kind = o.next().ok_or("`shared-dir` options must not be empty")?;
-            let value = o
-                .next()
-                .ok_or("`shared-dir` options must be of the form `kind=value`")?;
-
-            match kind {
-                "type" => {
-                    shared_dir.kind = value
-                        .parse()
-                        .map_err(|_| "`type` must be one of `fs` or `9p`")?
-                }
-                "uidmap" => shared_dir.uid_map = value.into(),
-                "gidmap" => shared_dir.gid_map = value.into(),
-                #[cfg(feature = "arc_quota")]
-                "privileged_quota_uids" => {
-                    shared_dir.fs_cfg.privileged_quota_uids =
-                        value.split(' ').map(|s| s.parse().unwrap()).collect();
-                }
-                "timeout" => {
-                    let seconds = value.parse().map_err(|_| "`timeout` must be an integer")?;
-
-                    let dur = Duration::from_secs(seconds);
-                    shared_dir.fs_cfg.entry_timeout = dur;
-                    shared_dir.fs_cfg.attr_timeout = dur;
-                }
-                "cache" => {
-                    let policy = value
-                        .parse()
-                        .map_err(|_| "`cache` must be one of `never`, `always`, or `auto`")?;
-                    shared_dir.fs_cfg.cache_policy = policy;
-                }
-                "writeback" => {
-                    let writeback = value.parse().map_err(|_| "`writeback` must be a boolean")?;
-                    shared_dir.fs_cfg.writeback = writeback;
-                }
-                "rewrite-security-xattrs" => {
-                    let rewrite_security_xattrs = value
-                        .parse()
-                        .map_err(|_| "`rewrite-security-xattrs` must be a boolean")?;
-                    shared_dir.fs_cfg.rewrite_security_xattrs = rewrite_security_xattrs;
-                }
-                "ascii_casefold" => {
-                    let ascii_casefold = value
-                        .parse()
-                        .map_err(|_| "`ascii_casefold` must be a boolean")?;
-                    shared_dir.fs_cfg.ascii_casefold = ascii_casefold;
-                    shared_dir.p9_cfg.ascii_casefold = ascii_casefold;
-                }
-                "dax" => {
-                    let use_dax = value.parse().map_err(|_| "`dax` must be a boolean")?;
-                    shared_dir.fs_cfg.use_dax = use_dax;
-                }
-                "posix_acl" => {
-                    let posix_acl = value.parse().map_err(|_| "`posix_acl` must be a boolean")?;
-                    shared_dir.fs_cfg.posix_acl = posix_acl;
-                }
-                _ => return Err("unrecognized option for `shared-dir`"),
-            }
-        }
-
-        Ok(shared_dir)
-    }
+/// virtio-input device configuration
+#[derive(Serialize, Deserialize, Debug, FromKeyValues, Eq, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub enum InputDeviceOption {
+    Evdev {
+        path: PathBuf,
+    },
+    Keyboard {
+        path: PathBuf,
+    },
+    Mouse {
+        path: PathBuf,
+    },
+    MultiTouch {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
+    Rotary {
+        path: PathBuf,
+    },
+    SingleTouch {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
+    Switches {
+        path: PathBuf,
+    },
+    Trackpad {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, FromKeyValues)]
@@ -559,12 +346,6 @@ pub struct FileBackedMappingParameters {
     pub sync: bool,
     #[serde(default)]
     pub align: bool,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct HostPcieRootPortParameters {
-    pub host_path: PathBuf,
-    pub hp_gpe: Option<u32>,
 }
 
 fn parse_hex_or_decimal(maybe_hex_string: &str) -> Result<u64, String> {
@@ -600,45 +381,6 @@ pub fn parse_mmio_address_range(s: &str) -> Result<Vec<AddressRange>, String> {
         .collect()
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[derive(Deserialize, Serialize, serde_keyvalue::FromKeyValues)]
-#[serde(deny_unknown_fields)]
-struct UserspaceMsrOptions {
-    pub index: u32,
-    #[serde(rename = "type")]
-    pub rw_type: MsrRWType,
-    pub action: MsrAction,
-    #[serde(default = "default_msr_value_from")]
-    pub from: MsrValueFrom,
-    #[serde(default = "default_msr_filter")]
-    pub filter: MsrFilter,
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn default_msr_value_from() -> MsrValueFrom {
-    MsrValueFrom::RWFromRunningCPU
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn default_msr_filter() -> MsrFilter {
-    MsrFilter::Default
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub fn parse_userspace_msr_options(value: &str) -> Result<(u32, MsrConfig), String> {
-    let options: UserspaceMsrOptions = from_key_values(value)?;
-
-    Ok((
-        options.index,
-        MsrConfig {
-            rw_type: options.rw_type,
-            action: options.action,
-            from: options.from,
-            filter: options.filter,
-        },
-    ))
-}
-
 pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), String> {
     if params.stdin && params.input.is_some() {
         return Err("Cannot specify both stdin and input options".to_string());
@@ -657,6 +399,16 @@ pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), Strin
         ));
     }
 
+    if params.pci_address.is_some()
+        && params.hardware != SerialHardware::VirtioConsole
+        && params.hardware != SerialHardware::LegacyVirtioConsole
+    {
+        return Err(invalid_value_err(
+            params.pci_address.unwrap().to_string(),
+            "Providing serial PCI address is only supported for virtio-console hardware type",
+        ));
+    }
+
     Ok(())
 }
 
@@ -668,55 +420,7 @@ pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
     Ok(params)
 }
 
-#[cfg(feature = "plugin")]
-pub fn parse_plugin_mount_option(value: &str) -> Result<BindMount, String> {
-    let components: Vec<&str> = value.split(':').collect();
-    if components.is_empty() || components.len() > 3 || components[0].is_empty() {
-        return Err(invalid_value_err(
-            value,
-            "`plugin-mount` should be in a form of: <src>[:[<dst>][:<writable>]]",
-        ));
-    }
-
-    let src = PathBuf::from(components[0]);
-    if src.is_relative() {
-        return Err(invalid_value_err(
-            components[0],
-            "the source path for `plugin-mount` must be absolute",
-        ));
-    }
-    if !src.exists() {
-        return Err(invalid_value_err(
-            components[0],
-            "the source path for `plugin-mount` does not exist",
-        ));
-    }
-
-    let dst = PathBuf::from(match components.get(1) {
-        None | Some(&"") => components[0],
-        Some(path) => path,
-    });
-    if dst.is_relative() {
-        return Err(invalid_value_err(
-            components[1],
-            "the destination path for `plugin-mount` must be absolute",
-        ));
-    }
-
-    let writable: bool = match components.get(2) {
-        None => false,
-        Some(s) => s.parse().map_err(|_| {
-            invalid_value_err(
-                components[2],
-                "the <writable> component for `plugin-mount` is not valid bool",
-            )
-        })?,
-    };
-
-    Ok(BindMount { src, dst, writable })
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub fn parse_memory_region(value: &str) -> Result<AddressRange, String> {
     let paras: Vec<&str> = value.split(',').collect();
     if paras.len() != 2 {
@@ -773,53 +477,6 @@ pub fn parse_memory_region(value: &str) -> Result<AddressRange, String> {
     }
 }
 
-#[cfg(feature = "direct")]
-pub fn parse_pcie_root_port_params(value: &str) -> Result<HostPcieRootPortParameters, String> {
-    let opts: Vec<_> = value.split(',').collect();
-    if opts.len() > 2 {
-        return Err(invalid_value_err(
-            value,
-            "pcie-root-port has maxmimum two arguments",
-        ));
-    }
-    let pcie_path = PathBuf::from(opts[0]);
-    if !pcie_path.exists() {
-        return Err(invalid_value_err(
-            value,
-            "the pcie root port path does not exist",
-        ));
-    }
-    if !pcie_path.is_dir() {
-        return Err(invalid_value_err(
-            value,
-            "the pcie root port path should be directory",
-        ));
-    }
-
-    let hp_gpe = if opts.len() == 2 {
-        let gpes: Vec<&str> = opts[1].split('=').collect();
-        if gpes.len() != 2 || gpes[0] != "hp_gpe" {
-            return Err(invalid_value_err(value, "it should be hp_gpe=Num"));
-        }
-        match gpes[1].parse::<u32>() {
-            Ok(gpe) => Some(gpe),
-            Err(_) => {
-                return Err(invalid_value_err(
-                    value,
-                    "host hp gpe must be a non-negative integer",
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
-    Ok(HostPcieRootPortParameters {
-        host_path: pcie_path,
-        hp_gpe,
-    })
-}
-
 pub fn parse_bus_id_addr(v: &str) -> Result<(u8, u8, u16, u16), String> {
     debug!("parse_bus_id_addr: {}", v);
     let mut ids = v.split(':');
@@ -834,36 +491,6 @@ pub fn parse_bus_id_addr(v: &str) -> Result<(u8, u8, u16, u16), String> {
         }
         _ => Err(String::from("BUS_ID:ADDR:BUS_NUM:DEV_NUM")),
     }
-}
-
-#[cfg(feature = "audio")]
-pub fn parse_ac97_options(s: &str) -> Result<Ac97Parameters, String> {
-    let mut ac97_params: Ac97Parameters = Default::default();
-
-    let opts = s
-        .split(',')
-        .map(|frag| frag.split('='))
-        .map(|mut kv| (kv.next().unwrap_or(""), kv.next().unwrap_or("")));
-
-    for (k, v) in opts {
-        match k {
-            "backend" => {
-                ac97_params.backend = v
-                    .parse::<Ac97Backend>()
-                    .map_err(|e| invalid_value_err(v, e))?;
-            }
-            "capture" => {
-                ac97_params.capture = v
-                    .parse::<bool>()
-                    .map_err(|e| format!("invalid capture option: {}", e))?;
-            }
-            _ => {
-                super::sys::config::parse_ac97_options(&mut ac97_params, k, v)?;
-            }
-        }
-    }
-
-    Ok(ac97_params)
 }
 
 pub fn invalid_value_err<T: AsRef<str>, S: ToString>(value: T, expected: S) -> String {
@@ -895,6 +522,35 @@ pub fn parse_cpu_capacity(s: &str) -> Result<BTreeMap<usize, u32>, String> {
         }
     }
     Ok(cpu_capacity)
+}
+
+pub fn parse_dynamic_power_coefficient(s: &str) -> Result<BTreeMap<usize, u32>, String> {
+    let mut dyn_power_coefficient: BTreeMap<usize, u32> = BTreeMap::default();
+    for cpu_pair in s.split(',') {
+        let assignment: Vec<&str> = cpu_pair.split('=').collect();
+        if assignment.len() != 2 {
+            return Err(invalid_value_err(
+                cpu_pair,
+                "invalid CPU dynamic power pair syntax",
+            ));
+        }
+        let cpu = assignment[0].parse().map_err(|_| {
+            invalid_value_err(assignment[0], "CPU index must be a non-negative integer")
+        })?;
+        let power_coefficient = assignment[1].parse().map_err(|_| {
+            invalid_value_err(
+                assignment[1],
+                "Power coefficient must be a non-negative integer",
+            )
+        })?;
+        if dyn_power_coefficient
+            .insert(cpu, power_coefficient)
+            .is_some()
+        {
+            return Err(invalid_value_err(cpu_pair, "CPU index must be unique"));
+        }
+    }
+    Ok(dyn_power_coefficient)
 }
 
 pub fn from_key_values<'a, T: Deserialize<'a>>(value: &'a str) -> Result<T, String> {
@@ -930,50 +586,6 @@ pub fn parse_cpu_affinity(s: &str) -> Result<VcpuAffinity, String> {
     } else {
         Ok(VcpuAffinity::Global(CpuSet::from_str(s)?))
     }
-}
-
-#[cfg(feature = "direct")]
-pub fn parse_direct_io_options(s: &str) -> Result<DirectIoOption, String> {
-    let parts: Vec<&str> = s.splitn(2, '@').collect();
-    if parts.len() != 2 {
-        return Err(invalid_value_err(
-            s,
-            "missing port range, use /path@X-Y,Z,.. syntax",
-        ));
-    }
-    let path = PathBuf::from(parts[0]);
-    if !path.exists() {
-        return Err(invalid_value_err(parts[0], "the path does not exist"));
-    };
-    let ranges: Result<Vec<BusRange>, String> = parts[1]
-        .split(',')
-        .map(|frag| frag.split('-'))
-        .map(|mut range| {
-            let base = range
-                .next()
-                .map(parse_hex_or_decimal)
-                .map_or(Ok(None), |r| r.map(Some));
-            let last = range
-                .next()
-                .map(parse_hex_or_decimal)
-                .map_or(Ok(None), |r| r.map(Some));
-            (base, last)
-        })
-        .map(|range| match range {
-            (Ok(Some(base)), Ok(None)) => Ok(BusRange { base, len: 1 }),
-            (Ok(Some(base)), Ok(Some(last))) => Ok(BusRange {
-                base,
-                len: last.saturating_sub(base).saturating_add(1),
-            }),
-            (Err(_), _) => Err(invalid_value_err(s, "invalid base range value")),
-            (_, Err(_)) => Err(invalid_value_err(s, "invalid last range value")),
-            _ => Err(invalid_value_err(s, "invalid range format")),
-        })
-        .collect();
-    Ok(DirectIoOption {
-        path,
-        ranges: ranges?,
-    })
 }
 
 pub fn executable_is_plugin(executable: &Option<Executable>) -> bool {
@@ -1015,7 +627,7 @@ mod serde_serial_params {
     {
         let params: Vec<((SerialHardware, u8), SerialParameters)> =
             serde::Deserialize::deserialize(de)?;
-        Ok(BTreeMap::from_iter(params.into_iter()))
+        Ok(BTreeMap::from_iter(params))
     }
 }
 
@@ -1023,29 +635,40 @@ mod serde_serial_params {
 #[derive(Serialize, Deserialize)]
 #[remain::sorted]
 pub struct Config {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
-    #[cfg(feature = "audio")]
-    pub ac97_parameters: Vec<Ac97Parameters>,
     pub acpi_tables: Vec<PathBuf>,
+    #[cfg(feature = "android_display")]
+    pub android_display_service: Option<String>,
     pub android_fstab: Option<PathBuf>,
     pub async_executor: Option<ExecutorKind>,
+    #[cfg(feature = "balloon")]
     pub balloon: bool,
+    #[cfg(feature = "balloon")]
     pub balloon_bias: i64,
+    #[cfg(feature = "balloon")]
     pub balloon_control: Option<PathBuf>,
+    #[cfg(feature = "balloon")]
     pub balloon_page_reporting: bool,
+    #[cfg(feature = "balloon")]
+    pub balloon_ws_num_bins: u8,
+    #[cfg(feature = "balloon")]
+    pub balloon_ws_reporting: bool,
     pub battery_config: Option<BatteryConfig>,
     #[cfg(windows)]
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
     pub block_vhost_user_tube: Vec<Tube>,
+    pub boot_cpu: usize,
+    #[cfg(target_arch = "x86_64")]
+    pub break_linux_pci_config_io: bool,
     #[cfg(windows)]
     pub broker_shutdown_event: Option<Event>,
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+    #[cfg(target_arch = "x86_64")]
     pub bus_lock_ratelimit: u64,
-    pub cid: Option<u64>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub coiommu_param: Option<devices::CoIommuParameters>,
+    pub core_scheduling: bool,
     pub cpu_capacity: BTreeMap<usize, u32>, // CPU index -> capacity
     pub cpu_clusters: Vec<CpuSet>,
     #[cfg(feature = "crash-report")]
@@ -1053,95 +676,86 @@ pub struct Config {
     #[cfg(feature = "crash-report")]
     pub crash_report_uuid: Option<String>,
     pub delay_rt: bool,
-    #[cfg(feature = "direct")]
-    pub direct_edge_irq: Vec<u32>,
-    #[cfg(feature = "direct")]
-    pub direct_fixed_evts: Vec<devices::ACPIPMFixedEvent>,
-    #[cfg(feature = "direct")]
-    pub direct_gpe: Vec<u32>,
-    #[cfg(feature = "direct")]
-    pub direct_level_irq: Vec<u32>,
-    #[cfg(feature = "direct")]
-    pub direct_mmio: Option<DirectIoOption>,
-    #[cfg(feature = "direct")]
-    pub direct_pmio: Option<DirectIoOption>,
+    pub device_tree_overlay: Vec<DtboOption>,
     pub disable_virtio_intx: bool,
     pub disks: Vec<DiskOption>,
+    pub display_input_height: Option<u32>,
+    pub display_input_width: Option<u32>,
     pub display_window_keyboard: bool,
     pub display_window_mouse: bool,
-    pub dmi_path: Option<PathBuf>,
     pub dump_device_tree_blob: Option<PathBuf>,
+    pub dynamic_power_coefficient: BTreeMap<usize, u32>,
+    pub enable_fw_cfg: bool,
     pub enable_hwp: bool,
-    pub enable_pnp_data: bool,
     pub executable_path: Option<Executable>,
     #[cfg(windows)]
     pub exit_stats: bool,
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub force_calibrated_tsc_leaf: bool,
     pub force_s2idle: bool,
+    pub fw_cfg_parameters: Vec<FwCfgParameters>,
     #[cfg(feature = "gdb")]
     pub gdb: Option<u32>,
     #[cfg(all(windows, feature = "gpu"))]
     pub gpu_backend_config: Option<GpuBackendConfig>,
+    #[cfg(all(unix, feature = "gpu"))]
+    pub gpu_cgroup_path: Option<PathBuf>,
     #[cfg(feature = "gpu")]
     pub gpu_parameters: Option<GpuParameters>,
     #[cfg(all(unix, feature = "gpu"))]
     pub gpu_render_server_parameters: Option<GpuRenderServerParameters>,
+    #[cfg(all(unix, feature = "gpu"))]
+    pub gpu_server_cgroup_path: Option<PathBuf>,
     #[cfg(all(windows, feature = "gpu"))]
     pub gpu_vmm_config: Option<GpuVmmConfig>,
     pub host_cpu_topology: bool,
     #[cfg(windows)]
     pub host_guid: Option<String>,
-    pub host_ip: Option<net::Ipv4Addr>,
     pub hugepages: bool,
     pub hypervisor: Option<HypervisorKind>,
+    #[cfg(feature = "balloon")]
     pub init_memory: Option<u64>,
     pub initrd_path: Option<PathBuf>,
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "gpu"))]
+    pub input_event_split_config: Option<InputEventSplitConfig>,
     pub irq_chip: Option<IrqChipKind>,
     pub itmt: bool,
     pub jail_config: Option<JailConfig>,
     #[cfg(windows)]
     pub kernel_log_file: Option<String>,
-    #[cfg(unix)]
-    pub kvm_device_path: PathBuf,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub lock_guest_memory: bool,
     #[cfg(windows)]
     pub log_file: Option<String>,
     #[cfg(windows)]
     pub logs_directory: Option<String>,
-    pub mac_address: Option<net_util::MacAddress>,
     pub memory: Option<u64>,
     pub memory_file: Option<PathBuf>,
     pub mmio_address_ranges: Vec<AddressRange>,
     #[cfg(target_arch = "aarch64")]
     pub mte: bool,
+    #[cfg(feature = "net")]
     pub net: Vec<NetParameters>,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
-    pub net_vq_pairs: Option<u16>,
-    pub netmask: Option<net::Ipv4Addr>,
     pub no_i8042: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    pub oem_strings: Vec<String>,
     pub params: Vec<String>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(feature = "pci-hotplug")]
+    pub pci_hotplug_slots: Option<u8>,
+    #[cfg(target_arch = "x86_64")]
     pub pci_low_start: Option<u64>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub pcie_ecam: Option<AddressRange>,
-    #[cfg(feature = "direct")]
-    pub pcie_rp: Vec<HostPcieRootPortParameters>,
     pub per_vm_core_scheduling: bool,
     pub pflash_parameters: Option<PflashParameters>,
     #[cfg(feature = "plugin")]
-    pub plugin_gid_maps: Vec<GidMap>,
-    pub plugin_mounts: Vec<BindMount>,
+    pub plugin_gid_maps: Vec<crate::crosvm::plugin::GidMap>,
+    #[cfg(feature = "plugin")]
+    pub plugin_mounts: Vec<crate::crosvm::plugin::BindMount>,
     pub plugin_root: Option<PathBuf>,
     pub pmem_devices: Vec<DiskOption>,
-    pub privileged_vm: bool,
     #[cfg(feature = "process-invariants")]
     pub process_invariants_data_handle: Option<u64>,
     #[cfg(feature = "process-invariants")]
@@ -1154,116 +768,117 @@ pub struct Config {
     pub product_version: Option<String>,
     pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
-    #[cfg(windows)]
     pub pvclock: bool,
     /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
     pub restore_path: Option<PathBuf>,
     pub rng: bool,
     pub rt_cpus: CpuSet,
+    pub scsis: Vec<ScsiOption>,
     #[serde(with = "serde_serial_params")]
     pub serial_parameters: BTreeMap<(SerialHardware, u8), SerialParameters>,
     #[cfg(windows)]
     pub service_pipe_name: Option<String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[serde(skip)]
     pub shared_dirs: Vec<SharedDir>,
-    #[cfg(feature = "slirp-ring-capture")]
+    #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pub slirp_capture_file: Option<String>,
+    #[cfg(target_arch = "x86_64")]
+    pub smbios: SmbiosOptions,
     #[cfg(all(windows, feature = "audio"))]
     pub snd_split_config: Option<SndSplitConfig>,
     pub socket_path: Option<PathBuf>,
-    #[cfg(feature = "tpm")]
-    pub software_tpm: bool,
     #[cfg(feature = "audio")]
     pub sound: Option<PathBuf>,
-    pub split_irqchip: bool,
+    #[cfg(feature = "balloon")]
     pub strict_balloon: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
+    pub suspended: bool,
     pub swap_dir: Option<PathBuf>,
     pub swiotlb: Option<u64>,
-    #[cfg(windows)]
-    pub syslog_tag: Option<String>,
-    #[cfg(unix)]
-    pub tap_fd: Vec<RawDescriptor>,
-    pub tap_name: Vec<String>,
     #[cfg(target_os = "android")]
     pub task_profiles: Vec<String>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
-    pub userspace_msr: BTreeMap<u32, MsrConfig>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
     pub vcpu_count: Option<usize>,
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     pub vcpu_hybrid_type: BTreeMap<usize, CpuHybridType>, // CPU index -> hybrid type
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub vfio: Vec<super::sys::config::VfioOption>,
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub vfio_isolate_hotplug: bool,
-    pub vhost_net: bool,
-    #[cfg(unix)]
-    pub vhost_net_device_path: PathBuf,
-    pub vhost_user_blk: Vec<VhostUserOption>,
-    pub vhost_user_console: Vec<VhostUserOption>,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub vhost_scmi: bool,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub vhost_scmi_device: PathBuf,
+    pub vhost_user: Vec<VhostUserFrontendOption>,
     pub vhost_user_fs: Vec<VhostUserFsOption>,
-    pub vhost_user_gpu: Vec<VhostUserOption>,
-    pub vhost_user_mac80211_hwsim: Option<VhostUserOption>,
-    pub vhost_user_net: Vec<VhostUserOption>,
-    pub vhost_user_snd: Vec<VhostUserOption>,
-    pub vhost_user_video_dec: Vec<VhostUserOption>,
-    pub vhost_user_vsock: Vec<VhostUserOption>,
-    pub vhost_user_wl: Option<VhostUserOption>,
-    #[cfg(unix)]
-    pub vhost_vsock_device: Option<PathBuf>,
     #[cfg(feature = "video-decoder")]
     pub video_dec: Vec<VideoDeviceConfig>,
     #[cfg(feature = "video-encoder")]
     pub video_enc: Vec<VideoDeviceConfig>,
-    pub virtio_input_evdevs: Vec<PathBuf>,
-    pub virtio_keyboard: Vec<PathBuf>,
-    pub virtio_mice: Vec<PathBuf>,
-    pub virtio_multi_touch: Vec<TouchDeviceOption>,
-    pub virtio_single_touch: Vec<TouchDeviceOption>,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub virt_cpufreq: bool,
+    pub virt_cpufreq_socket: Option<PathBuf>,
+    pub virtio_input: Vec<InputDeviceOption>,
     #[cfg(feature = "audio")]
     #[serde(skip)]
     pub virtio_snds: Vec<SndParameters>,
-    pub virtio_switches: Vec<PathBuf>,
-    pub virtio_trackpad: Vec<TouchDeviceOption>,
-    #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+    pub vsock: Option<VsockConfig>,
+    #[cfg(feature = "vtpm")]
     pub vtpm_proxy: bool,
-    pub vvu_proxy: Vec<VvuOption>,
     pub wayland_socket_paths: BTreeMap<String, PathBuf>,
+    #[cfg(all(windows, feature = "gpu"))]
+    pub window_procedure_thread_split_config: Option<WindowProcedureThreadSplitConfig>,
     pub x_display: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
-            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            #[cfg(all(target_arch = "x86_64", unix))]
             ac_adapter: false,
-            #[cfg(feature = "audio")]
-            ac97_parameters: Vec::new(),
             acpi_tables: Vec::new(),
+            #[cfg(feature = "android_display")]
+            android_display_service: None,
             android_fstab: None,
             async_executor: None,
+            #[cfg(feature = "balloon")]
             balloon: true,
+            #[cfg(feature = "balloon")]
             balloon_bias: 0,
+            #[cfg(feature = "balloon")]
             balloon_control: None,
+            #[cfg(feature = "balloon")]
             balloon_page_reporting: false,
+            #[cfg(feature = "balloon")]
+            balloon_ws_num_bins: VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS,
+            #[cfg(feature = "balloon")]
+            balloon_ws_reporting: false,
             battery_config: None,
+            boot_cpu: 0,
             #[cfg(windows)]
             block_control_tube: Vec::new(),
             #[cfg(windows)]
             block_vhost_user_tube: Vec::new(),
+            #[cfg(target_arch = "x86_64")]
+            break_linux_pci_config_io: false,
             #[cfg(windows)]
             broker_shutdown_event: None,
-            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), unix))]
+            #[cfg(target_arch = "x86_64")]
             bus_lock_ratelimit: 0,
-            cid: None,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             coiommu_param: None,
+            core_scheduling: true,
             #[cfg(feature = "crash-report")]
             crash_pipe_name: None,
             #[cfg(feature = "crash-report")]
@@ -1271,32 +886,24 @@ impl Default for Config {
             cpu_capacity: BTreeMap::new(),
             cpu_clusters: Vec::new(),
             delay_rt: false,
-            #[cfg(feature = "direct")]
-            direct_edge_irq: Vec::new(),
-            #[cfg(feature = "direct")]
-            direct_fixed_evts: Vec::new(),
-            #[cfg(feature = "direct")]
-            direct_gpe: Vec::new(),
-            #[cfg(feature = "direct")]
-            direct_level_irq: Vec::new(),
-            #[cfg(feature = "direct")]
-            direct_mmio: None,
-            #[cfg(feature = "direct")]
-            direct_pmio: None,
+            device_tree_overlay: Vec::new(),
             disks: Vec::new(),
             disable_virtio_intx: false,
+            display_input_height: None,
+            display_input_width: None,
             display_window_keyboard: false,
             display_window_mouse: false,
-            dmi_path: None,
             dump_device_tree_blob: None,
+            dynamic_power_coefficient: BTreeMap::new(),
+            enable_fw_cfg: false,
             enable_hwp: false,
-            enable_pnp_data: false,
             executable_path: None,
             #[cfg(windows)]
             exit_stats: false,
             file_backed_mappings: Vec::new(),
             force_calibrated_tsc_leaf: false,
             force_s2idle: false,
+            fw_cfg_parameters: Vec::new(),
             #[cfg(feature = "gdb")]
             gdb: None,
             #[cfg(all(windows, feature = "gpu"))]
@@ -1305,21 +912,26 @@ impl Default for Config {
             gpu_parameters: None,
             #[cfg(all(unix, feature = "gpu"))]
             gpu_render_server_parameters: None,
+            #[cfg(all(unix, feature = "gpu"))]
+            gpu_cgroup_path: None,
+            #[cfg(all(unix, feature = "gpu"))]
+            gpu_server_cgroup_path: None,
             #[cfg(all(windows, feature = "gpu"))]
             gpu_vmm_config: None,
             host_cpu_topology: false,
             #[cfg(windows)]
             host_guid: None,
-            host_ip: None,
             #[cfg(windows)]
             product_version: None,
             #[cfg(windows)]
             product_channel: None,
             hugepages: false,
             hypervisor: None,
+            #[cfg(feature = "balloon")]
             init_memory: None,
             initrd_path: None,
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "gpu"))]
+            input_event_split_config: None,
             irq_chip: None,
             itmt: false,
             jail_config: if !cfg!(feature = "default-no-sandbox") {
@@ -1329,45 +941,39 @@ impl Default for Config {
             },
             #[cfg(windows)]
             kernel_log_file: None,
-            #[cfg(unix)]
-            kvm_device_path: PathBuf::from(KVM_PATH),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             lock_guest_memory: false,
             #[cfg(windows)]
             log_file: None,
             #[cfg(windows)]
             logs_directory: None,
-            mac_address: None,
             memory: None,
             memory_file: None,
             mmio_address_ranges: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             mte: false,
+            #[cfg(feature = "net")]
             net: Vec::new(),
             #[cfg(windows)]
             net_vhost_user_tube: None,
-            net_vq_pairs: None,
-            netmask: None,
             no_i8042: false,
             no_rtc: false,
             no_smt: false,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            oem_strings: Vec::new(),
             params: Vec::new(),
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(feature = "pci-hotplug")]
+            pci_hotplug_slots: None,
+            #[cfg(target_arch = "x86_64")]
             pci_low_start: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             pcie_ecam: None,
-            #[cfg(feature = "direct")]
-            pcie_rp: Vec::new(),
             per_vm_core_scheduling: false,
             pflash_parameters: None,
             #[cfg(feature = "plugin")]
             plugin_gid_maps: Vec::new(),
+            #[cfg(feature = "plugin")]
             plugin_mounts: Vec::new(),
             plugin_root: None,
             pmem_devices: Vec::new(),
-            privileged_vm: false,
             #[cfg(feature = "process-invariants")]
             process_invariants_data_handle: None,
             #[cfg(feature = "process-invariants")]
@@ -1376,83 +982,73 @@ impl Default for Config {
             product_name: None,
             protection_type: ProtectionType::Unprotected,
             pstore: None,
-            #[cfg(windows)]
             pvclock: false,
             pvm_fw: None,
             restore_path: None,
             rng: true,
             rt_cpus: Default::default(),
             serial_parameters: BTreeMap::new(),
+            scsis: Vec::new(),
             #[cfg(windows)]
             service_pipe_name: None,
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             shared_dirs: Vec::new(),
-            #[cfg(feature = "slirp-ring-capture")]
+            #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file: None,
+            #[cfg(target_arch = "x86_64")]
+            smbios: SmbiosOptions::default(),
             #[cfg(all(windows, feature = "audio"))]
             snd_split_config: None,
-            swap_dir: None,
             socket_path: None,
-            #[cfg(feature = "tpm")]
-            software_tpm: false,
             #[cfg(feature = "audio")]
             sound: None,
-            split_irqchip: false,
+            #[cfg(feature = "balloon")]
             strict_balloon: false,
             stub_pci_devices: Vec::new(),
+            suspended: false,
+            swap_dir: None,
             swiotlb: None,
-            #[cfg(windows)]
-            syslog_tag: None,
-            #[cfg(unix)]
-            tap_fd: Vec::new(),
-            tap_name: Vec::new(),
             #[cfg(target_os = "android")]
             task_profiles: Vec::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             unmap_guest_memory_on_fork: false,
             usb: true,
-            userspace_msr: BTreeMap::new(),
             vcpu_affinity: None,
             vcpu_cgroup_path: None,
             vcpu_count: None,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(target_arch = "x86_64")]
             vcpu_hybrid_type: BTreeMap::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             vfio: Vec::new(),
-            #[cfg(unix)]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             vfio_isolate_hotplug: false,
-            vhost_net: false,
-            #[cfg(unix)]
-            vhost_net_device_path: PathBuf::from(VHOST_NET_PATH),
-            vhost_user_blk: Vec::new(),
-            vhost_user_console: Vec::new(),
-            vhost_user_video_dec: Vec::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            vhost_scmi: false,
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
+            vhost_user: Vec::new(),
             vhost_user_fs: Vec::new(),
-            vhost_user_gpu: Vec::new(),
-            vhost_user_mac80211_hwsim: None,
-            vhost_user_net: Vec::new(),
-            vhost_user_snd: Vec::new(),
-            vhost_user_vsock: Vec::new(),
-            vhost_user_wl: None,
-            #[cfg(unix)]
-            vhost_vsock_device: None,
+            vsock: None,
             #[cfg(feature = "video-decoder")]
             video_dec: Vec::new(),
             #[cfg(feature = "video-encoder")]
             video_enc: Vec::new(),
-            virtio_input_evdevs: Vec::new(),
-            virtio_keyboard: Vec::new(),
-            virtio_mice: Vec::new(),
-            virtio_multi_touch: Vec::new(),
-            virtio_single_touch: Vec::new(),
+            #[cfg(all(
+                any(target_arch = "arm", target_arch = "aarch64"),
+                any(target_os = "android", target_os = "linux")
+            ))]
+            virt_cpufreq: false,
+            virt_cpufreq_socket: None,
+            virtio_input: Vec::new(),
             #[cfg(feature = "audio")]
             virtio_snds: Vec::new(),
-            virtio_switches: Vec::new(),
-            virtio_trackpad: Vec::new(),
-            #[cfg(all(feature = "vtpm", target_arch = "x86_64"))]
+            #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
-            vvu_proxy: Vec::new(),
             wayland_socket_paths: BTreeMap::new(),
+            #[cfg(windows)]
+            window_procedure_thread_split_config: None,
             x_display: None,
         }
     }
@@ -1514,20 +1110,39 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
                 );
             }
         }
-    } else {
-        // TODO(b/215297064): Support generic cpuaffinity if there's a need.
-        if !cfg.userspace_msr.is_empty() {
-            for (_, msr_config) in cfg.userspace_msr.iter() {
-                if msr_config.from == MsrValueFrom::RWFromRunningCPU {
-                    return Err(
-                        "`userspace-msr` must set `cpu0` if `host-cpu-topology` is not set"
-                            .to_string(),
-                    );
-                }
-            }
+
+        if !cfg.cpu_capacity.is_empty() {
+            return Err(
+                "`host-cpu-topology` requires not to set `cpu-capacity` at the same time"
+                    .to_string(),
+            );
+        }
+
+        if !cfg.cpu_clusters.is_empty() {
+            return Err(
+                "`host-cpu-topology` requires not to set `cpu clusters` at the same time"
+                    .to_string(),
+            );
         }
     }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+
+    if cfg.boot_cpu >= cfg.vcpu_count.unwrap_or(1) {
+        log::warn!("boot_cpu selection cannot be higher than vCPUs available, defaulting to 0");
+        cfg.boot_cpu = 0;
+    }
+
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    if cfg.virt_cpufreq {
+        if !cfg.host_cpu_topology && (cfg.vcpu_affinity.is_none() || cfg.cpu_capacity.is_empty()) {
+            return Err("`virt-cpufreq` requires 'host-cpu-topology' enabled or \
+                       have vcpu_affinity and cpu_capacity configured"
+                .to_string());
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
     if !cfg.vcpu_hybrid_type.is_empty() {
         if cfg.host_cpu_topology {
             return Err("`core-types` cannot be set with `host-cpu-topology`.".to_string());
@@ -1543,23 +1158,11 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
             }
         }
     }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     if cfg.enable_hwp && !cfg.host_cpu_topology {
         return Err("setting `enable-hwp` requires `host-cpu-topology` is set.".to_string());
     }
-    if cfg.enable_pnp_data {
-        if !cfg.host_cpu_topology {
-            return Err(
-                "setting `enable_pnp_data` must require `host-cpu-topology` is set previously."
-                    .to_string(),
-            );
-        }
-
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        set_enable_pnp_data_msr_config(&mut cfg.userspace_msr)
-            .map_err(|e| format!("MSR can't be passed through {}", e))?;
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(target_arch = "x86_64")]
     if cfg.itmt {
         use std::collections::BTreeSet;
         // ITMT only works on the case each vCPU is 1:1 mapping to a pCPU.
@@ -1599,22 +1202,34 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
     }
 
-    if !cfg.balloon && cfg.balloon_control.is_some() {
-        return Err("'balloon-control' requires enabled balloon".to_string());
+    #[cfg(feature = "balloon")]
+    {
+        if !cfg.balloon && cfg.balloon_control.is_some() {
+            return Err("'balloon-control' requires enabled balloon".to_string());
+        }
+
+        if !cfg.balloon && cfg.balloon_page_reporting {
+            return Err("'balloon_page_reporting' requires enabled balloon".to_string());
+        }
     }
 
-    if !cfg.balloon && cfg.balloon_page_reporting {
-        return Err("'balloon_page_reporting' requires enabled balloon".to_string());
-    }
-
-    #[cfg(unix)]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     if cfg.lock_guest_memory && cfg.jail_config.is_none() {
         return Err("'lock-guest-memory' and 'disable-sandbox' are mutually exclusive".to_string());
     }
 
+    // TODO(b/253386409): Vmm-swap only support sandboxed devices until vmm-swap use
+    // `devices::Suspendable` to suspend devices.
+    #[cfg(feature = "swap")]
+    if cfg.swap_dir.is_some() && cfg.jail_config.is_none() {
+        return Err("'swap' and 'disable-sandbox' are mutually exclusive".to_string());
+    }
+
     set_default_serial_parameters(
         &mut cfg.serial_parameters,
-        !cfg.vhost_user_console.is_empty(),
+        cfg.vhost_user
+            .iter()
+            .any(|opt| opt.type_ == DeviceType::Console),
     );
 
     for mapping in cfg.file_backed_mappings.iter_mut() {
@@ -1649,6 +1264,8 @@ mod tests {
     use argh::FromArgs;
     use devices::PciClassCode;
     use devices::StubPciParameters;
+    #[cfg(target_arch = "x86_64")]
+    use uuid::uuid;
 
     use super::*;
 
@@ -1713,7 +1330,7 @@ mod tests {
             }
         );
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         {
             let res: CpuOptions = from_key_values("core-types=[atom=[1,3-7],core=[0,2]]").unwrap();
             assert_eq!(
@@ -1784,7 +1401,8 @@ mod tests {
 
     #[test]
     fn parse_cpu_set_repeated() {
-        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t conversion.
+        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t
+        // conversion.
         assert_eq!(
             CpuSet::from_str("1,1,1").expect("parse failed"),
             CpuSet::new([1, 1, 1])
@@ -1856,35 +1474,6 @@ mod tests {
 
         let res: MemOptions = from_key_values("size=0x4000").unwrap();
         assert_eq!(res.size, Some(16384));
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_vaild() {
-        parse_ac97_options("backend=cras").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_null_vaild() {
-        parse_ac97_options("backend=null").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_capture_vaild() {
-        parse_ac97_options("backend=cras,capture=true").expect("parse should have succeded");
-    }
-
-    #[cfg(feature = "audio_cras")]
-    #[test]
-    fn parse_ac97_client_type() {
-        parse_ac97_options("backend=cras,capture=true,client_type=crosvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=arcvm")
-            .expect("parse should have succeded");
-        parse_ac97_options("backend=cras,capture=true,client_type=none")
-            .expect_err("parse should have failed");
     }
 
     #[test]
@@ -1960,67 +1549,45 @@ mod tests {
     }
 
     #[test]
-    fn parse_plugin_mount_invalid() {
-        "".parse::<BindMount>().expect_err("parse should fail");
-        "/dev/null:/dev/null:true:false"
-            .parse::<BindMount>()
-            .expect_err("parse should fail because too many arguments");
-
-        "null:/dev/null:true"
-            .parse::<BindMount>()
-            .expect_err("parse should fail because source is not absolute");
-        "/dev/null:null:true"
-            .parse::<BindMount>()
-            .expect_err("parse should fail because source is not absolute");
-        "/dev/null:null:blah"
-            .parse::<BindMount>()
-            .expect_err("parse should fail because flag is not boolean");
+    fn parse_serial_pci_address_valid_for_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
     }
 
-    #[cfg(feature = "plugin")]
     #[test]
-    fn parse_plugin_gid_map_valid() {
-        let opt: GidMap = "1:2:3".parse().expect("parse should succeed");
-        assert_eq!(opt.inner, 1);
-        assert_eq!(opt.outer, 2);
-        assert_eq!(opt.count, 3);
+    fn parse_serial_pci_address_valid_for_legacy_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=legacy-virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
     }
 
-    #[cfg(feature = "plugin")]
     #[test]
-    fn parse_plugin_gid_map_valid_shorthand() {
-        let opt: GidMap = "1".parse().expect("parse should succeed");
-        assert_eq!(opt.inner, 1);
-        assert_eq!(opt.outer, 1);
-        assert_eq!(opt.count, 1);
-
-        let opt: GidMap = "1:2".parse().expect("parse should succeed");
-        assert_eq!(opt.inner, 1);
-        assert_eq!(opt.outer, 2);
-        assert_eq!(opt.count, 1);
-
-        let opt: GidMap = "1::3".parse().expect("parse should succeed");
-        assert_eq!(opt.inner, 1);
-        assert_eq!(opt.outer, 1);
-        assert_eq!(opt.count, 3);
+    fn parse_serial_pci_address_failed_for_serial() {
+        parse_serial_options("type=syslog,hardware=serial,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for serial hardware");
     }
 
-    #[cfg(feature = "plugin")]
     #[test]
-    fn parse_plugin_gid_map_invalid() {
-        "".parse::<GidMap>().expect_err("parse should fail");
-        "1:2:3:4"
-            .parse::<GidMap>()
-            .expect_err("parse should fail because too many arguments");
-        "blah:2:3"
-            .parse::<GidMap>()
-            .expect_err("parse should fail because inner is not a number");
-        "1:blah:3"
-            .parse::<GidMap>()
-            .expect_err("parse should fail because outer is not a number");
-        "1:2:blah"
-            .parse::<GidMap>()
-            .expect_err("parse should fail because count is not a number");
+    fn parse_serial_pci_address_failed_for_debugcon() {
+        parse_serial_options("type=syslog,hardware=debugcon,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for debugcon hardware");
     }
 
     #[test]
@@ -2046,6 +1613,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_irqchip_kernel() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--irqchip", "kernel", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.irq_chip, Some(IrqChipKind::Kernel));
+    }
+
+    #[test]
+    fn parse_irqchip_split() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--irqchip", "split", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.irq_chip, Some(IrqChipKind::Split));
+    }
+
+    #[test]
+    fn parse_irqchip_userspace() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--irqchip", "userspace", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.irq_chip, Some(IrqChipKind::Userspace));
+    }
+
+    #[test]
     fn parse_stub_pci() {
         let params = from_key_values::<StubPciParameters>("0000:01:02.3,vendor=0xfffe,device=0xfffd,class=0xffc1c2,subsystem_vendor=0xfffc,subsystem_device=0xfffb,revision=0xa").unwrap();
         assert_eq!(params.address.bus, 1);
@@ -2059,52 +1668,6 @@ mod tests {
         assert_eq!(params.subsystem_vendor, 0xfffc);
         assert_eq!(params.subsystem_device, 0xfffb);
         assert_eq!(params.revision, 0xa);
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_valid() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        let params = parse_direct_io_options("/dev/zero@1,100-110").unwrap();
-        assert_eq!(params.path.to_str(), Some("/dev/zero"));
-        assert_eq!(params.ranges[0], BusRange { base: 1, len: 1 });
-        assert_eq!(params.ranges[1], BusRange { base: 100, len: 11 });
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_hex() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        let params = parse_direct_io_options("/dev/zero@1,0x10,100-110,0x10-0x20").unwrap();
-        assert_eq!(params.path.to_str(), Some("/dev/zero"));
-        assert_eq!(params.ranges[0], BusRange { base: 1, len: 1 });
-        assert_eq!(params.ranges[1], BusRange { base: 0x10, len: 1 });
-        assert_eq!(params.ranges[2], BusRange { base: 100, len: 11 });
-        assert_eq!(
-            params.ranges[3],
-            BusRange {
-                base: 0x10,
-                len: 0x11
-            }
-        );
-    }
-
-    #[cfg(feature = "direct")]
-    #[test]
-    fn parse_direct_io_options_invalid() {
-        // Use /dev/zero here which is usually available on any systems,
-        // /dev/mem may not.
-        assert!(parse_direct_io_options("/dev/zero@0y10")
-            .unwrap_err()
-            .to_string()
-            .contains("invalid base range value"));
-
-        assert!(parse_direct_io_options("/dev/zero@")
-            .unwrap_err()
-            .to_string()
-            .contains("invalid base range value"));
     }
 
     #[test]
@@ -2161,55 +1724,125 @@ mod tests {
 
     #[test]
     fn parse_file_backed_mapping_align() {
-        let mut params = from_key_values::<FileBackedMappingParameters>(
-            "addr=0x3042,size=0xff0,path=/dev/mem,align",
-        )
+        let addr = pagesize() as u64 * 3 + 42;
+        let size = pagesize() as u64 - 0xf;
+        let mut params = from_key_values::<FileBackedMappingParameters>(&format!(
+            "addr={addr},size={size},path=/dev/mem,align",
+        ))
         .unwrap();
-        assert_eq!(params.address, 0x3042);
-        assert_eq!(params.size, 0xff0);
+        assert_eq!(params.address, addr);
+        assert_eq!(params.size, size);
         validate_file_backed_mapping(&mut params).unwrap();
-        assert_eq!(params.address, 0x3000);
-        assert_eq!(params.size, 0x2000);
+        assert_eq!(params.address, pagesize() as u64 * 3);
+        assert_eq!(params.size, pagesize() as u64 * 2);
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
-    fn parse_userspace_msr_options_test() {
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=w,action=pass,filter=yes").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::WriteOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.filter, MsrFilter::Override);
+    fn parse_fw_cfg_valid_path() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--fw-cfg", "name=bar,path=data.bin", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-        let (pass_cpu0_index, pass_cpu0_cfg) =
-            parse_userspace_msr_options("0x10,type=r,action=pass,from=cpu0").unwrap();
-        assert_eq!(pass_cpu0_index, 0x10);
-        assert_eq!(pass_cpu0_cfg.rw_type, MsrRWType::ReadOnly);
-        assert_eq!(pass_cpu0_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpu0_cfg.from, MsrValueFrom::RWFromCPU0);
+        assert_eq!(cfg.fw_cfg_parameters.len(), 1);
+        assert_eq!(cfg.fw_cfg_parameters[0].name, "bar".to_string());
+        assert_eq!(cfg.fw_cfg_parameters[0].string, None);
+        assert_eq!(cfg.fw_cfg_parameters[0].path, Some("data.bin".into()));
+    }
 
-        let (pass_cpus_index, pass_cpus_cfg) =
-            parse_userspace_msr_options("0x10,type=rw,action=pass").unwrap();
-        assert_eq!(pass_cpus_index, 0x10);
-        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
-        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrPassthrough);
-        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
+    #[test]
+    fn parse_fw_cfg_valid_string() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--fw-cfg", "name=bar,string=foo", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-        let (pass_cpus_index, pass_cpus_cfg) =
-            parse_userspace_msr_options("0x10,type=rw,action=emu").unwrap();
-        assert_eq!(pass_cpus_index, 0x10);
-        assert_eq!(pass_cpus_cfg.rw_type, MsrRWType::ReadWrite);
-        assert_eq!(pass_cpus_cfg.action, MsrAction::MsrEmulate);
-        assert_eq!(pass_cpus_cfg.from, MsrValueFrom::RWFromRunningCPU);
+        assert_eq!(cfg.fw_cfg_parameters.len(), 1);
+        assert_eq!(cfg.fw_cfg_parameters[0].name, "bar".to_string());
+        assert_eq!(cfg.fw_cfg_parameters[0].string, Some("foo".to_string()));
+        assert_eq!(cfg.fw_cfg_parameters[0].path, None);
+    }
 
-        assert!(parse_userspace_msr_options("0x10,action=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,action=pass").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=none").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=rw").is_err());
-        assert!(parse_userspace_msr_options("0x10,type=w,action=pass,from=f").is_err());
-        assert!(parse_userspace_msr_options("0x10").is_err());
-        assert!(parse_userspace_msr_options("hoge").is_err());
+    #[test]
+    fn parse_dtbo() {
+        let cfg: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--device-tree-overlay",
+                "/path/to/dtbo1",
+                "--device-tree-overlay",
+                "/path/to/dtbo2",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        assert_eq!(cfg.device_tree_overlay.len(), 2);
+        for (opt, p) in cfg
+            .device_tree_overlay
+            .into_iter()
+            .zip(["/path/to/dtbo1", "/path/to/dtbo2"])
+        {
+            assert_eq!(opt.path, PathBuf::from(p));
+            assert!(!opt.filter_devs);
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    fn parse_dtbo_filtered() {
+        let cfg: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--vfio",
+                "/path/to/dev,dt-symbol=mydev",
+                "--device-tree-overlay",
+                "/path/to/dtbo1,filter",
+                "--device-tree-overlay",
+                "/path/to/dtbo2,filter",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        assert_eq!(cfg.device_tree_overlay.len(), 2);
+        for (opt, p) in cfg
+            .device_tree_overlay
+            .into_iter()
+            .zip(["/path/to/dtbo1", "/path/to/dtbo2"])
+        {
+            assert_eq!(opt.path, PathBuf::from(p));
+            assert!(opt.filter_devs);
+        }
+
+        assert!(TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--device-tree-overlay", "/path/to/dtbo,filter", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_fw_cfg_invalid_no_name() {
+        assert!(
+            crate::crosvm::cmdline::RunCommand::from_args(&[], &["--fw-cfg", "string=foo",])
+                .is_err()
+        );
     }
 
     #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
@@ -2240,49 +1873,415 @@ mod tests {
     }
 
     #[test]
-    fn parse_vvu() {
-        assert_eq!(
-            from_key_values::<VvuOption>(
-                "/tmp/vvu-sock,addr=05:2.1,uuid=23546c3d-962d-4ebc-94d9-4acf50996944"
+    fn parse_vhost_user_option() {
+        let opt: VhostUserOption = from_key_values("/10mm").unwrap();
+        assert_eq!(opt.socket.to_str(), Some("/10mm"));
+        assert_eq!(opt.max_queue_size, None);
+
+        let opt: VhostUserOption = from_key_values("/10mm,max-queue-size=256").unwrap();
+        assert_eq!(opt.socket.to_str(), Some("/10mm"));
+        assert_eq!(opt.max_queue_size, Some(256));
+    }
+
+    #[test]
+    fn parse_vhost_user_option_all_device_types() {
+        fn test_device_type(type_string: &str, type_: DeviceType) {
+            let vhost_user_arg = format!("{},socket=sock", type_string);
+
+            let cfg = TryInto::<Config>::try_into(
+                crate::crosvm::cmdline::RunCommand::from_args(
+                    &[],
+                    &["--vhost-user", &vhost_user_arg, "/dev/null"],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(cfg.vhost_user.len(), 1);
+            let vu = &cfg.vhost_user[0];
+            assert_eq!(vu.type_, type_);
+        }
+
+        test_device_type("net", DeviceType::Net);
+        test_device_type("block", DeviceType::Block);
+        test_device_type("console", DeviceType::Console);
+        test_device_type("rng", DeviceType::Rng);
+        test_device_type("balloon", DeviceType::Balloon);
+        test_device_type("scsi", DeviceType::Scsi);
+        test_device_type("9p", DeviceType::P9);
+        test_device_type("gpu", DeviceType::Gpu);
+        test_device_type("input", DeviceType::Input);
+        test_device_type("vsock", DeviceType::Vsock);
+        test_device_type("iommu", DeviceType::Iommu);
+        test_device_type("sound", DeviceType::Sound);
+        test_device_type("fs", DeviceType::Fs);
+        test_device_type("pmem", DeviceType::Pmem);
+        test_device_type("mac80211-hwsim", DeviceType::Mac80211HwSim);
+        test_device_type("video-encoder", DeviceType::VideoEncoder);
+        test_device_type("video-decoder", DeviceType::VideoDecoder);
+        test_device_type("scmi", DeviceType::Scmi);
+        test_device_type("wl", DeviceType::Wl);
+        test_device_type("tpm", DeviceType::Tpm);
+        test_device_type("pvclock", DeviceType::Pvclock);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_deprecated() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--vhost-user-fs", "my_socket:my_tag", "/dev/null"],
             )
             .unwrap(),
-            VvuOption {
-                socket: PathBuf::from("/tmp/vvu-sock"),
-                addr: Some(PciAddress::new(0, 0x05, 0x02, 1).unwrap()),
-                uuid: Some(Uuid::parse_str("23546c3d-962d-4ebc-94d9-4acf50996944").unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, Some("my_tag".to_string()));
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--vhost-user-fs", "my_socket,tag=my_tag", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, Some("my_tag".to_string()));
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_max_queue_size() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--vhost-user-fs",
+                    "my_socket,tag=my_tag,max-queue-size=256",
+                    "/dev/null",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, Some("my_tag".to_string()));
+        assert_eq!(fs.max_queue_size, Some(256));
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_no_tag() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--vhost-user-fs", "my_socket", "/dev/null"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, None);
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn parse_smbios_uuid() {
+        let opt: SmbiosOptions =
+            from_key_values("uuid=12e474af-2cc1-49d1-b0e5-d03a3e03ca03").unwrap();
+        assert_eq!(
+            opt.uuid,
+            Some(uuid!("12e474af-2cc1-49d1-b0e5-d03a3e03ca03"))
+        );
+
+        from_key_values::<SmbiosOptions>("uuid=zzzz").expect_err("expected error parsing uuid");
+    }
+
+    #[test]
+    fn parse_touch_legacy() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--multi-touch", "my_socket:867:5309", "bzImage"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.virtio_input.len(), 1);
+        let multi_touch = cfg
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::MultiTouch { .. }))
+            .unwrap();
+        assert_eq!(
+            *multi_touch,
+            InputDeviceOption::MultiTouch {
+                path: PathBuf::from("my_socket"),
+                width: Some(867),
+                height: Some(5309),
+                name: None
             }
         );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn parse_shared_dir() {
-        // Although I want to test /usr/local/bin, Use / instead of
-        // /usr/local/bin, as /usr/local/bin doesn't always exist.
-        let s = "/:usr_local_bin:type=fs:cache=always:uidmap=0 655360 5000,5000 600 50,5050 660410 1994950:gidmap=0 655360 1065,1065 20119 1,1066 656426 3934,5000 600 50,5050 660410 1994950:timeout=3600:rewrite-security-xattrs=true:ascii_casefold=false:writeback=true:posix_acl=true";
+    fn parse_touch() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &["--multi-touch", r"C:\path,width=867,height=5309", "bzImage"],
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-        let shared_dir: SharedDir = s.parse().unwrap();
-        assert_eq!(shared_dir.src, Path::new("/").to_path_buf());
-        assert_eq!(shared_dir.tag, "usr_local_bin");
-        assert!(shared_dir.kind == SharedDirKind::FS);
+        assert_eq!(cfg.virtio_input.len(), 1);
+        let multi_touch = cfg
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::MultiTouch { .. }))
+            .unwrap();
         assert_eq!(
-            shared_dir.uid_map,
-            "0 655360 5000,5000 600 50,5050 660410 1994950"
+            *multi_touch,
+            InputDeviceOption::MultiTouch {
+                path: PathBuf::from(r"C:\path"),
+                width: Some(867),
+                height: Some(5309),
+                name: None
+            }
+        );
+    }
+
+    #[test]
+    fn single_touch_spec_and_track_pad_spec_default_size() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test",
+                "--trackpad",
+                "/dev/single-touch-test",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+        let trackpad = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Trackpad { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
         );
         assert_eq!(
-            shared_dir.gid_map,
-            "0 655360 1065,1065 20119 1,1066 656426 3934,5000 600 50,5050 660410 1994950"
+            *trackpad,
+            InputDeviceOption::Trackpad {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
         );
-        assert_eq!(shared_dir.fs_cfg.ascii_casefold, false);
-        assert_eq!(shared_dir.fs_cfg.attr_timeout, Duration::from_secs(3600));
-        assert_eq!(shared_dir.fs_cfg.entry_timeout, Duration::from_secs(3600));
-        assert_eq!(shared_dir.fs_cfg.writeback, true);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn single_touch_spec_default_size_from_gpu() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test",
+                "--gpu",
+                "width=1024,height=768",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
         assert_eq!(
-            shared_dir.fs_cfg.cache_policy,
-            passthrough::CachePolicy::Always
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
         );
-        assert_eq!(shared_dir.fs_cfg.rewrite_security_xattrs, true);
-        assert_eq!(shared_dir.fs_cfg.use_dax, false);
-        assert_eq!(shared_dir.fs_cfg.posix_acl, true);
+
+        assert_eq!(config.display_input_width, Some(1024));
+        assert_eq!(config.display_input_height, Some(768));
+    }
+
+    #[test]
+    fn single_touch_spec_and_track_pad_spec_with_size() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test:12345:54321",
+                "--trackpad",
+                "/dev/single-touch-test:5678:9876",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+        let trackpad = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Trackpad { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(12345),
+                height: Some(54321),
+                name: None
+            }
+        );
+        assert_eq!(
+            *trackpad,
+            InputDeviceOption::Trackpad {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(5678),
+                height: Some(9876),
+                name: None
+            }
+        );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn single_touch_spec_with_size_independent_from_gpu() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test:12345:54321",
+                "--gpu",
+                "width=1024,height=768",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(12345),
+                height: Some(54321),
+                name: None
+            }
+        );
+
+        assert_eq!(config.display_input_width, Some(1024));
+        assert_eq!(config.display_input_height, Some(768));
+    }
+
+    #[test]
+    fn virtio_switches() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--switches", "/dev/switches-test", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let switches = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Switches { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *switches,
+            InputDeviceOption::Switches {
+                path: PathBuf::from("/dev/switches-test")
+            }
+        );
+    }
+
+    #[test]
+    fn virtio_rotary() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--rotary", "/dev/rotary-test", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let rotary = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Rotary { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *rotary,
+            InputDeviceOption::Rotary {
+                path: PathBuf::from("/dev/rotary-test")
+            }
+        );
     }
 }

@@ -6,8 +6,6 @@ use std::cmp::max;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-#[cfg(feature = "direct")]
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,8 +14,6 @@ use std::sync::Arc;
 use std::u32;
 
 use acpi_tables::aml::Aml;
-#[cfg(feature = "direct")]
-use anyhow::Context;
 use base::debug;
 use base::error;
 use base::pagesize;
@@ -32,24 +28,26 @@ use base::RawDescriptor;
 use base::Tube;
 use base::WaitContext;
 use base::WorkerThread;
-use hypervisor::MemSlot;
+use hypervisor::MemCacheType;
 use resources::AddressRange;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::MmioType;
 use resources::SystemAllocator;
 use sync::Mutex;
+use vfio_sys::vfio::VFIO_PCI_ACPI_NTFY_IRQ_INDEX;
 use vfio_sys::*;
+use vm_control::api::VmMemoryClient;
 use vm_control::HotPlugDeviceInfo;
 use vm_control::HotPlugDeviceType;
 use vm_control::VmMemoryDestination;
-use vm_control::VmMemoryRequest;
-use vm_control::VmMemoryResponse;
+use vm_control::VmMemoryRegionId;
 use vm_control::VmMemorySource;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
 
 use crate::pci::acpi::DeviceVcfgRegister;
+use crate::pci::acpi::DsmMethod;
 use crate::pci::acpi::PowerResourceMethod;
 use crate::pci::acpi::SHM_OFFSET;
 use crate::pci::msi::MsiConfig;
@@ -63,12 +61,6 @@ use crate::pci::msix::MsixStatus;
 use crate::pci::msix::BITS_PER_PBA_ENTRY;
 use crate::pci::msix::MSIX_PBA_ENTRIES_MODULO;
 use crate::pci::msix::MSIX_TABLE_ENTRIES_MODULO;
-#[cfg(feature = "direct")]
-use crate::pci::pci_configuration::CLASS_REG;
-#[cfg(feature = "direct")]
-use crate::pci::pci_configuration::CLASS_REG_REVISION_ID_OFFSET;
-#[cfg(feature = "direct")]
-use crate::pci::pci_configuration::HEADER_TYPE_REG;
 use crate::pci::pci_device::BarRange;
 use crate::pci::pci_device::Error as PciDeviceError;
 use crate::pci::pci_device::PciDevice;
@@ -85,6 +77,9 @@ use crate::pci::PciCapabilityID;
 use crate::pci::PciClassCode;
 use crate::pci::PciId;
 use crate::pci::PciInterruptPin;
+use crate::pci::PCI_VCFG_DSM;
+use crate::pci::PCI_VCFG_NOTY;
+use crate::pci::PCI_VCFG_PM;
 use crate::pci::PCI_VENDOR_ID_INTEL;
 use crate::vfio::VfioDevice;
 use crate::vfio::VfioError;
@@ -117,11 +112,6 @@ const PCI_EXT_CAP_ID_ARI: u16 = 0x0E;
 const PCI_EXT_CAP_ID_SRIOV: u16 = 0x10;
 const PCI_EXT_CAP_ID_REBAR: u16 = 0x15;
 
-#[cfg(feature = "direct")]
-const LPSS_MANATEE_OFFSET: u64 = 0x400;
-#[cfg(feature = "direct")]
-const LPSS_MANATEE_SIZE: u64 = 0x400;
-
 struct VfioPmCap {
     offset: u32,
     capabilities: u32,
@@ -135,7 +125,7 @@ impl VfioPmCap {
         VfioPmCap {
             offset: cap_start,
             capabilities,
-            config: PmConfig::new(),
+            config: PmConfig::new(false),
         }
     }
 
@@ -232,10 +222,10 @@ struct VfioMsixCap {
     config: MsixConfig,
     offset: u32,
     table_size: u16,
-    table_pci_bar: u32,
+    table_pci_bar: PciBarIndex,
     table_offset: u64,
     table_size_bytes: u64,
-    pba_pci_bar: u32,
+    pba_pci_bar: PciBarIndex,
     pba_offset: u64,
     pba_size_bytes: u64,
     msix_interrupt_evt: Vec<Event>,
@@ -251,10 +241,10 @@ impl VfioMsixCap {
     ) -> Self {
         let msix_ctl: u16 = config.read_config(msix_cap_start + PCI_MSIX_FLAGS);
         let table: u32 = config.read_config(msix_cap_start + PCI_MSIX_TABLE);
-        let table_pci_bar = table & PCI_MSIX_TABLE_BIR;
+        let table_pci_bar = (table & PCI_MSIX_TABLE_BIR) as PciBarIndex;
         let table_offset = (table & PCI_MSIX_TABLE_OFFSET) as u64;
         let pba: u32 = config.read_config(msix_cap_start + PCI_MSIX_PBA);
-        let pba_pci_bar = pba & PCI_MSIX_PBA_BIR;
+        let pba_pci_bar = (pba & PCI_MSIX_PBA_BIR) as PciBarIndex;
         let pba_offset = (pba & PCI_MSIX_PBA_OFFSET) as u64;
 
         let mut table_size = (msix_ctl & PCI_MSIX_FLAGS_QSIZE) as u64 + 1;
@@ -320,13 +310,13 @@ impl VfioMsixCap {
         }
     }
 
-    fn is_msix_table(&self, bar_index: u32, offset: u64) -> bool {
+    fn is_msix_table(&self, bar_index: PciBarIndex, offset: u64) -> bool {
         bar_index == self.table_pci_bar
             && offset >= self.table_offset
             && offset < self.table_offset + self.table_size_bytes
     }
 
-    fn get_msix_table(&self, bar_index: u32) -> Option<AddressRange> {
+    fn get_msix_table(&self, bar_index: PciBarIndex) -> Option<AddressRange> {
         if bar_index == self.table_pci_bar {
             AddressRange::from_start_and_size(self.table_offset, self.table_size_bytes)
         } else {
@@ -344,13 +334,13 @@ impl VfioMsixCap {
         self.config.write_msix_table(offset, data)
     }
 
-    fn is_msix_pba(&self, bar_index: u32, offset: u64) -> bool {
+    fn is_msix_pba(&self, bar_index: PciBarIndex, offset: u64) -> bool {
         bar_index == self.pba_pci_bar
             && offset >= self.pba_offset
             && offset < self.pba_offset + self.pba_size_bytes
     }
 
-    fn get_msix_pba(&self, bar_index: u32) -> Option<AddressRange> {
+    fn get_msix_pba(&self, bar_index: PciBarIndex) -> Option<AddressRange> {
         if bar_index == self.pba_pci_bar {
             AddressRange::from_start_and_size(self.pba_offset, self.pba_size_bytes)
         } else {
@@ -522,13 +512,18 @@ impl VfioPciWorker {
         &mut self,
         req_irq_evt: Event,
         wakeup_evt: Event,
+        acpi_notify_evt: Event,
         kill_evt: Event,
         msix_evt: Vec<Event>,
+        is_in_low_power: Arc<Mutex<bool>>,
+        gpe: Option<u32>,
+        notification_val: Arc<Mutex<Vec<u32>>>,
     ) {
-        #[derive(EventToken)]
+        #[derive(EventToken, Debug)]
         enum Token {
             ReqIrq,
             WakeUp,
+            AcpiNotifyEvent,
             Kill,
             MsixIrqi { index: usize },
         }
@@ -536,6 +531,7 @@ impl VfioPciWorker {
         let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (&req_irq_evt, Token::ReqIrq),
             (&wakeup_evt, Token::WakeUp),
+            (&acpi_notify_evt, Token::AcpiNotifyEvent),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(pc) => pc,
@@ -578,7 +574,7 @@ impl VfioPciWorker {
                             hp_interrupt: false,
                         };
 
-                        let request = VmRequest::HotPlugCommand { device, add: false };
+                        let request = VmRequest::HotPlugVfioCommand { device, add: false };
                         if self.vm_socket.send(&request).is_ok() {
                             if let Err(e) = self.vm_socket.recv::<VmResponse>() {
                                 error!("{} failed to remove vfio_device: {}", self.name.clone(), e);
@@ -589,14 +585,37 @@ impl VfioPciWorker {
                     }
                     Token::WakeUp => {
                         let _ = wakeup_evt.wait();
-                        if let Some(pm_cap) = &self.pm_cap {
-                            if pm_cap.lock().should_trigger_pme() {
-                                let request = VmRequest::PciPme(self.address.pme_requester_id());
-                                if self.vm_socket.send(&request).is_ok() {
-                                    if let Err(e) = self.vm_socket.recv::<VmResponse>() {
-                                        error!("{} failed to send PME: {}", self.name.clone(), e);
+
+                        if *is_in_low_power.lock() {
+                            if let Some(pm_cap) = &self.pm_cap {
+                                if pm_cap.lock().should_trigger_pme() {
+                                    let request =
+                                        VmRequest::PciPme(self.address.pme_requester_id());
+                                    if self.vm_socket.send(&request).is_ok() {
+                                        if let Err(e) = self.vm_socket.recv::<VmResponse>() {
+                                            error!(
+                                                "{} failed to send PME: {}",
+                                                self.name.clone(),
+                                                e
+                                            );
+                                        }
                                     }
                                 }
+                            }
+                        }
+                    }
+                    Token::AcpiNotifyEvent => {
+                        if let Some(gpe) = gpe {
+                            if let Ok(val) = base::EventExt::read_count(&acpi_notify_evt) {
+                                notification_val.lock().push(val as u32);
+                                let request = VmRequest::Gpe(gpe);
+                                if self.vm_socket.send(&request).is_ok() {
+                                    if let Err(e) = self.vm_socket.recv::<VmResponse>() {
+                                        error!("{} failed to send GPE: {}", self.name.clone(), e);
+                                    }
+                                }
+                            } else {
+                                error!("{} failed to read acpi_notify_evt", self.name.clone());
                             }
                         }
                     }
@@ -645,44 +664,28 @@ pub struct VfioPciDevice {
     preferred_address: PciAddress,
     pci_address: Option<PciAddress>,
     interrupt_evt: Option<IrqLevelEvent>,
+    acpi_notification_evt: Option<Event>,
     mmio_regions: Vec<PciBarConfiguration>,
     io_regions: Vec<PciBarConfiguration>,
     pm_cap: Option<Arc<Mutex<VfioPmCap>>>,
     msi_cap: Option<VfioMsiCap>,
     msix_cap: Option<Arc<Mutex<VfioMsixCap>>>,
     irq_type: Option<VfioIrqType>,
-    vm_socket_mem: Tube,
+    vm_memory_client: VmMemoryClient,
     device_data: Option<DeviceData>,
     pm_evt: Option<Event>,
+    is_in_low_power: Arc<Mutex<bool>>,
     worker_thread: Option<WorkerThread<VfioPciWorker>>,
     vm_socket_vm: Option<Tube>,
     sysfs_path: PathBuf,
-    #[cfg(feature = "direct")]
-    header_type_reg: Option<u32>,
     // PCI Express Extended Capabilities
     ext_caps: Vec<ExtCap>,
-    #[cfg(feature = "direct")]
-    is_intel_lpss: bool,
-    #[cfg(feature = "direct")]
-    supports_coordinated_pm: bool,
-    #[cfg(feature = "direct")]
-    i2c_devs: HashMap<u16, PathBuf>,
     vcfg_shm_mmap: Option<MemoryMapping>,
-    mapped_mmio_bars: BTreeMap<PciBarIndex, (u64, Vec<MemSlot>)>,
+    mapped_mmio_bars: BTreeMap<PciBarIndex, (u64, Vec<VmMemoryRegionId>)>,
     activated: bool,
-}
-
-#[cfg(feature = "direct")]
-fn iter_dir_starts_with(
-    path: &Path,
-    start: &'static str,
-) -> anyhow::Result<impl Iterator<Item = fs::DirEntry>> {
-    let dir = fs::read_dir(path)
-        .with_context(|| format!("read_dir call on {} failed", path.to_string_lossy()))?;
-    Ok(dir
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|f| f.is_dir()).unwrap_or(false))
-        .filter(move |e| e.file_name().to_str().unwrap_or("").starts_with(start)))
+    acpi_notifier_val: Arc<Mutex<Vec<u32>>>,
+    gpe: Option<u32>,
+    base_class_code: PciClassCode,
 }
 
 impl VfioPciDevice {
@@ -695,9 +698,8 @@ impl VfioPciDevice {
         guest_address: Option<PciAddress>,
         vfio_device_socket_msi: Tube,
         vfio_device_socket_msix: Tube,
-        vfio_device_socket_mem: Tube,
+        vm_memory_client: VmMemoryClient,
         vfio_device_socket_vm: Tube,
-        #[cfg(feature = "direct")] is_intel_lpss: bool,
     ) -> Result<Self, PciDeviceError> {
         let preferred_address = if let Some(bus_num) = hotplug_bus_number {
             debug!("hotplug bus {}", bus_num);
@@ -731,6 +733,8 @@ impl VfioPciDevice {
         let mut cap_next: u32 = config.read_config::<u8>(PCI_CAPABILITY_LIST).into();
         let vendor_id: u16 = config.read_config(PCI_VENDOR_ID);
         let device_id: u16 = config.read_config(PCI_DEVICE_ID);
+        let base_class_code = PciClassCode::try_from(config.read_config::<u8>(PCI_BASE_CLASS_CODE))
+            .unwrap_or(PciClassCode::Other);
 
         let pci_id = PciId::new(vendor_id, device_id);
 
@@ -811,10 +815,8 @@ impl VfioPciDevice {
             ext_caps.reverse();
         }
 
-        let class_code: u8 = config.read_config(PCI_BASE_CLASS_CODE);
-
-        let is_intel_gfx = vendor_id == PCI_VENDOR_ID_INTEL
-            && class_code == PciClassCode::DisplayController.get_register_value();
+        let is_intel_gfx =
+            base_class_code == PciClassCode::DisplayController && vendor_id == PCI_VENDOR_ID_INTEL;
         let device_data = if is_intel_gfx {
             Some(DeviceData::IntelGfxData {
                 opregion_index: u32::max_value(),
@@ -822,40 +824,6 @@ impl VfioPciDevice {
         } else {
             None
         };
-
-        #[cfg(feature = "direct")]
-        let mut i2c_devs: HashMap<u16, PathBuf> = HashMap::new();
-
-        #[cfg(feature = "direct")]
-        let (supports_coordinated_pm, header_type_reg) =
-            match VfioPciDevice::coordinated_pm(sysfs_path, true) {
-                Ok(_) => {
-                    if is_intel_lpss {
-                        if let Err(e) = VfioPciDevice::coordinated_pm_i2c(sysfs_path, &mut i2c_devs)
-                        {
-                            warn!("coordinated_pm_i2c not supported: {}", e);
-                            for (_, i2c_path) in i2c_devs.iter() {
-                                let _ = VfioPciDevice::coordinated_pm(i2c_path, false);
-                            }
-                            i2c_devs.clear();
-                        }
-                    }
-
-                    // Cache the dword at offset 0x0c (cacheline size, latency timer,
-                    // header type, BIST).
-                    // When using the "direct" feature, this dword can be accessed for
-                    // device power state. Directly accessing a device's physical PCI
-                    // config space in D3cold state causes a hang. We treat the cacheline
-                    // size, latency timer and header type field as immutable in the
-                    // guest.
-                    let reg: u32 = config.read_config((HEADER_TYPE_REG as u32) * 4);
-                    (true, Some(reg))
-                }
-                Err(e) => {
-                    warn!("coordinated_pm not supported: {}", e);
-                    (false, None)
-                }
-            };
 
         Ok(VfioPciDevice {
             device: dev,
@@ -865,30 +833,27 @@ impl VfioPciDevice {
             preferred_address,
             pci_address: None,
             interrupt_evt: None,
+            acpi_notification_evt: None,
             mmio_regions: Vec::new(),
             io_regions: Vec::new(),
             pm_cap,
             msi_cap,
             msix_cap,
             irq_type: None,
-            vm_socket_mem: vfio_device_socket_mem,
+            vm_memory_client,
             device_data,
             pm_evt: None,
+            is_in_low_power: Arc::new(Mutex::new(false)),
             worker_thread: None,
             vm_socket_vm: Some(vfio_device_socket_vm),
             sysfs_path: sysfs_path.to_path_buf(),
-            #[cfg(feature = "direct")]
-            header_type_reg,
             ext_caps,
-            #[cfg(feature = "direct")]
-            is_intel_lpss,
-            #[cfg(feature = "direct")]
-            supports_coordinated_pm,
-            #[cfg(feature = "direct")]
-            i2c_devs,
             vcfg_shm_mmap: None,
             mapped_mmio_bars: BTreeMap::new(),
             activated: false,
+            acpi_notifier_val: Arc::new(Mutex::new(Vec::new())),
+            gpe: None,
+            base_class_code,
         })
     }
 
@@ -897,26 +862,44 @@ impl VfioPciDevice {
         self.pci_address
     }
 
-    fn is_intel_gfx(&self) -> bool {
-        let mut ret = false;
-
-        if let Some(device_data) = &self.device_data {
-            match *device_data {
-                DeviceData::IntelGfxData { .. } => ret = true,
-            }
-        }
-
-        ret
+    pub fn is_gfx(&self) -> bool {
+        self.base_class_code == PciClassCode::DisplayController
     }
 
-    fn find_region(&self, addr: u64) -> Option<PciBarConfiguration> {
-        for mmio_info in self.mmio_regions.iter() {
-            if addr >= mmio_info.address() && addr < mmio_info.address() + mmio_info.size() {
-                return Some(*mmio_info);
-            }
-        }
+    fn is_intel_gfx(&self) -> bool {
+        matches!(self.device_data, Some(DeviceData::IntelGfxData { .. }))
+    }
 
-        None
+    fn enable_acpi_notification(&mut self) -> Result<(), PciDeviceError> {
+        if let Some(ref acpi_notification_evt) = self.acpi_notification_evt {
+            return self
+                .device
+                .acpi_notification_evt_enable(acpi_notification_evt, VFIO_PCI_ACPI_NTFY_IRQ_INDEX)
+                .map_err(|_| PciDeviceError::AcpiNotifySetupFailed);
+        }
+        Err(PciDeviceError::AcpiNotifySetupFailed)
+    }
+
+    #[allow(dead_code)]
+    fn disable_acpi_notification(&mut self) -> Result<(), PciDeviceError> {
+        if let Some(ref _acpi_notification_evt) = self.acpi_notification_evt {
+            return self
+                .device
+                .acpi_notification_disable(VFIO_PCI_ACPI_NTFY_IRQ_INDEX)
+                .map_err(|_| PciDeviceError::AcpiNotifyDeactivationFailed);
+        }
+        Err(PciDeviceError::AcpiNotifyDeactivationFailed)
+    }
+
+    #[allow(dead_code)]
+    fn test_acpi_notification(&mut self, val: u32) -> Result<(), PciDeviceError> {
+        if let Some(ref _acpi_notification_evt) = self.acpi_notification_evt {
+            return self
+                .device
+                .acpi_notification_test(VFIO_PCI_ACPI_NTFY_IRQ_INDEX, val)
+                .map_err(|_| PciDeviceError::AcpiNotifyTestFailed);
+        }
+        Err(PciDeviceError::AcpiNotifyTestFailed)
     }
 
     fn enable_intx(&mut self) {
@@ -1105,7 +1088,7 @@ impl VfioPciDevice {
 
         for mmap in bar_mmaps.iter() {
             let mmap_range = if let Some(mmap_range) =
-                AddressRange::from_start_and_size(mmap.offset as u64, mmap.size as u64)
+                AddressRange::from_start_and_size(mmap.offset, mmap.size)
             {
                 mmap_range
             } else {
@@ -1146,7 +1129,7 @@ impl VfioPciDevice {
 
     fn remove_bar_mmap_msix(
         &self,
-        bar_index: u32,
+        bar_index: PciBarIndex,
         bar_mmaps: Vec<vfio_region_sparse_mmap_area>,
     ) -> Vec<vfio_region_sparse_mmap_area> {
         let msix_cap = &self.msix_cap.as_ref().unwrap().lock();
@@ -1166,25 +1149,8 @@ impl VfioPciDevice {
         self.adjust_bar_mmap(bar_mmaps, &msix_regions)
     }
 
-    #[cfg(feature = "direct")]
-    fn remove_bar_mmap_lpss(
-        &self,
-        bar_index: u32,
-        bar_mmaps: Vec<vfio_region_sparse_mmap_area>,
-    ) -> Vec<vfio_region_sparse_mmap_area> {
-        // must be BAR0
-        if bar_index != 0 {
-            return bar_mmaps;
-        }
-
-        match AddressRange::from_start_and_size(LPSS_MANATEE_OFFSET, LPSS_MANATEE_SIZE) {
-            Some(lpss_range) => self.adjust_bar_mmap(bar_mmaps, &[lpss_range]),
-            None => bar_mmaps,
-        }
-    }
-
-    fn add_bar_mmap(&self, index: u32, bar_addr: u64) -> Vec<MemSlot> {
-        let mut mmaps_slots: Vec<MemSlot> = Vec::new();
+    fn add_bar_mmap(&self, index: PciBarIndex, bar_addr: u64) -> Vec<VmMemoryRegionId> {
+        let mut mmaps_ids: Vec<VmMemoryRegionId> = Vec::new();
         if self.device.get_region_flags(index) & VFIO_REGION_INFO_FLAG_MMAP != 0 {
             // the bar storing msix table and pba couldn't mmap.
             // these bars should be trapped, so that msix could be emulated.
@@ -1193,12 +1159,8 @@ impl VfioPciDevice {
             if self.msix_cap.is_some() {
                 mmaps = self.remove_bar_mmap_msix(index, mmaps);
             }
-            #[cfg(feature = "direct")]
-            if self.is_intel_lpss {
-                mmaps = self.remove_bar_mmap_lpss(index, mmaps);
-            }
             if mmaps.is_empty() {
-                return mmaps_slots;
+                return mmaps_ids;
             }
 
             for mmap in mmaps.iter() {
@@ -1211,57 +1173,41 @@ impl VfioPciDevice {
                     Ok(device_file) => device_file.into(),
                     Err(_) => break,
                 };
-                if self
-                    .vm_socket_mem
-                    .send(&VmMemoryRequest::RegisterMemory {
-                        source: VmMemorySource::Descriptor {
-                            descriptor,
-                            offset,
-                            size: mmap_size,
-                        },
-                        dest: VmMemoryDestination::GuestPhysicalAddress(guest_map_start),
-                        prot: Protection::read_write(),
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-
-                let response: VmMemoryResponse = match self.vm_socket_mem.recv() {
-                    Ok(res) => res,
-                    Err(_) => break,
-                };
-                match response {
-                    VmMemoryResponse::RegisterMemory { pfn: _, slot } => {
-                        mmaps_slots.push(slot);
+                match self.vm_memory_client.register_memory(
+                    VmMemorySource::Descriptor {
+                        descriptor,
+                        offset,
+                        size: mmap_size,
+                    },
+                    VmMemoryDestination::GuestPhysicalAddress(guest_map_start),
+                    Protection::read_write(),
+                    MemCacheType::CacheCoherent,
+                ) {
+                    Ok(id) => {
+                        mmaps_ids.push(id);
                     }
-                    _ => break,
+                    Err(e) => {
+                        error!("register_memory failed: {}", e);
+                        break;
+                    }
                 }
             }
         }
 
-        mmaps_slots
+        mmaps_ids
     }
 
-    fn remove_bar_mmap(&self, mmap_slots: &[MemSlot]) {
-        for mmap_slot in mmap_slots {
-            if self
-                .vm_socket_mem
-                .send(&VmMemoryRequest::UnregisterMemory(*mmap_slot))
-                .is_err()
-            {
-                error!("failed to send UnregisterMemory request");
-                return;
-            }
-            if self.vm_socket_mem.recv::<VmMemoryResponse>().is_err() {
-                error!("failed to receive UnregisterMemory response");
+    fn remove_bar_mmap(&self, mmap_ids: &[VmMemoryRegionId]) {
+        for mmap_id in mmap_ids {
+            if let Err(e) = self.vm_memory_client.unregister_memory(*mmap_id) {
+                error!("unregister_memory failed: {}", e);
             }
         }
     }
 
     fn disable_bars_mmap(&mut self) {
-        for (_, (_, mmap_slots)) in self.mapped_mmio_bars.iter() {
-            self.remove_bar_mmap(mmap_slots);
+        for (_, (_, mmap_ids)) in self.mapped_mmio_bars.iter() {
+            self.remove_bar_mmap(mmap_ids);
         }
         self.mapped_mmio_bars.clear();
     }
@@ -1273,12 +1219,12 @@ impl VfioPciDevice {
             let bar_idx = mmio_info.bar_index();
             let addr = mmio_info.address();
 
-            if let Some((cur_addr, slots)) = self.mapped_mmio_bars.remove(&bar_idx) {
+            if let Some((cur_addr, ids)) = self.mapped_mmio_bars.remove(&bar_idx) {
                 if cur_addr == addr {
-                    self.mapped_mmio_bars.insert(bar_idx, (cur_addr, slots));
+                    self.mapped_mmio_bars.insert(bar_idx, (cur_addr, ids));
                     continue;
                 } else {
-                    self.remove_bar_mmap(&slots);
+                    self.remove_bar_mmap(&ids);
                 }
             }
 
@@ -1288,8 +1234,8 @@ impl VfioPciDevice {
         }
 
         for (bar_idx, addr) in needs_map.iter() {
-            let slots = self.add_bar_mmap(*bar_idx as u32, *addr);
-            self.mapped_mmio_bars.insert(*bar_idx, (*addr, slots));
+            let ids = self.add_bar_mmap(*bar_idx, *addr);
+            self.mapped_mmio_bars.insert(*bar_idx, (*addr, ids));
         }
     }
 
@@ -1337,6 +1283,24 @@ impl VfioPciDevice {
         };
         self.pm_evt = Some(self_pm_evt);
 
+        let (self_acpi_notify_evt, acpi_notify_evt) =
+            match Event::new().and_then(|e| Ok((e.try_clone()?, e))) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "{} failed creating ACPI Event pair: {}",
+                        self.debug_label(),
+                        e
+                    );
+                    return;
+                }
+            };
+        self.acpi_notification_evt = Some(self_acpi_notify_evt);
+
+        if let Err(e) = self.enable_acpi_notification() {
+            error!("{}: {}", self.debug_label(), e);
+        }
+
         let mut msix_evt = Vec::new();
         if let Some(msix_cap) = &self.msix_cap {
             msix_evt = msix_cap.lock().clone_msix_evt();
@@ -1347,6 +1311,9 @@ impl VfioPciDevice {
         let sysfs_path = self.sysfs_path.clone();
         let pm_cap = self.pm_cap.clone();
         let msix_cap = self.msix_cap.clone();
+        let is_in_low_power = self.is_in_low_power.clone();
+        let gpe_nr = self.gpe;
+        let notification_val = self.acpi_notifier_val.clone();
         self.worker_thread = Some(WorkerThread::start("vfio_pci", move |kill_evt| {
             let mut worker = VfioPciWorker {
                 address,
@@ -1356,7 +1323,16 @@ impl VfioPciDevice {
                 pm_cap,
                 msix_cap,
             };
-            worker.run(req_evt, pm_evt, kill_evt, msix_evt);
+            worker.run(
+                req_evt,
+                pm_evt,
+                acpi_notify_evt,
+                kill_evt,
+                msix_evt,
+                is_in_low_power,
+                gpe_nr,
+                notification_val,
+            );
             worker
         }));
         self.activated = true;
@@ -1617,99 +1593,6 @@ impl VfioPciDevice {
         self.device.get_max_addr()
     }
 
-    #[cfg(feature = "direct")]
-    fn coordinated_pm(sysfs_path: &Path, enter: bool) -> anyhow::Result<()> {
-        let path = sysfs_path.join("power/coordinated");
-        fs::write(&path, if enter { "enter\n" } else { "exit\n" })
-            .with_context(|| format!("Failed to write to {}", path.to_string_lossy()))
-    }
-
-    #[cfg(feature = "direct")]
-    fn coordinated_pm_i2c_adap(
-        adap_path: &Path,
-        i2c_devs: &mut HashMap<u16, PathBuf>,
-    ) -> anyhow::Result<()> {
-        for entry in iter_dir_starts_with(adap_path, "i2c-")? {
-            let path = adap_path.join(entry.file_name());
-
-            VfioPciDevice::coordinated_pm(&path, true)?;
-
-            let addr_path = path.join("address");
-            let addr = fs::read_to_string(&addr_path).with_context(|| {
-                format!(
-                    "Failed to read to string from {}",
-                    addr_path.to_string_lossy()
-                )
-            })?;
-            let addr = addr.trim_end().parse::<u16>().with_context(|| {
-                format!(
-                    "Failed to parse {} from {}",
-                    addr,
-                    addr_path.to_string_lossy()
-                )
-            })?;
-
-            if let Some(c) = i2c_devs.insert(addr, path.to_path_buf()) {
-                anyhow::bail!(
-                    "Collision encountered: {}, {}",
-                    path.to_string_lossy(),
-                    c.to_string_lossy()
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "direct")]
-    fn coordinated_pm_i2c_platdev(
-        plat_path: &Path,
-        i2c_devs: &mut HashMap<u16, PathBuf>,
-    ) -> anyhow::Result<()> {
-        for entry in iter_dir_starts_with(plat_path, "i2c-")? {
-            let path = plat_path.join(entry.file_name());
-            VfioPciDevice::coordinated_pm_i2c_adap(&path, i2c_devs)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "direct")]
-    fn coordinated_pm_i2c(
-        sysfs_path: &Path,
-        i2c_devs: &mut HashMap<u16, PathBuf>,
-    ) -> anyhow::Result<()> {
-        for entry in iter_dir_starts_with(sysfs_path, "i2c_designware")? {
-            let path = sysfs_path.join(entry.file_name());
-            VfioPciDevice::coordinated_pm_i2c_platdev(&path, i2c_devs)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "direct")]
-    fn power_state(&self) -> anyhow::Result<u8> {
-        let path = self.sysfs_path.join("power_state");
-        let state = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read from {}", path.to_string_lossy()))?;
-        match state.as_str() {
-            "D0\n" => Ok(0),
-            "D1\n" => Ok(1),
-            "D2\n" => Ok(2),
-            "D3hot\n" => Ok(3),
-            "D3cold\n" => Ok(4),
-            "unknown\n" => Ok(5),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid state",
-            ))?,
-        }
-    }
-
-    #[cfg(feature = "direct")]
-    fn op_call(path: &Path, id: u8) -> anyhow::Result<()> {
-        let path = path.join("power/op_call");
-        fs::write(&path, &[id])
-            .with_context(|| format!("Failed to write to {}", path.to_string_lossy()))
-    }
-
     fn get_ext_cap_by_reg(&self, reg: u32) -> Option<ExtCap> {
         self.ext_caps
             .iter()
@@ -1770,7 +1653,7 @@ impl PciDevice for VfioPciDevice {
         if let Some(ref interrupt_evt) = self.interrupt_evt {
             rds.extend(interrupt_evt.as_raw_descriptors());
         }
-        rds.push(self.vm_socket_mem.as_raw_descriptor());
+        rds.push(self.vm_memory_client.as_raw_descriptor());
         if let Some(vm_socket_vm) = &self.vm_socket_vm {
             rds.push(vm_socket_vm.as_raw_descriptor());
         }
@@ -1917,21 +1800,6 @@ impl PciDevice for VfioPciDevice {
     }
 
     fn read_config_register(&self, reg_idx: usize) -> u32 {
-        #[cfg(feature = "direct")]
-        if reg_idx == HEADER_TYPE_REG {
-            if let Some(header_type_reg) = self.header_type_reg {
-                let mut v = header_type_reg.to_le_bytes();
-                // HACK
-                // Reads from the "BIST" register are interpreted as device
-                // PCI power state
-                v[3] = self.power_state().unwrap_or_else(|e| {
-                    error!("Failed to get device power state: {}", e);
-                    5 // unknown state
-                });
-                return u32::from_le_bytes(v);
-            }
-        }
-
         let reg: u32 = (reg_idx * 4) as u32;
         let mut config: u32 = self.config.read_config(reg);
 
@@ -1987,21 +1855,6 @@ impl PciDevice for VfioPciDevice {
             self.start_work_thread();
         };
 
-        #[cfg(feature = "direct")]
-        if self.supports_coordinated_pm
-            && reg_idx == CLASS_REG
-            && offset == CLASS_REG_REVISION_ID_OFFSET as u64
-            && data.len() == 1
-        {
-            // HACK
-            // Byte writes to the "Revision ID" register are interpreted as PM
-            // op calls
-            if let Err(e) = VfioPciDevice::op_call(&self.sysfs_path, data[0]) {
-                error!("Failed to perform op call: {}", e);
-            }
-            return;
-        }
-
         let start = (reg_idx * 4) as u64 + offset;
 
         if let Some(pm_cap) = self.pm_cap.as_mut() {
@@ -2045,7 +1898,7 @@ impl PciDevice for VfioPciDevice {
 
         if !self.is_skipped_reg(start as u32) {
             self.device
-                .region_write(VFIO_PCI_CONFIG_REGION_INDEX, data, start);
+                .region_write(VFIO_PCI_CONFIG_REGION_INDEX as usize, data, start);
         }
 
         // if guest enable memory access, then enable bar mappable once
@@ -2101,136 +1954,117 @@ impl PciDevice for VfioPciDevice {
     }
 
     fn read_virtual_config_register(&self, reg_idx: usize) -> u32 {
+        if reg_idx == PCI_VCFG_NOTY {
+            let mut q = self.acpi_notifier_val.lock();
+            let mut val = 0;
+            if !q.is_empty() {
+                val = q.remove(0);
+            }
+            drop(q);
+            return val;
+        }
+
         warn!(
-            "{} read unsupported register {}",
+            "{} read unsupported vcfg register {}",
             self.debug_label(),
             reg_idx
         );
-        0
+        0xFFFF_FFFF
     }
 
     fn write_virtual_config_register(&mut self, reg_idx: usize, value: u32) {
         match reg_idx {
-            0 => {
+            PCI_VCFG_PM => {
                 match value {
                     0 => {
                         if let Some(pm_evt) =
                             self.pm_evt.as_ref().map(|evt| evt.try_clone().unwrap())
                         {
+                            *self.is_in_low_power.lock() = true;
                             let _ = self.device.pm_low_power_enter_with_wakeup(pm_evt);
                         } else {
                             let _ = self.device.pm_low_power_enter();
                         }
                     }
                     _ => {
+                        *self.is_in_low_power.lock() = false;
                         let _ = self.device.pm_low_power_exit();
                     }
                 };
             }
+            PCI_VCFG_DSM => {
+                if let Some(shm) = &self.vcfg_shm_mmap {
+                    let mut args = [0u8; 4096];
+                    if let Err(e) = shm.read_slice(&mut args, 0) {
+                        error!("failed to read DSM Args: {}", e);
+                        return;
+                    }
+                    let res = match self.device.acpi_dsm(&args) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("failed to call DSM: {}", e);
+                            return;
+                        }
+                    };
+                    if let Err(e) = shm.write_slice(&res, 0) {
+                        error!("failed to write DSM result: {}", e);
+                        return;
+                    }
+                    if let Err(e) = shm.msync() {
+                        error!("failed to msync: {}", e)
+                    }
+                }
+            }
             _ => warn!(
-                "{} write unsupported register {}",
+                "{} write unsupported vcfg register {}",
                 self.debug_label(),
                 reg_idx
             ),
         };
     }
 
-    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        if let Some(mmio_info) = self.find_region(addr) {
-            let offset = addr - mmio_info.address();
-            let bar_index = mmio_info.bar_index() as u32;
-            if let Some(msix_cap) = &self.msix_cap {
-                let msix_cap = msix_cap.lock();
-                if msix_cap.is_msix_table(bar_index, offset) {
-                    msix_cap.read_table(offset, data);
-                    return;
-                } else if msix_cap.is_msix_pba(bar_index, offset) {
-                    msix_cap.read_pba(offset, data);
-                    return;
-                }
-            }
-            self.device.region_read(bar_index, data, offset);
-        }
-    }
-
-    fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        if let Some(mmio_info) = self.find_region(addr) {
-            // Ignore igd opregion's write
-            if let Some(device_data) = &self.device_data {
-                match *device_data {
-                    DeviceData::IntelGfxData { opregion_index } => {
-                        if opregion_index == mmio_info.bar_index() as u32 {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            let offset = addr - mmio_info.address();
-            let bar_index = mmio_info.bar_index() as u32;
-
-            if let Some(msix_cap) = &self.msix_cap {
-                let mut msix_cap = msix_cap.lock();
-                if msix_cap.is_msix_table(bar_index, offset) {
-                    let behavior = msix_cap.write_table(offset, data);
-                    if let MsixStatus::EntryChanged(index) = behavior {
-                        let irqfd = msix_cap.get_msix_irqfd(index);
-                        self.msix_vector_update(index, irqfd);
-                    }
-                    return;
-                } else if msix_cap.is_msix_pba(bar_index, offset) {
-                    msix_cap.write_pba(offset, data);
-                    return;
-                }
-            }
-
-            #[cfg(feature = "direct")]
-            if self.is_intel_lpss
-                && bar_index == 0
-                && offset >= LPSS_MANATEE_OFFSET
-                && offset < LPSS_MANATEE_OFFSET + LPSS_MANATEE_SIZE
-            {
-                if offset != LPSS_MANATEE_OFFSET {
-                    warn!(
-                        "{} write_bar invalid offset 0x{:x}",
-                        self.debug_label(),
-                        offset,
-                    );
-                    return;
-                }
-
-                let val = if let Ok(bytes) = data.try_into() {
-                    u64::from_le_bytes(bytes)
-                } else {
-                    warn!(
-                        "{} write_bar invalid len 0x{:x}",
-                        self.debug_label(),
-                        data.len()
-                    );
-                    return;
-                };
-                let addr = val as u16;
-                let id = (val >> 32) as u8;
-
-                match self.i2c_devs.get(&addr) {
-                    Some(path) => {
-                        if let Err(e) = VfioPciDevice::op_call(path, id) {
-                            error!("{} Failed to perform op call: {}", self.debug_label(), e);
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "{} write_bar addr 0x{:x} id 0x{:x} not found",
-                            self.debug_label(),
-                            addr,
-                            id
-                        );
-                    }
-                }
+    fn read_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &mut [u8]) {
+        if let Some(msix_cap) = &self.msix_cap {
+            let msix_cap = msix_cap.lock();
+            if msix_cap.is_msix_table(bar_index, offset) {
+                msix_cap.read_table(offset, data);
+                return;
+            } else if msix_cap.is_msix_pba(bar_index, offset) {
+                msix_cap.read_pba(offset, data);
                 return;
             }
-            self.device.region_write(bar_index, data, offset);
         }
+        self.device.region_read(bar_index, data, offset);
+    }
+
+    fn write_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &[u8]) {
+        // Ignore igd opregion's write
+        if let Some(device_data) = &self.device_data {
+            match *device_data {
+                DeviceData::IntelGfxData { opregion_index } => {
+                    if opregion_index == bar_index as u32 {
+                        return;
+                    }
+                }
+            }
+        }
+
+        if let Some(msix_cap) = &self.msix_cap {
+            let mut msix_cap = msix_cap.lock();
+            if msix_cap.is_msix_table(bar_index, offset) {
+                let behavior = msix_cap.write_table(offset, data);
+                if let MsixStatus::EntryChanged(index) = behavior {
+                    let irqfd = msix_cap.get_msix_irqfd(index);
+                    self.msix_vector_update(index, irqfd);
+                }
+                return;
+            } else if msix_cap.is_msix_pba(bar_index, offset) {
+                msix_cap.write_pba(offset, data);
+                return;
+            }
+        }
+
+        self.device.region_write(bar_index, data, offset);
     }
 
     fn destroy_device(&mut self) {
@@ -2253,23 +2087,32 @@ impl PciDevice for VfioPciDevice {
                 // host would always think it is in active state, so its parent PCIe
                 // switch couldn't enter into suspend state.
                 PowerResourceMethod {}.to_aml_bytes(&mut amls);
+                // TODO: WIP: Ideally, we should generate DSM only if the physical
+                // device has a _DSM; however, such information is not provided by
+                // Linux. As a temporary workaround, we chech whether there is an
+                // associated ACPI companion device node and skip generating guest
+                // _DSM if there is none.
+                let acpi_path = self.sysfs_path.join("firmware_node/path");
+                if acpi_path.exists() {
+                    DsmMethod {}.to_aml_bytes(&mut amls);
+                }
             }
         }
 
         (amls, shm)
     }
+
+    fn set_gpe(&mut self, resources: &mut SystemAllocator) -> Option<u32> {
+        if let Some(gpe_nr) = resources.allocate_gpe() {
+            base::debug!("set_gpe: gpe-nr {} addr {:?}", gpe_nr, self.pci_address);
+            self.gpe = Some(gpe_nr);
+        }
+        self.gpe
+    }
 }
 
 impl Suspendable for VfioPciDevice {
     fn sleep(&mut self) -> anyhow::Result<()> {
-        #[cfg(feature = "direct")]
-        if self.supports_coordinated_pm {
-            for (_, i2c_path) in self.i2c_devs.iter() {
-                let _ = VfioPciDevice::coordinated_pm(i2c_path, false);
-            }
-            let _ = VfioPciDevice::coordinated_pm(&self.sysfs_path, false);
-        }
-
         if let Some(worker_thread) = self.worker_thread.take() {
             let res = worker_thread.stop();
             self.pci_address = Some(res.address);

@@ -7,11 +7,11 @@
 use std::convert::TryInto;
 use std::fmt;
 
+use base::linux::MemoryMappingBuilderUnix;
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
 use base::MemoryMappingArena;
 use base::MemoryMappingBuilder;
-use base::MemoryMappingBuilderUnix;
 use base::MmapError;
 use base::SafeDescriptor;
 use thiserror::Error as ThisError;
@@ -20,6 +20,7 @@ use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::virtio::resource_bridge;
 use crate::virtio::resource_bridge::ResourceBridgeError;
@@ -32,22 +33,17 @@ use crate::virtio::video::protocol::virtio_video_mem_entry;
 use crate::virtio::video::protocol::virtio_video_object_entry;
 
 /// Defines how resources for a given queue are represented.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResourceType {
     /// Resources are backed by guest memory pages.
     GuestPages,
     /// Resources are backed by virtio objects.
+    #[default]
     VirtioObject,
 }
 
-impl Default for ResourceType {
-    fn default() -> Self {
-        ResourceType::VirtioObject
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, Copy, AsBytes, FromBytes)]
+#[derive(Clone, Copy, AsBytes, FromZeroes, FromBytes)]
 /// A guest resource entry which type is not decided yet.
 pub union UnresolvedResourceEntry {
     pub object: virtio_video_object_entry,
@@ -56,12 +52,16 @@ pub union UnresolvedResourceEntry {
 
 impl fmt::Debug for UnresolvedResourceEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Safe because `self.object` and `self.guest_mem` are the same size and both made of
-        // integers, making it safe to display them no matter their value.
         write!(
             f,
             "unresolved {:?} or {:?}",
+            // SAFETY:
+            // Safe because `self.object` and `self.guest_mem` are the same size and both made of
+            // integers, making it safe to display them no matter their value.
             unsafe { self.object },
+            // SAFETY:
+            // Safe because `self.object` and `self.guest_mem` are the same size and both made of
+            // integers, making it safe to display them no matter their value.
             unsafe { self.guest_mem }
         )
     }
@@ -183,6 +183,9 @@ pub struct GuestResource {
     pub width: u32,
     pub height: u32,
     pub format: Format,
+    /// Whether the buffer can be accessed by the guest CPU. This means the host must ensure that
+    /// all operations on the buffer are completed before passing it to the guest.
+    pub guest_cpu_mappable: bool,
 }
 
 #[derive(Debug, ThisError)]
@@ -229,10 +232,8 @@ impl GuestResource {
                 let guest_region = mem
                     .shm_region(GuestAddress(addr))
                     .map_err(GuestMemResourceCreationError::CantGetShmRegion)?;
-                let desc = base::clone_descriptor(guest_region)
-                    .map_err(GuestMemResourceCreationError::DescriptorCloneError)?;
-                // Safe because we are the sole owner of the duplicated descriptor.
-                unsafe { SafeDescriptor::from_raw_descriptor(desc) }
+                base::clone_descriptor(guest_region)
+                    .map_err(GuestMemResourceCreationError::DescriptorCloneError)?
             }
         };
 
@@ -281,6 +282,7 @@ impl GuestResource {
             width: params.frame_width,
             height: params.frame_height,
             format: params.format.unwrap(),
+            guest_cpu_mappable: true,
         })
     }
 
@@ -313,6 +315,7 @@ impl GuestResource {
         };
 
         let handle = GuestResourceHandle::VirtioObject(VirtioObjectHandle {
+            // SAFETY:
             // Safe because `buffer_info.file` is a valid file descriptor and we are stealing
             // it.
             desc: unsafe {
@@ -351,6 +354,7 @@ impl GuestResource {
             width: params.frame_width,
             height: params.frame_height,
             format: params.format.unwrap(),
+            guest_cpu_mappable: buffer_info.guest_cpu_mappable,
         })
     }
 
@@ -362,6 +366,7 @@ impl GuestResource {
             width: self.width,
             height: self.height,
             format: self.format,
+            guest_cpu_mappable: self.guest_cpu_mappable,
         })
     }
 }
@@ -369,7 +374,6 @@ impl GuestResource {
 #[cfg(test)]
 mod tests {
     use base::MappedRegion;
-    use base::SafeDescriptor;
     use base::SharedMemory;
 
     use super::*;
@@ -384,14 +388,13 @@ mod tests {
     fn check_guest_mem_handle(page_order: &[usize]) {
         const PAGE_SIZE: usize = 0x1000;
         const U32_SIZE: usize = std::mem::size_of::<u32>();
-        const ENTRIES_PER_PAGE: usize = PAGE_SIZE as usize / std::mem::size_of::<u32>();
+        const ENTRIES_PER_PAGE: usize = PAGE_SIZE / std::mem::size_of::<u32>();
 
         // Fill a vector of the same size as the handle with u32s of increasing value, following
         // the page layout given as argument.
         let mut data = vec![0u8; PAGE_SIZE * page_order.len()];
         for (page_index, page) in page_order.iter().enumerate() {
-            let page_slice =
-                &mut data[(page * PAGE_SIZE as usize)..((page + 1) * PAGE_SIZE as usize)];
+            let page_slice = &mut data[(page * PAGE_SIZE)..((page + 1) * PAGE_SIZE)];
             for (index, chunk) in page_slice.chunks_exact_mut(4).enumerate() {
                 let sized_chunk: &mut [u8; 4] = chunk.try_into().unwrap();
                 *sized_chunk = (((page_index * ENTRIES_PER_PAGE) + index) as u32).to_ne_bytes();
@@ -408,14 +411,12 @@ mod tests {
 
         // Create the `GuestMemHandle` we will try to map and retrieve the data from.
         let mem_handle = GuestResourceHandle::GuestPages(GuestMemHandle {
-            desc: unsafe {
-                SafeDescriptor::from_raw_descriptor(base::clone_descriptor(&mem).unwrap())
-            },
+            desc: base::clone_descriptor(&mem).unwrap(),
             mem_areas: page_order
                 .iter()
                 .map(|&page| GuestMemArea {
                     offset: page as u64 * PAGE_SIZE as u64,
-                    length: PAGE_SIZE as usize,
+                    length: PAGE_SIZE,
                 })
                 .collect(),
         });
@@ -424,6 +425,7 @@ mod tests {
         // that its u32s appear to increase linearly.
         let mapping = mem_handle.get_mapping(0, mem.size() as usize).unwrap();
         let mut data = vec![0u8; PAGE_SIZE * page_order.len()];
+        // SAFETY: src and dst are valid and aligned
         unsafe { std::ptr::copy_nonoverlapping(mapping.as_ptr(), data.as_mut_ptr(), data.len()) };
         for (index, chunk) in data.chunks_exact(U32_SIZE).enumerate() {
             let sized_chunk: &[u8; 4] = chunk.try_into().unwrap();

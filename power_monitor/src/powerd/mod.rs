@@ -6,11 +6,6 @@
 //!
 //! <https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/power_manager/README.md>
 
-use crate::BatteryData;
-use crate::BatteryStatus;
-use crate::PowerData;
-use crate::PowerMonitor;
-
 use std::error::Error;
 use std::os::unix::io::RawFd;
 
@@ -21,14 +16,16 @@ use dbus::ffidisp::BusType;
 use dbus::ffidisp::Connection;
 use dbus::ffidisp::ConnectionItem;
 use dbus::ffidisp::WatchEvent;
-use protobuf::error::ProtobufError;
 use protobuf::Message;
 use remain::sorted;
 use thiserror::Error;
 
+use crate::protos::power_supply_properties::power_supply_properties;
 use crate::protos::power_supply_properties::PowerSupplyProperties;
-use crate::protos::power_supply_properties::PowerSupplyProperties_BatteryState;
-use crate::protos::power_supply_properties::PowerSupplyProperties_ExternalPower;
+use crate::BatteryData;
+use crate::BatteryStatus;
+use crate::PowerData;
+use crate::PowerMonitor;
 
 // Interface name from power_manager/dbus_bindings/org.chromium.PowerManager.xml.
 const POWER_INTERFACE_NAME: &str = "org.chromium.PowerManager";
@@ -39,29 +36,29 @@ const POLL_SIGNAL_NAME: &str = "PowerSupplyPoll";
 impl From<PowerSupplyProperties> for PowerData {
     fn from(props: PowerSupplyProperties) -> Self {
         let ac_online = if props.has_external_power() {
-            props.get_external_power() != PowerSupplyProperties_ExternalPower::DISCONNECTED
+            props.external_power() != power_supply_properties::ExternalPower::DISCONNECTED
         } else {
             false
         };
 
         let battery = if props.has_battery_state()
-            && props.get_battery_state() != PowerSupplyProperties_BatteryState::NOT_PRESENT
+            && props.battery_state() != power_supply_properties::BatteryState::NOT_PRESENT
         {
-            let status = match props.get_battery_state() {
-                PowerSupplyProperties_BatteryState::FULL => BatteryStatus::NotCharging,
-                PowerSupplyProperties_BatteryState::CHARGING => BatteryStatus::Charging,
-                PowerSupplyProperties_BatteryState::DISCHARGING => BatteryStatus::Discharging,
+            let status = match props.battery_state() {
+                power_supply_properties::BatteryState::FULL => BatteryStatus::NotCharging,
+                power_supply_properties::BatteryState::CHARGING => BatteryStatus::Charging,
+                power_supply_properties::BatteryState::DISCHARGING => BatteryStatus::Discharging,
                 _ => BatteryStatus::Unknown,
             };
 
-            let percent = std::cmp::min(100, props.get_battery_percent().round() as u32);
+            let percent = std::cmp::min(100, props.battery_percent().round() as u32);
             // Convert from volts to microvolts.
-            let voltage = (props.get_battery_voltage() * 1_000_000f64).round() as u32;
+            let voltage = (props.battery_voltage() * 1_000_000f64).round() as u32;
             // Convert from amps to microamps.
-            let current = (props.get_battery_current() * 1_000_000f64).round() as u32;
+            let current = (props.battery_current() * 1_000_000f64).round() as u32;
             // Convert from ampere-hours to micro ampere-hours.
-            let charge_counter = (props.get_battery_charge() * 1_000_000f64).round() as u32;
-            let charge_full = (props.get_battery_charge_full() * 1_000_000f64).round() as u32;
+            let charge_counter = (props.battery_charge() * 1_000_000f64).round() as u32;
+            let charge_full = (props.battery_charge_full() * 1_000_000f64).round() as u32;
 
             Some(BatteryData {
                 status,
@@ -83,7 +80,7 @@ impl From<PowerSupplyProperties> for PowerData {
 #[derive(Error, Debug)]
 pub enum DBusMonitorError {
     #[error("failed to convert protobuf message: {0}")]
-    ConvertProtobuf(ProtobufError),
+    ConvertProtobuf(protobuf::Error),
     #[error("failed to add D-Bus match rule: {0}")]
     DBusAddMatch(dbus::Error),
     #[error("failed to connect to D-Bus: {0}")]
@@ -99,6 +96,7 @@ pub enum DBusMonitorError {
 pub struct DBusMonitor {
     connection: Connection,
     connection_fd: RawFd,
+    previous_data: Option<BatteryData>,
 }
 
 impl DBusMonitor {
@@ -129,7 +127,16 @@ impl DBusMonitor {
         Ok(Box::new(Self {
             connection,
             connection_fd: fds[0],
+            previous_data: None,
         }))
+    }
+}
+
+fn denoise_value(new_val: u32, prev_val: u32, margin: f64) -> u32 {
+    if new_val.abs_diff(prev_val) as f64 / prev_val.min(new_val).max(1) as f64 >= margin {
+        new_val
+    } else {
+        prev_val
     }
 }
 
@@ -175,6 +182,7 @@ impl PowerMonitor for DBusMonitor {
                 _ => last,
             });
 
+        let previous_data = self.previous_data.take();
         match newest_message {
             Some(message) => {
                 let data_bytes: Vec<u8> = message.read1().map_err(DBusMonitorError::DBusRead)?;
@@ -182,7 +190,22 @@ impl PowerMonitor for DBusMonitor {
                 props
                     .merge_from_bytes(&data_bytes)
                     .map_err(DBusMonitorError::ConvertProtobuf)?;
-                Ok(Some(props.into()))
+                let mut data: PowerData = props.into();
+                if let (Some(new_data), Some(previous)) = (data.battery.as_mut(), previous_data) {
+                    // The raw information from powerd signals isn't really that useful to
+                    // the guest. Voltage/current are volatile values, so the .0333 hZ
+                    // snapshot provided by powerd isn't particularly meaningful. We do
+                    // need to provide *something*, but we might as well make it less noisy
+                    // to avoid having the guest try to process mostly useless information.
+                    // charge_counter is potentially useful to the guest, but it doesn't
+                    // need to be higher precision than battery.percent.
+                    new_data.voltage = denoise_value(new_data.voltage, previous.voltage, 0.1);
+                    new_data.current = denoise_value(new_data.current, previous.current, 0.1);
+                    new_data.charge_counter =
+                        denoise_value(new_data.charge_counter, previous.charge_counter, 0.01);
+                }
+                self.previous_data = data.battery;
+                Ok(Some(data))
             }
             None => Ok(None),
         }

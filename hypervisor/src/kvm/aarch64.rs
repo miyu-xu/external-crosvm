@@ -6,6 +6,7 @@
 // taking u32/64 parameters. So on 32 bit platforms we may have needless casts.
 #![allow(clippy::useless_conversion)]
 
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 
 use base::errno_result;
@@ -16,6 +17,7 @@ use base::ioctl_with_val;
 use base::warn;
 use base::Error;
 use base::Result;
+use cros_fdt::Fdt;
 #[cfg(feature = "gdb")]
 use gdbstub::arch::Arch;
 #[cfg(feature = "gdb")]
@@ -60,6 +62,7 @@ impl Kvm {
     // the closest machine type for this VM. Here, we just return the maximum
     // the kernel support.
     pub fn get_vm_type(&self, protection_type: ProtectionType) -> Result<u32> {
+        // SAFETY:
         // Safe because we know self is a real kvm fd
         let ipa_size = match unsafe {
             ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_ARM_VM_IPA_SIZE.into())
@@ -79,6 +82,7 @@ impl Kvm {
 
     /// Get the size of guest physical addresses (IPA) in bits.
     pub fn get_guest_phys_addr_bits(&self) -> u8 {
+        // SAFETY:
         // Safe because we know self is a real kvm fd
         match unsafe { ioctl_with_val(self, KVM_CHECK_EXTENSION(), KVM_CAP_ARM_VM_IPA_SIZE.into()) }
         {
@@ -94,6 +98,7 @@ impl KvmVm {
     pub fn init_arch(&self, cfg: &Config) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         if cfg.mte {
+            // SAFETY:
             // Safe because it does not take pointer arguments.
             unsafe { self.enable_raw_capability(KvmCap::ArmMte, 0, &[0, 0, 0, 0])? }
         }
@@ -104,6 +109,11 @@ impl KvmVm {
         }
 
         Ok(())
+    }
+
+    /// Whether running under pKVM.
+    pub fn is_pkvm(&self) -> bool {
+        self.get_protected_vm_info().is_ok()
     }
 
     /// Checks if a particular `VmCap` is available, or returns None if arch-independent
@@ -140,11 +150,18 @@ impl KvmVm {
         Err(Error::new(ENXIO))
     }
 
+    /// Get pKVM hypervisor details, e.g. the firmware size.
+    ///
+    /// Returns `Err` if not running under pKVM.
+    ///
+    /// Uses `KVM_ENABLE_CAP` internally, but it is only a getter, there should be no side effects
+    /// in KVM.
     fn get_protected_vm_info(&self) -> Result<KvmProtectedVmInfo> {
         let mut info = KvmProtectedVmInfo {
             firmware_size: 0,
             reserved: [0; 7],
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel won't write beyond the end of
         // the struct or keep a pointer to it.
         unsafe {
@@ -158,6 +175,7 @@ impl KvmVm {
     }
 
     fn set_protected_vm_firmware_ipa(&self, fw_addr: GuestAddress) -> Result<()> {
+        // SAFETY:
         // Safe because none of the args are pointers.
         unsafe {
             self.enable_raw_capability(
@@ -166,11 +184,6 @@ impl KvmVm {
                 &[fw_addr.0, 0, 0, 0],
             )
         }
-    }
-
-    /// Enable userspace msr. This is not available on ARM, just succeed.
-    pub fn enable_userspace_msr(&self) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -206,14 +219,22 @@ impl VmAArch64 for KvmVm {
         // or VcpuX86.  But both use the same implementation in KvmVm::create_kvm_vcpu.
         Ok(Box::new(self.create_kvm_vcpu(id)?))
     }
+
+    fn create_fdt(&self, _fdt: &mut Fdt, _phandles: &BTreeMap<&str, u32>) -> cros_fdt::Result<()> {
+        Ok(())
+    }
+
+    fn init_arch(
+        &self,
+        _payload_entry_address: GuestAddress,
+        _fdt_address: GuestAddress,
+        _fdt_size: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl KvmVcpu {
-    /// Arch-specific implementation of `Vcpu::pvclock_ctrl`.  Always returns an error on AArch64.
-    pub fn pvclock_ctrl_arch(&self) -> Result<()> {
-        Err(Error::new(ENXIO))
-    }
-
     /// Handles a `KVM_EXIT_SYSTEM_EVENT` with event type `KVM_SYSTEM_EVENT_RESET` with the given
     /// event flags and returns the appropriate `VcpuExit` value for the run loop to handle.
     ///
@@ -236,6 +257,10 @@ impl KvmVcpu {
         self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
     }
 
+    fn set_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister, data: u128) -> Result<()> {
+        self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
+    }
+
     fn set_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister, data: &[u8]) -> Result<()> {
         let onereg = kvm_one_reg {
             id: kvm_reg_id.into(),
@@ -243,6 +268,7 @@ impl KvmVcpu {
                 .try_into()
                 .expect("can't represent usize as u64"),
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_SET_ONE_REG(), &onereg) };
@@ -259,6 +285,12 @@ impl KvmVcpu {
         Ok(u64::from_ne_bytes(bytes))
     }
 
+    fn get_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u128> {
+        let mut bytes = 0u128.to_ne_bytes();
+        self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
+        Ok(u128::from_ne_bytes(bytes))
+    }
+
     fn get_one_kvm_reg(&self, kvm_reg_id: KvmVcpuRegister, data: &mut [u8]) -> Result<()> {
         let onereg = kvm_one_reg {
             id: kvm_reg_id.into(),
@@ -267,6 +299,7 @@ impl KvmVcpu {
                 .expect("can't represent usize as u64"),
         };
 
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_GET_ONE_REG(), &onereg) };
@@ -284,20 +317,10 @@ impl KvmVcpu {
         self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
     }
 
-    fn set_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister, data: u128) -> Result<()> {
-        self.set_one_kvm_reg(kvm_reg_id, data.to_ne_bytes().as_slice())
-    }
-
     fn get_one_kvm_reg_u32(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u32> {
         let mut bytes = 0u32.to_ne_bytes();
         self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
         Ok(u32::from_ne_bytes(bytes))
-    }
-
-    fn get_one_kvm_reg_u128(&self, kvm_reg_id: KvmVcpuRegister) -> Result<u128> {
-        let mut bytes = 0u128.to_ne_bytes();
-        self.get_one_kvm_reg(kvm_reg_id, bytes.as_mut_slice())?;
-        Ok(u128::from_ne_bytes(bytes))
     }
 
     /// Retrieves the value of the currently active "version" of a multiplexed registers.
@@ -358,12 +381,24 @@ pub enum KvmVcpuRegister {
 }
 
 impl KvmVcpuRegister {
+    pub const MPIDR_EL1: Self = Self::from_encoding(0b11, 0b000, 0b0000, 0b0000, 0b101);
+
     // Firmware pseudo-registers are part of the ARM KVM interface:
     //     https://docs.kernel.org/virt/kvm/arm/hypercalls.html
     pub const PSCI_VERSION: Self = Self::Firmware(0);
     pub const SMCCC_ARCH_WORKAROUND_1: Self = Self::Firmware(1);
     pub const SMCCC_ARCH_WORKAROUND_2: Self = Self::Firmware(2);
     pub const SMCCC_ARCH_WORKAROUND_3: Self = Self::Firmware(3);
+
+    const fn from_encoding(op0: u8, op1: u8, crn: u8, crm: u8, op2: u8) -> Self {
+        let op0 = (op0 as u16 & 0b11) << 14;
+        let op1 = (op1 as u16 & 0b111) << 11;
+        let crn = (crn as u16 & 0b1111) << 7;
+        let crm = (crm as u16 & 0b1111) << 3;
+        let op2 = op2 as u16 & 0b111;
+
+        Self::System(op0 | op1 | crn | crm | op2)
+    }
 }
 
 /// Gives the `u64` register ID expected by the `GET_ONE_REG`/`SET_ONE_REG` ioctl API.
@@ -525,6 +560,7 @@ impl VcpuAArch64 for KvmVcpu {
             target: KVM_ARM_TARGET_GENERIC_V8,
             features: [0; 7],
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will write exactly the size
         // of the struct.
         let ret = unsafe { ioctl_with_mut_ref(&self.vm, KVM_ARM_PREFERRED_TARGET(), &mut kvi) };
@@ -541,8 +577,9 @@ impl VcpuAArch64 for KvmVcpu {
             kvi.features[0] |= 1 << shift;
         }
 
-        // Safe because we know self.vm is a real kvm fd
         let check_extension = |ext: u32| -> bool {
+            // SAFETY:
+            // Safe because we know self.vm is a real kvm fd
             unsafe { ioctl_with_val(&self.vm, KVM_CHECK_EXTENSION(), ext.into()) == 1 }
         };
         if check_extension(KVM_CAP_ARM_PTRAUTH_ADDRESS)
@@ -552,6 +589,7 @@ impl VcpuAArch64 for KvmVcpu {
             kvi.features[0] |= 1 << KVM_ARM_VCPU_PTRAUTH_GENERIC;
         }
 
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_ARM_VCPU_INIT(), &kvi) };
@@ -574,6 +612,7 @@ impl VcpuAArch64 for KvmVcpu {
             addr: irq_addr as u64,
             flags: 0,
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, kvm_sys::KVM_HAS_DEVICE_ATTR(), &irq_attr) };
@@ -581,6 +620,7 @@ impl VcpuAArch64 for KvmVcpu {
             return errno_result();
         }
 
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, kvm_sys::KVM_SET_DEVICE_ATTR(), &irq_attr) };
@@ -594,6 +634,7 @@ impl VcpuAArch64 for KvmVcpu {
             addr: 0,
             flags: 0,
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, kvm_sys::KVM_SET_DEVICE_ATTR(), &init_attr) };
@@ -613,6 +654,7 @@ impl VcpuAArch64 for KvmVcpu {
             addr: 0,
             flags: 0,
         };
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, kvm_sys::KVM_HAS_DEVICE_ATTR(), &pvtime_attr) };
@@ -631,6 +673,7 @@ impl VcpuAArch64 for KvmVcpu {
             flags: 0,
         };
 
+        // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, kvm_sys::KVM_SET_DEVICE_ATTR(), &pvtime_attr) };
@@ -647,6 +690,24 @@ impl VcpuAArch64 for KvmVcpu {
 
     fn get_one_reg(&self, reg_id: VcpuRegAArch64) -> Result<u64> {
         self.get_one_kvm_reg_u64(KvmVcpuRegister::from(reg_id))
+    }
+
+    fn set_vector_reg(&self, reg_num: u8, data: u128) -> Result<()> {
+        if reg_num > 31 {
+            return Err(Error::new(EINVAL));
+        }
+        self.set_one_kvm_reg_u128(KvmVcpuRegister::V(reg_num), data)
+    }
+
+    fn get_vector_reg(&self, reg_num: u8) -> Result<u128> {
+        if reg_num > 31 {
+            return Err(Error::new(EINVAL));
+        }
+        self.get_one_kvm_reg_u128(KvmVcpuRegister::V(reg_num))
+    }
+
+    fn get_mpidr(&self) -> Result<u64> {
+        self.get_one_kvm_reg_u64(KvmVcpuRegister::MPIDR_EL1)
     }
 
     fn get_psci_version(&self) -> Result<PsciVersion> {
@@ -669,6 +730,7 @@ impl VcpuAArch64 for KvmVcpu {
 
     #[cfg(feature = "gdb")]
     fn get_max_hw_bps(&self) -> Result<usize> {
+        // SAFETY:
         // Safe because the kernel will only return the result of the ioctl.
         let max_hw_bps = unsafe {
             ioctl_with_val(
@@ -722,6 +784,7 @@ impl VcpuAArch64 for KvmVcpu {
             dbg.arch.dbg_bcr[i] = 0b1111_11_1;
         }
 
+        // SAFETY:
         // Safe because the kernel won't read past the end of the kvm_guest_debug struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_SET_GUEST_DEBUG(), &dbg) };
         if ret == 0 {
@@ -749,7 +812,7 @@ impl VcpuAArch64 for KvmVcpu {
         self.set_one_kvm_reg_u64(KvmVcpuRegister::Pstate, pstate)?;
         for (i, reg) in regs.v.iter().enumerate() {
             let n = u8::try_from(i).expect("invalid Vn general purpose register index");
-            self.set_one_kvm_reg_u128(KvmVcpuRegister::V(n), *reg)?;
+            self.set_vector_reg(n, *reg)?;
         }
         self.set_one_kvm_reg_u32(KvmVcpuRegister::Fpcr, regs.fpcr)?;
         self.set_one_kvm_reg_u32(KvmVcpuRegister::Fpsr, regs.fpsr)?;
@@ -773,7 +836,7 @@ impl VcpuAArch64 for KvmVcpu {
         regs.cpsr = self.get_one_kvm_reg_u64(KvmVcpuRegister::Pstate)? as u32;
         for (i, reg) in regs.v.iter_mut().enumerate() {
             let n = u8::try_from(i).expect("invalid Vn general purpose register index");
-            *reg = self.get_one_kvm_reg_u128(KvmVcpuRegister::V(n))?;
+            *reg = self.get_vector_reg(n)?;
         }
         regs.fpcr = self.get_one_kvm_reg_u32(KvmVcpuRegister::Fpcr)?;
         regs.fpsr = self.get_one_kvm_reg_u32(KvmVcpuRegister::Fpsr)?;

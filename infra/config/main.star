@@ -28,6 +28,7 @@ luci.project(
                 "role/swarming.poolOwner",
                 "role/swarming.poolUser",
                 "role/swarming.taskTriggerer",
+                "role/buildbucket.owner",
             ],
             groups = "mdb/crosvm-acl-luci-admin",
         ),
@@ -123,8 +124,6 @@ luci.cq_group(
         repo = "https://chromium.googlesource.com/crosvm/crosvm",
         refs = ["refs/heads/.+"],  # will watch all branches
     ),
-    # Allows us to submit chains of commits with a single CQ run.
-    allow_submit_with_open_deps = True,
 )
 
 # Console showing all postsubmit verify builders
@@ -237,18 +236,14 @@ def verify_builder(
             cq_group = "main",
         )
 
-def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
+def verify_linux_builder(arch, **kwargs):
     """Creates a verify builder that builds crosvm on linux
 
     Args:
         arch: Architecture to build and test
-        crosvm_direct: Test crosvm-direct instead of crosvm
-        coverage: Disable coverage collection
         **kwargs: Passed to verify_builder
     """
     name = "linux_%s" % arch
-    if crosvm_direct:
-        name += "_direct"
     verify_builder(
         name = name,
         dimensions = {
@@ -260,7 +255,6 @@ def verify_linux_builder(arch, crosvm_direct = False, **kwargs):
         ),
         properties = {
             "test_arch": arch,
-            "crosvm_direct": crosvm_direct,
         },
         postsubmit_properties = {
             "profile": "postsubmit",
@@ -310,10 +304,12 @@ def infra_builder(name, postsubmit, **args):
     )
 
 verify_linux_builder("x86_64")
-verify_linux_builder("x86_64", crosvm_direct = True)
 verify_linux_builder("aarch64")
 verify_linux_builder("armhf")
 verify_linux_builder("mingw64")
+
+# Disabled due to b/304875018
+# verify_linux_builder("riscv64")
 
 verify_builder(
     name = "chromeos_hatch",

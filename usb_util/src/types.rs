@@ -7,6 +7,7 @@ use std::mem::size_of;
 use static_assertions::const_assert;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 /// Standard USB descriptor types.
 pub enum DescriptorType {
@@ -24,7 +25,7 @@ pub trait Descriptor {
 
 /// Standard USB descriptor header common to all descriptor types.
 #[allow(non_snake_case)]
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 pub struct DescriptorHeader {
     pub bLength: u8,
@@ -38,7 +39,7 @@ fn _assert_descriptor_header() {
 /// Standard USB device descriptor as defined in USB 2.0 chapter 9,
 /// not including the standard header.
 #[allow(non_snake_case)]
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 pub struct DeviceDescriptor {
     pub bcdUSB: u16,
@@ -68,7 +69,7 @@ fn _assert_device_descriptor() {
 /// Standard USB configuration descriptor as defined in USB 2.0 chapter 9,
 /// not including the standard header.
 #[allow(non_snake_case)]
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 pub struct ConfigDescriptor {
     pub wTotalLength: u16,
@@ -98,7 +99,7 @@ impl ConfigDescriptor {
 /// Standard USB interface descriptor as defined in USB 2.0 chapter 9,
 /// not including the standard header.
 #[allow(non_snake_case)]
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 pub struct InterfaceDescriptor {
     pub bInterfaceNumber: u8,
@@ -123,7 +124,7 @@ fn _assert_interface_descriptor() {
 /// Standard USB endpoint descriptor as defined in USB 2.0 chapter 9,
 /// not including the standard header.
 #[allow(non_snake_case)]
-#[derive(Copy, Clone, Debug, Default, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, Default, FromZeroes, FromBytes, AsBytes)]
 #[repr(C, packed)]
 pub struct EndpointDescriptor {
     pub bEndpointAddress: u8,
@@ -232,22 +233,22 @@ pub enum ControlRequestRecipient {
 /// Standard request defined in usb spec.
 #[derive(PartialEq, Eq)]
 pub enum StandardControlRequest {
-    GetStatus = 0x00,
-    ClearFeature = 0x01,
-    SetFeature = 0x03,
-    SetAddress = 0x05,
-    GetDescriptor = 0x06,
-    SetDescriptor = 0x07,
-    GetConfiguration = 0x08,
-    SetConfiguration = 0x09,
-    GetInterface = 0x0a,
-    SetInterface = 0x11,
-    SynchFrame = 0x12,
+    GetStatus = 0,
+    ClearFeature = 1,
+    SetFeature = 3,
+    SetAddress = 5,
+    GetDescriptor = 6,
+    SetDescriptor = 7,
+    GetConfiguration = 8,
+    SetConfiguration = 9,
+    GetInterface = 10,
+    SetInterface = 11,
+    SynchFrame = 12,
 }
 
 /// RequestSetup is first part of control transfer buffer.
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Debug, FromZeroes, FromBytes, AsBytes)]
 pub struct UsbRequestSetup {
     // USB Device Request. USB spec. rev. 2.0 9.3
     pub request_type: u8, // bmRequestType
@@ -316,17 +317,18 @@ impl UsbRequestSetup {
             return None;
         }
         match self.request {
-            0x00 => Some(StandardControlRequest::GetStatus),
-            0x01 => Some(StandardControlRequest::ClearFeature),
-            0x03 => Some(StandardControlRequest::SetFeature),
-            0x05 => Some(StandardControlRequest::SetAddress),
-            0x06 => Some(StandardControlRequest::GetDescriptor),
-            0x07 => Some(StandardControlRequest::SetDescriptor),
-            0x08 => Some(StandardControlRequest::GetConfiguration),
-            0x09 => Some(StandardControlRequest::SetConfiguration),
-            0x0a => Some(StandardControlRequest::GetInterface),
-            0x11 => Some(StandardControlRequest::SetInterface),
-            0x12 => Some(StandardControlRequest::SynchFrame),
+            // Defined in USB 2.0 Specification Table 9-4
+            0 => Some(StandardControlRequest::GetStatus),
+            1 => Some(StandardControlRequest::ClearFeature),
+            3 => Some(StandardControlRequest::SetFeature),
+            5 => Some(StandardControlRequest::SetAddress),
+            6 => Some(StandardControlRequest::GetDescriptor),
+            7 => Some(StandardControlRequest::SetDescriptor),
+            8 => Some(StandardControlRequest::GetConfiguration),
+            9 => Some(StandardControlRequest::SetConfiguration),
+            10 => Some(StandardControlRequest::GetInterface),
+            11 => Some(StandardControlRequest::SetInterface),
+            12 => Some(StandardControlRequest::SynchFrame),
             _ => None,
         }
     }
@@ -341,6 +343,15 @@ pub fn control_request_type(
     ((type_ as u8) << CONTROL_REQUEST_TYPE_OFFSET)
         | ((dir as u8) << DATA_PHASE_DIRECTION_OFFSET)
         | (recipient as u8)
+}
+
+/// USB device speed
+pub enum DeviceSpeed {
+    Full,
+    Low,
+    High,
+    Super,
+    SuperPlus,
 }
 
 #[cfg(test)]

@@ -4,20 +4,14 @@ version = "0.1.0"
 authors = ["The ChromiumOS Authors"]
 edition = "2021"
 default-run = "crosvm"
-# b:223855233
-resolver = "1"
 
 [[bin]]
 name = "crosvm"
 path = "src/main.rs"
 
-[[bin]]
-name = "crosvm-direct"
-path = "src/main.rs"
-required-features = [ "direct" ]
-
 [profile.release]
 panic = 'abort'
+opt-level = 3
 overflow-checks = true
 
 [profile.release-test]
@@ -27,7 +21,6 @@ panic = 'unwind'
 # Reproduces the options used when building crosvm for ChromeOS.
 [profile.chromeos]
 inherits = "release"
-opt-level = "s"
 strip = "symbols"
 
 # Enables LTO to further reduce the size of the binary.
@@ -35,37 +28,39 @@ strip = "symbols"
 inherits = "chromeos"
 lto = true
 
+# Set codegen units to 1 to further reduce binary size.
+[profile.largecodegen]
+inherits = "lto"
+codegen-units = 1
+
 [workspace]
 # Explicitly list all crates of crosvm as workspace members since not all of them may be referenced
 # by dependencies.
 members = [
     "aarch64",
     "acpi_tables",
-    "anti_tamper",
     "arch",
     "argh_helpers",
+    "audio_util",
+    "audio_streams_conformance_test",
     "base",
     "bit_field",
     "broker_ipc",
     "common/audio_streams",
     "common/balloon_control",
-    "common/cros_asyncv2",
-    "common/cros-fuzz",
     "common/data_model",
-    "common/p9",
     "common/sync",
-    "crash_report",
     "cros_async",
     "cros_fdt",
     "cros_tracing",
     "crosvm_cli",
     "crosvm_control",
     "crosvm_plugin",
-    "crosvm-fuzz",
     "devices",
     "disk",
     "e2e_tests",
     "fuse",
+    "fuzz",
     "gpu_display",
     "hypervisor",
     "io_uring",
@@ -75,18 +70,15 @@ members = [
     "kvm",
     "libcras_stub",
     "linux_input_sys",
-    "media/cros-codecs",
     "media/ffmpeg",
-    "media/libva",
-    "media/libvda",
     "metrics",
+    "metrics_events",
     "net_sys",
     "net_util",
     "power_monitor",
     "prebuilts",
     "protos",
     "proto_build_tools",
-    "qcow_utils",
     "resources",
     "rutabaga_gfx",
     "serde_keyvalue",
@@ -94,10 +86,11 @@ members = [
     "system_api",
     "third_party/vmm_vhost",
     "tools/impl/catapult_converter",
-    "tpm2-sys",
-    "tpm2",
     "usb_sys",
     "usb_util",
+    "vendor/generic/anti_tamper",
+    "vendor/generic/crash_report",
+    "vendor/generic/crypto",
     "vfio_sys",
     "vhost",
     "virtio_sys",
@@ -112,14 +105,15 @@ exclude = [
     "sandbox",
     "tools/audio_streams_conformance_test",
     "tools/examples/baremetal",
-    "tube_transporter",
-    "win_audio",
-    "win_util",
+    "perfetto",
+
+    # This crate depends on optional features and is compiled via dependencies when enabled.
+    "media/libvda",
 ]
 
 [features]
 ## Default features of crosvm. This selection is somewhat arbitrary for historical reasons.
-default = ["audio", "balloon", "config-file", "document-features", "gpu", "qcow", "usb", "libvda-stub"]
+default = ["audio", "balloon", "config-file", "document-features", "gpu", "qcow", "usb", "libvda-stub", "net", "slirp"]
 
 ## Enables support for the Android [sparse image format](https://android.googlesource.com/platform/system/core/+/HEAD/libsparse/sparse_format.h)
 ## in the block device.
@@ -151,25 +145,34 @@ gdb = [
     "arch/gdb",
     "gdbstub",
     "gdbstub_arch",
+    "riscv64/gdb",
     "vm_control/gdb",
     "x86_64/gdb",
 ]
 
-## Enables a panic handler that writes panic info to the `RUST_PANIC_SIG` memfd.
-panic-memfd = []
+## Enables virtio-net and vhost-user-net backend.
+net = ["devices/net"]
+
+## Enables PCI hotplug. Only available on Linux, and currently only for x86/x86-64.
+pci-hotplug = ["devices/pci-hotplug", "vm_control/pci-hotplug"]
+
+## Enables virtio-pvclock. Only available on Linux, and currently only for x86/x86-64.
+pvclock = ["devices/pvclock"]
 
 ## Enables the use of the qcow format for block devices.
 qcow = ["disk/qcow"]
 
+## Enables the registered_events mechanisms.
+registered_events = ["protos/registered_events", "protobuf", "base/proto_tube", "vm_control/registered_events", "devices/registered_events"]
+
 ## Enables vmm-swap of guest memory. This is only available on Linux.
-swap = ["aarch64/swap", "arch/swap", "devices/swap", "vm_control/swap", "x86_64/swap", "dep:swap"]
+swap = ["aarch64/swap", "arch/swap", "devices/swap", "vm_control/swap", "x86_64/swap", "swap/enable"]
 
 ## Enables collection of VM statistics.
 stats = ["devices/stats"]
 
-## Enables trusted platform module emulation for the guest. This relies on the software emulated
-## TPM implementation from libtpm2 which is suited only for testing purposes.
-tpm = ["devices/tpm"]
+## Supports tokio as an asynchronous executor.
+tokio = ["cros_async/tokio"]
 
 ## Enables USB host device passthrough via an emulated XHCI controller.
 ## USB is supported only on unix/linux. The feature is a no-op on windows.
@@ -203,8 +206,20 @@ gfxstream_stub = ["rutabaga_gfx/gfxstream_stub"]
 ## Enables 3D acceleration for the guest via the virglrenderer library over virtio-gpu.
 virgl_renderer = ["devices/virgl_renderer"]
 
-## Enables in development features of virglrenderer to support newer OpenGL versions.
-virgl_renderer_next = ["devices/virgl_renderer_next", "rutabaga_gfx/virgl_renderer_next"]
+## Enables the usage of Vulkan for display on the host.
+vulkan_display = ["gpu_display/vulkan_display"]
+
+# Enables the highly experimental vulkan graphics buffer allocator.
+# see rutabaga_gfx/Cargo.toml for instructions on building with enabled.
+vulkano = ["rutabaga_gfx/vulkano"]
+
+# Enables the GPU display backend for Android. The backend uses Android surface as the backing
+# store.
+android_display = ["devices/android_display"]
+
+# Stub implementation of the Android display backend. This is only used for building and testing the
+# Android display backend on a non-Android target
+android_display_stub = ["devices/android_display_stub"]
 
 #! ### Video features
 #!
@@ -224,10 +239,25 @@ vaapi = ["devices/vaapi"]
 
 #! ### Linux-specific feature flags
 
+## Enables the use of the GenieZone hypervisor
+geniezone = ["devices/geniezone", "hypervisor/geniezone"]
+
+## Enables the use of the Gunyah hypervisor
+gunyah = ["devices/gunyah", "hypervisor/gunyah"]
+
 ## Enables the Linux trace_marker backend for cros_tracing. This backend is only
 ## supported on Linux systems. It sends all cros_tracing tracepoints to the tracefs
 ## filesystem if mounted, for easier debugging with tools like trace-cmd.
 trace_marker = ["cros_tracing/trace_marker"]
+
+## Facilitate tracing all syscalls by sandboxed processes.
+seccomp_trace = ["jail/seccomp_trace","base/seccomp_trace","devices/seccomp_trace"]
+
+## Enables virtio-gpu devices to request a non-coherent memory mapping from the
+## hypervisor. Currently only supported in KVM on x86 and requires kernel
+## patches from:
+## <https://lore.kernel.org/all/20240105091535.24760-1-yan.y.zhao@intel.com/>
+noncoherent-dma = ["devices/noncoherent-dma", "hypervisor/noncoherent-dma"]
 
 #! ### Windows-specific feature flags
 #!
@@ -249,9 +279,6 @@ slirp = ["devices/slirp", "net_util/slirp"]
 
 ## Run crosvm with `--disable-sandbox` by default.
 default-no-sandbox = []
-
-## Special build of crosvm for ChromeOS that only supports direct device passthrough.
-direct = ["balloon", "devices/direct", "arch/direct", "x86_64/direct"]
 
 #! ### Project specific features
 #!
@@ -303,38 +330,60 @@ crash-report = ["broker_ipc/crash-report", "crash_report"]
 #! Note that these may include project specific features that will not be functional at runtime but
 #! are enabled for compile and test coverage.
 
-## All features that are compiled and tested for aarch64
-all-aarch64 = [
+## All features that are compiled and tested for aarch64 and x86_64
+all-default = [
     "android-sparse",
     "arc_quota",
     "audio_cras",
-    "chromeos",
     "composite-disk",
     "crash-report",
     "default",
     "ffmpeg",
     "gdb",
+    "geniezone",
     "gfxstream",
     "gfxstream_stub",
     "libvda-stub",
-    "panic-memfd",
+    "net",
+    "noncoherent-dma",
+    "pci-hotplug",
     "power-monitor-powerd",
+    "registered_events",
     "slirp",
     "swap",
+    "tokio",
     "trace_marker",
-    "tpm",
     "vaapi",
     "video-decoder",
     "video-encoder",
-    "virgl_renderer_next",
     "virgl_renderer",
     "vtpm",
     "wl-dmabuf",
     "x",
 ]
 
+## All features that are compiled and tested for aarch64
+all-aarch64 = [
+    "all-default",
+    "android_display",
+    "android_display_stub",
+    "gunyah",
+]
+
+## All features that are compiled and tested for riscv64
+all-riscv64 = [
+    "gdb",
+]
+
 ## All features that are compiled and tested for x86_64
-all-x86_64 = ["all-aarch64", "plugin", "scudo"]
+all-x86_64 = [
+    "all-default",
+    "android_display",
+    "android_display_stub",
+    "plugin",
+    "pvclock",
+    "scudo"
+]
 
 ## All features that are compiled and tested for armhf
 ## Note: This platform is deprecated and will be phased out.
@@ -342,9 +391,9 @@ all-armhf = [
     "android-sparse",
     "composite-disk",
     "default",
-    "gdb", # no effect because gdb is not supported for armhf
+    "gdb",
     "libvda-stub",
-    "tpm",
+    "net",
 ]
 
 ## All features that are compiled and tested for mingw64
@@ -355,41 +404,36 @@ all-mingw64 = [
     "crash_report",
     "gpu",
     "haxm",
+    "net",
     "slirp",
     "stats",
+    "vulkan_display",
 ]
 
 ## All features that are compiled and tested for msvc64
 all-msvc64 = [ "all-mingw64" ]
 
-## All features that are enabled in ChromeOS builds.
-all-chromeos = ["base/chromeos", "audio_cras", "devices/chromeos", "panic-memfd", "arc_quota", "vtpm"]
-
-# Deprecated feature flag. Remove after ChromeOS-side is updated.
-chromeos = ["all-chromeos"]
-
 [dependencies]
 anyhow = "1.0.32"
 arch = { path = "arch" }
-argh = "0.1"
+argh = "0.1.10"
 argh_helpers = { path = "argh_helpers" }
 audio_streams = "*"
 base = "*"
 bit_field = { path = "bit_field" }
 broker_ipc = { path = "broker_ipc" }
 cfg-if = "1.0.0"
-crash_report = { path = "crash_report", optional = true }
+crash_report = { path = "vendor/generic/crash_report", optional = true }
 cros_async = { path = "cros_async" }
 cros_tracing = { path = "cros_tracing" }
 crosvm_cli = { path = "crosvm_cli" }
 crosvm_plugin = { path = "crosvm_plugin", optional = true }
-data_model = "*"
 devices = { path = "devices" }
 disk = { path = "disk" }
 document-features = { version = "0.2", optional = true }
 enumn = "0.1.0"
-gdbstub = { version = "0.6.3", optional = true }
-gdbstub_arch = { version = "0.2.4", optional = true }
+gdbstub = { version = "0.7.0", optional = true }
+gdbstub_arch = { version = "0.3.0", optional = true }
 rutabaga_gfx = { path = "rutabaga_gfx"}
 hypervisor = { path = "hypervisor" }
 jail = { path = "jail" }
@@ -405,24 +449,28 @@ merge = "0.1.0"
 metrics = { path = "metrics" }
 net_util = { path = "net_util" }
 once_cell = "1.7"
-protobuf = { version = "2.3", optional = true }
+protobuf = { version = "3.2", optional = true }
 protos = { path = "protos", optional = true }
 remain = "*"
 resources = { path = "resources" }
 scudo = { version = "0.1", optional = true }
-serde = "*"
+serde = { version = "*", features = ["rc"] }
 serde_json = "*"
 serde_keyvalue = { path = "serde_keyvalue", features = ["argh_derive"] }
 smallvec = "1.6.1"
 static_assertions = "1.1"
+swap = { path = "swap" }
 sync = { path = "common/sync" }
 tempfile = "3"
 thiserror = { version = "1.0.20" }
-uuid = { version = "0.8.2", features = [ "serde" ] }
-vhost = { path = "vhost" }
 vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
 vm_memory = { path = "vm_memory" }
+uuid = { version = "1", features = ["v4"] }
+zerocopy = { version = "0.7", features = ["derive"] }
+
+[target.'cfg(target_arch = "riscv64")'.dependencies]
+riscv64 = { path = "riscv64" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 x86_64 = { path = "x86_64" }
@@ -430,16 +478,14 @@ x86_64 = { path = "x86_64" }
 [target.'cfg(any(target_arch = "aarch64", target_arch = "arm"))'.dependencies]
 aarch64 = { path = "aarch64" }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
 minijail = "*" # provided by ebuild
-p9 = "*"
-
-[target.'cfg(target_os="linux")'.dependencies]
-swap = { path = "swap", optional = true }
+p9 = "0.2.3"
+vhost = { path = "vhost" }
 
 [target.'cfg(windows)'.dependencies]
-anti_tamper = { path = "anti_tamper" }
-cros_async =  { path = "cros_async" }
+anti_tamper = { path = "vendor/generic/anti_tamper" }
+cros_async = { path = "cros_async" }
 ctrlc = "*"
 futures = "0.3"
 gpu_display = { path = "gpu_display", optional = true }
@@ -448,8 +494,8 @@ sandbox = { path = "sandbox" }
 cros_tracing = { path = "cros_tracing" }
 tube_transporter = { path = "tube_transporter" }
 winapi = "*"
-win_audio = { path = "win_audio"}
-win_util = { path = "win_util"}
+win_audio = { path = "win_audio" }
+win_util = { path = "win_util" }
 
 [dev-dependencies]
 base = "*"
@@ -458,11 +504,8 @@ rand = "0.8"
 [patch.crates-io]
 audio_streams = { path = "common/audio_streams" }
 base = { path = "base" }
-cros_async =  { path = "cros_async" }
-cros_fuzz = { path = "common/cros-fuzz" } # ignored by ebuild
+cros_async = { path = "cros_async" }
 data_model = { path = "common/data_model" }
 libcras = { path = "libcras_stub" } # ignored by ebuild
-p9 = { path = "common/p9" } # ignored by ebuild
 sync = { path = "common/sync" }
-wire_format_derive = { path = "common/p9/wire_format_derive" } # ignored by ebuild
 minijail = { path = "third_party/minijail/rust/minijail" } # ignored by ebuild

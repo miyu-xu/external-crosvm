@@ -19,7 +19,9 @@
 //!   assert!(b == 3);
 //!   assert!(l == 3);
 //!
+//!   // SAFETY: trivially safe
 //!   let b_trans: u32 = unsafe { std::mem::transmute(b) };
+//!   // SAFETY: trivially safe
 //!   let l_trans: u32 = unsafe { std::mem::transmute(l) };
 //!
 //!   #[cfg(target_endian = "little")]
@@ -30,16 +32,13 @@
 //!   assert_ne!(b_trans, l_trans);
 //! ```
 
-use std::mem::align_of;
-use std::mem::size_of;
-
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-use static_assertions::const_assert;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 macro_rules! endian_type {
     ($old_type:ident, $new_type:ident, $to_new:ident, $from_new:ident) => {
@@ -47,40 +46,40 @@ macro_rules! endian_type {
         ///
         /// See module level documentation for examples.
         #[repr(transparent)]
-        #[derive(Copy, Clone, Eq, PartialEq, Debug, Default, FromBytes, AsBytes)]
+        #[derive(Copy, Clone, Eq, PartialEq, Debug, Default, FromZeroes, FromBytes, AsBytes)]
         pub struct $new_type($old_type);
 
         impl $new_type {
-            fn _assert() {
-                const_assert!(align_of::<$new_type>() == align_of::<$old_type>());
-                const_assert!(size_of::<$new_type>() == size_of::<$old_type>());
-            }
-
             /// Converts `self` to the native endianness.
+            #[inline]
             pub fn to_native(self) -> $old_type {
                 $old_type::$from_new(self.0)
             }
         }
 
         impl PartialEq<$old_type> for $new_type {
+            #[inline]
             fn eq(&self, other: &$old_type) -> bool {
                 self.0 == $old_type::$to_new(*other)
             }
         }
 
         impl PartialEq<$new_type> for $old_type {
+            #[inline]
             fn eq(&self, other: &$new_type) -> bool {
                 $old_type::$to_new(other.0) == *self
             }
         }
 
         impl From<$new_type> for $old_type {
+            #[inline]
             fn from(v: $new_type) -> $old_type {
                 $old_type::$from_new(v.0)
             }
         }
 
         impl From<$old_type> for $new_type {
+            #[inline]
             fn from(v: $old_type) -> $new_type {
                 $new_type($old_type::$to_new(v))
             }
@@ -126,6 +125,8 @@ endian_type!(isize, SBeSize, to_be, from_be);
 #[cfg(test)]
 mod tests {
     use std::convert::From;
+    use std::mem::align_of;
+    use std::mem::size_of;
     use std::mem::transmute;
 
     use super::*;
@@ -147,6 +148,7 @@ mod tests {
                     let v = 0x0123456789ABCDEF as $old_type;
                     let endian_v: $new_type = From::from(v);
                     let endian_into: $old_type = endian_v.into();
+                    // SAFETY: trivially safe
                     let endian_transmute: $old_type = unsafe { transmute(endian_v) };
 
                     if $native {
@@ -158,6 +160,16 @@ mod tests {
                     assert_eq!(v, endian_into);
                     assert!(v == endian_v);
                     assert!(endian_v == v);
+                }
+
+                #[test]
+                fn alignment() {
+                    assert_eq!(align_of::<$new_type>(), align_of::<$old_type>());
+                }
+
+                #[test]
+                fn size() {
+                    assert_eq!(size_of::<$new_type>(), size_of::<$old_type>());
                 }
             }
         };

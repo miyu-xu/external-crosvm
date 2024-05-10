@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 // TODO(b/237714823): Currently, only kvm is enabled for this test once LUCI can run windows.
-#![cfg(unix)]
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(target_os = "android", target_os = "linux"))]
+#![cfg(target_arch = "x86_64")]
 
 use hypervisor::*;
 use sync::Mutex;
@@ -12,7 +12,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn test_kvm_real_run_addr() {
     use hypervisor::kvm::*;
     test_real_run_addr(|guest_mem| {
@@ -23,7 +23,7 @@ fn test_kvm_real_run_addr() {
 }
 
 #[test]
-#[cfg(feature = "haxm")]
+#[cfg(all(windows, feature = "haxm"))]
 fn test_haxm_real_run_addr() {
     use hypervisor::haxm::*;
     test_real_run_addr(|guest_mem| {
@@ -105,9 +105,8 @@ where
     vcpu.set_regs(&vcpu_regs).expect("set regs failed");
 
     let out = Mutex::new(String::new());
-    let run_handle = vcpu.take_run_handle(None).unwrap();
     loop {
-        match vcpu.run(&run_handle).expect("run failed") {
+        match vcpu.run().expect("run failed") {
             VcpuExit::Io => {
                 vcpu.handle_io(&mut |IoParams {
                                          address,

@@ -259,33 +259,34 @@ impl Name {
 }
 
 /// Package object. 'children' represents the ACPI objects contained in this package.
-pub struct Package<'a> {
-    children: Vec<&'a dyn Aml>,
+pub struct Package {
+    children_bytes: Vec<u8>,
 }
 
-impl<'a> Aml for Package<'a> {
+impl Aml for Package {
     fn to_aml_bytes(&self, aml: &mut Vec<u8>) {
-        let mut bytes = vec![self.children.len() as u8];
-        for child in &self.children {
-            child.to_aml_bytes(&mut bytes);
-        }
-
-        let mut pkg_length = create_pkg_length(&bytes, true);
-        pkg_length.reverse();
-        for byte in pkg_length {
-            bytes.insert(0, byte);
-        }
-
-        bytes.insert(0, PACKAGEOP);
-
-        aml.append(&mut bytes);
+        let pkg_length = create_pkg_length(&self.children_bytes, true);
+        aml.append(
+            &mut [
+                &[PACKAGEOP],
+                pkg_length.as_slice(),
+                self.children_bytes.as_slice(),
+            ]
+            .concat(),
+        );
     }
 }
 
-impl<'a> Package<'a> {
+impl Package {
     /// Create Package object:
-    pub fn new(children: Vec<&'a dyn Aml>) -> Self {
-        Package { children }
+    pub fn new(children: Vec<&dyn Aml>) -> Package {
+        let mut bytes = vec![children.len() as u8];
+        for child in &children {
+            child.to_aml_bytes(&mut bytes);
+        }
+        Package {
+            children_bytes: bytes,
+        }
     }
 }
 
@@ -1463,7 +1464,7 @@ impl<'a> Aml for BufferTerm<'a> {
 }
 
 /// Buffer object with the data in it.
-struct BufferData {
+pub struct BufferData {
     data: Vec<u8>,
 }
 
@@ -2066,7 +2067,7 @@ mod tests {
                 0x03, /* 3 name parts */
                 0x5F, 0x53, 0x42, 0x5F, /* _SB_ */
                 0x50, 0x43, 0x49, 0x30, /* PCI0 */
-                0x5F, 0x55, 0x49, 0x44, /* _UID  */
+                0x5F, 0x55, 0x49, 0x44, /* _UID */
                 0x0b, /* WordPrefix */
                 0x34, 0x12
             ]

@@ -12,15 +12,6 @@ use serde::Serialize;
 
 use crate::crosvm::config::Config;
 
-#[cfg(feature = "audio")]
-pub fn parse_ac97_options(
-    _ac97_params: &mut devices::Ac97Parameters,
-    key: &str,
-    _value: &str,
-) -> Result<(), String> {
-    Err(format!("unknown ac97 parameter {}", key))
-}
-
 pub fn check_serial_params(
     #[allow(unused_variables)] serial_params: &SerialParameters,
 ) -> Result<(), String> {
@@ -41,29 +32,6 @@ pub fn check_serial_params(
 
 pub fn validate_config(_cfg: &mut Config) -> std::result::Result<(), String> {
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IrqChipKind {
-    /// All interrupt controllers are emulated in the kernel.
-    Kernel,
-    /// APIC is emulated in the kernel.  All other interrupt controllers are in userspace.
-    Split,
-    /// All interrupt controllers are emulated in userspace.
-    Userspace,
-}
-
-impl FromStr for IrqChipKind {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "kernel" => Ok(Self::Kernel),
-            "split" => Ok(Self::Split),
-            "userspace" => Ok(Self::Userspace),
-            _ => Err("invalid irqchip kind: expected \"kernel\", \"split\", or \"userspace\""),
-        }
-    }
 }
 
 /// Hypervisor backend.
@@ -94,15 +62,5 @@ impl FromStr for HypervisorKind {
             "whpx" => Ok(HypervisorKind::Whpx),
             _ => Err("invalid hypervisor backend"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(feature = "audio")]
-    #[test]
-    fn parse_ac97_vaild() {
-        crate::crosvm::config::parse_ac97_options("backend=win_audio")
-            .expect("parse should have succeded");
     }
 }

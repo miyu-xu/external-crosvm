@@ -13,6 +13,7 @@ use serde_keyvalue::FromKeyValues;
 
 pub use crate::sys::handle_request;
 pub use crate::sys::DisplayMode;
+pub use crate::sys::MouseMode;
 pub use crate::*;
 
 pub const DEFAULT_DISPLAY_WIDTH: u32 = 1280;
@@ -31,9 +32,19 @@ pub(crate) trait DisplayModeTrait {
 
     /// Returns the virtual display size used for creating the display device.
     ///
+    /// We need to query the phenotype flags to see if resolutions higher than 1080p should be
+    /// enabled. This functions assumes process invariants have been set up and phenotype flags are
+    /// available. If not, use `get_virtual_display_size_4k_uhd()` instead.
+    ///
     /// This may be different from the initial host window size since different display backends may
     /// have different alignment requirements on it.
     fn get_virtual_display_size(&self) -> (u32, u32);
+
+    /// Returns the virtual display size used for creating the display device.
+    ///
+    /// While `get_virtual_display_size()` reads phenotype flags internally, this function does not,
+    /// so it can be used when process invariants and phenotype flags are not yet ready.
+    fn get_virtual_display_size_4k_uhd(&self, is_4k_uhd_enabled: bool) -> (u32, u32);
 }
 
 impl Default for DisplayMode {
@@ -91,6 +102,10 @@ impl DisplayParameters {
         self.mode.get_virtual_display_size()
     }
 
+    pub fn get_virtual_display_size_4k_uhd(&self, is_4k_uhd_enabled: bool) -> (u32, u32) {
+        self.mode.get_virtual_display_size_4k_uhd(is_4k_uhd_enabled)
+    }
+
     pub fn horizontal_dpi(&self) -> u32 {
         self.dpi.expect("'dpi' is None").0
     }
@@ -108,9 +123,17 @@ impl Default for DisplayParameters {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum GpuControlCommand {
-    AddDisplays { displays: Vec<DisplayParameters> },
+    AddDisplays {
+        displays: Vec<DisplayParameters>,
+    },
     ListDisplays,
-    RemoveDisplays { display_ids: Vec<u32> },
+    RemoveDisplays {
+        display_ids: Vec<u32>,
+    },
+    SetDisplayMouseMode {
+        display_id: u32,
+        mouse_mode: MouseMode,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -123,6 +146,8 @@ pub enum GpuControlResult {
     NoSuchDisplay {
         display_id: u32,
     },
+    DisplayMouseModeSet,
+    ErrString(String),
 }
 
 impl Display for GpuControlResult {
@@ -141,6 +166,8 @@ impl Display for GpuControlResult {
             }
             TooManyDisplays(n) => write!(f, "too_many_displays {}", n),
             NoSuchDisplay { display_id } => write!(f, "no_such_display {}", display_id),
+            DisplayMouseModeSet => write!(f, "display_mouse_mode_set"),
+            ErrString(reason) => write!(f, "err_string {}", reason),
         }
     }
 }
@@ -200,6 +227,20 @@ pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
     display_ids: Vec<u32>,
 ) -> ModifyGpuResult {
     let request = VmRequest::GpuCommand(GpuControlCommand::RemoveDisplays { display_ids });
+    handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyGpuError::SocketFailed)?
+        .into()
+}
+
+pub fn do_gpu_set_display_mouse_mode<T: AsRef<Path> + std::fmt::Debug>(
+    control_socket_path: T,
+    display_id: u32,
+    mouse_mode: MouseMode,
+) -> ModifyGpuResult {
+    let request = VmRequest::GpuCommand(GpuControlCommand::SetDisplayMouseMode {
+        display_id,
+        mouse_mode,
+    });
     handle_request(&request, control_socket_path)
         .map_err(|_| ModifyGpuError::SocketFailed)?
         .into()

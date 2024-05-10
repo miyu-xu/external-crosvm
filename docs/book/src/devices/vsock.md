@@ -2,13 +2,13 @@
 
 crosvm supports [virtio-vsock] device for communication between the host and a guest VM.
 
-Assign a context id to a guest VM by passing it with `--cid` flag.
+Assign a context id to a guest VM by passing it with the `--vsock` flag.
 
 ```sh
 GUEST_CID=3
 
 crosvm run \
-  --cid "${GUEST_CID}" \
+  --vsock "${GUEST_CID}" \
   <usual crosvm arguments>
   /path/to/bzImage
 ```
@@ -21,6 +21,17 @@ at a different path or one given as an fd, you can use `--vhost-vsock-device` fl
 `--vhost-vsock-fd` flag respectively.
 
 ## Example usage
+
+This example assumes `ncat` is installed. If you are using a VM image created using `virt-builder`,
+it needs to come pre-installed with `ncat`. This can be achieved by running the following command:
+
+```sh
+    # Build a simple ubuntu image and create a user with no password.
+    virt-builder ubuntu-20.04 \
+        --run-command "useradd -m -g sudo -p '' $USER ; chage -d 0 $USER" \
+        -o ./rootfs \
+        --install ncat
+```
 
 At host shell:
 

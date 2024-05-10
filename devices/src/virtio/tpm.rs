@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -20,15 +21,10 @@ use thiserror::Error;
 use vm_memory::GuestMemory;
 
 use super::DescriptorChain;
-use super::DescriptorError;
 use super::DeviceType;
 use super::Interrupt;
 use super::Queue;
-use super::Reader;
-use super::SignalableInterrupt;
 use super::VirtioDevice;
-use super::Writer;
-use crate::Suspendable;
 
 // A single queue of size 2. The guest kernel driver will enqueue a single
 // descriptor chain containing one command buffer and one response buffer at a
@@ -44,8 +40,6 @@ const TPM_BUFSIZE: usize = 4096;
 struct Worker {
     interrupt: Interrupt,
     queue: Queue,
-    mem: GuestMemory,
-    queue_evt: Event,
     backend: Box<dyn TpmBackend>,
 }
 
@@ -54,11 +48,8 @@ pub trait TpmBackend: Send {
 }
 
 impl Worker {
-    fn perform_work(&mut self, desc: DescriptorChain) -> Result<u32> {
-        let mut reader = Reader::new(self.mem.clone(), desc.clone()).map_err(Error::Descriptor)?;
-        let mut writer = Writer::new(self.mem.clone(), desc).map_err(Error::Descriptor)?;
-
-        let available_bytes = reader.available_bytes();
+    fn perform_work(&mut self, desc: &mut DescriptorChain) -> Result<u32> {
+        let available_bytes = desc.reader.available_bytes();
         if available_bytes > TPM_BUFSIZE {
             return Err(Error::CommandTooLong {
                 size: available_bytes,
@@ -66,7 +57,7 @@ impl Worker {
         }
 
         let mut command = vec![0u8; available_bytes];
-        reader.read_exact(&mut command).map_err(Error::Read)?;
+        desc.reader.read_exact(&mut command).map_err(Error::Read)?;
 
         let response = self.backend.execute_command(&command);
 
@@ -76,7 +67,7 @@ impl Worker {
             });
         }
 
-        let writer_len = writer.available_bytes();
+        let writer_len = desc.writer.available_bytes();
         if response.len() > writer_len {
             return Err(Error::BufferTooSmall {
                 size: writer_len,
@@ -84,17 +75,15 @@ impl Worker {
             });
         }
 
-        writer.write_all(response).map_err(Error::Write)?;
+        desc.writer.write_all(response).map_err(Error::Write)?;
 
-        Ok(writer.bytes_written() as u32)
+        Ok(desc.writer.bytes_written() as u32)
     }
 
     fn process_queue(&mut self) -> NeedsInterrupt {
         let mut needs_interrupt = NeedsInterrupt::No;
-        while let Some(avail_desc) = self.queue.pop(&self.mem) {
-            let index = avail_desc.index;
-
-            let len = match self.perform_work(avail_desc) {
+        while let Some(mut avail_desc) = self.queue.pop() {
+            let len = match self.perform_work(&mut avail_desc) {
                 Ok(len) => len,
                 Err(err) => {
                     error!("{}", err);
@@ -102,7 +91,7 @@ impl Worker {
                 }
             };
 
-            self.queue.add_used(&self.mem, index, len);
+            self.queue.add_used(avail_desc, len);
             needs_interrupt = NeedsInterrupt::Yes;
         }
 
@@ -121,7 +110,7 @@ impl Worker {
         }
 
         let wait_ctx = match WaitContext::build_with(&[
-            (&self.queue_evt, Token::QueueAvailable),
+            (self.queue.event(), Token::QueueAvailable),
             (&kill_evt, Token::Kill),
         ])
         .and_then(|wc| {
@@ -150,7 +139,7 @@ impl Worker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::QueueAvailable => {
-                        if let Err(e) = self.queue_evt.wait() {
+                        if let Err(e) = self.queue.event().wait() {
                             error!("vtpm failed reading queue Event: {}", e);
                             break 'wait;
                         }
@@ -163,7 +152,7 @@ impl Worker {
                 }
             }
             if needs_interrupt == NeedsInterrupt::Yes {
-                self.queue.trigger_interrupt(&self.mem, &self.interrupt);
+                self.queue.trigger_interrupt(&self.interrupt);
             }
         }
     }
@@ -205,22 +194,20 @@ impl VirtioDevice for Tpm {
 
     fn activate(
         &mut self,
-        mem: GuestMemory,
+        _mem: GuestMemory,
         interrupt: Interrupt,
-        mut queues: Vec<(Queue, Event)>,
+        mut queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
         if queues.len() != 1 {
             return Err(anyhow!("expected 1 queue, got {}", queues.len()));
         }
-        let (queue, queue_evt) = queues.remove(0);
+        let queue = queues.pop_first().unwrap().1;
 
         let backend = self.backend.take().context("no backend in vtpm")?;
 
         let worker = Worker {
             interrupt,
             queue,
-            mem,
-            queue_evt,
             backend,
         };
 
@@ -231,8 +218,6 @@ impl VirtioDevice for Tpm {
         Ok(())
     }
 }
-
-impl Suspendable for Tpm {}
 
 #[derive(PartialEq, Eq)]
 enum NeedsInterrupt {
@@ -257,8 +242,6 @@ enum Error {
     BufferTooSmall { size: usize, required: usize },
     #[error("vtpm command is too long: {size} > {} bytes", TPM_BUFSIZE)]
     CommandTooLong { size: usize },
-    #[error("virtio descriptor error: {0}")]
-    Descriptor(DescriptorError),
     #[error("vtpm failed to read from guest memory: {0}")]
     Read(io::Error),
     #[error(

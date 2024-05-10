@@ -18,12 +18,11 @@ use anyhow::Context;
 use base::error;
 use base::RawDescriptor;
 use base::SendTube;
+use base::SharedMemory;
 use base::VmEventType;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
-use serde::Deserialize;
-use serde::Serialize;
 
 use crate::pci::pci_configuration::PciBarConfiguration;
 use crate::pci::pci_configuration::PciBarPrefetchable;
@@ -37,6 +36,7 @@ use crate::pci::pci_device::BarRange;
 use crate::pci::pci_device::PciDevice;
 use crate::pci::pci_device::Result;
 use crate::pci::PciAddress;
+use crate::pci::PciBarIndex;
 use crate::pci::PciDeviceError;
 use crate::pci::PCI_VENDOR_ID_REDHAT;
 use crate::Suspendable;
@@ -44,7 +44,7 @@ use crate::Suspendable;
 const PCI_DEVICE_ID_REDHAT_PVPANIC: u16 = 0x0011;
 const PCI_PVPANIC_REVISION_ID: u8 = 1;
 
-const PVPANIC_REG_NUM: u8 = 0;
+const PVPANIC_BAR_INDEX: PciBarIndex = 0;
 const PVPANIC_REG_SIZE: u64 = 0x10;
 
 // Guest panicked
@@ -82,18 +82,10 @@ impl fmt::Display for PvPanicCode {
     }
 }
 
-#[derive(Serialize)]
 pub struct PvPanicPciDevice {
-    #[serde(skip_serializing)]
     pci_address: Option<PciAddress>,
     config_regs: PciConfiguration,
-    #[serde(skip_serializing)]
     evt_wrtube: SendTube,
-}
-
-#[derive(Deserialize)]
-struct PvPanicPciDeviceSerializable {
-    config_regs: serde_json::Value,
 }
 
 impl PvPanicPciDevice {
@@ -150,7 +142,7 @@ impl PciDevice for PvPanicPciDevice {
                     bus: address.bus,
                     dev: address.dev,
                     func: address.func,
-                    bar: PVPANIC_REG_NUM,
+                    bar: PVPANIC_BAR_INDEX as u8,
                 },
                 "pvpanic_reg".to_string(),
                 AllocOptions::new()
@@ -159,7 +151,7 @@ impl PciDevice for PvPanicPciDevice {
             )
             .map_err(|e| pci_device::Error::IoAllocationFailed(PVPANIC_REG_SIZE, e))?;
         let pvpanic_config = PciBarConfiguration::new(
-            PVPANIC_REG_NUM.into(),
+            PVPANIC_BAR_INDEX,
             PVPANIC_REG_SIZE,
             PciBarRegionType::Memory32BitRegion,
             PciBarPrefetchable::NotPrefetchable,
@@ -190,21 +182,31 @@ impl PciDevice for PvPanicPciDevice {
     }
 
     fn write_config_register(&mut self, reg_idx: usize, offset: u64, data: &[u8]) {
-        self.config_regs.write_reg(reg_idx, offset, data)
+        self.config_regs.write_reg(reg_idx, offset, data);
     }
 
-    fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        let mmio_addr = self.config_regs.get_bar_addr(PVPANIC_REG_NUM as usize);
-        data[0] = if addr == mmio_addr && data.len() == 1 {
+    fn setup_pci_config_mapping(
+        &mut self,
+        shmem: &SharedMemory,
+        base: usize,
+        len: usize,
+    ) -> Result<bool> {
+        self.config_regs
+            .setup_mapping(shmem, base, len)
+            .map(|_| true)
+            .map_err(PciDeviceError::MmioSetup)
+    }
+
+    fn read_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &mut [u8]) {
+        data[0] = if bar_index == PVPANIC_BAR_INDEX && offset == 0 && data.len() == 1 {
             PVPANIC_CAPABILITIES
         } else {
             0
         };
     }
 
-    fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let mmio_addr = self.config_regs.get_bar_addr(PVPANIC_REG_NUM as usize);
-        if addr != mmio_addr || data.len() != 1 {
+    fn write_bar(&mut self, bar_index: PciBarIndex, offset: u64, data: &[u8]) {
+        if bar_index != PVPANIC_BAR_INDEX || offset != 0 || data.len() != 1 {
             return;
         }
 
@@ -218,15 +220,16 @@ impl PciDevice for PvPanicPciDevice {
 }
 
 impl Suspendable for PvPanicPciDevice {
-    fn snapshot(&self) -> anyhow::Result<serde_json::Value> {
-        serde_json::to_value(self).context("failed to serialize PvPanicPciDevice")
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        self.config_regs
+            .snapshot()
+            .context("failed to serialize PvPanicPciDevice")
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
-        let deser: PvPanicPciDeviceSerializable =
-            serde_json::from_value(data).context("failed to deserialize PvPanicPciDevice")?;
-        self.config_regs.restore(deser.config_regs)?;
-        Ok(())
+        self.config_regs
+            .restore(data)
+            .context("failed to deserialize PvPanicPciDevice")
     }
 
     fn sleep(&mut self) -> anyhow::Result<()> {
@@ -280,17 +283,16 @@ mod test {
         let mut data: [u8; 1] = [0; 1];
 
         // Read from an invalid addr
-        device.read_bar(0, &mut data);
+        device.read_bar(0, 1, &mut data);
         assert_eq!(data[0], 0);
 
         // Read from the valid addr
-        let mmio_addr = device.config_regs.get_bar_addr(PVPANIC_REG_NUM as usize);
-        device.read_bar(mmio_addr, &mut data);
+        device.read_bar(0, 0, &mut data);
         assert_eq!(data[0], PVPANIC_CAPABILITIES);
 
         // Write to the valid addr.
         data[0] = PVPANIC_CRASH_LOADED;
-        device.write_bar(mmio_addr, &data);
+        device.write_bar(0, 0, &data);
 
         // Verify the event
         let val = evt_rdtube.recv::<VmEventType>().unwrap();

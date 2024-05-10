@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 use std::sync::Arc;
+use std::sync::Weak;
 
 use anyhow::Context;
 use base::Event;
 use sync::Mutex;
 use vm_memory::GuestMemory;
 
+use super::device_slot::DeviceSlot;
 use super::interrupter::Interrupter;
 use super::usb_hub::UsbPort;
 use super::xhci_abi::TransferDescriptor;
@@ -21,6 +23,12 @@ use crate::utils::EventLoop;
 /// Transfer ring controller manages transfer ring.
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
 
+#[derive(Clone)]
+pub enum TransferRingControllers {
+    Endpoint(Arc<TransferRingController>),
+    Stream(Vec<Arc<TransferRingController>>),
+}
+
 pub type TransferRingControllerError = RingBufferControllerError;
 
 /// TransferRingTrbHandler handles trbs on transfer ring.
@@ -31,6 +39,7 @@ pub struct TransferRingTrbHandler {
     slot_id: u8,
     endpoint_id: u8,
     transfer_manager: XhciTransferManager,
+    stream_id: Option<u16>,
 }
 
 impl TransferDescriptorHandler for TransferRingTrbHandler {
@@ -47,6 +56,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
             self.endpoint_id,
             descriptor,
             completion_event,
+            self.stream_id,
         );
         xhci_transfer
             .send_to_backend_if_valid()
@@ -54,7 +64,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
     }
 
     fn stop(&self) -> bool {
-        let backend = self.port.get_backend_device();
+        let backend = self.port.backend_device();
         if backend.is_some() {
             self.transfer_manager.cancel_all();
             true
@@ -72,6 +82,8 @@ impl TransferRingController {
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,
+        device_slot: Weak<DeviceSlot>,
+        stream_id: Option<u16>,
     ) -> Result<Arc<TransferRingController>, TransferRingControllerError> {
         RingBufferController::new_with_handler(
             format!("transfer ring slot_{} ep_{}", slot_id, endpoint_id),
@@ -83,7 +95,8 @@ impl TransferRingController {
                 interrupter,
                 slot_id,
                 endpoint_id,
-                transfer_manager: XhciTransferManager::new(),
+                transfer_manager: XhciTransferManager::new(device_slot),
+                stream_id,
             },
         )
     }
