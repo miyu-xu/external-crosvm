@@ -569,7 +569,8 @@ fn create_virtio_devices(
 
     #[cfg(feature = "balloon")]
     if let (Some(balloon_device_tube), Some(dynamic_mapping_device_tube)) =
-        (balloon_device_tube, dynamic_mapping_device_tube) {
+        (balloon_device_tube, dynamic_mapping_device_tube)
+    {
         let balloon_features = (cfg.balloon_page_reporting as u64)
             << BalloonFeatures::PageReporting as u64
             | (cfg.balloon_ws_reporting as u64) << BalloonFeatures::WSReporting as u64;
@@ -2971,6 +2972,7 @@ fn process_vm_request<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         }
         _ => {
             let response = request.execute(
+                &state.linux.vm,
                 &mut run_mode_opt,
                 state.disk_host_tubes,
                 &mut state.linux.pm,
@@ -3589,6 +3591,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     if let Some(path) = &cfg.restore_path {
         vm_control::do_restore(
             path.clone(),
+            &linux.vm,
             |msg| vcpu::kick_all_vcpus(&vcpu_handles, linux.irq_chip.as_irq_chip(), msg),
             |msg, index| {
                 vcpu::kick_vcpu(&vcpu_handles.get(index), linux.irq_chip.as_irq_chip(), msg)
