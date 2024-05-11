@@ -1,5 +1,23 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "89dc05f0_15ca088d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-05-11T01:05:56Z",
+      "side": 1,
+      "message": "hi - I don\u0027t know how many patches we would be requested to review here.\n\nWe have a zero forking policy for this code. Can you say what the plan is to avoid forking or take owners just for BUILD? if you need more than that, maybe should chat or file build request and take full responsibility for conflicts, thanks!",
+      "revId": "58cd2488e62c98a15c3168c276dbe457cff29741",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
