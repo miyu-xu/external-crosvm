@@ -18,6 +18,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c04ae820_4e3db484",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 31,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "0770fb78_36c626a2",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ecea7004_54d2eac9",
@@ -31,6 +49,24 @@
       "writtenOn": "2024-05-13T09:08:20Z",
       "side": 1,
       "message": "From [3054802](https://android-review.git.corp.google.com/c/platform/packages/modules/Virtualization/+/3054802/comment/4432aecd_e860ab48/)\n\u003e Jiyong Park: This name is very confusing with `AAudioStream`. I don\u0027t think you need the `Aaudio` prefix for the items in this module, because its name already is `aaudio_streams`.",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7931b087_db9fd372",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 69,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "Renamed to `AndroidAudioStream`.",
+      "parentUuid": "ecea7004_54d2eac9",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -54,6 +90,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "2b3febd1_9eb48cb1",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "I left unimplemented because it will not be called.\n`devices/src/virtio/snd/sys/linux.rs` only uses async functions.",
+      "parentUuid": "fa87f0c2_b2f18de6",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a4520ae8_f95c5416",
         "filename": "android_audio/src/android_audio_streams.rs",
         "patchSetId": 8
@@ -65,6 +119,24 @@
       "writtenOn": "2024-05-13T09:08:20Z",
       "side": 1,
       "message": "Has comment from [3054802](https://android-review.git.corp.google.com/c/platform/packages/modules/Virtualization/+/3054802/comment/57b12c25_1d09e327/).\nResolved for now.",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "da97817e_fa75bc4f",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 114,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a4520ae8_f95c5416",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -86,6 +158,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f835567_e625f2ba",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 147,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "Yes, thanks!",
+      "parentUuid": "a60b060d_6c40223f",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3d26cc79_d6015b84",
@@ -99,6 +189,41 @@
       "writtenOn": "2024-05-13T09:08:20Z",
       "side": 1,
       "message": "From [3054802](https://android-review.git.corp.google.com/c/platform/packages/modules/Virtualization/+/3054802/comment/a68b9572_b9cc665a/):\n\u003e Jiyong Park: You are passing a mutable reference to the slice. Consider wrapping the slice with RefCell and using borrow_mut to get a mutable reference to the slice.\n\n... and use borrow in the commit function above. Be sure to check the error condition.",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1c8c8925_882d68d7",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 184,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "Thanks for pointing this out.\nI write like this is because of the windows [implementation](https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4878756/comment/f629a15a_30f958ab/).\n\nI didn\u0027t fix it with RefCell because the call flow is like:\n```\n{\n    let stream \u003d AndroidAudioStream::new(/* ... */);\n    let buf \u003d stream.next_playback_buffer.await?;\n    write_audio_data(buf);\n    buf.commit(/* ... */);\n}\n```\nThat cause lifetime and mutable borrow issue.\n\nAnd I finally resolved this by use another struct(`AndroidAudioPlaybackBufferCommit`) instead of `self`\nI\u0027m not sure if it is a good practice.\nDoes this fix make sense to you?",
+      "parentUuid": "3d26cc79_d6015b84",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a409acb1_b98645a6",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 221,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:22:32Z",
+      "side": 1,
+      "message": "From [3054802](https://android-review.git.corp.google.com/c/platform/packages/modules/Virtualization/+/3054802/comment/32a93f82_b3eae8d7/)\n\u003e Jiyong Park:\nAccording to https://developer.android.com/ndk/reference/group/audio#aaudiostream_release\n\n\u003e\u003e AAudioStream_close() should be called at some point after calling this function.\n\nReply:\nThanks. Changed it to AAudioStream_close. And no need to release manually after it according to the doc.",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
