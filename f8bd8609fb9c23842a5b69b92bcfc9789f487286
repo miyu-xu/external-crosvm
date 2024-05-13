@@ -73,6 +73,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "49cf83c3_db24fe81",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 86,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-05-13T18:00:39Z",
+      "side": 1,
+      "message": "AndroidAudioStream has a lot of stuff in it, so it is easy for the SAFETY justification to go stale. It is actually already wrong because `Rc` is not thread safe.\n\nInstead I suggest you create a small type to wrap just the `*mut AAudioStream`, e.g. `struct AAudioStreamPtr(*mut AAudioStream);`. Give that type `unsafe impl Send`, but not `unsafe impl Sync` because as the comment above says, `AAudioStream` isn\u0027t thread safe.\n\nThen, you can adjust the rest of the code to make the compiler happy. If `AndroidAudioStream` needs to be `Send` and `Sync`, then you\u0027ll probably want `stream: Arc\u003cMutex\u003cAAudioStreamPtr\u003e\u003e`",
+      "range": {
+        "startLine": 80,
+        "startChar": 0,
+        "endLine": 86,
+        "endChar": 42
+      },
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "fa87f0c2_b2f18de6",
         "filename": "android_audio/src/android_audio_streams.rs",
         "patchSetId": 8
