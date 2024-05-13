@@ -106,6 +106,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e7286899_0aa449e4",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 95,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-05-13T13:37:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "2b3febd1_9eb48cb1",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a4520ae8_f95c5416",
@@ -178,6 +196,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "4b7bb53d_62883de1",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 158,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-05-13T13:37:26Z",
+      "side": 1,
+      "message": "When is this deallocated?",
+      "range": {
+        "startLine": 158,
+        "startChar": 24,
+        "endLine": 158,
+        "endChar": 30
+      },
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3d26cc79_d6015b84",
         "filename": "android_audio/src/android_audio_streams.rs",
         "patchSetId": 8
@@ -207,6 +248,24 @@
       "side": 1,
       "message": "Thanks for pointing this out.\nI write like this is because of the windows [implementation](https://chromium-review.googlesource.com/c/crosvm/crosvm/+/4878756/comment/f629a15a_30f958ab/).\n\nI didn\u0027t fix it with RefCell because the call flow is like:\n```\n{\n    let stream \u003d AndroidAudioStream::new(/* ... */);\n    let buf \u003d stream.next_playback_buffer.await?;\n    write_audio_data(buf);\n    buf.commit(/* ... */);\n}\n```\nThat cause lifetime and mutable borrow issue.\n\nAnd I finally resolved this by use another struct(`AndroidAudioPlaybackBufferCommit`) instead of `self`\nI\u0027m not sure if it is a good practice.\nDoes this fix make sense to you?",
       "parentUuid": "3d26cc79_d6015b84",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c6e91b43_ea4284a7",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 184,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-05-13T13:37:26Z",
+      "side": 1,
+      "message": "I don\u0027t think the windows impl can be considered as a good example.\n\nAnd I don\u0027t like `AndroidAudioStream` carrying `buffer_ptr: *const u8`, not a slice. It\u0027s a memory leak, right? I\u0027ve left a comment above as well.\n\nCould you elaborate more on why RefCell couldn\u0027t be used? Did you actually experience an error from the \"runtime\" borrow checker?",
+      "parentUuid": "1c8c8925_882d68d7",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
