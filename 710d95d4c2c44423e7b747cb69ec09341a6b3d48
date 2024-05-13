@@ -22,6 +22,30 @@
       },
       "revId": "710d95d4c2c44423e7b747cb69ec09341a6b3d48",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1919e345_659c325f",
+        "filename": "aaudio_backend_stub/src/aaudio_backend.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 13,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-13T09:08:20Z",
+      "side": 1,
+      "message": "File removed",
+      "parentUuid": "354fdc95_38431af6",
+      "range": {
+        "startLine": 13,
+        "startChar": 8,
+        "endLine": 13,
+        "endChar": 13
+      },
+      "revId": "710d95d4c2c44423e7b747cb69ec09341a6b3d48",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
