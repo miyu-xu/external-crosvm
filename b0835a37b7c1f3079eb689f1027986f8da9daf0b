@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "eb4ff249_a80f46d1",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-05-14T19:41:56Z",
+      "side": 1,
+      "message": "Can you add OWNERS for yourself for these BUILD files? as mentioned in https://android-review.git.corp.google.com/c/platform/external/crosvm/+/3083529/comments/89dc05f0_15ca088d",
+      "revId": "b0835a37b7c1f3079eb689f1027986f8da9daf0b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
