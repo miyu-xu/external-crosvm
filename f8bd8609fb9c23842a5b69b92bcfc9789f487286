@@ -242,6 +242,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "9a31638a_56484e34",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 158,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-14T07:52:22Z",
+      "side": 1,
+      "message": "I think this will be deallocated when AndroidAudioStream is deallocated.\n\nThe buffer_ptr is the ptr of AndroidAudioStream.buffer. Then AndroidAudioStream is freed, AndroidAudioStream.buffer will be freed and so as the AndroidAudioStream.drop (struct AndroidAudioPlaybackBufferCommit).",
+      "parentUuid": "4b7bb53d_62883de1",
+      "range": {
+        "startLine": 158,
+        "startChar": 24,
+        "endLine": 158,
+        "endChar": 30
+      },
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "3d26cc79_d6015b84",
         "filename": "android_audio/src/android_audio_streams.rs",
         "patchSetId": 8
@@ -289,6 +313,24 @@
       "side": 1,
       "message": "I don\u0027t think the windows impl can be considered as a good example.\n\nAnd I don\u0027t like `AndroidAudioStream` carrying `buffer_ptr: *const u8`, not a slice. It\u0027s a memory leak, right? I\u0027ve left a comment above as well.\n\nCould you elaborate more on why RefCell couldn\u0027t be used? Did you actually experience an error from the \"runtime\" borrow checker?",
       "parentUuid": "1c8c8925_882d68d7",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d7adeb1a_0576abf7",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 184,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-14T07:52:22Z",
+      "side": 1,
+      "message": "Thanks for your advice!\n\nFor referencing windows, I mean my [previous](https://android-review.googlesource.com/c/platform/packages/modules/Virtualization/+/3054802/6/libs/android_audio_backend/aaudio_streams.rs#167) version that with unsafe is referencing windows impl.\n\nFor RefCell things. No I didn\u0027t experience \"runtime\" borrow checker.\nI got errors in the compilation.\nMaybe I did not use RefCell in a right way....\n\nHere\u0027s what I tried and errors I got:\n\nBackground: If I understand correctly, the functions and structs I added will be used in this [function](https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/devices/src/virtio/snd/common_backend/async_funcs.rs;l\u003d347) like this way:\n\n```\nimpl\u003c\u0027a\u003e AsyncPlaybackBuffer\u003c\u0027a\u003e {\n    pub fn new\u003cF\u003e(\n        frame_size: usize,\n        buffer: \u0026\u0027a mut [u8],\n        trigger: \u0026\u0027a mut F,\n    ) -\u003e Result\u003cSelf, PlaybackBufferError\u003e\n    where\n        F: AsyncBufferCommit,\n    {\n        if buffer.len() % frame_size !\u003d 0 {\n            return Err(PlaybackBufferError::InvalidLength);\n        }\n\n        Ok(AsyncPlaybackBuffer {\n            buffer: AudioBuffer {\n                buffer,\n                offset: 0,\n                frame_size,\n            },\n            trigger,\n        })\n    }\n}\n\n{\n    let stream \u003d AndroidAudioStream::new(/* ... */);\n    let buf \u003d stream.next_playback_buffer.await?;\n    write_audio_data(buf);\n    buf.commit(/* ... */);\n}\n```\n\nI tried with and without independent struct `AndroidAudioPlaybackBufferCommit`. The implementation and error message are attached in following two comments.\n\n\n\n1. Without independent struct AndroidAudioPlaybackBufferCommit(use self):\n\n```\nstruct AAudioStreamPtr {\n    stream_ptr: *mut AAudioStream,\n}\n\nstruct AndroidAudioStream {\n    buffer: Arc\u003cMutex\u003cRefCell\u003cVec\u003cu8\u003e\u003e\u003e\u003e,\n    stream: Arc\u003cMutex\u003cAAudioStreamPtr\u003e\u003e,\n    /* \n        other menbers...\n    */\n    drop: AndroidAudioStreamCommit,\n}\n\nstruct AndroidAudioStreamCommit {\n    buffer: Arc\u003cMutex\u003cRefCell\u003cVec\u003cu8\u003e\u003e\u003e\u003e,\n    stream: Arc\u003cMutex\u003cAAudioStreamPtr\u003e\u003e,\n}\n\nimpl AsyncBufferCommit for AndroidAudioStreamCommit {\n    async fn commit(\u0026mut self, nwritten: usize) {unsafe {\n            AAudioStream_write(\n                self.stream.lock().unwrap().stream_ptr,\n                self.buffer.lock().unwrap().borrow().as_ptr(),\n                nwritten as c_int,\n                0, // this call will not wait.\n            );\n        }\n    }\n}\n\nimpl AndroidAudioStream {\n    pub fn new(/* arguments */) {\n        let mut stream_ptr: *mut AAudioStream \u003d std::ptr::null_mut();\n        /* aaudio_stream */\n        let buffer \u003d Arc::new(Mutex::new(RefCell::new(vec![0; buffer_size * frame_size])));\n        let stream \u003d Arc::new(Mutex::new(AAudioStreamPtr{stream_ptr}));\n        AndroidAudioStream {\n            buffer: buffer.clone(),\n            frame_size,\n            interval,\n            next_frame: interval,\n            start_time: None,\n            stream: stream.clone(),\n            drop: AndroidAudioStreamCommit{stream, buffer},\n        }\n    }\n}\n\nimpl AsyncPlaybackBufferStream for AndroidAudioStream {\n    async fn next_playback_buffer\u003c\u0027a\u003e(\n        \u0026\u0027a mut self,\n        ex: \u0026dyn AudioStreamsExecutor,\n    ) -\u003e Result\u003cAsyncPlaybackBuffer\u003c\u0027a\u003e, BoxError\u003e {\n        /* skip time syncing */\n        match AsyncPlaybackBuffer::new(self.frame_size, self.buffer.lock().unwrap().borrow_mut().as_mut_slice(), \u0026mut self.drop) {\n            Ok(playback_buffer) \u003d\u003e Ok(playback_buffer),\n            Err(err) \u003d\u003e Err(Box::new(err)),\n        }\n    }\n}\n```\n\nThis gets compile error:\n\n```\nerror[E0716]: temporary value dropped while borrowed\n   --\u003e external/crosvm/android_audio/src/android_audio_streams.rs:192:57\n    |\n178 |     async fn next_playback_buffer\u003c\u0027a\u003e(\n    |                                   -- lifetime `\u0027a` defined here\n...\n181 |     ) -\u003e Result\u003cAsyncPlaybackBuffer\u003c\u0027a\u003e, BoxError\u003e {\n    |          ----------------------------------------- type annotation requires that borrow lasts for `\u0027a`\n...\n192 |         match AsyncPlaybackBuffer::new(self.frame_size, self.buffer.lock().unwrap().borrow_mut().as_mut_slice(), \u0026mut self.drop) {\n    |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ creates a temporary value which is freed while still in use\n...\n196 |     }\n    |     - temporary value is freed at the end of this statement\n```\n\n2. Without independent struct AndroidAudioPlaybackBufferCommit(use self):\n\n```\nstruct AAudioStreamPtr {\n    stream_ptr: *mut AAudioStream,\n}\n\nstruct AndroidAudioStream {\n    buffer: RefCell\u003cVec\u003cu8\u003e\u003e,\n    stream: Arc\u003cMutex\u003cAAudioStreamPtr\u003e\u003e,\n    /* \n        other menbers...\n    */\n}\n\nimpl AsyncBufferCommit for AndroidAudioStream {\n    async fn commit(\u0026mut self, nwritten: usize) {unsafe {\n            AAudioStream_write(\n                self.stream.lock().unwrap().stream_ptr,\n                self.buffer.borrow().as_ptr(),\n                nwritten as c_int,\n                0, // this call will not wait.\n            );\n        }\n    }\n}\n\nimpl AndroidAudioStream {\n    pub fn new(/* arguments */) {\n        let mut stream_ptr: *mut AAudioStream \u003d std::ptr::null_mut();\n        /* aaudio_stream */\n        let buffer \u003d RefCell::new(vec![0; buffer_size * frame_size]);\n        let stream \u003d Arc::new(Mutex::new(AAudioStreamPtr{stream_ptr}));\n        AndroidAudioStream {\n            buffer,\n            frame_size,\n            interval,\n            next_frame: interval,\n            start_time: None,\n            stream,\n        }\n    }\n}\n\nimpl AsyncPlaybackBufferStream for AndroidAudioStream {\n    async fn next_playback_buffer\u003c\u0027a\u003e(\n        \u0026\u0027a mut self,\n        ex: \u0026dyn AudioStreamsExecutor,\n    ) -\u003e Result\u003cAsyncPlaybackBuffer\u003c\u0027a\u003e, BoxError\u003e {\n        /* skip time syncing */\n        match AsyncPlaybackBuffer::new(self.frame_size, self.buffer.borrow_mut().as_mut_slice(), self) {\n            Ok(playback_buffer) \u003d\u003e Ok(playback_buffer),\n            Err(err) \u003d\u003e Err(Box::new(err)),\n        }\n    }\n}\n```\n\nThis gets compile error:\n```\n\nerror[E0502]: cannot borrow `*__self` as mutable because it is also borrowed as immutable\n   --\u003e external/crosvm/android_audio/src/android_audio_streams.rs:185:15\n    |\n171 |     async fn next_playback_buffer\u003c\u0027a\u003e(\n    |                                   -- lifetime `\u0027a` defined here\n...\n174 |     ) -\u003e Result\u003cAsyncPlaybackBuffer\u003c\u0027a\u003e, BoxError\u003e {\n    |          ----------------------------------------- type annotation requires that `__self.buffer` is borrowed for `\u0027a`\n...\n185 |         match AsyncPlaybackBuffer::new(self.frame_size, self.buffer.borrow_mut().as_mut_slice(), self) {\n    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    |               |                                         |\n    |               |                                         immutable borrow occurs here\n    |               mutable borrow occurs here\n\nerror[E0716]: temporary value dropped while borrowed\n   --\u003e external/crosvm/android_audio/src/android_audio_streams.rs:185:57\n    |\n171 |     async fn next_playback_buffer\u003c\u0027a\u003e(\n    |                                   -- lifetime `\u0027a` defined here\n...\n174 |     ) -\u003e Result\u003cAsyncPlaybackBuffer\u003c\u0027a\u003e, BoxError\u003e {\n    |          ----------------------------------------- type annotation requires that borrow lasts for `\u0027a`\n...\n185 |         match AsyncPlaybackBuffer::new(self.frame_size, self.buffer.borrow_mut().as_mut_slice(), self) {\n    |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^ creates a temporary value which is freed while still in use\n...\n189 |     }\n    |     - temporary value is freed at the end of this statement\n```\n\nSorry it may take too much of your time for my changes....",
+      "parentUuid": "c6e91b43_ea4284a7",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
