@@ -89,6 +89,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c2d5f292_1e5e13bc",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 69,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-15T13:08:08Z",
+      "side": 1,
+      "message": "Good idea, thanks.",
+      "parentUuid": "4e26c364_7b0d98ba",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "49cf83c3_db24fe81",
@@ -391,6 +409,24 @@
       "side": 1,
       "message": "No worries. What I expected was closer to your approach #2. But now I\u0027ve just noticed that next_playback_buffer is accepting \u0026mut self. Sorry for that. \n\nThen yes, there\u0027s no need to use RefCell because you already have a mutable reference to self where the buffer is a part of.\n\nCan you just do `buffer: Vec\u003cu8\u003e`?",
       "parentUuid": "d7adeb1a_0576abf7",
+      "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f4cf3e45_b2c20dc1",
+        "filename": "android_audio/src/android_audio_streams.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 184,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-15T13:08:08Z",
+      "side": 1,
+      "message": "Sure, I changed it back to Vec\u003cu8\u003e.\nI think this Vec\u003cu8\u003e + *const u8 solution is acceptable for now?\nI don\u0027t know if it is the best practice. Maybe I should not do AAudioStream_write in the commit function(do it somewhere else or use the callback function in the future).\nAnyway, this gave me a good change to study into RefCell, lifetime and lots of stuff... which would benefit my rust coding quality in future. Thanks!",
+      "parentUuid": "e27f2b75_16e2f3cc",
       "revId": "f8bd8609fb9c23842a5b69b92bcfc9789f487286",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
