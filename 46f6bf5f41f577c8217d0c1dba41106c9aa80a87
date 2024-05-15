@@ -34,6 +34,24 @@
       "parentUuid": "2f0a18e2_89a6e200",
       "revId": "46f6bf5f41f577c8217d0c1dba41106c9aa80a87",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f78b1045_6986f839",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-05-15T15:31:25Z",
+      "side": 1,
+      "message": "I eventually placed all android_audio_stream in crosvm. And provided libaaudio_stub for crosvm to build and test on non-android environments.",
+      "parentUuid": "2d2e6b07_7bd9ee06",
+      "revId": "46f6bf5f41f577c8217d0c1dba41106c9aa80a87",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
