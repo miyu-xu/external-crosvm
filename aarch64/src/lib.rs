@@ -208,7 +208,7 @@ const AARCH64_IRQ_BASE: u32 = 4;
 
 // Virtual CPU Frequency Device.
 const AARCH64_VIRTFREQ_BASE: u64 = 0x1040000;
-const AARCH64_VIRTFREQ_SIZE: u64 = 0x8;
+const AARCH64_VIRTFREQ_SIZE: u64 = 0x1000;
 const AARCH64_VIRTFREQ_MAXSIZE: u64 = 0x10000;
 
 // PMU PPI interrupt, same as qemu
@@ -680,7 +680,7 @@ impl arch::LinuxArch for AArch64 {
 
                 let virt_cpufreq = Arc::new(Mutex::new(VirtCpufreq::new(
                     vcpu_affinity[0].try_into().unwrap(),
-                    socket.clone(),
+                    components.cpu_frequencies.clone(),
                 )));
 
                 if vcpu as u64 * AARCH64_VIRTFREQ_SIZE + AARCH64_VIRTFREQ_SIZE
@@ -693,7 +693,7 @@ impl arch::LinuxArch for AArch64 {
                     .insert(
                         virt_cpufreq,
                         AARCH64_VIRTFREQ_BASE + (vcpu as u64 * AARCH64_VIRTFREQ_SIZE),
-                        AARCH64_VIRTFREQ_SIZE,
+                        256,
                     )
                     .map_err(Error::RegisterVirtCpufreq)?;
             }

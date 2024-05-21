@@ -6,6 +6,7 @@ use base::sched_attr;
 use base::sched_setattr;
 use base::warn;
 use base::Error;
+use std::collections::BTreeMap;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
@@ -25,13 +26,22 @@ const SCHED_FLAG_KEEP_POLICY: u64 = 0x08;
 const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
 const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
 
+const VCPUFREQ_CUR_PERF: u32 = 0x0;
+const VCPUFREQ_SET_PERF: u32 = 0x4;
+const VCPUFREQ_FREQTBL_LEN: u32 = 0x8;
+const VCPUFREQ_FREQTBL_SEL: u32 = 0xc;
+const VCPUFREQ_FREQTBL_RD: u32 = 0x10;
+const VCPUFREQ_PERF_DOMAIN: u32 = 0x14;
+
 const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
 
 pub struct VirtCpufreq {
+    cpu_freq_table: Vec<u32>,
     cpu_fmax: u32,
     cpu_capacity: u32,
     pcpu: u32,
     util_factor: u32,
+    freqtbl_sel: u32,
 }
 
 fn get_cpu_info(cpu_id: u32, property: &str) -> Result<u32, Error> {
@@ -68,16 +78,21 @@ fn get_cpu_util_factor(cpu_id: u32) -> Result<u32, Error> {
 }
 
 impl VirtCpufreq {
-    pub fn new(pcpu: u32, _socket: Option<Arc<Mutex<UnixStream>>>) -> Self {
+    pub fn new(pcpu: u32, cpu_frequencies: BTreeMap<usize, Vec<u32>>) -> Self {
         let cpu_capacity = get_cpu_capacity(pcpu).expect("Error reading capacity");
         let cpu_fmax = get_cpu_maxfreq_khz(pcpu).expect("Error reading max freq");
         let util_factor = get_cpu_util_factor(pcpu).expect("Error getting util factor");
+//        let cpu_freq_table = cpu_frequencies.get(&(pcpu as usize)).unwrap().clone();
+        let cpu_freq_table = vec![cpu_fmax as u32];
+        let freqtbl_sel = 0;
 
         VirtCpufreq {
+            cpu_freq_table,
             cpu_fmax,
             cpu_capacity,
             pcpu,
             util_factor,
+            freqtbl_sel,
         }
     }
 }
@@ -91,7 +106,7 @@ impl BusDevice for VirtCpufreq {
         "VirtCpufreq Device".to_owned()
     }
 
-    fn read(&mut self, _info: BusAccessInfo, data: &mut [u8]) {
+    fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
         if data.len() != std::mem::size_of::<u32>() {
             warn!(
                 "{}: unsupported read length {}, only support 4bytes read",
@@ -100,18 +115,29 @@ impl BusDevice for VirtCpufreq {
             );
             return;
         }
-        // TODO(davidai): Evaluate opening file and re-reading the same fd.
-        let freq = match get_cpu_curfreq_khz(self.pcpu) {
-            Ok(freq) => freq,
-            Err(e) => panic!("{}: Error reading freq: {}", self.debug_label(), e),
+
+        let val = match info.offset as u32 {
+            VCPUFREQ_CUR_PERF => {
+                match get_cpu_curfreq_khz(self.pcpu) {
+                    Ok(freq) => freq,
+                    Err(e) => 0,
+                }
+            },
+            VCPUFREQ_FREQTBL_LEN => self.cpu_freq_table.len() as u32,
+            VCPUFREQ_PERF_DOMAIN => self.pcpu,
+            VCPUFREQ_FREQTBL_RD => self.cpu_freq_table[self.freqtbl_sel as usize],
+            _ => {
+                warn!("{}: unsupported read address {}", self.debug_label(), info);
+                return;
+            }
         };
 
-        let freq_arr = freq.to_ne_bytes();
-        data.copy_from_slice(&freq_arr);
+        let val_arr = val.to_ne_bytes();
+        data.copy_from_slice(&val_arr);
     }
 
-    fn write(&mut self, _info: BusAccessInfo, data: &[u8]) {
-        let freq: u32 = match data.try_into().map(u32::from_ne_bytes) {
+    fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
+        let val: u32 = match data.try_into().map(u32::from_ne_bytes) {
             Ok(v) => v,
             Err(e) => {
                 warn!(
@@ -123,18 +149,28 @@ impl BusDevice for VirtCpufreq {
             }
         };
 
-        // Util margin depends on the cpufreq governor on the host
-        let cpu_cap_scaled = self.cpu_capacity * self.util_factor / CPUFREQ_GOV_SCALE_FACTOR_DEFAULT;
-        let util = cpu_cap_scaled * freq / self.cpu_fmax;
+        match info.offset as u32 {
+            VCPUFREQ_SET_PERF => {
+                // Util margin depends on the cpufreq governor on the host
+                let cpu_cap_scaled = self.cpu_capacity * self.util_factor / CPUFREQ_GOV_SCALE_FACTOR_DEFAULT;
+                let util = cpu_cap_scaled * val / self.cpu_fmax;
 
-        let mut sched_attr = sched_attr::default();
-        sched_attr.sched_flags =
-            SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
-        sched_attr.sched_util_min = util;
+                let mut sched_attr = sched_attr::default();
+                sched_attr.sched_flags =
+                SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
+                sched_attr.sched_util_min = util;
 
-        if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
-            panic!("{}: Error setting util value: {}", self.debug_label(), e);
-        }
+                if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
+                    panic!("{}: Error setting util value: {}", self.debug_label(), e);
+                }
+            },
+            VCPUFREQ_FREQTBL_SEL => self.freqtbl_sel = val,
+            _ => {
+                warn!("{}: unsupported read address {}", self.debug_label(), info);
+                return;
+            }
+        };
+
     }
 }
 
