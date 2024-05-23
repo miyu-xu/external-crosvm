@@ -141,6 +141,13 @@ impl Tap {
             .map_err(SysError::from)
             .map_err(Error::CloneTap)
     }
+
+    pub fn try_clone_file(&self) -> Result<File> {
+        self.tap_file
+            .try_clone()
+            .map_err(SysError::from)
+            .map_err(Error::CloneTapFile)
+    }
 }
 
 impl TapTCommon for Tap {

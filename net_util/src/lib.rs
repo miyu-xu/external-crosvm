@@ -43,6 +43,9 @@ pub enum Error {
     /// Unable to clone tap interface.
     #[error("failed to clone tap interface: {0}")]
     CloneTap(SysError),
+    /// Unable to clone file struct of tap interface.
+    #[error("failed to clone file struct of tap interface: {0}")]
+    CloneTapFile(SysError),
     /// Failed to create a socket.
     #[error("failed to create a socket: {0}")]
     CreateSocket(SysError),
@@ -69,6 +72,7 @@ impl Error {
             Error::OpenTun(e) => *e,
             Error::CreateTap(e) => *e,
             Error::CloneTap(e) => *e,
+            Error::CloneTapFile(e) => *e,
             Error::IoctlError(e) => *e,
             #[cfg(all(feature = "slirp", windows))]
             Error::Slirp(e) => e.sys_error(),
