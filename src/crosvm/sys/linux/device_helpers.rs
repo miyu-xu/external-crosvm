@@ -32,6 +32,8 @@ use devices::serial_device::SerialType;
 use devices::vfio::VfioContainerManager;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
+#[cfg(all(feature = "media", feature = "video-decoder",))]
+use devices::virtio::device_constants::media::MediaDecoderBackendType;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::device_constants::video::VideoBackendType;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
@@ -1050,6 +1052,20 @@ pub fn create_simple_media_device(protection_type: ProtectionType) -> DeviceResu
 
     let features = virtio::base_features(protection_type);
     let dev = create_virtio_media_simple_capture_device(features);
+
+    Ok(VirtioDeviceStub { dev, jail: None })
+}
+
+#[cfg(all(feature = "media", feature = "video-decoder",))]
+pub fn create_virtio_media_adapter(
+    protection_type: ProtectionType,
+    tube: Tube,
+    backend: MediaDecoderBackendType,
+) -> DeviceResult {
+    use devices::virtio::media::create_virtio_media_decoder_adapter_device;
+
+    let features = virtio::base_features(protection_type);
+    let dev = create_virtio_media_decoder_adapter_device(features, tube, backend);
 
     Ok(VirtioDeviceStub { dev, jail: None })
 }

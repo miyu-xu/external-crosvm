@@ -157,8 +157,30 @@ pub mod snd {
 }
 
 pub mod media {
+    use serde::Deserialize;
+    use serde::Serialize;
+    use serde_keyvalue::FromKeyValues;
+
     const QUEUE_SIZE: u16 = 256;
     pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE];
+
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum MediaDecoderBackendType {
+        #[cfg(feature = "libvda")]
+        Libvda,
+        #[cfg(feature = "libvda")]
+        LibvdaVd,
+        #[cfg(feature = "ffmpeg")]
+        Ffmpeg,
+        #[cfg(feature = "vaapi")]
+        Vaapi,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, FromKeyValues)]
+    pub struct MediaDecoderDeviceConfig {
+        pub backend: MediaDecoderBackendType,
+    }
 }
 
 pub mod video {

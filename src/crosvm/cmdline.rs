@@ -32,6 +32,8 @@ use argh::FromArgs;
 use base::getpid;
 use cros_async::ExecutorKind;
 use devices::virtio::block::DiskOption;
+#[cfg(all(feature = "video-decoder", feature = "media"))]
+use devices::virtio::device_constants::media::MediaDecoderDeviceConfig;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::device_constants::video::VideoDeviceConfig;
 use devices::virtio::scsi::ScsiOption;
@@ -1595,6 +1597,13 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     /// MAC address for VM
     pub mac_address: Option<net_util::MacAddress>,
+
+    #[cfg(all(feature = "media", feature = "video-decoder",))]
+    #[argh(option, arg_name = "[backend]")]
+    #[serde(skip)]
+    #[merge(strategy = append)]
+    /// add a virtio-media adapter device.
+    pub media_decoder: Vec<MediaDecoderDeviceConfig>,
 
     #[argh(option, short = 'm', arg_name = "N")]
     #[merge(strategy = overwrite_option)]
@@ -3613,6 +3622,11 @@ impl TryFrom<RunCommand> for super::config::Config {
         {
             cfg.v4l2_proxy = cmd.v4l2_proxy;
             cfg.simple_media = cmd.simple_media.unwrap_or_default();
+        }
+
+        #[cfg(all(feature = "media", feature = "video-decoder",))]
+        {
+            cfg.media_decoder = cmd.media_decoder;
         }
 
         cfg.file_backed_mappings = cmd.file_backed_mapping;
