@@ -44,7 +44,7 @@ use crate::TapTCommon;
 /// automatically.
 #[derive(Debug)]
 pub struct Tap {
-    tap_file: File,
+    pub tap_file: File,
     if_name: [c_char; 16usize],
     if_flags: ::std::os::raw::c_short,
 }

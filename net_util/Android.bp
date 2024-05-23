@@ -34,6 +34,7 @@ rust_library {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
+    visibility: ["//packages/modules/Virtualization/virtualizationservice/vmnic"],
 }
 
 rust_test {
