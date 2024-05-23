@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0014b9f3_fd339f84",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2024-05-23T01:53:13Z",
+      "side": 1,
+      "message": "A part of change should be submitted into the upstream branch, not AOSP.",
+      "revId": "6e8028001c133c9c01c341ebefb6f8568b68e9b6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
