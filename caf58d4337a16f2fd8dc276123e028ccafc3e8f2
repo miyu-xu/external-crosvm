@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e9856b03_375849c8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1386891
+      },
+      "writtenOn": "2024-05-24T09:44:37Z",
+      "side": 1,
+      "message": "I\u0027ll upstream change in \u0027stub\u0027, but I want this change to be reviewed before that.",
+      "revId": "caf58d4337a16f2fd8dc276123e028ccafc3e8f2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
