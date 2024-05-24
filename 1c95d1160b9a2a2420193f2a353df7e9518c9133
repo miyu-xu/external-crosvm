@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "97e6c3fd_64491fa3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1950816
+      },
+      "writtenOn": "2024-05-24T07:49:59Z",
+      "side": 1,
+      "message": "Uploaded https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5568990 for the patch should be merged from the upstream branch.",
+      "revId": "1c95d1160b9a2a2420193f2a353df7e9518c9133",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
