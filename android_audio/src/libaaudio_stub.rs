@@ -34,6 +34,14 @@ extern "C" fn AAudioStreamBuilder_setBufferCapacityInFrames(
 }
 
 #[no_mangle]
+extern "C" fn AAudioStreamBuilder_setDirection(
+    _builder: *mut AAudioStreamBuilder,
+    _direction: u32,
+) {
+    unimplemented!();
+}
+
+#[no_mangle]
 extern "C" fn AAudioStreamBuilder_setFormat(
     _builder: *mut AAudioStreamBuilder,
     _format: AaudioFormatT,
@@ -67,6 +75,16 @@ extern "C" fn AAudioStreamBuilder_openStream(
 
 #[no_mangle]
 extern "C" fn AAudioStream_requestStart(_stream: *mut AAudioStream) -> AaudioResultT {
+    unimplemented!();
+}
+
+#[no_mangle]
+extern "C" fn AAudioStream_read(
+    _stream: *mut AAudioStream,
+    _buffer: *mut c_void,
+    _num_frames: i32,
+    _timeout_nanoseconds: i64,
+) -> AaudioResultT {
     unimplemented!();
 }
 

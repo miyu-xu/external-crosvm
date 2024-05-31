@@ -11,6 +11,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use audio_streams::capture::AsyncCaptureBuffer;
+use audio_streams::capture::AsyncCaptureBufferStream;
+use audio_streams::capture::CaptureBuffer;
+use audio_streams::capture::CaptureBufferStream;
 use audio_streams::AsyncBufferCommit;
 use audio_streams::AsyncPlaybackBuffer;
 use audio_streams::AsyncPlaybackBufferStream;
@@ -22,10 +26,17 @@ use audio_streams::PlaybackBuffer;
 use audio_streams::PlaybackBufferStream;
 use audio_streams::SampleFormat;
 use audio_streams::StreamControl;
+use audio_streams::StreamEffect;
 use audio_streams::StreamSource;
 use audio_streams::StreamSourceGenerator;
 use base::warn;
 use thiserror::Error;
+
+#[derive(Clone, Copy)]
+enum AndroidAudioStreamDirection {
+    Input = 1,
+    Output = 0,
+}
 
 #[derive(Error, Debug)]
 pub enum AAudioError {
@@ -64,6 +75,7 @@ extern "C" {
         builder: *mut AAudioStreamBuilder,
         num_frames: i32,
     );
+    fn AAudioStreamBuilder_setDirection(builder: *mut AAudioStreamBuilder, direction: u32);
     fn AAudioStreamBuilder_setFormat(builder: *mut AAudioStreamBuilder, format: AaudioFormatT);
     fn AAudioStreamBuilder_setSampleRate(builder: *mut AAudioStreamBuilder, sample_rate: i32);
     fn AAudioStreamBuilder_setChannelCount(builder: *mut AAudioStreamBuilder, channel_count: i32);
@@ -72,6 +84,12 @@ extern "C" {
         stream: *mut *mut AAudioStream,
     ) -> AaudioResultT;
     fn AAudioStream_requestStart(stream: *mut AAudioStream) -> AaudioResultT;
+    fn AAudioStream_read(
+        stream: *mut AAudioStream,
+        buffer: *mut c_void,
+        num_frames: i32,
+        timeout_nanoseconds: i64,
+    ) -> AaudioResultT;
     fn AAudioStream_write(
         stream: *mut AAudioStream,
         buffer: *const c_void,
@@ -104,29 +122,36 @@ struct AudioStream {
 struct AndroidAudioStreamCommit {
     buffer_ptr: *const u8,
     stream: AAudioStreamPtr,
+    direction: AndroidAudioStreamDirection,
 }
 
 impl BufferCommit for AndroidAudioStreamCommit {
     fn commit(&mut self, nwritten: usize) {
-        // SAFETY:
-        // The AAudioStream_write reads buffer for nwritten * frame_size bytes
-        // It is safe since nwritten < buffer_size and the buffer.len() == buffer_size * frame_size
-        let frames_written: i32 = unsafe {
-            AAudioStream_write(
-                self.stream.stream_ptr,
-                self.buffer_ptr as *const c_void,
-                nwritten as i32,
-                0, // this call will not wait.
-            )
-        };
-        if frames_written < 0 {
-            warn!("AAudio stream write failed.");
-        } else if (frames_written as usize) < nwritten {
-            // Currently, the frames unable to write by the AAudio API are dropped.
-            warn!(
-                "Android Audio Stream:  Drop {} frames",
-                nwritten - (frames_written as usize)
-            );
+        match self.direction {
+            AndroidAudioStreamDirection::Input => {}
+            AndroidAudioStreamDirection::Output => {
+                // SAFETY:
+                // The AAudioStream_write reads buffer for nwritten * frame_size bytes
+                // It is safe since nwritten < buffer_size and the buffer.len() == buffer_size *
+                // frame_size
+                let frames_written: i32 = unsafe {
+                    AAudioStream_write(
+                        self.stream.stream_ptr,
+                        self.buffer_ptr as *const c_void,
+                        nwritten as i32,
+                        0, // this call will not wait.
+                    )
+                };
+                if frames_written < 0 {
+                    warn!("AAudio stream write failed.");
+                } else if (frames_written as usize) < nwritten {
+                    // Currently, the frames unable to write by the AAudio API are dropped.
+                    warn!(
+                        "Android Audio Stream:  Drop {} frames",
+                        nwritten - (frames_written as usize)
+                    );
+                }
+            }
         }
     }
 }
@@ -134,25 +159,31 @@ impl BufferCommit for AndroidAudioStreamCommit {
 #[async_trait(?Send)]
 impl AsyncBufferCommit for AndroidAudioStreamCommit {
     async fn commit(&mut self, nwritten: usize) {
-        // SAFETY:
-        // The AAudioStream_write reads buffer for nwritten * frame_size bytes
-        // It is safe since nwritten < buffer_size and the buffer.len() == buffer_size * frame_size
-        let frames_written: i32 = unsafe {
-            AAudioStream_write(
-                self.stream.stream_ptr,
-                self.buffer_ptr as *const c_void,
-                nwritten as i32,
-                0, // this call will not wait.
-            )
-        };
-        if frames_written < 0 {
-            warn!("AAudio stream write failed.");
-        } else if (frames_written as usize) < nwritten {
-            // Currently, the frames unable to write by the AAudio API are dropped.
-            warn!(
-                "Android Audio Stream:  Drop {} frames",
-                nwritten - (frames_written as usize)
-            );
+        match self.direction {
+            AndroidAudioStreamDirection::Input => {}
+            AndroidAudioStreamDirection::Output => {
+                // SAFETY:
+                // The AAudioStream_write reads buffer for nwritten * frame_size bytes
+                // It is safe since nwritten < buffer_size and the buffer.len() == buffer_size *
+                // frame_size
+                let frames_written: i32 = unsafe {
+                    AAudioStream_write(
+                        self.stream.stream_ptr,
+                        self.buffer_ptr as *const c_void,
+                        nwritten as i32,
+                        0, // this call will not wait.
+                    )
+                };
+                if frames_written < 0 {
+                    warn!("AAudio stream write failed.");
+                } else if (frames_written as usize) < nwritten {
+                    // Currently, the frames unable to write by the AAudio API are dropped.
+                    warn!(
+                        "Android Audio Stream:  Drop {} frames",
+                        nwritten - (frames_written as usize)
+                    );
+                }
+            }
         }
     }
 }
@@ -163,6 +194,7 @@ impl AudioStream {
         format: SampleFormat,
         frame_rate: u32,
         buffer_size: usize,
+        direction: AndroidAudioStreamDirection,
     ) -> Result<Self, BoxError> {
         let frame_size = format.sample_bytes() * num_channels;
         let interval = Duration::from_millis(buffer_size as u64 * 1000 / frame_rate as u64);
@@ -176,6 +208,7 @@ impl AudioStream {
             if AAudio_createStreamBuilder(&mut builder) != AAUDIO_OK {
                 return Err(Box::new(AAudioError::StreamBuilderCreation));
             }
+            AAudioStreamBuilder_setDirection(builder, direction as u32);
             AAudioStreamBuilder_setBufferCapacityInFrames(builder, buffer_size as i32 * 2);
             AAudioStreamBuilder_setFormat(builder, format as AaudioFormatT);
             AAudioStreamBuilder_setSampleRate(builder, frame_rate as i32);
@@ -195,6 +228,7 @@ impl AudioStream {
         let buffer_drop = AndroidAudioStreamCommit {
             stream,
             buffer_ptr: buffer.as_ptr(),
+            direction,
         };
         Ok(AudioStream {
             buffer,
@@ -249,6 +283,56 @@ impl AsyncPlaybackBufferStream for AudioStream {
     }
 }
 
+#[async_trait(?Send)]
+impl CaptureBufferStream for AudioStream {
+    fn next_capture_buffer<'b, 's: 'b>(&'s mut self) -> Result<CaptureBuffer<'b>, BoxError> {
+        // This traits function is never called.
+        unimplemented!()
+    }
+}
+
+#[async_trait(?Send)]
+impl AsyncCaptureBufferStream for AudioStream {
+    async fn next_capture_buffer<'a>(
+        &'a mut self,
+        ex: &dyn AudioStreamsExecutor,
+    ) -> Result<AsyncCaptureBuffer<'a>, BoxError> {
+        if let Some(start_time) = self.start_time {
+            ex.delay(self.next_frame.saturating_sub(start_time.elapsed()))
+                .await?;
+            self.next_frame += self.interval;
+        } else {
+            self.start_time = Some(Instant::now());
+            self.next_frame = self.interval;
+        }
+
+        // SAFETY:
+        // The AAudioStream_read writes buffer for buffer.len() / frame_size * frame_size bytes
+        let frames_read = unsafe {
+            AAudioStream_read(
+                self.buffer_drop.stream.stream_ptr,
+                self.buffer.as_mut_ptr() as *mut c_void,
+                (self.buffer.len() / self.frame_size) as i32,
+                0,
+            )
+        };
+
+        if frames_read < 0 {
+            warn!("AAudio stream write failed: {frames_read}");
+            self.buffer.fill(0);
+        } else if (frames_read as usize) < self.buffer.len() / self.frame_size {
+            self.buffer[frames_read as usize * self.frame_size..].fill(0);
+        }
+
+        Ok(AsyncCaptureBuffer::new(
+            self.buffer.len() / self.frame_size,
+            self.buffer.as_mut(),
+            &mut self.buffer_drop,
+        )
+        .map_err(Box::new)?)
+    }
+}
+
 impl Drop for AAudioStreamPtr {
     fn drop(&mut self) {
         // SAFETY:
@@ -272,7 +356,13 @@ impl StreamSource for AndroidAudioStreamSource {
         frame_rate: u32,
         buffer_size: usize,
     ) -> Result<(Box<dyn StreamControl>, Box<dyn PlaybackBufferStream>), BoxError> {
-        match AudioStream::new(num_channels, format, frame_rate, buffer_size) {
+        match AudioStream::new(
+            num_channels,
+            format,
+            frame_rate,
+            buffer_size,
+            AndroidAudioStreamDirection::Output,
+        ) {
             Ok(audio_stream) => Ok((Box::new(NoopStreamControl::new()), Box::new(audio_stream))),
             Err(err) => Err(err),
         }
@@ -287,10 +377,50 @@ impl StreamSource for AndroidAudioStreamSource {
         buffer_size: usize,
         _ex: &dyn AudioStreamsExecutor,
     ) -> Result<(Box<dyn StreamControl>, Box<dyn AsyncPlaybackBufferStream>), BoxError> {
-        match AudioStream::new(num_channels, format, frame_rate, buffer_size) {
+        match AudioStream::new(
+            num_channels,
+            format,
+            frame_rate,
+            buffer_size,
+            AndroidAudioStreamDirection::Output,
+        ) {
             Ok(audio_stream) => Ok((Box::new(NoopStreamControl::new()), Box::new(audio_stream))),
             Err(err) => Err(err),
         }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn new_capture_stream(
+        &mut self,
+        _num_channels: usize,
+        _format: SampleFormat,
+        _frame_rate: u32,
+        _buffer_size: usize,
+        _effects: &[StreamEffect],
+    ) -> std::result::Result<(Box<dyn StreamControl>, Box<dyn CaptureBufferStream>), BoxError> {
+        // This traits function is never called.
+        unimplemented!();
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn new_async_capture_stream(
+        &mut self,
+        num_channels: usize,
+        format: SampleFormat,
+        frame_rate: u32,
+        buffer_size: usize,
+        _effects: &[StreamEffect],
+        _ex: &dyn AudioStreamsExecutor,
+    ) -> std::result::Result<(Box<dyn StreamControl>, Box<dyn AsyncCaptureBufferStream>), BoxError>
+    {
+        let audio_stream = AudioStream::new(
+            num_channels,
+            format,
+            frame_rate,
+            buffer_size,
+            AndroidAudioStreamDirection::Input,
+        )?;
+        Ok((Box::new(NoopStreamControl::new()), Box::new(audio_stream)))
     }
 }
 
