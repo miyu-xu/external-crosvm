@@ -57,7 +57,7 @@ pub struct PflashParameters {
     pub block_size: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 enum State {
     ReadArray,
     ReadStatus,
@@ -232,6 +232,22 @@ impl BusDevice for Pflash {
 }
 
 impl Suspendable for Pflash {
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        let mut serialized = serde_json::Map::new();
+        serialized.insert("status".to_string(), serde_json::to_value(self.status)?);
+        serialized.insert("state".to_string(), serde_json::to_value(self.state)?);
+        Ok(serde_json::Value::Object(serialized))
+    }
+
+    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let serde_json::Value::Object(map) = data else {
+            anyhow::bail!("Wrong object type, expected map, got {:?}", data);
+        };
+        self.status = serde_json::from_value(map.get("status").ok_or_else(|| anyhow::anyhow!("missing 'status'"))?.clone())?;
+        self.state = serde_json::from_value(map.get("state").ok_or_else(|| anyhow::anyhow!("missing 'state'"))?.clone())?;
+        Ok(())
+    }
+
     fn sleep(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
