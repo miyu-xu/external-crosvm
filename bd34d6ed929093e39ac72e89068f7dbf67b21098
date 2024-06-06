@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "0be86ab7_3c055b85",
+        "filename": "devices/src/pflash.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 239,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2024-06-06T21:25:32Z",
+      "side": 1,
+      "message": "Thanks, that looks better.",
+      "parentUuid": "9aae9eba_abf68d7c",
+      "range": {
+        "startLine": 236,
+        "startChar": 0,
+        "endLine": 239,
+        "endChar": 49
+      },
+      "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4c56e14a_9473276f",
@@ -37,6 +61,24 @@
       "writtenOn": "2024-06-06T20:35:06Z",
       "side": 1,
       "message": "should flush the disk image: `self.image.flush()`\n\nonly matters in practice for qcow2, so can wait for the version of this CL that goes upstream if we don\u0027t use qcow2 for pflash in CF",
+      "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "eef99137_89d2d21b",
+        "filename": "devices/src/pflash.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 252,
+      "author": {
+        "id": 1291337
+      },
+      "writtenOn": "2024-06-06T21:25:32Z",
+      "side": 1,
+      "message": "We don\u0027t use qcow2 for pflash in CF, so not urgent. I\u0027ve left a `TODO` comment.\n\nUnfortunately this looks nontrivial: `flush()` is only in `AsyncDisk`, not `DiskFile`, and creating an `AsyncDisk` consumes the `Box\u003cdyn DiskFile\u003e`.",
+      "parentUuid": "4c56e14a_9473276f",
       "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
