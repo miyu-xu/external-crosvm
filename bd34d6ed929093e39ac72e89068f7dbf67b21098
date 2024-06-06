@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9aae9eba_abf68d7c",
+        "filename": "devices/src/pflash.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 239,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-06T20:31:51Z",
+      "side": 1,
+      "message": "Probably simpler to define a struct for the snapshot, or use a tuple\n\n```\nOk(serde_json::to_value((self.status, self.state))?)\n```\n\nand \n\n```\nlet (status, state) \u003d serde_json::from_value(data)?;\nself.status \u003d status;\nself.state \u003d state;\nOk(())\n```",
+      "range": {
+        "startLine": 236,
+        "startChar": 0,
+        "endLine": 239,
+        "endChar": 49
+      },
+      "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
