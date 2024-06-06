@@ -22,6 +22,23 @@
       },
       "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c56e14a_9473276f",
+        "filename": "devices/src/pflash.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 252,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-06T20:35:06Z",
+      "side": 1,
+      "message": "should flush the disk image: `self.image.flush()`\n\nonly matters in practice for qcow2, so can wait for the version of this CL that goes upstream if we don\u0027t use qcow2 for pflash in CF",
+      "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
