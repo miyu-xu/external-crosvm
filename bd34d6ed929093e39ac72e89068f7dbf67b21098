@@ -81,6 +81,24 @@
       "parentUuid": "4c56e14a_9473276f",
       "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "59f77666_c4a3f2a0",
+        "filename": "devices/src/pflash.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 252,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-06T21:31:40Z",
+      "side": 1,
+      "message": "Sounds good.\n\nI\u0027m bringing back the sync flush in https://crrev.com/c/5508453, but not sure when that will land, that series is still in limbo.",
+      "parentUuid": "eef99137_89d2d21b",
+      "revId": "bd34d6ed929093e39ac72e89068f7dbf67b21098",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
