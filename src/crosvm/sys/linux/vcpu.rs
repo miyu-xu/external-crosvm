@@ -27,6 +27,8 @@ use arch::VmArch;
 use base::signal::clear_signal_handler;
 use base::signal::BlockedSignal;
 use base::*;
+use base::sched_attr;
+use base::sched_setattr;
 use devices::Bus;
 use devices::IrqChip;
 use devices::VcpuRunState;
@@ -78,6 +80,13 @@ fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
     }
 }
 
+const SCHED_FLAG_RESET_ON_FORK: u64 = 0x1;
+const SCHED_FLAG_KEEP_POLICY: u64 = 0x08;
+const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
+const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
+
+const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
+
 /// Set the VCPU thread affinity and other per-thread scheduler properties.
 /// This function will be called from each VCPU thread at startup.
 pub fn set_vcpu_thread_scheduling(
@@ -91,6 +100,15 @@ pub fn set_vcpu_thread_scheduling(
         if let Err(e) = set_cpu_affinity(vcpu_affinity) {
             error!("Failed to set CPU affinity: {}", e);
         }
+    }
+
+    let mut sched_attr = sched_attr::default();
+    sched_attr.sched_flags =
+        SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
+    sched_attr.sched_util_min = 1024;
+
+    if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
+        warn!("Error setting util value:");
     }
 
     if core_scheduling && !enable_per_vm_core_scheduling {
