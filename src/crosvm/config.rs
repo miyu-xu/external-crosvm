@@ -129,6 +129,9 @@ pub struct CpuOptions {
     /// Core Type of CPUs.
     #[cfg(target_arch = "x86_64")]
     pub core_types: Option<CpuCoreType>,
+    /// Vector of frequencies for each CPU.
+    #[serde(default)]
+    pub frequencies: Vec<Vec<u32>>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, FromKeyValues, PartialEq, Eq)]
@@ -658,6 +661,24 @@ pub fn parse_dynamic_power_coefficient(s: &str) -> Result<BTreeMap<usize, u32>, 
         }
     }
     Ok(dyn_power_coefficient)
+}
+
+pub fn parse_cpu_frequencies(s: &str) -> Result<BTreeMap<usize, Vec<u32>>, String> {
+    let mut cpu_frequencies: BTreeMap<usize, Vec<u32>> = BTreeMap::default();
+    for cpufreq_assigns in s.split(';') {
+        let assignment: Vec<&str> = cpufreq_assigns.split('=').collect();
+        if assignment.len() != 2 {
+            return Err(invalid_value_err(cpufreq_assigns, "invalid CPU freq syntax"));
+        }
+        let cpu = assignment[0].parse().map_err(|_| {
+            invalid_value_err(assignment[0], "CPU index must be a non-negative integer")
+        })?;
+        let freqs = assignment[1].split(',').map(|x| x.parse::<u32>().unwrap()).collect::<Vec<_>>();
+        if cpu_frequencies.insert(cpu, freqs).is_some() {
+            return Err(invalid_value_err(cpufreq_assigns, "CPU index must be unique"));
+        }
+    }
+    Ok(cpu_frequencies)
 }
 
 pub fn from_key_values<'a, T: Deserialize<'a>>(value: &'a str) -> Result<T, String> {

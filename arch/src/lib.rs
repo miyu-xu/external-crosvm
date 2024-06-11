@@ -321,6 +321,7 @@ pub struct VmComponents {
     pub break_linux_pci_config_io: bool,
     pub cpu_capacity: BTreeMap<usize, u32>,
     pub cpu_clusters: Vec<CpuSet>,
+    pub cpu_freq_scale: BTreeMap<usize, f32>,
     pub cpu_frequencies: BTreeMap<usize, Vec<u32>>,
     pub delay_rt: bool,
     pub dynamic_power_coefficient: BTreeMap<usize, u32>,

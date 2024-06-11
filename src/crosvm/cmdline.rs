@@ -73,6 +73,7 @@ use crate::crosvm::config::from_key_values;
 use crate::crosvm::config::parse_bus_id_addr;
 use crate::crosvm::config::parse_cpu_affinity;
 use crate::crosvm::config::parse_cpu_capacity;
+use crate::crosvm::config::parse_cpu_frequencies;
 use crate::crosvm::config::parse_dynamic_power_coefficient;
 #[cfg(target_arch = "x86_64")]
 use crate::crosvm::config::parse_memory_region;

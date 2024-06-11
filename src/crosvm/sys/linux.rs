@@ -1083,9 +1083,11 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
     };
 
     let mut cpu_frequencies = BTreeMap::new();
+    let mut cpu_freq_scale = BTreeMap::new();
 
     if cfg.virt_cpufreq {
         let host_cpu_frequencies = Arch::get_host_cpu_frequencies_khz()?;
+        let max_cpu_capacity = cfg.cpu_capacity.values().max().unwrap();
 
         for cpu_id in 0..cfg.vcpu_count.unwrap_or(1) {
             let vcpu_affinity = match cfg.vcpu_affinity.clone() {
@@ -1106,6 +1108,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
                         }
                     }
                 }
+                let scale = 1024 as f32 / *max_cpu_capacity as f32;
+                cpu_freq_scale.insert(cpu_id, scale);
                 cpu_frequencies.insert(cpu_id, freq_domain.clone());
             } else {
                 panic!("No frequency domain for cpu:{}", cpu_id);
@@ -1134,6 +1138,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         cpu_clusters: cfg.cpu_clusters.clone(),
         cpu_capacity: cfg.cpu_capacity.clone(),
         cpu_frequencies,
+        cpu_freq_scale,
         fw_cfg_parameters: cfg.fw_cfg_parameters.clone(),
         no_smt: cfg.no_smt,
         hugepages: cfg.hugepages,

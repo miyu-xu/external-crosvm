@@ -654,6 +654,14 @@ pub fn move_proc_to_cgroup(cgroup_path: PathBuf, process_id: Pid) -> Result<()> 
     move_to_cgroup(cgroup_path, process_id, "cgroup.procs")
 }
 
+fn parse_sysfs_cpu_info(cpu_id: usize, property: &str) -> Result<u32> {
+    let path = format!("/sys/devices/system/cpu/cpu{cpu_id}/{property}");
+    std::fs::read_to_string(path)?
+        .trim()
+        .parse()
+        .map_err(|_| Error::new(libc::EINVAL))
+}
+
 /// Queries the property of a specified CPU sysfs node.
 fn parse_sysfs_cpu_info_vec(cpu_id: usize, property: &str) -> Result<Vec<u32>> {
     let path = format!("/sys/devices/system/cpu/cpu{cpu_id}/{property}");

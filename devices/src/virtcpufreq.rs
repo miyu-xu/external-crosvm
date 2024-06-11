@@ -17,6 +17,7 @@ const SCHED_FLAG_RESET_ON_FORK: u64 = 0x1;
 const SCHED_FLAG_KEEP_POLICY: u64 = 0x08;
 const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
 const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
+const SCHED_FLAG_UTIL_CLAMP_MAX: u64 = 0x40;
 
 const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
 
@@ -24,6 +25,7 @@ pub struct VirtCpufreq {
     cpu_fmax: u32,
     cpu_capacity: u32,
     pcpu: u32,
+    cpu_freq_scale: f32,
 }
 
 fn get_cpu_info(cpu_id: u32, property: &str) -> Result<u32, Error> {
@@ -47,7 +49,7 @@ fn get_cpu_curfreq_khz(cpu_id: u32) -> Result<u32, Error> {
 }
 
 impl VirtCpufreq {
-    pub fn new(pcpu: u32) -> Self {
+    pub fn new(pcpu: u32, cpu_freq_scale: f32) -> Self {
         let cpu_capacity = get_cpu_capacity(pcpu).expect("Error reading capacity");
         let cpu_fmax = get_cpu_maxfreq_khz(pcpu).expect("Error reading max freq");
 
@@ -55,6 +57,7 @@ impl VirtCpufreq {
             cpu_fmax,
             cpu_capacity,
             pcpu,
+            cpu_freq_scale,
         }
     }
 }
@@ -79,7 +82,8 @@ impl BusDevice for VirtCpufreq {
         }
         // TODO(davidai): Evaluate opening file and re-reading the same fd.
         let freq = match get_cpu_curfreq_khz(self.pcpu) {
-            Ok(freq) => freq,
+//            Ok(freq) => freq,
+            Ok(freq) => (freq as f32 / self.cpu_freq_scale) as u32,
             Err(e) => panic!("{}: Error reading freq: {}", self.debug_label(), e),
         };
 
@@ -100,12 +104,14 @@ impl BusDevice for VirtCpufreq {
             }
         };
 
-        let util = self.cpu_capacity * freq / self.cpu_fmax;
+        let scaled_freq = (freq as f32 / self.cpu_freq_scale) as u32;
+        let util = self.cpu_capacity * scaled_freq / self.cpu_fmax;
 
         let mut sched_attr = sched_attr::default();
         sched_attr.sched_flags =
-            SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_RESET_ON_FORK;
+            SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_UTIL_CLAMP_MAX | SCHED_FLAG_RESET_ON_FORK;
         sched_attr.sched_util_min = util;
+        sched_attr.sched_util_max = util;
 
         if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
             panic!("{}: Error setting util value: {}", self.debug_label(), e);

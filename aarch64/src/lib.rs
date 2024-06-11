@@ -633,6 +633,7 @@ impl arch::LinuxArch for AArch64 {
 
                 let virt_cpufreq = Arc::new(Mutex::new(VirtCpufreq::new(
                     vcpu_affinity[0].try_into().unwrap(),
+                    *components.cpu_freq_scale.get(&vcpu).unwrap()
                 )));
 
                 if vcpu as u64 * AARCH64_VIRTFREQ_SIZE + AARCH64_VIRTFREQ_SIZE
