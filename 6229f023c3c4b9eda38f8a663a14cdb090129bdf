@@ -3,6 +3,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "3bede871_abf475c1",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-13T21:36:48Z",
+      "side": 1,
+      "message": "i\u0027m not sure what happens when you do `repr(C)` on an enum type. i don\u0027t think we can trust it to have the same representation this function argument expects\n\ni suggest using u32 for argument type here, removing `repr(C)` from the type, and using a cast to convert it to a u32 at call time (something like `AAudioStreamBuilder_setDirection(builder, direction as u32)`)",
+      "range": {
+        "startLine": 81,
+        "startChar": 19,
+        "endLine": 81,
+        "endChar": 46
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "d5c6950e_c93d1e57",
         "filename": "android_audio/src/lib.rs",
         "patchSetId": 3
@@ -14,6 +37,30 @@
       "writtenOn": "2024-06-13T05:48:44Z",
       "side": 1,
       "message": "... why?",
+      "range": {
+        "startLine": 215,
+        "startChar": 63,
+        "endLine": 215,
+        "endChar": 71
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b97131bb_763970ca",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 215,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-13T21:36:48Z",
+      "side": 1,
+      "message": "you can make the type `Copy` (`#[derive(Clone, Copy)]`) to get rid of this",
+      "parentUuid": "d5c6950e_c93d1e57",
       "range": {
         "startLine": 215,
         "startChar": 63,
@@ -72,6 +119,46 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "fc4a2f8a_4e7629af",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 329,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-13T21:36:48Z",
+      "side": 1,
+      "message": "if the non-async traits aren\u0027t used, maybe just do `unimplemented!()`",
+      "range": {
+        "startLine": 293,
+        "startChar": 0,
+        "endLine": 329,
+        "endChar": 9
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b24aedf6_d17286f6",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 362,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-13T21:36:48Z",
+      "side": 1,
+      "message": "maybe include the return in the message `warn!(\"AAudio stream write failed: {frames_read}\");`",
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "ae1c5ff1_191fd366",
         "filename": "android_audio/src/lib.rs",
         "patchSetId": 3
@@ -83,6 +170,30 @@
       "writtenOn": "2024-06-13T05:48:44Z",
       "side": 1,
       "message": "I didn\u0027t notice this in the previous CL, but this could be simplified by using the map function on Result.",
+      "range": {
+        "startLine": 409,
+        "startChar": 0,
+        "endLine": 410,
+        "endChar": 33
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7c1f65cc_188f000b",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 410,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-13T21:36:48Z",
+      "side": 1,
+      "message": "or\n\n```\n        let audio_stream \u003d AudioStream::new(\n            num_channels,\n            format,\n            frame_rate,\n            buffer_size,\n            AndroidAudioStreamDirection::Output,\n        )?;\n        Ok((Box::new(NoopStreamControl::new()), Box::new(audio_stream)))\n```",
+      "parentUuid": "ae1c5ff1_191fd366",
       "range": {
         "startLine": 409,
         "startChar": 0,
