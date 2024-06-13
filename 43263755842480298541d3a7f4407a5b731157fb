@@ -22,6 +22,30 @@
       },
       "revId": "43263755842480298541d3a7f4407a5b731157fb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2e5adcfb_18daa0e1",
+        "filename": "src/crosvm/sys/linux/vcpu.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 41,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-06-13T21:10:49Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "ffe8f2e3_0ddcbbf7",
+      "range": {
+        "startLine": 40,
+        "startChar": 0,
+        "endLine": 41,
+        "endChar": 35
+      },
+      "revId": "43263755842480298541d3a7f4407a5b731157fb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
