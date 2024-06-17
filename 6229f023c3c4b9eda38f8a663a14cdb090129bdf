@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "ccd7cd58_1df757d0",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 81,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3bede871_abf475c1",
+      "range": {
+        "startLine": 81,
+        "startChar": 19,
+        "endLine": 81,
+        "endChar": 46
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "d5c6950e_c93d1e57",
@@ -71,6 +95,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b30dbfe6_0a8b4fde",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 215,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Thanks!",
+      "parentUuid": "b97131bb_763970ca",
+      "range": {
+        "startLine": 215,
+        "startChar": 63,
+        "endLine": 215,
+        "endChar": 71
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "81f42f75_71826755",
@@ -84,6 +132,30 @@
       "writtenOn": "2024-06-13T05:48:44Z",
       "side": 1,
       "message": "this needs an explanation or should be from named constants.",
+      "range": {
+        "startLine": 216,
+        "startChar": 67,
+        "endLine": 216,
+        "endChar": 80
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9688159a_61f08358",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 216,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Oh... it\u0027s actually my mistake to change this line.",
+      "parentUuid": "81f42f75_71826755",
       "range": {
         "startLine": 216,
         "startChar": 67,
@@ -117,6 +189,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "fb63a4fc_1f9244e2",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 297,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Done. And for previous change I uploaded aosp/3133479",
+      "parentUuid": "1f9450b5_602ea993",
+      "range": {
+        "startLine": 294,
+        "startChar": 0,
+        "endLine": 297,
+        "endChar": 13
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "fc4a2f8a_4e7629af",
@@ -140,6 +236,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d1af7d48_168d6632",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 329,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Done. And for previous change I uploaded aosp/3133479",
+      "parentUuid": "fc4a2f8a_4e7629af",
+      "range": {
+        "startLine": 293,
+        "startChar": 0,
+        "endLine": 329,
+        "endChar": 9
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "b24aedf6_d17286f6",
@@ -153,6 +273,24 @@
       "writtenOn": "2024-06-13T21:36:48Z",
       "side": 1,
       "message": "maybe include the return in the message `warn!(\"AAudio stream write failed: {frames_read}\");`",
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bb6a6a16_913a8e53",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 362,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "b24aedf6_d17286f6",
       "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -194,6 +332,30 @@
       "side": 1,
       "message": "or\n\n```\n        let audio_stream \u003d AudioStream::new(\n            num_channels,\n            format,\n            frame_rate,\n            buffer_size,\n            AndroidAudioStreamDirection::Output,\n        )?;\n        Ok((Box::new(NoopStreamControl::new()), Box::new(audio_stream)))\n```",
       "parentUuid": "ae1c5ff1_191fd366",
+      "range": {
+        "startLine": 409,
+        "startChar": 0,
+        "endLine": 410,
+        "endChar": 33
+      },
+      "revId": "6229f023c3c4b9eda38f8a663a14cdb090129bdf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "82871387_88fe5ebd",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 410,
+      "author": {
+        "id": 1956136
+      },
+      "writtenOn": "2024-06-17T07:15:23Z",
+      "side": 1,
+      "message": "Done by another refactor change aosp/3133479",
+      "parentUuid": "7c1f65cc_188f000b",
       "range": {
         "startLine": 409,
         "startChar": 0,
