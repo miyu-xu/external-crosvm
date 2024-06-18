@@ -130,7 +130,7 @@ impl BusDevice for VirtCpufreq {
 
         // Util margin depends on the cpufreq governor on the host
         let cpu_cap_scaled = self.cpu_capacity * self.util_factor / CPUFREQ_GOV_SCALE_FACTOR_DEFAULT;
-        let util = cpu_cap_scaled * freq / self.cpu_fmax;
+        let util = cpu_cap_scaled * (freq / self.cpu_fmax);
 
         let mut sched_attr = sched_attr::default();
         sched_attr.sched_flags =
