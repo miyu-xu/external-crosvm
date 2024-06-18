@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c3248533_29c4ecb7",
+        "filename": "android_audio/src/lib.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 302,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-18T00:55:22Z",
+      "side": 1,
+      "message": "the `delay` implementation isn\u0027t the best. even if the duration is zero, it is going to allocate a timerfd, arm the timer, set the FD to non-block, and then read from the FD before returning back here\n\nmaybe one of us should send a CL to add the basic zero check to `delay` so that this code can stay nicer",
+      "range": {
+        "startLine": 301,
+        "startChar": 0,
+        "endLine": 302,
+        "endChar": 24
+      },
+      "revId": "eb763f7fc9808bc43fd60574d91d3777f30f719b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
