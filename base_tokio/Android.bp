@@ -13,85 +13,48 @@ package {
 }
 
 rust_test {
-    name: "disk_test_src_disk",
+    name: "base_tokio_test_src_lib",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
-    crate_name: "disk",
+    crate_name: "base_tokio",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
-    crate_root: "src/disk.rs",
+    crate_root: "src/lib.rs",
     test_suites: ["general-tests"],
     auto_gen_config: true,
     test_options: {
         unit_test: true,
     },
     edition: "2021",
-    features: [
-        "android-sparse",
-        "composite-disk", // Added manually
-        "qcow",
-    ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libcfg_if",
-        "libcrc32fast", // Added manually
-        "libcros_async",
-        "libdata_model",
         "libfutures",
         "liblibc",
-        "libprotobuf", // Added manually
-        "libprotos", // Added manually
         "libserde",
         "libsync_rust",
-        "libtempfile",
-        "libthiserror",
-        "libuuid", // Added manually
-        "libvm_memory",
-        "libzerocopy",
-    ],
-    proc_macros: [
-        "libasync_trait",
-        "libremain",
+        "libtokio",
     ],
 }
 
 rust_library {
-    name: "libdisk",
+    name: "libbase_tokio",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
-    crate_name: "disk",
+    crate_name: "base_tokio",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
-    crate_root: "src/disk.rs",
+    crate_root: "src/lib.rs",
     edition: "2021",
-    features: [
-        "android-sparse",
-        "composite-disk", // Added manually
-        "qcow",
-    ],
     rustlibs: [
+        "libanyhow",
         "libbase_rust",
         "libcfg_if",
-        "libcrc32fast", // Added manually
-        "libcros_async",
-        "libdata_model",
         "libfutures",
         "liblibc",
-        "libprotobuf", // Added manually
-        "libprotos", // Added manually
         "libserde",
         "libsync_rust",
-        "libthiserror",
-        "libuuid", // Added manually
-        "libvm_memory",
-        "libzerocopy",
-    ],
-    proc_macros: [
-        "libasync_trait",
-        "libremain",
-    ],
-    visibility: [
-        "//packages/modules/Virtualization/virtualizationmanager",
-        "//vendor:__subpackages__",
+        "libtokio",
     ],
 }
