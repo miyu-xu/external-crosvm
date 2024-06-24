@@ -37,6 +37,9 @@ use hypervisor::IoParams;
 use hypervisor::VcpuExit;
 use hypervisor::VcpuSignalHandle;
 use libc::c_int;
+use libc::SCHED_FLAG_KEEP_ALL;
+use libc::SCHED_FLAG_RESET_ON_FORK;
+use metrics_events::MetricEventType;
 #[cfg(target_arch = "riscv64")]
 use riscv64::Riscv64 as Arch;
 #[cfg(target_arch = "x86_64")]
@@ -52,6 +55,7 @@ use super::ExitState;
 use crate::crosvm::ratelimit::Ratelimit;
 
 // TODO(davidai): Import libc constant when updated
+<<<<<<< HEAD   (9d9e56 Merge "UPSTREAM: vcpu: boost vcpu threads" into main)
 const SCHED_FLAG_RESET_ON_FORK: u64 = 0x1;
 const SCHED_FLAG_KEEP_POLICY: u64 = 0x08;
 const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
@@ -59,6 +63,10 @@ const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
 const SCHED_SCALE_CAPACITY: u32 = 1024;
 
 const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
+=======
+const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
+const SCHED_SCALE_CAPACITY: u32 = 1024;
+>>>>>>> BRANCH (be0f37 Roll recipe dependencies (trivial).)
 
 fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
     |IoParams {
@@ -107,9 +115,15 @@ pub fn set_vcpu_thread_scheduling(
 
     if boost_uclamp {
         let mut sched_attr = sched_attr::default();
+<<<<<<< HEAD   (9d9e56 Merge "UPSTREAM: vcpu: boost vcpu threads" into main)
         sched_attr.sched_flags = SCHED_FLAG_KEEP_ALL
             | SCHED_FLAG_UTIL_CLAMP_MIN
             | SCHED_FLAG_RESET_ON_FORK;
+=======
+        sched_attr.sched_flags = SCHED_FLAG_KEEP_ALL as u64
+            | SCHED_FLAG_UTIL_CLAMP_MIN
+            | SCHED_FLAG_RESET_ON_FORK as u64;
+>>>>>>> BRANCH (be0f37 Roll recipe dependencies (trivial).)
         sched_attr.sched_util_min = SCHED_SCALE_CAPACITY;
 
         if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
@@ -191,7 +205,7 @@ where
     Ok(vcpu)
 }
 
-thread_local!(static VCPU_THREAD: RefCell<Option<VcpuSignalHandle>> = RefCell::new(None));
+thread_local!(static VCPU_THREAD: RefCell<Option<VcpuSignalHandle>> = const { RefCell::new(None) });
 
 fn set_vcpu_thread_local(vcpu: Option<&dyn VcpuArch>, signal_num: c_int) {
     // Block signal while we add -- if a signal fires (very unlikely,
@@ -413,7 +427,15 @@ where
                 }
                 Ok(VcpuExit::IrqWindowOpen) => {}
                 Ok(VcpuExit::Hlt) => irq_chip.halted(cpu_id),
-                Ok(VcpuExit::Shutdown) => return ExitState::Stop,
+                Ok(VcpuExit::Shutdown(reason)) => {
+                    if let Err(e) = reason {
+                        metrics::log_descriptor(
+                            MetricEventType::VcpuShutdownError,
+                            e.get_raw_error_code() as i64,
+                        );
+                    }
+                    return ExitState::Stop;
+                }
                 Ok(VcpuExit::FailEntry {
                     hardware_entry_failure_reason,
                 }) => {
