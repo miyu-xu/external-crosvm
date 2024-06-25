@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bf18de6f_1f334258",
+        "filename": "src/crosvm/sys/linux/vcpu.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-25T18:46:02Z",
+      "side": 1,
+      "message": "CC @davidai@google.com",
+      "revId": "b79815ee3a961753d3da14af885891698abdc96f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
