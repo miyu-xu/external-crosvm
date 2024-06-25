@@ -1,0 +1,73 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a647fb22_7e9af96f",
+        "filename": "base_tokio/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-06-25T16:43:14Z",
+      "side": 1,
+      "message": "License",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 48
+      },
+      "revId": "53fd7cd47c64d0de4c20c37dc5be11f23e971f1f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f8ea581d_1551c5b5",
+        "filename": "ext2/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-06-25T16:43:14Z",
+      "side": 1,
+      "message": "License",
+      "range": {
+        "startLine": 5,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 48
+      },
+      "revId": "53fd7cd47c64d0de4c20c37dc5be11f23e971f1f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0b915cba_0e32ceec",
+        "filename": "hypervisor/hypervisor_test_macro/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 6,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-06-25T16:43:14Z",
+      "side": 1,
+      "message": "License",
+      "range": {
+        "startLine": 6,
+        "startChar": 0,
+        "endLine": 6,
+        "endChar": 48
+      },
+      "revId": "53fd7cd47c64d0de4c20c37dc5be11f23e971f1f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
