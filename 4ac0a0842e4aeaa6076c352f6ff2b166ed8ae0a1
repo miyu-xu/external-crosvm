@@ -35,6 +35,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "5874f5bd_ba23a33a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-06-25T22:55:14Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "45435362_111031c2",
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cdd432ef_250ba926",
@@ -58,6 +76,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e38a6dfb_5630e0dc",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-06-25T22:55:14Z",
+      "side": 1,
+      "message": "I think I got mixed up reading the old patch file and trying to keep the operations the same. It looks like things were moved to static/rlib upstream so the new generated Android.bp file before the patch looks like: https://paste.googleplex.com/6244270300463104?raw\n\nSo I think you\u0027re right, the resulting Android.bp file after the patch should look mostly the same as it did before.",
+      "parentUuid": "cdd432ef_250ba926",
+      "range": {
+        "startLine": 56,
+        "startChar": 0,
+        "endLine": 66,
+        "endChar": 6
+      },
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f6d0f259_25f7527a",
@@ -71,6 +113,24 @@
       "writtenOn": "2024-06-25T19:04:35Z",
       "side": 1,
       "message": "delete `gfxstream_stub`",
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "823874c5_335fa93a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-06-25T22:55:14Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f6d0f259_25f7527a",
       "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
