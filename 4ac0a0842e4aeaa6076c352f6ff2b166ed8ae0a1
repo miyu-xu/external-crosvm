@@ -1,0 +1,78 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "2cd0f240_5125d0c6",
+        "filename": "power_monitor/patches/Android.bp.patch",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-25T19:04:35Z",
+      "side": 1,
+      "message": "`\"copy_out\": true,` is supposed to output this genrule. i think there must be a cargo_embargo bug, or there are no out files anymore, so it gets skipped\n\ni don\u0027t think it needs to block the merge though. we can debug after",
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "45435362_111031c2",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-25T19:04:35Z",
+      "side": 1,
+      "message": "delete `gfxstream_stub`",
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cdd432ef_250ba926",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-25T19:04:35Z",
+      "side": 1,
+      "message": "some of the libs got moved from static to shared. do you remember if that is necessary? i think someone went out of their way to make them static before\n\nCC @gurchetansingh@google.com @jiyong@google.com",
+      "range": {
+        "startLine": 56,
+        "startChar": 0,
+        "endLine": 66,
+        "endChar": 6
+      },
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f6d0f259_25f7527a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 123,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-06-25T19:04:35Z",
+      "side": 1,
+      "message": "delete `gfxstream_stub`",
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
