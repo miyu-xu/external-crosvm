@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fd4dfc28_8462be21",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-06-26T00:14:56Z",
+      "side": 1,
+      "message": "(Lint +2 because it should support the whole directory ???)",
+      "revId": "64d5dea5601c748f10dc469b0315d051ad6eece0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
