@@ -5,8 +5,8 @@ authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [dependencies]
-anyhow = "1"
-cfg-if = "1"
+anyhow = "*"
+cfg-if = "*"
 serde = { version = "1", features = ["derive"] }
 metrics_events_product = { path = "../vendor/generic/metrics_events", package = "metrics_events_generic" }
 

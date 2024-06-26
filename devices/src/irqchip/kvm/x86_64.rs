@@ -356,15 +356,18 @@ impl KvmSplitIrqChip {
         self.pic.lock().interrupt_requested()
     }
 
-    /// Check if the specified vcpu has any pending interrupts. Returns [`None`] for no interrupts,
-    /// otherwise [`Some::<u8>`] should be the injected interrupt vector. For [`KvmSplitIrqChip`]
-    /// this calls `get_external_interrupt` on the pic.
-    pub fn get_external_interrupt(&self, vcpu_id: usize) -> Option<u8> {
+    /// Check if the specified vcpu has any pending interrupts. Returns None for no interrupts,
+    /// otherwise Some(u32) should be the injected interrupt vector. For KvmSplitIrqChip
+    /// this calls get_external_interrupt on the pic.
+    pub fn get_external_interrupt(&self, vcpu_id: usize) -> Option<u32> {
         // Pic interrupts for the split irqchip only go to vcpu 0
         if vcpu_id != 0 {
             return None;
         }
-        self.pic.lock().get_external_interrupt()
+        self.pic
+            .lock()
+            .get_external_interrupt()
+            .map(|vector| vector as u32)
     }
 
     /// Register an event that can trigger an interrupt for a particular GSI.

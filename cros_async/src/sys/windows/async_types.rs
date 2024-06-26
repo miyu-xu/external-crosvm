@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use base::AsRawDescriptor;
 use base::Descriptor;
+use base::ReadNotifier;
 use base::Tube;
 use base::TubeError;
 use base::TubeResult;
@@ -26,9 +27,8 @@ pub struct AsyncTube {
 
 impl AsyncTube {
     pub fn new(ex: &Executor, tube: Tube) -> io::Result<AsyncTube> {
-        let read_notifier =
-            EventAsync::new_without_reset(tube.get_read_notifier_event().try_clone()?, ex)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let read_notifier = EventAsync::clone_raw_without_reset(tube.get_read_notifier(), ex)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let inner = Arc::new(Mutex::new(tube));
         Ok(AsyncTube {
             inner,

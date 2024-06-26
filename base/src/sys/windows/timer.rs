@@ -67,7 +67,9 @@ impl Timer {
             interval: None,
         })
     }
+}
 
+impl TimerTrait for Timer {
     fn reset(&mut self, dur: Duration, mut interval: Option<Duration>) -> Result<()> {
         // If interval is 0 or None it means that this timer does not repeat. We
         // set self.interval to None in this case so it can easily be checked
@@ -117,16 +119,6 @@ impl Timer {
         }
 
         Ok(())
-    }
-}
-
-impl TimerTrait for Timer {
-    fn reset_oneshot(&mut self, dur: Duration) -> Result<()> {
-        self.reset(dur, None)
-    }
-
-    fn reset_repeating(&mut self, interval: Duration) -> Result<()> {
-        self.reset(interval, Some(interval))
     }
 
     fn wait(&mut self) -> Result<()> {

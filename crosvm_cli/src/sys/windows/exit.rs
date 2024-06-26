@@ -337,6 +337,7 @@ pub enum Exit {
     ConnectTube = 0xE0000064,
     BalloonDeviceNew = 0xE0000065,
     BalloonStats = 0xE0000066,
+    BorrowVfioContainer = 0xE0000067,
     OpenCompositeFooterFile = 0xE0000068,
     OpenCompositeHeaderFile = 0xE0000069,
     OpenCompositeImageFile = 0xE0000070,

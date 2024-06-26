@@ -14,6 +14,7 @@ use std::thread;
 
 use arch::LinuxArch;
 use arch::SmbiosOptions;
+use base::Event;
 use base::Tube;
 use devices::Bus;
 use devices::BusType;
@@ -54,6 +55,12 @@ use x86_64::KERNEL_64BIT_ENTRY_OFFSET;
 use x86_64::KERNEL_START_OFFSET;
 use x86_64::X86_64_SCI_IRQ;
 use x86_64::ZERO_PAGE_OFFSET;
+
+enum TaggedControlTube {
+    VmMemory(Tube),
+    VmIrq(Tube),
+    Vm(Tube),
+}
 
 /// Tests the integration of x86_64 with some hypervisor and devices setup. This test can help
 /// narrow down whether boot issues are caused by the interaction between hypervisor and devices
@@ -98,7 +105,7 @@ where
     let mut resources =
         SystemAllocator::new(X8664arch::get_system_allocator_config(&vm), None, &[])
             .expect("failed to create system allocator");
-    let (_irqchip_tube, device_tube) = Tube::pair().expect("failed to create irq tube");
+    let (irqchip_tube, device_tube) = Tube::pair().expect("failed to create irq tube");
 
     let mut irq_chip = create_irq_chip(vm.try_clone().expect("failed to clone vm"), 1, device_tube);
 
@@ -106,6 +113,7 @@ where
     let io_bus = Arc::new(Bus::new(BusType::Io));
     let (exit_evt_wrtube, _) = Tube::directional_pair().unwrap();
 
+    let mut control_tubes = vec![TaggedControlTube::VmIrq(irqchip_tube)];
     // Create one control socket per disk.
     let mut disk_device_tubes = Vec::new();
     let mut disk_host_tubes = Vec::new();
@@ -115,6 +123,9 @@ where
         disk_host_tubes.push(disk_host_tube);
         disk_device_tubes.push(disk_device_tube);
     }
+    let (gpu_host_tube, _gpu_device_tube) = Tube::pair().unwrap();
+
+    control_tubes.push(TaggedControlTube::VmMemory(gpu_host_tube));
 
     let devices = vec![];
 
@@ -149,8 +160,9 @@ where
     )
     .unwrap();
 
-    let (_host_cmos_tube, cmos_tube) = Tube::pair().unwrap();
+    let (host_cmos_tube, cmos_tube) = Tube::pair().unwrap();
     X8664arch::setup_legacy_cmos_device(&io_bus, &mut irq_chip, cmos_tube, memory_size).unwrap();
+    control_tubes.push(TaggedControlTube::Vm(host_cmos_tube));
 
     let mut serial_params = BTreeMap::new();
 
@@ -187,14 +199,16 @@ where
     // ````
 
     let max_bus = (read_pcie_cfg_mmio().len().unwrap() / 0x100000 - 1) as u8;
-    let (suspend_tube_send, _suspend_tube_recv) = Tube::directional_pair().unwrap();
+    let suspend_evt = Event::new().unwrap();
     let mut resume_notify_devices = Vec::new();
     let acpi_dev_resource = X8664arch::setup_acpi_devices(
         pci,
         &guest_mem,
         &io_bus,
         &mut resources,
-        Arc::new(Mutex::new(suspend_tube_send)),
+        suspend_evt
+            .try_clone()
+            .expect("unable to clone suspend_evt"),
         exit_evt_wrtube
             .try_clone()
             .expect("unable to clone exit_evt_wrtube"),
@@ -302,33 +316,35 @@ where
 
             set_lint(0, &mut irq_chip).unwrap();
 
-            match vcpu.run().expect("run failed") {
-                VcpuExit::Io => {
-                    vcpu.handle_io(&mut |IoParams {
-                                             address,
-                                             size,
-                                             operation: direction,
-                                         }| {
-                        match direction {
-                            IoOperation::Write { data } => {
-                                // We consider this test to be done when this particular
-                                // one-byte port-io to port 0xff with the value of 0x12, which
-                                // was in register eax
-                                assert_eq!(address, 0xff);
-                                assert_eq!(size, 1);
-                                assert_eq!(data[0], 0x12);
+            loop {
+                match vcpu.run().expect("run failed") {
+                    VcpuExit::Io => {
+                        vcpu.handle_io(&mut |IoParams {
+                                                 address,
+                                                 size,
+                                                 operation: direction,
+                                             }| {
+                            match direction {
+                                IoOperation::Write { data } => {
+                                    // We consider this test to be done when this particular
+                                    // one-byte port-io to port 0xff with the value of 0x12, which
+                                    // was in register eax
+                                    assert_eq!(address, 0xff);
+                                    assert_eq!(size, 1);
+                                    assert_eq!(data[0], 0x12);
+                                }
+                                _ => panic!("unexpected direction {:?}", direction),
                             }
-                            _ => panic!("unexpected direction {:?}", direction),
-                        }
-                        None
-                    })
-                    .expect("vcpu.handle_io failed");
-                }
-                r => {
-                    panic!("unexpected exit {:?}", r);
+                            None
+                        })
+                        .expect("vcpu.handle_io failed");
+                        break;
+                    }
+                    r => {
+                        panic!("unexpected exit {:?}", r);
+                    }
                 }
             }
-
             let regs = vcpu.get_regs().unwrap();
             // ecx and eax should now contain 0x12
             assert_eq!(regs.rcx, 0x12);

@@ -39,7 +39,6 @@ use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
-use std::path::Path;
 use std::path::PathBuf;
 use std::result::Result as StdResult;
 use std::str::FromStr;
@@ -97,12 +96,10 @@ use swap::SwapStatus;
 use sync::Mutex;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub use sys::FsMappingRequest;
-#[cfg(windows)]
-pub use sys::InitialAudioSessionState;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-pub use sys::VmMemoryMappingRequest;
+pub use sys::VmMsyncRequest;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-pub use sys::VmMemoryMappingResponse;
+pub use sys::VmMsyncResponse;
 use thiserror::Error;
 pub use vm_control_product::GpuSendToMain;
 pub use vm_control_product::GpuSendToService;
@@ -110,9 +107,7 @@ pub use vm_control_product::ServiceSendToGpu;
 use vm_memory::GuestAddress;
 
 #[cfg(feature = "balloon")]
-pub use crate::balloon_tube::BalloonControlCommand;
-#[cfg(feature = "balloon")]
-pub use crate::balloon_tube::BalloonTube;
+pub use crate::balloon_tube::*;
 #[cfg(feature = "gdb")]
 pub use crate::gdb::VcpuDebug;
 #[cfg(feature = "gdb")]
@@ -189,8 +184,8 @@ pub trait PmeNotify: Send {
 pub trait PmResource {
     fn pwrbtn_evt(&mut self) {}
     fn slpbtn_evt(&mut self) {}
-    fn rtc_evt(&mut self, _clear_evt: Event) {}
-    fn gpe_evt(&mut self, _gpe: u32, _clear_evt: Option<Event>) {}
+    fn rtc_evt(&mut self) {}
+    fn gpe_evt(&mut self, _gpe: u32) {}
     fn pme_evt(&mut self, _requester_id: u16) {}
     fn register_gpe_notify_dev(&mut self, _gpe: u32, _notify_dev: Arc<Mutex<dyn GpeNotify>>) {}
     fn register_pme_notify_dev(&mut self, _bus: u8, _notify_dev: Arc<Mutex<dyn PmeNotify>>) {}
@@ -1268,7 +1263,6 @@ pub enum PvClockCommand {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PvClockCommandResponse {
     Ok,
-    Resumed { total_suspended_ticks: u64 },
     DeviceInactive,
     Err(SysError),
 }
@@ -1295,19 +1289,16 @@ pub enum VmRequest {
     Powerbtn,
     /// Trigger a sleep button event in the guest.
     Sleepbtn,
-    /// Trigger a RTC interrupt in the guest. When the irq associated with the RTC is
-    /// resampled, it will be re-asserted as long as `clear_evt` is not signaled.
-    Rtc { clear_evt: Event },
+    /// Trigger a RTC interrupt in the guest.
+    Rtc,
     /// Suspend the VM's VCPUs until resume.
     SuspendVcpus,
     /// Swap the memory content into files on a disk
     Swap(SwapCommand),
     /// Resume the VM's VCPUs that were previously suspended.
     ResumeVcpus,
-    /// Inject a general-purpose event. If `clear_evt` is provided, when the irq associated
-    /// with the GPE is resampled, it will be re-asserted as long as `clear_evt` is not
-    /// signaled.
-    Gpe { gpe: u32, clear_evt: Option<Event> },
+    /// Inject a general-purpose event.
+    Gpe(u32),
     /// Inject a PCI PME
     PciPme(u16),
     /// Make the VM's RT VCPU real-time.
@@ -1339,16 +1330,19 @@ pub enum VmRequest {
     /// Command to Snapshot devices
     Snapshot(SnapshotCommand),
     /// Register for event notification
+    #[cfg(feature = "registered_events")]
     RegisterListener {
         socket_addr: String,
         event: RegisteredEvent,
     },
     /// Unregister for notifications for event
+    #[cfg(feature = "registered_events")]
     UnregisterListener {
         socket_addr: String,
         event: RegisteredEvent,
     },
     /// Unregister for all event notification
+    #[cfg(feature = "registered_events")]
     Unregister { socket_addr: String },
     /// Suspend VM VCPUs and Devices until resume.
     SuspendVm,
@@ -1358,6 +1352,7 @@ pub enum VmRequest {
 
 /// NOTE: when making any changes to this enum please also update
 /// RegisteredEventFfi in crosvm_control/src/lib.rs
+#[cfg(feature = "registered_events")]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum RegisteredEvent {
     VirtioBalloonWsReport,
@@ -1365,16 +1360,18 @@ pub enum RegisteredEvent {
     VirtioBalloonOOMDeflation,
 }
 
+#[cfg(feature = "registered_events")]
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegisteredEventWithData {
     VirtioBalloonWsReport {
-        ws_buckets: Vec<balloon_control::WSBucket>,
+        ws_buckets: Vec<WSBucket>,
         balloon_actual: u64,
     },
     VirtioBalloonResize,
     VirtioBalloonOOMDeflation,
 }
 
+#[cfg(feature = "registered_events")]
 impl RegisteredEventWithData {
     pub fn into_event(&self) -> RegisteredEvent {
         match self {
@@ -1384,7 +1381,6 @@ impl RegisteredEventWithData {
         }
     }
 
-    #[cfg(feature = "registered_events")]
     pub fn into_proto(&self) -> registered_events::RegisteredEvent {
         match self {
             Self::VirtioBalloonWsReport {
@@ -1420,7 +1416,7 @@ impl RegisteredEventWithData {
         }
     }
 
-    pub fn from_ws(ws: &balloon_control::BalloonWS, balloon_actual: u64) -> Self {
+    pub fn from_ws(ws: &BalloonWS, balloon_actual: u64) -> Self {
         RegisteredEventWithData::VirtioBalloonWsReport {
             ws_buckets: ws.ws.clone(),
             balloon_actual,
@@ -1629,7 +1625,7 @@ impl VmRequest {
         irq_handler_control: &Tube,
         snapshot_irqchip: impl Fn() -> anyhow::Result<serde_json::Value>,
     ) -> VmResponse {
-        match self {
+        match *self {
             VmRequest::Exit => {
                 *run_mode = Some(VmRunMode::Exiting);
                 VmResponse::Ok
@@ -1652,19 +1648,10 @@ impl VmRequest {
                     VmResponse::Err(SysError::new(ENOTSUP))
                 }
             }
-            VmRequest::Rtc { clear_evt } => {
-                if let Some(pm) = pm.as_ref() {
-                    match clear_evt.try_clone() {
-                        Ok(clear_evt) => {
-                            pm.lock().rtc_evt(clear_evt);
-                            *run_mode = Some(VmRunMode::Running);
-                            VmResponse::Ok
-                        }
-                        Err(err) => {
-                            error!("Error cloning clear_evt: {:?}", err);
-                            VmResponse::Err(SysError::new(EIO))
-                        }
-                    }
+            VmRequest::Rtc => {
+                if let Some(pm) = pm {
+                    pm.lock().rtc_evt();
+                    VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
                     VmResponse::Err(SysError::new(ENOTSUP))
@@ -1774,7 +1761,7 @@ impl VmRequest {
             }) => {
                 #[cfg(feature = "swap")]
                 if let Some(swap_controller) = swap_controller {
-                    return match swap_controller.disable(*slow_file_cleanup) {
+                    return match swap_controller.disable(slow_file_cleanup) {
                         Ok(()) => VmResponse::Ok,
                         Err(e) => {
                             error!("swap disable failed: {}", e);
@@ -1864,18 +1851,10 @@ impl VmRequest {
                 kick_vcpus(VcpuControl::RunState(VmRunMode::Running));
                 VmResponse::Ok
             }
-            VmRequest::Gpe { gpe, clear_evt } => {
+            VmRequest::Gpe(gpe) => {
                 if let Some(pm) = pm.as_ref() {
-                    match clear_evt.as_ref().map(|e| e.try_clone()).transpose() {
-                        Ok(clear_evt) => {
-                            pm.lock().gpe_evt(*gpe, clear_evt);
-                            VmResponse::Ok
-                        }
-                        Err(err) => {
-                            error!("Error cloning clear_evt: {:?}", err);
-                            VmResponse::Err(SysError::new(EIO))
-                        }
-                    }
+                    pm.lock().gpe_evt(gpe);
+                    VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
                     VmResponse::Err(SysError::new(ENOTSUP))
@@ -1883,7 +1862,7 @@ impl VmRequest {
             }
             VmRequest::PciPme(requester_id) => {
                 if let Some(pm) = pm.as_ref() {
-                    pm.lock().pme_evt(*requester_id);
+                    pm.lock().pme_evt(requester_id);
                     VmResponse::Ok
                 } else {
                     error!("{:#?} not supported", *self);
@@ -1899,7 +1878,7 @@ impl VmRequest {
             VmRequest::DiskCommand {
                 disk_index,
                 ref command,
-            } => match &disk_host_tubes.get(*disk_index) {
+            } => match &disk_host_tubes.get(disk_index) {
                 Some(tube) => handle_disk_command(command, tube),
                 None => VmResponse::Err(SysError::new(ENODEV)),
             },
@@ -1948,7 +1927,7 @@ impl VmRequest {
             VmRequest::BatCommand(type_, ref cmd) => {
                 match bat_control {
                     Some(battery) => {
-                        if battery.type_ != *type_ {
+                        if battery.type_ != type_ {
                             error!("ignored battery command due to battery type: expected {:?}, got {:?}", battery.type_, type_);
                             return VmResponse::Err(SysError::new(EINVAL));
                         }
@@ -1989,8 +1968,8 @@ impl VmRequest {
                     device_control_tube,
                     vcpu_size,
                     snapshot_irqchip,
-                    *compress_memory,
-                    *encrypt,
+                    compress_memory,
+                    encrypt,
                 ) {
                     Ok(()) => {
                         info!("Finished crosvm snapshot successfully");
@@ -2002,14 +1981,17 @@ impl VmRequest {
                     }
                 }
             }
+            #[cfg(feature = "registered_events")]
             VmRequest::RegisterListener {
                 socket_addr: _,
                 event: _,
             } => VmResponse::Ok,
+            #[cfg(feature = "registered_events")]
             VmRequest::UnregisterListener {
                 socket_addr: _,
                 event: _,
             } => VmResponse::Ok,
+            #[cfg(feature = "registered_events")]
             VmRequest::Unregister { socket_addr: _ } => VmResponse::Ok,
         }
     }
@@ -2130,7 +2112,7 @@ fn do_snapshot(
 /// Same as `VmRequest::execute` with a `VmRequest::Restore`. Exposed as a separate function
 /// because not all the `VmRequest::execute` arguments are available in the "cold restore" flow.
 pub fn do_restore(
-    restore_path: &Path,
+    restore_path: PathBuf,
     vm: &impl Vm,
     kick_vcpus: impl Fn(VcpuControl),
     kick_vcpu: impl Fn(VcpuControl, usize),
@@ -2235,15 +2217,12 @@ pub enum VmResponse {
     /// Results of balloon control commands.
     #[cfg(feature = "balloon")]
     BalloonStats {
-        stats: balloon_control::BalloonStats,
+        stats: BalloonStats,
         balloon_actual: u64,
     },
     /// Results of balloon WS-R command
     #[cfg(feature = "balloon")]
-    BalloonWS {
-        ws: balloon_control::BalloonWS,
-        balloon_actual: u64,
-    },
+    BalloonWS { ws: BalloonWS, balloon_actual: u64 },
     /// Results of PCI hot plug
     #[cfg(feature = "pci-hotplug")]
     PciHotPlugResponse { bus: u8 },

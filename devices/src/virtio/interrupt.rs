@@ -5,16 +5,10 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-#[cfg(target_arch = "x86_64")]
-use std::time::Instant;
 
 #[cfg(target_arch = "x86_64")]
 use base::error;
 use base::Event;
-#[cfg(target_arch = "x86_64")]
-use metrics::log_metric;
-#[cfg(target_arch = "x86_64")]
-use metrics::MetricEventType;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
@@ -51,7 +45,8 @@ struct InterruptInner {
     interrupt_status: AtomicUsize,
     transport: Transport,
     async_intr_status: bool,
-    pm_state: Arc<Mutex<PmState>>,
+    #[cfg(target_arch = "x86_64")]
+    wakeup_event: Option<PmWakeupEvent>,
 }
 
 impl InterruptInner {
@@ -86,15 +81,12 @@ impl Interrupt {
     /// If MSI-X is enabled in this device, MSI-X interrupt is preferred.
     /// Write to the irqfd to VMM to deliver virtual interrupt to the guest
     pub fn signal(&self, vector: u16, interrupt_status_mask: u32) {
-        if self
-            .inner
-            .pm_state
-            .lock()
-            .handle_interrupt(vector, interrupt_status_mask)
-        {
-            return;
+        #[cfg(target_arch = "x86_64")]
+        if let Some(wakeup_event) = self.inner.wakeup_event.as_ref() {
+            if let Err(e) = wakeup_event.trigger_wakeup() {
+                error!("Wakeup trigger failed {:?}", e);
+            }
         }
-
         match &self.inner.transport {
             Transport::Pci { pci } => {
                 // Don't need to set ISR for MSI-X interrupts
@@ -172,7 +164,7 @@ impl Interrupt {
         irq_evt_lvl: IrqLevelEvent,
         msix_config: Option<Arc<Mutex<MsixConfig>>>,
         config_msix_vector: u16,
-        #[cfg(target_arch = "x86_64")] wakeup_event: Option<(PmWakeupEvent, MetricEventType)>,
+        #[cfg(target_arch = "x86_64")] wakeup_event: Option<PmWakeupEvent>,
     ) -> Interrupt {
         Interrupt {
             inner: Arc::new(InterruptInner {
@@ -185,10 +177,8 @@ impl Interrupt {
                         config_msix_vector,
                     },
                 },
-                pm_state: PmState::new(
-                    #[cfg(target_arch = "x86_64")]
-                    wakeup_event,
-                ),
+                #[cfg(target_arch = "x86_64")]
+                wakeup_event,
             }),
         }
     }
@@ -201,7 +191,7 @@ impl Interrupt {
         msix_config: Option<Arc<Mutex<MsixConfig>>>,
         config_msix_vector: u16,
         snapshot: InterruptSnapshot,
-        #[cfg(target_arch = "x86_64")] wakeup_event: Option<(PmWakeupEvent, MetricEventType)>,
+        #[cfg(target_arch = "x86_64")] wakeup_event: Option<PmWakeupEvent>,
     ) -> Interrupt {
         Interrupt {
             inner: Arc::new(InterruptInner {
@@ -214,10 +204,8 @@ impl Interrupt {
                         config_msix_vector,
                     },
                 },
-                pm_state: PmState::new(
-                    #[cfg(target_arch = "x86_64")]
-                    wakeup_event,
-                ),
+                #[cfg(target_arch = "x86_64")]
+                wakeup_event,
             }),
         }
     }
@@ -228,10 +216,8 @@ impl Interrupt {
                 interrupt_status: AtomicUsize::new(0),
                 transport: Transport::Mmio { irq_evt_edge },
                 async_intr_status,
-                pm_state: PmState::new(
-                    #[cfg(target_arch = "x86_64")]
-                    None,
-                ),
+                #[cfg(target_arch = "x86_64")]
+                wakeup_event: None,
             }),
         }
     }
@@ -250,10 +236,8 @@ impl Interrupt {
                     signal_config_changed_fn,
                 },
                 async_intr_status: false,
-                pm_state: PmState::new(
-                    #[cfg(target_arch = "x86_64")]
-                    None,
-                ),
+                #[cfg(target_arch = "x86_64")]
+                wakeup_event: None,
             }),
         }
     }
@@ -341,118 +325,10 @@ impl Interrupt {
         }
     }
 
-    pub fn set_suspended(&self, suspended: bool) {
-        let retrigger_evts = self.inner.pm_state.lock().set_suspended(suspended);
-        for (vector, interrupt_status_mask) in retrigger_evts.into_iter() {
-            self.signal(vector, interrupt_status_mask);
-        }
-    }
-
     #[cfg(target_arch = "x86_64")]
     pub fn set_wakeup_event_active(&self, active: bool) {
-        self.inner.pm_state.lock().set_wakeup_event_active(active);
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-struct WakeupState {
-    wakeup_event: PmWakeupEvent,
-    wakeup_enabled: bool,
-    armed_time: Instant,
-    metrics_event: MetricEventType,
-    wakeup_clear_evt: Option<Event>,
-}
-
-#[cfg(target_arch = "x86_64")]
-impl WakeupState {
-    fn new(wakeup_event: Option<(PmWakeupEvent, MetricEventType)>) -> Option<Self> {
-        wakeup_event.map(|(wakeup_event, metrics_event)| Self {
-            wakeup_event,
-            wakeup_enabled: false,
-            // Not actually armed, but simpler than wrapping with an Option.
-            armed_time: Instant::now(),
-            metrics_event,
-            wakeup_clear_evt: None,
-        })
-    }
-
-    fn trigger_wakeup(&mut self) {
-        if self.wakeup_clear_evt.is_some() {
-            return;
-        }
-
-        let elapsed = self.armed_time.elapsed().as_millis();
-        log_metric(
-            self.metrics_event.clone(),
-            elapsed.try_into().unwrap_or(i64::MAX),
-        );
-
-        match self.wakeup_event.trigger_wakeup() {
-            Ok(clear_evt) => self.wakeup_clear_evt = clear_evt,
-            Err(err) => error!("Wakeup trigger failed {:?}", err),
-        }
-    }
-}
-
-// Power management state of the interrupt.
-struct PmState {
-    // Whether or not the virtio device that owns this interrupt is suspended. A
-    // suspended virtio device MUST NOT send notifications (i.e. interrupts) to the
-    // driver.
-    suspended: bool,
-    // The queue of interrupts that the virtio device has generated while suspended.
-    // These are deferred and sent in order when the device is un-suspended.
-    pending_signals: Vec<(u16, u32)>,
-    #[cfg(target_arch = "x86_64")]
-    wakeup_state: Option<WakeupState>,
-}
-
-impl PmState {
-    fn new(
-        #[cfg(target_arch = "x86_64")] wakeup_event: Option<(PmWakeupEvent, MetricEventType)>,
-    ) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self {
-            suspended: false,
-            pending_signals: Vec::new(),
-            #[cfg(target_arch = "x86_64")]
-            wakeup_state: WakeupState::new(wakeup_event),
-        }))
-    }
-
-    fn handle_interrupt(&mut self, vector: u16, mask: u32) -> bool {
-        if self.suspended {
-            self.pending_signals.push((vector, mask));
-            #[cfg(target_arch = "x86_64")]
-            if let Some(wakeup_state) = self.wakeup_state.as_mut() {
-                if wakeup_state.wakeup_enabled {
-                    wakeup_state.trigger_wakeup();
-                }
-            }
-        }
-        self.suspended
-    }
-
-    fn set_suspended(&mut self, suspended: bool) -> Vec<(u16, u32)> {
-        self.suspended = suspended;
-        std::mem::take(&mut self.pending_signals)
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn set_wakeup_event_active(&mut self, active: bool) {
-        let Some(wakeup_state) = self.wakeup_state.as_mut() else {
-            return;
-        };
-
-        wakeup_state.wakeup_enabled = active;
-        if active {
-            wakeup_state.armed_time = Instant::now();
-            if !self.pending_signals.is_empty() {
-                wakeup_state.trigger_wakeup();
-            }
-        } else if let Some(clear_evt) = wakeup_state.wakeup_clear_evt.take() {
-            if let Err(e) = clear_evt.signal() {
-                error!("failed to signal clear event {}", e);
-            }
+        if let Some(wakeup_event) = self.inner.wakeup_event.as_ref() {
+            wakeup_event.set_active(active);
         }
     }
 }

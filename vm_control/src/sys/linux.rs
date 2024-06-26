@@ -84,7 +84,7 @@ pub fn handle_request_with_timeout<T: AsRef<Path> + std::fmt::Debug>(
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum VmMemoryMappingRequest {
+pub enum VmMsyncRequest {
     /// Flush the content of a memory mapping to its backing file.
     /// `slot` selects the arena (as returned by `Vm::add_mmap_arena`).
     /// `offset` is the offset of the mapping to sync within the arena.
@@ -94,31 +94,15 @@ pub enum VmMemoryMappingRequest {
         offset: usize,
         size: usize,
     },
-
-    /// Gives a MADV_PAGEOUT advice to the memory region mapped at `slot`, with the address range
-    /// starting at `offset` from the start of the region, and with size `size`.
-    MadvisePageout {
-        slot: MemSlot,
-        offset: usize,
-        size: usize,
-    },
-
-    /// Gives a MADV_REMOVE advice to the memory region mapped at `slot`, with the address range
-    /// starting at `offset` from the start of the region, and with size `size`.
-    MadviseRemove {
-        slot: MemSlot,
-        offset: usize,
-        size: usize,
-    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum VmMemoryMappingResponse {
+pub enum VmMsyncResponse {
     Ok,
     Err(SysError),
 }
 
-impl VmMemoryMappingRequest {
+impl VmMsyncRequest {
     /// Executes this request on the given Vm.
     ///
     /// # Arguments
@@ -127,25 +111,13 @@ impl VmMemoryMappingRequest {
     /// This does not return a result, instead encapsulating the success or failure in a
     /// `VmMsyncResponse` with the intended purpose of sending the response back over the socket
     /// that received this `VmMsyncResponse`.
-    pub fn execute(&self, vm: &mut impl Vm) -> VmMemoryMappingResponse {
-        use self::VmMemoryMappingRequest::*;
+    pub fn execute(&self, vm: &mut impl Vm) -> VmMsyncResponse {
+        use self::VmMsyncRequest::*;
         match *self {
             MsyncArena { slot, offset, size } => match vm.msync_memory_region(slot, offset, size) {
-                Ok(()) => VmMemoryMappingResponse::Ok,
-                Err(e) => VmMemoryMappingResponse::Err(e),
+                Ok(()) => VmMsyncResponse::Ok,
+                Err(e) => VmMsyncResponse::Err(e),
             },
-            MadvisePageout { slot, offset, size } => {
-                match vm.madvise_pageout_memory_region(slot, offset, size) {
-                    Ok(()) => VmMemoryMappingResponse::Ok,
-                    Err(e) => VmMemoryMappingResponse::Err(e),
-                }
-            }
-            MadviseRemove { slot, offset, size } => {
-                match vm.madvise_remove_memory_region(slot, offset, size) {
-                    Ok(()) => VmMemoryMappingResponse::Ok,
-                    Err(e) => VmMemoryMappingResponse::Err(e),
-                }
-            }
         }
     }
 }

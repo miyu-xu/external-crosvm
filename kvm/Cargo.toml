@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 data_model = { path = "../common/data_model" }
 kvm_sys = { path = "../kvm_sys" }
-libc = "0.2"
+libc = "*"
 base = { path = "../base" }
 sync = { path = "../common/sync" }
 vm_memory = { path = "../vm_memory" }

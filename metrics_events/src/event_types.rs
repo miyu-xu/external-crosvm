@@ -49,7 +49,6 @@ pub enum MetricEventType {
     VirtioWakeup {
         virtio_id: u32,
     },
-    VcpuShutdownError,
     Other(i64),
     Vendor(VendorMetricEventType),
 }

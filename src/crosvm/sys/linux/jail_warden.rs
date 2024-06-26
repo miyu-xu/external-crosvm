@@ -14,6 +14,8 @@ use anyhow::Context;
 use anyhow::Result;
 use base::error;
 use base::info;
+use base::linux::process::fork_process;
+use base::linux::process::Child;
 use base::syslog;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
@@ -28,8 +30,6 @@ use devices::ProxyDevice;
 use devices::ResourceCarrier;
 use jail::create_base_minijail;
 use jail::create_sandbox_minijail;
-use jail::fork::fork_process;
-use jail::fork::Child;
 use jail::RunAsUser;
 use jail::SandboxConfig;
 use jail::MAX_OPEN_FILES_FOR_JAIL_WARDEN;

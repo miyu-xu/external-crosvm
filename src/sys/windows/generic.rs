@@ -60,7 +60,6 @@ pub(crate) use metrics::MetricEventType;
 use sync::Mutex;
 #[cfg(feature = "balloon")]
 use vm_control::BalloonTube;
-use vm_control::InitialAudioSessionState;
 use vm_control::PvClockCommand;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
@@ -79,8 +78,6 @@ impl ServiceVmState {
     pub fn set_memory_size(&mut self, _size: u64) {}
     pub fn generate_send_state_message(&self) {}
 }
-
-pub struct ServiceAudioStates {}
 
 pub(super) struct RunControlArgs {}
 
@@ -135,7 +132,6 @@ pub(super) fn get_run_control_args(cfg: &mut Config) -> RunControlArgs {
 pub(super) fn merge_session_invariants(serialized_session_invariants: &[u8]) {}
 
 // Handles sending command to pvclock device.
-#[cfg(feature = "pvclock")]
 pub(super) fn handle_pvclock_request(tube: &Option<Tube>, command: PvClockCommand) -> Result<()> {
     Ok(())
 }
@@ -168,7 +164,7 @@ pub(super) fn start_service_ipc_listener(
 
 pub(super) fn handle_tagged_control_tube_event(
     product_tube: &TaggedControlTube,
-    virtio_snd_host_mute_tubes: &mut [Tube],
+    virtio_snd_host_mute_tube: &mut Option<Tube>,
     service_vm_state: &mut ServiceVmState,
     ipc_main_loop_tube: Option<&Tube>,
 ) {
@@ -196,11 +192,11 @@ pub(super) fn handle_received_token<'a, V: VmArch + 'static, Vcpu: VcpuArch + 's
     _ipc_main_loop_tube: Option<&Tube>,
     _memory_size_mb: u64,
     _proto_main_loop_tube: Option<&ProtoTube>,
-    #[cfg(feature = "pvclock")] _pvclock_host_tube: &Option<Tube>,
+    _pvclock_host_tube: &Option<Tube>,
     _run_mode_arc: &VcpuRunMode,
     _service_vm_state: &mut ServiceVmState,
     _vcpu_boxes: &Mutex<Vec<Box<dyn VcpuArch>>>,
-    _virtio_snd_host_mute_tube: &mut [Tube],
+    _virtio_snd_host_mute_tube: &mut Option<Tube>,
     _execute_vm_request: F,
 ) -> Option<VmRunMode>
 where
@@ -248,13 +244,6 @@ pub(super) fn create_gpu(
     ))
 }
 
-pub(super) fn create_service_audio_states_and_send_to_service(
-    initial_audio_session_states: Vec<InitialAudioSessionState>,
-    ipc_main_loop_tube: &Option<Tube>,
-) -> Result<ServiceAudioStates> {
-    Ok(ServiceAudioStates {})
-}
-
 #[cfg(feature = "gpu")]
 pub(super) fn push_window_procedure_thread_control_tubes(
     #[allow(clippy::ptr_arg)]
@@ -297,8 +286,16 @@ pub(crate) fn get_gpu_product_configs(
 }
 
 #[cfg(feature = "audio")]
-pub(crate) fn get_snd_product_configs() -> Result<(SndBackendConfigProduct, SndVmmConfigProduct)> {
+pub(crate) fn get_snd_product_configs(
+    _cfg: &Config,
+    _alias_pid: u32,
+) -> Result<(SndBackendConfigProduct, SndVmmConfigProduct)> {
     Ok((SndBackendConfigProduct {}, SndVmmConfigProduct {}))
+}
+
+#[cfg(feature = "audio")]
+pub(super) fn virtio_sound_enabled() -> bool {
+    false
 }
 
 pub(crate) fn run_metrics(_args: RunMetricsCommand) -> Result<()> {
@@ -319,7 +316,6 @@ pub(super) fn push_mouse_device(
     Ok(())
 }
 
-#[cfg(feature = "pvclock")]
 pub(super) fn push_pvclock_device(
     cfg: &Config,
     devs: &mut [VirtioDeviceStub],

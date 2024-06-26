@@ -21,11 +21,10 @@ use crate::descriptor::SafeDescriptor;
 /// A trait for timer objects that delivers timer expiration
 /// notifications to an underlying descriptor.
 pub trait TimerTrait: AsRawDescriptor + IntoRawDescriptor + Send {
-    /// Sets the timer to expire after `dur` without repeating. Cancels any existing timer.
-    fn reset_oneshot(&mut self, dur: Duration) -> Result<()>;
-
-    /// Sets the timer to fire repeatedly at `dur` intervals. Cancels any existing timer.
-    fn reset_repeating(&mut self, dur: Duration) -> Result<()>;
+    /// Sets the timer to expire after `dur`.  If `interval` is not `None` and non-zero it
+    /// represents the period for repeated expirations after the initial expiration.  Otherwise
+    /// the timer will expire just once.  Cancels any existing duration and repeating interval.
+    fn reset(&mut self, dur: Duration, interval: Option<Duration>) -> Result<()>;
 
     /// Waits until the timer expires.
     fn wait(&mut self) -> Result<()>;
@@ -115,14 +114,6 @@ impl FakeTimer {
         }
     }
 
-    fn reset(&mut self, dur: Duration) -> Result<()> {
-        let mut guard = self.clock.lock();
-        let deadline = guard.nanos() + dur.as_nanos() as u64;
-        self.deadline_ns = Some(deadline);
-        guard.add_event(deadline, self.event.try_clone()?);
-        Ok(())
-    }
-
     /// Waits until the timer expires or an optional wait timeout expires, whichever happens first.
     ///
     /// # Returns
@@ -167,14 +158,13 @@ impl FakeTimer {
 }
 
 impl TimerTrait for FakeTimer {
-    fn reset_oneshot(&mut self, dur: Duration) -> Result<()> {
-        self.interval = None;
-        self.reset(dur)
-    }
-
-    fn reset_repeating(&mut self, dur: Duration) -> Result<()> {
-        self.interval = Some(dur);
-        self.reset(dur)
+    fn reset(&mut self, dur: Duration, interval: Option<Duration>) -> Result<()> {
+        let mut guard = self.clock.lock();
+        let deadline = guard.nanos() + dur.as_nanos() as u64;
+        self.deadline_ns = Some(deadline);
+        self.interval = interval;
+        guard.add_event(deadline, self.event.try_clone()?);
+        Ok(())
     }
 
     fn wait(&mut self) -> Result<()> {
@@ -246,25 +236,13 @@ mod tests {
         let clock_error = get_clock_error();
 
         let now = Instant::now();
-        tfd.reset_oneshot(dur).expect("failed to arm timer");
+        tfd.reset(dur, None).expect("failed to arm timer");
 
         tfd.wait().expect("unable to wait for timer");
         let elapsed = now.elapsed();
         // elapsed is within +-clock_error from expected duration
-        assert!(
-            elapsed - clock_error <= dur,
-            "expected {:?} - {:?} <= {:?}",
-            elapsed,
-            clock_error,
-            dur
-        );
-        assert!(
-            elapsed + clock_error >= dur,
-            "expected {:?} + {:?} >= {:?}",
-            elapsed,
-            clock_error,
-            dur
-        );
+        assert!(elapsed - clock_error <= dur);
+        assert!(elapsed + clock_error >= dur);
     }
 
     /// Similar to one_shot, except this one waits for a clone of the timer.
@@ -280,25 +258,13 @@ mod tests {
         let clock_error = get_clock_error();
 
         let now = Instant::now();
-        tfd.reset_oneshot(dur).expect("failed to arm timer");
+        tfd.reset(dur, None).expect("failed to arm timer");
         cloned_tfd.wait().expect("unable to wait for timer");
         let elapsed = now.elapsed();
 
         // elapsed is within +-clock_error from expected duration
-        assert!(
-            elapsed - clock_error <= dur,
-            "expected {:?} - {:?} <= {:?}",
-            elapsed,
-            clock_error,
-            dur
-        );
-        assert!(
-            elapsed + clock_error >= dur,
-            "expected {:?} + {:?} >= {:?}",
-            elapsed,
-            clock_error,
-            dur
-        );
+        assert!(elapsed - clock_error <= dur);
+        assert!(elapsed + clock_error >= dur);
     }
 
     #[test]
@@ -310,6 +276,7 @@ mod tests {
 
         let mut tfd = Timer::new().expect("failed to create Timer");
 
+        let dur = Duration::from_millis(200);
         // clock error is 2*clock_resolution + 100 microseconds to handle
         // time change from calling now() to arming timer
         let clock_error = Timer::new()
@@ -322,16 +289,16 @@ mod tests {
             .expect("timer resolution x 2 + 100 microsecond should not overflow");
         let interval = Duration::from_millis(100);
         let now = Instant::now();
-        tfd.reset_repeating(interval).expect("failed to arm timer");
+        tfd.reset(dur, Some(interval)).expect("failed to arm timer");
 
         tfd.wait().expect("unable to wait for timer");
-        // should take `interval` duration for the first wait
-        assert!(now.elapsed() + clock_error >= interval);
+        // should take "dur" duration for the first wait
+        assert!(now.elapsed() + clock_error >= dur);
         tfd.wait().expect("unable to wait for timer");
         // subsequent waits should take "interval" duration
-        assert!(now.elapsed() + clock_error >= interval * 2);
+        assert!(now.elapsed() + clock_error >= dur + interval);
         tfd.wait().expect("unable to wait for timer");
-        assert!(now.elapsed() + clock_error >= interval * 3);
+        assert!(now.elapsed() + clock_error >= dur + interval * 2);
     }
 
     #[test]
@@ -340,7 +307,7 @@ mod tests {
         let mut tfd = FakeTimer::new(clock.clone());
 
         let dur = Duration::from_nanos(200);
-        tfd.reset_oneshot(dur).expect("failed to arm timer");
+        tfd.reset(dur, None).expect("failed to arm timer");
 
         clock.lock().add_ns(200);
 
@@ -353,7 +320,7 @@ mod tests {
         let mut tfd = FakeTimer::new(clock.clone());
 
         let dur = Duration::from_nanos(200);
-        tfd.reset_oneshot(dur).expect("failed to arm timer");
+        tfd.reset(dur, None).expect("failed to arm timer");
 
         clock.lock().add_ns(100);
         let result = tfd
@@ -377,15 +344,16 @@ mod tests {
         let clock = Arc::new(Mutex::new(FakeClock::new()));
         let mut tfd = FakeTimer::new(clock.clone());
 
+        let dur = Duration::from_nanos(200);
         let interval = Duration::from_nanos(100);
-        tfd.reset_repeating(interval).expect("failed to arm timer");
+        tfd.reset(dur, Some(interval)).expect("failed to arm timer");
 
-        clock.lock().add_ns(150);
+        clock.lock().add_ns(300);
 
         // An expiration from the initial expiry and from 1 repeat.
         assert_eq!(tfd.wait().is_ok(), true);
 
-        clock.lock().add_ns(100);
+        clock.lock().add_ns(300);
         assert_eq!(tfd.wait().is_ok(), true);
     }
 }

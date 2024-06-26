@@ -44,7 +44,6 @@ fn generate_vhost_port() -> u32 {
 }
 
 #[test]
-#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -54,7 +53,6 @@ fn host_to_guest() {
 }
 
 #[test]
-#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_disable_sandbox() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -66,7 +64,6 @@ fn host_to_guest_disable_sandbox() {
 }
 
 #[test]
-#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_snapshot_restore() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -97,7 +94,6 @@ fn host_to_guest_snapshot_restore() {
 }
 
 #[test]
-#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_disable_sandbox_snapshot_restore() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();

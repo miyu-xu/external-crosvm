@@ -5,23 +5,24 @@ memory device. The disk image is provided to the guest using a memory-mapped vie
 and this mapping can be directly mapped into the guest's address space if the guest operating system
 and filesystem support [DAX](https://www.kernel.org/doc/html/latest/filesystems/dax.html).
 
-Pmem devices may be added to crosvm using the `--pmem` flag, specifying the filename of the backing
-image as the parameter. By default, the pmem device will be writable; add `ro=true` to create a
-read-only pmem device instead.
+Pmem devices may be added to crosvm using the `--pmem-device` (read only) or `--rw-pmem-device`
+(read-write) flag, specifying the filename of the backing image as the parameter.
 
 ```sh
 crosvm run \
-  --pmem disk.img \
+  --pmem-device disk.img \
   ... # usual crosvm args
 ```
 
 The Linux virtio-pmem driver can be enabled with the `CONFIG_VIRTIO_PMEM` option. It will expose
 pmem devices as `/dev/pmem0`, `/dev/pmem1`, etc., which may be mounted like any other block device.
-A pmem device may also be used as the root filesystem by adding `root=true` to the `--pmem` flag:
+A pmem device may also be used as a root filesystem by adding a `root=` kernel command line
+parameters:
 
 ```sh
 crosvm run \
-  --pmem rootfs.img,root=true,ro=true \
+  --pmem-device rootfs.img \
+  -p "root=/dev/pmem0 ro" \
   ... # usual crosvm args
 ```
 

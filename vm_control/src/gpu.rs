@@ -142,10 +142,7 @@ pub enum GpuControlResult {
     DisplayList {
         displays: Map<u32, DisplayParameters>,
     },
-    TooManyDisplays {
-        allowed: usize,
-        requested: usize,
-    },
+    TooManyDisplays(usize),
     NoSuchDisplay {
         display_id: u32,
     },
@@ -167,11 +164,7 @@ impl Display for GpuControlResult {
                     serde_json::to_string_pretty(&json).map_err(|_| std::fmt::Error)?;
                 write!(f, "{}", json_pretty)
             }
-            TooManyDisplays { allowed, requested } => write!(
-                f,
-                "too_many_displays: allowed {}, requested {}",
-                allowed, requested
-            ),
+            TooManyDisplays(n) => write!(f, "too_many_displays {}", n),
             NoSuchDisplay { display_id } => write!(f, "no_such_display {}", display_id),
             DisplayMouseModeSet => write!(f, "display_mouse_mode_set"),
             ErrString(reason) => write!(f, "err_string {}", reason),

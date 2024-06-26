@@ -52,7 +52,7 @@ pub enum Error {
     #[error("An error occurred trying to duplicate source handles: {0}.")]
     HandleDuplicationFailed(io::Error),
     #[error("An error occurred trying to wait on source handles: {0}.")]
-    HandleWaitFailed(io::Error),
+    HandleWaitFailed(base::Error),
     #[error("An error occurred trying to get a VolatileSlice into BackingMemory: {0}.")]
     BackingMemoryVolatileSliceFetchFailed(crate::mem::Error),
     #[error("HandleSource is gone, so no handles are available to fulfill the IO request.")]
@@ -74,7 +74,7 @@ impl From<Error> for io::Error {
             IoPunchHoleError(e) => e,
             IoWriteZeroesError(e) => e,
             HandleDuplicationFailed(e) => e,
-            HandleWaitFailed(e) => e,
+            HandleWaitFailed(e) => e.into(),
             BackingMemoryVolatileSliceFetchFailed(e) => io::Error::new(io::ErrorKind::Other, e),
             NoHandleSource => io::Error::new(io::ErrorKind::Other, NoHandleSource),
             OperationCancelled => io::Error::new(io::ErrorKind::Interrupted, OperationCancelled),
@@ -330,7 +330,7 @@ impl<F: AsRawDescriptor> HandleSource<F> {
             .blocking_pool
             .spawn(
                 move || {
-                    let file = get_thread_file(descriptors);
+                    let mut file = get_thread_file(descriptors);
                     // ZeroRange calls `punch_hole` which doesn't extend the File size if it needs
                     // to. Will fix if it becomes a problem.
                     file.write_zeroes_at(file_offset, len as usize)
@@ -385,10 +385,8 @@ impl<F: AsRawDescriptor> HandleSource<F> {
 
     /// If sources are not interchangeable, behavior is undefined.
     pub async fn wait_for_handle(&self) -> AsyncResult<()> {
-        base::sys::windows::async_wait_for_single_object(&self.source)
-            .await
-            .map_err(Error::HandleWaitFailed)?;
-        Ok(())
+        let waiter = super::WaitForHandle::new(&self.source);
+        Ok(waiter.await?)
     }
 }
 

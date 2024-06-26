@@ -561,7 +561,7 @@ impl DecoderSession for FfmpegDecoderSession {
             .context("while importing output buffer")
             .map_err(VideoError::BackendFailure)?;
         self.try_decode()
-            .context("while decoding output buffer")
+            .context("while importing output buffer")
             .map_err(VideoError::BackendFailure)
     }
 

@@ -314,7 +314,14 @@ impl<T: WindowEventLoop<VulkanState>> VulkanDisplayImpl<T> {
             array_2d_compatible,
             block_texel_view_compatible,
             _ne: _,
-        } = vk::ImageCreateFlags::from_raw(image_create_flags).into();
+        } = vk::ImageCreateFlags::from_raw(image_create_flags)
+            .try_into()
+            .map_err(|_| {
+                format_err!(
+                    "Failed to convert flags {} to an image create flags.",
+                    image_create_flags
+                )
+            })?;
         assert!(
             !(sparse_binding || sparse_residency || sparse_aliased),
             "unsupported image create flags {:#x}",
@@ -352,7 +359,9 @@ impl<T: WindowEventLoop<VulkanState>> VulkanDisplayImpl<T> {
         };
         let image_usage = {
             let usage = metadata.usage;
-            vk::ImageUsageFlags::from_raw(usage).into()
+            vk::ImageUsageFlags::from_raw(usage)
+                .try_into()
+                .map_err(|_| format_err!("Failed to convert {:#x} to image usage.", usage))?
         };
         let image_sharing = {
             let sharing_mode = metadata.sharing_mode;

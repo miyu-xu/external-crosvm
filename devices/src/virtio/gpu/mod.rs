@@ -18,7 +18,6 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::Context;
 use base::debug;
 use base::error;
@@ -42,7 +41,6 @@ use base::WorkerThread;
 use data_model::*;
 pub use gpu_display::EventDevice;
 use gpu_display::*;
-pub use parameters::AudioDeviceMode;
 pub use parameters::GpuParameters;
 use rutabaga_gfx::*;
 use serde::Deserialize;
@@ -1758,8 +1756,7 @@ impl VirtioDevice for Gpu {
         let ctrl_queue = SharedQueueReader::new(queues.remove(&0).unwrap(), interrupt.clone());
         let cursor_queue = LocalQueueReader::new(queues.remove(&1).unwrap(), interrupt.clone());
 
-        match self
-            .worker_thread
+        self.worker_thread
             .as_mut()
             .expect("worker thread missing on activate")
             .0
@@ -1769,13 +1766,10 @@ impl VirtioDevice for Gpu {
                 ctrl_queue,
                 cursor_queue,
                 worker_snapshot: self.worker_snapshot.take(),
-            }) {
-            Err(mpsc::SendError(gpu_activation_resources)) => {
-                self.worker_snapshot = gpu_activation_resources.worker_snapshot;
-                bail!("failed to send activation resources to worker thread");
-            }
-            Ok(()) => Ok(()),
-        }
+            })
+            .expect("failed to send activation resources to worker thread");
+
+        Ok(())
     }
 
     fn pci_address(&self) -> Option<PciAddress> {
