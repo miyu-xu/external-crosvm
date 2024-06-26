@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "465ed5d8_9db6a30e",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 133,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-06-26T21:36:06Z",
+      "side": 1,
+      "message": "is this (and same above), always guaranteed to divide evenly? Otherwise, you lose precision",
+      "range": {
+        "startLine": 133,
+        "startChar": 37,
+        "endLine": 133,
+        "endChar": 57
+      },
+      "revId": "f9da5e5d0085ff52613f78a5097bb7ac2e5136d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
