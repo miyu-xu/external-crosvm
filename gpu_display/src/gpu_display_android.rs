@@ -35,7 +35,7 @@ pub(crate) struct AndroidDisplayContext {
 
 // Opaque blob
 #[repr(C)]
-pub(crate) struct AndroidDisplaySurface {
+pub(crate) struct ANativeWindow {
     _data: [u8; 0],
     _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 }
@@ -79,14 +79,11 @@ extern "C" {
         width: u32,
         height: u32,
         for_cursor: bool,
-    ) -> *mut AndroidDisplaySurface;
+    ) -> *mut ANativeWindow;
 
     /// Destroys the Android surface created from `create_android_surface`.
     #[allow(dead_code)]
-    fn destroy_android_surface(
-        ctx: *mut AndroidDisplayContext,
-        surface: *mut AndroidDisplaySurface,
-    );
+    fn destroy_android_surface(ctx: *mut AndroidDisplayContext, surface: *mut ANativeWindow);
 
     /// Obtains one buffer from the given Android Surface. The information about the buffer (buffer
     /// address, size, stride, etc) is reported via the `ANativeWindow_Buffer` struct. It shouldn't
@@ -97,7 +94,7 @@ extern "C" {
     /// returned), then the caller shouldn't try to read `out_buffer` or use the buffer in any way.
     fn get_android_surface_buffer(
         ctx: *mut AndroidDisplayContext,
-        surface: *mut AndroidDisplaySurface,
+        surface: *mut ANativeWindow,
         out_buffer: *mut ANativeWindow_Buffer,
     ) -> bool;
 
@@ -106,10 +103,7 @@ extern "C" {
     /// Posts the buffer obtained from `get_android_surface_buffer` to the Android display system
     /// so that it can be displayed on the screen. Once this is called, the caller shouldn't use
     /// the buffer any more.
-    fn post_android_surface_buffer(
-        ctx: *mut AndroidDisplayContext,
-        surface: *mut AndroidDisplaySurface,
-    );
+    fn post_android_surface_buffer(ctx: *mut AndroidDisplayContext, surface: *mut ANativeWindow);
 }
 
 unsafe extern "C" fn error_callback(message: *const c_char) {
@@ -162,7 +156,7 @@ impl From<ANativeWindow_Buffer> for GpuDisplayFramebuffer<'_> {
 
 struct AndroidSurface {
     context: Rc<AndroidDisplayContextWrapper>,
-    surface: NonNull<AndroidDisplaySurface>,
+    surface: NonNull<ANativeWindow>,
 }
 
 impl GpuDisplaySurface for AndroidSurface {

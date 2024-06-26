@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::sync::mpsc;
 
 use anyhow::bail;
 use base::error;
-use base::Event;
 
 use crate::bus::HotPlugBus;
 use crate::bus::HotPlugKey;
@@ -85,18 +85,14 @@ impl PciePortVariant for PcieUpstreamPort {
 // hotplug out.
 impl HotPlugBus for PcieUpstreamPort {
     // Do nothing. We are not a real hotplug bus.
-    fn hot_plug(&mut self, _addr: PciAddress) -> anyhow::Result<Option<Event>> {
+    fn hot_plug(&mut self, _addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
         bail!("hot plug not supported on upstream port.")
     }
 
     // Just remove the downstream device.
-    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<Event>> {
+    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
         self.downstream_devices.remove(&addr);
         Ok(None)
-    }
-
-    fn get_ready_notification(&mut self) -> anyhow::Result<Event> {
-        bail!("hot plug not supported on upstream port.")
     }
 
     fn get_secondary_bus_number(&self) -> Option<u8> {
@@ -217,15 +213,12 @@ impl PciePortVariant for PcieDownstreamPort {
 }
 
 impl HotPlugBus for PcieDownstreamPort {
-    fn hot_plug(&mut self, addr: PciAddress) -> anyhow::Result<Option<Event>> {
+    fn hot_plug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
         if !self.pcie_port.hotplug_implemented() {
             bail!("hotplug not implemented.");
         }
-        if !self.downstream_devices.contains_key(&addr) {
+        if self.downstream_devices.get(&addr).is_none() {
             bail!("no downstream devices.");
-        }
-        if !self.pcie_port.is_hotplug_ready() {
-            bail!("Hot unplug fail: slot is not enabled by the guest yet.");
         }
         self.pcie_port
             .set_slot_status(PCIE_SLTSTA_PDS | PCIE_SLTSTA_ABP);
@@ -233,15 +226,12 @@ impl HotPlugBus for PcieDownstreamPort {
         Ok(None)
     }
 
-    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<Event>> {
+    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<mpsc::Receiver<()>>> {
         if !self.pcie_port.hotplug_implemented() {
             bail!("hotplug not implemented.");
         }
         if self.downstream_devices.remove(&addr).is_none() {
             bail!("no downstream devices.");
-        }
-        if !self.pcie_port.is_hotplug_ready() {
-            bail!("Hot unplug fail: slot is not enabled by the guest yet.");
         }
 
         if !self.hotplug_out_begin {
@@ -253,22 +243,6 @@ impl HotPlugBus for PcieDownstreamPort {
             }
             self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
             self.pcie_port.trigger_hp_or_pme_interrupt();
-            let slot_control = self.pcie_port.get_slot_control();
-            match slot_control & PCIE_SLTCTL_PIC {
-                PCIE_SLTCTL_PIC_ON => {
-                    self.pcie_port.set_slot_status(PCIE_SLTSTA_ABP);
-                    self.pcie_port.trigger_hp_or_pme_interrupt();
-                }
-                PCIE_SLTCTL_PIC_OFF => {
-                    // Do not press attention button, as the slot is already off. Likely caused by
-                    // previous hot plug failed.
-                    self.pcie_port.mask_slot_status(!PCIE_SLTSTA_PDS);
-                }
-                _ => {
-                    // Power indicator in blinking state.
-                    bail!("Hot unplug fail: Power indicator is blinking.");
-                }
-            }
 
             if self.pcie_port.is_host() {
                 self.pcie_port.hot_unplug()
@@ -277,10 +251,6 @@ impl HotPlugBus for PcieDownstreamPort {
 
         self.hotplug_out_begin = true;
         Ok(None)
-    }
-
-    fn get_ready_notification(&mut self) -> anyhow::Result<Event> {
-        Ok(self.pcie_port.get_ready_notification()?)
     }
 
     fn get_address(&self) -> Option<PciAddress> {

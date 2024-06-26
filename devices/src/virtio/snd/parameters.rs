@@ -108,7 +108,6 @@ pub struct Parameters {
     pub socket_type: CrasSocketType,
     pub output_device_config: Vec<PCMDeviceParameters>,
     pub input_device_config: Vec<PCMDeviceParameters>,
-    pub card_index: usize,
 }
 
 impl Default for Parameters {
@@ -128,7 +127,6 @@ impl Default for Parameters {
             socket_type: CrasSocketType::Unified,
             output_device_config: vec![],
             input_device_config: vec![],
-            card_index: 0,
         }
     }
 }

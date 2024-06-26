@@ -37,14 +37,6 @@ mod serde_capset_mask {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AudioDeviceMode {
-    #[serde(rename = "per-surface")]
-    PerSurface,
-    #[serde(rename = "one-global")]
-    OneGlobal,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 pub struct GpuParameters {
@@ -52,8 +44,6 @@ pub struct GpuParameters {
     pub mode: GpuMode,
     #[serde(default = "default_max_num_displays")]
     pub max_num_displays: u32,
-    #[serde(default = "default_audio_device_mode")]
-    pub audio_device_mode: AudioDeviceMode,
     #[serde(rename = "displays")]
     pub display_params: Vec<DisplayParameters>,
     // `width` and `height` are supported for CLI backwards compatibility.
@@ -95,7 +85,6 @@ impl Default for GpuParameters {
     fn default() -> Self {
         GpuParameters {
             max_num_displays: default_max_num_displays(),
-            audio_device_mode: default_audio_device_mode(),
             display_params: vec![],
             __width_compat: None,
             __height_compat: None,
@@ -126,10 +115,6 @@ impl Default for GpuParameters {
 
 fn default_max_num_displays() -> u32 {
     VIRTIO_GPU_MAX_SCANOUTS as u32
-}
-
-fn default_audio_device_mode() -> AudioDeviceMode {
-    AudioDeviceMode::PerSurface
 }
 
 #[cfg(test)]

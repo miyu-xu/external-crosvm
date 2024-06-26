@@ -221,9 +221,10 @@ pub fn parse_usbfs_descriptors(data: &[u8]) -> Result<DeviceDescriptorTree> {
             }
 
             for intf_idx in 0..config_descriptor.bNumInterfaces {
-                if !config_descriptor
+                if config_descriptor
                     .interface_descriptors
-                    .contains_key(&(intf_idx, 0))
+                    .get(&(intf_idx, 0))
+                    .is_none()
                 {
                     warn!("device interface {} has no interface descriptors", intf_idx);
                 }

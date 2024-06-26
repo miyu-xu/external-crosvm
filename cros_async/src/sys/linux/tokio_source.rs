@@ -101,10 +101,10 @@ fn do_fsync(raw: Arc<OwnedFd>) -> io::Result<()> {
     }
 }
 
-fn do_read_vectored(
+fn do_read_to_mem(
     raw: Arc<OwnedFd>,
     file_offset: Option<u64>,
-    io_vecs: &[VolatileSlice],
+    io_vecs: &Vec<VolatileSlice>,
 ) -> io::Result<usize> {
     let ptr = io_vecs.as_ptr() as *const libc::iovec;
     let len = io_vecs.len() as i32;
@@ -120,40 +120,48 @@ fn do_read_vectored(
         _ => Err(io::Error::last_os_error()),
     }
 }
-fn do_read(raw: Arc<OwnedFd>, file_offset: Option<u64>, buf: &mut [u8]) -> io::Result<usize> {
-    let fd = raw.as_raw_fd();
-    let ptr = buf.as_mut_ptr() as *mut libc::c_void;
-    let res = match file_offset {
-        // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
-        Some(off) => unsafe { libc::pread64(fd, ptr, buf.len(), off as libc::off64_t) },
-        // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
-        None => unsafe { libc::read(fd, ptr, buf.len()) },
-    };
-    match res {
-        r if r >= 0 => Ok(res as usize),
-        _ => Err(io::Error::last_os_error()),
-    }
-}
-
-fn do_write(raw: Arc<OwnedFd>, file_offset: Option<u64>, buf: &[u8]) -> io::Result<usize> {
-    let fd = raw.as_raw_fd();
-    let ptr = buf.as_ptr() as *const libc::c_void;
-    let res = match file_offset {
-        // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
-        Some(off) => unsafe { libc::pwrite64(fd, ptr, buf.len(), off as libc::off64_t) },
-        // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
-        None => unsafe { libc::write(fd, ptr, buf.len()) },
-    };
-    match res {
-        r if r >= 0 => Ok(res as usize),
-        _ => Err(io::Error::last_os_error()),
-    }
-}
-
-fn do_write_vectored(
+fn do_read_to_vec(
     raw: Arc<OwnedFd>,
     file_offset: Option<u64>,
-    io_vecs: &[VolatileSlice],
+    vec: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let fd = raw.as_raw_fd();
+    let ptr = vec.as_mut_ptr() as *mut libc::c_void;
+    let res = match file_offset {
+        // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
+        Some(off) => unsafe { libc::pread64(fd, ptr, vec.len(), off as libc::off64_t) },
+        // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
+        None => unsafe { libc::read(fd, ptr, vec.len()) },
+    };
+    match res {
+        r if r >= 0 => Ok(res as usize),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+fn do_write_from_vec(
+    raw: Arc<OwnedFd>,
+    file_offset: Option<u64>,
+    vec: &Vec<u8>,
+) -> io::Result<usize> {
+    let fd = raw.as_raw_fd();
+    let ptr = vec.as_ptr() as *const libc::c_void;
+    let res = match file_offset {
+        // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
+        Some(off) => unsafe { libc::pwrite64(fd, ptr, vec.len(), off as libc::off64_t) },
+        // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
+        None => unsafe { libc::write(fd, ptr, vec.len()) },
+    };
+    match res {
+        r if r >= 0 => Ok(res as usize),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+fn do_write_from_mem(
+    raw: Arc<OwnedFd>,
+    file_offset: Option<u64>,
+    io_vecs: &Vec<VolatileSlice>,
 ) -> io::Result<usize> {
     let ptr = io_vecs.as_ptr() as *const libc::iovec;
     let len = io_vecs.len() as i32;
@@ -240,7 +248,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
             FdType::Async(async_fd) => {
                 let res = async_fd
                     .async_io(tokio::io::Interest::READABLE, |fd| {
-                        do_read(fd.clone(), file_offset, &mut vec)
+                        do_read_to_vec(fd.clone(), file_offset, &mut vec)
                     })
                     .await
                     .map_err(AsyncError::Io)?;
@@ -250,7 +258,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                 let fd = blocking.clone();
                 self.runtime
                     .spawn_blocking(move || {
-                        let size = do_read(fd, file_offset, &mut vec)?;
+                        let size = do_read_to_vec(fd, file_offset, &mut vec)?;
                         Ok((size, vec))
                     })
                     .await
@@ -275,7 +283,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                     .collect::<Vec<VolatileSlice>>();
                 async_fd
                     .async_io(tokio::io::Interest::READABLE, |fd| {
-                        do_read_vectored(fd.clone(), file_offset, &iovecs)
+                        do_read_to_mem(fd.clone(), file_offset, &iovecs)
                     })
                     .await
                     .map_err(AsyncError::Io)?
@@ -288,7 +296,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                             .into_iter()
                             .filter_map(|mem_range| mem.get_volatile_slice(mem_range).ok())
                             .collect::<Vec<VolatileSlice>>();
-                        do_read_vectored(fd, file_offset, &iovecs)
+                        do_read_to_mem(fd, file_offset, &iovecs)
                     })
                     .await
                     .map_err(Error::Join)?
@@ -334,7 +342,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                     .collect::<Vec<VolatileSlice>>();
                 async_fd
                     .async_io(tokio::io::Interest::WRITABLE, |fd| {
-                        do_write_vectored(fd.clone(), file_offset, &iovecs)
+                        do_write_from_mem(fd.clone(), file_offset, &iovecs)
                     })
                     .await
                     .map_err(AsyncError::Io)?
@@ -347,7 +355,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                             .into_iter()
                             .filter_map(|mem_range| mem.get_volatile_slice(mem_range).ok())
                             .collect::<Vec<VolatileSlice>>();
-                        do_write_vectored(fd, file_offset, &iovecs)
+                        do_write_from_mem(fd, file_offset, &iovecs.clone())
                     })
                     .await
                     .map_err(Error::Join)?
@@ -365,7 +373,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
             FdType::Async(async_fd) => {
                 let res = async_fd
                     .async_io(tokio::io::Interest::WRITABLE, |fd| {
-                        do_write(fd.clone(), file_offset, &vec)
+                        do_write_from_vec(fd.clone(), file_offset, &vec)
                     })
                     .await
                     .map_err(AsyncError::Io)?;
@@ -375,7 +383,7 @@ impl<T: AsRawDescriptor> TokioSource<T> {
                 let fd = blocking.clone();
                 self.runtime
                     .spawn_blocking(move || {
-                        let size = do_write(fd.clone(), file_offset, &vec)?;
+                        let size = do_write_from_vec(fd.clone(), file_offset, &vec)?;
                         Ok((size, vec))
                     })
                     .await

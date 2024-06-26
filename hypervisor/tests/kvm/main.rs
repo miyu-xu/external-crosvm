@@ -21,7 +21,6 @@ use base::MemoryMappingArena;
 use base::MemoryMappingBuilder;
 use hypervisor::kvm::dirty_log_bitmap_size;
 use hypervisor::kvm::Kvm;
-use hypervisor::kvm::KvmCap;
 use hypervisor::kvm::KvmVm;
 use hypervisor::Datamatch;
 use hypervisor::Hypervisor;
@@ -35,6 +34,7 @@ use hypervisor::VmAArch64;
 use hypervisor::VmRiscv64;
 #[cfg(target_arch = "x86_64")]
 use hypervisor::VmX86_64;
+use kvm::Cap;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
@@ -92,9 +92,9 @@ fn check_vm_capability() {
     let kvm = Kvm::new().unwrap();
     let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
-    assert!(vm.check_raw_capability(KvmCap::UserMemory));
+    assert!(vm.check_raw_capability(Cap::UserMemory));
     // I assume nobody is testing this on s390
-    assert!(!vm.check_raw_capability(KvmCap::S390UserSigp));
+    assert!(!vm.check_raw_capability(Cap::S390UserSigp));
 }
 
 #[test]

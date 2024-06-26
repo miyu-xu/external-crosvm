@@ -183,7 +183,7 @@ impl CallbackHandler for Handler {
             - Duration::from_nanos(self.clock_get_ns() as u64);
 
         timer
-            .reset_oneshot(timer_duration)
+            .reset(timer_duration, None)
             .expect("failed to modify network timer");
     }
 

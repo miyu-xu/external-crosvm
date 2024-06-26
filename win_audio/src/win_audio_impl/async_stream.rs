@@ -69,14 +69,7 @@ impl WinAudio {
         let _ = check_hresult!(hr, WinAudioError::from(hr), "Co Initialized failed");
 
         let playback_buffer_stream: Box<dyn AsyncPlaybackBufferStream> =
-            match WinAudioRenderer::new_async(
-                num_channels,
-                format,
-                frame_rate,
-                buffer_size,
-                ex,
-                None,
-            ) {
+            match WinAudioRenderer::new_async(num_channels, format, frame_rate, buffer_size, ex) {
                 Ok(renderer) => Box::new(renderer),
                 Err(e) => {
                     warn!(
@@ -104,7 +97,6 @@ impl WinAudioRenderer {
         frame_rate: u32,
         incoming_buffer_size_in_frames: usize,
         ex: &dyn audio_streams::AudioStreamsExecutor,
-        audio_client_guid: Option<String>,
     ) -> Result<Self, RenderError> {
         let device = DeviceRendererWrapper::new(
             num_channels,
@@ -112,7 +104,6 @@ impl WinAudioRenderer {
             frame_rate,
             incoming_buffer_size_in_frames,
             Some(ex),
-            audio_client_guid.clone(),
         )
         .map_err(|e| {
             match &e {
@@ -131,10 +122,7 @@ impl WinAudioRenderer {
             e
         })?;
 
-        Ok(Self {
-            device,
-            audio_client_guid,
-        })
+        Ok(Self { device })
     }
 
     fn unregister_notification_client_and_make_new_device_renderer(
@@ -147,7 +135,6 @@ impl WinAudioRenderer {
             self.device.guest_frame_rate,
             self.device.incoming_buffer_size_in_frames,
             Some(ex),
-            self.audio_client_guid.clone(),
         )
         .map_err(|e| {
             match &e {

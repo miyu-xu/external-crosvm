@@ -10,6 +10,7 @@ use crate::virtio::snd::parameters::Parameters;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
 use crate::virtio::vhost::user::device::snd::SndBackend;
+use crate::virtio::vhost::user::device::snd::SND_EXECUTOR;
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "snd")]
@@ -47,8 +48,10 @@ fn snd_parameters_from_str(input: &str) -> Result<Parameters, String> {
 /// Starts a vhost-user snd device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
 pub fn run_snd_device(opts: Options) -> anyhow::Result<()> {
+    let snd_device = Box::new(SndBackend::new(opts.params)?);
+
     let ex = Executor::new().context("Failed to create executor")?;
-    let snd_device = Box::new(SndBackend::new(&ex, opts.params, 0)?);
+    let _ = SND_EXECUTOR.set(ex.clone());
 
     let listener = VhostUserListener::new_socket(&opts.socket, None)?;
 

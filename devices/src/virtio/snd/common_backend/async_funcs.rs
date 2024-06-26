@@ -150,15 +150,14 @@ async fn process_pcm_ctrl(
     cmd: VirtioSndPcmCmd,
     writer: &mut Writer,
     stream_id: usize,
-    card_index: usize,
 ) -> Result<(), Error> {
     let streams = streams.read_lock().await;
     let mut stream = match streams.get(stream_id) {
         Some(stream_info) => stream_info.lock().await,
         None => {
             error!(
-                "[Card {}] Stream id={} not found for {}. Error code: VIRTIO_SND_S_BAD_MSG",
-                card_index, stream_id, cmd
+                "Stream id={} not found for {}. Error code: VIRTIO_SND_S_BAD_MSG",
+                stream_id, cmd
             );
             return writer
                 .write_obj(VIRTIO_SND_S_BAD_MSG)
@@ -166,15 +165,15 @@ async fn process_pcm_ctrl(
         }
     };
 
-    debug!("[Card {}] {} for stream id={}", card_index, cmd, stream_id);
+    debug!("{} for stream id={}", cmd, stream_id);
 
     let result = match cmd {
         VirtioSndPcmCmd::SetParams { set_params } => {
             let result = stream.set_params(set_params).await;
             if result.is_ok() {
                 debug!(
-                    "[Card {}] VIRTIO_SND_R_PCM_SET_PARAMS for stream id={}. Stream info: {:#?}",
-                    card_index, stream_id, *stream
+                    "VIRTIO_SND_R_PCM_SET_PARAMS for stream id={}. Stream info: {:#?}",
+                    stream_id, *stream
                 );
             }
             result
@@ -190,8 +189,8 @@ async fn process_pcm_ctrl(
             .map_err(Error::WriteResponse),
         Err(Error::OperationNotSupported) => {
             error!(
-                "[Card {}] {} for stream id={} failed. Error code: VIRTIO_SND_S_NOT_SUPP.",
-                card_index, cmd, stream_id
+                "{} for stream id={} failed. Error code: VIRTIO_SND_S_NOT_SUPP.",
+                cmd, stream_id
             );
 
             writer
@@ -202,8 +201,8 @@ async fn process_pcm_ctrl(
             // Runtime/internal error would be more appropriate, but there's
             // no such error type
             error!(
-                "[Card {}] {} for stream id={} failed. Error code: VIRTIO_SND_S_IO_ERR. Actual error: {}",
-                card_index, cmd, stream_id, e
+                "{} for stream id={} failed. Error code: VIRTIO_SND_S_IO_ERR. Actual error: {}",
+                cmd, stream_id, e
             );
             writer
                 .write_obj(VIRTIO_SND_S_IO_ERR)
@@ -320,7 +319,6 @@ pub async fn start_pcm_worker(
     status_mutex: Rc<AsyncRwLock<WorkerStatus>>,
     mut sender: mpsc::UnboundedSender<PcmResponse>,
     period_dur: Duration,
-    card_index: usize,
     release_signal: Rc<(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
     let res = pcm_worker_loop(
@@ -330,15 +328,13 @@ pub async fn start_pcm_worker(
         &status_mutex,
         &mut sender,
         period_dur,
-        card_index,
         release_signal,
     )
     .await;
     *status_mutex.lock().await = WorkerStatus::Quit;
     if res.is_err() {
         error!(
-            "[Card {}] pcm_worker error: {:#?}. Draining desc_receiver",
-            card_index,
+            "pcm_worker error: {:#?}. Draining desc_receiver",
             res.as_ref().err()
         );
         // On error, guaranteed that desc_receiver has not been drained, so drain it here.
@@ -355,7 +351,6 @@ async fn pcm_worker_loop(
     status_mutex: &Rc<AsyncRwLock<WorkerStatus>>,
     sender: &mut mpsc::UnboundedSender<PcmResponse>,
     period_dur: Duration,
-    card_index: usize,
     release_signal: Rc<(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
     let on_release = async {
@@ -363,10 +358,7 @@ async fn pcm_worker_loop(
         // After receiving release signal, wait for up to 2 periods,
         // giving it a chance to respond to the last buffer.
         if let Err(e) = TimerAsync::sleep(&ex, period_dur * 2).await {
-            error!(
-                "[Card {}] Error on sleep after receiving reset signal: {}",
-                card_index, e
-            )
+            error!("Error on sleep after receiving reset signal: {}", e)
         }
     }
     .fuse();
@@ -405,10 +397,7 @@ async fn pcm_worker_loop(
                 WorkerStatus::Quit => {
                     drain_desc_receiver(desc_receiver, sender).await?;
                     if let Err(e) = write_data(dst_buf, None, buffer_writer).await {
-                        error!(
-                            "[Card {}] Error on write_data after worker quit: {}",
-                            card_index, e
-                        )
+                        error!("Error on write_data after worker quit: {}", e)
                     }
                     break Ok(());
                 }
@@ -417,14 +406,11 @@ async fn pcm_worker_loop(
                 }
                 WorkerStatus::Running => match desc_receiver.try_next() {
                     Err(e) => {
-                        error!(
-                            "[Card {}] Underrun. No new DescriptorChain while running: {}",
-                            card_index, e
-                        );
+                        error!("Underrun. No new DescriptorChain while running: {}", e);
                         write_data(dst_buf, None, buffer_writer).await?;
                     }
                     Ok(None) => {
-                        error!("[Card {}] Unreachable. status should be Quit when the channel is closed", card_index);
+                        error!("Unreachable. status should be Quit when the channel is closed");
                         write_data(dst_buf, None, buffer_writer).await?;
                         return Err(Error::InvalidPCMWorkerState);
                     }
@@ -463,10 +449,7 @@ async fn pcm_worker_loop(
                 WorkerStatus::Quit => {
                     drain_desc_receiver(desc_receiver, sender).await?;
                     if let Err(e) = read_data(src_buf, None, period_bytes).await {
-                        error!(
-                            "[Card {}] Error on read_data after worker quit: {}",
-                            card_index, e
-                        )
+                        error!("Error on read_data after worker quit: {}", e)
                     }
                     break Ok(());
                 }
@@ -475,14 +458,11 @@ async fn pcm_worker_loop(
                 }
                 WorkerStatus::Running => match desc_receiver.try_next() {
                     Err(e) => {
-                        error!(
-                            "[Card {}] Overrun. No new DescriptorChain while running: {}",
-                            card_index, e
-                        );
+                        error!("Overrun. No new DescriptorChain while running: {}", e);
                         read_data(src_buf, None, period_bytes).await?;
                     }
                     Ok(None) => {
-                        error!("[Card {}] Unreachable. status should be Quit when the channel is closed", card_index);
+                        error!("Unreachable. status should be Quit when the channel is closed");
                         read_data(src_buf, None, period_bytes).await?;
                         return Err(Error::InvalidPCMWorkerState);
                     }
@@ -594,7 +574,6 @@ pub async fn handle_pcm_queue(
     mut response_sender: mpsc::UnboundedSender<PcmResponse>,
     queue: Rc<AsyncRwLock<Queue>>,
     queue_event: &EventAsync,
-    card_index: usize,
     reset_signal: Option<&(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
     let on_reset = await_reset_signal(reset_signal).fuse();
@@ -628,8 +607,7 @@ pub async fn handle_pcm_queue(
             Some(stream_info) => stream_info.read_lock().await,
             None => {
                 error!(
-                    "[Card {}] stream_id ({}) >= num_streams ({})",
-                    card_index,
+                    "stream_id ({}) >= num_streams ({})",
                     stream_id,
                     streams.len()
                 );
@@ -655,8 +633,7 @@ pub async fn handle_pcm_queue(
             None => {
                 if !stream_info.just_reset {
                     error!(
-                        "[Card {}] stream {} is not ready. state: {}",
-                        card_index,
+                        "stream {} is not ready. state: {}",
                         stream_id,
                         get_virtio_snd_r_pcm_cmd_name(stream_info.state)
                     );
@@ -683,7 +660,6 @@ pub async fn handle_ctrl_queue(
     interrupt: Interrupt,
     tx_send: mpsc::UnboundedSender<PcmResponse>,
     rx_send: mpsc::UnboundedSender<PcmResponse>,
-    card_index: usize,
     reset_signal: Option<&(AsyncRwLock<bool>, Condvar)>,
 ) -> Result<(), Error> {
     let on_reset = await_reset_signal(reset_signal).fuse();
@@ -719,9 +695,8 @@ pub async fn handle_ctrl_queue(
                     let count: usize = u32::from(query_info.count) as usize;
                     if start_id + count > snd_data.jack_info.len() {
                         error!(
-                            "[Card {}] start_id({}) + count({}) must be smaller than \
+                            "start_id({}) + count({}) must be smaller than \
                             the number of jacks ({})",
-                            card_index,
                             start_id,
                             count,
                             snd_data.jack_info.len()
@@ -750,9 +725,8 @@ pub async fn handle_ctrl_queue(
                     let count: usize = u32::from(query_info.count) as usize;
                     if start_id + count > snd_data.pcm_info.len() {
                         error!(
-                            "[Card {}] start_id({}) + count({}) must be smaller than \
+                            "start_id({}) + count({}) must be smaller than \
                             the number of streams ({})",
-                            card_index,
                             start_id,
                             count,
                             snd_data.pcm_info.len()
@@ -781,9 +755,8 @@ pub async fn handle_ctrl_queue(
                     let count: usize = u32::from(query_info.count) as usize;
                     if start_id + count > snd_data.chmap_info.len() {
                         error!(
-                            "[Card {}] start_id({}) + count({}) must be smaller than \
+                            "start_id({}) + count({}) must be smaller than \
                             the number of chmaps ({})",
-                            card_index,
                             start_id,
                             count,
                             snd_data.chmap_info.len()
@@ -822,8 +795,7 @@ pub async fn handle_ctrl_queue(
                                 || set_params.channels > pcm_info.channels_max
                             {
                                 error!(
-                                    "[Card {}] Number of channels ({}) must be between {} and {}",
-                                    card_index,
+                                    "Number of channels ({}) must be between {} and {}",
                                     set_params.channels,
                                     pcm_info.channels_min,
                                     pcm_info.channels_max
@@ -833,19 +805,13 @@ pub async fn handle_ctrl_queue(
                                     .map_err(Error::WriteResponse);
                             }
                             if (u64::from(pcm_info.formats) & (1 << set_params.format)) == 0 {
-                                error!(
-                                    "[Card {}] PCM format {} is not supported.",
-                                    card_index, set_params.format
-                                );
+                                error!("PCM format {} is not supported.", set_params.format);
                                 return writer
                                     .write_obj(VIRTIO_SND_S_NOT_SUPP)
                                     .map_err(Error::WriteResponse);
                             }
                             if (u64::from(pcm_info.rates) & (1 << set_params.rate)) == 0 {
-                                error!(
-                                    "[Card {}] PCM frame rate {} is not supported.",
-                                    card_index, set_params.rate
-                                );
+                                error!("PCM frame rate {} is not supported.", set_params.rate);
                                 return writer
                                     .write_obj(VIRTIO_SND_S_NOT_SUPP)
                                     .map_err(Error::WriteResponse);
@@ -855,8 +821,7 @@ pub async fn handle_ctrl_queue(
                         }
                         None => {
                             error!(
-                                "[Card {}] stream_id {} < streams {}",
-                                card_index,
+                                "stream_id {} < streams {}",
                                 stream_id,
                                 snd_data.pcm_info.len()
                             );
@@ -867,7 +832,7 @@ pub async fn handle_ctrl_queue(
                     };
 
                     if set_params.features != 0 {
-                        error!("[Card {}] No feature is supported", card_index);
+                        error!("No feature is supported");
                         return writer
                             .write_obj(VIRTIO_SND_S_NOT_SUPP)
                             .map_err(Error::WriteResponse);
@@ -875,8 +840,8 @@ pub async fn handle_ctrl_queue(
 
                     if buffer_bytes % period_bytes != 0 {
                         error!(
-                            "[Card {}] buffer_bytes({}) must be dividable by period_bytes({})",
-                            card_index, buffer_bytes, period_bytes
+                            "buffer_bytes({}) must be dividable by period_bytes({})",
+                            buffer_bytes, period_bytes
                         );
                         return writer
                             .write_obj(VIRTIO_SND_S_BAD_MSG)
@@ -891,7 +856,6 @@ pub async fn handle_ctrl_queue(
                         VirtioSndPcmCmd::with_set_params_and_direction(set_params, dir),
                         writer,
                         stream_id,
-                        card_index,
                     )
                     .await
                 }
@@ -904,24 +868,19 @@ pub async fn handle_ctrl_queue(
                     let cmd = match VirtioSndPcmCmd::try_from(code) {
                         Ok(cmd) => cmd,
                         Err(err) => {
-                            error!(
-                                "[Card {}] Error converting code to command: {}",
-                                card_index, err
-                            );
+                            error!("Error converting code to command: {}", err);
                             return writer
                                 .write_obj(VIRTIO_SND_S_BAD_MSG)
                                 .map_err(Error::WriteResponse);
                         }
                     };
-                    process_pcm_ctrl(
-                        ex, &tx_send, &rx_send, streams, cmd, writer, stream_id, card_index,
-                    )
-                    .await
-                    .and(Ok(()))?;
+                    process_pcm_ctrl(ex, &tx_send, &rx_send, streams, cmd, writer, stream_id)
+                        .await
+                        .and(Ok(()))?;
                     Ok(())
                 }
                 c => {
-                    error!("[Card {}] Unrecognized code: {}", card_index, c);
+                    error!("Unrecognized code: {}", c);
                     return writer
                         .write_obj(VIRTIO_SND_S_BAD_MSG)
                         .map_err(Error::WriteResponse);

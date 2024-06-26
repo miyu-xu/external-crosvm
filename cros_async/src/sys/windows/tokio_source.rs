@@ -212,8 +212,8 @@ impl<T: AsRawDescriptor> TokioSource<T> {
         unimplemented!();
     }
     pub async fn wait_for_handle(&self) -> AsyncResult<()> {
-        base::sys::windows::async_wait_for_single_object(self.source.as_ref().unwrap()).await?;
-        Ok(())
+        let waiter = super::wait_for_handle::WaitForHandle::new(self.source.as_ref().unwrap());
+        Ok(waiter.await?)
     }
     pub async fn write_from_mem(
         &self,

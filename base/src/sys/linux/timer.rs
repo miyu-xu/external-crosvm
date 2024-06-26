@@ -75,12 +75,8 @@ impl Timer {
 }
 
 impl TimerTrait for Timer {
-    fn reset_oneshot(&mut self, dur: Duration) -> Result<()> {
-        self.set_time(Some(dur), None)
-    }
-
-    fn reset_repeating(&mut self, dur: Duration) -> Result<()> {
-        self.set_time(Some(dur), Some(dur))
+    fn reset(&mut self, dur: Duration, interval: Option<Duration>) -> Result<()> {
+        self.set_time(Some(dur), interval)
     }
 
     fn clear(&mut self) -> Result<()> {

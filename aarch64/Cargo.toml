@@ -5,7 +5,7 @@ authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [features]
-gdb = ["gdbstub", "gdbstub_arch", "arch/gdb"]
+gdb = ["gdbstub", "gdbstub_arch", "arch/gdb", "hypervisor/gdb"]
 swap = ["swap/enable"]
 
 [dependencies]
@@ -18,15 +18,15 @@ hypervisor = { path = "../hypervisor" }
 jail = { path = "../jail" }
 kernel_cmdline = { path = "../kernel_cmdline" }
 kernel_loader = { path = "../kernel_loader" }
-libc = "0.2"
+libc = "*"
 memoffset = "0.6"
 rand = "0.8"
-remain = "0.2"
+remain = "*"
 resources = { path = "../resources" }
 swap = { path = "../swap" }
 sync = { path = "../common/sync" }
 base = { path = "../base" }
-thiserror = "1"
+thiserror = "*"
 vm_control = { path = "../vm_control" }
 vm_memory = { path = "../vm_memory" }
 

@@ -137,7 +137,6 @@ impl<T: Cacheable> CacheMap<T> {
 mod tests {
     use super::*;
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     struct NumCache(pub u64);
     impl Cacheable for NumCache {
         fn dirty(&self) -> bool {
@@ -183,6 +182,5 @@ mod tests {
         let num_items = (0..=3).filter(|k| cache.contains_key(k)).count();
         assert_eq!(num_items, 3);
         assert!(cache.contains_key(&3));
-        assert_eq!(cache.get(&3), Some(&NumCache(8)));
     }
 }

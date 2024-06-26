@@ -154,7 +154,7 @@ impl Debug for SnapshotReader {
 
 impl SnapshotReader {
     /// Reads a snapshot at `root`. Set require_encrypted to require an encrypted snapshot.
-    pub fn new(root: &Path, require_encrypted: bool) -> Result<Self> {
+    pub fn new(root: PathBuf, require_encrypted: bool) -> Result<Self> {
         let enc_metadata_path = root.join("enc_metadata");
         if Path::exists(&enc_metadata_path) {
             let key = Some(
@@ -163,16 +163,13 @@ impl SnapshotReader {
                 )
                 .context("failed to load snapshot key")?,
             );
-            return Ok(Self {
-                dir: root.to_path_buf(),
-                key,
-            });
+            return Ok(Self { dir: root, key });
         } else if require_encrypted {
             return Err(anyhow::anyhow!("snapshot was not encrypted"));
         }
 
         Ok(Self {
-            dir: root.to_path_buf(),
+            dir: root,
             key: None,
         })
     }

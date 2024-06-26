@@ -7,7 +7,6 @@
 extern crate base;
 
 #[path = "dwl.rs"]
-#[allow(dead_code)]
 mod dwl;
 
 use std::cell::Cell;
