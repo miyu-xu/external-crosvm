@@ -100,6 +100,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "11feb819_bf24d80a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 66,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-06-26T00:30:10Z",
+      "side": 1,
+      "message": "Yes, static please.",
+      "parentUuid": "e38a6dfb_5630e0dc",
+      "range": {
+        "startLine": 56,
+        "startChar": 0,
+        "endLine": 66,
+        "endChar": 6
+      },
+      "revId": "4ac0a0842e4aeaa6076c352f6ff2b166ed8ae0a1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "f6d0f259_25f7527a",
