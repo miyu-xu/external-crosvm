@@ -34,6 +34,24 @@
       "parentUuid": "8a9a2fc8_731af81b",
       "revId": "e57341511a854dd2a22d8c126afce13195c14ea7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "77b38203_9beab9a3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-06-26T21:17:52Z",
+      "side": 1,
+      "message": "https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5661556 is the upstream change.",
+      "parentUuid": "a951e1dd_15ae3cd1",
+      "revId": "e57341511a854dd2a22d8c126afce13195c14ea7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
