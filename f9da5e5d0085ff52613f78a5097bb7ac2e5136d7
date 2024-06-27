@@ -46,6 +46,30 @@
       },
       "revId": "f9da5e5d0085ff52613f78a5097bb7ac2e5136d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "d3657ae8_8511e89f",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 133,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-06-27T17:05:11Z",
+      "side": 1,
+      "message": "We lose precision in both cases, we should do the math in u64 and then cast to u32 after division. I\u0027ll send out a fix.",
+      "parentUuid": "f862bd35_2642db6d",
+      "range": {
+        "startLine": 133,
+        "startChar": 37,
+        "endLine": 133,
+        "endChar": 57
+      },
+      "revId": "f9da5e5d0085ff52613f78a5097bb7ac2e5136d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
