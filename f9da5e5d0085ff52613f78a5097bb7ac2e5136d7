@@ -22,6 +22,30 @@
       },
       "revId": "f9da5e5d0085ff52613f78a5097bb7ac2e5136d7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f862bd35_2642db6d",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 133,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-06-27T03:38:46Z",
+      "side": 1,
+      "message": "You are probably right, the precision might be lost here. The one above should be okay I guess. Could we have someone from DVFS comment on this?",
+      "parentUuid": "465ed5d8_9db6a30e",
+      "range": {
+        "startLine": 133,
+        "startChar": 37,
+        "endLine": 133,
+        "endChar": 57
+      },
+      "revId": "f9da5e5d0085ff52613f78a5097bb7ac2e5136d7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
