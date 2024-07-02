@@ -62,16 +62,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "android_audio"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "audio_streams",
- "base",
- "thiserror",
-]
-
-[[package]]
 name = "anti_tamper"
 version = "0.1.0"
 dependencies = [
@@ -770,7 +760,6 @@ version = "0.1.0"
 dependencies = [
  "aarch64",
  "acpi_tables",
- "android_audio",
  "anti_tamper",
  "anyhow",
  "arch",
@@ -967,7 +956,6 @@ name = "devices"
 version = "0.1.0"
 dependencies = [
  "acpi_tables",
- "android_audio",
  "anyhow",
  "argh",
  "async-task",
