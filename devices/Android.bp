@@ -30,7 +30,6 @@ rust_test {
         "android_display",
         "android_display_stub",
         "audio",
-        "audio_aaudio",
         "balloon",
         "geniezone",
         "gfxstream",
@@ -43,7 +42,6 @@ rust_test {
     ],
     rustlibs: [
         "libacpi_tables",
-        "libandroid_audio",
         "libanyhow",
         "libargh",
         "libasync_task",
@@ -124,7 +122,6 @@ rust_test {
         "android_display",
         "android_display_stub",
         "audio",
-        "audio_aaudio",
         "balloon",
         "geniezone",
         "gfxstream",
@@ -137,7 +134,6 @@ rust_test {
     ],
     rustlibs: [
         "libacpi_tables",
-        "libandroid_audio",
         "libanyhow",
         "libargh",
         "libasync_task",
@@ -214,7 +210,6 @@ rust_library {
         "android_display",
         "android_display_stub",
         "audio",
-        "audio_aaudio",
         "balloon",
         "geniezone",
         "gfxstream",
@@ -227,7 +222,6 @@ rust_library {
     ],
     rustlibs: [
         "libacpi_tables",
-        "libandroid_audio",
         "libanyhow",
         "libargh",
         "libasync_task",
