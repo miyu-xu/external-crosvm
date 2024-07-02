@@ -24,7 +24,6 @@ mod descriptor;
 mod event;
 mod file;
 mod file_traits;
-mod get_filesystem_type;
 mod mmap;
 mod net;
 mod netlink;
@@ -65,7 +64,6 @@ pub(crate) use event::PlatformEvent;
 pub use file::find_next_data;
 pub use file::FileDataIterator;
 pub(crate) use file_traits::lib::*;
-pub use get_filesystem_type::*;
 pub use ioctl::*;
 use libc::c_int;
 use libc::c_long;
@@ -263,7 +261,7 @@ pub fn discard_block<F: AsRawDescriptor>(file: &F, offset: u64, len: u64) -> Res
     // - ioctl(BLKDISCARD) does not hold the descriptor after the call.
     // - ioctl(BLKDISCARD) does not break the file descriptor.
     // - ioctl(BLKDISCARD) does not modify the given range.
-    syscall!(unsafe { libc::ioctl(file.as_raw_descriptor(), BLKDISCARD(), &range) }).map(|_| ())
+    syscall!(unsafe { libc::ioctl(file.as_raw_descriptor(), BLKDISCARD, &range) }).map(|_| ())
 }
 
 /// A trait used to abstract types that provide a process id that can be operated on.
@@ -616,11 +614,14 @@ pub fn logical_core_capacity(cpu_id: usize) -> Result<u32> {
     });
 
     if let Ok(cpu_max_freqs) = cpu_max_freqs {
-        let largest_max_freq = cpu_max_freqs.iter().max().ok_or(Error::new(EINVAL))?;
-        let cpu_max_freq = cpu_max_freqs.get(cpu_id).ok_or(Error::new(EINVAL))?;
-        (cpu_capacity * largest_max_freq)
-            .checked_div(*cpu_max_freq)
-            .ok_or(Error::new(EINVAL))
+        let largest_max_freq = *cpu_max_freqs.iter().max().ok_or(Error::new(EINVAL))?;
+        let cpu_max_freq = *cpu_max_freqs.get(cpu_id).ok_or(Error::new(EINVAL))?;
+        let normalized_cpu_capacity = (u64::from(cpu_capacity) * u64::from(largest_max_freq))
+            .checked_div(u64::from(cpu_max_freq))
+            .ok_or(Error::new(EINVAL))?;
+        normalized_cpu_capacity
+            .try_into()
+            .map_err(|_| Error::new(EINVAL))
     } else {
         // cpu-freq is not enabled. Fall back to using the normalized capacity.
         Ok(cpu_capacity)
