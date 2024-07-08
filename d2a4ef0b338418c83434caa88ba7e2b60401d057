@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1ac9e7d5_bbec5f33",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-08T23:29:09Z",
+      "side": 1,
+      "message": "this only updated the patch file, not the actual Android.bp. did you run cargo_embargo?",
+      "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
