@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "33038736_0889a1e7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-07-09T08:23:36Z",
+      "side": 1,
+      "message": "Let me +2 this as this was merged in the upstream and we need this change asap.",
+      "revId": "497f10ede3a3ab99abf869ea3d4313a4c09c5118",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
