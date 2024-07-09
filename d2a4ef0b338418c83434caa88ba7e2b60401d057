@@ -16,6 +16,24 @@
       "message": "this only updated the patch file, not the actual Android.bp. did you run cargo_embargo?",
       "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0bb68665_0d118715",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-07-09T01:00:39Z",
+      "side": 1,
+      "message": "```\n      [38/44] Compiling C object src/libvirglrenderer.a.p/virglrenderer.c.o\n      [39/44] Compiling C object src/libvirgl.a.p/vrend_winsys_gbm.c.o\n      FAILED: src/libvirgl.a.p/vrend_winsys_gbm.c.o \n      cc -Isrc/libvirgl.a.p -Isrc -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/gallium/include -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/gallium/auxiliary -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/gallium/auxiliary/util -I. -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/venus -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/drm -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/drm/drm-uapi -Isrc/mesa -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/mesa -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/mesa/compat -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/mesa/pipe -I../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/mesa/util -I/usr/include/libdrm -I/tmp/.tmpHby4zu/target.tmp/x86_64-unknown-linux-gnu/debug/build/rutabaga_gfx-46964f995c8d82ca/out/minigbm -fdiagnostics-color\u003dalways -DNDEBUG -D_FILE_OFFSET_BITS\u003d64 -Wall -Winvalid-pch -Wextra -Wpedantic -std\u003dgnu11 -O3 -Werror\u003dimplicit-function-declaration -Werror\u003dmissing-prototypes -Wmissing-prototypes -Werror\u003dincompatible-pointer-types -Werror\u003dint-to-pointer-cast -Wno-overlength-strings -fvisibility\u003dhidden -imacros /tmp/.tmpHby4zu/target.tmp/x86_64-unknown-linux-gnu/debug/build/rutabaga_gfx-46964f995c8d82ca/out/virglrenderer/config.h -DHAVE_CONFIG_H\u003d1 -fPIC -pthread -MD -MQ src/libvirgl.a.p/vrend_winsys_gbm.c.o -MF src/libvirgl.a.p/vrend_winsys_gbm.c.o.d -o src/libvirgl.a.p/vrend_winsys_gbm.c.o -c ../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/vrend_winsys_gbm.c\n      ../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/vrend_winsys_gbm.c:101:7: error: ‘GBM_FORMAT_RGB565’ undeclared here (not in a function)\n        101 |     { GBM_FORMAT_RGB565, VIRGL_FORMAT_B5G6R5_UNORM },\n            |       ^~~~~~~~~~~~~~~~~\n      ../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/vrend_winsys_gbm.c:102:7: error: ‘GBM_FORMAT_ARGB8888’ undeclared here (not in a function)\n        102 |     { GBM_FORMAT_ARGB8888, VIRGL_FORMAT_B8G8R8A8_UNORM },\n            |       ^~~~~~~~~~~~~~~~~~~\n      ../../../../../../../../../usr/local/google/home/gurchetansingh/main/external/virglrenderer/src/vrend_winsys_gbm.c:103:7: err\n```\n\n^^ `android-merge-2-cargo-embargo.sh` fails?  Maybe we need to change the build.rs script, is this possible?",
+      "parentUuid": "1ac9e7d5_bbec5f33",
+      "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
