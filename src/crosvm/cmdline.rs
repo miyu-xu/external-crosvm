@@ -1488,6 +1488,7 @@ pub struct RunCommand {
     ///     single-touch[path=PATH,width=W,height=H,name=N]
     ///     switches[path=PATH]
     ///     trackpad[path=PATH,width=W,height=H,name=N]
+    ///     multi-touch-trackpad[path=PATH,width=W,height=H,name=N]
     /// See <https://crosvm.dev/book/devices/input.html> for more
     /// information.
     pub input: Vec<InputDeviceOption>,
@@ -1596,6 +1597,18 @@ pub struct RunCommand {
     /// touchscreen) and write status updates to, optionally followed by width and height (defaults
     /// to 800x1280) and a name for the input device
     pub multi_touch: Vec<TouchDeviceOption>,
+
+    #[argh(
+        option,
+        arg_name = "[path=]PATH[,width=WIDTH][,height=HEIGHT][,name=NAME]",
+        from_str_fn(parse_touch_device_option)
+    )]
+    #[serde(skip)] // TODO(b/255223604)
+    #[merge(strategy = append)]
+    /// path to a socket from where to read trackpad input events and write status updates to,
+    /// optionally followed by screen width and height (defaults to 800x1280) and a name for the
+    /// input device
+    pub multi_touch_trackpad: Vec<TouchDeviceOption>,
 
     #[cfg(all(unix, feature = "net"))]
     #[argh(
@@ -3028,6 +3041,21 @@ impl TryFrom<RunCommand> for super::config::Config {
                     cmd.trackpad
                         .into_iter()
                         .map(|trackpad| InputDeviceOption::Trackpad {
+                            path: trackpad.path,
+                            width: trackpad.width,
+                            height: trackpad.height,
+                            name: trackpad.name,
+                        }),
+                );
+        }
+
+        if !cmd.multi_touch_trackpad.is_empty() {
+            log::warn!("`--multi-touch-trackpad` is deprecated; please use `--input multi-touch-trackpad[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.multi_touch_trackpad
+                        .into_iter()
+                        .map(|trackpad| InputDeviceOption::MultiTouchTrackpad {
                             path: trackpad.path,
                             width: trackpad.width,
                             height: trackpad.height,

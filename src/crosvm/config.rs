@@ -329,6 +329,12 @@ pub enum InputDeviceOption {
         height: Option<u32>,
         name: Option<String>,
     },
+    MultiTouchTrackpad {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, FromKeyValues)]
