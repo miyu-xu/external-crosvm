@@ -34,6 +34,24 @@
       "parentUuid": "1ac9e7d5_bbec5f33",
       "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6f4e0b38_25567563",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-09T01:17:41Z",
+      "side": 1,
+      "message": "maybe could add a new feature to tweak the build.rs behavior?\n\nif those constants are the only issue, maybe can add them to `src/vrend_winsys_gbm.h` (i assume they are missing because of the deleted `#include \u003cgbm.h\u003e` line there)",
+      "parentUuid": "0bb68665_0d118715",
+      "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
