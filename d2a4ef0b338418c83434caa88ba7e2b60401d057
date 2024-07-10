@@ -52,6 +52,24 @@
       "parentUuid": "0bb68665_0d118715",
       "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3bb78394_326a94c2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-07-10T00:54:12Z",
+      "side": 1,
+      "message": "Fixed on the virglrenderer side, had to modify meson.build file.",
+      "parentUuid": "6f4e0b38_25567563",
+      "revId": "d2a4ef0b338418c83434caa88ba7e2b60401d057",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
