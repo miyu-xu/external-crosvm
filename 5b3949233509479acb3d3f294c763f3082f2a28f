@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "1317c60e_484c95e5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-07-10T10:00:04Z",
+      "side": 1,
+      "message": "Upstream CL at https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5690989\n\nThis CL is just to run CI with the Android-side changes.",
+      "revId": "5b3949233509479acb3d3f294c763f3082f2a28f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
