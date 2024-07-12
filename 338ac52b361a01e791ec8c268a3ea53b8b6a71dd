@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "917664d4_c59a6d16",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-07-12T03:42:56Z",
+      "side": 1,
+      "message": "Andrew, can you approve this? This was merged in upstream.",
+      "revId": "338ac52b361a01e791ec8c268a3ea53b8b6a71dd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
