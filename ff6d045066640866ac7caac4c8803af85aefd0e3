@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a3226bb6_ff5e7aa3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-15T23:59:03Z",
+      "side": 1,
+      "message": "doesn\u0027t conflict with the pending merge https://r.android.com/c/3173860, so should be ok",
+      "revId": "ff6d045066640866ac7caac4c8803af85aefd0e3",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
