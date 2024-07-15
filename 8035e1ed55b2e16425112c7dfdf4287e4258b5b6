@@ -16,6 +16,24 @@
       "message": "can wait for the merge instead if preferred, just need to add https://r.android.com/3171359 to the same topic",
       "revId": "8035e1ed55b2e16425112c7dfdf4287e4258b5b6",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3c1bc08c_6df0deda",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-07-15T18:46:42Z",
+      "side": 1,
+      "message": "I\u0027m about to upload it",
+      "parentUuid": "3c4412c3_8f3a7042",
+      "revId": "8035e1ed55b2e16425112c7dfdf4287e4258b5b6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
