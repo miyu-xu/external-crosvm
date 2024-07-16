@@ -48,8 +48,6 @@ use devices::virtio::vhost::user::NetBackend;
 use devices::virtio::vhost::user::VhostUserDeviceBuilder;
 use devices::virtio::vhost::user::VhostUserVsockDevice;
 use devices::virtio::vsock::VsockConfig;
-#[cfg(feature = "balloon")]
-use devices::virtio::BalloonMode;
 use devices::virtio::Console;
 #[cfg(feature = "net")]
 use devices::virtio::NetError;
@@ -409,7 +407,7 @@ pub fn create_virtio_snd_device(
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::AAUDIO) => "snd_aaudio_device",
         #[cfg(feature = "audio_cras")]
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::CRAS) => "snd_cras_device",
-        #[cfg(not(feature = "audio_cras"))]
+        #[cfg(not(any(feature = "audio_cras", feature = "audio_aaudio")))]
         _ => unreachable!(),
     };
 
@@ -552,6 +550,35 @@ pub fn create_trackpad_device<T: IntoUnixStream>(
     })
 }
 
+pub fn create_multitouch_trackpad_device<T: IntoUnixStream>(
+    protection_type: ProtectionType,
+    jail_config: &Option<JailConfig>,
+    trackpad_socket: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+    idx: u32,
+) -> DeviceResult {
+    let socket = trackpad_socket
+        .into_unix_stream()
+        .context("failed configuring virtio trackpad")?;
+
+    let dev = virtio::input::new_multitouch_trackpad(
+        idx,
+        socket,
+        width,
+        height,
+        name,
+        virtio::base_features(protection_type),
+    )
+    .context("failed to set up input device")?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(jail_config, "input_device")?,
+    })
+}
+
 pub fn create_mouse_device<T: IntoUnixStream>(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
@@ -652,7 +679,6 @@ pub fn create_vinput_device(
 pub fn create_balloon_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
-    mode: BalloonMode,
     tube: Tube,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
@@ -667,7 +693,6 @@ pub fn create_balloon_device(
         VmMemoryClient::new(dynamic_mapping_device_tube),
         inflate_tube,
         init_balloon_size,
-        mode,
         enabled_features,
         #[cfg(feature = "registered_events")]
         registered_evt_q,
