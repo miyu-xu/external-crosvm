@@ -11,7 +11,6 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
@@ -28,6 +27,8 @@ use cros_async::IoSource;
 use hypervisor::ProtectionType;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGralloc;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGrallocBackendFlags;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -150,11 +151,6 @@ impl VhostUserDevice for WlBackend {
     }
 
     fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
-        let unrequested_features = value & !self.features();
-        if unrequested_features != 0 {
-            bail!("invalid features are given: {:#x}", unrequested_features);
-        }
-
         self.acked_features |= value;
 
         if value & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0 {
@@ -170,32 +166,8 @@ impl VhostUserDevice for WlBackend {
         Ok(())
     }
 
-    fn acked_features(&self) -> u64 {
-        self.acked_features
-    }
-
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         VhostUserProtocolFeatures::BACKEND_REQ | VhostUserProtocolFeatures::SHARED_MEMORY_REGIONS
-    }
-
-    fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        if features & self.protocol_features().bits() != self.protocol_features().bits() {
-            Err(anyhow!(
-                "Acked features {:#x} missing required protocol features",
-                features
-            ))
-        } else if features & !self.protocol_features().bits() != 0 {
-            Err(anyhow!(
-                "Acked features {:#x} contains unexpected features",
-                features
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn acked_protocol_features(&self) -> u64 {
-        VhostUserProtocolFeatures::empty().bits()
     }
 
     fn read_config(&self, _offset: u64, _dst: &mut [u8]) {}
@@ -234,7 +206,8 @@ impl VhostUserDevice for WlBackend {
         } = self;
 
         #[cfg(feature = "minigbm")]
-        let gralloc = RutabagaGralloc::new().context("Failed to initailize gralloc")?;
+        let gralloc = RutabagaGralloc::new(RutabagaGrallocBackendFlags::new())
+            .context("Failed to initailize gralloc")?;
         let wlstate = match &self.wlstate {
             None => {
                 let mapper = {

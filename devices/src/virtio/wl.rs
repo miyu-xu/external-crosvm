@@ -72,7 +72,6 @@ use base::Error;
 use base::Event;
 use base::EventToken;
 use base::EventType;
-use base::FromRawDescriptor;
 #[cfg(feature = "gpu")]
 use base::IntoRawDescriptor;
 #[cfg(feature = "minigbm")]
@@ -115,6 +114,8 @@ use rutabaga_gfx::RutabagaDescriptor;
 use rutabaga_gfx::RutabagaError;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGralloc;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGrallocBackendFlags;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGrallocFlags;
 #[cfg(feature = "minigbm")]
@@ -232,7 +233,7 @@ fn is_fence(f: &File) -> bool {
     let info = sync_file_info::default();
     // SAFETY:
     // Safe as f is a valid file
-    unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO(), &info) == 0 }
+    unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO, &info) == 0 }
 }
 
 #[cfg(feature = "minigbm")]
@@ -462,7 +463,7 @@ struct VmRequester {
 fn to_safe_descriptor(r: RutabagaDescriptor) -> SafeDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe { SafeDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
+    unsafe { base::FromRawDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
 }
 
 impl VmRequester {
@@ -916,7 +917,7 @@ impl WlVfd {
                 };
                 // SAFETY:
                 // Safe as descriptor is a valid dmabuf and incorrect flags will return an error.
-                if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC(), &sync) } < 0 {
+                if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC, &sync) } < 0 {
                     return Err(WlError::DmabufSync(io::Error::last_os_error()));
                 }
 
@@ -1052,14 +1053,14 @@ impl WlVfd {
                 .send_vectored_with_fds(&data.get_remaining(), rds)
                 .map_err(WlError::SendVfd)?;
             // All remaining data in `data` is now considered consumed.
-            data.consume(::std::usize::MAX);
+            data.consume(usize::MAX);
             Ok(WlResp::Ok)
         } else if let Some((_, local_pipe)) = &mut self.local_pipe {
             // Impossible to send descriptors over a simple pipe.
             if !rds.is_empty() {
                 return Ok(WlResp::InvalidType);
             }
-            data.read_to(local_pipe, usize::max_value())
+            data.read_to(local_pipe, usize::MAX)
                 .map_err(WlError::WritePipe)?;
             Ok(WlResp::Ok)
         } else {
@@ -1492,7 +1493,9 @@ impl WlState {
                             *descriptor = dup.into_raw_descriptor();
                             // SAFETY:
                             // Safe because the fd comes from a valid SafeDescriptor.
-                            let file = unsafe { File::from_raw_descriptor(*descriptor) };
+                            let file: File = unsafe {
+                                base::FromRawDescriptor::from_raw_descriptor(*descriptor)
+                            };
                             bridged_files.push(file);
                         }
                         Err(_) => return Ok(WlResp::InvalidId),
@@ -2009,7 +2012,7 @@ impl VirtioDevice for Wl {
     fn on_device_sandboxed(&mut self) {
         // Gralloc initialization can cause some GPU drivers to create their own threads
         // and that must be done after sandboxing.
-        match RutabagaGralloc::new() {
+        match RutabagaGralloc::new(RutabagaGrallocBackendFlags::new()) {
             Ok(g) => self.gralloc = Some(g),
             Err(e) => {
                 error!("failed to initialize gralloc {:?}", e);
