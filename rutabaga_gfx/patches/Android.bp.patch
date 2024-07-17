@@ -1,8 +1,8 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index 3384aee72..0c64f2ef2 100644
+index c69e8a386..d64f158e6 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -22,7 +22,6 @@ rust_library {
+@@ -23,7 +23,6 @@ rust_library {
      edition: "2021",
      features: [
          "gfxstream",
@@ -10,15 +10,14 @@ index 3384aee72..0c64f2ef2 100644
          "virgl_renderer",
      ],
      rustlibs: [
-@@ -34,14 +33,59 @@ rust_library {
+@@ -35,14 +34,71 @@ rust_library {
          "libzerocopy",
      ],
      proc_macros: ["libremain"],
 +    cfgs: [
 +        "gfxstream_unstable",
 +    ],
-     shared_libs: [
--        "libdrm",
++    shared_libs: [
 +        "libc++",
 +        "libbase",
 +    ],
@@ -30,16 +29,21 @@ index 3384aee72..0c64f2ef2 100644
 +                "liblog",
 +            ],
 +        },
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
++            ],
++        },
 +    },
-+    static_libs: [
-         "libepoxy",
-         "libgbm",
-+        "libdrm",
+     static_libs: [
+-        "libgbm",
++        "libepoxy",
 +        "libgfxstream_backend",
          "libvirglrenderer",
      ],
- }
- 
++}
++
 +rust_library {
 +    name: "librutabaga_gfx_gfxstream",
 +    defaults: ["crosvm_inner_defaults"],
@@ -62,16 +66,26 @@ index 3384aee72..0c64f2ef2 100644
 +    cfgs: [
 +        "gfxstream_unstable",
 +    ],
-+    features: ["gfxstream"],
-+    shared_libs: [
-+        "libgfxstream_backend",
++    features: [
++        "gfxstream",
 +    ],
-+}
-+
+     shared_libs: [
+-        "libdrm",
+-        "libepoxy",
++        "libgfxstream_backend",
+     ],
++    target: {
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
++            ],
++        },
++    },
+ }
+ 
  rust_test {
-     name: "rutabaga_gfx_test_src_lib",
-     defaults: ["crosvm_inner_defaults"],
-@@ -58,7 +102,6 @@ rust_test {
+@@ -61,7 +117,6 @@ rust_test {
      edition: "2021",
      features: [
          "gfxstream",
@@ -79,17 +93,18 @@ index 3384aee72..0c64f2ef2 100644
          "virgl_renderer",
      ],
      rustlibs: [
-@@ -71,9 +114,12 @@ rust_test {
+@@ -73,12 +128,9 @@ rust_test {
+         "libzerocopy",
      ],
      proc_macros: ["libremain"],
+-    static_libs: [
+-        "libgbm",
+-        "libvirglrenderer",
+-    ],
      shared_libs: [
 -        "libdrm",
          "libepoxy",
-         "libgbm",
 +        "libgfxstream_backend",
-         "libvirglrenderer",
++        "libvirglrenderer",
      ],
-+    static_libs: [
-+        "libdrm",
-+    ],
  }
