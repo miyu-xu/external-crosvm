@@ -1935,6 +1935,12 @@ pub struct RunCommand {
     /// Only available when crosvm is built with feature 'pvclock'.
     pub pvclock: Option<bool>,
 
+    #[argh(option)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// qualcomm Trusted VM
+    pub qualcomm_trusted_vm: Option<String>,
+
     #[argh(option, long = "restore", arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -3464,6 +3470,11 @@ impl TryFrom<RunCommand> for super::config::Config {
         } else {
             ProtectionType::Unprotected
         };
+
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        {
+            cfg.qualcomm_trusted_vm = cmd.qualcomm_trusted_vm;
+        }
 
         if !matches!(cfg.protection_type, ProtectionType::Unprotected) {
             // USB devices only work for unprotected VMs.

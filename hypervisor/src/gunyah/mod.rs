@@ -14,6 +14,8 @@ use std::collections::HashSet;
 use std::ffi::CString;
 use std::fs::File;
 use std::mem::size_of;
+use std::os::fd::FromRawFd;
+use std::os::fd::RawFd;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
@@ -45,6 +47,9 @@ use libc::EOVERFLOW;
 use libc::O_CLOEXEC;
 use libc::O_RDWR;
 use sync::Mutex;
+use vm_memory::BackingObject;
+use vm_memory::MemoryRegion;
+use vm_memory::MemoryRegionOptions;
 use vm_memory::MemoryRegionPurpose;
 
 use crate::*;
@@ -101,6 +106,141 @@ impl Hypervisor for Gunyah {
             #[cfg(target_arch = "x86_64")]
             HypervisorCap::Xcrs | HypervisorCap::CalibratedTscLeafRequired => false,
         }
+    }
+}
+
+pub struct GunyahCma {
+    mem_regions: Vec<MemoryRegion>,
+}
+
+fn create_cma_fd(cma_fd: RawFd) -> Result<RawFd> {
+    let cma_descriptor = unsafe { SafeDescriptor::from_raw_descriptor(cma_fd) };
+
+    let gunyah_cma_mem_args = gunyah_cma_mem_args {
+        flags: 0,
+        reserved: [0; 6],
+    };
+
+    // SAFETY:
+    // Safe because we know that our file is a gunyah_cma node and we verify the return result.
+    let fd = unsafe { ioctl_with_ref(&cma_descriptor, GUNYAH_CREATE_CMA_MEM(), &gunyah_cma_mem_args) };
+    if fd < 0 {
+        return errno_result();
+    }
+
+    Ok(fd)
+}
+
+impl GunyahCma {
+    pub fn new(
+        vm_name: Option<String>,
+        guest_mem_layout: &Vec<(GuestAddress, u64, MemoryRegionOptions)>,
+    ) -> Result<GunyahCma> {
+        let mut cma_backed_mappings = Vec::new();
+        // Check if it is a Qualcomm Trusted VM
+        if vm_name.is_none() {
+            // For now, we don't have any CMA regions setup for Non Qualcomm Trusted VMs
+            return Ok(GunyahCma {
+                mem_regions: cma_backed_mappings,
+            });
+        }
+
+        let qtvm = vm_name.unwrap();
+        for (addr, size, option) in guest_mem_layout {
+            match option.purpose {
+                MemoryRegionPurpose::GuestMemoryRegion => {
+                    // Find the GuestMemoryRegion Pool and get the fd behind it
+                    let gm_cma_pool = "/dev/".to_owned() + &qtvm + "_cma";
+                    let gm_cma_path = CString::new(Path::new(&gm_cma_pool).as_os_str().as_bytes()).unwrap();
+                    // SAFETY:
+                    // Open calls are safe because we give a nul-terminated string and verify the result.
+                    let gm_cma_fd = unsafe { open(gm_cma_path.as_ptr(), O_RDWR | O_CLOEXEC) };
+                    if gm_cma_fd < 0 {
+                        // There may not be a cma pool associated with GuestMemory.
+                        // If so, move on to swiotlb. Shm will be used for
+                        // GuestMemory.
+                        continue;
+                    }
+                    let gm_fd = create_cma_fd(gm_cma_fd)?;
+                    // SAFETY:
+                    // Safe because we create this file and we verify the return result.
+                    let file = Arc::new(unsafe { File::from_raw_fd(gm_fd) });
+                    let size = file.metadata()?.len();
+                    // Map at the beginning of the guest mem for every option
+                    let region = MemoryRegion::new_from_file_with_option(size, *addr, 0, file, *option)
+                    .unwrap_or_else(|e| panic!("failed to create mem region for CMA, addr:{}. Err: {}", addr.offset(), e));
+                    cma_backed_mappings.push(region);
+                },
+                MemoryRegionPurpose::StaticSwiotlbRegion => {
+                    // Find the StaticSwiotlbRegion Pool and get the fd behind it
+                    let swiotlb_cma_pool = "/dev/".to_owned() + &qtvm + "_swiotlb_cma";
+                    let swiotlb_cma_path = CString::new(Path::new(&swiotlb_cma_pool).as_os_str().as_bytes()).unwrap();
+                    // SAFETY:
+                    // Open calls are safe because we give a nul-terminated string and verify the result.
+                    let swiotlb_cma_fd = unsafe { open(swiotlb_cma_path.as_ptr(), O_RDWR | O_CLOEXEC) };
+                    if swiotlb_cma_fd < 0 {
+                        // There may not be a cma pool associated with SwiotlbMemory.
+                        // If so, move on. Shm will be used for SwiotlbMemory.
+                        continue;
+                    }
+                    let swiotlb_fd = create_cma_fd(swiotlb_cma_fd)?;
+                    // Map at the beginning of the guest mem for every option
+                    let file = Arc::new(unsafe { File::from_raw_fd(swiotlb_fd) });
+                    let size = file.metadata()?.len();
+                    let region = MemoryRegion::new_from_file_with_option(size, *addr, 0, file, *option)
+                    .unwrap_or_else(|e| panic!("failed to create mem region for CMA, addr:{}, size:{}. Err: {}", addr.offset(), size, e));
+                    cma_backed_mappings.push(region);
+                },
+                MemoryRegionPurpose::ProtectedFirmwareRegion => continue,
+            }
+        }
+
+        Ok(GunyahCma {
+            mem_regions: cma_backed_mappings,
+        })
+    }
+
+    pub fn get_memory_regions(self) -> Vec<MemoryRegion> {
+        self.mem_regions
+    }
+}
+
+unsafe fn map_cma_region_with_vm(
+    vm: &SafeDescriptor,
+    lend: bool,
+    read_only: bool,
+    guest_addr: u64,
+    guest_mem_fd: u32,
+    size: u64,
+    offset: u64,
+) -> Result<()> {
+    let mut flags = 0;
+
+    flags |= GUNYAH_MEM_ALLOW_READ | GUNYAH_MEM_ALLOW_EXEC;
+    if !read_only {
+        flags |= GUNYAH_MEM_ALLOW_WRITE;
+    }
+
+    if !lend {
+        flags |= GUNYAH_MEM_FORCE_SHARE;
+    }
+    else {
+        flags |= GUNYAH_MEM_FORCE_LEND;
+    }
+
+    let region = gunyah_map_mem_args {
+        guest_addr,
+        flags,
+        guest_mem_fd,
+        offset,
+        size,
+    };
+
+    let ret = ioctl_with_ref(vm, GUNYAH_VM_MAP_CMA_MEM(), &region);
+    if ret == 0 {
+        Ok(())
+    } else {
+        errno_result()
     }
 }
 
@@ -181,6 +321,7 @@ pub struct GunyahVm {
     gh: Gunyah,
     vm: SafeDescriptor,
     guest_mem: GuestMemory,
+    vm_name: Option<String>,
     mem_regions: Arc<Mutex<BTreeMap<MemSlot, (Box<dyn MappedRegion>, GuestAddress)>>>,
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
@@ -195,7 +336,7 @@ impl AsRawDescriptor for GunyahVm {
 }
 
 impl GunyahVm {
-    pub fn new(gh: &Gunyah, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
+    pub fn new(gh: &Gunyah, guest_mem: GuestMemory, cfg: Config, vm_name: Option<String>) -> Result<GunyahVm> {
         // SAFETY:
         // Safe because we know gunyah is a real gunyah fd as this module is the only one that can
         // make Gunyah objects.
@@ -219,44 +360,92 @@ impl GunyahVm {
             } else {
                 false
             };
-            if lend {
-                // SAFETY:
-                // Safe because the guest regions are guarnteed not to overlap.
-                unsafe {
-                    android_lend_user_memory_region(
-                        &vm_descriptor,
-                        region.index as MemSlot,
-                        false,
-                        region.guest_addr.offset(),
-                        region.size.try_into().unwrap(),
-                        region.host_addr as *mut u8,
-                    )?;
+            match region.shm {
+                BackingObject::File(f) => {
+                    unsafe {
+                        map_cma_region_with_vm(
+                            &vm_descriptor,
+                            lend,
+                            false,
+                            region.guest_addr.offset(),
+                            region.shm.as_raw_descriptor().try_into().unwrap(),
+                            region.size.try_into().unwrap(),
+                            region.shm_offset,
+                        )?;
+                    }
                 }
-            } else {
-                // SAFETY:
-                // Safe because the guest regions are guarnteed not to overlap.
-                unsafe {
-                    set_user_memory_region(
-                        &vm_descriptor,
-                        region.index as MemSlot,
-                        false,
-                        region.guest_addr.offset(),
-                        region.size.try_into().unwrap(),
-                        region.host_addr as *mut u8,
-                    )?;
+                BackingObject::Shm(f) => {
+                    if lend {
+                        // SAFETY:
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        unsafe {
+                            android_lend_user_memory_region(
+                                &vm_descriptor,
+                                region.index as MemSlot,
+                                false,
+                                region.guest_addr.offset(),
+                                region.size.try_into().unwrap(),
+                                region.host_addr as *mut u8,
+                            )?;
+                        }
+                    } else {
+                        // SAFETY:
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        unsafe {
+                            set_user_memory_region(
+                                &vm_descriptor,
+                                region.index as MemSlot,
+                                false,
+                                region.guest_addr.offset(),
+                                region.size.try_into().unwrap(),
+                                region.host_addr as *mut u8,
+                            )?;
+                        }
+                    }
                 }
-            }
+            };
         }
 
         Ok(GunyahVm {
             gh: gh.try_clone()?,
             vm: vm_descriptor,
             guest_mem,
+            vm_name,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             routes: Arc::new(Mutex::new(HashSet::new())),
             hv_cfg: cfg,
         })
+    }
+
+    pub fn set_vm_auth_type_to_qualcomm_trusted_vm(&self, payload_start: GuestAddress, payload_size: u64) -> Result<()> {
+        let name = self.vm_name.as_ref().unwrap();
+        let mut fw_name: [u8; 16] = [0; 16];
+        fw_name[..name.len()].copy_from_slice(name.as_bytes());
+
+        let gunyah_qtvm_auth_arg = gunyah_qtvm_auth_arg {
+            vm_name: fw_name,
+            len: name.len() as u32,
+            // QTVMs have the metadata needed for authentication at the start of the guest addrspace.
+            guest_phys_addr: payload_start.offset(),
+            size: payload_size,
+        };
+
+        let gunyah_auth_desc = gunyah_auth_desc {
+            type_: gunyah_auth_type_GUNYAH_QCOM_TRUSTED_VM_TYPE,
+            arg_size: size_of::<gunyah_qtvm_auth_arg>() as u32,
+            // SAFETY:
+            // Safe because kernel is expecting pointer with non-zero arg_size
+            arg: &gunyah_qtvm_auth_arg as *const gunyah_qtvm_auth_arg as u64,
+        };
+
+        // SAFETY: safe because the return value is checked.
+        let ret = unsafe { ioctl_with_ref(self, GUNYAH_VM_SET_AUTH_TYPE(), &gunyah_auth_desc) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
     }
 
     fn create_vcpu(&self, id: usize) -> Result<GunyahVcpu> {
@@ -362,6 +551,7 @@ impl GunyahVm {
             gh: self.gh.try_clone()?,
             vm: self.vm.try_clone()?,
             guest_mem: self.guest_mem.clone(),
+            vm_name: self.vm_name.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
@@ -420,6 +610,7 @@ impl Vm for GunyahVm {
         Ok(GunyahVm {
             gh: self.gh.try_clone()?,
             vm: self.vm.try_clone()?,
+            vm_name: self.vm_name.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),

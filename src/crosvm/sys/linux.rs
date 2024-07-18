@@ -40,6 +40,7 @@ use std::mem;
 use std::ops::RangeInclusive;
 use std::os::unix::prelude::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
+use std::os::fd::RawFd;
 use std::path::Path;
 use std::process;
 #[cfg(feature = "registered_events")]
@@ -184,7 +185,9 @@ use vm_control::*;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::MemoryPolicy;
+use vm_memory::MemoryRegion;
 use vm_memory::MemoryRegionOptions;
+use vm_memory::MemoryRegionPurpose;
 #[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as Arch;
 
@@ -1418,6 +1421,106 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
         .collect()
 }
 
+// Remove ranges in `guest_mem_layout` that overlap with ranges in `cma_backed_mappings`.
+// Returns the updated guest memory layout.
+fn punch_holes_in_guest_mem_layout_for_cma_mappings(
+    guest_mem_layout: Vec<(GuestAddress, u64, MemoryRegionOptions)>,
+    cma_backed_mappings: &Vec<MemoryRegion>,
+) -> Vec<(GuestAddress, u64, MemoryRegionOptions)> {
+    // Create a set containing (start, end) pairs with exclusive end (end = start + size; the byte
+    // at end is not included in the range).
+    let mut layout_set = BTreeSet::new();
+    for (addr, size, options) in &guest_mem_layout {
+        layout_set.insert((addr.offset(), addr.offset() + size, *options));
+    }
+
+    for region in cma_backed_mappings {
+        // Repeatedly split overlapping guest memory regions until no overlaps remain.
+        let mapping_start = region.start().offset();
+        let mapping_end = region.end().offset();
+
+        // Repeatedly split overlapping guest memory regions until no overlaps remain.
+        while let Some((range_start, range_end, options)) = layout_set
+            .iter()
+            .find(|&&(range_start, range_end, _)| {
+                mapping_start < range_end && mapping_end > range_start
+            })
+            .cloned()
+        {
+            layout_set.remove(&(range_start, range_end, options));
+
+            if range_start < mapping_start {
+                layout_set.insert((range_start, mapping_start, options));
+            }
+            if range_end > mapping_end {
+                layout_set.insert((mapping_end, range_end, options));
+            }
+        }
+    }
+
+    // Build the final guest memory layout from the modified layout_set.
+    layout_set
+        .iter()
+        .map(|(start, end, options)| (GuestAddress(*start), end - start, *options))
+        .collect()
+}
+
+fn create_guest_memory_with_contiguous_memory(
+    cfg: &Config,
+    components: &VmComponents,
+    hypervisor: &impl Hypervisor,
+    cma_backed_mappings: Vec<MemoryRegion>,
+) -> Result<GuestMemory> {
+    // Create MemoryRegions for non-cma based guest memory
+    let guest_mem_layout = Arch::guest_memory_layout(components, hypervisor)
+        .context("failed to create guest memory layout")?;
+
+    let guest_mem_layout =
+        punch_holes_in_guest_mem_layout_for_cma_mappings(guest_mem_layout, &cma_backed_mappings);
+
+    let guest_mem_layout =
+        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings);
+
+    let mut regions = Vec::new();
+    let shm = Arc::new(GuestMemory::create_shm(&guest_mem_layout)?);
+    let mut offset = 0;
+    for mapping in guest_mem_layout {
+        let region = MemoryRegion::new_from_shm_with_option(mapping.1, mapping.0, offset, shm.clone(), mapping.2)
+                     .unwrap_or_else(|e| panic!("failed to create mem region, addr:{}, size:{}. Err: {}", mapping.0, mapping.1, e));
+        regions.push(region);
+        offset += mapping.1 as u64;
+    }
+
+    // Add the MemoryRegions for cma backed mappings
+    for mapping in cma_backed_mappings {
+        regions.push(mapping);
+    }
+
+    let guest_mem = GuestMemory::from_regions(regions).context("failed to create guest memory")?;
+
+    let mut mem_policy = MemoryPolicy::empty();
+    if components.hugepages {
+        mem_policy |= MemoryPolicy::USE_HUGEPAGES;
+    }
+
+    if cfg.lock_guest_memory {
+        mem_policy |= MemoryPolicy::LOCK_GUEST_MEMORY;
+    }
+    guest_mem.set_memory_policy(mem_policy);
+
+    if cfg.unmap_guest_memory_on_fork {
+        // Note that this isn't compatible with sandboxing. We could potentially fix that by
+        // delaying the call until after the sandboxed devices are forked. However, the main use
+        // for this is in conjunction with protected VMs, where most of the guest memory has been
+        // unshared with the host. We'd need to be confident that the guest memory is unshared with
+        // the host only after the `use_dontfork` call and those details will vary by hypervisor.
+        // So, for now we keep things simple to be safe.
+        guest_mem.use_dontfork().context("use_dontfork failed")?;
+    }
+
+    Ok(guest_mem)
+}
+
 fn create_guest_memory(
     cfg: &Config,
     components: &VmComponents,
@@ -1614,6 +1717,7 @@ fn run_gunyah(
 ) -> Result<ExitState> {
     use devices::GunyahIrqChip;
     use hypervisor::gunyah::Gunyah;
+    use hypervisor::gunyah::GunyahCma;
     use hypervisor::gunyah::GunyahVcpu;
     use hypervisor::gunyah::GunyahVm;
 
@@ -1621,7 +1725,22 @@ fn run_gunyah(
     let gunyah = Gunyah::new_with_path(device_path)
         .with_context(|| format!("failed to open Gunyah device {}", device_path.display()))?;
 
-    let guest_mem = create_guest_memory(&cfg, &components, &gunyah)?;
+    let guest_mem = if let Some(qtvm) = cfg.qualcomm_trusted_vm.clone() {
+        let guest_mem_layout = Arch::guest_memory_layout(&components, &gunyah)
+        .context("failed to create guest memory layout")?;
+        let gunyah_cma = GunyahCma::new(cfg.qualcomm_trusted_vm.clone(), &guest_mem_layout)
+        .with_context(|| format!("failed to create CMA for {}", qtvm))?;
+        // If qtvm is chosen and we are able to obtain cma based fds for it, then
+        // create guest_mem based out of these fds as well.
+        let gunyah_cma_regions = gunyah_cma.get_memory_regions();
+        if gunyah_cma_regions.is_empty() {
+            create_guest_memory(&cfg, &components, &gunyah)?
+        } else {
+            create_guest_memory_with_contiguous_memory(&cfg, &components, &gunyah, gunyah_cma_regions)?
+        }
+    } else {
+        create_guest_memory(&cfg, &components, &gunyah)?
+    };
 
     #[cfg(feature = "swap")]
     let swap_controller = if let Some(swap_dir) = cfg.swap_dir.as_ref() {
@@ -1633,7 +1752,7 @@ fn run_gunyah(
         None
     };
 
-    let vm = GunyahVm::new(&gunyah, guest_mem, components.hv_cfg).context("failed to create vm")?;
+    let vm = GunyahVm::new(&gunyah, guest_mem, components.hv_cfg, cfg.qualcomm_trusted_vm.clone()).context("failed to create VM")?;
 
     // Check that the VM was actually created in protected mode as expected.
     if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
