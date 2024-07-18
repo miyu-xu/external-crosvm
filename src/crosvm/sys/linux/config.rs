@@ -34,6 +34,7 @@ pub enum HypervisorKind {
     #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
     Gunyah {
         device: Option<PathBuf>,
+        qcom_trusted_vm_name: Option<String>,
     },
 }
 
