@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c72bcfc2_406607d0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-18T23:06:22Z",
+      "side": 1,
+      "message": "early merge because there is a breaking change to vhost-user protocol i want to get sorted out (associated AOSP fix in https://r.android.com/3182888)",
+      "revId": "559dbe8ea49bf1de2f44cfed4d8b2c91111a3e1b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
