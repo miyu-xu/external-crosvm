@@ -128,17 +128,10 @@ impl VmAArch64 for GunyahVm {
             bell_node.set_prop("interrupts", &interrupts)?;
         }
 
-        let mut base_set = false;
         for region in self.guest_mem.regions() {
             let create_shm_node = match region.options.purpose {
-                MemoryRegionPurpose::GuestMemoryRegion => {
-                    // Assume first GuestMemoryRegion contains the payload
-                    // This memory region is described by the "base-address" property
-                    // and doesn't get re-described as a separate shm node.
-                    let ret = base_set;
-                    base_set = true;
-                    ret
-                }
+                // We would not have to expose a GuestMemoryRegion as shm
+                MemoryRegionPurpose::GuestMemoryRegion => false,
                 // Described by the "firmware-address" property
                 MemoryRegionPurpose::ProtectedFirmwareRegion => false,
                 MemoryRegionPurpose::StaticSwiotlbRegion => true,
@@ -162,12 +155,6 @@ impl VmAArch64 for GunyahVm {
         fdt_address: GuestAddress,
         fdt_size: usize,
     ) -> Result<()> {
-        // Gunyah initializes the PC to be the payload entry (except for protected VMs)
-        // and assumes that the image is loaded at the beginning of the "primary"
-        // memory parcel (region). This parcel contains both DTB and kernel Image, so
-        // make sure that DTB and payload are in the same memory region and that
-        // payload is at the start of that region.
-
         let (dtb_mapping, _, dtb_obj_offset) = self
             .guest_mem
             .find_region(fdt_address)
@@ -177,12 +164,35 @@ impl VmAArch64 for GunyahVm {
             .find_region(payload_entry_address)
             .map_err(|_| Error::new(ENOENT))?;
 
-        if !std::ptr::eq(dtb_mapping, payload_mapping) || dtb_obj_offset != payload_obj_offset {
-            panic!("DTB and payload are not part of same memory region.");
-        }
-
         if payload_offset != 0 {
             panic!("Payload offset must be zero");
+        }
+
+        if self.vm_name.is_some() {
+            // Gunyah will find the metadata about the Qualcomm Trusted VM in the
+            // last few pages (decided at build time) of the primary payload region.
+            // This metadata consists of the elf header which tells Gunyah where
+            // the different elf segments (kernel/DTB/ramdisk) are. As we send the entire
+            // primary payload as a single memory parcel to Gunyah, with the offsets from
+            // the elf header, Gunyah can find the DTB through which it will discover the
+            // vdevices along with the kernel start.
+            // Pass on the primary payload region start address and its size for Qualcomm
+            // Trusted VMs.
+            for region in self.guest_mem.regions() {
+                if region.guest_addr.offset() == payload_entry_address.offset() {
+                    self.set_vm_auth_type_to_qcom_trusted_vm(payload_entry_address, region.size.try_into().unwrap());
+                    break;
+                }
+            }
+        } else {
+            // Gunyah initializes the PC to be the payload entry (except for protected VMs)
+            // and assumes that the image is loaded at the beginning of the "primary"
+            // memory parcel (region). This parcel contains both DTB and kernel Image, so
+            // make sure that DTB and payload are in the same memory region and that
+            // payload is at the start of that region.
+            if !std::ptr::eq(dtb_mapping, payload_mapping) || dtb_obj_offset != payload_obj_offset {
+                panic!("DTB and payload are not part of same memory region.");
+            }
         }
 
         self.set_dtb_config(fdt_address, fdt_size)?;

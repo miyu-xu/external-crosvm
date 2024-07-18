@@ -29,6 +29,9 @@ ioctl_iow_nr!(GH_VM_ADD_FUNCTION, GH_IOCTL_TYPE, 0x4, gh_fn_desc);
 ioctl_io_nr!(GH_VCPU_RUN, GH_IOCTL_TYPE, 0x5);
 ioctl_io_nr!(GH_VCPU_MMAP_SIZE, GH_IOCTL_TYPE, 0x6);
 ioctl_iow_nr!(GH_VM_REMOVE_FUNCTION, GH_IOCTL_TYPE, 0x7, gh_fn_desc);
+ioctl_iow_nr!(GUNYAH_CREATE_CMA_MEM, GH_IOCTL_TYPE, 0xb, gunyah_cma_mem_args);
+ioctl_iow_nr!(GUNYAH_VM_MAP_CMA_MEM, GH_IOCTL_TYPE, 0xc, gunyah_map_mem_args);
+ioctl_iow_nr!(GUNYAH_VM_SET_AUTH_TYPE, GH_IOCTL_TYPE, 0xd, gunyah_auth_desc);
 
 // Special bindings for Android Common Kernel
 pub const GH_ANDROID_IOCTL_TYPE: u8 = 65u8;

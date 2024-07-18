@@ -13,7 +13,10 @@ use std::collections::BinaryHeap;
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::fs::File;
+use std::io;
+use std::io::ErrorKind;
 use std::mem::size_of;
+use std::os::fd::FromRawFd;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
@@ -45,6 +48,9 @@ use libc::EOVERFLOW;
 use libc::O_CLOEXEC;
 use libc::O_RDWR;
 use sync::Mutex;
+use vm_memory::BackingObject;
+use vm_memory::MemoryRegion;
+use vm_memory::MemoryRegionOptions;
 use vm_memory::MemoryRegionPurpose;
 
 use crate::*;
@@ -101,6 +107,115 @@ impl Hypervisor for Gunyah {
             #[cfg(target_arch = "x86_64")]
             HypervisorCap::Xcrs | HypervisorCap::CalibratedTscLeafRequired => false,
         }
+    }
+}
+
+pub struct GunyahCma {
+    gunyah_cma_pool: Option<SafeDescriptor>,
+}
+
+impl GunyahCma {
+    pub fn new(cma_pool: &Path) -> Result<GunyahCma> {
+        let c_path = CString::new(cma_pool.as_os_str().as_bytes()).unwrap();
+        // SAFETY:
+        // Open calls are safe because we give a nul-terminated string and verify the result.
+        let ret = unsafe { open(c_path.as_ptr(), O_RDWR | O_CLOEXEC) };
+        if ret < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() ==  ErrorKind::NotFound {
+                return Ok(GunyahCma {
+                    gunyah_cma_pool: None,
+                })
+            } else {
+                return errno_result();
+            }
+        } else {
+            Ok(GunyahCma {
+                // SAFETY:
+                // Safe because we verify that ret is valid and we own the fd.
+                gunyah_cma_pool: unsafe { Some(SafeDescriptor::from_raw_descriptor(ret)) },
+            })
+        }
+    }
+
+    pub fn is_valid_cma(&self) -> bool {
+        match &self.gunyah_cma_pool {
+            Some(c) => true,
+            None => false,
+        }
+    }
+
+    pub fn create_cma_memory_region(
+        &self,
+        guest_addr: GuestAddress,
+        option: MemoryRegionOptions,
+    ) -> Result<MemoryRegion> {
+        let gunyah_cma_mem_args = gunyah_cma_mem_args {
+            flags: 0,
+            reserved: [0; 6],
+        };
+
+        let cma_pool = self
+            .gunyah_cma_pool
+            .as_ref()
+            .expect("CMA pool doesn't exist");
+
+        // SAFETY:
+        // Safe because we know that our file is a gunyah_cma node and we verify the return result.
+        let fd = unsafe { ioctl_with_ref(cma_pool, GUNYAH_CREATE_CMA_MEM(), &gunyah_cma_mem_args) };
+        if fd < 0 {
+            return errno_result();
+        }
+        // SAFETY:
+        // Safe because we create this file and we verify the return result.
+        let file = Arc::new(unsafe { File::from_raw_fd(fd) });
+        let size = file.metadata()?.len();
+        // Map at the beginning of the guest mem for every option
+        let region = MemoryRegion::new_from_cma_with_option(size, guest_addr, 0, file, option)
+            .unwrap_or_else(|e| panic!("failed to create mem region for CMA, addr:{}. Err: {}", guest_addr.offset(), e));
+
+        Ok (region)
+    }
+}
+
+unsafe fn map_cma_region_with_vm(
+    vm: &SafeDescriptor,
+    slot: MemSlot,
+    lend: bool,
+    read_only: bool,
+    guest_addr: u64,
+    guest_mem_fd: u32,
+    size: u64,
+    offset: u64,
+) -> Result<()> {
+    let mut flags = 0;
+
+    flags |= GUNYAH_MEM_ALLOW_READ | GUNYAH_MEM_ALLOW_EXEC;
+    if !read_only {
+        flags |= GUNYAH_MEM_ALLOW_WRITE;
+    }
+
+    if !lend {
+        flags |= GUNYAH_MEM_FORCE_SHARE;
+    }
+    else {
+        flags |= GUNYAH_MEM_FORCE_LEND;
+    }
+
+    let region = gunyah_map_mem_args {
+        label: slot,
+        guest_addr,
+        flags,
+        guest_mem_fd,
+        offset,
+        size,
+    };
+
+    let ret = ioctl_with_ref(vm, GUNYAH_VM_MAP_CMA_MEM(), &region);
+    if ret == 0 {
+        Ok(())
+    } else {
+        errno_result()
     }
 }
 
@@ -181,6 +296,7 @@ pub struct GunyahVm {
     gh: Gunyah,
     vm: SafeDescriptor,
     guest_mem: GuestMemory,
+    vm_name: Option<String>,
     mem_regions: Arc<Mutex<BTreeMap<MemSlot, (Box<dyn MappedRegion>, GuestAddress)>>>,
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
@@ -195,7 +311,7 @@ impl AsRawDescriptor for GunyahVm {
 }
 
 impl GunyahVm {
-    pub fn new(gh: &Gunyah, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
+    pub fn new(gh: &Gunyah, guest_mem: GuestMemory, cfg: Config, vm_name: Option<String>) -> Result<GunyahVm> {
         // SAFETY:
         // Safe because we know gunyah is a real gunyah fd as this module is the only one that can
         // make Gunyah objects.
@@ -219,44 +335,100 @@ impl GunyahVm {
             } else {
                 false
             };
-            if lend {
-                // SAFETY:
-                // Safe because the guest regions are guarnteed not to overlap.
-                unsafe {
-                    android_lend_user_memory_region(
-                        &vm_descriptor,
-                        region.index as MemSlot,
-                        false,
-                        region.guest_addr.offset(),
-                        region.size.try_into().unwrap(),
-                        region.host_addr as *mut u8,
-                    )?;
+            match region.shm {
+                BackingObject::File(f) => {
+                    continue;
                 }
-            } else {
-                // SAFETY:
-                // Safe because the guest regions are guarnteed not to overlap.
-                unsafe {
-                    set_user_memory_region(
-                        &vm_descriptor,
-                        region.index as MemSlot,
-                        false,
-                        region.guest_addr.offset(),
-                        region.size.try_into().unwrap(),
-                        region.host_addr as *mut u8,
-                    )?;
+                BackingObject::Cma(c) => {
+                    unsafe {
+                        map_cma_region_with_vm(
+                            &vm_descriptor,
+                            region.index as MemSlot,
+                            lend,
+                            false,
+                            region.guest_addr.offset(),
+                            region.shm.as_raw_descriptor().try_into().unwrap(),
+                            region.size.try_into().unwrap(),
+                            region.shm_offset,
+                        )?;
+                    }
                 }
-            }
+                BackingObject::Shm(s) => {
+                    if lend {
+                        // SAFETY:
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        unsafe {
+                            android_lend_user_memory_region(
+                                &vm_descriptor,
+                                region.index as MemSlot,
+                                false,
+                                region.guest_addr.offset(),
+                                region.size.try_into().unwrap(),
+                                region.host_addr as *mut u8,
+                            )?;
+                        }
+                    } else {
+                        // SAFETY:
+                        // Safe because the guest regions are guarnteed not to overlap.
+                        unsafe {
+                            set_user_memory_region(
+                                &vm_descriptor,
+                                region.index as MemSlot,
+                                false,
+                                region.guest_addr.offset(),
+                                region.size.try_into().unwrap(),
+                                region.host_addr as *mut u8,
+                            )?;
+                        }
+                    }
+                }
+            };
         }
 
         Ok(GunyahVm {
             gh: gh.try_clone()?,
             vm: vm_descriptor,
             guest_mem,
+            vm_name,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             routes: Arc::new(Mutex::new(HashSet::new())),
             hv_cfg: cfg,
         })
+    }
+
+    pub fn set_vm_auth_type_to_qcom_trusted_vm(&self, payload_start: GuestAddress, payload_size: u64) -> Result<()> {
+        let name = self.vm_name.as_ref().unwrap();
+        if name.len() > usize::try_from(GUNYAH_MAX_QTVM_NAME).unwrap() {
+            panic!("qcom_trusted_vm_name can have a maximum size of {}", GUNYAH_MAX_QTVM_NAME);
+        }
+
+        let mut fw_name: [u8; GUNYAH_MAX_QTVM_NAME as usize] = [0; GUNYAH_MAX_QTVM_NAME as usize];
+        fw_name[..name.len()].copy_from_slice(name.as_bytes());
+
+        let gunyah_qtvm_auth_arg = gunyah_qtvm_auth_arg {
+            vm_name: fw_name,
+            len: name.len() as u32,
+            // QTVMs have the metadata needed for authentication at the start of the guest addrspace.
+            guest_phys_addr: payload_start.offset(),
+            size: payload_size,
+        };
+
+        let gunyah_auth_desc = gunyah_auth_desc {
+            type_: gunyah_auth_type_GUNYAH_QCOM_TRUSTED_VM_TYPE,
+            arg_size: size_of::<gunyah_qtvm_auth_arg>() as u32,
+            // SAFETY:
+            // Safe because kernel is expecting pointer with non-zero arg_size
+            arg: &gunyah_qtvm_auth_arg as *const gunyah_qtvm_auth_arg as u64,
+        };
+
+        // SAFETY: safe because the return value is checked.
+        let ret = unsafe { ioctl_with_ref(self, GUNYAH_VM_SET_AUTH_TYPE(), &gunyah_auth_desc) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            errno_result()
+        }
     }
 
     fn create_vcpu(&self, id: usize) -> Result<GunyahVcpu> {
@@ -362,6 +534,7 @@ impl GunyahVm {
             gh: self.gh.try_clone()?,
             vm: self.vm.try_clone()?,
             guest_mem: self.guest_mem.clone(),
+            vm_name: self.vm_name.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
@@ -420,6 +593,7 @@ impl Vm for GunyahVm {
         Ok(GunyahVm {
             gh: self.gh.try_clone()?,
             vm: self.vm.try_clone()?,
+            vm_name: self.vm_name.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),

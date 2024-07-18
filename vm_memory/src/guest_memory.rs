@@ -81,6 +81,7 @@ pub type Result<T> = result::Result<T, Error>;
 pub enum BackingObject {
     Shm(Arc<SharedMemory>),
     File(Arc<File>),
+    Cma(Arc<File>),
 }
 
 impl AsRawDescriptor for BackingObject {
@@ -88,6 +89,7 @@ impl AsRawDescriptor for BackingObject {
         match self {
             Self::Shm(shm) => shm.as_raw_descriptor(),
             Self::File(f) => f.as_raw_descriptor(),
+            Self::Cma(c) => c.as_raw_descriptor(),
         }
     }
 }
@@ -97,6 +99,7 @@ impl AsRef<dyn AsRawDescriptor + Sync + Send> for BackingObject {
         match self {
             BackingObject::Shm(shm) => shm.as_ref(),
             BackingObject::File(f) => f.as_ref(),
+            BackingObject::Cma(c) => c.as_ref(),
         }
     }
 }
@@ -189,6 +192,28 @@ impl MemoryRegion {
         })
     }
 
+    /// Creates a new MemoryRegion using the given SharedMemory object to later be attached to a VM
+    /// at `guest_base` address in the guest with an option.
+    pub fn new_from_shm_with_option(
+        size: u64,
+        guest_base: GuestAddress,
+        offset: u64,
+        shm: Arc<SharedMemory>,
+        option: MemoryRegionOptions,
+    ) -> Result<Self> {
+        let mapping = MemoryMappingBuilder::new(size as usize)
+            .from_shared_memory(shm.as_ref())
+            .offset(offset)
+            .build()
+            .map_err(Error::MemoryMappingFailed)?;
+        Ok(MemoryRegion {
+            mapping,
+            guest_base,
+            shared_obj: BackingObject::Shm(shm),
+            obj_offset: offset,
+            options: option,
+        })
+    }
     /// Creates a new MemoryRegion using the given file to get available later at `guest_base`
     /// address in the guest.
     pub fn new_from_file(
@@ -211,11 +236,34 @@ impl MemoryRegion {
         })
     }
 
-    fn start(&self) -> GuestAddress {
+    /// Creates a new MemoryRegion using the given cma region (a file backed)
+    /// to get available later at `guest_base` address in the guest with option.
+    pub fn new_from_cma_with_option(
+        size: u64,
+        guest_base: GuestAddress,
+        offset: u64,
+        cma: Arc<File>,
+        option: MemoryRegionOptions,
+    ) -> Result<Self> {
+        let mapping = MemoryMappingBuilder::new(size as usize)
+            .from_file(&cma)
+            .offset(offset)
+            .build()
+            .map_err(Error::MemoryMappingFailed)?;
+        Ok(MemoryRegion {
+            mapping,
+            guest_base,
+            shared_obj: BackingObject::Cma(cma),
+            obj_offset: offset,
+            options: option,
+        })
+    }
+
+    pub fn start(&self) -> GuestAddress {
         self.guest_base
     }
 
-    fn end(&self) -> GuestAddress {
+    pub fn end(&self) -> GuestAddress {
         // unchecked_add is safe as the region bounds were checked when it was created.
         self.guest_base.unchecked_add(self.mapping.size() as u64)
     }
@@ -245,7 +293,7 @@ impl AsRawDescriptors for GuestMemory {
 
 impl GuestMemory {
     /// Creates backing shm for GuestMemory regions
-    fn create_shm(ranges: &[(GuestAddress, u64, MemoryRegionOptions)]) -> Result<SharedMemory> {
+    pub fn create_shm(ranges: &[(GuestAddress, u64, MemoryRegionOptions)]) -> Result<SharedMemory> {
         let mut aligned_size = 0;
         let pg_size = pagesize();
         for range in ranges {
