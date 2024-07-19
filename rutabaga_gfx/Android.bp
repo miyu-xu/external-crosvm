@@ -86,6 +86,7 @@ rust_library {
         "gfxstream_unstable",
     ],
     features: [
+        "ipc",
         "gfxstream",
     ],
     shared_libs: [
