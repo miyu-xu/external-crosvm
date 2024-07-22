@@ -34,6 +34,52 @@
       "parentUuid": "a0bbb755_b26ab05d",
       "revId": "6c5edcf21c14888a0db17fc5864ff67e381de9b7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e3fbe785_57bf18e8",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 162,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-22T20:25:53Z",
+      "side": 1,
+      "message": "nit: the layer above adds the debug label to the error context, so you can leave it out here",
+      "range": {
+        "startLine": 162,
+        "startChar": 86,
+        "endLine": 162,
+        "endChar": 103
+      },
+      "revId": "6c5edcf21c14888a0db17fc5864ff67e381de9b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "21d8e4bd_c921e37b",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 170,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-22T20:25:53Z",
+      "side": 1,
+      "message": "nit: `*self \u003d deser;` should be equivalent",
+      "range": {
+        "startLine": 167,
+        "startChar": 0,
+        "endLine": 170,
+        "endChar": 45
+      },
+      "revId": "6c5edcf21c14888a0db17fc5864ff67e381de9b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
