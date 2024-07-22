@@ -285,7 +285,7 @@ macro_rules! suspendable_virtio_tests {
                     let mut queue = QueueConfig::new(queue_size, 0);
                     queue.set_ready(true);
                     let queue = queue
-                        .activate(mem, Event::new().unwrap())
+                        .activate(mem, base::Event::new().unwrap())
                         .expect("QueueConfig::activate");
                     queues.insert(i, queue);
                 }
