@@ -6,8 +6,6 @@
 
 #![allow(dead_code)]
 
-use std::fs::File;
-
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::FromZeroes;
@@ -95,6 +93,7 @@ pub struct kumquat_gpu_protocol_resource_create_3d {
     pub flags: u32,
     pub size: u32,
     pub stride: u32,
+    pub ctx_id: u32,
 }
 
 #[derive(Debug, Copy, FromZeroes, FromBytes, AsBytes)]
@@ -235,5 +234,4 @@ pub enum KumquatGpuProtocolWrite<T: AsBytes + FromBytes> {
     Cmd(T),
     CmdWithHandle(T, RutabagaHandle),
     CmdWithData(T, Vec<u8>),
-    CmdWithFile(T, Vec<u8>, File),
 }
