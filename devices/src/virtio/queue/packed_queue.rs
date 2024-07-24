@@ -166,6 +166,15 @@ impl PackedQueue {
         })
     }
 
+    pub fn vhost_user_reclaim(&mut self, _vring_base: u16) {
+        // TODO: b/331466964 - Need more than `vring_base` to reclaim a packed virtqueue.
+        unimplemented!()
+    }
+
+    pub fn next_avail_to_process(&self) -> u16 {
+        self.avail_index.index.0
+    }
+
     /// Return the actual size of the queue, as the driver may not set up a
     /// queue as big as the device allows.
     pub fn size(&self) -> u16 {
@@ -212,8 +221,8 @@ impl PackedQueue {
 
     /// Set the device event suppression
     ///
-    // This field is used to specify the timing of when the driver notifies the
-    // device that the descriptor table is ready to be processed.
+    /// This field is used to specify the timing of when the driver notifies the
+    /// device that the descriptor table is ready to be processed.
     fn set_avail_event(&mut self, event: PackedDescEvent) {
         fence(Ordering::SeqCst);
         self.mem

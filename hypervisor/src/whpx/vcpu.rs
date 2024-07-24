@@ -4,6 +4,7 @@
 
 use core::ffi::c_void;
 use std::arch::x86_64::CpuidResult;
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -20,17 +21,12 @@ use windows::Win32::Foundation::WHV_E_INSUFFICIENT_BUFFER;
 
 use super::types::*;
 use super::*;
-use crate::get_tsc_offset_from_msr;
-use crate::set_tsc_offset_via_msr;
-use crate::set_tsc_value_via_msr;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
 use crate::Fpu;
-use crate::HypervHypercall;
 use crate::IoOperation;
 use crate::IoParams;
-use crate::Register;
 use crate::Regs;
 use crate::Sregs;
 use crate::Vcpu;
@@ -65,7 +61,8 @@ impl SafeInstructionEmulator {
             WHvEmulatorTranslateGvaPage: Some(SafeInstructionEmulator::translate_gva_page_cb),
         };
         let mut handle: WHV_EMULATOR_HANDLE = std::ptr::null_mut();
-        // safe because pass in valid callbacks and a emulator handle for the kernel to place the allocated handle into.
+        // safe because pass in valid callbacks and a emulator handle for the kernel to place the
+        // allocated handle into.
         check_whpx!(unsafe { WHvEmulatorCreateEmulator(&EMULATOR_CALLBACKS, &mut handle) })?;
 
         Ok(SafeInstructionEmulator { handle })
@@ -524,7 +521,8 @@ impl Vcpu for WhpxVcpu {
     /// Exits the vcpu immediately if exit is true
     fn set_immediate_exit(&self, exit: bool) {
         if exit {
-            // safe because we own this whpx virtual processor index, and assume the vm partition is still valid
+            // safe because we own this whpx virtual processor index, and assume the vm partition is
+            // still valid
             unsafe {
                 WHvCancelRunVirtualProcessor(self.vm_partition.partition, self.index, 0);
             }
@@ -547,9 +545,9 @@ impl Vcpu for WhpxVcpu {
 
     /// This function should be called after `Vcpu::run` returns `VcpuExit::Mmio`.
     ///
-    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio exit,
-    /// call `handle_fn` with the respective IoOperation to perform the mmio read or write,
-    /// and set the return data in the vcpu so that the vcpu can resume running.
+    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio
+    /// exit, call `handle_fn` with the respective IoOperation to perform the mmio read or
+    /// write, and set the return data in the vcpu so that the vcpu can resume running.
     fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         let mut status: WHV_EMULATOR_STATUS = Default::default();
         let mut ctx = InstructionEmulatorContext {
@@ -610,29 +608,10 @@ impl Vcpu for WhpxVcpu {
         }
     }
 
-    /// this is unhandled currently since we don't emulate hypercall instructions for whpx.
-    fn handle_hyperv_hypercall(&self, _func: &mut dyn FnMut(HypervHypercall) -> u64) -> Result<()> {
-        Ok(())
-    }
-
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::RdMsr`,
-    /// and in the same thread as run.
-    ///
-    /// It will put `data` into the user buffer and return.
-    fn handle_rdmsr(&self, _data: u64) -> Result<()> {
-        // TODO(b/235691411): Implement.
-        Err(Error::new(libc::ENXIO))
-    }
-
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::WrMsr`,
-    /// and in the same thread as run.
-    fn handle_wrmsr(&self) {
-        // TODO(b/235691411): Implement.
-    }
-
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // safe because we own this whpx virtual processor index, and assume the vm partition is still valid
+        // safe because we own this whpx virtual processor index, and assume the vm partition is
+        // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
         check_whpx!(unsafe {
             WHvRunVirtualProcessor(
@@ -644,7 +623,6 @@ impl Vcpu for WhpxVcpu {
         })?;
 
         match self.last_exit_context.ExitReason {
-            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonNone => Ok(VcpuExit::Unknown),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => Ok(VcpuExit::Mmio),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64IoPortAccess => Ok(VcpuExit::Io),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonUnrecoverableException => {
@@ -802,7 +780,7 @@ impl VcpuX86_64 for WhpxVcpu {
     }
 
     /// Injects interrupt vector `irq` into the VCPU.
-    fn interrupt(&self, irq: u32) -> Result<()> {
+    fn interrupt(&self, irq: u8) -> Result<()> {
         const REG_NAMES: [WHV_REGISTER_NAME; 1] =
             [WHV_REGISTER_NAME_WHvRegisterPendingInterruption];
         let mut pending_interrupt: WHV_X64_PENDING_INTERRUPTION_REGISTER__bindgen_ty_1 =
@@ -810,7 +788,7 @@ impl VcpuX86_64 for WhpxVcpu {
         pending_interrupt.set_InterruptionPending(1);
         pending_interrupt
             .set_InterruptionType(WHV_X64_PENDING_INTERRUPTION_TYPE_WHvX64PendingInterrupt as u32);
-        pending_interrupt.set_InterruptionVector(irq);
+        pending_interrupt.set_InterruptionVector(irq.into());
         let interrupt = WHV_REGISTER_VALUE {
             PendingInterruption: WHV_X64_PENDING_INTERRUPTION_REGISTER {
                 __bindgen_anon_1: pending_interrupt,
@@ -1080,83 +1058,71 @@ impl VcpuX86_64 for WhpxVcpu {
     }
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
-        const REG_NAMES: [WHV_REGISTER_NAME; 1] = [WHV_REGISTER_NAME_WHvX64RegisterXCr0];
-        let mut xcrs: [WHV_REGISTER_VALUE; 1] = Default::default();
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
+        const REG_NAME: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterXCr0;
+        let mut reg_value = WHV_REGISTER_VALUE::default();
         // safe because we have enough space for all the registers in whpx_regs
         check_whpx!(unsafe {
             WHvGetVirtualProcessorRegisters(
                 self.vm_partition.partition,
                 self.index,
-                &REG_NAMES as *const WHV_REGISTER_NAME,
-                REG_NAMES.len() as u32,
-                xcrs.as_mut_ptr(),
+                &REG_NAME,
+                /* RegisterCount */ 1,
+                &mut reg_value,
             )
         })?;
-        let reg = Register {
-            id: 0, // whpx only supports xcr0
-            // safe because the union value, reg64, is safe to pull out assuming
-            // kernel filled in the xcrs properly.
-            value: unsafe { xcrs[0].Reg64 },
-        };
-        Ok(vec![reg])
+
+        // safe because the union value, reg64, is safe to pull out assuming
+        // kernel filled in the xcrs properly.
+        let xcr0 = unsafe { reg_value.Reg64 };
+
+        // whpx only supports xcr0
+        let xcrs = BTreeMap::from([(0, xcr0)]);
+        Ok(xcrs)
     }
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, xcrs: &[Register]) -> Result<()> {
-        const REG_NAMES: [WHV_REGISTER_NAME; 1] = [WHV_REGISTER_NAME_WHvX64RegisterXCr0];
-        let whpx_xcrs = xcrs
-            .iter()
-            .filter_map(|reg| match reg.id {
-                0 => Some(WHV_REGISTER_VALUE { Reg64: reg.value }),
-                _ => None,
-            })
-            .collect::<Vec<WHV_REGISTER_VALUE>>();
-        if !whpx_xcrs.is_empty() {
-            // safe because we have enough space for all the registers in whpx_xcrs
-            check_whpx!(unsafe {
-                WHvSetVirtualProcessorRegisters(
-                    self.vm_partition.partition,
-                    self.index,
-                    &REG_NAMES as *const WHV_REGISTER_NAME,
-                    REG_NAMES.len() as u32,
-                    whpx_xcrs.as_ptr(),
-                )
-            })
-        } else {
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, xcr_index: u32, value: u64) -> Result<()> {
+        if xcr_index != 0 {
             // invalid xcr register provided
-            Err(Error::new(ENXIO))
+            return Err(Error::new(EINVAL));
         }
+
+        const REG_NAME: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterXCr0;
+        let reg_value = WHV_REGISTER_VALUE { Reg64: value };
+        // safe because we have enough space for all the registers in whpx_xcrs
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                &REG_NAME,
+                /* RegisterCount */ 1,
+                &reg_value,
+            )
+        })
     }
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()> {
-        let msr_names = get_msr_names(msrs);
-        let mut buffer: Vec<WHV_REGISTER_VALUE> = vec![Default::default(); msr_names.len()];
+    /// Gets the value of a single model-specific register.
+    fn get_msr(&self, msr_index: u32) -> Result<u64> {
+        let msr_name = get_msr_name(msr_index).ok_or(Error::new(libc::ENOENT))?;
+        let mut msr_value = WHV_REGISTER_VALUE::default();
         // safe because we have enough space for all the registers in whpx_regs
         check_whpx!(unsafe {
             WHvGetVirtualProcessorRegisters(
                 self.vm_partition.partition,
                 self.index,
-                msr_names.as_ptr(),
-                msr_names.len() as u32,
-                buffer.as_mut_ptr(),
+                &msr_name,
+                /* RegisterCount */ 1,
+                &mut msr_value,
             )
         })?;
 
-        msrs.retain(|&msr| VALID_MSRS.contains_key(&msr.id));
-        if buffer.len() != msrs.len() {
-            panic!("mismatch of valid whpx msr registers and returned registers");
-        }
-        for (i, msr) in msrs.iter_mut().enumerate() {
-            // safe because Reg64 will be a valid union value for all msrs
-            msr.value = unsafe { buffer[i].Reg64 };
-        }
-        Ok(())
+        // safe because Reg64 will be a valid union value
+        let value = unsafe { msr_value.Reg64 };
+        Ok(value)
     }
 
-    fn get_all_msrs(&self) -> Result<Vec<Register>> {
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
         // Note that some members of VALID_MSRS cannot be fetched from WHPX with
         // WHvGetVirtualProcessorRegisters per the HTLFS, so we enumerate all of
         // permitted MSRs here.
@@ -1169,75 +1135,50 @@ impl VcpuX86_64 for WhpxVcpu {
         // handled by the generic x86_64 VCPU snapshot/restore. Non snapshot
         // consumers should use get/set_tsc_adjust to access the adjust register
         // if needed.
-        let mut registers = vec![
-            Register {
-                id: MSR_EFER,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_KERNEL_GS_BASE,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_APIC_BASE,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_SYSENTER_CS,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_SYSENTER_EIP,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_SYSENTER_ESP,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_STAR,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_LSTAR,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_CSTAR,
-                ..Default::default()
-            },
-            Register {
-                id: MSR_SFMASK,
-                ..Default::default()
-            },
+        const MSRS_TO_SAVE: &[u32] = &[
+            MSR_EFER,
+            MSR_KERNEL_GS_BASE,
+            MSR_APIC_BASE,
+            MSR_SYSENTER_CS,
+            MSR_SYSENTER_EIP,
+            MSR_SYSENTER_ESP,
+            MSR_STAR,
+            MSR_LSTAR,
+            MSR_CSTAR,
+            MSR_SFMASK,
         ];
-        self.get_msrs(&mut registers)?;
+
+        let registers = MSRS_TO_SAVE
+            .iter()
+            .map(|msr_index| {
+                let value = self.get_msr(*msr_index)?;
+                Ok((*msr_index, value))
+            })
+            .collect::<Result<BTreeMap<u32, u64>>>()?;
+
         Ok(registers)
     }
 
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()> {
-        let msr_names = get_msr_names(msrs);
-        let whpx_msrs = msrs
-            .iter()
-            .filter_map(|msr| {
-                if VALID_MSRS.contains_key(&msr.id) {
-                    Some(WHV_REGISTER_VALUE { Reg64: msr.value })
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<WHV_REGISTER_VALUE>>();
-
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition,
-                self.index,
-                msr_names.as_ptr(),
-                msr_names.len() as u32,
-                whpx_msrs.as_ptr(),
-            )
-        })
+    /// Sets the value of a single model-specific register.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()> {
+        match get_msr_name(msr_index) {
+            Some(msr_name) => {
+                let msr_value = WHV_REGISTER_VALUE { Reg64: value };
+                check_whpx!(unsafe {
+                    WHvSetVirtualProcessorRegisters(
+                        self.vm_partition.partition,
+                        self.index,
+                        &msr_name,
+                        /* RegisterCount */ 1,
+                        &msr_value,
+                    )
+                })
+            }
+            None => {
+                warn!("msr 0x{msr_index:X} write unsupported by WHPX, dropping");
+                Ok(())
+            }
+        }
     }
 
     /// Sets up the data returned by the CPUID instruction.
@@ -1296,33 +1237,10 @@ impl VcpuX86_64 for WhpxVcpu {
         })
     }
 
-    /// Gets the system emulated hyper-v CPUID values.
-    /// For WHPX, this is not valid on the vcpu, and needs to be setup on the vm.
-    fn get_hyperv_cpuid(&self) -> Result<CpuId> {
-        Err(Error::new(ENXIO))
-    }
-
     /// Sets up debug registers and configure vcpu for handling guest debug events.
     fn set_guest_debug(&self, _addrs: &[GuestAddress], _enable_singlestep: bool) -> Result<()> {
         // TODO(b/173807302): Implement this
         Err(Error::new(ENOENT))
-    }
-
-    fn get_tsc_offset(&self) -> Result<u64> {
-        // Note: WHV_REGISTER_NAME_WHvX64RegisterTscVirtualOffset register appears to no longer be
-        // supported, so we use the MSR path. (It also didn't work in 19H2 either, always returning
-        // zero on get.)
-        get_tsc_offset_from_msr(self)
-    }
-
-    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
-        // Note: WHV_REGISTER_NAME_WHvX64RegisterTscVirtualOffset register appears to no longer be
-        // supported, so we use the MSR path.
-        set_tsc_offset_via_msr(self, offset)
-    }
-
-    fn set_tsc_value(&self, value: u64) -> Result<()> {
-        set_tsc_value_via_msr(self, value)
     }
 
     fn restore_timekeeping(&self, host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()> {
@@ -1335,10 +1253,8 @@ impl VcpuX86_64 for WhpxVcpu {
     }
 }
 
-fn get_msr_names(msrs: &[Register]) -> Vec<WHV_REGISTER_NAME> {
-    msrs.iter()
-        .filter_map(|reg| VALID_MSRS.get(&reg.id).copied())
-        .collect::<Vec<WHV_REGISTER_NAME>>()
+fn get_msr_name(msr_index: u32) -> Option<WHV_REGISTER_NAME> {
+    VALID_MSRS.get(&msr_index).copied()
 }
 
 // run calls are tested with the integration tests since the full vcpu needs to be setup for it.
@@ -1478,10 +1394,10 @@ mod tests {
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
         let mut fpu = vcpu.get_fpu().unwrap();
-        fpu.fpr[0][0] += 3;
+        fpu.fpr[0].significand += 3;
         vcpu.set_fpu(&fpu).unwrap();
         let fpu2 = vcpu.get_fpu().unwrap();
-        assert_eq!(fpu.fpr[0][0], fpu2.fpr[0][0]);
+        assert_eq!(fpu.fpr, fpu2.fpr);
     }
 
     #[test]
@@ -1500,15 +1416,14 @@ mod tests {
             return;
         }
 
-        let mut xcrs = vcpu.get_xcrs().unwrap();
-        xcrs[0].value = 1;
-        vcpu.set_xcrs(&xcrs).unwrap();
-        let xcrs2 = vcpu.get_xcrs().unwrap();
-        assert_eq!(xcrs[0].value, xcrs2[0].value);
+        vcpu.set_xcr(0, 1).unwrap();
+        let xcrs = vcpu.get_xcrs().unwrap();
+        let xcr0 = xcrs.get(&0).unwrap();
+        assert_eq!(*xcr0, 1);
     }
 
     #[test]
-    fn set_msrs() {
+    fn set_msr() {
         if !Whpx::is_enabled() {
             return;
         }
@@ -1518,21 +1433,14 @@ mod tests {
         let vm = new_vm(cpu_count, mem);
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut msrs = vec![Register {
-            id: MSR_KERNEL_GS_BASE,
-            value: 42,
-        }];
-        vcpu.set_msrs(&msrs).unwrap();
+        vcpu.set_msr(MSR_KERNEL_GS_BASE, 42).unwrap();
 
-        msrs[0].value = 0;
-        vcpu.get_msrs(&mut msrs).unwrap();
-        assert_eq!(msrs.len(), 1);
-        assert_eq!(msrs[0].id, MSR_KERNEL_GS_BASE);
-        assert_eq!(msrs[0].value, 42);
+        let gs_base = vcpu.get_msr(MSR_KERNEL_GS_BASE).unwrap();
+        assert_eq!(gs_base, 42);
     }
 
     #[test]
-    fn get_msrs() {
+    fn get_msr() {
         if !Whpx::is_enabled() {
             return;
         }
@@ -1542,20 +1450,12 @@ mod tests {
         let vm = new_vm(cpu_count, mem);
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut msrs = vec![
-            // This one should succeed
-            Register {
-                id: MSR_TSC,
-                ..Default::default()
-            },
-            // This one will fail to fetch
-            Register {
-                id: MSR_TSC + 1,
-                ..Default::default()
-            },
-        ];
-        vcpu.get_msrs(&mut msrs).unwrap();
-        assert_eq!(msrs.len(), 1);
+        // This one should succeed
+        let _value = vcpu.get_msr(MSR_TSC).unwrap();
+
+        // This one will fail to fetch
+        vcpu.get_msr(MSR_TSC + 1)
+            .expect_err("invalid MSR index should fail");
     }
 
     #[test]
@@ -1595,22 +1495,18 @@ mod tests {
         assert_eq!(sregs.cr0 & X86_CR0_PG, X86_CR0_PG);
         assert_eq!(sregs.cr4 & X86_CR4_PAE, X86_CR4_PAE);
 
-        let mut efer_reg = vec![Register {
-            id: MSR_EFER,
-            value: 0,
-        }];
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_LMA | EFER_LME);
+        let efer = vcpu.get_msr(MSR_EFER).expect("failed to get msr");
+        assert_eq!(efer, EFER_LMA | EFER_LME);
 
         // Enable SCE via set_msrs
-        efer_reg[0].value |= EFER_SCE;
-        vcpu.set_msrs(&efer_reg).expect("failed to set msrs");
+        vcpu.set_msr(MSR_EFER, efer | EFER_SCE)
+            .expect("failed to set msr");
 
         // Verify that setting stuck
         let sregs = vcpu.get_sregs().expect("failed to get sregs");
         assert_eq!(sregs.efer, EFER_SCE | EFER_LME | EFER_LMA);
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_SCE | EFER_LME | EFER_LMA);
+        let new_efer = vcpu.get_msr(MSR_EFER).expect("failed to get msr");
+        assert_eq!(new_efer, EFER_SCE | EFER_LME | EFER_LMA);
     }
 
     #[test]
@@ -1662,7 +1558,7 @@ mod tests {
 
         // Our MSR buffer is init'ed to zeros in the registers. The APIC base will be non-zero, so
         // by asserting that we know the MSR fetch actually did get us data.
-        let apic_base = all_msrs.iter().find(|reg| reg.id == MSR_APIC_BASE).unwrap();
-        assert_ne!(apic_base.value, 0);
+        let apic_base = all_msrs.get(&MSR_APIC_BASE).unwrap();
+        assert_ne!(*apic_base, 0);
     }
 }

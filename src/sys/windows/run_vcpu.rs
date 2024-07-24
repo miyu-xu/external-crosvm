@@ -66,6 +66,7 @@ use hypervisor::IoOperation;
 use hypervisor::IoParams;
 use hypervisor::VcpuExit;
 use hypervisor::VcpuInitX86_64;
+use metrics_events::MetricEventType;
 use sync::Condvar;
 use sync::Mutex;
 use vm_control::VcpuControl;
@@ -140,8 +141,8 @@ impl VcpuRunThread {
     fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch) {
         // only apply to actual WhpxVcpu instances
         if let Some(whpx_vcpu) = vcpu.downcast_mut::<WhpxVcpu>() {
-            // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR reads
-            // and writes.
+            // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR
+            // reads and writes.
             let tsc_freq = devices::tsc::tsc_frequency()
                 .map_err(|e| {
                     error!(
@@ -175,8 +176,8 @@ impl VcpuRunThread {
         let mut vcpu = match vcpu {
             Some(v) => v,
             None => {
-                // If vcpu is None, it means this arch/hypervisor requires create_vcpu to be called from
-                // the vcpu thread.
+                // If vcpu is None, it means this arch/hypervisor requires create_vcpu to be called
+                // from the vcpu thread.
                 match vm
                     .create_vcpu(cpu_id)
                     .exit_context(Exit::CreateVcpu, "failed to create vcpu")?
@@ -362,13 +363,15 @@ impl VcpuRunThread {
                     )
                 };
 
-                let final_event_data = match vcpu_fn().unwrap_or_else(|e| {
+                let exit_state = vcpu_fn().unwrap_or_else(|e| {
                     error!(
                         "vcpu {} run loop exited with error: {:#}",
                         context.cpu_id, e
                     );
                     ExitState::Stop
-                }) {
+                });
+
+                let final_event_data = match exit_state {
                     ExitState::Stop => VmEventType::Exit,
                     _ => unreachable!(),
                 };
@@ -437,10 +440,7 @@ impl VcpuStallMonitor {
                 pin_mut!(exit_future);
                 'main: loop {
                     if reset_timer {
-                        timer.reset(
-                            Self::VCPU_CHECKUP_INTERVAL,
-                            Some(Self::VCPU_CHECKUP_INTERVAL),
-                        )?;
+                        timer.reset_repeating(Self::VCPU_CHECKUP_INTERVAL)?;
                         reset_timer = false;
                     }
                     let timer_future = timer.wait();
@@ -834,7 +834,15 @@ where
                 // Shutdown only for triple faults and other vcpu panics.  WHPX never exits
                 // with Shutdown.  Normal reboots and shutdowns, like window close, use
                 // the vm event tube and VmRunMode::Exiting instead of VcpuExit::Shutdown.
-                Ok(VcpuExit::Shutdown) => bail_exit_code!(Exit::VcpuShutdown, "vcpu shutdown"),
+                Ok(VcpuExit::Shutdown(reason)) => {
+                    if let Err(e) = reason {
+                        metrics::log_descriptor(
+                            MetricEventType::VcpuShutdownError,
+                            e.get_raw_error_code() as i64,
+                        );
+                    }
+                    bail_exit_code!(Exit::VcpuShutdown, "vcpu shutdown (reason: {:?})", reason)
+                }
                 Ok(VcpuExit::FailEntry {
                     hardware_entry_failure_reason,
                 }) => bail_exit_code!(

@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
@@ -38,7 +37,7 @@ use crate::virtio::fs::passthrough::PassthroughFs;
 use crate::virtio::fs::process_fs_queue;
 use crate::virtio::fs::Config;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
@@ -72,8 +71,6 @@ struct FsBackend {
     server: Arc<fuse::Server<PassthroughFs>>,
     tag: [u8; FS_MAX_TAG_LEN],
     avail_features: u64,
-    acked_features: u64,
-    acked_protocol_features: VhostUserProtocolFeatures,
     workers: [Option<WorkerState<Rc<RefCell<Queue>>, ()>>; MAX_QUEUE_NUM],
     keep_rds: Vec<RawDescriptor>,
 }
@@ -109,15 +106,13 @@ impl FsBackend {
             server,
             tag: fs_tag,
             avail_features,
-            acked_features: 0,
-            acked_protocol_features: VhostUserProtocolFeatures::empty(),
             workers: Default::default(),
             keep_rds,
         })
     }
 }
 
-impl VhostUserBackend for FsBackend {
+impl VhostUserDevice for FsBackend {
     fn max_queue_num(&self) -> usize {
         MAX_QUEUE_NUM
     }
@@ -126,35 +121,8 @@ impl VhostUserBackend for FsBackend {
         self.avail_features
     }
 
-    fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
-        let unrequested_features = value & !self.avail_features;
-        if unrequested_features != 0 {
-            bail!("invalid features are given: {:#x}", unrequested_features);
-        }
-
-        self.acked_features |= value;
-
-        Ok(())
-    }
-
-    fn acked_features(&self) -> u64 {
-        self.acked_features
-    }
-
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         VhostUserProtocolFeatures::CONFIG | VhostUserProtocolFeatures::MQ
-    }
-
-    fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        let features = VhostUserProtocolFeatures::from_bits(features)
-            .ok_or_else(|| anyhow!("invalid protocol features are given: {:#x}", features))?;
-        let supported = self.protocol_features();
-        self.acked_protocol_features = features & supported;
-        Ok(())
-    }
-
-    fn acked_protocol_features(&self) -> u64 {
-        self.acked_protocol_features.bits()
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {

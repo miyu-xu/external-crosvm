@@ -1,34 +1,47 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index f2c450cb4..b05d9cf86 100644
+index c69e8a386..d64f158e6 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -29,11 +29,56 @@ rust_library {
+@@ -23,7 +23,6 @@ rust_library {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -35,14 +34,71 @@ rust_library {
          "libzerocopy",
      ],
      proc_macros: ["libremain"],
 +    cfgs: [
 +        "gfxstream_unstable",
 +    ],
++    shared_libs: [
++        "libc++",
++        "libbase",
++    ],
 +    target: {
-+        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
 +        android: {
 +            shared_libs: [
++                "libnativewindow",
 +                "libcutils",
-+                "libdrm",
++                "liblog",
 +            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
++        },
++        host: {
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
 +            ],
 +        },
 +    },
+     static_libs: [
+-        "libgbm",
++        "libepoxy",
++        "libgfxstream_backend",
+         "libvirglrenderer",
+     ],
 +}
 +
 +rust_library {
@@ -53,44 +66,45 @@ index f2c450cb4..b05d9cf86 100644
 +    cfgs: [
 +        "gfxstream_unstable",
 +    ],
-+    features: ["gfxstream"],
++    features: [
++        "gfxstream",
++    ],
      shared_libs: [
 -        "libdrm",
 -        "libepoxy",
--        "libgbm",
--        "libvirglrenderer",
 +        "libgfxstream_backend",
      ],
- }
- 
-@@ -61,10 +106,24 @@ rust_test {
-         "libzerocopy",
-     ],
-     proc_macros: ["libremain"],
--    shared_libs: [
--        "libdrm",
--        "libepoxy",
--        "libgbm",
--        "libvirglrenderer",
--    ],
 +    target: {
 +        host: {
-+            features: ["gfxstream"],
-+            shared_libs: [
-+                "libgfxstream_backend",
-+                "libvirglrenderer",
-+            ],
-+        },
-+        android: {
-+            shared_libs: [
-+                "libcutils",
-+                "libdrm",
-+            ],
-+            static_libs: [
-+                "libepoxy",
-+                "libgbm",
-+                "libvirglrenderer",
++            features: ["vulkano"],
++            rustlibs: [
++                "libvulkano",
 +            ],
 +        },
 +    },
+ }
+ 
+ rust_test {
+@@ -61,7 +117,6 @@ rust_test {
+     edition: "2021",
+     features: [
+         "gfxstream",
+-        "gfxstream_stub",
+         "virgl_renderer",
+     ],
+     rustlibs: [
+@@ -73,12 +128,9 @@ rust_test {
+         "libzerocopy",
+     ],
+     proc_macros: ["libremain"],
+-    static_libs: [
+-        "libgbm",
+-        "libvirglrenderer",
+-    ],
+     shared_libs: [
+-        "libdrm",
+         "libepoxy",
++        "libgfxstream_backend",
++        "libvirglrenderer",
+     ],
  }

@@ -88,11 +88,32 @@ pub fn create_gpu_device(
     gpu_control_tube: Tube,
     resource_bridges: Vec<Tube>,
     render_server_fd: Option<SafeDescriptor>,
+    has_vfio_gfx_device: bool,
     event_devices: Vec<EventDevice>,
 ) -> DeviceResult {
     let is_sandboxed = cfg.jail_config.is_some();
     let mut gpu_params = cfg.gpu_parameters.clone().unwrap();
-    gpu_params.external_blob = is_sandboxed;
+
+    if gpu_params.fixed_blob_mapping {
+        if has_vfio_gfx_device {
+            // TODO(b/323368701): make fixed_blob_mapping compatible with vfio dma_buf mapping for
+            // GPU pci passthrough.
+            debug!("gpu fixed blob mapping disabled: not compatible with passthrough GPU.");
+            gpu_params.fixed_blob_mapping = false;
+        } else if cfg!(feature = "vulkano") {
+            // TODO(b/244591751): make fixed_blob_mapping compatible with vulkano for opaque_fd blob
+            // mapping.
+            debug!("gpu fixed blob mapping disabled: not compatible with vulkano");
+            gpu_params.fixed_blob_mapping = false;
+        }
+    }
+
+    // external_blob must be enforced to ensure that a blob can be exported to a mappable descriptor
+    // (dma_buf, shmem, ...), since:
+    //   - is_sandboxed implies that blob mapping will be done out-of-process by the crosvm
+    //     hypervisor process.
+    //   - fixed_blob_mapping is not yet compatible with VmMemorySource::ExternalMapping
+    gpu_params.external_blob = is_sandboxed || gpu_params.fixed_blob_mapping;
 
     // Implicit launch is not allowed when sandboxed. A socket fd from a separate sandboxed
     // render_server process must be provided instead.
@@ -103,6 +124,11 @@ pub fn create_gpu_device(
         virtio::DisplayBackend::X(cfg.x_display.clone()),
         virtio::DisplayBackend::Stub,
     ];
+
+    #[cfg(feature = "android_display")]
+    if let Some(service_name) = &cfg.android_display_service {
+        display_backends.insert(0, virtio::DisplayBackend::Android(service_name.to_string()));
+    }
 
     // Use the unnamed socket for GPU display screens.
     if let Some(socket_path) = cfg.wayland_socket_paths.get("") {
@@ -167,7 +193,7 @@ pub fn create_gpu_device(
                     socket_path.display(),
                 )
             })?;
-            jail.mount_bind(dir, dir, true)?;
+            jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
         }
 
         Some(jail)
@@ -223,12 +249,31 @@ fn get_gpu_render_server_environment(
         }
     }
 
+    // TODO(b/323284290): workaround to advertise 2 graphics queues in ANV
+    if !env.contains_key("ANV_QUEUE_OVERRIDE") {
+        env.insert("ANV_QUEUE_OVERRIDE".to_string(), "gc=2".to_string());
+    }
+
     // TODO(b/237493180, b/284517235): workaround to enable ETC2/ASTC format emulation in Mesa
-    let driconf_options = ["radv_require_etc2", "vk_require_etc2", "vk_require_astc"];
+    // TODO(b/284361281, b/328827736): workaround to enable legacy sparse binding in RADV
+    let driconf_options = [
+        "radv_legacy_sparse_binding",
+        "radv_require_etc2",
+        "vk_require_etc2",
+        "vk_require_astc",
+    ];
     for opt in driconf_options {
         if !env.contains_key(opt) {
             env.insert(opt.to_string(), "true".to_string());
         }
+    }
+
+    // TODO(b/339766043): workaround to disable Vulkan protected memory feature in Mali
+    if !env.contains_key("MALI_BASE_PROTECTED_MEMORY_HEAP_SIZE") {
+        env.insert(
+            "MALI_BASE_PROTECTED_MEMORY_HEAP_SIZE".to_string(),
+            "0".to_string(),
+        );
     }
 
     Ok(env.iter().map(|(k, v)| format!("{}={}", k, v)).collect())

@@ -9,7 +9,6 @@
 #![cfg(feature = "gfxstream")]
 
 use std::convert::TryInto;
-#[cfg(gfxstream_unstable)]
 use std::ffi::CString;
 use std::io::IoSliceMut;
 use std::mem::size_of;
@@ -37,15 +36,13 @@ use crate::rutabaga_os::SafeDescriptor;
 use crate::rutabaga_utils::*;
 
 // See `virtgpu-gfxstream-renderer.h` for definitions
-const STREAM_RENDERER_PARAM_NULL: u64 = 0;
 const STREAM_RENDERER_PARAM_USER_DATA: u64 = 1;
 const STREAM_RENDERER_PARAM_RENDERER_FLAGS: u64 = 2;
 const STREAM_RENDERER_PARAM_FENCE_CALLBACK: u64 = 3;
 const STREAM_RENDERER_PARAM_WIN0_WIDTH: u64 = 4;
 const STREAM_RENDERER_PARAM_WIN0_HEIGHT: u64 = 5;
 const STREAM_RENDERER_PARAM_DEBUG_CALLBACK: u64 = 6;
-
-const STREAM_RENDERER_MAX_PARAMS: usize = 6;
+const STREAM_RENDERER_PARAM_RENDERER_FEATURES: u64 = 11;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -151,6 +148,8 @@ extern "C" {
         num_iovs: *mut c_int,
     );
     fn stream_renderer_create_fence(fence: *const stream_renderer_fence) -> c_int;
+    #[cfg(gfxstream_unstable)]
+    fn stream_renderer_export_fence(fence_id: u64, handle: *mut stream_renderer_handle) -> c_int;
     fn stream_renderer_ctx_attach_resource(ctx_id: c_int, res_handle: c_int);
     fn stream_renderer_ctx_detach_resource(ctx_id: c_int, res_handle: c_int);
     fn stream_renderer_get_cap_set(set: u32, max_ver: *mut u32, max_size: *mut u32);
@@ -203,12 +202,40 @@ struct GfxstreamContext {
     fence_handler: RutabagaFenceHandler,
 }
 
-impl RutabagaContext for GfxstreamContext {
-    fn submit_cmd(&mut self, commands: &mut [u8], fence_ids: &[u64]) -> RutabagaResult<()> {
-        if !fence_ids.is_empty() {
-            return Err(RutabagaError::Unsupported);
-        }
+impl GfxstreamContext {
+    #[cfg(gfxstream_unstable)]
+    fn export_fence(&self, fence_id: u64) -> RutabagaResult<RutabagaHandle> {
+        let mut stream_handle: stream_renderer_handle = Default::default();
+        // SAFETY:
+        // Safe because a correctly formatted stream_handle is given to gfxstream.
+        let ret = unsafe { stream_renderer_export_fence(fence_id, &mut stream_handle) };
+        ret_to_res(ret)?;
 
+        let raw_descriptor = stream_handle.os_handle as RawDescriptor;
+        // SAFETY:
+        // Safe because the handle was just returned by a successful gfxstream call so it must
+        // be valid and owned by us.
+        let handle = unsafe { SafeDescriptor::from_raw_descriptor(raw_descriptor) };
+
+        Ok(RutabagaHandle {
+            os_handle: handle,
+            handle_type: stream_handle.handle_type,
+        })
+    }
+
+    #[cfg(not(gfxstream_unstable))]
+    fn export_fence(&self, _fence_id: u64) -> RutabagaResult<RutabagaHandle> {
+        Err(RutabagaError::Unsupported)
+    }
+}
+
+impl RutabagaContext for GfxstreamContext {
+    fn submit_cmd(
+        &mut self,
+        commands: &mut [u8],
+        _fence_ids: &[u64],
+        _shareable_fences: Vec<RutabagaHandle>,
+    ) -> RutabagaResult<()> {
         if commands.len() % size_of::<u32>() != 0 {
             return Err(RutabagaError::InvalidCommandSize(commands.len()));
         }
@@ -251,17 +278,26 @@ impl RutabagaContext for GfxstreamContext {
         RutabagaComponentType::Gfxstream
     }
 
-    fn context_create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
+    fn context_create_fence(
+        &mut self,
+        fence: RutabagaFence,
+    ) -> RutabagaResult<Option<RutabagaHandle>> {
         if fence.ring_idx as u32 == 1 {
             self.fence_handler.call(fence);
-            return Ok(());
+            return Ok(None);
         }
 
         // SAFETY:
         // Safe because RutabagaFences and stream_renderer_fence are ABI identical
         let ret = unsafe { stream_renderer_create_fence(&fence as *const stream_renderer_fence) };
+        ret_to_res(ret)?;
 
-        ret_to_res(ret)
+        let mut hnd: Option<RutabagaHandle> = None;
+        if fence.flags & RUTABAGA_FLAG_FENCE_HOST_SHAREABLE != 0 {
+            hnd = Some(self.export_fence(fence.fence_id)?);
+        }
+
+        Ok(hnd)
     }
 }
 
@@ -310,6 +346,7 @@ impl Gfxstream {
         display_width: u32,
         display_height: u32,
         gfxstream_flags: GfxstreamFlags,
+        gfxstream_features: Option<String>,
         fence_handler: RutabagaFenceHandler,
         debug_handler: Option<RutabagaDebugHandler>,
     ) -> RutabagaResult<Box<dyn RutabagaComponent>> {
@@ -320,7 +357,7 @@ impl Gfxstream {
             debug_handler,
         });
 
-        let mut stream_renderer_params: [stream_renderer_param; STREAM_RENDERER_MAX_PARAMS] = [
+        let mut stream_renderer_params = Vec::from([
             stream_renderer_param {
                 key: STREAM_RENDERER_PARAM_USER_DATA,
                 // Safe as cookie outlives the stream renderer (stream_renderer_teardown called
@@ -343,18 +380,22 @@ impl Gfxstream {
                 key: STREAM_RENDERER_PARAM_WIN0_HEIGHT,
                 value: display_height as u64,
             },
-            if use_debug {
-                stream_renderer_param {
-                    key: STREAM_RENDERER_PARAM_DEBUG_CALLBACK,
-                    value: gfxstream_debug_callback as usize as u64,
-                }
-            } else {
-                stream_renderer_param {
-                    key: STREAM_RENDERER_PARAM_NULL,
-                    value: 0,
-                }
-            },
-        ];
+        ]);
+
+        if use_debug {
+            stream_renderer_params.push(stream_renderer_param {
+                key: STREAM_RENDERER_PARAM_DEBUG_CALLBACK,
+                value: gfxstream_debug_callback as usize as u64,
+            });
+        }
+
+        let features_cstr = gfxstream_features.map(|f| CString::new(f).unwrap());
+        if let Some(features_cstr) = &features_cstr {
+            stream_renderer_params.push(stream_renderer_param {
+                key: STREAM_RENDERER_PARAM_RENDERER_FEATURES,
+                value: features_cstr.as_ptr() as u64,
+            });
+        }
 
         // TODO(b/315870313): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]

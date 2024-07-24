@@ -19,13 +19,13 @@ use libc::TFD_CLOEXEC;
 use super::super::errno_result;
 use super::super::Error;
 use super::super::Result;
-use super::duration_to_timespec;
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::SafeDescriptor;
 use crate::handle_eintr_errno;
 use crate::timer::Timer;
 use crate::timer::TimerTrait;
+use crate::unix::duration_to_timespec;
 
 impl AsRawFd for Timer {
     fn as_raw_fd(&self) -> RawFd {
@@ -75,8 +75,12 @@ impl Timer {
 }
 
 impl TimerTrait for Timer {
-    fn reset(&mut self, dur: Duration, interval: Option<Duration>) -> Result<()> {
-        self.set_time(Some(dur), interval)
+    fn reset_oneshot(&mut self, dur: Duration) -> Result<()> {
+        self.set_time(Some(dur), None)
+    }
+
+    fn reset_repeating(&mut self, dur: Duration) -> Result<()> {
+        self.set_time(Some(dur), Some(dur))
     }
 
     fn clear(&mut self) -> Result<()> {

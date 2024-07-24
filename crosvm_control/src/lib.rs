@@ -9,7 +9,13 @@
 //!
 //! Downstream projects rely on this library maintaining a stable API surface.
 //! Do not make changes to this library without consulting the crosvm externalization team.
-//! Email: crosvm-dev@chromium.org
+//! Email: <crosvm-dev@chromium.org>
+//!
+//! The API of this library should remain the same regardless of which crosvm features are enabled.
+//! Any missing functionality should be handled by returning an error at runtime, not conditional
+//! compilation, so that users can rely on the the same set of functions with the same prototypes
+//! regardless of how crosvm is configured.
+//!
 //! For more information see:
 //! <https://crosvm.dev/book/running_crosvm/programmatic_interaction.html#usage>
 
@@ -19,24 +25,32 @@ use std::ffi::CStr;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(any(target_os = "android", target_os = "linux"))]
 use std::time::Duration;
 
+use balloon_control::BalloonStats;
+use balloon_control::BalloonWS;
+use balloon_control::WSBucket;
 use libc::c_char;
 use libc::ssize_t;
 pub use swap::SwapStatus;
-use vm_control::client::*;
+use vm_control::client::do_modify_battery;
+use vm_control::client::do_net_add;
+use vm_control::client::do_net_remove;
+use vm_control::client::do_security_key_attach;
+use vm_control::client::do_usb_attach;
+use vm_control::client::do_usb_detach;
+use vm_control::client::do_usb_list;
+use vm_control::client::handle_request;
+use vm_control::client::handle_request_with_timeout;
+use vm_control::client::vms_request;
 use vm_control::BalloonControlCommand;
-use vm_control::BalloonStats;
-use vm_control::BalloonWS;
 use vm_control::DiskControlCommand;
-#[cfg(feature = "registered_events")]
 use vm_control::RegisteredEvent;
+use vm_control::SwapCommand;
 use vm_control::UsbControlAttachedDevice;
 use vm_control::UsbControlResult;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
-use vm_control::WSBucket;
 use vm_control::USB_CONTROL_MAX_PORTS;
 
 pub const VIRTIO_BALLOON_WS_MAX_NUM_BINS: usize = 16;
@@ -172,7 +186,6 @@ pub unsafe extern "C" fn crosvm_client_balloon_vms(
 /// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
-#[cfg(any(target_os = "android", target_os = "linux"))]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_balloon_vms_wait_with_timeout(
     socket_path: *const c_char,
@@ -368,14 +381,15 @@ pub extern "C" fn crosvm_client_max_usb_devices() -> usize {
     USB_CONTROL_MAX_PORTS
 }
 
-/// Returns all USB devices passed through the crosvm instance whose control socket is listening on `socket_path`.
+/// Returns all USB devices passed through the crosvm instance whose control socket is listening on
+/// `socket_path`.
 ///
 /// The function returns the amount of entries written.
 /// # Arguments
 ///
 /// * `socket_path` - Path to the crosvm control socket
 /// * `entries` - Pointer to an array of `UsbDeviceEntry` where the details about the attached
-///               devices will be written to
+///   devices will be written to
 /// * `entries_length` - Amount of entries in the array specified by `entries`
 ///
 /// Use the value returned by [`crosvm_client_max_usb_devices()`] to determine the size of the input
@@ -397,7 +411,7 @@ pub unsafe extern "C" fn crosvm_client_usb_list(
             if entries.is_null() {
                 return -1;
             }
-            if let Ok(UsbControlResult::Devices(res)) = do_usb_list(&socket_path) {
+            if let Ok(UsbControlResult::Devices(res)) = do_usb_list(socket_path) {
                 let mut i = 0;
                 for entry in res.iter().filter(|x| x.valid()) {
                     if i >= entries_length {
@@ -437,9 +451,13 @@ pub unsafe extern "C" fn crosvm_client_usb_list(
 ///
 /// # Safety
 ///
-/// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
-/// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
-/// null pointers are passed.
+/// Function is unsafe due to raw pointer usage.
+/// Trivial !raw_pointer.is_null() checks prevent some unsafe behavior, but the caller should
+/// ensure no null pointers are passed into the function.
+///
+/// The safety requirements for `socket_path` and `dev_path` are the same as the ones from
+/// `CStr::from_ptr()`. `out_port` should be a non-null pointer that points to a writable 1byte
+/// region.
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_usb_attach(
     socket_path: *const c_char,
@@ -459,6 +477,63 @@ pub unsafe extern "C" fn crosvm_client_usb_attach(
             let dev_path = Path::new(unsafe { CStr::from_ptr(dev_path) }.to_str().unwrap_or(""));
 
             if let Ok(UsbControlResult::Ok { port }) = do_usb_attach(socket_path, dev_path) {
+                if !out_port.is_null() {
+                    // SAFETY: trivially safe
+                    unsafe { *out_port = port };
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// Attaches a u2f security key to crosvm instance whose control socket is listening on
+/// `socket_path`.
+///
+/// The function returns the amount of entries written.
+/// # Arguments
+///
+/// * `socket_path` - Path to the crosvm control socket
+/// * `hidraw_path` - Path to the hidraw device of the security key (like `/dev/hidraw0`)
+/// * `out_port` - (optional) internal port will be written here if provided.
+///
+/// The function returns true on success or false if an error occurred.
+///
+/// # Safety
+///
+/// Function is unsafe due to raw pointer usage.
+/// Trivial !raw_pointer.is_null() checks prevent some unsafe behavior, but the caller should
+/// ensure no null pointers are passed into the function.
+///
+/// The safety requirements for `socket_path` and `hidraw_path` are the same as the ones from
+/// `CStr::from_ptr()`. `out_port` should be a non-null pointer that points to a writable 1byte
+/// region.
+#[no_mangle]
+pub unsafe extern "C" fn crosvm_client_security_key_attach(
+    socket_path: *const c_char,
+    hidraw_path: *const c_char,
+    out_port: *mut u8,
+) -> bool {
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            if hidraw_path.is_null() {
+                return false;
+            }
+            let hidraw_path = Path::new(
+                // SAFETY: just checked that `hidraw_path` is not null.
+                unsafe { CStr::from_ptr(hidraw_path) }
+                    .to_str()
+                    .unwrap_or(""),
+            );
+
+            if let Ok(UsbControlResult::Ok { port }) =
+                do_security_key_attach(socket_path, hidraw_path)
+            {
                 if !out_port.is_null() {
                     // SAFETY: trivially safe
                     unsafe { *out_port = port };
@@ -710,13 +785,7 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
     stats: *mut BalloonStatsFfi,
     actual: *mut u64,
 ) -> bool {
-    crosvm_client_balloon_stats_impl(
-        socket_path,
-        #[cfg(any(target_os = "android", target_os = "linux"))]
-        None,
-        stats,
-        actual,
-    )
+    crosvm_client_balloon_stats_impl(socket_path, None, stats, actual)
 }
 
 /// See crosvm_client_balloon_stats.
@@ -726,7 +795,6 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats(
 /// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
-#[cfg(any(target_os = "android", target_os = "linux"))]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_balloon_stats_with_timeout(
     socket_path: *const c_char,
@@ -744,16 +812,13 @@ pub unsafe extern "C" fn crosvm_client_balloon_stats_with_timeout(
 
 fn crosvm_client_balloon_stats_impl(
     socket_path: *const c_char,
-    #[cfg(any(target_os = "android", target_os = "linux"))] timeout_ms: Option<Duration>,
+    timeout_ms: Option<Duration>,
     stats: *mut BalloonStatsFfi,
     actual: *mut u64,
 ) -> bool {
     catch_unwind(|| {
         if let Some(socket_path) = validate_socket_path(socket_path) {
             let request = &VmRequest::BalloonCommand(BalloonControlCommand::Stats {});
-            #[cfg(not(unix))]
-            let resp = handle_request(request, socket_path);
-            #[cfg(any(target_os = "android", target_os = "linux"))]
             let resp = handle_request_with_timeout(request, socket_path, timeout_ms);
             if let Ok(VmResponse::BalloonStats {
                 stats: ref balloon_stats,
@@ -863,7 +928,8 @@ pub struct BalloonWSRConfigFfi {
     report_threshold: u64,
 }
 
-/// Returns balloon working set of the crosvm instance whose control socket is listening on socket_path.
+/// Returns balloon working set of the crosvm instance whose control socket is listening on
+/// socket_path.
 ///
 /// The function returns true on success or false if an error occurred.
 ///
@@ -915,19 +981,14 @@ pub unsafe extern "C" fn crosvm_client_balloon_working_set(
 
 /// Publically exposed version of RegisteredEvent enum, implemented as an
 /// integral newtype for FFI safety.
-#[cfg(feature = "registered_events")]
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct RegisteredEventFfi(u32);
 
-#[cfg(feature = "registered_events")]
 pub const REGISTERED_EVENT_VIRTIO_BALLOON_WS_REPORT: RegisteredEventFfi = RegisteredEventFfi(0);
-#[cfg(feature = "registered_events")]
 pub const REGISTERED_EVENT_VIRTIO_BALLOON_RESIZE: RegisteredEventFfi = RegisteredEventFfi(1);
-#[cfg(feature = "registered_events")]
 pub const REGISTERED_EVENT_VIRTIO_BALLOON_OOM_DEFLATION: RegisteredEventFfi = RegisteredEventFfi(2);
 
-#[cfg(feature = "registered_events")]
 impl TryFrom<RegisteredEventFfi> for RegisteredEvent {
     type Error = &'static str;
 
@@ -950,7 +1011,6 @@ impl TryFrom<RegisteredEventFfi> for RegisteredEvent {
 /// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
-#[cfg(feature = "registered_events")]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_register_events_listener(
     socket_path: *const c_char,
@@ -988,7 +1048,6 @@ pub unsafe extern "C" fn crosvm_client_register_events_listener(
 /// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
-#[cfg(feature = "registered_events")]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_unregister_events_listener(
     socket_path: *const c_char,
@@ -1026,7 +1085,6 @@ pub unsafe extern "C" fn crosvm_client_unregister_events_listener(
 /// Function is unsafe due to raw pointer usage - a null pointer could be passed in. Usage of
 /// !raw_pointer.is_null() checks should prevent unsafe behavior but the caller should ensure no
 /// null pointers are passed.
-#[cfg(feature = "registered_events")]
 #[no_mangle]
 pub unsafe extern "C" fn crosvm_client_unregister_listener(
     socket_path: *const c_char,

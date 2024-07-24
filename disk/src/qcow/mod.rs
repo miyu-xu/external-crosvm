@@ -27,7 +27,7 @@ use base::FileAllocate;
 use base::FileReadWriteAtVolatile;
 use base::FileSetLen;
 use base::FileSync;
-use base::PunchHoleMut;
+use base::PunchHole;
 use base::RawDescriptor;
 use base::VolatileMemory;
 use base::VolatileSlice;
@@ -37,6 +37,7 @@ use libc::EINVAL;
 use libc::ENOSPC;
 use libc::ENOTSUP;
 use remain::sorted;
+use sync::Mutex;
 use thiserror::Error;
 
 use crate::asynchronous::DiskFlush;
@@ -287,10 +288,10 @@ impl QcowHeader {
         }
         // L2 blocks are always one cluster long. They contain cluster_size/sizeof(u64) addresses.
         let l2_size: u32 = cluster_size / size_of::<u64>() as u32;
-        let num_clusters: u32 = div_round_up_u64(size, u64::from(cluster_size)) as u32;
-        let num_l2_clusters: u32 = div_round_up_u32(num_clusters, l2_size);
-        let l1_clusters: u32 = div_round_up_u32(num_l2_clusters, cluster_size);
-        let header_clusters = div_round_up_u32(size_of::<QcowHeader>() as u32, cluster_size);
+        let num_clusters: u32 = size.div_ceil(u64::from(cluster_size)) as u32;
+        let num_l2_clusters: u32 = num_clusters.div_ceil(l2_size);
+        let l1_clusters: u32 = num_l2_clusters.div_ceil(cluster_size);
+        let header_clusters = (size_of::<QcowHeader>() as u32).div_ceil(cluster_size);
         Ok(QcowHeader {
             magic: QCOW_MAGIC,
             version: 3,
@@ -317,10 +318,7 @@ impl QcowHeader {
                     num_clusters + l1_clusters + num_l2_clusters + header_clusters,
                 ) as u32;
                 // The refcount table needs to store the offset of each refcount cluster.
-                div_round_up_u32(
-                    max_refcount_clusters * size_of::<u64>() as u32,
-                    cluster_size,
-                )
+                (max_refcount_clusters * size_of::<u64>() as u32).div_ceil(cluster_size)
             },
             nb_snapshots: 0,
             snapshots_offset: 0,
@@ -389,8 +387,8 @@ impl QcowHeader {
 fn max_refcount_clusters(refcount_order: u32, cluster_size: u32, num_clusters: u32) -> u64 {
     // Use u64 as the product of the u32 inputs can overflow.
     let refcount_bytes = (0x01 << refcount_order as u64) / 8;
-    let for_data = div_round_up_u64(num_clusters as u64 * refcount_bytes, cluster_size as u64);
-    let for_refcounts = div_round_up_u64(for_data * refcount_bytes, cluster_size as u64);
+    let for_data = (u64::from(num_clusters) * refcount_bytes).div_ceil(u64::from(cluster_size));
+    let for_refcounts = (for_data * refcount_bytes).div_ceil(u64::from(cluster_size));
     for_data + for_refcounts
 }
 
@@ -413,6 +411,13 @@ fn max_refcount_clusters(refcount_order: u32, cluster_size: u32, num_clusters: u
 /// ```
 #[derive(Debug)]
 pub struct QcowFile {
+    inner: Mutex<QcowFileInner>,
+    // Copy of `inner.header.size` outside the mutex.
+    virtual_size: u64,
+}
+
+#[derive(Debug)]
+struct QcowFileInner {
     raw_file: QcowRawFile,
     header: QcowHeader,
     l1_table: VecCache<u64>,
@@ -430,7 +435,7 @@ pub struct QcowFile {
 impl DiskFile for QcowFile {}
 
 impl DiskFlush for QcowFile {
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&self) -> io::Result<()> {
         // Using fsync is overkill here, but, the code for flushing state to file tangled up with
         // the fsync, so it is best we can do for now.
         self.fsync()
@@ -528,14 +533,14 @@ impl QcowFile {
         let mut raw_file =
             QcowRawFile::from(file, cluster_size).ok_or(Error::InvalidClusterSize)?;
         if refcount_rebuild_required {
-            QcowFile::rebuild_refcounts(&mut raw_file, header.clone())?;
+            QcowFileInner::rebuild_refcounts(&mut raw_file, header.clone())?;
         }
 
         let l2_size = cluster_size / size_of::<u64>() as u64;
-        let num_clusters = div_round_up_u64(header.size, cluster_size);
-        let num_l2_clusters = div_round_up_u64(num_clusters, l2_size);
-        let l1_clusters = div_round_up_u64(num_l2_clusters, cluster_size);
-        let header_clusters = div_round_up_u64(size_of::<QcowHeader>() as u64, cluster_size);
+        let num_clusters = header.size.div_ceil(cluster_size);
+        let num_l2_clusters = num_clusters.div_ceil(l2_size);
+        let l1_clusters = num_l2_clusters.div_ceil(cluster_size);
+        let header_clusters = (size_of::<QcowHeader>() as u64).div_ceil(cluster_size);
         if num_l2_clusters > MAX_RAM_POINTER_TABLE_SIZE {
             return Err(Error::TooManyL1Entries(num_l2_clusters));
         }
@@ -549,7 +554,7 @@ impl QcowFile {
                 .map_err(Error::ReadingHeader)?,
         );
 
-        let num_clusters = div_round_up_u64(header.size, cluster_size);
+        let num_clusters = header.size.div_ceil(cluster_size);
         let refcount_clusters = max_refcount_clusters(
             header.refcount_order,
             cluster_size as u32,
@@ -574,7 +579,7 @@ impl QcowFile {
 
         let l2_entries = cluster_size / size_of::<u64>() as u64;
 
-        let mut qcow = QcowFile {
+        let mut inner = QcowFileInner {
             raw_file,
             header,
             l1_table,
@@ -588,18 +593,24 @@ impl QcowFile {
         };
 
         // Check that the L1 and refcount tables fit in a 64bit address space.
-        qcow.header
+        inner
+            .header
             .l1_table_offset
-            .checked_add(qcow.l1_address_offset(qcow.virtual_size()))
+            .checked_add(inner.l1_address_offset(inner.virtual_size()))
             .ok_or(Error::InvalidL1TableOffset)?;
-        qcow.header
+        inner
+            .header
             .refcount_table_offset
-            .checked_add(u64::from(qcow.header.refcount_table_clusters) * cluster_size)
+            .checked_add(u64::from(inner.header.refcount_table_clusters) * cluster_size)
             .ok_or(Error::InvalidRefcountTableOffset)?;
 
-        qcow.find_avail_clusters()?;
+        inner.find_avail_clusters()?;
 
-        Ok(qcow)
+        let virtual_size = inner.virtual_size();
+        Ok(QcowFile {
+            inner: Mutex::new(inner),
+            virtual_size,
+        })
     }
 
     /// Creates a new QcowFile at the given path.
@@ -632,7 +643,7 @@ impl QcowFile {
         let size = backing_file.get_len().map_err(Error::BackingFileIo)?;
         let header = QcowHeader::create_for_size_and_path(size, Some(backing_file_name))?;
         let mut result = QcowFile::new_from_header(file, header, backing_file_max_nesting_depth)?;
-        result.backing_file = Some(backing_file);
+        result.inner.get_mut().backing_file = Some(backing_file);
         Ok(result)
     }
 
@@ -645,19 +656,20 @@ impl QcowFile {
         header.write_to(&mut file)?;
 
         let mut qcow = Self::from(file, max_nesting_depth)?;
+        let inner = qcow.inner.get_mut();
 
         // Set the refcount for each refcount table cluster.
-        let cluster_size = 0x01u64 << qcow.header.cluster_bits;
-        let refcount_table_base = qcow.header.refcount_table_offset;
+        let cluster_size = 0x01u64 << inner.header.cluster_bits;
+        let refcount_table_base = inner.header.refcount_table_offset;
         let end_cluster_addr =
-            refcount_table_base + u64::from(qcow.header.refcount_table_clusters) * cluster_size;
+            refcount_table_base + u64::from(inner.header.refcount_table_clusters) * cluster_size;
 
         let mut cluster_addr = 0;
         while cluster_addr < end_cluster_addr {
-            let mut unref_clusters = qcow
+            let mut unref_clusters = inner
                 .set_cluster_refcount(cluster_addr, 1)
                 .map_err(Error::SettingRefcountRefcount)?;
-            qcow.unref_clusters.append(&mut unref_clusters);
+            inner.unref_clusters.append(&mut unref_clusters);
             cluster_addr += cluster_size;
         }
 
@@ -665,11 +677,14 @@ impl QcowFile {
     }
 
     pub fn set_backing_file(&mut self, backing: Option<Box<dyn DiskFile>>) {
-        self.backing_file = backing;
+        self.inner.get_mut().backing_file = backing;
     }
+}
 
+impl QcowFileInner {
     /// Returns the first cluster in the file with a 0 refcount. Used for testing.
-    pub fn first_zero_refcount(&mut self) -> Result<Option<u64>> {
+    #[cfg(test)]
+    fn first_zero_refcount(&mut self) -> Result<Option<u64>> {
         let file_size = self
             .raw_file
             .file_mut()
@@ -737,7 +752,7 @@ impl QcowFile {
             header: QcowHeader,
             cluster_size: u64,
         ) -> Result<()> {
-            let l1_clusters = div_round_up_u64(header.l1_size as u64, cluster_size);
+            let l1_clusters = u64::from(header.l1_size).div_ceil(cluster_size);
             let l1_table_offset = header.l1_table_offset;
             for i in 0..l1_clusters {
                 add_ref(refcounts, cluster_size, l1_table_offset + i * cluster_size)?;
@@ -810,7 +825,7 @@ impl QcowFile {
             refblock_clusters: u64,
             pointers_per_cluster: u64,
         ) -> Result<Vec<u64>> {
-            let refcount_table_entries = div_round_up_u64(refblock_clusters, pointers_per_cluster);
+            let refcount_table_entries = refblock_clusters.div_ceil(pointers_per_cluster);
             let mut ref_table = vec![0; refcount_table_entries as usize];
             let mut first_free_cluster: u64 = 0;
             for refblock_addr in &mut ref_table {
@@ -899,24 +914,21 @@ impl QcowFile {
             .len();
 
         let refcount_bits = 1u64 << header.refcount_order;
-        let refcount_bytes = div_round_up_u64(refcount_bits, 8);
+        let refcount_bytes = refcount_bits.div_ceil(8);
         let refcount_block_entries = cluster_size / refcount_bytes;
         let pointers_per_cluster = cluster_size / size_of::<u64>() as u64;
-        let data_clusters = div_round_up_u64(header.size, cluster_size);
-        let l2_clusters = div_round_up_u64(data_clusters, pointers_per_cluster);
-        let l1_clusters = div_round_up_u64(l2_clusters, cluster_size);
-        let header_clusters = div_round_up_u64(size_of::<QcowHeader>() as u64, cluster_size);
+        let data_clusters = header.size.div_ceil(cluster_size);
+        let l2_clusters = data_clusters.div_ceil(pointers_per_cluster);
+        let l1_clusters = l2_clusters.div_ceil(cluster_size);
+        let header_clusters = (size_of::<QcowHeader>() as u64).div_ceil(cluster_size);
         let max_clusters = data_clusters + l2_clusters + l1_clusters + header_clusters;
         let mut max_valid_cluster_index = max_clusters;
-        let refblock_clusters = div_round_up_u64(max_valid_cluster_index, refcount_block_entries);
-        let reftable_clusters = div_round_up_u64(refblock_clusters, pointers_per_cluster);
+        let refblock_clusters = max_valid_cluster_index.div_ceil(refcount_block_entries);
+        let reftable_clusters = refblock_clusters.div_ceil(pointers_per_cluster);
         // Account for refblocks and the ref table size needed to address them.
-        let refblocks_for_refs = div_round_up_u64(
-            refblock_clusters + reftable_clusters,
-            refcount_block_entries,
-        );
-        let reftable_clusters_for_refs =
-            div_round_up_u64(refblocks_for_refs, refcount_block_entries);
+        let refblocks_for_refs =
+            (refblock_clusters + reftable_clusters).div_ceil(refcount_block_entries);
+        let reftable_clusters_for_refs = refblocks_for_refs.div_ceil(refcount_block_entries);
         max_valid_cluster_index += refblock_clusters + reftable_clusters;
         max_valid_cluster_index += refblocks_for_refs + reftable_clusters_for_refs;
 
@@ -1232,10 +1244,7 @@ impl QcowFile {
             // This cluster is no longer in use; deallocate the storage.
             // The underlying FS may not support FALLOC_FL_PUNCH_HOLE,
             // so don't treat an error as fatal.  Future reads will return zeros anyways.
-            let _ = self
-                .raw_file
-                .file_mut()
-                .punch_hole_mut(cluster_addr, cluster_size);
+            let _ = self.raw_file.file().punch_hole(cluster_addr, cluster_size);
             self.unref_clusters.push(cluster_addr);
         }
         Ok(())
@@ -1269,9 +1278,7 @@ impl QcowFile {
                 };
                 if let Some(offset) = offset {
                     // Partial cluster - zero it out.
-                    self.raw_file
-                        .file_mut()
-                        .write_zeroes_all_at(offset, count)?;
+                    self.raw_file.file().write_zeroes_all_at(offset, count)?;
                 }
             }
 
@@ -1444,14 +1451,17 @@ impl QcowFile {
 
 impl Drop for QcowFile {
     fn drop(&mut self) {
-        let _ = self.sync_caches();
+        let _ = self.inner.get_mut().sync_caches();
     }
 }
 
 impl AsRawDescriptors for QcowFile {
     fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
-        let mut descriptors = vec![self.raw_file.file().as_raw_descriptor()];
-        if let Some(backing) = &self.backing_file {
+        // Taking a lock here feels wrong, but this method is generally only used during
+        // sandboxing, so it should be OK.
+        let inner = self.inner.lock();
+        let mut descriptors = vec![inner.raw_file.file().as_raw_descriptor()];
+        if let Some(backing) = &inner.backing_file {
             descriptors.append(&mut backing.as_raw_descriptors());
         }
         descriptors
@@ -1460,10 +1470,11 @@ impl AsRawDescriptors for QcowFile {
 
 impl Read for QcowFile {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let inner = self.inner.get_mut();
         let len = buf.len();
         let slice = VolatileSlice::new(buf);
-        let read_count = self.read_cb(
-            self.current_offset,
+        let read_count = inner.read_cb(
+            inner.current_offset,
             len,
             |file, already_read, offset, count| {
                 let sub_slice = slice.get_slice(already_read, count).unwrap();
@@ -1476,36 +1487,37 @@ impl Read for QcowFile {
                 }
             },
         )?;
-        self.current_offset += read_count as u64;
+        inner.current_offset += read_count as u64;
         Ok(read_count)
     }
 }
 
 impl Seek for QcowFile {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let inner = self.inner.get_mut();
         let new_offset: Option<u64> = match pos {
             SeekFrom::Start(off) => Some(off),
             SeekFrom::End(off) => {
                 if off < 0 {
                     0i64.checked_sub(off)
-                        .and_then(|increment| self.virtual_size().checked_sub(increment as u64))
+                        .and_then(|increment| inner.virtual_size().checked_sub(increment as u64))
                 } else {
-                    self.virtual_size().checked_add(off as u64)
+                    inner.virtual_size().checked_add(off as u64)
                 }
             }
             SeekFrom::Current(off) => {
                 if off < 0 {
                     0i64.checked_sub(off)
-                        .and_then(|increment| self.current_offset.checked_sub(increment as u64))
+                        .and_then(|increment| inner.current_offset.checked_sub(increment as u64))
                 } else {
-                    self.current_offset.checked_add(off as u64)
+                    inner.current_offset.checked_add(off as u64)
                 }
             }
         };
 
         if let Some(o) = new_offset {
-            if o <= self.virtual_size() {
-                self.current_offset = o;
+            if o <= inner.virtual_size() {
+                inner.current_offset = o;
                 return Ok(o);
             }
         }
@@ -1515,15 +1527,16 @@ impl Seek for QcowFile {
 
 impl Write for QcowFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let write_count = self.write_cb(
-            self.current_offset,
+        let inner = self.inner.get_mut();
+        let write_count = inner.write_cb(
+            inner.current_offset,
             buf.len(),
             |file, offset, raw_offset, count| {
                 file.seek(SeekFrom::Start(raw_offset))?;
                 file.write_all(&buf[offset..(offset + count)])
             },
         )?;
-        self.current_offset += write_count as u64;
+        inner.current_offset += write_count as u64;
         Ok(write_count)
     }
 
@@ -1533,8 +1546,9 @@ impl Write for QcowFile {
 }
 
 impl FileReadWriteAtVolatile for QcowFile {
-    fn read_at_volatile(&mut self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
-        self.read_cb(offset, slice.size(), |file, read, offset, count| {
+    fn read_at_volatile(&self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
+        let mut inner = self.inner.lock();
+        inner.read_cb(offset, slice.size(), |file, read, offset, count| {
             let sub_slice = slice.get_slice(read, count).unwrap();
             match file {
                 Some(f) => f.read_exact_at_volatile(sub_slice, offset),
@@ -1546,8 +1560,9 @@ impl FileReadWriteAtVolatile for QcowFile {
         })
     }
 
-    fn write_at_volatile(&mut self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
-        self.write_cb(offset, slice.size(), |file, offset, raw_offset, count| {
+    fn write_at_volatile(&self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
+        let mut inner = self.inner.lock();
+        inner.write_cb(offset, slice.size(), |file, offset, raw_offset, count| {
             let sub_slice = slice.get_slice(offset, count).unwrap();
             file.write_all_at_volatile(sub_slice, raw_offset)
         })
@@ -1555,13 +1570,15 @@ impl FileReadWriteAtVolatile for QcowFile {
 }
 
 impl FileSync for QcowFile {
-    fn fsync(&mut self) -> std::io::Result<()> {
-        self.sync_caches()?;
-        self.avail_clusters.append(&mut self.unref_clusters);
+    fn fsync(&self) -> std::io::Result<()> {
+        let mut inner = self.inner.lock();
+        inner.sync_caches()?;
+        let unref_clusters = std::mem::take(&mut inner.unref_clusters);
+        inner.avail_clusters.extend(unref_clusters);
         Ok(())
     }
 
-    fn fdatasync(&mut self) -> io::Result<()> {
+    fn fdatasync(&self) -> io::Result<()> {
         // QcowFile does not implement fdatasync. Just fall back to fsync.
         self.fsync()
     }
@@ -1578,15 +1595,16 @@ impl FileSetLen for QcowFile {
 
 impl DiskGetLen for QcowFile {
     fn get_len(&self) -> io::Result<u64> {
-        Ok(self.virtual_size())
+        Ok(self.virtual_size)
     }
 }
 
 impl FileAllocate for QcowFile {
-    fn allocate(&mut self, offset: u64, len: u64) -> io::Result<()> {
+    fn allocate(&self, offset: u64, len: u64) -> io::Result<()> {
+        let mut inner = self.inner.lock();
         // Call write_cb with a do-nothing callback, which will have the effect
         // of allocating all clusters in the specified range.
-        self.write_cb(
+        inner.write_cb(
             offset,
             len as usize,
             |_file, _offset, _raw_offset, _count| Ok(()),
@@ -1595,13 +1613,14 @@ impl FileAllocate for QcowFile {
     }
 }
 
-impl PunchHoleMut for QcowFile {
-    fn punch_hole_mut(&mut self, offset: u64, length: u64) -> std::io::Result<()> {
+impl PunchHole for QcowFile {
+    fn punch_hole(&self, offset: u64, length: u64) -> std::io::Result<()> {
+        let mut inner = self.inner.lock();
         let mut remaining = length;
         let mut offset = offset;
         while remaining > 0 {
-            let chunk_length = min(remaining, std::usize::MAX as u64) as usize;
-            self.zero_bytes(offset, chunk_length)?;
+            let chunk_length = min(remaining, usize::MAX as u64) as usize;
+            inner.zero_bytes(offset, chunk_length)?;
             remaining -= chunk_length as u64;
             offset += chunk_length as u64;
         }
@@ -1610,8 +1629,8 @@ impl PunchHoleMut for QcowFile {
 }
 
 impl WriteZeroesAt for QcowFile {
-    fn write_zeroes_at(&mut self, offset: u64, length: usize) -> io::Result<usize> {
-        self.punch_hole_mut(offset, length as u64)?;
+    fn write_zeroes_at(&self, offset: u64, length: usize) -> io::Result<usize> {
+        self.punch_hole(offset, length as u64)?;
         Ok(length)
     }
 }
@@ -1628,16 +1647,6 @@ fn offset_is_cluster_boundary(offset: u64, cluster_bits: u32) -> Result<()> {
         return Err(Error::InvalidOffset(offset));
     }
     Ok(())
-}
-
-// Ceiling of the division of `dividend`/`divisor`.
-fn div_round_up_u64(dividend: u64, divisor: u64) -> u64 {
-    dividend / divisor + u64::from(dividend % divisor != 0)
-}
-
-// Ceiling of the division of `dividend`/`divisor`.
-fn div_round_up_u32(dividend: u32, divisor: u32) -> u32 {
-    dividend / divisor + u32::from(dividend % divisor != 0)
 }
 
 #[cfg(test)]
@@ -2007,8 +2016,8 @@ mod tests {
     #[test]
     fn test_header() {
         with_basic_file(&valid_header(), |disk_file: File| {
-            let q = QcowFile::from(disk_file, MAX_NESTING_DEPTH).unwrap();
-            assert_eq!(q.virtual_size(), 0x20_0000_0000);
+            let mut q = QcowFile::from(disk_file, MAX_NESTING_DEPTH).unwrap();
+            assert_eq!(q.inner.get_mut().virtual_size(), 0x20_0000_0000);
         });
     }
 
@@ -2431,7 +2440,10 @@ mod tests {
                 }
             }
 
-            assert_eq!(qcow_file.first_zero_refcount().unwrap(), None);
+            assert_eq!(
+                qcow_file.inner.get_mut().first_zero_refcount().unwrap(),
+                None
+            );
         });
     }
 
@@ -2442,7 +2454,7 @@ mod tests {
             let cluster_size = 65536;
             let mut raw_file =
                 QcowRawFile::from(disk_file, cluster_size).expect("Failed to create QcowRawFile.");
-            QcowFile::rebuild_refcounts(&mut raw_file, header)
+            QcowFileInner::rebuild_refcounts(&mut raw_file, header)
                 .expect("Failed to rebuild recounts.");
         });
     }
@@ -2458,7 +2470,7 @@ mod tests {
         let _backing_file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
+            .create_new(true)
             .open(&backing_file_path)
             .unwrap();
 
@@ -2466,7 +2478,7 @@ mod tests {
         let level1_qcow_file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
+            .create_new(true)
             .open(&level1_qcow_file_path)
             .unwrap();
         let _level1_qcow_file = QcowFile::new_from_backing(

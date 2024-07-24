@@ -21,8 +21,8 @@
 //! * Derive implementations of AsBytes and FromBytes for each struct as needed.
 //! * Added GET_PARAMS_EXT and SET_PARAMS_EXT to allow querying and changing the resource type
 //!   dynamically.
-//! * Moved some definitions such as virtio_video_config to device_constants to make them visible
-//!   to vhost-user modules, and also pub-use them.
+//! * Moved some definitions such as virtio_video_config to device_constants to make them visible to
+//!   vhost-user modules, and also pub-use them.
 
 #![allow(dead_code, non_snake_case, non_camel_case_types)]
 
@@ -31,11 +31,6 @@ use data_model::Le64;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::FromZeroes;
-
-pub use crate::virtio::device_constants::video::virtio_video_config;
-pub use crate::virtio::device_constants::video::VIRTIO_VIDEO_F_RESOURCE_GUEST_PAGES;
-pub use crate::virtio::device_constants::video::VIRTIO_VIDEO_F_RESOURCE_NON_CONTIG;
-pub use crate::virtio::device_constants::video::VIRTIO_VIDEO_F_RESOURCE_VIRTIO_OBJECT;
 
 pub const VIRTIO_VIDEO_MAX_PLANES: u32 = 8;
 pub const VIRTIO_VIDEO_FORMAT_RAW_MIN: virtio_video_format = 1;

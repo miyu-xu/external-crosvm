@@ -133,7 +133,6 @@ pub trait Vm: Send {
     /// e.g this could be the case when host GPU doesn't set the memory to be coherent with CPU
     /// access. Setting this attribute would allow hypervisor to adjust guest mem control to ensure
     /// synchronized guest access in noncoherent DMA case.
-    ///
     fn add_memory_region(
         &mut self,
         guest_addr: GuestAddress,
@@ -146,6 +145,28 @@ pub trait Vm: Send {
     /// Does a synchronous msync of the memory mapped at `slot`, syncing `size` bytes starting at
     /// `offset` from the start of the region.  `offset` must be page aligned.
     fn msync_memory_region(&mut self, slot: MemSlot, offset: usize, size: usize) -> Result<()>;
+
+    /// Gives a MADV_PAGEOUT advice to the memory region mapped at `slot`, with the address range
+    /// starting at `offset` from the start of the region, and with size `size`. `offset`
+    /// must be page aligned.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    fn madvise_pageout_memory_region(
+        &mut self,
+        slot: MemSlot,
+        offset: usize,
+        size: usize,
+    ) -> Result<()>;
+
+    /// Gives a MADV_REMOVE advice to the memory region mapped at `slot`, with the address range
+    /// starting at `offset` from the start of the region, and with size `size`. `offset`
+    /// must be page aligned.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    fn madvise_remove_memory_region(
+        &mut self,
+        slot: MemSlot,
+        offset: usize,
+        size: usize,
+    ) -> Result<()>;
 
     /// Removes and drops the `UserMemoryRegion` that was previously added at the given slot.
     fn remove_memory_region(&mut self, slot: MemSlot) -> Result<Box<dyn MappedRegion>>;
@@ -323,29 +344,6 @@ pub trait Vcpu: downcast_rs::DowncastSync {
     /// the return data in the vcpu so that the vcpu can resume running.
     fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()>;
 
-    /// Handles the HYPERV_HYPERCALL exit from a vcpu.
-    ///
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::HypervHcall`, and in the
-    /// same thread as run.
-    ///
-    /// Once called, it will parse the appropriate input parameters to the provided function to
-    /// handle the hyperv call, and then set the return data into the vcpu so it can resume running.
-    fn handle_hyperv_hypercall(&self, func: &mut dyn FnMut(HypervHypercall) -> u64) -> Result<()>;
-
-    /// Handles a RDMSR exit from the guest.
-    ///
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::RdMsr`,
-    /// and in the same thread as run.
-    ///
-    /// It will put `data` into the guest buffer and return.
-    fn handle_rdmsr(&self, data: u64) -> Result<()>;
-
-    /// Handles a WRMSR exit from the guest by removing any error indication for the operation.
-    ///
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::WrMsr`,
-    /// and in the same thread as run.
-    fn handle_wrmsr(&self);
-
     /// Signals to the hypervisor that this Vcpu is being paused by userspace.
     fn on_suspend(&self) -> Result<()>;
 
@@ -378,6 +376,40 @@ pub enum Datamatch {
     U64(Option<u64>),
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum VcpuShutdownErrorKind {
+    DoubleFault,
+    TripleFault,
+    Other,
+}
+
+/// A Vcpu shutdown may signify an error, such as a double or triple fault,
+/// or hypervisor specific reasons. This error covers all such cases.
+#[derive(Copy, Clone, Debug)]
+pub struct VcpuShutdownError {
+    kind: VcpuShutdownErrorKind,
+    raw_error_code: u64,
+}
+
+impl VcpuShutdownError {
+    pub fn new(kind: VcpuShutdownErrorKind, raw_error_code: u64) -> VcpuShutdownError {
+        Self {
+            kind,
+            raw_error_code,
+        }
+    }
+    pub fn kind(&self) -> VcpuShutdownErrorKind {
+        self.kind
+    }
+    pub fn get_raw_error_code(&self) -> u64 {
+        self.raw_error_code
+    }
+}
+
+// Note that when adding entries to the VcpuExit enum you may want to add corresponding entries in
+// crosvm::stats::exit_to_index and crosvm::stats::exit_index_to_str if you don't want the new
+// exit type to be categorized as "Unknown".
+
 /// A reason why a VCPU exited. One of these returns every time `Vcpu::run` is called.
 #[derive(Debug, Clone, Copy)]
 pub enum VcpuExit {
@@ -390,41 +422,22 @@ pub enum VcpuExit {
     IoapicEoi {
         vector: u8,
     },
-    HypervHypercall,
-    Unknown,
     Exception,
     Hypercall,
     Debug,
     Hlt,
     IrqWindowOpen,
-    Shutdown,
+    Shutdown(std::result::Result<(), VcpuShutdownError>),
     FailEntry {
         hardware_entry_failure_reason: u64,
     },
     Intr,
     SetTpr,
     TprAccess,
-    S390Sieic,
-    S390Reset,
-    Dcr,
-    Nmi,
     InternalError,
-    Osi,
-    PaprHcall,
-    S390Ucontrol,
-    Watchdog,
-    S390Tsch,
-    Epr,
     SystemEventShutdown,
     SystemEventReset,
     SystemEventCrash,
-    RdMsr {
-        index: u32,
-    },
-    WrMsr {
-        index: u32,
-        data: u64,
-    },
     /// An invalid vcpu register was set while running.
     InvalidVpRegister,
     /// incorrect setup for vcpu requiring an unsupported feature
@@ -460,21 +473,6 @@ pub enum VcpuExit {
         new_value: u64,
         write_mask: u64,
         ret_value: u64,
-    },
-}
-
-/// A hypercall with parameters being made from the guest.
-#[derive(Debug)]
-pub enum HypervHypercall {
-    HypervSynic {
-        msr: u32,
-        control: u64,
-        evt_page: u64,
-        msg_page: u64,
-    },
-    HypervHcall {
-        input: u64,
-        params: [u64; 2],
     },
 }
 
@@ -522,12 +520,10 @@ pub struct IrqRoute {
 }
 
 /// The state of the paravirtual clock.
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 pub struct ClockState {
     /// Current pv clock timestamp, as seen by the guest
     pub clock: u64,
-    /// Hypervisor-specific feature flags for the pv clock
-    pub flags: u32,
 }
 
 /// The MPState represents the state of a processor.
@@ -563,9 +559,9 @@ pub enum ProtectionType {
     /// The VM should be run in protected mode, but booted directly without pVM firmware. The host
     /// will still be unable to access the VM memory, but it won't be given any secrets.
     ProtectedWithoutFirmware,
-    /// The VM should be run in unprotected mode, but with the same memory layout as protected mode,
-    /// protected VM firmware loaded, and simulating protected mode as much as possible. This is
-    /// useful for debugging the protected VM firmware and other protected mode issues.
+    /// The VM should be run in unprotected mode, but with the same memory layout as protected
+    /// mode, protected VM firmware loaded, and simulating protected mode as much as possible.
+    /// This is useful for debugging the protected VM firmware and other protected mode issues.
     UnprotectedWithFirmware,
 }
 

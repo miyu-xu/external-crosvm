@@ -7,8 +7,10 @@ cfg_if::cfg_if! {
         use base::RawDescriptor;
         use devices::virtio::vhost::user::device::parse_wayland_sock;
 
+        use crate::crosvm::sys::config::parse_pmem_ext2_option;
         use crate::crosvm::sys::config::VfioOption;
         use crate::crosvm::sys::config::SharedDir;
+        use crate::crosvm::sys::config::PmemExt2Option;
     }
 }
 
@@ -40,6 +42,8 @@ use devices::virtio::DeviceType;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuDisplayParameters;
 #[cfg(feature = "gpu")]
+use devices::virtio::GpuMouseMode;
+#[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
 #[cfg(all(unix, feature = "net"))]
 use devices::virtio::NetParameters;
@@ -64,6 +68,7 @@ use serde::Serialize;
 #[cfg(feature = "gpu")]
 use serde_keyvalue::FromKeyValues;
 
+use super::config::PmemOption;
 #[cfg(feature = "gpu")]
 use super::gpu_config::fixup_gpu_display_options;
 #[cfg(feature = "gpu")]
@@ -88,6 +93,7 @@ use crate::crosvm::config::DtboOption;
 use crate::crosvm::config::Executable;
 use crate::crosvm::config::FileBackedMappingParameters;
 use crate::crosvm::config::HypervisorKind;
+use crate::crosvm::config::InputDeviceOption;
 use crate::crosvm::config::IrqChipKind;
 use crate::crosvm::config::MemOptions;
 use crate::crosvm::config::TouchDeviceOption;
@@ -130,9 +136,6 @@ pub enum CrossPlatformCommands {
     BalloonStats(BalloonStatsCommand),
     #[cfg(feature = "balloon")]
     BalloonWs(BalloonWsCommand),
-    // TODO(b/288432539): remove once concierge is migrated
-    #[cfg(feature = "balloon")]
-    BalloonWss(BalloonWsCommand),
     Battery(BatteryCommand),
     #[cfg(feature = "composite-disk")]
     CreateComposite(CreateCompositeCommand),
@@ -227,7 +230,7 @@ pub struct CreateCompositeCommand {
     #[argh(positional, arg_name = "PATH")]
     /// image path
     pub path: String,
-    #[argh(positional, arg_name = "LABEL:PARTITION<:writable>")]
+    #[argh(positional, arg_name = "LABEL:PARTITION[:writable][:<GUID>]")]
     /// partitions
     pub partitions: Vec<String>,
 }
@@ -244,8 +247,8 @@ pub struct CreateQcow2Command {
     /// desired size of the image in bytes; required if not using --backing-file
     pub size: Option<u64>,
     #[argh(option)]
-    /// path to backing file; if specified, the image will be the same size as the backing file, and
-    /// SIZE may not be specified
+    /// path to backing file; if specified, the image will be the same size as the backing file,
+    /// and SIZE may not be specified
     pub backing_file: Option<String>,
 }
 
@@ -289,7 +292,11 @@ pub struct MakeRTCommand {
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "resume")]
-/// Resumes the crosvm instance
+/// Resumes the crosvm instance. No-op if already running. When starting crosvm with `--restore`,
+/// this command can be used to wait until the restore is complete
+// Implementation note: All the restore work happens before crosvm becomes able to process incoming
+// commands, so really all commands can be used to wait for restore to complete, but few are side
+// effect free.
 pub struct ResumeCommand {
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
@@ -559,6 +566,7 @@ pub enum GpuSubCommand {
     AddDisplays(GpuAddDisplaysCommand),
     ListDisplays(GpuListDisplaysCommand),
     RemoveDisplays(GpuRemoveDisplaysCommand),
+    SetDisplayMouseMode(GpuSetDisplayMouseModeCommand),
 }
 
 #[cfg(feature = "gpu")]
@@ -598,10 +606,27 @@ pub struct GpuRemoveDisplaysCommand {
     pub socket_path: String,
 }
 
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+/// Sets the mouse mode of a display attached to the GPU device.
+#[argh(subcommand, name = "set-mouse-mode")]
+pub struct GpuSetDisplayMouseModeCommand {
+    #[argh(option)]
+    /// display id
+    pub display_id: u32,
+    #[argh(option)]
+    /// display mouse mode
+    pub mouse_mode: GpuMouseMode,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
 #[derive(FromArgs)]
 #[argh(subcommand)]
 pub enum UsbSubCommand {
     Attach(UsbAttachCommand),
+    SecurityKeyAttach(UsbAttachKeyCommand),
     Detach(UsbDetachCommand),
     List(UsbListCommand),
 }
@@ -618,6 +643,18 @@ pub struct UsbAttachCommand {
     pub addr: (u8, u8, u16, u16),
     #[argh(positional)]
     /// usb device path
+    pub dev_path: String,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[derive(FromArgs)]
+/// Attach security key device
+#[argh(subcommand, name = "attach_key")]
+pub struct UsbAttachKeyCommand {
+    #[argh(positional)]
+    /// security key hidraw device path
     pub dev_path: String,
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
@@ -703,18 +740,12 @@ pub struct SnapshotTakeCommand {
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
     pub socket_path: String,
-}
-
-#[derive(FromArgs)]
-#[argh(subcommand, name = "restore")]
-/// Restore VM state from a snapshot created by take
-pub struct SnapshotRestoreCommand {
-    #[argh(positional)]
-    /// path to snapshot to restore
-    pub snapshot_path: PathBuf,
-    #[argh(positional, arg_name = "VM_SOCKET")]
-    /// VM Socket path
-    pub socket_path: String,
+    #[argh(switch)]
+    /// compress the ram snapshot.
+    pub compress_memory: bool,
+    #[argh(switch, arg_name = "encrypt")]
+    /// whether the snapshot should be encrypted
+    pub encrypt: bool,
 }
 
 #[derive(FromArgs)]
@@ -722,7 +753,6 @@ pub struct SnapshotRestoreCommand {
 /// Snapshot commands
 pub enum SnapshotSubCommands {
     Take(SnapshotTakeCommand),
-    Restore(SnapshotRestoreCommand),
 }
 
 /// Container for GpuParameters that have been fixed after parsing using serde.
@@ -808,8 +838,13 @@ where
 
 #[cfg(feature = "config-file")]
 fn write_config_file(config_file: &Path, cmd: &RunCommand) -> Result<(), String> {
-    let file = std::fs::File::create(config_file).map_err(|e| e.to_string())?;
-    serde_json::to_writer_pretty(file, cmd).map_err(|e| e.to_string())
+    use std::io::Write;
+
+    let mut w =
+        std::io::BufWriter::new(std::fs::File::create(config_file).map_err(|e| e.to_string())?);
+    serde_json::to_writer_pretty(&mut w, cmd).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Overwrite an `Option<T>` if the right member is set.
@@ -902,6 +937,12 @@ pub struct RunCommand {
     /// path to user provided ACPI table
     pub acpi_table: Vec<PathBuf>,
 
+    #[cfg(feature = "android_display")]
+    #[argh(option, arg_name = "NAME")]
+    #[merge(strategy = overwrite_option)]
+    /// name that the Android display backend will be registered to the service manager.
+    pub android_display_service: Option<String>,
+
     #[argh(option)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -914,42 +955,40 @@ pub struct RunCommand {
     #[serde(skip)] // TODO(b/255223604)
     pub async_executor: Option<ExecutorKind>,
 
+    #[cfg(feature = "balloon")]
     #[argh(option, arg_name = "N")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// amount to bias balance of memory between host and guest as the balloon inflates, in mib.
     pub balloon_bias_mib: Option<i64>,
 
+    #[cfg(feature = "balloon")]
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// path for balloon controller socket.
     pub balloon_control: Option<PathBuf>,
 
+    #[cfg(feature = "balloon")]
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// enable page reporting in balloon.
     pub balloon_page_reporting: Option<bool>,
 
+    #[cfg(feature = "balloon")]
     #[argh(option)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// set number of WS bins to use (default = 4).
     pub balloon_ws_num_bins: Option<u8>,
 
+    #[cfg(feature = "balloon")]
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// enable working set reporting in balloon.
     pub balloon_ws_reporting: Option<bool>,
-
-    // TODO(b/288432539): remove once concierge is migrated
-    #[argh(switch)]
-    #[serde(skip)] // TODO(b/255223604)
-    #[merge(strategy = overwrite_option)]
-    /// enable working set reporting in balloon.
-    pub balloon_wss_reporting: Option<bool>,
 
     #[argh(option)]
     /// comma separated key=value pairs for setting up battery
@@ -1003,7 +1042,16 @@ pub struct RunCommand {
     ///         will attempt to boot from the current device
     ///         after failing to boot from the device with
     ///         bootindex=1.
+    ///     pci-address=ADDR - Preferred PCI address, e.g. "00:01.0".
     block: Vec<DiskOptionWithId>,
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[argh(switch)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// set a minimum utilization for vCPU threads which will hint to the host scheduler
+    /// to ramp up higher frequencies or place vCPU threads on larger cores.
+    pub boost_uclamp: Option<bool>,
 
     #[cfg(target_arch = "x86_64")]
     #[argh(switch)]
@@ -1065,7 +1113,8 @@ pub struct RunCommand {
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// comma-separated list of CPUs or CPU ranges to run VCPUs on (e.g. 0,1-3,5)
-    /// or colon-separated list of assignments of guest to host CPU assignments (e.g. 0=0:1=1:2=2) (default: no mask)
+    /// or colon-separated list of assignments of guest to host CPU assignments (e.g. 0=0:1=1:2=2)
+    /// (default: no mask)
     pub cpu_affinity: Option<VcpuAffinity>,
 
     #[argh(
@@ -1109,6 +1158,7 @@ pub struct RunCommand {
     ///       core-types=[atom=[0,1],core=[2,3]] - set vCPU 0 and
     ///       vCPU 1 as intel Atom type, also set vCPU 2 and vCPU 3
     ///       as intel Core type.
+    ///     boot-cpu=NUM - Select vCPU to boot from. (default: 0) (aarch64 only)
     pub cpus: Option<CpuOptions>,
 
     #[cfg(feature = "crash-report")]
@@ -1147,8 +1197,9 @@ pub struct RunCommand {
     #[argh(option, short = 'd', arg_name = "PATH[,key=value[,key=value[,...]]]")]
     #[serde(skip)] // Deprecated - use `block` instead.
     #[merge(strategy = append)]
+    // (DEPRECATED): Use `block` instead.
     /// path to a disk image followed by optional comma-separated
-    /// options.  Deprecated - use `block` instead.
+    /// options.
     /// Valid keys:
     ///    sparse=BOOL - Indicates whether the disk should support
     ///        the discard operation (default: true)
@@ -1212,7 +1263,8 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// path to an event device node. The device will be grabbed (unusable from the host) and made available to the guest with the same configuration it shows on the host
+    /// path to an event device node. The device will be grabbed (unusable from the host) and made
+    /// available to the guest with the same configuration it shows on the host
     pub evdev: Vec<PathBuf>,
 
     #[cfg(windows)]
@@ -1282,9 +1334,13 @@ pub struct RunCommand {
     /// Possible key values:
     ///     backend=(2d|virglrenderer|gfxstream) - Which backend to
     ///        use for virtio-gpu (determining rendering protocol)
+    ///     max_num_displays=INT - The maximum number of concurrent
+    ///        virtual displays in this VM. This must not exceed
+    ///        VIRTIO_GPU_MAX_SCANOUTS (i.e. 16).
     ///     displays=[[GpuDisplayParameters]] - The list of virtual
-    ///         displays to create. See the possible key values for
-    ///         GpuDisplayParameters in the section below.
+    ///        displays to create when booting this VM. Displays may
+    ///        be hotplugged after booting. See the possible key
+    ///        values for GpuDisplayParameters in the section below.
     ///     context-types=LIST - The list of supported context
     ///       types, separated by ':' (default: no contexts enabled)
     ///     width=INT - The width of the virtual display connected
@@ -1316,6 +1372,8 @@ pub struct RunCommand {
     ///     implicit-render-server[=true|=false] - If the render
     ///        server process should be allowed to autostart
     ///        (ignored when sandboxing is enabled)
+    ///     fixed-blob-mapping[=true|=false] - if gpu memory blobs
+    ///        should use fixed address mapping.
     ///
     /// Possible key values for GpuDisplayParameters:
     ///     mode=(borderless_full_screen|windowed[width,height]) -
@@ -1386,7 +1444,8 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// string representation of the host guid in registry format, for namespacing vsock connections.
+    /// string representation of the host guid in registry format, for namespacing vsock
+    /// connections.
     pub host_guid: Option<String>,
 
     #[cfg(all(unix, feature = "net"))]
@@ -1407,6 +1466,7 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     pub hypervisor: Option<HypervisorKind>,
 
+    #[cfg(feature = "balloon")]
     #[argh(option, arg_name = "N")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -1418,6 +1478,25 @@ pub struct RunCommand {
     /// initial ramdisk to load
     pub initrd: Option<PathBuf>,
 
+    #[argh(option, arg_name = "TYPE[OPTIONS]")]
+    #[serde(default)]
+    #[merge(strategy = append)]
+    /// virtio-input device
+    /// TYPE is an input device type, and OPTIONS are key=value
+    /// pairs specific to the device type:
+    ///     evdev[path=PATH]
+    ///     keyboard[path=PATH]
+    ///     mouse[path=PATH]
+    ///     multi-touch[path=PATH,width=W,height=H,name=N]
+    ///     rotary[path=PATH]
+    ///     single-touch[path=PATH,width=W,height=H,name=N]
+    ///     switches[path=PATH]
+    ///     trackpad[path=PATH,width=W,height=H,name=N]
+    ///     multi-touch-trackpad[path=PATH,width=W,height=H,name=N]
+    /// See <https://crosvm.dev/book/devices/input.html> for more
+    /// information.
+    pub input: Vec<InputDeviceOption>,
+
     #[argh(option, arg_name = "kernel|split|userspace")]
     #[merge(strategy = overwrite_option)]
     /// type of interrupt controller emulation. "split" is only available for x86 KVM.
@@ -1426,7 +1505,8 @@ pub struct RunCommand {
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// allow to enable ITMT scheduling feature in VM. The success of enabling depends on HWP and ACPI CPPC support on hardware
+    /// allow to enable ITMT scheduling feature in VM. The success of enabling depends on HWP and
+    /// ACPI CPPC support on hardware
     pub itmt: Option<bool>,
 
     #[argh(positional, arg_name = "KERNEL")]
@@ -1465,14 +1545,16 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// redirect logs to the supplied log file at PATH rather than stderr. For multi-process mode, use --logs-directory instead
+    /// redirect logs to the supplied log file at PATH rather than stderr. For multi-process mode,
+    /// use --logs-directory instead
     pub log_file: Option<String>,
 
     #[cfg(windows)]
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// path to the logs directory used for crosvm processes. Logs will be sent to stderr if unset, and stderr/stdout will be uncaptured
+    /// path to the logs directory used for crosvm processes. Logs will be sent to stderr if unset,
+    /// and stderr/stdout will be uncaptured
     pub logs_directory: Option<String>,
 
     #[cfg(all(unix, feature = "net"))]
@@ -1515,7 +1597,9 @@ pub struct RunCommand {
     )]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// path to a socket from where to read multi touch input events (such as those from a touchscreen) and write status updates to, optionally followed by width and height (defaults to 800x1280) and a name for the input device
+    /// path to a socket from where to read multi touch input events (such as those from a
+    /// touchscreen) and write status updates to, optionally followed by width and height (defaults
+    /// to 800x1280) and a name for the input device
     pub multi_touch: Vec<TouchDeviceOption>,
 
     #[cfg(all(unix, feature = "net"))]
@@ -1581,6 +1665,7 @@ pub struct RunCommand {
     /// netmask for VM subnet
     pub netmask: Option<std::net::Ipv4Addr>,
 
+    #[cfg(feature = "balloon")]
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -1672,8 +1757,8 @@ pub struct RunCommand {
     )]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// comma-seperated key-value pair for setting up the pflash device, which provides space to store UEFI variables.
-    /// block_size defaults to 4K.
+    /// comma-seperated key-value pair for setting up the pflash device, which provides space to
+    /// store UEFI variables. block_size defaults to 4K.
     /// [--pflash <path=PATH,[block_size=SIZE]>]
     pub pflash: Option<PflashParameters>,
 
@@ -1701,7 +1786,8 @@ pub struct RunCommand {
     #[argh(option)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// path to the file listing supplemental GIDs that should be mapped in plugin jail.  Can be given more than once
+    /// path to the file listing supplemental GIDs that should be mapped in plugin jail.  Can be
+    /// given more than once
     pub plugin_gid_map_file: Option<PathBuf>,
 
     #[cfg(feature = "plugin")]
@@ -1715,7 +1801,8 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// path to the file listing paths be mounted into the plugin's root filesystem.  Can be given more than once
+    /// path to the file listing paths be mounted into the plugin's root filesystem.  Can be given
+    /// more than once
     pub plugin_mount_file: Option<PathBuf>,
 
     #[cfg(feature = "plugin")]
@@ -1725,11 +1812,59 @@ pub struct RunCommand {
     /// absolute path to a directory that will become root filesystem for the plugin process.
     pub plugin_root: Option<PathBuf>,
 
+    #[argh(option)]
+    #[serde(default)]
+    #[merge(strategy = append)]
+    /// parameters for setting up a virtio-pmem device.
+    /// Valid keys:
+    ///     path=PATH - Path to the disk image. Can be specified
+    ///         without the key as the first argument.
+    ///     ro=BOOL - Whether the pmem device should be read-only.
+    ///         (default: false)
+    ///     vma-size=BYTES - (Experimental) Size in bytes
+    ///        of an anonymous virtual memory area that is
+    ///        created to back this device. When this
+    ///        option is specified, the disk image path
+    ///        is used to name the memory area
+    ///     swap-interval-ms=NUM - (Experimental) Interval
+    ///        in milliseconds for periodic swap out of
+    ///        memory mapping created by this device. 0
+    ///        means the memory mapping won't be swapped
+    ///        out by crosvm
+    pub pmem: Vec<PmemOption>,
+
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
+    /// (DEPRECATED): Use --pmem instead.
     /// path to a disk image
-    pub pmem_device: Vec<DiskOption>,
+    pmem_device: Vec<DiskOption>,
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[argh(
+        option,
+        arg_name = "PATH[,key=value[,key=value[,...]]]",
+        from_str_fn(parse_pmem_ext2_option)
+    )]
+    #[serde(default)]
+    #[merge(strategy = append)]
+    /// (EXPERIMENTAL): construct an ext2 file system on a pmem
+    /// device from the given directory. The argument is the form of
+    /// "PATH[,key=value[,key=value[,...]]]".
+    /// Valid keys:
+    ///     blocks_per_group=NUM - Number of blocks in a block
+    ///       group. (default: 4096)
+    ///     inodes_per_group=NUM - Number of inodes in a block
+    ///       group. (default: 1024)
+    ///     size=BYTES - Size of the memory region allocated by this
+    ///       device. A file system will be built on the region. If
+    ///       the filesystem doesn't fit within this size, crosvm
+    ///       will fail to start with an error.
+    ///       The number of block groups in the file system is
+    ///       calculated from this value and other given parameters.
+    ///       The value of `size` must be larger than (4096 *
+    ///        blocks_per_group.) (default: 16777216)
+    pub pmem_ext2: Vec<PmemExt2Option>,
 
     #[cfg(feature = "process-invariants")]
     #[argh(option, arg_name = "PATH")]
@@ -1742,7 +1877,8 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// size of the serialized EmulatorProcessInvariants proto pointed at by process-invariants-handle
+    /// size of the serialized EmulatorProcessInvariants proto pointed at by
+    /// process-invariants-handle
     pub process_invariants_size: Option<usize>,
 
     #[cfg(windows)]
@@ -1791,11 +1927,12 @@ pub struct RunCommand {
     ///     [--pstore <path=PATH,size=SIZE>]
     pub pstore: Option<Pstore>,
 
-    #[cfg(windows)]
+    #[cfg(feature = "pvclock")]
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
     /// enable virtio-pvclock.
+    /// Only available when crosvm is built with feature 'pvclock'.
     pub pvclock: Option<bool>,
 
     #[argh(option, long = "restore", arg_name = "PATH")]
@@ -1807,8 +1944,9 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH[,key=value[,key=value[,...]]]", short = 'r')]
     #[serde(skip)] // Deprecated - use `block` instead.
     #[merge(strategy = overwrite_option)]
+    // (DEPRECATED): Use `block` instead.
     /// path to a disk image followed by optional comma-separated
-    /// options.  Deprecated - use `block` instead.
+    /// options.
     /// Valid keys:
     ///     sparse=BOOL - Indicates whether the disk should support
     ///         the discard operation (default: true)
@@ -1834,14 +1972,16 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
+    /// (DEPRECATED): Use --pmem instead.
     /// path to a writable disk image
     rw_pmem_device: Vec<DiskOption>,
 
     #[argh(option, arg_name = "PATH[,key=value[,key=value[,...]]]")]
     #[serde(skip)] // Deprecated - use `block` instead.
     #[merge(strategy = append)]
+    // (DEPRECATED): Use `block` instead.
     /// path to a read-write disk image followed by optional
-    /// comma-separated options. Deprecated - use `block` instead.
+    /// comma-separated options.
     /// Valid keys:
     ///     sparse=BOOL - Indicates whether the disk should support
     ///        the discard operation (default: true)
@@ -1855,8 +1995,9 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH[,key=value[,key=value[,...]]]")]
     #[serde(skip)] // Deprecated - use `block` instead.
     #[merge(strategy = overwrite_option)]
+    // (DEPRECATED) Use `block` instead.
     /// path to a read-write root disk image followed by optional
-    /// comma-separated options.  Deprecated - use `block` instead.
+    /// comma-separated options.
     /// Valid keys:
     ///     sparse=BOOL - Indicates whether the disk should support
     ///       the discard operation (default: true)
@@ -1909,7 +2050,7 @@ pub struct RunCommand {
 
     #[argh(
         option,
-        arg_name = "type=TYPE,[hardware=HW,name=NAME,num=NUM,path=PATH,input=PATH,console,earlycon,stdin]",
+        arg_name = "type=TYPE,[hardware=HW,name=NAME,num=NUM,path=PATH,input=PATH,console,earlycon,stdin,pci-address=ADDR]",
         from_str_fn(parse_serial_options)
     )]
     #[serde(default)]
@@ -1935,13 +2076,13 @@ pub struct RunCommand {
     ///     input=PATH - The path to the file to read from when not
     ///        stdin
     ///     console - Use this serial device as the guest console.
-    ///        Can only be given once. Will default to first
-    ///        serial port if not provided.
+    ///        Will default to first serial port if not provided.
     ///     earlycon - Use this serial device as the early console.
     ///        Can only be given once.
     ///     stdin - Direct standard input to this serial device.
     ///        Can only be given once. Will default to first serial
     ///        port if not provided.
+    ///     pci-address - Preferred PCI address, e.g. "00:01.0".
     pub serial: Vec<SerialParameters>,
 
     #[cfg(windows)]
@@ -2010,6 +2151,18 @@ pub struct RunCommand {
     ///        namespace created by minijail. (default: 0)
     ///     gid=GID - gid of the device process in the user
     ///        namespace created by minijail. (default: 0)
+    ///     max_dynamic_perm=uint - Indicates maximum number of
+    ///        dynamic permissions that the shared directory allows.
+    ///         (default: 0). The fuse server will return EPERM
+    ///         Error when FS_IOC_SETPERMISSION ioctl is called
+    ///         in the device if current dyamic permission path is
+    ///         lager or equal to this value.
+    ///     max_dynamic_xattr=uint - Indicates maximum number of
+    ///        dynamic xattrs that the shared directory allows.
+    ///         (default: 0). The fuse server will return EPERM
+    ///         Error when FS_IOC_SETPATHXATTR ioctl is called
+    ///         in the device if current dyamic permission path is
+    ///         lager or equal to this value.
     ///     Options uid and gid are useful when the crosvm process
     ///     has no CAP_SETGID/CAP_SETUID but an identity mapping of
     ///     the current user/group between the VM and the host is
@@ -2031,14 +2184,17 @@ pub struct RunCommand {
     )]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// path to a socket from where to read single touch input events (such as those from a touchscreen) and write status updates to, optionally followed by width and height (defaults to 800x1280) and a name for the input device
+    /// path to a socket from where to read single touch input events (such as those from a
+    /// touchscreen) and write status updates to, optionally followed by width and height (defaults
+    /// to 800x1280) and a name for the input device
     pub single_touch: Vec<TouchDeviceOption>,
 
     #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// redirects slirp network packets to the supplied log file rather than the current directory as `slirp_capture_packets.pcap`
+    /// redirects slirp network packets to the supplied log file rather than the current directory
+    /// as `slirp_capture_packets.pcap`
     pub slirp_capture_file: Option<String>,
 
     #[cfg(target_arch = "x86_64")]
@@ -2076,12 +2232,6 @@ pub struct RunCommand {
     /// (EXPERIMENTAL) enable split-irqchip support
     pub split_irqchip: Option<bool>,
 
-    #[argh(switch)]
-    #[serde(skip)] // TODO(b/255223604)
-    #[merge(strategy = overwrite_option)]
-    /// don't allow guest to use pages from the balloon
-    pub strict_balloon: Option<bool>,
-
     #[argh(
         option,
         arg_name = "DOMAIN:BUS:DEVICE.FUNCTION[,vendor=NUM][,device=NUM][,class=NUM][,subsystem_vendor=NUM][,subsystem_device=NUM][,revision=NUM]"
@@ -2110,14 +2260,15 @@ pub struct RunCommand {
     #[argh(option, long = "swap", arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// enable vmm-swap via an unnamed temporary file on the filesystem which contains the specified
-    /// directory.
+    /// enable vmm-swap via an unnamed temporary file on the filesystem which contains the
+    /// specified directory.
     pub swap_dir: Option<PathBuf>,
 
     #[argh(option, arg_name = "N")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
-    /// (EXPERIMENTAL) Size of virtio swiotlb buffer in MiB (default: 64 if `--protected-vm` or `--protected-vm-without-firmware` is present)
+    /// (EXPERIMENTAL) Size of virtio swiotlb buffer in MiB (default: 64 if `--protected-vm` or
+    /// `--protected-vm-without-firmware` is present)
     pub swiotlb: Option<u64>,
 
     #[argh(option, arg_name = "PATH")]
@@ -2136,21 +2287,24 @@ pub struct RunCommand {
     #[argh(option)]
     #[serde(skip)] // Deprecated - use `net` instead.
     #[merge(strategy = append)]
-    /// file descriptor for configured tap device. A different virtual network card will be added each time this argument is given
+    /// file descriptor for configured tap device. A different virtual network card will be added
+    /// each time this argument is given
     pub tap_fd: Vec<RawDescriptor>,
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[argh(option)]
     #[serde(skip)] // Deprecated - use `net` instead.
     #[merge(strategy = append)]
-    /// name of a configured persistent TAP interface to use for networking. A different virtual network card will be added each time this argument is given
+    /// name of a configured persistent TAP interface to use for networking. A different virtual
+    /// network card will be added each time this argument is given
     pub tap_name: Vec<String>,
 
     #[cfg(target_os = "android")]
     #[argh(option, arg_name = "NAME[,...]")]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// comma-separated names of the task profiles to apply to all threads in crosvm including the vCPU threads
+    /// comma-separated names of the task profiles to apply to all threads in crosvm including the
+    /// vCPU threads
     pub task_profiles: Vec<String>,
 
     #[argh(
@@ -2160,7 +2314,9 @@ pub struct RunCommand {
     )]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// path to a socket from where to read trackpad input events and write status updates to, optionally followed by screen width and height (defaults to 800x1280) and a name for the input device
+    /// path to a socket from where to read trackpad input events and write status updates to,
+    /// optionally followed by screen width and height (defaults to 800x1280) and a name for the
+    /// input device
     pub trackpad: Vec<TouchDeviceOption>,
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -2375,7 +2531,7 @@ pub struct RunCommand {
     #[cfg(feature = "audio")]
     #[argh(
         option,
-        arg_name = "[capture=true,backend=BACKEND,num_output_devices=1,
+        arg_name = "[capture=true,backend=BACKEND,num_output_devices=1,\
         num_input_devices=1,num_output_streams=1,num_input_streams=1]"
     )]
     #[serde(skip)] // TODO(b/255223604)
@@ -2425,7 +2581,8 @@ pub struct RunCommand {
     #[argh(option, arg_name = "PATH[,name=NAME]", from_str_fn(parse_wayland_sock))]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = append)]
-    /// path to the Wayland socket to use. The unnamed one is used for displaying virtual screens. Named ones are only for IPC
+    /// path to the Wayland socket to use. The unnamed one is used for displaying virtual screens.
+    /// Named ones are only for IPC
     pub wayland_sock: Vec<(String, PathBuf)>,
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -2514,6 +2671,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         {
             let cpus = cmd.cpus.unwrap_or_default();
             cfg.vcpu_count = cpus.num_cores;
+            cfg.boot_cpu = cpus.boot_cpu.unwrap_or_default();
 
             // Only allow deprecated `--cpu-cluster` option only if `--cpu clusters=[...]` is not
             // used.
@@ -2585,13 +2743,13 @@ impl TryFrom<RunCommand> for super::config::Config {
         #[cfg(target_arch = "aarch64")]
         {
             if cmd.mte.unwrap_or_default()
-                && !(cmd.pmem_device.is_empty()
+                && !(cmd.pmem.is_empty()
+                    && cmd.pmem_device.is_empty()
                     && cmd.pstore.is_none()
                     && cmd.rw_pmem_device.is_empty())
             {
                 return Err(
-                    "--mte cannot be specified together with --pmem-device, --pstore or --rw-pmem-device"
-                        .to_string(),
+                    "--mte cannot be specified together with --pstore or pmem flags".to_string(),
                 );
             }
             cfg.mte = cmd.mte.unwrap_or_default();
@@ -2609,6 +2767,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         #[cfg(any(target_os = "android", target_os = "linux"))]
         {
             cfg.lock_guest_memory = cmd.lock_guest_memory.unwrap_or_default();
+            cfg.boost_uclamp = cmd.boost_uclamp.unwrap_or_default();
         }
 
         #[cfg(feature = "audio")]
@@ -2627,17 +2786,6 @@ impl TryFrom<RunCommand> for super::config::Config {
                     "serial hardware {} num {}",
                     serial_params.hardware, num,
                 ));
-            }
-
-            if serial_params.console {
-                for params in cfg.serial_parameters.values() {
-                    if params.console {
-                        return Err(format!(
-                            "{} device {} already set as console",
-                            params.hardware, params.num,
-                        ));
-                    }
-                }
             }
 
             if serial_params.earlycon {
@@ -2673,6 +2821,13 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.serial_parameters.insert(key, serial_params);
         }
 
+        if !(cmd.root.is_none()
+            && cmd.rwroot.is_none()
+            && cmd.disk.is_empty()
+            && cmd.rwdisk.is_empty())
+        {
+            log::warn!("Deprecated disk flags such as --[rw]disk or --[rw]root are passed. Use --block instead.");
+        }
         // Aggregate all the disks with the expected read-only and root values according to the
         // option they have been passed with.
         let mut disks = cmd
@@ -2703,49 +2858,81 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         // Sort all our disks by index.
         disks.sort_by_key(|d| d.index);
-
-        // Check that we don't have more than one root disk.
-        if disks.iter().filter(|d| d.disk_option.root).count() > 1
-            || cmd.scsi_block.iter().filter(|s| s.root).count() > 1
-            || disks.iter().any(|d| d.disk_option.root) && cmd.scsi_block.iter().any(|s| s.root)
-        {
-            return Err("only one root disk can be specified".to_string());
-        }
-
-        // If we have a root disk, add the corresponding command-line parameters.
-        if let Some(d) = disks.iter().find(|d| d.disk_option.root) {
-            if d.index >= 26 {
-                return Err("ran out of letters for to assign to root disk".to_string());
-            }
-            cfg.params.push(format!(
-                "root=/dev/vd{} {}",
-                char::from(b'a' + d.index as u8),
-                if d.disk_option.read_only { "ro" } else { "rw" }
-            ));
-        }
-
-        // Pass the sorted disks to the VM config.
         cfg.disks = disks.into_iter().map(|d| d.disk_option).collect();
-
-        // If we have a root scsi disk, add the corresponding command-line parameters.
-        if let Some((i, s)) = cmd.scsi_block.iter().enumerate().find(|(_, s)| s.root) {
-            cfg.params.push(format!(
-                "root=/dev/sd{} {}",
-                char::from(b'a' + i as u8),
-                if s.read_only { "ro" } else { "rw" }
-            ));
-        }
 
         cfg.scsis = cmd.scsi_block;
 
-        for (mut pmem, read_only) in cmd
-            .pmem_device
-            .into_iter()
-            .map(|p| (p, true))
-            .chain(cmd.rw_pmem_device.into_iter().map(|p| (p, false)))
+        cfg.pmems = cmd.pmem;
+
+        if !cmd.pmem_device.is_empty() || !cmd.rw_pmem_device.is_empty() {
+            log::warn!(
+                "--pmem-device and --rw-pmem-device are deprecated. Please use --pmem instead."
+            );
+        }
+
+        // Convert the deprecated `pmem_device` and `rw_pmem_device` into `pmem_devices`.
+        for disk_option in cmd.pmem_device.into_iter() {
+            cfg.pmems.push(PmemOption {
+                path: disk_option.path,
+                ro: true, // read-only
+                ..PmemOption::default()
+            });
+        }
+        for disk_option in cmd.rw_pmem_device.into_iter() {
+            cfg.pmems.push(PmemOption {
+                path: disk_option.path,
+                ro: false, // writable
+                ..PmemOption::default()
+            });
+        }
+
+        // Find the device to use as the kernel `root=` parameter. There can only be one.
+        let virtio_blk_root_devs = cfg
+            .disks
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.root)
+            .map(|(i, d)| (format_disk_letter("/dev/vd", i), d.read_only));
+
+        let virtio_scsi_root_devs = cfg
+            .scsis
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.root)
+            .map(|(i, s)| (format_disk_letter("/dev/sd", i), s.read_only));
+
+        let virtio_pmem_root_devs = cfg
+            .pmems
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.root)
+            .map(|(i, p)| (format!("/dev/pmem{}", i), p.ro));
+
+        let mut root_devs = virtio_blk_root_devs
+            .chain(virtio_scsi_root_devs)
+            .chain(virtio_pmem_root_devs);
+        if let Some((root_dev, read_only)) = root_devs.next() {
+            cfg.params.push(format!(
+                "root={} {}",
+                root_dev,
+                if read_only { "ro" } else { "rw" }
+            ));
+
+            // If the iterator is not exhausted, the user specified `root=true` on more than one
+            // device, which is an error.
+            if root_devs.next().is_some() {
+                return Err("only one root disk can be specified".to_string());
+            }
+        }
+
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         {
-            pmem.read_only = read_only;
-            cfg.pmem_devices.push(pmem);
+            cfg.pmem_ext2 = cmd.pmem_ext2;
+        }
+
+        #[cfg(feature = "pvclock")]
+        {
+            cfg.pvclock = cmd.pvclock.unwrap_or_default();
         }
 
         #[cfg(windows)]
@@ -2766,7 +2953,6 @@ impl TryFrom<RunCommand> for super::config::Config {
 
                 cfg.process_invariants_data_size = cmd.process_invariants_size;
             }
-            cfg.pvclock = cmd.pvclock.unwrap_or_default();
             #[cfg(windows)]
             {
                 cfg.service_pipe_name = cmd.service_pipe_name;
@@ -2814,8 +3000,6 @@ impl TryFrom<RunCommand> for super::config::Config {
             }
             cfg.socket_path = Some(socket_path);
         }
-
-        cfg.balloon_control = cmd.balloon_control;
 
         cfg.vsock = cmd.vsock;
 
@@ -2906,14 +3090,97 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.vtpm_proxy = cmd.vtpm_proxy.unwrap_or_default();
         }
 
-        cfg.virtio_single_touch = cmd.single_touch;
-        cfg.virtio_multi_touch = cmd.multi_touch;
-        cfg.virtio_trackpad = cmd.trackpad;
-        cfg.virtio_mice = cmd.mouse;
-        cfg.virtio_keyboard = cmd.keyboard;
-        cfg.virtio_switches = cmd.switches;
-        cfg.virtio_rotary = cmd.rotary;
-        cfg.virtio_input_evdevs = cmd.evdev;
+        cfg.virtio_input = cmd.input;
+
+        if !cmd.single_touch.is_empty() {
+            log::warn!("`--single-touch` is deprecated; please use `--input single-touch[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.single_touch
+                        .into_iter()
+                        .map(|touch| InputDeviceOption::SingleTouch {
+                            path: touch.path,
+                            width: touch.width,
+                            height: touch.height,
+                            name: touch.name,
+                        }),
+                );
+        }
+
+        if !cmd.multi_touch.is_empty() {
+            log::warn!("`--multi-touch` is deprecated; please use `--input multi-touch[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.multi_touch
+                        .into_iter()
+                        .map(|touch| InputDeviceOption::MultiTouch {
+                            path: touch.path,
+                            width: touch.width,
+                            height: touch.height,
+                            name: touch.name,
+                        }),
+                );
+        }
+
+        if !cmd.trackpad.is_empty() {
+            log::warn!("`--trackpad` is deprecated; please use `--input trackpad[...]`");
+            cfg.virtio_input
+                .extend(
+                    cmd.trackpad
+                        .into_iter()
+                        .map(|trackpad| InputDeviceOption::Trackpad {
+                            path: trackpad.path,
+                            width: trackpad.width,
+                            height: trackpad.height,
+                            name: trackpad.name,
+                        }),
+                );
+        }
+
+        if !cmd.mouse.is_empty() {
+            log::warn!("`--mouse` is deprecated; please use `--input mouse[...]`");
+            cfg.virtio_input.extend(
+                cmd.mouse
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Mouse { path }),
+            );
+        }
+
+        if !cmd.keyboard.is_empty() {
+            log::warn!("`--keyboard` is deprecated; please use `--input keyboard[...]`");
+            cfg.virtio_input.extend(
+                cmd.keyboard
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Keyboard { path }),
+            )
+        }
+
+        if !cmd.switches.is_empty() {
+            log::warn!("`--switches` is deprecated; please use `--input switches[...]`");
+            cfg.virtio_input.extend(
+                cmd.switches
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Switches { path }),
+            );
+        }
+
+        if !cmd.rotary.is_empty() {
+            log::warn!("`--rotary` is deprecated; please use `--input rotary[...]`");
+            cfg.virtio_input.extend(
+                cmd.rotary
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Rotary { path }),
+            );
+        }
+
+        if !cmd.evdev.is_empty() {
+            log::warn!("`--evdev` is deprecated; please use `--input evdev[...]`");
+            cfg.virtio_input.extend(
+                cmd.evdev
+                    .into_iter()
+                    .map(|path| InputDeviceOption::Evdev { path }),
+            );
+        }
 
         cfg.irq_chip = cmd.irqchip;
 
@@ -2953,12 +3220,23 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.usb = !cmd.no_usb.unwrap_or_default();
         cfg.rng = !cmd.no_rng.unwrap_or_default();
-        cfg.balloon = !cmd.no_balloon.unwrap_or_default();
-        cfg.balloon_page_reporting = cmd.balloon_page_reporting.unwrap_or_default();
-        cfg.balloon_ws_num_bins = cmd.balloon_ws_num_bins.unwrap_or(4);
-        cfg.balloon_ws_reporting = cmd.balloon_ws_reporting.unwrap_or_default()
-        // TODO(b/288432539): remove once concierge is migrated
-            | cmd.balloon_wss_reporting.unwrap_or_default();
+
+        #[cfg(feature = "balloon")]
+        {
+            cfg.balloon = !cmd.no_balloon.unwrap_or_default();
+
+            // cfg.balloon_bias is in bytes.
+            if let Some(b) = cmd.balloon_bias_mib {
+                cfg.balloon_bias = b * 1024 * 1024;
+            }
+
+            cfg.balloon_control = cmd.balloon_control;
+            cfg.balloon_page_reporting = cmd.balloon_page_reporting.unwrap_or_default();
+            cfg.balloon_ws_num_bins = cmd.balloon_ws_num_bins.unwrap_or(4);
+            cfg.balloon_ws_reporting = cmd.balloon_ws_reporting.unwrap_or_default();
+            cfg.init_memory = cmd.init_mem;
+        }
+
         #[cfg(feature = "audio")]
         {
             cfg.virtio_snds = cmd.virtio_snd;
@@ -2972,10 +3250,20 @@ impl TryFrom<RunCommand> for super::config::Config {
             }
             cfg.gpu_parameters = cmd.gpu.into_iter().map(|p| p.0).take(1).next();
             if !cmd.gpu_display.is_empty() {
+                log::warn!("'--gpu-display' is deprecated; please use `--gpu displays=[...]`");
                 cfg.gpu_parameters
                     .get_or_insert_with(Default::default)
                     .display_params
                     .extend(cmd.gpu_display.into_iter().map(|p| p.0));
+            }
+
+            #[cfg(feature = "android_display")]
+            {
+                if let Some(gpu_parameters) = &cfg.gpu_parameters {
+                    if !gpu_parameters.display_params.is_empty() {
+                        cfg.android_display_service = cmd.android_display_service;
+                    }
+                }
             }
 
             #[cfg(windows)]
@@ -3221,11 +3509,6 @@ impl TryFrom<RunCommand> for super::config::Config {
             cfg.pci_hotplug_slots = cmd.pci_hotplug_slots;
         }
 
-        // cfg.balloon_bias is in bytes.
-        if let Some(b) = cmd.balloon_bias_mib {
-            cfg.balloon_bias = b * 1024 * 1024;
-        }
-
         cfg.vhost_user = cmd.vhost_user;
 
         // Convert an option from `VhostUserOption` to `VhostUserFrontendOption` with the given
@@ -3278,10 +3561,6 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.file_backed_mappings = cmd.file_backed_mapping;
 
-        cfg.init_memory = cmd.init_mem;
-
-        cfg.strict_balloon = cmd.strict_balloon.unwrap_or_default();
-
         #[cfg(target_os = "android")]
         {
             cfg.task_profiles = cmd.task_profiles;
@@ -3327,9 +3606,27 @@ impl TryFrom<RunCommand> for super::config::Config {
     }
 }
 
+// Produce a block device path as used by Linux block devices.
+//
+// Examples for "/dev/vdX":
+// /dev/vda, /dev/vdb, ..., /dev/vdz, /dev/vdaa, /dev/vdab, ...
+fn format_disk_letter(dev_prefix: &str, mut i: usize) -> String {
+    const ALPHABET_LEN: usize = 26; // a to z
+    let mut s = dev_prefix.to_string();
+    let insert_idx = dev_prefix.len();
+    loop {
+        s.insert(insert_idx, char::from(b'a' + (i % ALPHABET_LEN) as u8));
+        i /= ALPHABET_LEN;
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "config-file")]
     use super::*;
 
     #[test]
@@ -3368,5 +3665,21 @@ mod tests {
                 String::from("fourthparam"),
             ]
         );
+    }
+
+    #[test]
+    fn disk_letter() {
+        assert_eq!(format_disk_letter("/dev/sd", 0), "/dev/sda");
+        assert_eq!(format_disk_letter("/dev/sd", 1), "/dev/sdb");
+        assert_eq!(format_disk_letter("/dev/sd", 25), "/dev/sdz");
+        assert_eq!(format_disk_letter("/dev/sd", 26), "/dev/sdaa");
+        assert_eq!(format_disk_letter("/dev/sd", 27), "/dev/sdab");
+        assert_eq!(format_disk_letter("/dev/sd", 51), "/dev/sdaz");
+        assert_eq!(format_disk_letter("/dev/sd", 52), "/dev/sdba");
+        assert_eq!(format_disk_letter("/dev/sd", 53), "/dev/sdbb");
+        assert_eq!(format_disk_letter("/dev/sd", 78), "/dev/sdca");
+        assert_eq!(format_disk_letter("/dev/sd", 701), "/dev/sdzz");
+        assert_eq!(format_disk_letter("/dev/sd", 702), "/dev/sdaaa");
+        assert_eq!(format_disk_letter("/dev/sd", 703), "/dev/sdaab");
     }
 }

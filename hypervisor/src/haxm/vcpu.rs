@@ -5,6 +5,7 @@
 use core::ffi::c_void;
 use std::arch::x86_64::CpuidResult;
 use std::cmp::min;
+use std::collections::BTreeMap;
 use std::intrinsics::copy_nonoverlapping;
 use std::mem::size_of;
 
@@ -27,23 +28,21 @@ use libc::EOPNOTSUPP;
 use vm_memory::GuestAddress;
 
 use super::*;
-use crate::get_tsc_offset_from_msr;
-use crate::set_tsc_offset_via_msr;
-use crate::set_tsc_value_via_msr;
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::DebugRegs;
 use crate::DescriptorTable;
 use crate::Fpu;
-use crate::HypervHypercall;
+use crate::FpuReg;
 use crate::IoOperation;
 use crate::IoParams;
-use crate::Register;
 use crate::Regs;
 use crate::Segment;
 use crate::Sregs;
 use crate::Vcpu;
 use crate::VcpuExit;
+use crate::VcpuShutdownError;
+use crate::VcpuShutdownErrorKind;
 use crate::VcpuX86_64;
 use crate::Xsave;
 
@@ -61,11 +60,12 @@ const HAX_EXIT_REALMODE: u32 = 3;
 // Also used when vcpu thread receives a signal
 const HAX_EXIT_INTERRUPT: u32 = 4;
 // Unknown vmexit, mostly trigger reboot
+#[allow(dead_code)]
 const HAX_EXIT_UNKNOWN: u32 = 5;
 // HALT from guest
 const HAX_EXIT_HLT: u32 = 6;
-// Reboot request, like because of triple fault in guest
-const HAX_EXIT_STATECHANGE: u32 = 7;
+// VCPU panic, like because of triple fault in guest
+const HAX_EXIT_VCPU_PANIC: u32 = 7;
 // Paused by crosvm setting _exit_reason to HAX_EXIT_PAUSED before entry
 pub(crate) const HAX_EXIT_PAUSED: u32 = 8;
 // MMIO instruction emulation through io_buffer
@@ -106,37 +106,26 @@ impl HaxmVcpu {
         let mut state = vcpu_state_t::default();
 
         // SAFETY: trivially safe with return value checked.
-        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_GET_REGS(), &mut state) };
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_GET_REGS, &mut state) };
         if ret != 0 {
             return errno_result();
         }
 
         // Also read efer MSR
-        let mut efer = vec![Register {
-            id: IA32_EFER,
-            value: 0,
-        }];
-
-        self.get_msrs(&mut efer)?;
-        state._efer = efer[0].value as u32;
+        state.efer = self.get_msr(IA32_EFER)? as u32;
 
         Ok(VcpuState { state })
     }
 
     fn set_vcpu_state(&self, state: &mut VcpuState) -> Result<()> {
         // SAFETY: trivially safe with return value checked.
-        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_SET_REGS(), &mut state.state) };
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_SET_REGS, &mut state.state) };
         if ret != 0 {
             return errno_result();
         }
 
         // Also set efer MSR
-        let efer = vec![Register {
-            id: IA32_EFER,
-            value: state.state._efer as u64,
-        }];
-
-        self.set_msrs(&efer)
+        self.set_msr(IA32_EFER, state.state.efer as u64)
     }
 }
 
@@ -167,7 +156,7 @@ impl Vcpu for HaxmVcpu {
         // Crosvm's HAXM implementation does not use the _exit_reason, so it's fine if we
         // overwrite it.
         unsafe {
-            (*self.tunnel)._exit_reason = if exit { HAX_EXIT_PAUSED } else { 0 };
+            (*self.tunnel).exit_reason = if exit { HAX_EXIT_PAUSED } else { 0 };
         }
     }
 
@@ -185,16 +174,16 @@ impl Vcpu for HaxmVcpu {
 
     /// This function should be called after `Vcpu::run` returns `VcpuExit::Mmio`.
     ///
-    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio exit,
-    /// call `handle_fn` with the respective IoOperation to perform the mmio read or write,
-    /// and set the return data in the vcpu so that the vcpu can resume running.
+    /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio
+    /// exit, call `handle_fn` with the respective IoOperation to perform the mmio read or
+    /// write, and set the return data in the vcpu so that the vcpu can resume running.
     fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
         // Verify that the handler is called for mmio context only.
         unsafe {
-            assert!((*self.tunnel)._exit_status == HAX_EXIT_FAST_MMIO);
+            assert!((*self.tunnel).exit_status == HAX_EXIT_FAST_MMIO);
         }
         let mmio = self.io_buffer as *mut hax_fastmmio;
         let (address, size, direction) =
@@ -249,15 +238,15 @@ impl Vcpu for HaxmVcpu {
         // kernel told us how large it was.
         // Verify that the handler is called for io context only.
         unsafe {
-            assert!((*self.tunnel)._exit_status == HAX_EXIT_IO);
+            assert!((*self.tunnel).exit_status == HAX_EXIT_IO);
         }
         // SAFETY:
         // Safe because the exit_reason (which comes from the kernel) told us which
         // union field to use.
         let io = unsafe { (*self.tunnel).__bindgen_anon_1.io };
-        let address = io._port.into();
-        let size = (io._count as usize) * (io._size as usize);
-        match io._direction as u32 {
+        let address = io.port.into();
+        let size = (io.count as usize) * (io.size as usize);
+        match io.direction as u32 {
             HAX_EXIT_DIRECTION_PIO_IN => {
                 if let Some(data) = handle_fn(IoParams {
                     address,
@@ -295,33 +284,13 @@ impl Vcpu for HaxmVcpu {
         }
     }
 
-    /// haxm does not handle hypervcalls.
-    fn handle_hyperv_hypercall(&self, _func: &mut dyn FnMut(HypervHypercall) -> u64) -> Result<()> {
-        Err(Error::new(libc::ENXIO))
-    }
-
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::RdMsr`,
-    /// and in the same thread as run.
-    ///
-    /// It will put `data` into the user buffer and return.
-    fn handle_rdmsr(&self, _data: u64) -> Result<()> {
-        // TODO(b/233766326): Implement.
-        Err(Error::new(libc::ENXIO))
-    }
-
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::WrMsr`,
-    /// and in the same thread as run.
-    fn handle_wrmsr(&self) {
-        // TODO(b/233766326): Implement.
-    }
-
     #[allow(clippy::cast_ptr_alignment)]
     // The pointer is page aligned so casting to a different type is well defined, hence the clippy
     // allow attribute.
     fn run(&mut self) -> Result<VcpuExit> {
         // TODO(b/315998194): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
-        let ret = unsafe { ioctl(self, HAX_VCPU_IOCTL_RUN()) };
+        let ret = unsafe { ioctl(self, HAX_VCPU_IOCTL_RUN) };
         if ret != 0 {
             return errno_result();
         }
@@ -329,14 +298,22 @@ impl Vcpu for HaxmVcpu {
         // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
-        let exit_status = unsafe { (*self.tunnel)._exit_status };
+        let exit_status = unsafe { (*self.tunnel).exit_status };
 
         match exit_status {
             HAX_EXIT_IO => Ok(VcpuExit::Io),
             HAX_EXIT_INTERRUPT => Ok(VcpuExit::Intr),
-            HAX_EXIT_UNKNOWN => Ok(VcpuExit::Unknown),
             HAX_EXIT_HLT => Ok(VcpuExit::Hlt),
-            HAX_EXIT_STATECHANGE => Ok(VcpuExit::Shutdown),
+            HAX_EXIT_VCPU_PANIC => {
+                // SAFETY:
+                // 1) we mapped enough memory to hold the hax_tunnel struct because the kernel told
+                //    us how large it was. That memory is still alive here.
+                let panic_reason = unsafe { (*self.tunnel).vcpu_panic_reason };
+                Ok(VcpuExit::Shutdown(Err(VcpuShutdownError::new(
+                    VcpuShutdownErrorKind::Other,
+                    panic_reason as u64,
+                ))))
+            }
             HAX_EXIT_FAST_MMIO => Ok(VcpuExit::Mmio),
             HAX_EXIT_PAGEFAULT => Ok(VcpuExit::Exception),
             HAX_EXIT_DEBUG => Ok(VcpuExit::Debug),
@@ -367,10 +344,11 @@ impl VcpuX86_64 for HaxmVcpu {
     }
 
     /// Injects interrupt vector `irq` into the VCPU.
-    fn interrupt(&self, irq: u32) -> Result<()> {
+    fn interrupt(&self, irq: u8) -> Result<()> {
+        let irq: u32 = irq.into();
         // TODO(b/315998194): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
-        let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_INTERRUPT(), &irq) };
+        let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_INTERRUPT, &irq) };
         if ret != 0 {
             return errno_result();
         }
@@ -414,7 +392,7 @@ impl VcpuX86_64 for HaxmVcpu {
         let mut fpu = fx_layout::default();
         // TODO(b/315998194): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
-        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU(), &mut fpu) };
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU, &mut fpu) };
 
         if ret != 0 {
             return errno_result();
@@ -428,7 +406,7 @@ impl VcpuX86_64 for HaxmVcpu {
         let mut current_fpu = fx_layout::default();
         // TODO(b/315998194): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
-        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU(), &mut current_fpu) };
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_FPU, &mut current_fpu) };
 
         if ret != 0 {
             return errno_result();
@@ -442,7 +420,7 @@ impl VcpuX86_64 for HaxmVcpu {
 
         // TODO(b/315998194): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
-        let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_SET_FPU(), &new_fpu) };
+        let ret = unsafe { ioctl_with_ref(self, HAX_VCPU_IOCTL_SET_FPU, &new_fpu) };
 
         if ret != 0 {
             return errno_result();
@@ -481,78 +459,53 @@ impl VcpuX86_64 for HaxmVcpu {
     }
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
+        // Haxm does not support getting XCRs
+        Err(Error::new(libc::ENXIO))
+    }
+
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, _xcr_index: u32, _value: u64) -> Result<()> {
         // Haxm does not support setting XCRs
         Err(Error::new(libc::ENXIO))
     }
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, _xcrs: &[Register]) -> Result<()> {
-        // Haxm does not support setting XCRs
-        Err(Error::new(libc::ENXIO))
-    }
+    /// Gets the value of one model-specific register.
+    fn get_msr(&self, msr_index: u32) -> Result<u64> {
+        let mut msr_data = hax_msr_data {
+            nr_msr: 1,
+            ..Default::default()
+        };
+        msr_data.entries[0].entry = u64::from(msr_index);
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()> {
-        // HAX_VCPU_IOCTL_GET_MSRS only allows you to set HAX_MAX_MSR_ARRAY-1 msrs at a time
-        // TODO (b/163811378): the fact that you can only set HAX_MAX_MSR_ARRAY-1 seems like a
-        // bug with HAXM, since the entries array itself is HAX_MAX_MSR_ARRAY long
-        for chunk in msrs.chunks_mut((HAX_MAX_MSR_ARRAY - 1) as usize) {
-            let chunk_size = chunk.len();
-            let hax_chunk: Vec<vmx_msr> = chunk.iter().map(vmx_msr::from).collect();
-
-            let mut msr_data = hax_msr_data {
-                nr_msr: chunk_size as u16,
-                ..Default::default()
-            };
-
-            // Copy chunk into msr_data
-            msr_data.entries[..chunk_size].copy_from_slice(&hax_chunk);
-
-            // TODO(b/315998194): Add safety comment
-            #[allow(clippy::undocumented_unsafe_blocks)]
-            let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_MSRS(), &mut msr_data) };
-            if ret != 0 {
-                return errno_result();
-            }
-
-            // copy values we got from kernel
-            for (i, item) in chunk.iter_mut().enumerate().take(chunk_size) {
-                item.value = msr_data.entries[i].value;
-            }
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_GET_MSRS, &mut msr_data) };
+        if ret != 0 {
+            return errno_result();
         }
 
-        Ok(())
+        Ok(msr_data.entries[0].value)
     }
 
-    fn get_all_msrs(&self) -> Result<Vec<Register>> {
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
         Err(Error::new(EOPNOTSUPP))
     }
 
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()> {
-        // HAX_VCPU_IOCTL_GET_MSRS only allows you to set HAX_MAX_MSR_ARRAY-1 msrs at a time
-        // TODO (b/163811378): the fact that you can only set HAX_MAX_MSR_ARRAY-1 seems like a
-        // bug with HAXM, since the entries array itself is HAX_MAX_MSR_ARRAY long
-        for chunk in msrs.chunks((HAX_MAX_MSR_ARRAY - 1) as usize) {
-            let chunk_size = chunk.len();
-            let hax_chunk: Vec<vmx_msr> = chunk.iter().map(vmx_msr::from).collect();
+    /// Sets the value of one model-specific register.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()> {
+        let mut msr_data = hax_msr_data {
+            nr_msr: 1,
+            ..Default::default()
+        };
+        msr_data.entries[0].entry = u64::from(msr_index);
+        msr_data.entries[0].value = value;
 
-            let mut msr_data = hax_msr_data {
-                nr_msr: chunk_size as u16,
-                ..Default::default()
-            };
-
-            // Copy chunk into msr_data
-            msr_data.entries[..chunk_size].copy_from_slice(&hax_chunk);
-
-            // TODO(b/315998194): Add safety comment
-            #[allow(clippy::undocumented_unsafe_blocks)]
-            let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_SET_MSRS(), &mut msr_data) };
-            if ret != 0 {
-                return errno_result();
-            }
+        // TODO(b/315998194): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        let ret = unsafe { ioctl_with_mut_ref(self, HAX_VCPU_IOCTL_SET_MSRS, &mut msr_data) };
+        if ret != 0 {
+            return errno_result();
         }
 
         Ok(())
@@ -575,7 +528,7 @@ impl VcpuX86_64 for HaxmVcpu {
         let ret = unsafe {
             ioctl_with_ptr_sized(
                 self,
-                HAX_VCPU_IOCTL_SET_CPUID(),
+                HAX_VCPU_IOCTL_SET_CPUID,
                 hax.as_ptr(),
                 size_of::<hax_cpuid>() + total * size_of::<hax_cpuid_entry>(),
             )
@@ -595,25 +548,9 @@ impl VcpuX86_64 for HaxmVcpu {
         Err(Error::new(ENXIO))
     }
 
-    /// Gets the system emulated hyper-v CPUID values.
-    fn get_hyperv_cpuid(&self) -> Result<CpuId> {
-        // HaxmVcpu does not support hyperv_cpuid
-        Err(Error::new(libc::ENXIO))
-    }
-
     fn set_guest_debug(&self, _addrs: &[GuestAddress], _enable_singlestep: bool) -> Result<()> {
         // TODO(b/173807302): Implement this
         Err(Error::new(ENOENT))
-    }
-
-    fn get_tsc_offset(&self) -> Result<u64> {
-        // Use the default MSR-based implementation
-        get_tsc_offset_from_msr(self)
-    }
-
-    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
-        // Use the default MSR-based implementation
-        set_tsc_offset_via_msr(self, offset)
     }
 
     fn restore_timekeeping(&self, _host_tsc_reference_moment: u64, tsc_offset: u64) -> Result<()> {
@@ -629,10 +566,6 @@ impl VcpuX86_64 for HaxmVcpu {
         // reference moment. (Alternatively, we may just expose a way to set the
         // offset directly.)
         self.set_tsc_offset(tsc_offset)
-    }
-
-    fn set_tsc_value(&self, value: u64) -> Result<()> {
-        set_tsc_value_via_msr(self, value)
     }
 }
 
@@ -651,59 +584,59 @@ impl VcpuState {
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_1
-                    ._rax,
+                    .rax,
                 rbx: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_4
-                    ._rbx,
+                    .rbx,
                 rcx: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_2
-                    ._rcx,
+                    .rcx,
                 rdx: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_3
-                    ._rdx,
+                    .rdx,
                 rsi: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_7
-                    ._rsi,
+                    .rsi,
                 rdi: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_8
-                    ._rdi,
+                    .rdi,
                 rsp: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_5
-                    ._rsp,
+                    .rsp,
                 rbp: self
                     .state
                     .__bindgen_anon_1
                     .__bindgen_anon_1
                     .__bindgen_anon_6
-                    ._rbp,
-                r8: self.state.__bindgen_anon_1.__bindgen_anon_1._r8,
-                r9: self.state.__bindgen_anon_1.__bindgen_anon_1._r9,
-                r10: self.state.__bindgen_anon_1.__bindgen_anon_1._r10,
-                r11: self.state.__bindgen_anon_1.__bindgen_anon_1._r11,
-                r12: self.state.__bindgen_anon_1.__bindgen_anon_1._r12,
-                r13: self.state.__bindgen_anon_1.__bindgen_anon_1._r13,
-                r14: self.state.__bindgen_anon_1.__bindgen_anon_1._r14,
-                r15: self.state.__bindgen_anon_1.__bindgen_anon_1._r15,
-                rip: self.state.__bindgen_anon_2._rip,
-                rflags: self.state.__bindgen_anon_3._rflags,
+                    .rbp,
+                r8: self.state.__bindgen_anon_1.__bindgen_anon_1.r8,
+                r9: self.state.__bindgen_anon_1.__bindgen_anon_1.r9,
+                r10: self.state.__bindgen_anon_1.__bindgen_anon_1.r10,
+                r11: self.state.__bindgen_anon_1.__bindgen_anon_1.r11,
+                r12: self.state.__bindgen_anon_1.__bindgen_anon_1.r12,
+                r13: self.state.__bindgen_anon_1.__bindgen_anon_1.r13,
+                r14: self.state.__bindgen_anon_1.__bindgen_anon_1.r14,
+                r15: self.state.__bindgen_anon_1.__bindgen_anon_1.r15,
+                rip: self.state.__bindgen_anon_2.rip,
+                rflags: self.state.__bindgen_anon_3.rflags,
             }
         }
     }
@@ -713,114 +646,114 @@ impl VcpuState {
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_1
-            ._rax = regs.rax;
+            .rax = regs.rax;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_4
-            ._rbx = regs.rbx;
+            .rbx = regs.rbx;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_2
-            ._rcx = regs.rcx;
+            .rcx = regs.rcx;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_3
-            ._rdx = regs.rdx;
+            .rdx = regs.rdx;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_7
-            ._rsi = regs.rsi;
+            .rsi = regs.rsi;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_8
-            ._rdi = regs.rdi;
+            .rdi = regs.rdi;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_5
-            ._rsp = regs.rsp;
+            .rsp = regs.rsp;
         self.state
             .__bindgen_anon_1
             .__bindgen_anon_1
             .__bindgen_anon_6
-            ._rbp = regs.rbp;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r8 = regs.r8;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r9 = regs.r9;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r10 = regs.r10;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r11 = regs.r11;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r12 = regs.r12;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r13 = regs.r13;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r14 = regs.r14;
-        self.state.__bindgen_anon_1.__bindgen_anon_1._r15 = regs.r15;
-        self.state.__bindgen_anon_2._rip = regs.rip;
-        self.state.__bindgen_anon_3._rflags = regs.rflags;
+            .rbp = regs.rbp;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r8 = regs.r8;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r9 = regs.r9;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r10 = regs.r10;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r11 = regs.r11;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r12 = regs.r12;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r13 = regs.r13;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r14 = regs.r14;
+        self.state.__bindgen_anon_1.__bindgen_anon_1.r15 = regs.r15;
+        self.state.__bindgen_anon_2.rip = regs.rip;
+        self.state.__bindgen_anon_3.rflags = regs.rflags;
     }
 
     fn get_sregs(&self) -> Sregs {
         Sregs {
-            cs: Segment::from(&self.state._cs),
-            ds: Segment::from(&self.state._ds),
-            es: Segment::from(&self.state._es),
-            fs: Segment::from(&self.state._fs),
-            gs: Segment::from(&self.state._gs),
-            ss: Segment::from(&self.state._ss),
-            tr: Segment::from(&self.state._tr),
-            ldt: Segment::from(&self.state._ldt),
-            gdt: DescriptorTable::from(&self.state._gdt),
-            idt: DescriptorTable::from(&self.state._idt),
-            cr0: self.state._cr0,
-            cr2: self.state._cr2,
-            cr3: self.state._cr3,
-            cr4: self.state._cr4,
+            cs: Segment::from(&self.state.cs),
+            ds: Segment::from(&self.state.ds),
+            es: Segment::from(&self.state.es),
+            fs: Segment::from(&self.state.fs),
+            gs: Segment::from(&self.state.gs),
+            ss: Segment::from(&self.state.ss),
+            tr: Segment::from(&self.state.tr),
+            ldt: Segment::from(&self.state.ldt),
+            gdt: DescriptorTable::from(&self.state.gdt),
+            idt: DescriptorTable::from(&self.state.idt),
+            cr0: self.state.cr0,
+            cr2: self.state.cr2,
+            cr3: self.state.cr3,
+            cr4: self.state.cr4,
             // HAXM does not support setting cr8
             cr8: 0,
-            efer: self.state._efer as u64,
+            efer: self.state.efer as u64,
         }
     }
 
     fn set_sregs(&mut self, sregs: &Sregs) {
-        self.state._cs = segment_desc_t::from(&sregs.cs);
-        self.state._ds = segment_desc_t::from(&sregs.ds);
-        self.state._es = segment_desc_t::from(&sregs.es);
-        self.state._fs = segment_desc_t::from(&sregs.fs);
-        self.state._gs = segment_desc_t::from(&sregs.gs);
-        self.state._ss = segment_desc_t::from(&sregs.ss);
-        self.state._tr = segment_desc_t::from(&sregs.tr);
-        self.state._ldt = segment_desc_t::from(&sregs.ldt);
-        self.state._gdt = segment_desc_t::from(&sregs.gdt);
-        self.state._idt = segment_desc_t::from(&sregs.idt);
-        self.state._cr0 = sregs.cr0;
-        self.state._cr2 = sregs.cr2;
-        self.state._cr3 = sregs.cr3;
-        self.state._cr4 = sregs.cr4;
-        self.state._efer = sregs.efer as u32;
+        self.state.cs = segment_desc_t::from(&sregs.cs);
+        self.state.ds = segment_desc_t::from(&sregs.ds);
+        self.state.es = segment_desc_t::from(&sregs.es);
+        self.state.fs = segment_desc_t::from(&sregs.fs);
+        self.state.gs = segment_desc_t::from(&sregs.gs);
+        self.state.ss = segment_desc_t::from(&sregs.ss);
+        self.state.tr = segment_desc_t::from(&sregs.tr);
+        self.state.ldt = segment_desc_t::from(&sregs.ldt);
+        self.state.gdt = segment_desc_t::from(&sregs.gdt);
+        self.state.idt = segment_desc_t::from(&sregs.idt);
+        self.state.cr0 = sregs.cr0;
+        self.state.cr2 = sregs.cr2;
+        self.state.cr3 = sregs.cr3;
+        self.state.cr4 = sregs.cr4;
+        self.state.efer = sregs.efer as u32;
     }
 
     fn get_debugregs(&self) -> DebugRegs {
         DebugRegs {
             db: [
-                self.state._dr0,
-                self.state._dr1,
-                self.state._dr2,
-                self.state._dr3,
+                self.state.dr0,
+                self.state.dr1,
+                self.state.dr2,
+                self.state.dr3,
             ],
-            dr6: self.state._dr6,
-            dr7: self.state._dr7,
+            dr6: self.state.dr6,
+            dr7: self.state.dr7,
         }
     }
 
     fn set_debugregs(&mut self, debugregs: &DebugRegs) {
-        self.state._dr0 = debugregs.db[0];
-        self.state._dr1 = debugregs.db[1];
-        self.state._dr2 = debugregs.db[2];
-        self.state._dr3 = debugregs.db[3];
-        self.state._dr6 = debugregs.dr6;
-        self.state._dr7 = debugregs.dr7;
+        self.state.dr0 = debugregs.db[0];
+        self.state.dr1 = debugregs.db[1];
+        self.state.dr2 = debugregs.db[2];
+        self.state.dr3 = debugregs.db[3];
+        self.state.dr6 = debugregs.dr6;
+        self.state.dr7 = debugregs.dr7;
     }
 }
 
@@ -924,7 +857,7 @@ impl From<&DescriptorTable> for segment_desc_t {
 impl From<&fx_layout> for Fpu {
     fn from(item: &fx_layout) -> Self {
         let mut fpu = Fpu {
-            fpr: item.st_mm,
+            fpr: FpuReg::from_16byte_arrays(&item.st_mm),
             fcw: item.fcw,
             fsw: item.fsw,
             ftwx: item.ftw,
@@ -960,7 +893,7 @@ impl From<&Fpu> for fx_layout {
             },
             mxcsr: item.mxcsr,
             mxcsr_mask: 0,
-            st_mm: item.fpr,
+            st_mm: FpuReg::to_16byte_arrays(&item.fpr),
             mmx_1: [[0; 16]; 8],
             mmx_2: [[0; 16]; 8],
             pad: [0; 96],
@@ -1004,24 +937,6 @@ impl From<&CpuIdEntry> for hax_cpuid_entry {
     }
 }
 
-impl From<&vmx_msr> for Register {
-    fn from(item: &vmx_msr) -> Register {
-        Register {
-            id: item.entry as u32,
-            value: item.value,
-        }
-    }
-}
-
-impl From<&Register> for vmx_msr {
-    fn from(item: &Register) -> vmx_msr {
-        vmx_msr {
-            entry: item.id as u64,
-            value: item.value,
-        }
-    }
-}
-
 // TODO(b:241252288): Enable tests disabled with dummy feature flag - enable_haxm_tests.
 #[cfg(test)]
 #[cfg(feature = "enable_haxm_tests")]
@@ -1036,6 +951,7 @@ mod tests {
     const EFER_SCE: u64 = 0x00000001;
     const EFER_LME: u64 = 0x00000100;
     const EFER_LMA: u64 = 0x00000400;
+    const EFER_SVME: u64 = 1 << 12;
 
     // CR0 bits
     const CR0_PG: u64 = 1 << 31;
@@ -1063,42 +979,25 @@ mod tests {
     }
 
     #[test]
-    fn set_many_msrs() {
+    fn set_msr() {
         let haxm = Haxm::new().expect("failed to instantiate HAXM");
         let mem =
             GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
         let vm = HaxmVm::new(&haxm, mem).expect("failed to create vm");
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut registers: Vec<Register> = Vec::new();
-        for id in 0x300..0x3ff {
-            registers.push(Register {
-                id: 38,
-                value: id as u64,
-            });
-        }
-
-        vcpu.set_msrs(&registers).expect("failed to set registers");
+        vcpu.set_msr(38, 0x300).expect("failed to set MSR");
     }
 
     #[test]
-    fn get_many_msrs() {
+    fn get_msr() {
         let haxm = Haxm::new().expect("failed to instantiate HAXM");
         let mem =
             GuestMemory::new(&[(GuestAddress(0), 0x1000)]).expect("failed to create guest memory");
         let vm = HaxmVm::new(&haxm, mem).expect("failed to create vm");
         let vcpu = vm.create_vcpu(0).expect("failed to create vcpu");
 
-        let mut registers: Vec<Register> = Vec::new();
-        for id in 0x300..0x3ff {
-            registers.push(Register {
-                id: 38,
-                value: id as u64,
-            });
-        }
-
-        vcpu.get_msrs(&mut registers)
-            .expect("failed to get registers");
+        let _value = vcpu.get_msr(38).expect("failed to get MSR");
     }
 
     #[test]
@@ -1135,7 +1034,7 @@ mod tests {
 
         let mut sregs = vcpu.get_sregs().expect("failed to get sregs");
         // Initial value should be 0
-        assert_eq!(sregs.efer, 0);
+        assert_eq!(sregs.efer & !EFER_SVME, 0);
 
         // Enable and activate long mode
         sregs.efer = EFER_LMA | EFER_LME;
@@ -1145,24 +1044,20 @@ mod tests {
 
         // Verify that setting stuck
         let sregs = vcpu.get_sregs().expect("failed to get sregs");
-        assert_eq!(sregs.efer, EFER_LMA | EFER_LME);
+        assert_eq!(sregs.efer & !EFER_SVME, EFER_LMA | EFER_LME);
 
         // IA32_EFER register value should match
-        let mut efer_reg = vec![Register {
-            id: IA32_EFER,
-            value: 0,
-        }];
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_LMA | EFER_LME);
+        let efer = vcpu.get_msr(IA32_EFER).expect("failed to get msr");
+        assert_eq!(efer & !EFER_SVME, EFER_LMA | EFER_LME);
 
         // Enable SCE via set_msrs
-        efer_reg[0].value |= EFER_SCE;
-        vcpu.set_msrs(&efer_reg).expect("failed to set msrs");
+        vcpu.set_msr(IA32_EFER, efer | EFER_SCE)
+            .expect("failed to set msr");
 
         // Verify that setting stuck
         let sregs = vcpu.get_sregs().expect("failed to get sregs");
-        assert_eq!(sregs.efer, EFER_SCE | EFER_LME | EFER_LMA);
-        vcpu.get_msrs(&mut efer_reg).expect("failed to get msrs");
-        assert_eq!(efer_reg[0].value, EFER_SCE | EFER_LME | EFER_LMA);
+        assert_eq!(sregs.efer & !EFER_SVME, EFER_SCE | EFER_LME | EFER_LMA);
+        let new_efer = vcpu.get_msr(IA32_EFER).expect("failed to get msrs");
+        assert_eq!(new_efer & !EFER_SVME, EFER_SCE | EFER_LME | EFER_LMA);
     }
 }

@@ -4,6 +4,7 @@
 
 #![cfg(target_arch = "x86_64")]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -38,7 +39,6 @@ use hypervisor::DebugRegs;
 use hypervisor::DeliveryMode;
 use hypervisor::DestinationMode;
 use hypervisor::Fpu;
-use hypervisor::HypervHypercall;
 use hypervisor::IoParams;
 use hypervisor::IoapicRedirectionTableEntry;
 use hypervisor::IrqRoute;
@@ -46,7 +46,6 @@ use hypervisor::IrqSource;
 use hypervisor::Level;
 use hypervisor::PicSelect;
 use hypervisor::PitRWMode;
-use hypervisor::Register;
 use hypervisor::Regs;
 use hypervisor::Sregs;
 use hypervisor::TriggerMode;
@@ -626,12 +625,12 @@ struct FakeVcpu {
     id: usize,
     requested: Arc<Mutex<bool>>,
     ready: Arc<Mutex<bool>>,
-    injected: Arc<Mutex<Option<u32>>>,
+    injected: Arc<Mutex<Option<u8>>>,
 }
 
 impl FakeVcpu {
     /// Returns and clears the last interrupt set by `interrupt`.
-    fn clear_injected(&self) -> Option<u32> {
+    fn clear_injected(&self) -> Option<u8> {
         self.injected.lock().take()
     }
 
@@ -681,15 +680,6 @@ impl Vcpu for FakeVcpu {
     fn handle_io(&self, _handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         unimplemented!()
     }
-    fn handle_hyperv_hypercall(&self, _func: &mut dyn FnMut(HypervHypercall) -> u64) -> Result<()> {
-        unimplemented!()
-    }
-    fn handle_rdmsr(&self, _data: u64) -> Result<()> {
-        unimplemented!()
-    }
-    fn handle_wrmsr(&self) {
-        unimplemented!()
-    }
     fn on_suspend(&self) -> Result<()> {
         unimplemented!()
     }
@@ -707,7 +697,7 @@ impl VcpuX86_64 for FakeVcpu {
         *self.ready.lock()
     }
 
-    fn interrupt(&self, irq: u32) -> Result<()> {
+    fn interrupt(&self, irq: u8) -> Result<()> {
         *self.injected.lock() = Some(irq);
         Ok(())
     }
@@ -752,19 +742,19 @@ impl VcpuX86_64 for FakeVcpu {
     fn set_debugregs(&self, _debugregs: &DebugRegs) -> Result<()> {
         unimplemented!()
     }
-    fn get_xcrs(&self) -> Result<Vec<Register>> {
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>> {
         unimplemented!()
     }
-    fn set_xcrs(&self, _xcrs: &[Register]) -> Result<()> {
+    fn set_xcr(&self, _xcr_index: u32, _value: u64) -> Result<()> {
         unimplemented!()
     }
-    fn get_msrs(&self, _msrs: &mut Vec<Register>) -> Result<()> {
+    fn get_msr(&self, _msr_index: u32) -> Result<u64> {
         unimplemented!()
     }
-    fn get_all_msrs(&self) -> Result<Vec<Register>> {
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>> {
         unimplemented!()
     }
-    fn set_msrs(&self, _msrs: &[Register]) -> Result<()> {
+    fn set_msr(&self, _msr_index: u32, _value: u64) -> Result<()> {
         unimplemented!()
     }
     fn set_cpuid(&self, _cpuid: &CpuId) -> Result<()> {
@@ -773,19 +763,7 @@ impl VcpuX86_64 for FakeVcpu {
     fn handle_cpuid(&mut self, _entry: &CpuIdEntry) -> Result<()> {
         unimplemented!()
     }
-    fn get_hyperv_cpuid(&self) -> Result<CpuId> {
-        unimplemented!()
-    }
     fn set_guest_debug(&self, _addrs: &[GuestAddress], _enable_singlestep: bool) -> Result<()> {
-        unimplemented!()
-    }
-    fn get_tsc_offset(&self) -> Result<u64> {
-        unimplemented!()
-    }
-    fn set_tsc_offset(&self, _offset: u64) -> Result<()> {
-        unimplemented!()
-    }
-    fn set_tsc_value(&self, _value: u64) -> Result<()> {
         unimplemented!()
     }
     fn snapshot(&self) -> anyhow::Result<VcpuSnapshot> {

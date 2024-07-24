@@ -27,7 +27,6 @@ use anyhow::Context;
 use anyhow::Result;
 use base::enable_high_res_timers;
 use base::error;
-#[cfg(feature = "crash-report")]
 use base::generate_uuid;
 use base::info;
 use base::named_pipes;
@@ -72,6 +71,8 @@ use crosvm_cli::sys::windows::exit::ExitCodeWrapper;
 use crosvm_cli::sys::windows::exit::ExitContext;
 use crosvm_cli::sys::windows::exit::ExitContextAnyhow;
 #[cfg(feature = "audio")]
+use devices::virtio::gpu::AudioDeviceMode;
+#[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::device::gpu::sys::windows::GpuBackendConfig;
@@ -102,8 +103,6 @@ use gpu_display::EventDevice;
 use gpu_display::WindowProcedureThread;
 #[cfg(feature = "gpu")]
 use gpu_display::WindowProcedureThreadBuilder;
-use metrics::protos::event_details::EmulatorChildProcessExitDetails;
-use metrics::protos::event_details::RecordDetails;
 use metrics::MetricEventType;
 #[cfg(all(feature = "net", feature = "slirp"))]
 use net_util::slirp::sys::windows::SlirpStartupConfig;
@@ -119,6 +118,7 @@ use win_util::ProcessType;
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::um::processthreadsapi::TerminateProcess;
 
+use crate::crosvm::config::InputDeviceOption;
 #[cfg(feature = "gpu")]
 use crate::sys::windows::get_gpu_product_configs;
 #[cfg(feature = "audio")]
@@ -398,12 +398,10 @@ impl Drop for ChildCleanup {
             if self.process_type != ProcessType::Metrics {
                 let exit_code = self.child.wait();
                 if let Ok(Some(exit_code)) = exit_code {
-                    let mut details = RecordDetails::new();
-                    let mut exit_details = EmulatorChildProcessExitDetails::new();
-                    exit_details.set_exit_code(exit_code as u32);
-                    exit_details.set_process_type(self.process_type.into());
-                    details.emulator_child_process_exit_details = Some(exit_details).into();
-                    metrics::log_event_with_details(MetricEventType::ChildProcessExit, &details);
+                    metrics::log_event(MetricEventType::ChildProcessExit {
+                        exit_code: exit_code as u32,
+                        process_type: self.process_type,
+                    });
                 } else {
                     error!(
                         "Failed to log exit code for process: {:?}, couldn't get exit code",
@@ -418,8 +416,8 @@ impl Drop for ChildCleanup {
 /// Represents a child process spawned by the broker.
 struct ChildProcess {
     // This is unused, but we hold it open to avoid an EPIPE in the child if it doesn't
-    // immediately read its startup information. We don't use FlushFileBuffers to avoid this because
-    // that would require blocking the startup sequence.
+    // immediately read its startup information. We don't use FlushFileBuffers to avoid this
+    // because that would require blocking the startup sequence.
     tube_transporter: TubeTransporter,
 
     // Used to set up the child process. Unused in steady state.
@@ -465,10 +463,11 @@ fn get_log_path(cfg: &Config, file_name: &str) -> Option<PathBuf> {
 /// IMPORTANT NOTE: The metrics process must receive the client (second) end
 /// of the Tube pair in order to allow the connection to be properly shut
 /// down without data loss.
-fn metrics_tube_pair(metric_tubes: &mut Vec<Tube>) -> Result<Tube> {
+fn metrics_tube_pair(metric_tubes: &mut Vec<RecvTube>) -> Result<SendTube> {
     // TODO(nkgold): as written, this Tube pair won't handle ancillary data properly because the
     // PIDs are not set properly at each end; however, we don't plan to send ancillary data.
-    let (t1, t2) = Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    let (t1, t2) =
+        Tube::directional_pair().exit_context(Exit::CreateTube, "failed to create tube")?;
     metric_tubes.push(t2);
     Ok(t1)
 }
@@ -597,7 +596,8 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         false,
         /* use_sandbox= */
         cfg.jail_config.is_some(),
-        Vec::new(),
+        vec![],
+        &[],
         &cfg,
     )?;
     metrics_controller
@@ -618,7 +618,8 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         false,
         /* use_sandbox= */
         cfg.jail_config.is_some(),
-        Vec::new(),
+        vec![],
+        &[],
         &cfg,
     )?;
 
@@ -649,7 +650,28 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
     )?;
 
     #[cfg(feature = "audio")]
-    let snd_cfg = platform_create_snd(&cfg, &mut main_child, &mut exit_events)?;
+    let num_audio_devices = if let Some(gpu_params) = cfg.gpu_parameters.as_ref() {
+        match gpu_params.audio_device_mode {
+            AudioDeviceMode::PerSurface => gpu_params.max_num_displays,
+            AudioDeviceMode::OneGlobal => 1,
+        }
+    } else {
+        1
+    };
+
+    #[cfg(feature = "audio")]
+    let mut snd_cfgs = Vec::new();
+    #[cfg(feature = "audio")]
+    {
+        for card_index in 0..num_audio_devices {
+            snd_cfgs.push(platform_create_snd(
+                &cfg,
+                card_index as usize,
+                &mut main_child,
+                &mut exit_events,
+            )?);
+        }
+    }
 
     #[cfg(feature = "audio")]
     let _snd_child = if !cfg
@@ -658,14 +680,13 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         .any(|opt| opt.type_ == DeviceType::Sound)
     {
         // Pass both backend and frontend configs to main process.
-        cfg.snd_split_config = Some(snd_cfg);
+        cfg.snd_split_configs = snd_cfgs;
         None
     } else {
         Some(start_up_snd(
             &mut cfg,
             &log_args,
-            snd_cfg,
-            &mut main_child,
+            snd_cfgs,
             &mut children,
             &mut wait_ctx,
             &mut metric_tubes,
@@ -676,10 +697,6 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
 
     let (vm_evt_wrtube, vm_evt_rdtube) =
         Tube::directional_pair().context("failed to create vm event tube")?;
-
-    #[cfg(feature = "gpu")]
-    let (gpu_control_host_tube, gpu_control_device_tube) =
-        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
 
     #[cfg(feature = "gpu")]
     let mut input_event_split_config = platform_create_input_event_config(&cfg)
@@ -696,12 +713,10 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         vm_evt_wrtube
             .try_clone()
             .exit_context(Exit::CloneEvent, "failed to clone event")?,
-        gpu_control_host_tube,
-        gpu_control_device_tube,
     )?;
 
     #[cfg(feature = "gpu")]
-    let _gpu_child = if let Some(gpu_cfg) = gpu_cfg {
+    let _gpu_child = if let Some(mut gpu_cfg) = gpu_cfg {
         if !cfg
             .vhost_user
             .iter()
@@ -712,6 +727,10 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
             cfg.gpu_vmm_config = Some(gpu_cfg.1);
             None
         } else {
+            // If we are running in a separate process, turn on external blobs (memory will be
+            // exported, sent to VMM for import, then mapped).
+            gpu_cfg.0.params.external_blob = true;
+
             Some(start_up_gpu(
                 &mut cfg,
                 &log_args,
@@ -840,7 +859,7 @@ fn clean_up_metrics(metrics_child: ChildCleanup) -> Result<()> {
     let mut metrics_timeout =
         Timer::new().exit_context(Exit::CreateTimer, "failed to create metrics timeout timer")?;
     metrics_timeout
-        .reset(EXIT_TIMEOUT, None)
+        .reset_oneshot(EXIT_TIMEOUT)
         .exit_context(Exit::ResetTimer, "failed to reset timer")?;
     metrics_cleanup_wait.add(&metrics_timeout, 0).exit_context(
         Exit::WaitContextAdd,
@@ -981,7 +1000,7 @@ impl Supervisor {
         }
 
         let mut et = Timer::new().exit_context(Exit::CreateTimer, "failed to create timer")?;
-        et.reset(EXIT_TIMEOUT, None)
+        et.reset_oneshot(EXIT_TIMEOUT)
             .exit_context(Exit::ResetTimer, "failed to reset timer")?;
         self.wait_ctx.add(&et, timeout_token).exit_context(
             Exit::WaitContextAdd,
@@ -1042,10 +1061,10 @@ impl Supervisor {
 
                         // Save the child's exit code (to pass through to the broker's exit code) if
                         // none has been saved or if the previously saved exit code was
-                        // KilledBySignal.  We overwrite KilledBySignal because the child exit may
-                        // race with the sigterm from the service, esp if child exit is slowed by a Crashpad
-                        // dump, and we don't want to lose the child's exit code if it was the
-                        // initial cause of the emulator failing.
+                        // KilledBySignal. We overwrite KilledBySignal because the child exit may
+                        // race with the sigterm from the service, esp if child exit is slowed by a
+                        // Crashpad dump, and we don't want to lose the child's exit code if it was
+                        // the initial cause of the emulator failing.
                         if exit_code != 0
                             && (first_nonzero_exitcode.is_none()
                                 || matches!(first_nonzero_exitcode, Some(KILLED_BY_SIGNAL)))
@@ -1194,7 +1213,7 @@ fn start_up_block_backends(
     exit_events: &mut Vec<Event>,
     wait_ctx: &mut WaitContext<Token>,
     main_child: &mut ChildProcess,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<Vec<ChildProcess>> {
     let mut block_children = Vec::new();
@@ -1262,6 +1281,7 @@ fn spawn_block_backend(
                 tube_token: TubeToken::VhostUser,
             },
         ],
+        &[],
         cfg,
     )?;
 
@@ -1422,7 +1442,7 @@ fn start_up_net_backend(
     wait_ctx: &mut WaitContext<Token>,
     cfg: &mut Config,
     log_args: &LogArgs,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<(ChildProcess, ChildProcess)> {
     let (host_pipe, guest_pipe) = named_pipes::pair_with_buffer_size(
@@ -1507,6 +1527,7 @@ fn spawn_slirp(
         false,
         /* use_sandbox= */ cfg.jail_config.is_some(),
         vec![],
+        &[],
         cfg,
     )?;
 
@@ -1545,6 +1566,7 @@ fn spawn_net_backend(
             tube: vhost_user_device_tube,
             tube_token: TubeToken::VhostUser,
         }],
+        &[],
         cfg,
     )?;
 
@@ -1563,6 +1585,7 @@ fn spawn_net_backend(
 #[cfg(feature = "audio")]
 fn platform_create_snd(
     cfg: &Config,
+    card_index: usize,
     main_child: &mut ChildProcess,
     exit_events: &mut Vec<Event>,
 ) -> Result<SndSplitConfig> {
@@ -1573,8 +1596,13 @@ fn platform_create_snd(
             .exit_context(Exit::CloneEvent, "failed to clone event")?,
     );
 
-    let (backend_config_product, vmm_config_product) =
-        get_snd_product_configs(cfg, main_child.alias_pid)?;
+    let (mut main_vhost_user_tube, mut device_vhost_user_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    // Start off the vhost-user tube assuming it is in the main process.
+    main_vhost_user_tube.set_target_pid(main_child.alias_pid);
+    device_vhost_user_tube.set_target_pid(main_child.alias_pid);
+
+    let (backend_config_product, vmm_config_product) = get_snd_product_configs()?;
 
     let parameters = SndParameters {
         backend: "winaudio".try_into().unwrap(),
@@ -1583,16 +1611,22 @@ fn platform_create_snd(
         ..Default::default()
     };
 
+    let audio_client_guid = generate_uuid();
+
     let backend_config = Some(SndBackendConfig {
-        device_vhost_user_tube: None,
+        device_vhost_user_tube: Some(device_vhost_user_tube),
         exit_event,
         parameters,
         product_config: backend_config_product,
+        audio_client_guid: audio_client_guid.clone(),
+        card_index,
     });
 
     let vmm_config = Some(SndVmmConfig {
-        main_vhost_user_tube: None,
+        main_vhost_user_tube: Some(main_vhost_user_tube),
         product_config: vmm_config_product,
+        audio_client_guid,
+        card_index,
     });
 
     Ok(SndSplitConfig {
@@ -1602,25 +1636,26 @@ fn platform_create_snd(
 }
 
 /// Returns a snd child process for vhost-user sound.
+// TODO(b/292128227): This method is deprecated and is not used downstream. The following code
+// has not been converted to handle multiple devices. We don't want multiple snd backend processes
+// being spun up anyways.
 #[cfg(feature = "audio")]
 fn start_up_snd(
     cfg: &mut Config,
     log_args: &LogArgs,
-    mut snd_cfg: SndSplitConfig,
-    main_child: &mut ChildProcess,
+    mut snd_cfgs: Vec<SndSplitConfig>,
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<ChildProcess> {
     // Extract the backend config from the sound config, so it can run elsewhere.
-    let mut backend_cfg = snd_cfg
+    // TODO(b/292128227): Clean up when upstreamed.
+    let mut snd_cfg = snd_cfgs.swap_remove(0);
+    let backend_cfg = snd_cfg
         .backend_config
         .take()
         .expect("snd backend config must be set");
-
-    let (mut main_vhost_user_tube, mut device_host_user_tube) =
-        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
 
     let snd_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
@@ -1636,6 +1671,7 @@ fn start_up_snd(
         /* use_sandbox= */
         cfg.jail_config.is_some(),
         vec![],
+        &[],
         cfg,
     )?;
 
@@ -1645,17 +1681,14 @@ fn start_up_snd(
         .exit_context(Exit::TubeTransporterInit, "failed to initialize tube")?;
 
     // Update target PIDs to new child.
-    device_host_user_tube.set_target_pid(main_child.alias_pid);
-    main_vhost_user_tube.set_target_pid(snd_child.alias_pid);
-
-    // Insert vhost-user tube to backend / frontend configs.
-    backend_cfg.device_vhost_user_tube = Some(device_host_user_tube);
     if let Some(vmm_config) = snd_cfg.vmm_config.as_mut() {
-        vmm_config.main_vhost_user_tube = Some(main_vhost_user_tube);
+        if let Some(tube) = vmm_config.main_vhost_user_tube.as_mut() {
+            tube.set_target_pid(snd_child.alias_pid);
+        }
     }
 
     // Send VMM config to main process.
-    cfg.snd_split_config = Some(snd_cfg);
+    cfg.snd_split_configs = snd_cfgs;
 
     let startup_args = CommonChildStartupArgs::new(
         log_args,
@@ -1681,20 +1714,24 @@ fn platform_create_input_event_config(cfg: &Config) -> Result<InputEventSplitCon
     let mut mouse_pipes = vec![];
     let mut keyboard_pipes = vec![];
 
-    for _ in cfg.virtio_multi_touch.iter() {
-        let (event_device_pipe, virtio_input_pipe) =
-            StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
-                .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
-        event_devices.push(EventDevice::touchscreen(event_device_pipe));
-        multi_touch_pipes.push(virtio_input_pipe);
-    }
-
-    for _ in cfg.virtio_mice.iter() {
-        let (event_device_pipe, virtio_input_pipe) =
-            StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
-                .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
-        event_devices.push(EventDevice::mouse(event_device_pipe));
-        mouse_pipes.push(virtio_input_pipe);
+    for input in &cfg.virtio_input {
+        match input {
+            InputDeviceOption::MultiTouch { .. } => {
+                let (event_device_pipe, virtio_input_pipe) =
+                    StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                        .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
+                event_devices.push(EventDevice::touchscreen(event_device_pipe));
+                multi_touch_pipes.push(virtio_input_pipe);
+            }
+            InputDeviceOption::Mouse { .. } => {
+                let (event_device_pipe, virtio_input_pipe) =
+                    StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                        .exit_context(Exit::EventDeviceSetup, "failed to set up EventDevice")?;
+                event_devices.push(EventDevice::mouse(event_device_pipe));
+                mouse_pipes.push(virtio_input_pipe);
+            }
+            _ => {}
+        }
     }
 
     // One keyboard
@@ -1722,6 +1759,9 @@ fn platform_create_window_procedure_thread_configs(
     main_alias_pid: u32,
     device_alias_pid: u32,
 ) -> Result<WindowProcedureThreadSplitConfig> {
+    if let Some(params) = cfg.gpu_parameters.as_ref() {
+        wndproc_thread_builder.set_max_num_windows(params.max_num_displays);
+    }
     let product_config = get_window_procedure_thread_product_configs(
         cfg,
         &mut wndproc_thread_builder,
@@ -1742,8 +1782,6 @@ fn platform_create_gpu(
     #[allow(unused_variables)] main_child: &mut ChildProcess,
     exit_events: &mut Vec<Event>,
     exit_evt_wrtube: SendTube,
-    gpu_control_host_tube: Tube,
-    gpu_control_device_tube: Tube,
 ) -> Result<Option<(GpuBackendConfig, GpuVmmConfig)>> {
     if cfg.gpu_parameters.is_none() {
         return Ok(None);
@@ -1758,8 +1796,19 @@ fn platform_create_gpu(
     let (backend_config_product, vmm_config_product) =
         get_gpu_product_configs(cfg, main_child.alias_pid)?;
 
+    let (mut main_vhost_user_tube, mut device_host_user_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    // Start off the vhost-user tube assuming it is in the main process.
+    main_vhost_user_tube.set_target_pid(main_child.alias_pid);
+    device_host_user_tube.set_target_pid(main_child.alias_pid);
+
+    let (mut gpu_control_host_tube, mut gpu_control_device_tube) =
+        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    gpu_control_host_tube.set_target_pid(main_child.alias_pid);
+    gpu_control_device_tube.set_target_pid(main_child.alias_pid);
+
     let backend_config = GpuBackendConfig {
-        device_vhost_user_tube: None,
+        device_vhost_user_tube: Some(device_host_user_tube),
         exit_event,
         exit_evt_wrtube,
         gpu_control_device_tube,
@@ -1772,7 +1821,7 @@ fn platform_create_gpu(
     };
 
     let vmm_config = GpuVmmConfig {
-        main_vhost_user_tube: None,
+        main_vhost_user_tube: Some(main_vhost_user_tube),
         gpu_control_host_tube: Some(gpu_control_host_tube),
         product_config: vmm_config_product,
     };
@@ -1790,14 +1839,11 @@ fn start_up_gpu(
     main_child: &mut ChildProcess,
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
-    metric_tubes: &mut Vec<Tube>,
+    metric_tubes: &mut Vec<RecvTube>,
     wndproc_thread_builder: WindowProcedureThreadBuilder,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
 ) -> Result<ChildProcess> {
-    let (mut backend_cfg, mut vmm_cfg) = gpu_cfg;
-
-    let (mut main_vhost_user_tube, mut device_host_user_tube) =
-        Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
+    let (backend_cfg, mut vmm_cfg) = gpu_cfg;
 
     let gpu_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
@@ -1813,6 +1859,7 @@ fn start_up_gpu(
         /* use_sandbox= */
         cfg.jail_config.is_some(),
         vec![],
+        &[],
         cfg,
     )?;
 
@@ -1833,21 +1880,14 @@ fn start_up_gpu(
         .take()
         .expect("The window procedure thread builder is missing");
     cfg.window_procedure_thread_split_config = Some(wndproc_thread_cfg);
-    // Update target PIDs to new child.
-    device_host_user_tube.set_target_pid(main_child.alias_pid);
-    main_vhost_user_tube.set_target_pid(gpu_child.alias_pid);
-    backend_cfg
-        .gpu_control_device_tube
-        .set_target_pid(main_child.alias_pid);
-    vmm_cfg
-        .gpu_control_host_tube
-        .as_mut()
-        .unwrap()
-        .set_target_pid(gpu_child.alias_pid);
 
-    // Insert vhost-user tube to backend / frontend configs.
-    backend_cfg.device_vhost_user_tube = Some(device_host_user_tube);
-    vmm_cfg.main_vhost_user_tube = Some(main_vhost_user_tube);
+    // Update target PIDs to new child.
+    if let Some(tube) = &mut vmm_cfg.main_vhost_user_tube {
+        tube.set_target_pid(gpu_child.alias_pid);
+    }
+    if let Some(tube) = &mut vmm_cfg.gpu_control_host_tube {
+        tube.set_target_pid(gpu_child.alias_pid);
+    }
 
     // Send VMM config to main process. Note we don't set gpu_backend_config and
     // input_event_backend_config, since it is passed to the child.
@@ -1894,6 +1934,7 @@ fn spawn_child<I, S>(
     #[cfg(test)] skip_bootstrap: bool,
     use_sandbox: bool,
     mut tubes: Vec<TubeTransferData>,
+    handles_to_inherit: &[&dyn AsRawDescriptor],
     #[allow(unused_variables)] cfg: &Config,
 ) -> Result<ChildProcess>
 where
@@ -1935,26 +1976,22 @@ where
         None
     };
 
-    #[cfg(test)]
-    let bootstrap = if !skip_bootstrap {
-        vec![
-            "--bootstrap".to_string(),
-            (tube_transport_main_child.as_raw_descriptor() as usize).to_string(),
-        ]
-    } else {
-        vec![]
-    };
-    #[cfg(not(test))]
-    let bootstrap = vec![
+    let bootstrap = [
         "--bootstrap".to_string(),
         (tube_transport_main_child.as_raw_descriptor() as usize).to_string(),
     ];
+
+    #[cfg(test)]
+    let bootstrap: &[String] = if skip_bootstrap { &[] } else { &bootstrap };
 
     let input_args: Vec<S> = args.into_iter().collect();
     let args = input_args
         .iter()
         .map(|arg| arg.as_ref())
         .chain(bootstrap.iter().map(|arg| arg.as_ref()));
+
+    let mut handles_to_inherit = handles_to_inherit.to_vec();
+    handles_to_inherit.push(&tube_transport_main_child);
 
     #[cfg(feature = "sandbox")]
     let (process_id, child) = if use_sandbox {
@@ -1963,26 +2000,15 @@ where
             args,
             stdout_file,
             stderr_file,
-            vec![&tube_transport_main_child],
+            handles_to_inherit,
             process_policy(process_type, cfg),
         )?
     } else {
-        spawn_unsandboxed_child(
-            program,
-            args,
-            stdout_file,
-            stderr_file,
-            vec![&tube_transport_main_child],
-        )?
+        spawn_unsandboxed_child(program, args, stdout_file, stderr_file, handles_to_inherit)?
     };
     #[cfg(not(feature = "sandbox"))]
-    let (process_id, child) = spawn_unsandboxed_child(
-        program,
-        args,
-        stdout_file,
-        stderr_file,
-        vec![&tube_transport_main_child],
-    )?;
+    let (process_id, child) =
+        spawn_unsandboxed_child(program, args, stdout_file, stderr_file, handles_to_inherit)?;
 
     let (mut bootstrap_tube, bootstrap_tube_child) =
         Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
@@ -2071,7 +2097,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
 
@@ -2099,7 +2126,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
             let _child_device = spawn_child(
@@ -2112,7 +2140,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
 
@@ -2139,7 +2168,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
             let _child_device = spawn_child(
@@ -2152,7 +2182,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
 
@@ -2184,7 +2215,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
             let _child_device = spawn_child(
@@ -2197,7 +2229,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
 
@@ -2229,7 +2262,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
             let _child_device = spawn_child(
@@ -2242,7 +2276,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
 
@@ -2277,7 +2312,8 @@ mod tests {
                 &mut wait_ctx,
                 /* skip_bootstrap= */ true,
                 /* use_sandbox= */ false,
-                Vec::new(),
+                vec![],
+                &[],
                 &Config::default(),
             );
             wait_ctx.add(&sigterm_event, Token::Sigterm).unwrap();

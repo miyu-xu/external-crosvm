@@ -82,8 +82,9 @@ pub struct Apic {
     /// Base duration for the APIC timer.  A timer set with initial count = 1 and timer frequency
     /// divide = 1 runs for this long.
     cycle_length: Duration,
-    // Register state bytes.  Each register is 16-byte aligned, but only its first 4 bytes are used.
-    // The register MMIO space is 4 KiB, but only the first 1 KiB (64 registers * 16 bytes) is used.
+    // Register state bytes.  Each register is 16-byte aligned, but only its first 4 bytes are
+    // used. The register MMIO space is 4 KiB, but only the first 1 KiB (64 registers * 16
+    // bytes) is used.
     regs: [u8; APIC_MEM_LENGTH_BYTES as usize],
     // Multiprocessing initialization state: running, waiting for SIPI, etc.
     mp_state: MPState,
@@ -96,14 +97,15 @@ pub struct Apic {
     // When the timer started or last ticked.  For one-shot timers, this is the Instant when the
     // timer started.  For periodic timers, it's the Instant when it started or last expired.
     last_tick: Instant,
-    // Pending startup interrupt vector.  There can only be one pending startup interrupt at a time.
+    // Pending startup interrupt vector.  There can only be one pending startup interrupt at a
+    // time.
     sipi: Option<Vector>,
     // True if there's a pending INIT interrupt to send to the CPU.
     init: bool,
     // The number of pending non-maskable interrupts to be injected into the CPU.  The architecture
-    // specifies that multiple NMIs can be sent concurrently and will be processed in order.  Unlike
-    // fixed interrupts there's no architecturally defined place where the NMIs are queued or
-    // stored, we need to store them separately.
+    // specifies that multiple NMIs can be sent concurrently and will be processed in order.
+    // Unlike fixed interrupts there's no architecturally defined place where the NMIs are
+    // queued or stored, we need to store them separately.
     nmis: u32,
 }
 
@@ -628,9 +630,22 @@ impl Apic {
         }
         let length = self.cycle_length * initial_count * self.get_timer_divide_control();
         let mode = self.get_reg(Reg::LOCAL_TIMER) & TIMER_MODE_MASK;
-        let (duration, interval) = match mode {
-            TIMER_MODE_ONE_SHOT => (length, None),
-            TIMER_MODE_PERIODIC => (length, Some(length)),
+        match mode {
+            TIMER_MODE_ONE_SHOT => {
+                if let Err(e) = self.timer.reset_oneshot(length) {
+                    error!("Failed to reset APIC timer to one-shot({:?}) {}", length, e);
+                    return;
+                }
+            }
+            TIMER_MODE_PERIODIC => {
+                if let Err(e) = self.timer.reset_repeating(length) {
+                    error!(
+                        "Failed to reset APIC timer to repeating({:?}) {}",
+                        length, e
+                    );
+                    return;
+                }
+            }
             TIMER_MODE_TSC_DEADLINE => {
                 warn!("APIC TSC-deadline timer not supported");
                 return;
@@ -642,13 +657,6 @@ impl Apic {
         };
 
         self.last_tick = Instant::now();
-        if let Err(e) = self.timer.reset(duration, interval) {
-            error!(
-                "Failed to reset APIC timer to duration={:?} interval={:?}: {}",
-                duration, interval, e
-            );
-            return;
-        }
         self.timer_length = Some(length);
     }
 
@@ -728,11 +736,11 @@ pub struct InterruptDestination {
     /// The APIC ID that sent this interrupt.
     pub source_id: u8,
     /// In physical destination mode, used to specify the APIC ID of the destination processor.
-    /// In logical destination mode, used to specify a message destination address (MDA) that can be
-    /// used to select specific processors in clusters.  Only used if shorthand is None.
+    /// In logical destination mode, used to specify a message destination address (MDA) that can
+    /// be used to select specific processors in clusters.  Only used if shorthand is None.
     pub dest_id: u8,
-    /// Specifies a quick destination of all processors, all excluding self, or self.  If None, then
-    /// dest_id and mode are used to find the destinations.
+    /// Specifies a quick destination of all processors, all excluding self, or self.  If None,
+    /// then dest_id and mode are used to find the destinations.
     pub shorthand: DestinationShorthand,
     /// Specifies if physical or logical addressing is used for matching dest_id.
     pub mode: DestinationMode,
@@ -747,7 +755,8 @@ pub struct InterruptData {
     pub delivery: DeliveryMode,
     /// Edge- or level-triggered.
     pub trigger: TriggerMode,
-    /// For level-triggered interrupts, specifies whether the line should be asserted or deasserted.
+    /// For level-triggered interrupts, specifies whether the line should be asserted or
+    /// deasserted.
     pub level: Level,
 }
 
@@ -883,14 +892,14 @@ impl Reg {
 #[repr(usize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VectorReg {
-    /// In-service register.  A bit is set for each interrupt vector currently being serviced by the
-    /// processor.
+    /// In-service register.  A bit is set for each interrupt vector currently being serviced by
+    /// the processor.
     Isr = Reg::ISR,
     /// Trigger mode register.  Records whether interrupts are edge-triggered (bit is clear) or
     /// level-triggered (bit is set).
     Tmr = Reg::TMR,
-    /// Interrupt request register.  A bit is set for each interrupt vector received by the APIC but
-    /// not yet serviced by the processor.
+    /// Interrupt request register.  A bit is set for each interrupt vector received by the APIC
+    /// but not yet serviced by the processor.
     Irr = Reg::IRR,
 }
 
@@ -1328,6 +1337,7 @@ mod tests {
 
         // Top 8 bits of ICR high are the destination.
         a.write(Reg::INTERRUPT_COMMAND_HI as u64, &[0, 0, 0, 42]);
+        #[rustfmt::skip]
         let msg = a.write(
             Reg::INTERRUPT_COMMAND_LO as u64,
             &[
@@ -1439,7 +1449,7 @@ mod tests {
             level: Level::Assert,
         });
         // Non-fixed irqs should be injected even if vcpu_ready is false. */
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ false);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ false);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1460,7 +1470,7 @@ mod tests {
             trigger: TriggerMode::Edge,
             level: Level::Assert,
         });
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1470,7 +1480,7 @@ mod tests {
         );
         assert_eq!(a.nmis, 0);
 
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1491,7 +1501,7 @@ mod tests {
             trigger: TriggerMode::Level,
             level: Level::Assert,
         });
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ false);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ false);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1502,7 +1512,7 @@ mod tests {
         );
         assert_eq!(a.highest_bit_in_vector(VectorReg::Irr), Some(0x10));
         assert_eq!(a.highest_bit_in_vector(VectorReg::Isr), None);
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1527,7 +1537,7 @@ mod tests {
             trigger: TriggerMode::Level,
             level: Level::Assert,
         });
-        let _ = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let _ = a.get_pending_irqs(/* vcpu_ready= */ true);
 
         // An interrupt in a higher priority class should be injected immediately if the window is
         // open.
@@ -1537,7 +1547,7 @@ mod tests {
             trigger: TriggerMode::Level,
             level: Level::Assert,
         });
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ false);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ false);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1548,7 +1558,7 @@ mod tests {
         );
         assert_eq!(a.highest_bit_in_vector(VectorReg::Irr), Some(0x20));
         assert_eq!(a.highest_bit_in_vector(VectorReg::Isr), Some(0x10));
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1573,7 +1583,7 @@ mod tests {
             trigger: TriggerMode::Level,
             level: Level::Assert,
         });
-        let _ = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let _ = a.get_pending_irqs(/* vcpu_ready= */ true);
 
         // An interrupt in the same or lower priority class should be deferred.
         a.accept_irq(&InterruptData {
@@ -1582,12 +1592,13 @@ mod tests {
             trigger: TriggerMode::Level,
             level: Level::Assert,
         });
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
                 fixed: None,
-                needs_window: false, // Not injectable due to higher priority ISRV, so no window needed.
+                // Not injectable due to higher priority ISRV, so no window needed.
+                needs_window: false,
                 ..Default::default()
             }
         );
@@ -1597,7 +1608,7 @@ mod tests {
         // EOI lets it be injected.
         let msg = a.write(Reg::EOI as u64, &[0; 4]).unwrap();
         assert_eq!(msg, ApicBusMsg::Eoi(0x10));
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1621,7 +1632,7 @@ mod tests {
             level: Level::Assert,
         });
         a.set_reg(Reg::TPR, 0x20);
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {
@@ -1631,7 +1642,7 @@ mod tests {
             }
         );
         a.set_reg(Reg::TPR, 0x19);
-        let irqs = a.get_pending_irqs(/*vcpu_ready=*/ true);
+        let irqs = a.get_pending_irqs(/* vcpu_ready= */ true);
         assert_eq!(
             irqs,
             PendingInterrupts {

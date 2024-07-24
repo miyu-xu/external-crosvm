@@ -52,6 +52,8 @@ use base::Tube;
 use base::TubeError;
 use cros_async::AsyncTube;
 use cros_async::Executor;
+use serde::Deserialize;
+use serde::Serialize;
 use vm_control::DeviceControlCommand;
 use vm_control::DevicesState;
 use vm_control::VmResponse;
@@ -119,6 +121,7 @@ pub use self::pci::StubPciParameters;
 pub use self::pflash::Pflash;
 pub use self::pflash::PflashParameters;
 pub use self::pl030::Pl030;
+pub use self::pmc_virt::VirtualPmc;
 pub use self::serial::Serial;
 pub use self::serial_device::Error as SerialError;
 pub use self::serial_device::SerialDevice;
@@ -155,7 +158,6 @@ cfg_if::cfg_if! {
         };
         pub use self::platform::VfioPlatformDevice;
         pub use self::ac_adapter::AcAdapter;
-        pub use self::pmc_virt::VirtualPmc;
         pub use self::proxy::ChildProcIntf;
         pub use self::proxy::Error as ProxyError;
         pub use self::proxy::ProxyDevice;
@@ -175,9 +177,6 @@ cfg_if::cfg_if! {
 }
 
 /// Request CoIOMMU to unpin a specific range.
-use serde::Deserialize;
-/// Request CoIOMMU to unpin a specific range.
-use serde::Serialize;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UnpinRequest {
     /// The ranges presents (start gfn, count).
@@ -252,14 +251,26 @@ fn wake_buses(buses: &[&Bus]) {
     }
 }
 
+// Use 64MB chunks when writing the memory snapshot (if encryption is used).
+const MEMORY_SNAP_ENCRYPTED_CHUNK_SIZE_BYTES: usize = 1024 * 1024 * 64;
+
 async fn snapshot_handler(
     snapshot_writer: vm_control::SnapshotWriter,
     guest_memory: &GuestMemory,
     buses: &[&Bus],
+    compress_memory: bool,
 ) -> anyhow::Result<()> {
-    let guest_memory_metadata = guest_memory
-        .snapshot(&mut snapshot_writer.raw_fragment("mem")?)
-        .context("failed to snapshot memory")?;
+    // SAFETY:
+    // VM & devices are stopped.
+    let guest_memory_metadata = unsafe {
+        guest_memory
+            .snapshot(
+                &mut snapshot_writer
+                    .raw_fragment_with_chunk_size("mem", MEMORY_SNAP_ENCRYPTED_CHUNK_SIZE_BYTES)?,
+                compress_memory,
+            )
+            .context("failed to snapshot memory")?
+    };
     snapshot_writer.write_fragment("mem_metadata", &guest_memory_metadata)?;
     for (i, bus) in buses.iter().enumerate() {
         bus.snapshot_devices(&snapshot_writer.add_namespace(&format!("bus{i}"))?)
@@ -278,10 +289,14 @@ async fn restore_handler(
     buses: &[&Bus],
 ) -> anyhow::Result<()> {
     let guest_memory_metadata = snapshot_reader.read_fragment("mem_metadata")?;
-    guest_memory.restore(
-        guest_memory_metadata,
-        &mut snapshot_reader.raw_fragment("mem")?,
-    )?;
+    // SAFETY:
+    // VM & devices are stopped.
+    unsafe {
+        guest_memory.restore(
+            guest_memory_metadata,
+            &mut snapshot_reader.raw_fragment("mem")?,
+        )?
+    };
     for (i, bus) in buses.iter().enumerate() {
         bus.restore_devices(&snapshot_reader.namespace(&format!("bus{i}"))?)
             .context("failed to restore bus devices")?;
@@ -346,13 +361,17 @@ async fn handle_command_tube(
                             .await
                             .context("failed to reply to wake devices request")?;
                     }
-                    DeviceControlCommand::SnapshotDevices { snapshot_writer } => {
+                    DeviceControlCommand::SnapshotDevices {
+                        snapshot_writer,
+                        compress_memory,
+                    } => {
                         assert!(
                             matches!(devices_state, DevicesState::Sleep),
                             "devices must be sleeping to snapshot"
                         );
                         if let Err(e) =
-                            snapshot_handler(snapshot_writer, &guest_memory, buses).await
+                            snapshot_handler(snapshot_writer, &guest_memory, buses, compress_memory)
+                                .await
                         {
                             error!("failed to snapshot: {:#}", e);
                             command_tube

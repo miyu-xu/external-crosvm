@@ -646,7 +646,7 @@ impl<T: Encoder> EncoderDevice<T> {
             return Err(VideoError::InvalidArgument);
         } else {
             // unwrap() is safe because we just tested that `plane_entries` had exactly one element.
-            plane_entries.get(0).unwrap()
+            plane_entries.first().unwrap()
         };
 
         match queue_type {
@@ -671,9 +671,9 @@ impl<T: Encoder> EncoderDevice<T> {
                         GuestResource::from_virtio_object_entry(
                             // SAFETY:
                             // Safe because we confirmed the correct type for the resource.
-                            // unwrap() is also safe here because we just tested above that `entries` had
-                            // exactly one element.
-                            unsafe { entries.get(0).unwrap().object },
+                            // unwrap() is also safe here because we just tested above that
+                            // `entries` had exactly one element.
+                            unsafe { entries.first().unwrap().object },
                             &self.resource_bridge,
                             &stream.src_params,
                         )
@@ -721,9 +721,9 @@ impl<T: Encoder> EncoderDevice<T> {
                         GuestResource::from_virtio_object_entry(
                             // SAFETY:
                             // Safe because we confirmed the correct type for the resource.
-                            // unwrap() is also safe here because we just tested above that `entries` had
-                            // exactly one element.
-                            unsafe { entries.get(0).unwrap().object },
+                            // unwrap() is also safe here because we just tested above that
+                            // `entries` had exactly one element.
+                            unsafe { entries.first().unwrap().object },
                             &self.resource_bridge,
                             &stream.dst_params,
                         )
@@ -866,9 +866,9 @@ impl<T: Encoder> EncoderDevice<T> {
                 let buffer_size = dst_resource.resource.planes[0].size as u32;
 
                 // Stores an output buffer to notify EOS.
-                // This is necessary because libvda is unable to indicate EOS along with returned buffers.
-                // For now, when a `Flush()` completes, this saved resource will be returned as a zero-sized
-                // buffer with the EOS flag.
+                // This is necessary because libvda is unable to indicate EOS along with returned
+                // buffers. For now, when a `Flush()` completes, this saved resource
+                // will be returned as a zero-sized buffer with the EOS flag.
                 if stream.eos_manager.try_reserve_eos_buffer(resource_id) {
                     return Ok(VideoCmdResponseType::Async(AsyncCmdTag::Queue {
                         stream_id,
@@ -1087,7 +1087,7 @@ impl<T: Encoder> EncoderDevice<T> {
                         desired_format,
                         frame_width,
                         frame_height,
-                        plane_formats.get(0).map(|fmt| fmt.stride).unwrap_or(0),
+                        plane_formats.first().map(|fmt| fmt.stride).unwrap_or(0),
                     )?;
 
                     stream.dst_params.frame_width = frame_width;
@@ -1672,7 +1672,7 @@ impl EncoderCapabilities {
             .find(|&format_desc| format_desc.format == desired_format)
             .unwrap_or(
                 self.input_format_descs
-                    .get(0)
+                    .first()
                     .ok_or(VideoError::InvalidFormat)?,
             );
 
@@ -1707,7 +1707,7 @@ impl EncoderCapabilities {
             .find(move |&format_desc| format_desc.format == desired_format)
             .unwrap_or(
                 self.output_format_descs
-                    .get(0)
+                    .first()
                     .ok_or(VideoError::InvalidFormat)?,
             );
         dst_params.format = Some(format_desc.format);
@@ -1727,7 +1727,7 @@ impl EncoderCapabilities {
 
     pub fn get_default_profile(&self, coded_format: &Format) -> Option<Profile> {
         let profiles = self.get_profiles(coded_format)?;
-        match profiles.get(0) {
+        match profiles.first() {
             None => {
                 error!("Format {} exists but no available profiles.", coded_format);
                 None

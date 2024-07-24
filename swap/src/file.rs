@@ -188,10 +188,7 @@ impl FilePageStates {
                     .idx_page()
                     .unwrap_or_else(|| unreachable!("the page is not freed"))]
                 .is_present()
-        });
-        let Some(next_head_idx_offset) = next_head_idx_offset else {
-            return None;
-        };
+        })?;
         let idx_file = idx_file + next_head_idx_offset;
 
         let Some(head_idx_page) = self.states[idx_file].idx_page() else {
@@ -411,7 +408,8 @@ impl<'a> SwapFile<'a> {
 
         let offset = pages_to_bytes(idx_file_range.start);
         let munlocked_size = if idx_file_range.start < self.cursor_mlock {
-            // idx_page_range is validated at clear_range() and self.cursor_mlock is within the mmap.
+            // idx_page_range is validated at clear_range() and self.cursor_mlock is within the
+            // mmap.
             let pages = idx_file_range.end.min(self.cursor_mlock) - idx_file_range.start;
             // munlock(2) first because MADV_DONTNEED fails for mlock(2)ed pages.
             self.file_mmap
@@ -624,8 +622,8 @@ impl<'a> SwapFile<'a> {
     ///
     /// # Arguments
     ///
-    /// * `idx_page_range` - the indices of the pages. All the pages must be present and
-    ///   consecutive in the compacted file.
+    /// * `idx_page_range` - the indices of the pages. All the pages must be present and consecutive
+    ///   in the compacted file.
     pub fn get_slice(&self, idx_page_range: Range<usize>) -> Result<VolatileSlice> {
         let idx_file_range = self.convert_idx_page_range_to_idx_file(idx_page_range)?;
         match self.file_mmap.get_slice(

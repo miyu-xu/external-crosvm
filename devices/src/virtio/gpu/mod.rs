@@ -18,6 +18,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use anyhow::bail;
 use anyhow::Context;
 use base::debug;
 use base::error;
@@ -41,6 +42,7 @@ use base::WorkerThread;
 use data_model::*;
 pub use gpu_display::EventDevice;
 use gpu_display::*;
+pub use parameters::AudioDeviceMode;
 pub use parameters::GpuParameters;
 use rutabaga_gfx::*;
 use serde::Deserialize;
@@ -50,6 +52,7 @@ pub use vm_control::gpu::DisplayMode as GpuDisplayMode;
 pub use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
 use vm_control::gpu::GpuControlCommand;
 use vm_control::gpu::GpuControlResult;
+pub use vm_control::gpu::MouseMode as GpuMouseMode;
 pub use vm_control::gpu::DEFAULT_DISPLAY_HEIGHT;
 pub use vm_control::gpu::DEFAULT_DISPLAY_WIDTH;
 pub use vm_control::gpu::DEFAULT_REFRESH_RATE;
@@ -67,6 +70,7 @@ pub use self::protocol::VIRTIO_GPU_F_FENCE_PASSING;
 pub use self::protocol::VIRTIO_GPU_F_RESOURCE_BLOB;
 pub use self::protocol::VIRTIO_GPU_F_RESOURCE_UUID;
 pub use self::protocol::VIRTIO_GPU_F_VIRGL;
+pub use self::protocol::VIRTIO_GPU_MAX_SCANOUTS;
 pub use self::protocol::VIRTIO_GPU_SHM_ID_HOST_VISIBLE;
 use self::protocol::*;
 use self::virtio_gpu::to_rutabaga_descriptor;
@@ -243,6 +247,7 @@ fn build(
     rutabaga: Rutabaga,
     mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
     external_blob: bool,
+    fixed_blob_mapping: bool,
     #[cfg(windows)] wndproc_thread: &mut Option<WindowProcedureThread>,
     udmabuf: bool,
     #[cfg(windows)] gpu_display_wait_descriptor_ctrl_wr: SendTube,
@@ -280,6 +285,7 @@ fn build(
         rutabaga,
         mapper,
         external_blob,
+        fixed_blob_mapping,
         udmabuf,
     )
 }
@@ -715,7 +721,12 @@ impl Frontend {
         let mut gpu_response = match resp {
             Ok(gpu_response) => gpu_response,
             Err(gpu_response) => {
-                debug!("{:?} -> {:?}", gpu_cmd, gpu_response);
+                if let Some(gpu_cmd) = gpu_cmd {
+                    error!(
+                        "error processing gpu command {:?}: {:?}",
+                        gpu_cmd, gpu_response
+                    );
+                }
                 gpu_response
             }
         };
@@ -1110,7 +1121,13 @@ pub enum DisplayBackend {
     Stub,
     #[cfg(windows)]
     /// Open a window using WinAPI.
-    WinApi(WinDisplayProperties),
+    WinApi,
+    #[cfg(feature = "android_display")]
+    /// The display buffer is backed by an Android surface. The surface is set via an AIDL service
+    /// that the backend hosts. Currently, the AIDL service is registered to the service manager
+    /// using the name given here. The entity holding the surface is expected to locate the service
+    /// via this name, and pass the surface to it.
+    Android(String),
 }
 
 impl DisplayBackend {
@@ -1126,18 +1143,20 @@ impl DisplayBackend {
             DisplayBackend::X(display) => GpuDisplay::open_x(display.as_deref()),
             DisplayBackend::Stub => GpuDisplay::open_stub(),
             #[cfg(windows)]
-            DisplayBackend::WinApi(display_properties) => match wndproc_thread.take() {
+            DisplayBackend::WinApi => match wndproc_thread.take() {
                 Some(wndproc_thread) => GpuDisplay::open_winapi(
                     wndproc_thread,
                     /* win_metrics= */ None,
-                    display_properties.clone(),
                     gpu_display_wait_descriptor_ctrl,
+                    None,
                 ),
                 None => {
                     error!("wndproc_thread is none");
                     Err(GpuDisplayError::Allocate)
                 }
             },
+            #[cfg(feature = "android_display")]
+            DisplayBackend::Android(service_name) => GpuDisplay::open_android(service_name),
         }
     }
 }
@@ -1172,6 +1191,7 @@ pub struct Gpu {
     pci_address: Option<PciAddress>,
     pci_bar_size: u64,
     external_blob: bool,
+    fixed_blob_mapping: bool,
     rutabaga_component: RutabagaComponentType,
     #[cfg(windows)]
     wndproc_thread: Option<WindowProcedureThread>,
@@ -1179,9 +1199,9 @@ pub struct Gpu {
     udmabuf: bool,
     rutabaga_server_descriptor: Option<SafeDescriptor>,
     #[cfg(windows)]
-    /// Because the Windows GpuDisplay can't expose an epollfd, it has to inform the GPU worker which
-    /// descriptors to add to its wait context. That's what this Tube is used for (it is provided
-    /// to each display backend.
+    /// Because the Windows GpuDisplay can't expose an epollfd, it has to inform the GPU worker
+    /// which descriptors to add to its wait context. That's what this Tube is used for (it is
+    /// provided to each display backend.
     gpu_display_wait_descriptor_ctrl_wr: SendTube,
     #[cfg(windows)]
     /// The GPU worker uses this Tube to receive the descriptors that should be added to its wait
@@ -1263,7 +1283,8 @@ impl Gpu {
             .set_wsi(rutabaga_wsi)
             .set_use_external_blob(gpu_parameters.external_blob)
             .set_use_system_blob(gpu_parameters.system_blob)
-            .set_use_render_server(use_render_server);
+            .set_use_render_server(use_render_server)
+            .set_renderer_features(gpu_parameters.renderer_features.clone());
 
         #[cfg(windows)]
         let (gpu_display_wait_descriptor_ctrl_wr, gpu_display_wait_descriptor_ctrl_rd) =
@@ -1283,6 +1304,7 @@ impl Gpu {
             pci_address: gpu_parameters.pci_address,
             pci_bar_size: gpu_parameters.pci_bar_size,
             external_blob: gpu_parameters.external_blob,
+            fixed_blob_mapping: gpu_parameters.fixed_blob_mapping,
             rutabaga_component: component,
             #[cfg(windows)]
             wndproc_thread: Some(wndproc_thread),
@@ -1327,6 +1349,7 @@ impl Gpu {
             rutabaga,
             mapper,
             self.external_blob,
+            self.fixed_blob_mapping,
             #[cfg(windows)]
             &mut self.wndproc_thread,
             self.udmabuf,
@@ -1371,6 +1394,7 @@ impl Gpu {
         let display_event = self.display_event.clone();
         let event_devices = self.event_devices.take().expect("missing event_devices");
         let external_blob = self.external_blob;
+        let fixed_blob_mapping = self.fixed_blob_mapping;
         let udmabuf = self.udmabuf;
         let fence_state = Arc::new(Mutex::new(Default::default()));
 
@@ -1436,6 +1460,7 @@ impl Gpu {
                 rutabaga,
                 mapper,
                 external_blob,
+                fixed_blob_mapping,
                 #[cfg(windows)]
                 &mut wndproc_thread,
                 udmabuf,
@@ -1733,7 +1758,8 @@ impl VirtioDevice for Gpu {
         let ctrl_queue = SharedQueueReader::new(queues.remove(&0).unwrap(), interrupt.clone());
         let cursor_queue = LocalQueueReader::new(queues.remove(&1).unwrap(), interrupt.clone());
 
-        self.worker_thread
+        match self
+            .worker_thread
             .as_mut()
             .expect("worker thread missing on activate")
             .0
@@ -1743,10 +1769,13 @@ impl VirtioDevice for Gpu {
                 ctrl_queue,
                 cursor_queue,
                 worker_snapshot: self.worker_snapshot.take(),
-            })
-            .expect("failed to send activation resources to worker thread");
-
-        Ok(())
+            }) {
+            Err(mpsc::SendError(gpu_activation_resources)) => {
+                self.worker_snapshot = gpu_activation_resources.worker_snapshot;
+                bail!("failed to send activation resources to worker thread");
+            }
+            Ok(()) => Ok(()),
+        }
     }
 
     fn pci_address(&self) -> Option<PciAddress> {
@@ -1765,7 +1794,8 @@ impl VirtioDevice for Gpu {
     }
 
     fn expose_shmem_descriptors_with_viommu(&self) -> bool {
-        true
+        // TODO(b/323368701): integrate with fixed_blob_mapping so this can always return true.
+        !self.fixed_blob_mapping
     }
 
     // Notes on sleep/wake/snapshot/restore functionality.

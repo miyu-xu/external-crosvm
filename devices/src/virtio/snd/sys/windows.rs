@@ -105,6 +105,7 @@ impl StreamInfo {
     async fn set_up_async_playback_stream(
         &mut self,
         frame_size: usize,
+        audio_client_guid: Option<String>,
         ex: &Executor,
     ) -> Result<Box<dyn AsyncPlaybackBufferStream>, Error> {
         let (async_playback_buffer_stream, _) = self
@@ -115,13 +116,15 @@ impl StreamInfo {
                 self.channels as usize,
                 self.format,
                 self.frame_rate as usize,
-                // `buffer_size` in `audio_streams` API indicates the buffer size in bytes that the stream
-                // consumes (or transmits) each time (next_playback/capture_buffer).
-                // `period_bytes` in virtio-snd device (or ALSA) indicates the device transmits (or
+                // `buffer_size` in `audio_streams` API indicates the buffer size in bytes that the
+                // stream consumes (or transmits) each time
+                // (next_playback/capture_buffer). `period_bytes` in virtio-snd
+                // device (or ALSA) indicates the device transmits (or
                 // consumes) for each PCM message.
                 // Therefore, `buffer_size` in `audio_streams` == `period_bytes` in virtio-snd.
                 self.period_bytes / frame_size,
                 ex,
+                audio_client_guid,
             )
             .map_err(Error::CreateStream)?;
         Ok(async_playback_buffer_stream)
@@ -151,11 +154,13 @@ impl StreamInfo {
     pub(crate) async fn create_directionstream_output(
         &mut self,
         frame_size: usize,
+        audio_client_guid: Option<String>,
         ex: &Executor,
     ) -> Result<DirectionalStream, Error> {
         if self.playback_stream_cache.is_none() {
-            let async_playback_buffer_stream =
-                self.set_up_async_playback_stream(frame_size, ex).await?;
+            let async_playback_buffer_stream = self
+                .set_up_async_playback_stream(frame_size, audio_client_guid, ex)
+                .await?;
 
             let buffer_writer = WinBufferWriter::new(self.period_bytes);
 

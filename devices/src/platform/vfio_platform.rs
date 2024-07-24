@@ -4,14 +4,11 @@
 
 use std::fs::File;
 use std::sync::Arc;
-use std::u32;
 
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use base::error;
-#[cfg(any(target_os = "android", target_os = "linux"))]
-use base::linux::MemoryMappingBuilderUnix;
 use base::pagesize;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
@@ -19,8 +16,6 @@ use base::Event;
 use base::MappedRegion;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
-#[cfg(windows)]
-use base::MemoryMappingBuilderWindows;
 use base::Protection;
 use base::RawDescriptor;
 use hypervisor::MemCacheType;
@@ -202,7 +197,7 @@ impl VfioPlatformDevice {
             let offset = region_offset + mmap_offset;
 
             let mmap = match MemoryMappingBuilder::new(mmap_size as usize)
-                .from_descriptor(self.device.device_file())
+                .from_file(self.device.device_file())
                 .offset(offset)
                 .build()
             {
@@ -282,7 +277,8 @@ impl VfioPlatformDevice {
                         let host = mmap.as_ptr() as u64;
                         // SAFETY:
                         // Safe because the given guest_map_start is valid guest bar address. and
-                        // the host pointer is correct and valid guaranteed by MemoryMapping interface.
+                        // the host pointer is correct and valid guaranteed by MemoryMapping
+                        // interface.
                         match unsafe {
                             self.device
                                 .vfio_dma_map(guest_map_start, mmap_size, host, true)

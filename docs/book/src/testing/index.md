@@ -19,7 +19,8 @@ unit tests:
 - Avoid accessing kernel devices
 - Avoid global state in unit tests
 
-This allows us to execute unit tests for any platform using emulators such as qemu-static or wine64.
+This allows us to execute unit tests for any platform using emulators such as qemu-user-static or
+wine64.
 
 ### Documentation tests
 
@@ -52,7 +53,16 @@ are only executed when a device-under-test (DUT) is specified when running tests
 End to end tests live in the `e2e_tests` crate. The crate provides a framework to boot a guest with
 crosvm and execut commands in the guest to validate functionality at a high level.
 
-E2E tests are executed just like integration tests.
+E2E tests are executed just like integration tests. By giving
+[nextest's filter expressions](https://nexte.st/book/filter-expressions), you can run a subset of
+the tests.
+
+```sh
+# Run all e2e tests
+./tools/run_tests --dut=vm --filter-expr 'package(e2e_tests)'
+# Run e2e tests whose name contains the string 'boot'.
+./tools/run_tests --dut=vm --filter-expr 'package(e2e_tests) and test(boot)'
+```
 
 ### Downstream Product tests
 
@@ -79,17 +89,17 @@ processes.
 The platforms below can all be tested using `tools/run_tests -p $platform`. The table indicates how
 these tests are executed:
 
-| Platform                    | Build |          Unit Tests           | Integration Tests | E2E Tests |
-| :-------------------------- | :---: | :---------------------------: | :---------------: | :-------: |
-| x86_64 (linux)              |   ✅   |               ✅               |         ✅         |     ✅     |
-| aarch64 (linux)             |   ✅   | ✅ (qemu-static[^qemu-static]) |  ✅ (qemu[^qemu])  |     ❌     |
-| armhf (linux)               |   ✅   | ✅ (qemu-static[^qemu-static]) |         ❌         |     ❌     |
-| mingw64[^windows] (linux)   |   🚧   |          🚧 (wine64)           |         ❌         |     ❌     |
-| mingw64[^windows] (windows) |   🚧   |               🚧               |         🚧         |     ❌     |
+| Platform                    | Build |        Unit Tests         | Integration Tests | E2E Tests |
+| :-------------------------- | :---: | :-----------------------: | :---------------: | :-------: |
+| x86_64 (linux)              |   ✅   |             ✅             |         ✅         |     ✅     |
+| aarch64 (linux)             |   ✅   | ✅ (qemu-user[^qemu-user]) |  ✅ (qemu[^qemu])  |     ❌     |
+| armhf (linux)               |   ✅   | ✅ (qemu-user[^qemu-user]) |         ❌         |     ❌     |
+| mingw64[^windows] (linux)   |   🚧   |        🚧 (wine64)         |         ❌         |     ❌     |
+| mingw64[^windows] (windows) |   🚧   |             🚧             |         🚧         |     ❌     |
 
 Crosvm CI will use the same configuration as `tools/run_tests`.
 
-[^qemu-static]: qemu-static-aarch64 or qemu-static-arm translate instructions into x86 and executes them on the
+[^qemu-user]: qemu-aarch64-static or qemu-arm-static translate instructions into x86 and executes them on the
     host kernel. This works well for unit tests, but will fail when interacting with platform
     specific kernel features.
 

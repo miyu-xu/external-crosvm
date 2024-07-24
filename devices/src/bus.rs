@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use anyhow::Context;
 use base::debug;
 use base::error;
+use base::Event;
 use base::SharedMemory;
 use remain::sorted;
 use serde::Deserialize;
@@ -208,13 +209,20 @@ pub enum HotPlugKey {
 }
 
 /// Trait for devices that notify hotplug event into guest
-pub trait HotPlugBus {
-    /// Notify hotplug in event into guest
+pub trait HotPlugBus: Send {
+    /// Request hot plug event. Returns error if the request is not sent. Upon success, optionally
+    /// returns an event, which is triggerred once when the guest OS completes the request (by
+    /// sending PCI_EXP_SLTCTL_CCIE). Returns None if no such mechanism is provided.
     /// * 'addr' - the guest pci address for hotplug in device
-    fn hot_plug(&mut self, addr: PciAddress);
-    /// Notify hotplug out event into guest
+    fn hot_plug(&mut self, addr: PciAddress) -> anyhow::Result<Option<Event>>;
+    /// Request hot unplug event. Returns error if the request is not sent. Upon success, optionally
+    /// returns an event, which is triggerred once when the guest OS completes the request (by
+    /// sending PCI_EXP_SLTCTL_CCIE). Returns None if no such mechanism is provided.
     /// * 'addr' - the guest pci address for hotplug out device
-    fn hot_unplug(&mut self, addr: PciAddress);
+    fn hot_unplug(&mut self, addr: PciAddress) -> anyhow::Result<Option<Event>>;
+    /// Get a notification event when the HotPlugBus is ready for hot plug commands. If the port is
+    /// already ready, then the notification event is triggerred immediately.
+    fn get_ready_notification(&mut self) -> anyhow::Result<Event>;
     /// Check whether the hotplug bus is available to add the new device
     ///
     /// - 'None': hotplug bus isn't match with host pci device

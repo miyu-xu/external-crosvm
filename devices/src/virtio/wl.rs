@@ -72,9 +72,12 @@ use base::Error;
 use base::Event;
 use base::EventToken;
 use base::EventType;
-use base::FromRawDescriptor;
 #[cfg(feature = "gpu")]
 use base::IntoRawDescriptor;
+#[cfg(feature = "minigbm")]
+use base::MemoryMappingBuilder;
+#[cfg(feature = "minigbm")]
+use base::MmapError;
 use base::Protection;
 use base::RawDescriptor;
 use base::Result;
@@ -93,6 +96,8 @@ use hypervisor::MemCacheType;
 use libc::EBADF;
 #[cfg(feature = "minigbm")]
 use libc::EINVAL;
+#[cfg(feature = "minigbm")]
+use libc::ENOSYS;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
 use resources::AddressRange;
@@ -110,9 +115,15 @@ use rutabaga_gfx::RutabagaError;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGralloc;
 #[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGrallocBackendFlags;
+#[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGrallocFlags;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaIntoRawDescriptor;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
 use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
@@ -190,6 +201,10 @@ const VIRTIO_WL_VFD_DMABUF_SYNC_VALID_FLAG_MASK: u32 = 0x7;
 
 #[cfg(feature = "minigbm")]
 const DMA_BUF_IOCTL_BASE: c_uint = 0x62;
+#[cfg(feature = "minigbm")]
+const DMA_BUF_SYNC_WRITE: c_uint = 0x2;
+#[cfg(feature = "minigbm")]
+const DMA_BUF_SYNC_END: c_uint = 0x4;
 
 #[cfg(feature = "minigbm")]
 #[repr(C)]
@@ -218,7 +233,7 @@ fn is_fence(f: &File) -> bool {
     let info = sync_file_info::default();
     // SAFETY:
     // Safe as f is a valid file
-    unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO(), &info) == 0 }
+    unsafe { ioctl_with_ref(f, SYNC_IOC_FILE_INFO, &info) == 0 }
 }
 
 #[cfg(feature = "minigbm")]
@@ -448,7 +463,7 @@ struct VmRequester {
 fn to_safe_descriptor(r: RutabagaDescriptor) -> SafeDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe { SafeDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
+    unsafe { base::FromRawDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
 }
 
 impl VmRequester {
@@ -797,6 +812,8 @@ struct WlVfd {
     slot: Option<(u64 /* offset */, VmRequester)>,
     #[cfg(feature = "minigbm")]
     is_dmabuf: bool,
+    #[cfg(feature = "minigbm")]
+    map_info: u32,
     fence: Option<File>,
     is_fence: bool,
 }
@@ -818,6 +835,25 @@ impl fmt::Debug for WlVfd {
         }
         write!(f, " }}")
     }
+}
+
+#[cfg(feature = "minigbm")]
+fn flush_shared_memory(shared_memory: &SharedMemory) -> Result<()> {
+    let mmap = match MemoryMappingBuilder::new(shared_memory.size as usize)
+        .from_shared_memory(shared_memory)
+        .build()
+    {
+        Ok(v) => v,
+        Err(_) => return Err(Error::new(EINVAL)),
+    };
+    if let Err(err) = mmap.flush_all() {
+        base::error!("failed to flush shared memory: {}", err);
+        return match err {
+            MmapError::NotImplemented(_) => Err(Error::new(ENOSYS)),
+            _ => Err(Error::new(EINVAL)),
+        };
+    }
+    Ok(())
 }
 
 impl WlVfd {
@@ -864,6 +900,7 @@ impl WlVfd {
         vfd.guest_shared_memory = Some(vfd_shm);
         vfd.slot = Some((offset, vm));
         vfd.is_dmabuf = true;
+        vfd.map_info = reqs.map_info;
         Ok((vfd, desc))
     }
 
@@ -880,11 +917,26 @@ impl WlVfd {
                 };
                 // SAFETY:
                 // Safe as descriptor is a valid dmabuf and incorrect flags will return an error.
-                if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC(), &sync) } < 0 {
-                    Err(WlError::DmabufSync(io::Error::last_os_error()))
-                } else {
-                    Ok(())
+                if unsafe { ioctl_with_ref(descriptor, DMA_BUF_IOCTL_SYNC, &sync) } < 0 {
+                    return Err(WlError::DmabufSync(io::Error::last_os_error()));
                 }
+
+                // virtio-wl kernel driver always maps dmabufs with WB memory type, regardless of
+                // the host memory type (which is wrong). However, to avoid changing the protocol,
+                // assume that all guest writes are cached and ensure clflush-like ops on all mapped
+                // cachelines if the host mapping is not cached.
+                const END_WRITE_MASK: u32 = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+                if (flags & END_WRITE_MASK) == END_WRITE_MASK
+                    && (self.map_info & RUTABAGA_MAP_CACHE_MASK) != RUTABAGA_MAP_CACHE_CACHED
+                {
+                    if let Err(err) = flush_shared_memory(descriptor) {
+                        base::warn!("failed to flush cached dmabuf mapping: {:?}", err);
+                        return Err(WlError::DmabufSync(io::Error::from_raw_os_error(
+                            err.errno(),
+                        )));
+                    }
+                }
+                Ok(())
             }
             None => Err(WlError::DmabufSync(io::Error::from_raw_os_error(EBADF))),
         }
@@ -1001,14 +1053,14 @@ impl WlVfd {
                 .send_vectored_with_fds(&data.get_remaining(), rds)
                 .map_err(WlError::SendVfd)?;
             // All remaining data in `data` is now considered consumed.
-            data.consume(::std::usize::MAX);
+            data.consume(usize::MAX);
             Ok(WlResp::Ok)
         } else if let Some((_, local_pipe)) = &mut self.local_pipe {
             // Impossible to send descriptors over a simple pipe.
             if !rds.is_empty() {
                 return Ok(WlResp::InvalidType);
             }
-            data.read_to(local_pipe, usize::max_value())
+            data.read_to(local_pipe, usize::MAX)
                 .map_err(WlError::WritePipe)?;
             Ok(WlResp::Ok)
         } else {
@@ -1441,7 +1493,9 @@ impl WlState {
                             *descriptor = dup.into_raw_descriptor();
                             // SAFETY:
                             // Safe because the fd comes from a valid SafeDescriptor.
-                            let file = unsafe { File::from_raw_descriptor(*descriptor) };
+                            let file: File = unsafe {
+                                base::FromRawDescriptor::from_raw_descriptor(*descriptor)
+                            };
                             bridged_files.push(file);
                         }
                         Err(_) => return Ok(WlResp::InvalidId),
@@ -1958,7 +2012,7 @@ impl VirtioDevice for Wl {
     fn on_device_sandboxed(&mut self) {
         // Gralloc initialization can cause some GPU drivers to create their own threads
         // and that must be done after sandboxing.
-        match RutabagaGralloc::new() {
+        match RutabagaGralloc::new(RutabagaGrallocBackendFlags::new()) {
             Ok(g) => self.gralloc = Some(g),
             Err(e) => {
                 error!("failed to initialize gralloc {:?}", e);

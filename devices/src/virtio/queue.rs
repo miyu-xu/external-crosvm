@@ -49,8 +49,8 @@ pub struct QueueConfig {
     max_size: u16,
 
     /// The queue size in elements the driver selected. This is always guaranteed to be a power of
-    /// two less than or equal to `max_size`, as required for split virtqueues. These invariants are
-    /// enforced by `set_size()`.
+    /// two less than or equal to `max_size`, as required for split virtqueues. These invariants
+    /// are enforced by `set_size()`.
     size: u16,
 
     /// Indicates if the queue is finished with configuration
@@ -59,7 +59,8 @@ pub struct QueueConfig {
     /// MSI-X vector for the queue. Don't care for INTx
     vector: u16,
 
-    /// Ring features (e.g. `VIRTIO_RING_F_EVENT_IDX`, `VIRTIO_F_RING_PACKED`) offered by the device
+    /// Ring features (e.g. `VIRTIO_RING_F_EVENT_IDX`, `VIRTIO_F_RING_PACKED`) offered by the
+    /// device
     features: u64,
 
     // Device feature bits accepted by the driver
@@ -267,7 +268,8 @@ impl QueueConfig {
         if self.activated {
             bail!("queue is already activated");
         }
-        // If VIRTIO_F_RING_PACKED feature bit is set, create a packed queue, otherwise create a split queue
+        // If VIRTIO_F_RING_PACKED feature bit is set, create a packed queue, otherwise create a
+        // split queue
         let queue: Queue = if ((self.acked_features >> VIRTIO_F_RING_PACKED) & 1) != 0 {
             let pq =
                 PackedQueue::new(self, mem, event).context("Failed to create a packed queue.")?;
@@ -335,13 +337,15 @@ impl QueueConfig {
     }
 }
 
-/// Usage: define_queue_method!(method_name, return_type[, mut][, arg1: arg1_type, arg2: arg2_type, ...])
+/// Usage: define_queue_method!(method_name, return_type[, mut][, arg1: arg1_type, arg2: arg2_type,
+/// ...])
 ///
 /// - `method_name`: The name of the method to be defined (as an identifier).
 /// - `return_type`: The return type of the method.
-/// - `mut` (optional): Include this keyword if the method requires a mutable reference to `self` (`&mut self`).
-/// - `arg1: arg1_type, arg2: arg2_type, ...` (optional): Include method parameters as a comma-separated list
-///   of `name: type` pairs, if the method takes any arguments.
+/// - `mut` (optional): Include this keyword if the method requires a mutable reference to `self`
+///   (`&mut self`).
+/// - `arg1: arg1_type, arg2: arg2_type, ...` (optional): Include method parameters as a
+///   comma-separated list of `name: type` pairs, if the method takes any arguments.
 macro_rules! define_queue_method {
     (
         $(#[$doc:meta])*
@@ -450,6 +454,29 @@ impl Queue {
             PackedQueue::restore(queue_value, mem, event).map(Queue::PackedVirtQueue)
         } else {
             SplitQueue::restore(queue_value, mem, event).map(Queue::SplitVirtQueue)
+        }
+    }
+
+    /// "Reclaim" a queue that was given to a vhost-user backend and is now being taken back using
+    /// VHOST_USER_GET_VRING_BASE.
+    ///
+    /// The `Queue` will have stale fields if the vhost-user backend fulfilled any virtqueue
+    /// requests. This function updates the `Queue` to pick up where the backend left off.
+    pub fn vhost_user_reclaim(&mut self, vring_base: u16) {
+        match self {
+            Queue::SplitVirtQueue(q) => q.vhost_user_reclaim(vring_base),
+            Queue::PackedVirtQueue(q) => q.vhost_user_reclaim(vring_base),
+        }
+    }
+
+    /// Getter for the next index of the available ring that device will process.
+    ///
+    /// Not to be confused with the available ring's index field, which is the next index for the
+    /// driver to fill.
+    pub fn next_avail_to_process(&self) -> u16 {
+        match self {
+            Queue::SplitVirtQueue(q) => q.next_avail_to_process(),
+            Queue::PackedVirtQueue(q) => q.next_avail_to_process(),
         }
     }
 

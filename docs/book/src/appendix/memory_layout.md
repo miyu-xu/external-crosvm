@@ -22,7 +22,8 @@ see the source. All addresses are in hexadecimal.
 | [`END_ADDR_BEFORE_32BITS`]   | `D000_0000`   | `F400_0000`     | 576 MiB   | Low (\<4G) MMIO allocation area                                                          |
 | [`PCIE_CFG_MMIO_START`]      | `F400_0000`   | `F800_0000`     | 64 MiB    | PCIe enhanced config (ECAM)                                                              |
 | [`RESERVED_MEM_SIZE`]        | `F800_0000`   | `1_0000_0000`   | 128 MiB   | LAPIC/IOAPIC/HPET/…                                                                      |
-| [`TSS_ADDR`]                 | `FFFB_D000`   |                 |           | Boot task state segment                                                                  |
+| [`IDENTITY_MAP_ADDR`]        | `FEFF_C000`   |                 |           | Identity map segment                                                                     |
+| [`TSS_ADDR`]                 | `FEFF_D000`   |                 |           | Boot task state segment                                                                  |
 |                              | `1_0000_0000` |                 |           | RAM (>4G)                                                                                |
 |                              | (end of RAM)  |                 |           | High (>4G) MMIO allocation area                                                          |
 
@@ -40,7 +41,8 @@ see the source. All addresses are in hexadecimal.
 [`end_addr_before_32bits`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=230?q=END_ADDR_BEFORE_32BITS
 [`pcie_cfg_mmio_start`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=400?q=PCIE_CFG_MMIO_START
 [`reserved_mem_size`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=395?q=RESERVED_MEM_SIZE
-[`tss_addr`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=339?q=TSS_ADDR
+[`identity_map_addr`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=339?q=identity_map_addr_start
+[`tss_addr`]: https://crsrc.org/o/src/platform/crosvm/x86_64/src/lib.rs;l=339?q=tss_addr_start
 
 ## aarch64 guest physical memory map
 
@@ -67,8 +69,7 @@ These apply for all boot modes.
 | [`AARCH64_AXI_BASE`]              | `4000_0000`     |                 |                | Seemingly unused? Is this hard-coded somewhere in the kernel? |
 | [`AARCH64_PROTECTED_VM_FW_START`] | `7fc0_0000`     | `8000_0000`     | 4 MiB          | pVM firmware (if running a protected VM)                      |
 | [`AARCH64_PHYS_MEM_START`]        | `8000_0000`     |                 | --mem size     | RAM (starts at IPA = 2 GiB)                                   |
-| [`get_swiotlb_addr`]              | after RAM       |                 | --swiotlb size | Only present for hypervisors requiring static swiotlb alloc   |
-| [`plat_mmio_base`]                | after swiotlb   | +0x800000       | 8 MiB          | Platform device MMIO region                                   |
+| [`plat_mmio_base`]                | after RAM       | +0x800000       | 8 MiB          | Platform device MMIO region                                   |
 | [`high_mmio_base`]                | after plat_mmio | max phys addr   |                | High MMIO allocation area                                     |
 
 ### Layout when booting a kernel
@@ -102,7 +103,6 @@ These apply when a bootloader is passed with `--bios`.
 [`aarch64_pvtime_ipa_start`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=100?q=AARCH64_PVTIME_IPA_START
 [`aarch64_protected_vm_fw_start`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=96?q=AARCH64_PROTECTED_VM_FW_START
 [`aarch64_phys_mem_start`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=85?q=AARCH64_PHYS_MEM_START
-[`get_swiotlb_addr`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs?q=get_swiotlb_addr
 [`plat_mmio_base`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=835?q=plat_mmio_base
 [`high_mmio_base`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=838?q=high_mmio_base
 [`aarch64_kernel_offset`]: https://crsrc.org/o/src/platform/crosvm/aarch64/src/lib.rs;l=76?q=AARCH64_KERNEL_OFFSET

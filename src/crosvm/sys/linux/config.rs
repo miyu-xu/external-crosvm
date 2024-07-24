@@ -126,19 +126,22 @@ impl FromStr for SharedDir {
         // * type=TYPE - must be one of "p9" or "fs" (default: p9)
         // * uidmap=UIDMAP - a uid map in the format "inner outer count[,inner outer count]"
         //   (default: "0 <current euid> 1")
-        // * gidmap=GIDMAP - a gid map in the same format as uidmap
-        //   (default: "0 <current egid> 1")
+        // * gidmap=GIDMAP - a gid map in the same format as uidmap (default: "0 <current egid> 1")
         // * privileged_quota_uids=UIDS - Space-separated list of privileged uid values. When
-        //   performing quota-related operations, these UIDs are treated as if they have
-        //   CAP_FOWNER.
-        // * timeout=TIMEOUT - a timeout value in seconds, which indicates how long attributes
-        //   and directory contents should be considered valid (default: 5)
+        //   performing quota-related operations, these UIDs are treated as if they have CAP_FOWNER.
+        // * timeout=TIMEOUT - a timeout value in seconds, which indicates how long attributes and
+        //   directory contents should be considered valid (default: 5)
         // * cache=CACHE - one of "never", "always", or "auto" (default: auto)
         // * writeback=BOOL - indicates whether writeback caching should be enabled (default: false)
         // * uid=UID - uid of the device process in the user namespace created by minijail.
         //   (default: 0)
         // * gid=GID - gid of the device process in the user namespace created by minijail.
         //   (default: 0)
+        // * max_dynamic_perm=uint - number of maximum number of dynamic permissions paths (default:
+        //   0) This feature is arc_quota specific feature.
+        // * max_dynamic_xattr=uint - number of maximum number of dynamic xattr paths (default: 0).
+        //   This feature is arc_quota specific feature.
+        //
         // These two options (uid/gid) are useful when the crosvm process has no
         // CAP_SETGID/CAP_SETUID but an identity mapping of the current user/group
         // between the VM and the host is required.
@@ -206,8 +209,8 @@ impl FromStr for SharedDir {
                     // 1. Lookup "foo", an non-existing file. Negative dentry is cached on the
                     //    guest.
                     // 2. Create "FOO".
-                    // 3. Lookup "foo". This needs to be successful on the casefold directory,
-                    //    but the lookup can fail due the negative cache created at 1.
+                    // 3. Lookup "foo". This needs to be successful on the casefold directory, but
+                    //    the lookup can fail due the negative cache created at 1.
                     bail!("'negative_timeout' cannot be used with 'ascii_casefold'");
                 }
             }
@@ -222,6 +225,67 @@ impl FromStr for SharedDir {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PmemExt2Option {
+    pub path: PathBuf,
+    pub blocks_per_group: u32,
+    pub inodes_per_group: u32,
+    pub size: u32,
+}
+
+impl Default for PmemExt2Option {
+    fn default() -> Self {
+        let blocks_per_group = 4096;
+        let inodes_per_group = 1024;
+        let size = ext2::BLOCK_SIZE as u32 * blocks_per_group; // only one block group
+        Self {
+            path: Default::default(),
+            blocks_per_group,
+            inodes_per_group,
+            size,
+        }
+    }
+}
+
+pub fn parse_pmem_ext2_option(param: &str) -> Result<PmemExt2Option, String> {
+    let mut opt = PmemExt2Option::default();
+    let mut components = param.split(':');
+    opt.path = PathBuf::from(
+        components
+            .next()
+            .ok_or("missing source path for `pmem-ext2`")?,
+    );
+
+    for c in components {
+        let mut o = c.splitn(2, '=');
+        let kind = o.next().ok_or("`pmem-ext2` options must not be empty")?;
+        let value = o
+            .next()
+            .ok_or("`pmem-ext2` options must be of the form `kind=value`")?;
+        match kind {
+            "blocks_per_group" => {
+                opt.blocks_per_group = value
+                    .parse()
+                    .map_err(|e| format!("failed to parse blocks_per_groups '{value}': {:#}", e))?
+            }
+            "inodes_per_group" => {
+                opt.inodes_per_group = value
+                    .parse()
+                    .map_err(|e| format!("failed to parse inodes_per_groups '{value}': {:#}", e))?
+            }
+            "size" => {
+                opt.size = value
+                    .parse()
+                    .map_err(|e| format!("failed to parse memory size '{value}': {:#}", e))?
+            }
+            _ => return Err(format!("invalid `pmem-ext2` option: {}", kind)),
+        }
+    }
+
+    Ok(opt)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -233,8 +297,6 @@ mod tests {
 
     use super::*;
     use crate::crosvm::config::from_key_values;
-    use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_HEIGHT;
-    use crate::crosvm::config::DEFAULT_TOUCH_DEVICE_WIDTH;
 
     #[test]
     fn parse_coiommu_options() {
@@ -320,145 +382,6 @@ mod tests {
         // invalid parameter
         let coiommu_params = from_key_values::<CoIommuParameters>("unpin_invalid_param=0");
         assert!(coiommu_params.is_err());
-    }
-
-    #[test]
-    fn single_touch_spec_and_track_pad_spec_default_size() {
-        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &[
-                "--single-touch",
-                "/dev/single-touch-test",
-                "--trackpad",
-                "/dev/single-touch-test",
-                "/dev/null",
-            ],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT)
-        );
-        assert_eq!(
-            config.virtio_trackpad.first().unwrap().get_size(),
-            (DEFAULT_TOUCH_DEVICE_WIDTH, DEFAULT_TOUCH_DEVICE_HEIGHT)
-        );
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn single_touch_spec_default_size_from_gpu() {
-        let width = 12345u32;
-        let height = 54321u32;
-
-        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &[
-                "--single-touch",
-                "/dev/single-touch-test",
-                "--gpu",
-                &format!("width={},height={}", width, height),
-                "/dev/null",
-            ],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (width, height)
-        );
-    }
-
-    #[test]
-    fn single_touch_spec_and_track_pad_spec_with_size() {
-        let width = 12345u32;
-        let height = 54321u32;
-        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &[
-                "--single-touch",
-                &format!("/dev/single-touch-test:{}:{}", width, height),
-                "--trackpad",
-                &format!("/dev/single-touch-test:{}:{}", width, height),
-                "/dev/null",
-            ],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (width, height)
-        );
-        assert_eq!(
-            config.virtio_trackpad.first().unwrap().get_size(),
-            (width, height)
-        );
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn single_touch_spec_with_size_independent_from_gpu() {
-        let touch_width = 12345u32;
-        let touch_height = 54321u32;
-        let display_width = 1234u32;
-        let display_height = 5432u32;
-        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &[
-                "--single-touch",
-                &format!("/dev/single-touch-test:{}:{}", touch_width, touch_height),
-                "--gpu",
-                &format!("width={},height={}", display_width, display_height),
-                "/dev/null",
-            ],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_single_touch.first().unwrap().get_size(),
-            (touch_width, touch_height)
-        );
-    }
-
-    #[test]
-    fn virtio_switches() {
-        let mut config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &["--switches", "/dev/switches-test", "/dev/null"],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_switches.pop().unwrap(),
-            PathBuf::from("/dev/switches-test")
-        );
-    }
-
-    #[test]
-    fn virtio_rotary() {
-        let mut config: Config = crate::crosvm::cmdline::RunCommand::from_args(
-            &[],
-            &["--rotary", "/dev/rotary-test", "/dev/null"],
-        )
-        .unwrap()
-        .try_into()
-        .unwrap();
-
-        assert_eq!(
-            config.virtio_rotary.pop().unwrap(),
-            PathBuf::from("/dev/rotary-test")
-        );
     }
 
     #[test]
@@ -903,5 +826,46 @@ mod tests {
                 .fs_cfg
                 .use_dax
         );
+    }
+
+    #[test]
+    fn parse_pmem_ext2() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--pmem-ext2", "/path/to/dir", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let opt = config.pmem_ext2.first().unwrap();
+
+        assert_eq!(opt.path, PathBuf::from("/path/to/dir"));
+    }
+
+    #[test]
+    fn parse_pmem_ext2_size() {
+        let blocks_per_group = 2048;
+        let inodes_per_group = 1024;
+        let size = 4096 * blocks_per_group;
+
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--pmem-ext2",
+                &format!("/path/to/dir:blocks_per_group={blocks_per_group}:inodes_per_group={inodes_per_group}:size={size}"),
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let opt = config.pmem_ext2.first().unwrap();
+
+        assert_eq!(opt.path, PathBuf::from("/path/to/dir"));
+        assert_eq!(opt.blocks_per_group, blocks_per_group);
+        assert_eq!(opt.inodes_per_group, inodes_per_group);
+        assert_eq!(opt.size, size);
     }
 }

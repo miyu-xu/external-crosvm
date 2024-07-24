@@ -38,7 +38,6 @@ use sync::Mutex;
 use tube_transporter::TubeToken;
 use virtio_sys::virtio_net;
 use vm_memory::GuestMemory;
-use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 
 use crate::virtio;
@@ -50,7 +49,7 @@ use crate::virtio::net::MAX_BUFFER_SIZE;
 use crate::virtio::vhost::user::device::handler::sys::windows::read_from_tube_transporter;
 use crate::virtio::vhost::user::device::handler::sys::windows::run_handler;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::vhost::user::device::net::run_ctrl_queue;
 use crate::virtio::vhost::user::device::net::run_tx_queue;
@@ -77,7 +76,6 @@ where
             tap: slirp,
             avail_features,
             acked_features: 0,
-            acked_protocol_features: VhostUserProtocolFeatures::empty(),
             mtu: 1500,
             slirp_kill_event,
             workers: Default::default(),
@@ -167,7 +165,7 @@ async fn run_rx_queue<T: TapT>(
     queue
 }
 
-/// Platform specific impl of VhostUserBackend::start_queue.
+/// Platform specific impl of VhostUserDevice::start_queue.
 pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + IntoAsync + TapT>(
     backend: &mut NetBackend<T>,
     idx: usize,
@@ -307,13 +305,11 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
     let exit_event = bootstrap_tube.recv::<Event>()?;
 
     // We only have one net device for now.
-    let dev = Box::new(
-        NetBackend::<net_util::Slirp>::new_slirp(
-            net_backend_config.guest_pipe,
-            net_backend_config.slirp_kill_event,
-        )
-        .unwrap(),
-    );
+    let dev = NetBackend::<net_util::Slirp>::new_slirp(
+        net_backend_config.guest_pipe,
+        net_backend_config.slirp_kill_event,
+    )
+    .unwrap();
 
     let handler = DeviceRequestHandler::new(dev);
 

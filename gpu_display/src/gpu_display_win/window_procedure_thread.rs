@@ -32,7 +32,6 @@ use base::Event;
 use base::ReadNotifier;
 use base::Tube;
 use euclid::size2;
-use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
@@ -229,7 +228,7 @@ pub struct WindowProcedureThread {
     thread: Option<JoinHandle<()>>,
     message_router_handle: HWND,
     message_loop_state: Option<Arc<AtomicI32>>,
-    thread_terminated_event: Event,
+    close_requested_event: Event,
 }
 
 impl WindowProcedureThread {
@@ -237,38 +236,44 @@ impl WindowProcedureThread {
         // We don't implement Default for WindowProcedureThreadBuilder so that the builder function
         // is the only way to create WindowProcedureThreadBuilder.
         WindowProcedureThreadBuilder {
+            max_num_windows: 1,
             display_tube: None,
             #[cfg(feature = "kiwi")]
             ime_tube: None,
         }
     }
 
-    fn start_thread(gpu_main_display_tube: Option<Tube>) -> Result<Self> {
+    fn start_thread(max_num_windows: u32, gpu_main_display_tube: Option<Tube>) -> Result<Self> {
         let (message_router_handle_sender, message_router_handle_receiver) = channel();
         let message_loop_state = Arc::new(AtomicI32::new(MessageLoopState::NotStarted as i32));
-        let thread_terminated_event = Event::new().unwrap();
+        let close_requested_event = Event::new().unwrap();
 
         let message_loop_state_clone = Arc::clone(&message_loop_state);
-        let thread_terminated_event_clone = thread_terminated_event
+        let close_requested_event_clone = close_requested_event
             .try_clone()
-            .map_err(|e| anyhow!("Failed to clone thread_terminated_event: {}", e))?;
+            .map_err(|e| anyhow!("Failed to clone close_requested_event: {}", e))?;
 
-        let thread = match ThreadBuilder::new()
+        let thread = ThreadBuilder::new()
             .name("gpu_display_wndproc".into())
             .spawn(move || {
-                Self::run_message_loop(
-                    message_router_handle_sender,
-                    message_loop_state_clone,
-                    gpu_main_display_tube,
-                );
-
-                if let Err(e) = thread_terminated_event_clone.signal() {
-                    error!("Failed to signal thread terminated event: {}", e);
+                match close_requested_event_clone.try_clone() {
+                    Ok(close_requested_event) => Self::run_message_loop(
+                        max_num_windows,
+                        message_router_handle_sender,
+                        message_loop_state_clone,
+                        gpu_main_display_tube,
+                        close_requested_event,
+                    ),
+                    Err(e) => error!("Failed to clone close_requested_event: {}", e),
                 }
-            }) {
-            Ok(thread) => thread,
-            Err(e) => bail!("Failed to spawn WndProc thread: {}", e),
-        };
+                // The close requested event should have been signaled at this point, unless we hit
+                // some edge cases, e.g. the WndProc thread terminates unexpectedly during startup.
+                // We want to make sure it is signaled in all cases.
+                if let Err(e) = close_requested_event_clone.signal() {
+                    error!("Failed to signal close requested event: {}", e);
+                }
+            })
+            .context("Failed to spawn WndProc thread")?;
 
         match message_router_handle_receiver.recv() {
             Ok(message_router_handle_res) => match message_router_handle_res {
@@ -276,7 +281,7 @@ impl WindowProcedureThread {
                     thread: Some(thread),
                     message_router_handle: message_router_handle as HWND,
                     message_loop_state: Some(message_loop_state),
-                    thread_terminated_event,
+                    close_requested_event,
                 }),
                 Err(e) => bail!("WndProc internal failure: {:?}", e),
             },
@@ -284,10 +289,10 @@ impl WindowProcedureThread {
         }
     }
 
-    pub fn try_clone_thread_terminated_event(&self) -> Result<Event> {
-        self.thread_terminated_event
+    pub fn try_clone_close_requested_event(&self) -> Result<Event> {
+        self.close_requested_event
             .try_clone()
-            .map_err(|e| anyhow!("Failed to clone thread_terminated_event: {}", e))
+            .map_err(|e| anyhow!("Failed to clone close_requested_event: {}", e))
     }
 
     pub fn post_display_command(&self, message: DisplaySendToWndProc) -> Result<()> {
@@ -327,21 +332,26 @@ impl WindowProcedureThread {
     }
 
     fn run_message_loop(
+        max_num_windows: u32,
         message_router_handle_sender: Sender<Result<u32>>,
         message_loop_state: Arc<AtomicI32>,
         gpu_main_display_tube: Option<Tube>,
+        close_requested_event: Event,
     ) {
         let gpu_main_display_tube = gpu_main_display_tube.map(Rc::new);
         // SAFETY:
         // Safe because the dispatcher will take care of the lifetime of the `MessageOnlyWindow` and
         // `GuiWindow` objects.
-        match unsafe { Self::create_windows() }.and_then(|(message_router_window, gui_window)| {
-            WindowMessageDispatcher::create(
-                message_router_window,
-                gui_window,
-                gpu_main_display_tube.clone(),
-            )
-        }) {
+        match unsafe { Self::create_windows(max_num_windows) }.and_then(
+            |(message_router_window, gui_windows)| {
+                WindowMessageDispatcher::new(
+                    message_router_window,
+                    gui_windows,
+                    gpu_main_display_tube.clone(),
+                    close_requested_event,
+                )
+            },
+        ) {
             Ok(dispatcher) => {
                 info!("WndProc thread entering message loop");
                 message_loop_state.store(MessageLoopState::Running as i32, Ordering::SeqCst);
@@ -401,8 +411,8 @@ impl WindowProcedureThread {
                     }
                     Token::ServiceMessage => Self::read_and_dispatch_service_message(
                         &mut message_dispatcher,
-                        // We never use this token if `gpu_main_display_tube` is None, so `expect()`
-                        // should always succeed.
+                        // We never use this token if `gpu_main_display_tube` is None, so
+                        // `expect()` should always succeed.
                         gpu_main_display_tube
                             .as_ref()
                             .expect("Service message tube is None"),
@@ -469,9 +479,7 @@ impl WindowProcedureThread {
         gpu_main_display_tube: &Tube,
     ) {
         match gpu_main_display_tube.recv::<ServiceSendToGpu>() {
-            Ok(message) => message_dispatcher
-                .as_mut()
-                .process_service_message(&message),
+            Ok(message) => message_dispatcher.as_mut().process_service_message(message),
             Err(e) => {
                 error!("Failed to receive service message through the tube: {}", e)
             }
@@ -491,22 +499,22 @@ impl WindowProcedureThread {
         })
     }
 
-    /// In the normal case, when all windows are closed by the user, the WndProc thread exits the
-    /// message loop and terminates naturally. If we have to shutdown the VM before all windows are
-    /// closed because of errors, this function will post a message to let the WndProc thread kill
-    /// all windows and terminate.
+    /// Normally the WndProc thread should still be running when the `WindowProcedureThread` struct
+    /// is dropped, and this function will post a message to notify that thread to destroy all
+    /// windows and release all resources. If the WndProc thread has encountered fatal errors and
+    /// has already terminated, we don't need to post this message anymore.
     fn signal_exit_message_loop_if_needed(&self) {
         if !self.is_message_loop_running() {
             return;
         }
 
-        info!("WndProc thread is still in message loop before dropping. Signaling killing windows");
+        info!("WndProc thread is still in message loop before dropping. Signaling shutting down");
         if let Err(e) = self.post_message_to_thread(
-            WM_USER_WNDPROC_THREAD_DROP_KILL_WINDOW_INTERNAL,
+            WM_USER_SHUTDOWN_WNDPROC_THREAD_INTERNAL,
             /* w_param */ 0,
             /* l_param */ 0,
         ) {
-            error!("Failed to signal WndProc thread to kill windows: {:?}", e);
+            error!("Failed to signal WndProc thread to shut down: {:?}", e);
         }
     }
 
@@ -532,7 +540,7 @@ impl WindowProcedureThread {
     /// # Safety
     /// The owner of the returned window objects is responsible for dropping them before we finish
     /// processing `WM_NCDESTROY`, because the window handle will become invalid afterwards.
-    unsafe fn create_windows() -> Result<(MessageOnlyWindow, GuiWindow)> {
+    unsafe fn create_windows(max_num_windows: u32) -> Result<(MessageOnlyWindow, Vec<GuiWindow>)> {
         let message_router_window = MessageOnlyWindow::new(
             /* class_name */
             Self::get_window_class_name::<MessageOnlyWindow>()
@@ -549,22 +557,26 @@ impl WindowProcedureThread {
         // window may use the background brush to clear the gfxstream window client area when
         // drawing occurs. This caused the screen flickering issue during resizing.
         // See b/197786842 for details.
-        let gui_window = GuiWindow::new(
-            /* class_name */
-            Self::get_window_class_name::<GuiWindow>()
-                .with_context(|| {
-                    format!(
-                        "retrieve the window class name for GuiWindow of {}",
-                        type_name::<Self>()
-                    )
-                })?
-                .as_str(),
-            /* title */ Self::get_window_title().as_str(),
-            WS_POPUP | WS_CLIPCHILDREN,
-            // The window size and style can be adjusted later when `Surface` is created.
-            &size2(1, 1),
-        )?;
-        Ok((message_router_window, gui_window))
+        let mut gui_windows = Vec::with_capacity(max_num_windows as usize);
+        for scanout_id in 0..max_num_windows {
+            gui_windows.push(GuiWindow::new(
+                scanout_id,
+                /* class_name */
+                Self::get_window_class_name::<GuiWindow>()
+                    .with_context(|| {
+                        format!(
+                            "retrieve the window class name for GuiWindow of {}",
+                            type_name::<Self>()
+                        )
+                    })?
+                    .as_str(),
+                /* title */ Self::get_window_title().as_str(),
+                /* dw_style */ WS_POPUP | WS_CLIPCHILDREN,
+                // The window size and style can be adjusted later when `Surface` is created.
+                &size2(1, 1),
+            )?);
+        }
+        Ok((message_router_window, gui_windows))
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -589,8 +601,8 @@ impl WindowProcedureThread {
     /// name will be returned. This function also registers the Window class if it is not registered
     /// through this function yet.
     fn get_window_class_name<T: RegisterWindowClass>() -> Result<String> {
-        static WINDOW_CLASS_NAMES: OnceCell<Mutex<BTreeMap<TypeId, String>>> = OnceCell::new();
-        let mut window_class_names = WINDOW_CLASS_NAMES.get_or_init(Default::default).lock();
+        static WINDOW_CLASS_NAMES: Mutex<BTreeMap<TypeId, String>> = Mutex::new(BTreeMap::new());
+        let mut window_class_names = WINDOW_CLASS_NAMES.lock();
         let id = window_class_names.len();
         let entry = window_class_names.entry(TypeId::of::<T>());
         let entry = match entry {
@@ -636,12 +648,18 @@ unsafe impl Send for WindowProcedureThread {}
 
 #[derive(Deserialize, Serialize)]
 pub struct WindowProcedureThreadBuilder {
+    max_num_windows: u32,
     display_tube: Option<Tube>,
     #[cfg(feature = "kiwi")]
     ime_tube: Option<Tube>,
 }
 
 impl WindowProcedureThreadBuilder {
+    pub fn set_max_num_windows(&mut self, max_num_windows: u32) -> &mut Self {
+        self.max_num_windows = max_num_windows;
+        self
+    }
+
     pub fn set_display_tube(&mut self, display_tube: Option<Tube>) -> &mut Self {
         self.display_tube = display_tube;
         self
@@ -661,10 +679,16 @@ impl WindowProcedureThreadBuilder {
     pub fn start_thread(self) -> Result<WindowProcedureThread> {
         cfg_if::cfg_if! {
             if #[cfg(feature = "kiwi")] {
-                let ime_tube = self.ime_tube.ok_or_else(|| anyhow!("The ime tube is not set."))?;
-                WindowProcedureThread::start_thread(self.display_tube, ime_tube)
+                let ime_tube = self
+                    .ime_tube
+                    .ok_or_else(|| anyhow!("The ime tube is not set."))?;
+                WindowProcedureThread::start_thread(
+                    self.max_num_windows,
+                    self.display_tube,
+                    ime_tube,
+                )
             } else {
-                WindowProcedureThread::start_thread(None)
+                WindowProcedureThread::start_thread(self.max_num_windows, None)
             }
         }
     }

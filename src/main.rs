@@ -22,7 +22,6 @@ use base::syslog;
 use base::syslog::LogArgs;
 use base::syslog::LogConfig;
 use cmdline::RunCommand;
-use cmdline::UsbAttachCommand;
 mod crosvm;
 use crosvm::cmdline;
 #[cfg(feature = "plugin")]
@@ -53,17 +52,22 @@ use crosvm::cmdline::CrossPlatformCommands;
 use crosvm::cmdline::CrossPlatformDevicesCommands;
 #[cfg(windows)]
 use sys::windows::setup_metrics_reporting;
+#[cfg(feature = "composite-disk")]
+use uuid::Uuid;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_add;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_list;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_remove;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_set_display_mouse_mode;
 use vm_control::client::do_modify_battery;
 #[cfg(feature = "pci-hotplug")]
 use vm_control::client::do_net_add;
 #[cfg(feature = "pci-hotplug")]
 use vm_control::client::do_net_remove;
+use vm_control::client::do_security_key_attach;
 use vm_control::client::do_swap_status;
 use vm_control::client::do_usb_attach;
 use vm_control::client::do_usb_detach;
@@ -79,7 +83,6 @@ use vm_control::BalloonControlCommand;
 use vm_control::DiskControlCommand;
 use vm_control::HotPlugDeviceInfo;
 use vm_control::HotPlugDeviceType;
-use vm_control::RestoreCommand;
 use vm_control::SnapshotCommand;
 use vm_control::SwapCommand;
 use vm_control::UsbControlResult;
@@ -169,6 +172,12 @@ fn run_vm(cmd: RunCommand, log_config: LogConfig) -> Result<CommandStatus> {
 
     init_log(log_config, &cfg)?;
     cros_tracing::init();
+
+    if let Some(async_executor) = cfg.async_executor {
+        cros_async::Executor::set_default_executor_kind(async_executor)
+            .context("Failed to set the default async executor")?;
+    }
+
     let exit_state = crate::sys::run_config(cfg)?;
     Ok(CommandStatus::from(exit_state))
 }
@@ -223,7 +232,13 @@ fn sleepbtn_vms(cmd: cmdline::SleepCommand) -> std::result::Result<(), ()> {
 }
 
 fn inject_gpe(cmd: cmdline::GpeCommand) -> std::result::Result<(), ()> {
-    vms_request(&VmRequest::Gpe(cmd.gpe), cmd.socket_path)
+    vms_request(
+        &VmRequest::Gpe {
+            gpe: cmd.gpe,
+            clear_evt: None,
+        },
+        cmd.socket_path,
+    )
 }
 
 #[cfg(feature = "balloon")]
@@ -337,20 +352,35 @@ fn modify_virtio_net(cmd: cmdline::VirtioNetCommand) -> std::result::Result<(), 
 #[cfg(feature = "composite-disk")]
 fn parse_composite_partition_arg(
     partition_arg: &str,
-) -> std::result::Result<(String, String, bool), ()> {
+) -> std::result::Result<(String, String, bool, Option<Uuid>), ()> {
     let mut partition_fields = partition_arg.split(":");
 
     let label = partition_fields.next();
     let path = partition_fields.next();
     let opt = partition_fields.next();
+    let part_guid = partition_fields.next();
 
     if let (Some(label), Some(path)) = (label, path) {
         // By default, composite disk is read-only
         let writable = match opt {
             None => false,
-            Some(opt) => opt.contains("writable"),
+            Some("") => false,
+            Some("writable") => true,
+            Some(value) => {
+                error!(
+                    "Unrecognized option '{}'. Expected 'writable' or nothing.",
+                    value
+                );
+                return Err(());
+            }
         };
-        Ok((label.to_owned(), path.to_owned(), writable))
+
+        let part_guid = part_guid
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(|e| error!("Invalid partition GUID: {}", e))?;
+
+        Ok((label.to_owned(), path.to_owned(), writable, part_guid))
     } else {
         error!(
             "Must specify label and path for partition '{}', like LABEL:PARTITION",
@@ -417,7 +447,7 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
         .partitions
         .into_iter()
         .map(|partition_arg| {
-            let (label, path, writable) = parse_composite_partition_arg(&partition_arg)?;
+            let (label, path, writable, part_guid) = parse_composite_partition_arg(&partition_arg)?;
 
             let partition_file =
                 File::open(&path).map_err(|e| error!("Failed to open partition image: {}", e))?;
@@ -440,6 +470,7 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
                 partition_type: ImagePartitionType::LinuxFilesystem,
                 writable,
                 size,
+                part_guid,
             })
         })
         .collect::<Result<Vec<PartitionInfo>, ()>>()?;
@@ -557,11 +588,17 @@ fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult
 }
 
 #[cfg(feature = "gpu")]
+fn gpu_set_display_mouse_mode(cmd: cmdline::GpuSetDisplayMouseModeCommand) -> ModifyGpuResult {
+    do_gpu_set_display_mouse_mode(cmd.socket_path, cmd.display_id, cmd.mouse_mode)
+}
+
+#[cfg(feature = "gpu")]
 fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
     let result = match cmd.command {
         cmdline::GpuSubCommand::AddDisplays(cmd) => gpu_display_add(cmd),
         cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
         cmdline::GpuSubCommand::RemoveDisplays(cmd) => gpu_display_remove(cmd),
+        cmdline::GpuSubCommand::SetDisplayMouseMode(cmd) => gpu_set_display_mouse_mode(cmd),
     };
     match result {
         Ok(response) => {
@@ -575,10 +612,16 @@ fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
     }
 }
 
-fn usb_attach(cmd: UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
+fn usb_attach(cmd: cmdline::UsbAttachCommand) -> ModifyUsbResult<UsbControlResult> {
     let dev_path = Path::new(&cmd.dev_path);
 
     do_usb_attach(cmd.socket_path, dev_path)
+}
+
+fn security_key_attach(cmd: cmdline::UsbAttachKeyCommand) -> ModifyUsbResult<UsbControlResult> {
+    let dev_path = Path::new(&cmd.dev_path);
+
+    do_security_key_attach(cmd.socket_path, dev_path)
 }
 
 fn usb_detach(cmd: cmdline::UsbDetachCommand) -> ModifyUsbResult<UsbControlResult> {
@@ -592,6 +635,7 @@ fn usb_list(cmd: cmdline::UsbListCommand) -> ModifyUsbResult<UsbControlResult> {
 fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
     let result = match cmd.command {
         cmdline::UsbSubCommand::Attach(cmd) => usb_attach(cmd),
+        cmdline::UsbSubCommand::SecurityKeyAttach(cmd) => security_key_attach(cmd),
         cmdline::UsbSubCommand::Detach(cmd) => usb_detach(cmd),
         cmdline::UsbSubCommand::List(cmd) => usb_list(cmd),
     };
@@ -610,17 +654,13 @@ fn modify_usb(cmd: cmdline::UsbCommand) -> std::result::Result<(), ()> {
 fn snapshot_vm(cmd: cmdline::SnapshotCommand) -> std::result::Result<(), ()> {
     use cmdline::SnapshotSubCommands::*;
     let (socket_path, request) = match cmd.snapshot_command {
-        Take(path) => {
+        Take(take_cmd) => {
             let req = VmRequest::Snapshot(SnapshotCommand::Take {
-                snapshot_path: path.snapshot_path,
+                snapshot_path: take_cmd.snapshot_path,
+                compress_memory: take_cmd.compress_memory,
+                encrypt: take_cmd.encrypt,
             });
-            (path.socket_path, req)
-        }
-        Restore(path) => {
-            let req = VmRequest::Restore(RestoreCommand::Apply {
-                restore_path: path.snapshot_path,
-            });
-            (path.socket_path, req)
+            (take_cmd.socket_path, req)
         }
     };
     let socket_path = Path::new(&socket_path);
@@ -681,6 +721,19 @@ fn prepare_argh_args<I: IntoIterator<Item = String>>(args_iter: I) -> Vec<String
     args
 }
 
+fn shorten_usage(help: &str) -> String {
+    let mut lines = help.lines().collect::<Vec<_>>();
+    let first_line = lines[0].split(char::is_whitespace).collect::<Vec<_>>();
+
+    // Shorten the usage line if it's for `crovm run` command that has so many options.
+    let run_usage = format!("Usage: {} run <options> KERNEL", first_line[1]);
+    if first_line[0] == "Usage:" && first_line[2] == "run" {
+        lines[0] = &run_usage;
+    }
+
+    lines.join("\n")
+}
+
 fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus> {
     let _library_watcher = sys::get_library_watcher();
 
@@ -700,7 +753,8 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
         Err(e) if e.status.is_ok() => {
             // If parsing succeeded and the user requested --help, print the usage message to stdout
             // and exit with success.
-            println!("{}", e.output);
+            let help = shorten_usage(&e.output);
+            println!("{help}");
             return Ok(CommandStatus::SuccessOrVmStop);
         }
         Err(e) => {
@@ -733,14 +787,14 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                          `crosvm --syslog-tag=\"{}\" run` instead",
                         syslog_tag
                     );
-                    log_config.log_args.proc_name = syslog_tag.clone();
+                    log_config.log_args.proc_name.clone_from(syslog_tag);
                 }
                 // We handle run_vm separately because it does not simply signal success/error
                 // but also indicates whether the guest requested reset or stop.
                 run_vm(cmd, log_config)
             } else if let CrossPlatformCommands::Device(cmd) = command {
-                // On windows, the device command handles its own logging setup, so we can't handle it below
-                // otherwise logging will double init.
+                // On windows, the device command handles its own logging setup, so we can't handle
+                // it below otherwise logging will double init.
                 if cfg!(unix) {
                     syslog::init_with(log_config).context("failed to initialize syslog")?;
                 }
@@ -761,11 +815,6 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     }
                     #[cfg(feature = "balloon")]
                     CrossPlatformCommands::BalloonWs(cmd) => {
-                        balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
-                    }
-                    // TODO(b/288432539): remove once concierge is migrated
-                    #[cfg(feature = "balloon")]
-                    CrossPlatformCommands::BalloonWss(cmd) => {
                         balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
                     }
                     CrossPlatformCommands::Battery(cmd) => {
@@ -988,7 +1037,8 @@ mod tests {
             Ok((
                 String::from("LABEL1"),
                 String::from("/partition1.img"),
-                true
+                true,
+                None
             ))
         );
 
@@ -999,8 +1049,53 @@ mod tests {
             Ok((
                 String::from("LABEL2"),
                 String::from("/partition2.img"),
-                false
+                false,
+                None
             ))
+        );
+
+        let arg3 =
+            String::from("LABEL3:/partition3.img:writable:4049C8DC-6C2B-C740-A95A-BDAA629D4378");
+        let res3 = parse_composite_partition_arg(&arg3);
+        assert_eq!(
+            res3,
+            Ok((
+                String::from("LABEL3"),
+                String::from("/partition3.img"),
+                true,
+                Some(Uuid::from_u128(0x4049C8DC_6C2B_C740_A95A_BDAA629D4378))
+            ))
+        );
+
+        // third argument is an empty string. writable: false.
+        let arg4 = String::from("LABEL4:/partition4.img::4049C8DC-6C2B-C740-A95A-BDAA629D4378");
+        let res4 = parse_composite_partition_arg(&arg4);
+        assert_eq!(
+            res4,
+            Ok((
+                String::from("LABEL4"),
+                String::from("/partition4.img"),
+                false,
+                Some(Uuid::from_u128(0x4049C8DC_6C2B_C740_A95A_BDAA629D4378))
+            ))
+        );
+
+        // third argument is not "writable" or an empty string
+        let arg5 = String::from("LABEL5:/partition5.img:4049C8DC-6C2B-C740-A95A-BDAA629D4378");
+        let res5 = parse_composite_partition_arg(&arg5);
+        assert_eq!(res5, Err(()));
+    }
+
+    #[test]
+    fn test_shorten_run_usage() {
+        let help = r"Usage: crosvm run [<KERNEL>] [options] <very long line>...
+
+Start a new crosvm instance";
+        assert_eq!(
+            shorten_usage(help),
+            r"Usage: crosvm run <options> KERNEL
+
+Start a new crosvm instance"
         );
     }
 }

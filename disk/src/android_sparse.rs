@@ -24,7 +24,6 @@ use base::VolatileSlice;
 use cros_async::BackingMemory;
 use cros_async::Executor;
 use cros_async::IoSource;
-use data_model::zerocopy_from_reader;
 use data_model::Le16;
 use data_model::Le32;
 use remain::sorted;
@@ -59,17 +58,17 @@ const MAJOR_VERSION: u16 = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AsBytes, FromZeroes, FromBytes)]
 struct SparseHeader {
-    magic: Le32,          /* SPARSE_HEADER_MAGIC */
-    major_version: Le16,  /* (0x1) - reject images with higher major versions */
-    minor_version: Le16,  /* (0x0) - allow images with higer minor versions */
-    file_hdr_sz: Le16,    /* 28 bytes for first revision of the file format */
-    chunk_hdr_size: Le16, /* 12 bytes for first revision of the file format */
-    blk_sz: Le32,         /* block size in bytes, must be a multiple of 4 (4096) */
-    total_blks: Le32,     /* total blocks in the non-sparse output image */
-    total_chunks: Le32,   /* total chunks in the sparse input image */
-    image_checksum: Le32, /* CRC32 checksum of the original data, counting "don't care" */
-                          /* as 0. Standard 802.3 polynomial, use a Public Domain */
-                          /* table implementation */
+    magic: Le32,          // SPARSE_HEADER_MAGIC
+    major_version: Le16,  // (0x1) - reject images with higher major versions
+    minor_version: Le16,  // (0x0) - allow images with higer minor versions
+    file_hdr_sz: Le16,    // 28 bytes for first revision of the file format
+    chunk_hdr_size: Le16, // 12 bytes for first revision of the file format
+    blk_sz: Le32,         // block size in bytes, must be a multiple of 4 (4096)
+    total_blks: Le32,     // total blocks in the non-sparse output image
+    total_chunks: Le32,   // total chunks in the sparse input image
+    // CRC32 checksum of the original data, counting "don't care" as 0. Standard 802.3 polynomial,
+    // use a Public Domain table implementation
+    image_checksum: Le32,
 }
 
 const CHUNK_TYPE_RAW: u16 = 0xCAC1;
@@ -111,13 +110,15 @@ pub struct AndroidSparse {
     chunks: BTreeMap<u64, ChunkWithSize>,
 }
 
-fn parse_chunk<T: Read + Seek>(mut input: &mut T, blk_sz: u64) -> Result<Option<ChunkWithSize>> {
+fn parse_chunk<T: Read + Seek>(input: &mut T, blk_sz: u64) -> Result<Option<ChunkWithSize>> {
     const HEADER_SIZE: usize = mem::size_of::<ChunkHeader>();
     let current_offset = input
         .stream_position()
         .map_err(Error::ReadSpecificationError)?;
-    let chunk_header: ChunkHeader =
-        zerocopy_from_reader(&mut input).map_err(Error::ReadSpecificationError)?;
+    let mut chunk_header = ChunkHeader::new_zeroed();
+    input
+        .read_exact(chunk_header.as_bytes_mut())
+        .map_err(Error::ReadSpecificationError)?;
     let chunk_body_size = (chunk_header.total_sz.to_native() as usize)
         .checked_sub(HEADER_SIZE)
         .ok_or(Error::InvalidSpecification(format!(
@@ -166,8 +167,9 @@ impl AndroidSparse {
     pub fn from_file(mut file: File) -> Result<AndroidSparse> {
         file.seek(SeekFrom::Start(0))
             .map_err(Error::ReadSpecificationError)?;
-        let sparse_header: SparseHeader =
-            zerocopy_from_reader(&mut file).map_err(Error::ReadSpecificationError)?;
+        let mut sparse_header = SparseHeader::new_zeroed();
+        file.read_exact(sparse_header.as_bytes_mut())
+            .map_err(Error::ReadSpecificationError)?;
         if sparse_header.magic != SPARSE_HEADER_MAGIC {
             return Err(Error::InvalidSpecification(format!(
                 "Header did not match magic constant. Expected {:x}, was {:x}",
@@ -254,7 +256,7 @@ impl AsRawDescriptor for AndroidSparse {
 
 // Performs reads up to the chunk boundary.
 impl FileReadWriteAtVolatile for AndroidSparse {
-    fn read_at_volatile(&mut self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
+    fn read_at_volatile(&self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
         let found_chunk = self.chunks.range(..=offset).next_back();
         let (
             chunk_start,
@@ -299,7 +301,7 @@ impl FileReadWriteAtVolatile for AndroidSparse {
             }
         }
     }
-    fn write_at_volatile(&mut self, _slice: VolatileSlice, _offset: u64) -> io::Result<usize> {
+    fn write_at_volatile(&self, _slice: VolatileSlice, _offset: u64) -> io::Result<usize> {
         Err(io::Error::new(
             ErrorKind::PermissionDenied,
             "unsupported operation",
@@ -343,7 +345,7 @@ impl FileSetLen for AsyncAndroidSparse {
 }
 
 impl FileAllocate for AsyncAndroidSparse {
-    fn allocate(&mut self, _offset: u64, _length: u64) -> io::Result<()> {
+    fn allocate(&self, _offset: u64, _length: u64) -> io::Result<()> {
         Err(io::Error::new(
             ErrorKind::PermissionDenied,
             "unsupported operation",
@@ -353,14 +355,6 @@ impl FileAllocate for AsyncAndroidSparse {
 
 #[async_trait(?Send)]
 impl AsyncDisk for AsyncAndroidSparse {
-    fn into_inner(self: Box<Self>) -> Box<dyn DiskFile> {
-        Box::new(AndroidSparse {
-            file: self.inner.into_source(),
-            total_size: self.total_size,
-            chunks: self.chunks,
-        })
-    }
-
     async fn flush(&self) -> crate::Result<()> {
         // android sparse is read-only, nothing to flush.
         Ok(())
@@ -560,7 +554,7 @@ mod tests {
             chunk: Chunk::DontCare,
             expanded_size: 100,
         }];
-        let mut image = test_image(chunks);
+        let image = test_image(chunks);
         let mut input_memory = [55u8; 100];
         image
             .read_exact_at_volatile(VolatileSlice::new(&mut input_memory[..]), 0)
@@ -575,7 +569,7 @@ mod tests {
             chunk: Chunk::Fill([10, 20, 10, 20]),
             expanded_size: 8,
         }];
-        let mut image = test_image(chunks);
+        let image = test_image(chunks);
         let mut input_memory = [55u8; 8];
         image
             .read_exact_at_volatile(VolatileSlice::new(&mut input_memory[..]), 0)
@@ -590,7 +584,7 @@ mod tests {
             chunk: Chunk::Fill([10, 20, 30, 40]),
             expanded_size: 8,
         }];
-        let mut image = test_image(chunks);
+        let image = test_image(chunks);
         let mut input_memory = [55u8; 6];
         image
             .read_exact_at_volatile(VolatileSlice::new(&mut input_memory[..]), 1)
@@ -611,7 +605,7 @@ mod tests {
                 expanded_size: 100,
             },
         ];
-        let mut image = test_image(chunks);
+        let image = test_image(chunks);
         let mut input_memory = [55u8; 7];
         image
             .read_exact_at_volatile(VolatileSlice::new(&mut input_memory[..]), 39)
@@ -648,7 +642,7 @@ mod tests {
                 expanded_size: 4,
             },
         ];
-        let mut image = test_image(chunks);
+        let image = test_image(chunks);
         let mut input_memory = [55u8; 8];
         image
             .read_exact_at_volatile(VolatileSlice::new(&mut input_memory[..]), 0)
@@ -912,27 +906,6 @@ mod tests {
             let buf = read_exact_at(&*image, 0, 8).await;
             let expected = [10, 20, 10, 20, 30, 40, 30, 40];
             assert_eq!(&expected[..], &buf[..]);
-        })
-        .unwrap();
-    }
-
-    // Convert to sync and back again. There was once a bug where `into_inner` converted the
-    // AndroidSparse into a raw file.
-    //
-    // Skip on windows because `into_source` isn't supported.
-    #[cfg(not(windows))]
-    #[test]
-    fn async_roundtrip_read_dontcare() {
-        let ex = Executor::new().unwrap();
-        ex.run_until(async {
-            let chunks = vec![ChunkWithSize {
-                chunk: Chunk::DontCare,
-                expanded_size: 100,
-            }];
-            let image = test_async_image(chunks, &ex).unwrap();
-            let image = image.into_inner().to_async_disk(&ex).unwrap();
-            let buf = read_exact_at(&*image, 0, 100).await;
-            assert!(buf.iter().all(|x| *x == 0));
         })
         .unwrap();
     }

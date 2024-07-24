@@ -3,28 +3,24 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
 use acpi_tables::sdt::SDT;
+use anyhow::anyhow;
 use anyhow::Result;
-use base::Event;
 use base::Protection;
 use base::RawDescriptor;
 use hypervisor::MemCacheType;
-use sync::Mutex;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 use super::*;
-use crate::pci::MsixConfig;
 use crate::pci::MsixStatus;
 use crate::pci::PciAddress;
 use crate::pci::PciBarConfiguration;
 use crate::pci::PciBarIndex;
 use crate::pci::PciCapability;
-use crate::virtio::queue::QueueConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VirtioTransportType {
@@ -119,10 +115,10 @@ pub trait VirtioDevice: Send {
 
     /// Optionally deactivates this device. If the reset method is
     /// not able to reset the virtio device, or the virtio device model doesn't
-    /// implement the reset method, a false value is returned to indicate
-    /// the reset is not successful. Otherwise a true value should be returned.
-    fn reset(&mut self) -> bool {
-        false
+    /// implement the reset method, an `Err` value is returned to indicate
+    /// the reset is not successful. Otherwise `Ok(())` should be returned.
+    fn reset(&mut self) -> Result<()> {
+        Err(anyhow!("reset not implemented for {}", self.debug_label()))
     }
 
     /// Returns any additional BAR configuration required by the device.
@@ -180,6 +176,7 @@ pub trait VirtioDevice: Send {
     /// PCI bar into their IO address space with virtio-iommu.
     ///
     /// NOTE: Not all vm_control::VmMemorySource types are supported.
+    /// NOTE: Not yet compatible with PrepareSharedMemoryRegion (aka fixed mapping).
     fn expose_shmem_descriptors_with_viommu(&self) -> bool {
         false
     }
@@ -233,30 +230,6 @@ pub trait VirtioDevice: Send {
     /// TODO(b/280607404): Vhost user will need fds passed to the device process.
     fn virtio_restore(&mut self, _data: serde_json::Value) -> anyhow::Result<()> {
         anyhow::bail!("virtio_restore not implemented for {}", self.debug_label());
-    }
-
-    /// Returns true if the device uses the vhost user protocol.
-    fn is_vhost_user(&self) -> bool {
-        false
-    }
-
-    /// Vhost user device specific restore to be called instead of `virtio_restore`. This will
-    /// rewire irqfds, queue_evts, start up the worker if needed, and send a RESTORE request to
-    /// the device process.
-    fn vhost_user_restore(
-        &mut self,
-        _data: serde_json::Value,
-        _queue_configs: &[QueueConfig],
-        _queue_evts: Option<Vec<Event>>,
-        _interrupt: Option<Interrupt>,
-        _mem: GuestMemory,
-        _msix_config: &Arc<Mutex<MsixConfig>>,
-        _device_activated: bool,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!(
-            "vhost_user_restore not implemented for {}",
-            self.debug_label()
-        );
     }
 
     // Returns a tuple consisting of the non-arch specific part of the OpenFirmware path,
@@ -320,32 +293,17 @@ macro_rules! suspendable_virtio_tests {
             }
 
             #[test]
-            fn test_sleep_snapshot() {
-                let (_ctx, device) = &mut $dev();
-                let mem = memory();
-                let interrupt = interrupt();
-                let queues = create_queues(
-                    $num_queues,
-                    device
-                        .queue_max_sizes()
-                        .first()
-                        .cloned()
-                        .expect("missing queue size"),
-                    &mem,
-                );
-                device
-                    .activate(mem.clone(), interrupt.clone(), queues)
-                    .expect("failed to activate");
-                device
-                    .virtio_sleep()
-                    .expect("failed to sleep")
-                    .expect("missing queues while sleeping");
+            fn test_unactivated_sleep_snapshot_wake() {
+                let (_ctx, mut device) = $dev();
+                let sleep_result = device.virtio_sleep().expect("failed to sleep");
+                assert!(sleep_result.is_none());
                 device.virtio_snapshot().expect("failed to snapshot");
+                device.virtio_wake(None).expect("failed to wake");
             }
 
             #[test]
             fn test_sleep_snapshot_wake() {
-                let (_ctx, device) = &mut $dev();
+                let (_ctx, mut device) = $dev();
                 let mem = memory();
                 let interrupt = interrupt();
                 let queues = create_queues(
@@ -372,7 +330,7 @@ macro_rules! suspendable_virtio_tests {
 
             #[test]
             fn test_suspend_mod_restore() {
-                let (context, device) = &mut $dev();
+                let (mut context, mut device) = $dev();
                 let mem = memory();
                 let interrupt = interrupt();
                 let queues = create_queues(
@@ -392,7 +350,7 @@ macro_rules! suspendable_virtio_tests {
                     .expect("failed to sleep")
                     .expect("missing queues while sleeping");
                 // Modify device before snapshotting.
-                $modfun(context, device);
+                $modfun(&mut context, &mut device);
                 let snap = device
                     .virtio_snapshot()
                     .expect("failed to take initial snapshot");

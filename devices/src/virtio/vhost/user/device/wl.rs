@@ -11,14 +11,12 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
 use base::clone_descriptor;
 use base::error;
 use base::warn;
-use base::FromRawDescriptor;
 use base::SafeDescriptor;
 use base::Tube;
 use base::UnixSeqpacket;
@@ -29,6 +27,8 @@ use cros_async::IoSource;
 use hypervisor::ProtectionType;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RutabagaGralloc;
+#[cfg(feature = "minigbm")]
+use rutabaga_gfx::RutabagaGrallocBackendFlags;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
 use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -41,7 +41,7 @@ use crate::virtio::device_constants::wl::VIRTIO_WL_F_USE_SHMEM;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
 use crate::virtio::vhost::user::device::handler::VhostBackendReqConnection;
 use crate::virtio::vhost::user::device::handler::VhostBackendReqConnectionState;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
@@ -141,7 +141,7 @@ impl WlBackend {
     }
 }
 
-impl VhostUserBackend for WlBackend {
+impl VhostUserDevice for WlBackend {
     fn max_queue_num(&self) -> usize {
         NUM_QUEUES
     }
@@ -151,11 +151,6 @@ impl VhostUserBackend for WlBackend {
     }
 
     fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
-        let unrequested_features = value & !self.features();
-        if unrequested_features != 0 {
-            bail!("invalid features are given: {:#x}", unrequested_features);
-        }
-
         self.acked_features |= value;
 
         if value & (1 << VIRTIO_WL_F_TRANS_FLAGS) != 0 {
@@ -171,32 +166,8 @@ impl VhostUserBackend for WlBackend {
         Ok(())
     }
 
-    fn acked_features(&self) -> u64 {
-        self.acked_features
-    }
-
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
-        VhostUserProtocolFeatures::SLAVE_REQ | VhostUserProtocolFeatures::SHARED_MEMORY_REGIONS
-    }
-
-    fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        if features & self.protocol_features().bits() != self.protocol_features().bits() {
-            Err(anyhow!(
-                "Acked features {:#x} missing required protocol features",
-                features
-            ))
-        } else if features & !self.protocol_features().bits() != 0 {
-            Err(anyhow!(
-                "Acked features {:#x} contains unexpected features",
-                features
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn acked_protocol_features(&self) -> u64 {
-        VhostUserProtocolFeatures::empty().bits()
+        VhostUserProtocolFeatures::BACKEND_REQ | VhostUserProtocolFeatures::SHARED_MEMORY_REGIONS
     }
 
     fn read_config(&self, _offset: u64, _dst: &mut [u8]) {}
@@ -235,7 +206,8 @@ impl VhostUserBackend for WlBackend {
         } = self;
 
         #[cfg(feature = "minigbm")]
-        let gralloc = RutabagaGralloc::new().context("Failed to initailize gralloc")?;
+        let gralloc = RutabagaGralloc::new(RutabagaGrallocBackendFlags::new())
+            .context("Failed to initailize gralloc")?;
         let wlstate = match &self.wlstate {
             None => {
                 let mapper = {
@@ -268,11 +240,7 @@ impl VhostUserBackend for WlBackend {
         let queue_task = match idx {
             0 => {
                 let wlstate_ctx = clone_descriptor(wlstate.borrow().wait_ctx())
-                    .map(|fd| {
-                        // SAFETY:
-                        // Safe because we just created this fd.
-                        AsyncWrapper::new(unsafe { SafeDescriptor::from_raw_descriptor(fd) })
-                    })
+                    .map(AsyncWrapper::new)
                     .context("failed to clone inner WaitContext for WlState")
                     .and_then(|ctx| {
                         self.ex
@@ -407,7 +375,7 @@ pub fn run_wl_device(opts: Options) -> anyhow::Result<()> {
 
     let listener = VhostUserListener::new_socket(&socket, None)?;
 
-    let backend = Box::new(WlBackend::new(&ex, wayland_paths, resource_bridge));
+    let backend = WlBackend::new(&ex, wayland_paths, resource_bridge);
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
     ex.run_until(listener.run_backend(backend, &ex))?
 }

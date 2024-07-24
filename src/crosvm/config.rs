@@ -7,9 +7,9 @@ use std::arch::x86_64::__cpuid;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::__cpuid_count;
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use arch::set_default_serial_parameters;
 use arch::CpuSet;
@@ -54,6 +54,7 @@ use hypervisor::ProtectionType;
 use jail::JailConfig;
 use resources::AddressRange;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_keyvalue::FromKeyValues;
 use vm_control::BatteryType;
@@ -87,6 +88,7 @@ const MB_ALIGNED: u64 = ONE_MB - 1;
 const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
 
 // by default, if enabled, the balloon WS features will use 4 bins.
+#[cfg(feature = "balloon")]
 const VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS: u8 = 4;
 
 /// Indicates the location and kind of executable kernel for a VM.
@@ -135,6 +137,9 @@ pub struct CpuOptions {
     /// Core Type of CPUs.
     #[cfg(target_arch = "x86_64")]
     pub core_types: Option<CpuCoreType>,
+    /// Select which CPU to boot from.
+    #[serde(default)]
+    pub boot_cpu: Option<usize>,
 }
 
 /// Device tree overlay configuration.
@@ -154,6 +159,42 @@ pub struct MemOptions {
     /// Amount of guest memory in MiB.
     #[serde(default)]
     pub size: Option<u64>,
+}
+
+fn deserialize_swap_interval<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Duration>, D::Error> {
+    let ms = Option::<u64>::deserialize(deserializer)?;
+    match ms {
+        None => Ok(None),
+        Some(ms) => Ok(Some(Duration::from_millis(ms))),
+    }
+}
+
+#[derive(
+    Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, serde_keyvalue::FromKeyValues,
+)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct PmemOption {
+    /// Path to the diks image.
+    pub path: PathBuf,
+    /// Whether the disk is read-only.
+    #[serde(default)]
+    pub ro: bool,
+    /// If set, add a kernel command line option making this the root device. Can only be set once.
+    #[serde(default)]
+    pub root: bool,
+    /// Experimental option to specify the size in bytes of an anonymous virtual memory area that
+    /// will be created to back this device.
+    #[serde(default)]
+    pub vma_size: Option<u64>,
+    /// Experimental option to specify interval for periodic swap out of memory mapping
+    #[serde(
+        default,
+        deserialize_with = "deserialize_swap_interval",
+        rename = "swap-interval-ms"
+    )]
+    pub swap_interval: Option<Duration>,
 }
 
 #[derive(Serialize, Deserialize, FromKeyValues)]
@@ -235,81 +276,10 @@ pub const DEFAULT_TOUCH_DEVICE_WIDTH: u32 = 1280;
 #[derive(Serialize, Deserialize, Debug, FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TouchDeviceOption {
-    path: PathBuf,
-    width: Option<u32>,
-    height: Option<u32>,
-    name: Option<String>,
-
-    #[serde(skip, default = "default_touch_device_width")]
-    default_width: u32,
-
-    #[serde(skip, default = "default_touch_device_height")]
-    default_height: u32,
-}
-
-fn default_touch_device_width() -> u32 {
-    DEFAULT_TOUCH_DEVICE_WIDTH
-}
-
-fn default_touch_device_height() -> u32 {
-    DEFAULT_TOUCH_DEVICE_HEIGHT
-}
-
-impl TouchDeviceOption {
-    pub fn new(path: PathBuf) -> TouchDeviceOption {
-        TouchDeviceOption {
-            path,
-            width: None,
-            height: None,
-            name: None,
-            default_width: DEFAULT_TOUCH_DEVICE_WIDTH,
-            default_height: DEFAULT_TOUCH_DEVICE_HEIGHT,
-        }
-    }
-
-    /// Getter for the path to the input event streams.
-    #[cfg_attr(windows, allow(unused))]
-    pub fn get_path(&self) -> &Path {
-        self.path.as_path()
-    }
-
-    /// When a user specifies the parameters for a touch device, width and height are optional.
-    /// If the width and height are missing, default values are used. Default values can be set
-    /// dynamically, for example from the display sizes specified by the gpu argument.
-    #[cfg(feature = "gpu")]
-    pub fn set_default_size(&mut self, width: u32, height: u32) {
-        self.default_width = width;
-        self.default_height = height;
-    }
-
-    /// Setter for the width specified by the user.
-    pub fn set_width(&mut self, width: u32) {
-        self.width.replace(width);
-    }
-
-    /// Setter for the height specified by the user.
-    pub fn set_height(&mut self, height: u32) {
-        self.height.replace(height);
-    }
-
-    /// If the user specifies the size, use it. Otherwise, use the default values.
-    #[cfg(any(unix, feature = "gpu"))]
-    pub fn get_size(&self) -> (u32, u32) {
-        (
-            self.width.unwrap_or(self.default_width),
-            self.height.unwrap_or(self.default_height),
-        )
-    }
-
-    /// Setter for the input device's name specified by the user.
-    pub fn set_name(&mut self, name: String) {
-        self.name.replace(name);
-    }
-
-    /// Getter for the input device's name
-    pub fn get_name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
+    pub path: PathBuf,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub name: Option<String>,
 }
 
 /// Try to parse a colon-separated touch device option.
@@ -317,21 +287,28 @@ impl TouchDeviceOption {
 /// The expected format is "PATH:WIDTH:HEIGHT:NAME", with all fields except PATH being optional.
 fn parse_touch_device_option_legacy(s: &str) -> Option<TouchDeviceOption> {
     let mut it = s.split(':');
-    let mut touch_spec = TouchDeviceOption::new(PathBuf::from(it.next()?.to_owned()));
-    if let Some(width) = it.next() {
-        touch_spec.set_width(width.trim().parse().ok()?);
-    }
-    if let Some(height) = it.next() {
-        touch_spec.set_height(height.trim().parse().ok()?);
-    }
-    if let Some(name) = it.next() {
-        touch_spec.set_name(name.trim().to_string());
-    }
+    let path = PathBuf::from(it.next()?.to_owned());
+    let width = if let Some(width) = it.next() {
+        Some(width.trim().parse().ok()?)
+    } else {
+        None
+    };
+    let height = if let Some(height) = it.next() {
+        Some(height.trim().parse().ok()?)
+    } else {
+        None
+    };
+    let name = it.next().map(|name| name.trim().to_string());
     if it.next().is_some() {
         return None;
     }
 
-    Some(touch_spec)
+    Some(TouchDeviceOption {
+        path,
+        width,
+        height,
+        name,
+    })
 }
 
 /// Parse virtio-input touch device options from a string.
@@ -344,13 +321,58 @@ pub fn parse_touch_device_option(s: &str) -> Result<TouchDeviceOption, String> {
         if let Some(touch_spec) = parse_touch_device_option_legacy(s) {
             log::warn!(
                 "colon-separated touch device options are deprecated; \
-                please use key=value form instead"
+                please use --input instead"
             );
             return Ok(touch_spec);
         }
     }
 
     from_key_values::<TouchDeviceOption>(s)
+}
+
+/// virtio-input device configuration
+#[derive(Serialize, Deserialize, Debug, FromKeyValues, Eq, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub enum InputDeviceOption {
+    Evdev {
+        path: PathBuf,
+    },
+    Keyboard {
+        path: PathBuf,
+    },
+    Mouse {
+        path: PathBuf,
+    },
+    MultiTouch {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
+    Rotary {
+        path: PathBuf,
+    },
+    SingleTouch {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
+    Switches {
+        path: PathBuf,
+    },
+    Trackpad {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
+    MultiTouchTrackpad {
+        path: PathBuf,
+        width: Option<u32>,
+        height: Option<u32>,
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, FromKeyValues)]
@@ -418,6 +440,16 @@ pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), Strin
         return Err(invalid_value_err(
             format!("{}", params.num),
             "Serial port num must be 4 or less",
+        ));
+    }
+
+    if params.pci_address.is_some()
+        && params.hardware != SerialHardware::VirtioConsole
+        && params.hardware != SerialHardware::LegacyVirtioConsole
+    {
+        return Err(invalid_value_err(
+            params.pci_address.unwrap().to_string(),
+            "Providing serial PCI address is only supported for virtio-console hardware type",
         ));
     }
 
@@ -650,19 +682,30 @@ pub struct Config {
     #[cfg(all(target_arch = "x86_64", unix))]
     pub ac_adapter: bool,
     pub acpi_tables: Vec<PathBuf>,
+    #[cfg(feature = "android_display")]
+    pub android_display_service: Option<String>,
     pub android_fstab: Option<PathBuf>,
     pub async_executor: Option<ExecutorKind>,
+    #[cfg(feature = "balloon")]
     pub balloon: bool,
+    #[cfg(feature = "balloon")]
     pub balloon_bias: i64,
+    #[cfg(feature = "balloon")]
     pub balloon_control: Option<PathBuf>,
+    #[cfg(feature = "balloon")]
     pub balloon_page_reporting: bool,
+    #[cfg(feature = "balloon")]
     pub balloon_ws_num_bins: u8,
+    #[cfg(feature = "balloon")]
     pub balloon_ws_reporting: bool,
     pub battery_config: Option<BatteryConfig>,
     #[cfg(windows)]
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
     pub block_vhost_user_tube: Vec<Tube>,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub boost_uclamp: bool,
+    pub boot_cpu: usize,
     #[cfg(target_arch = "x86_64")]
     pub break_linux_pci_config_io: bool,
     #[cfg(windows)]
@@ -682,6 +725,8 @@ pub struct Config {
     pub device_tree_overlay: Vec<DtboOption>,
     pub disable_virtio_intx: bool,
     pub disks: Vec<DiskOption>,
+    pub display_input_height: Option<u32>,
+    pub display_input_width: Option<u32>,
     pub display_window_keyboard: bool,
     pub display_window_mouse: bool,
     pub dump_device_tree_blob: Option<PathBuf>,
@@ -714,6 +759,7 @@ pub struct Config {
     pub host_guid: Option<String>,
     pub hugepages: bool,
     pub hypervisor: Option<HypervisorKind>,
+    #[cfg(feature = "balloon")]
     pub init_memory: Option<u64>,
     pub initrd_path: Option<PathBuf>,
     #[cfg(all(windows, feature = "gpu"))]
@@ -755,7 +801,9 @@ pub struct Config {
     #[cfg(feature = "plugin")]
     pub plugin_mounts: Vec<crate::crosvm::plugin::BindMount>,
     pub plugin_root: Option<PathBuf>,
-    pub pmem_devices: Vec<DiskOption>,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    pub pmem_ext2: Vec<crate::crosvm::sys::config::PmemExt2Option>,
+    pub pmems: Vec<PmemOption>,
     #[cfg(feature = "process-invariants")]
     pub process_invariants_data_handle: Option<u64>,
     #[cfg(feature = "process-invariants")]
@@ -768,7 +816,7 @@ pub struct Config {
     pub product_version: Option<String>,
     pub protection_type: ProtectionType,
     pub pstore: Option<Pstore>,
-    #[cfg(windows)]
+    #[cfg(feature = "pvclock")]
     pub pvclock: bool,
     /// Must be `Some` iff `protection_type == ProtectionType::UnprotectedWithFirmware`.
     pub pvm_fw: Option<PathBuf>,
@@ -788,11 +836,10 @@ pub struct Config {
     #[cfg(target_arch = "x86_64")]
     pub smbios: SmbiosOptions,
     #[cfg(all(windows, feature = "audio"))]
-    pub snd_split_config: Option<SndSplitConfig>,
+    pub snd_split_configs: Vec<SndSplitConfig>,
     pub socket_path: Option<PathBuf>,
     #[cfg(feature = "audio")]
     pub sound: Option<PathBuf>,
-    pub strict_balloon: bool,
     pub stub_pci_devices: Vec<StubPciParameters>,
     pub suspended: bool,
     pub swap_dir: Option<PathBuf>,
@@ -829,17 +876,10 @@ pub struct Config {
     ))]
     pub virt_cpufreq: bool,
     pub virt_cpufreq_socket: Option<PathBuf>,
-    pub virtio_input_evdevs: Vec<PathBuf>,
-    pub virtio_keyboard: Vec<PathBuf>,
-    pub virtio_mice: Vec<PathBuf>,
-    pub virtio_multi_touch: Vec<TouchDeviceOption>,
-    pub virtio_rotary: Vec<PathBuf>,
-    pub virtio_single_touch: Vec<TouchDeviceOption>,
+    pub virtio_input: Vec<InputDeviceOption>,
     #[cfg(feature = "audio")]
     #[serde(skip)]
     pub virtio_snds: Vec<SndParameters>,
-    pub virtio_switches: Vec<PathBuf>,
-    pub virtio_trackpad: Vec<TouchDeviceOption>,
     pub vsock: Option<VsockConfig>,
     #[cfg(feature = "vtpm")]
     pub vtpm_proxy: bool,
@@ -855,15 +895,24 @@ impl Default for Config {
             #[cfg(all(target_arch = "x86_64", unix))]
             ac_adapter: false,
             acpi_tables: Vec::new(),
+            #[cfg(feature = "android_display")]
+            android_display_service: None,
             android_fstab: None,
             async_executor: None,
+            #[cfg(feature = "balloon")]
             balloon: true,
+            #[cfg(feature = "balloon")]
             balloon_bias: 0,
+            #[cfg(feature = "balloon")]
             balloon_control: None,
+            #[cfg(feature = "balloon")]
             balloon_page_reporting: false,
+            #[cfg(feature = "balloon")]
             balloon_ws_num_bins: VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS,
+            #[cfg(feature = "balloon")]
             balloon_ws_reporting: false,
             battery_config: None,
+            boot_cpu: 0,
             #[cfg(windows)]
             block_control_tube: Vec::new(),
             #[cfg(windows)]
@@ -887,6 +936,8 @@ impl Default for Config {
             device_tree_overlay: Vec::new(),
             disks: Vec::new(),
             disable_virtio_intx: false,
+            display_input_height: None,
+            display_input_width: None,
             display_window_keyboard: false,
             display_window_mouse: false,
             dump_device_tree_blob: None,
@@ -923,6 +974,7 @@ impl Default for Config {
             product_channel: None,
             hugepages: false,
             hypervisor: None,
+            #[cfg(feature = "balloon")]
             init_memory: None,
             initrd_path: None,
             #[cfg(all(windows, feature = "gpu"))]
@@ -942,6 +994,8 @@ impl Default for Config {
             log_file: None,
             #[cfg(windows)]
             logs_directory: None,
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            boost_uclamp: false,
             memory: None,
             memory_file: None,
             mmio_address_ranges: Vec::new(),
@@ -968,7 +1022,9 @@ impl Default for Config {
             #[cfg(feature = "plugin")]
             plugin_mounts: Vec::new(),
             plugin_root: None,
-            pmem_devices: Vec::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            pmem_ext2: Vec::new(),
+            pmems: Vec::new(),
             #[cfg(feature = "process-invariants")]
             process_invariants_data_handle: None,
             #[cfg(feature = "process-invariants")]
@@ -977,7 +1033,7 @@ impl Default for Config {
             product_name: None,
             protection_type: ProtectionType::Unprotected,
             pstore: None,
-            #[cfg(windows)]
+            #[cfg(feature = "pvclock")]
             pvclock: false,
             pvm_fw: None,
             restore_path: None,
@@ -994,11 +1050,10 @@ impl Default for Config {
             #[cfg(target_arch = "x86_64")]
             smbios: SmbiosOptions::default(),
             #[cfg(all(windows, feature = "audio"))]
-            snd_split_config: None,
+            snd_split_configs: Vec::new(),
             socket_path: None,
             #[cfg(feature = "audio")]
             sound: None,
-            strict_balloon: false,
             stub_pci_devices: Vec::new(),
             suspended: false,
             swap_dir: None,
@@ -1036,16 +1091,9 @@ impl Default for Config {
             ))]
             virt_cpufreq: false,
             virt_cpufreq_socket: None,
-            virtio_input_evdevs: Vec::new(),
-            virtio_keyboard: Vec::new(),
-            virtio_mice: Vec::new(),
-            virtio_multi_touch: Vec::new(),
-            virtio_rotary: Vec::new(),
-            virtio_single_touch: Vec::new(),
+            virtio_input: Vec::new(),
             #[cfg(feature = "audio")]
             virtio_snds: Vec::new(),
-            virtio_switches: Vec::new(),
-            virtio_trackpad: Vec::new(),
             #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
             wayland_socket_paths: BTreeMap::new(),
@@ -1128,6 +1176,11 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
     }
 
+    if cfg.boot_cpu >= cfg.vcpu_count.unwrap_or(1) {
+        log::warn!("boot_cpu selection cannot be higher than vCPUs available, defaulting to 0");
+        cfg.boot_cpu = 0;
+    }
+
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
         any(target_os = "android", target_os = "linux")
@@ -1199,12 +1252,15 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         }
     }
 
-    if !cfg.balloon && cfg.balloon_control.is_some() {
-        return Err("'balloon-control' requires enabled balloon".to_string());
-    }
+    #[cfg(feature = "balloon")]
+    {
+        if !cfg.balloon && cfg.balloon_control.is_some() {
+            return Err("'balloon-control' requires enabled balloon".to_string());
+        }
 
-    if !cfg.balloon && cfg.balloon_page_reporting {
-        return Err("'balloon_page_reporting' requires enabled balloon".to_string());
+        if !cfg.balloon && cfg.balloon_page_reporting {
+            return Err("'balloon_page_reporting' requires enabled balloon".to_string());
+        }
     }
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1230,6 +1286,10 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         validate_file_backed_mapping(mapping)?;
     }
 
+    for pmem in cfg.pmems.iter() {
+        validate_pmem(pmem)?;
+    }
+
     // Validate platform specific things
     super::sys::config::validate_config(cfg)
 }
@@ -1246,6 +1306,24 @@ fn validate_file_backed_mapping(mapping: &mut FileBackedMappingParameters) -> Re
     } else if aligned_address != mapping.address || aligned_size != mapping.size {
         return Err(
             "--file-backed-mapping addr and size parameters must be page size aligned".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_pmem(pmem: &PmemOption) -> Result<(), String> {
+    if (pmem.swap_interval.is_some() && pmem.vma_size.is_none())
+        || (pmem.swap_interval.is_none() && pmem.vma_size.is_some())
+    {
+        return Err(
+            "--pmem vma-size and swap-interval parameters must be specified together".to_string(),
+        );
+    }
+
+    if pmem.ro && pmem.swap_interval.is_some() {
+        return Err(
+            "--pmem swap-interval parameter can only be set for writable pmem device".to_string(),
         );
     }
 
@@ -1395,7 +1473,8 @@ mod tests {
 
     #[test]
     fn parse_cpu_set_repeated() {
-        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t conversion.
+        // For now, allow duplicates - they will be handled gracefully by the vec to cpu_set_t
+        // conversion.
         assert_eq!(
             CpuSet::from_str("1,1,1").expect("parse failed"),
             CpuSet::new([1, 1, 1])
@@ -1539,6 +1618,48 @@ mod tests {
             .unwrap()
         )
         .is_err())
+    }
+
+    #[test]
+    fn parse_serial_pci_address_valid_for_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_serial_pci_address_valid_for_legacy_virtio() {
+        let parsed =
+            parse_serial_options("type=syslog,hardware=legacy-virtio-console,pci-address=00:0e.0")
+                .expect("parse should have succeded");
+        assert_eq!(
+            parsed.pci_address,
+            Some(PciAddress {
+                bus: 0,
+                dev: 14,
+                func: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_serial_pci_address_failed_for_serial() {
+        parse_serial_options("type=syslog,hardware=serial,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for serial hardware");
+    }
+
+    #[test]
+    fn parse_serial_pci_address_failed_for_debugcon() {
+        parse_serial_options("type=syslog,hardware=debugcon,pci-address=00:0e.0")
+            .expect_err("expected pci-address error for debugcon hardware");
     }
 
     #[test]
@@ -1976,12 +2097,21 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(cfg.virtio_multi_touch.len(), 1);
-        let touch = &cfg.virtio_multi_touch[0];
-        assert_eq!(touch.path.to_str(), Some("my_socket"));
-        assert_eq!(touch.width, Some(867));
-        assert_eq!(touch.height, Some(5309));
-        assert_eq!(touch.name, None);
+        assert_eq!(cfg.virtio_input.len(), 1);
+        let multi_touch = cfg
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::MultiTouch { .. }))
+            .unwrap();
+        assert_eq!(
+            *multi_touch,
+            InputDeviceOption::MultiTouch {
+                path: PathBuf::from("my_socket"),
+                width: Some(867),
+                height: Some(5309),
+                name: None
+            }
+        );
     }
 
     #[test]
@@ -1995,11 +2125,293 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(cfg.virtio_multi_touch.len(), 1);
-        let touch = &cfg.virtio_multi_touch[0];
-        assert_eq!(touch.path.to_str(), Some(r"C:\path"));
-        assert_eq!(touch.width, Some(867));
-        assert_eq!(touch.height, Some(5309));
-        assert_eq!(touch.name, None);
+        assert_eq!(cfg.virtio_input.len(), 1);
+        let multi_touch = cfg
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::MultiTouch { .. }))
+            .unwrap();
+        assert_eq!(
+            *multi_touch,
+            InputDeviceOption::MultiTouch {
+                path: PathBuf::from(r"C:\path"),
+                width: Some(867),
+                height: Some(5309),
+                name: None
+            }
+        );
+    }
+
+    #[test]
+    fn single_touch_spec_and_track_pad_spec_default_size() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test",
+                "--trackpad",
+                "/dev/single-touch-test",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+        let trackpad = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Trackpad { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
+        );
+        assert_eq!(
+            *trackpad,
+            InputDeviceOption::Trackpad {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
+        );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn single_touch_spec_default_size_from_gpu() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test",
+                "--gpu",
+                "width=1024,height=768",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: None,
+                height: None,
+                name: None
+            }
+        );
+
+        assert_eq!(config.display_input_width, Some(1024));
+        assert_eq!(config.display_input_height, Some(768));
+    }
+
+    #[test]
+    fn single_touch_spec_and_track_pad_spec_with_size() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test:12345:54321",
+                "--trackpad",
+                "/dev/single-touch-test:5678:9876",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+        let trackpad = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Trackpad { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(12345),
+                height: Some(54321),
+                name: None
+            }
+        );
+        assert_eq!(
+            *trackpad,
+            InputDeviceOption::Trackpad {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(5678),
+                height: Some(9876),
+                name: None
+            }
+        );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn single_touch_spec_with_size_independent_from_gpu() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &[
+                "--single-touch",
+                "/dev/single-touch-test:12345:54321",
+                "--gpu",
+                "width=1024,height=768",
+                "/dev/null",
+            ],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let single_touch = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::SingleTouch { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *single_touch,
+            InputDeviceOption::SingleTouch {
+                path: PathBuf::from("/dev/single-touch-test"),
+                width: Some(12345),
+                height: Some(54321),
+                name: None
+            }
+        );
+
+        assert_eq!(config.display_input_width, Some(1024));
+        assert_eq!(config.display_input_height, Some(768));
+    }
+
+    #[test]
+    fn virtio_switches() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--switches", "/dev/switches-test", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let switches = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Switches { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *switches,
+            InputDeviceOption::Switches {
+                path: PathBuf::from("/dev/switches-test")
+            }
+        );
+    }
+
+    #[test]
+    fn virtio_rotary() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--rotary", "/dev/rotary-test", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        let rotary = config
+            .virtio_input
+            .iter()
+            .find(|input| matches!(input, InputDeviceOption::Rotary { .. }))
+            .unwrap();
+
+        assert_eq!(
+            *rotary,
+            InputDeviceOption::Rotary {
+                path: PathBuf::from("/dev/rotary-test")
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pmem_options_missing_path() {
+        assert!(from_key_values::<PmemOption>("")
+            .unwrap_err()
+            .contains("missing field `path`"));
+    }
+
+    #[test]
+    fn parse_pmem_options_default_values() {
+        let pmem = from_key_values::<PmemOption>("/path/to/disk.img").unwrap();
+        assert_eq!(
+            pmem,
+            PmemOption {
+                path: "/path/to/disk.img".into(),
+                ro: false,
+                root: false,
+                vma_size: None,
+                swap_interval: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pmem_options_virtual_swap() {
+        let pmem =
+            from_key_values::<PmemOption>("virtual_path,vma-size=12345,swap-interval-ms=1000")
+                .unwrap();
+        assert_eq!(
+            pmem,
+            PmemOption {
+                path: "virtual_path".into(),
+                ro: false,
+                root: false,
+                vma_size: Some(12345),
+                swap_interval: Some(Duration::new(1, 0)),
+            }
+        );
+    }
+
+    #[test]
+    fn validate_pmem_missing_virtual_swap_param() {
+        let pmem = from_key_values::<PmemOption>("virtual_path,swap-interval-ms=1000").unwrap();
+        assert!(validate_pmem(&pmem)
+            .unwrap_err()
+            .contains("vma-size and swap-interval parameters must be specified together"));
+    }
+
+    #[test]
+    fn validate_pmem_read_only_virtual_swap() {
+        let pmem = from_key_values::<PmemOption>(
+            "virtual_path,ro=true,vma-size=12345,swap-interval-ms=1000",
+        )
+        .unwrap();
+        assert!(validate_pmem(&pmem)
+            .unwrap_err()
+            .contains("swap-interval parameter can only be set for writable pmem device"));
     }
 }

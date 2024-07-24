@@ -15,11 +15,13 @@ use std::thread;
 use base::pagesize;
 use base::Event;
 use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
 use base::MappedRegion;
 use base::MemoryMappingArena;
 use base::MemoryMappingBuilder;
 use hypervisor::kvm::dirty_log_bitmap_size;
 use hypervisor::kvm::Kvm;
+use hypervisor::kvm::KvmCap;
 use hypervisor::kvm::KvmVm;
 use hypervisor::Datamatch;
 use hypervisor::Hypervisor;
@@ -33,7 +35,6 @@ use hypervisor::VmAArch64;
 use hypervisor::VmRiscv64;
 #[cfg(target_arch = "x86_64")]
 use hypervisor::VmX86_64;
-use kvm::Cap;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
@@ -91,9 +92,9 @@ fn check_vm_capability() {
     let kvm = Kvm::new().unwrap();
     let gm = GuestMemory::new(&[(GuestAddress(0), pagesize() as u64)]).unwrap();
     let vm = KvmVm::new(&kvm, gm, Default::default()).unwrap();
-    assert!(vm.check_raw_capability(Cap::UserMemory));
+    assert!(vm.check_raw_capability(KvmCap::UserMemory));
     // I assume nobody is testing this on s390
-    assert!(!vm.check_raw_capability(Cap::S390UserSigp));
+    assert!(!vm.check_raw_capability(KvmCap::S390UserSigp));
 }
 
 #[test]
@@ -277,25 +278,15 @@ fn irqfd_resample() {
     vm.create_irq_chip().unwrap();
     vm.register_irqfd(4, &evtfd1, Some(&evtfd2)).unwrap();
     vm.unregister_irqfd(4, &evtfd1).unwrap();
-    // Ensures the ioctl is actually reading the resamplefd.
-    vm.register_irqfd(
-        4,
-        &evtfd1,
-        Some(
-            // SAFETY: trivially safe
-            unsafe { &Event::from_raw_descriptor(-1) },
-        ),
-    )
-    .unwrap_err();
-}
 
-#[test]
-fn vcpu_mmap_size() {
-    let kvm = Kvm::new().unwrap();
-    let mmap_size = kvm.get_vcpu_mmap_size().unwrap();
-    let page_size = pagesize();
-    assert!(mmap_size >= page_size);
-    assert!(mmap_size % page_size == 0);
+    // Ensures the ioctl is actually reading the resamplefd by providing an invalid fd and expecting
+    // an error. File descriptor numbers are allocated sequentially, so this very large fd should
+    // never practically be in use.
+    // SAFETY: This is a bad idea! Don't try this at home! Professional driver on a closed course.
+    let resample_evt = unsafe { Event::from_raw_descriptor(2147483647) };
+    vm.register_irqfd(4, &evtfd1, Some(&resample_evt))
+        .unwrap_err();
+    let _ = resample_evt.into_raw_descriptor(); // Don't try to close the invalid fd.
 }
 
 #[test]

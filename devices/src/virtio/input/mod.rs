@@ -214,9 +214,9 @@ impl virtio_input_bitmap {
             if byte_pos < ret.len() {
                 ret.bitmap[byte_pos] |= bit_byte;
             } else {
-                // This would only happen if new event codes (or types, or ABS_*, etc) are defined to be
-                // larger than or equal to 1024, in which case a new version of the virtio input
-                // protocol needs to be defined.
+                // This would only happen if new event codes (or types, or ABS_*, etc) are defined
+                // to be larger than or equal to 1024, in which case a new version
+                // of the virtio input protocol needs to be defined.
                 // There is nothing we can do about this error except log it.
                 error!("Attempted to set an out of bounds bit: {}", idx);
             }
@@ -604,13 +604,12 @@ where
         Ok(())
     }
 
-    fn reset(&mut self) -> bool {
+    fn reset(&mut self) -> anyhow::Result<()> {
         if let Some(worker_thread) = self.worker_thread.take() {
             let worker = worker_thread.stop();
             self.source = Some(worker.event_source);
-            return true;
         }
-        false
+        Ok(())
     }
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
@@ -725,6 +724,27 @@ where
     Ok(Input {
         worker_thread: None,
         config: defaults::new_trackpad_config(idx, width, height, name),
+        source: Some(SocketEventSource::new(source)),
+        virtio_features,
+    })
+}
+
+/// Creates a new virtio trackpad device which supports multi touch, primary and secondary
+/// buttons as well as X and Y axis.
+pub fn new_multitouch_trackpad<T>(
+    idx: u32,
+    source: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+    virtio_features: u64,
+) -> Result<Input<SocketEventSource<T>>>
+where
+    T: Read + Write + AsRawDescriptor + Send + 'static,
+{
+    Ok(Input {
+        worker_thread: None,
+        config: defaults::new_multitouch_trackpad_config(idx, width, height, name),
         source: Some(SocketEventSource::new(source)),
         virtio_features,
     })

@@ -15,6 +15,7 @@ mod file_traits;
 mod iobuf;
 mod mmap;
 mod notifiers;
+mod periodic_logger;
 mod shm;
 pub mod syslog;
 pub mod test_utils;
@@ -79,7 +80,6 @@ pub use wait_context::TriggeredEvent;
 pub use wait_context::WaitContext;
 pub use worker_thread::WorkerThread;
 pub use write_zeroes::PunchHole;
-pub use write_zeroes::PunchHoleMut;
 pub use write_zeroes::WriteZeroesAt;
 
 // TODO(b/233233301): reorganize platform specific exports under platform
@@ -109,6 +109,7 @@ cfg_if::cfg_if! {
         pub use linux::{getegid, geteuid};
         pub use linux::{gettid, kill_process_group, reap_child};
         pub use linux::logical_core_capacity;
+        pub use linux::logical_core_cluster_id;
         pub use linux::logical_core_frequencies_khz;
         pub use linux::sched_attr;
         pub use linux::sched_setattr;
@@ -179,7 +180,6 @@ pub use log::trace;
 pub use log::warn;
 pub use mmap::Protection;
 pub use platform::get_cpu_affinity;
-pub use platform::get_filesystem_type;
 pub use platform::getpid;
 pub use platform::open_file_or_duplicate;
 pub use platform::platform_timer_resolution::enable_high_res_timers;

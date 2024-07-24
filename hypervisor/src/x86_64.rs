@@ -5,9 +5,8 @@
 use std::arch::x86_64::CpuidResult;
 #[cfg(any(unix, feature = "haxm", feature = "whpx"))]
 use std::arch::x86_64::__cpuid;
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
 use std::arch::x86_64::_rdtsc;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use anyhow::Context;
@@ -81,7 +80,17 @@ pub trait VcpuX86_64: Vcpu {
     fn ready_for_interrupt(&self) -> bool;
 
     /// Injects interrupt vector `irq` into the VCPU.
-    fn interrupt(&self, irq: u32) -> Result<()>;
+    ///
+    /// This function should only be called when [`Self::ready_for_interrupt`] returns true.
+    /// Otherwise the interrupt injection may fail or the next VCPU run may fail. However, if
+    /// [`Self::interrupt`] returns [`Ok`], the implementation must guarantee that the interrupt
+    /// isn't injected in an uninterruptible window (e.g. right after the mov ss instruction).
+    ///
+    /// The caller should avoid calling this function more than 1 time for one VMEXIT, because the
+    /// hypervisor may behave differently: some hypervisors(e.g. WHPX, KVM) will only try to inject
+    /// the last `irq` requested, while some other hypervisors(e.g. HAXM) may try to inject all
+    /// `irq`s requested.
+    fn interrupt(&self, irq: u8) -> Result<()>;
 
     /// Injects a non-maskable interrupt into the VCPU.
     fn inject_nmi(&self) -> Result<()>;
@@ -111,10 +120,10 @@ pub trait VcpuX86_64: Vcpu {
     fn set_debugregs(&self, debugregs: &DebugRegs) -> Result<()>;
 
     /// Gets the VCPU extended control registers.
-    fn get_xcrs(&self) -> Result<Vec<Register>>;
+    fn get_xcrs(&self) -> Result<BTreeMap<u32, u64>>;
 
-    /// Sets the VCPU extended control registers.
-    fn set_xcrs(&self, xcrs: &[Register]) -> Result<()>;
+    /// Sets a VCPU extended control register.
+    fn set_xcr(&self, xcr: u32, value: u64) -> Result<()>;
 
     /// Gets the VCPU x87 FPU, MMX, XMM, YMM and MXCSR registers.
     fn get_xsave(&self) -> Result<Xsave>;
@@ -130,21 +139,17 @@ pub trait VcpuX86_64: Vcpu {
     /// snapshotting.
     fn set_interrupt_state(&self, data: serde_json::Value) -> Result<()>;
 
-    /// Gets the model-specific registers.  `msrs` specifies the MSR indexes to be queried, and
-    /// on success contains their indexes and values.
-    fn get_msrs(&self, msrs: &mut Vec<Register>) -> Result<()>;
+    /// Gets a single model-specific register's value.
+    fn get_msr(&self, msr_index: u32) -> Result<u64>;
 
     /// Gets the model-specific registers. Returns all the MSRs for the VCPU.
-    fn get_all_msrs(&self) -> Result<Vec<Register>>;
+    fn get_all_msrs(&self) -> Result<BTreeMap<u32, u64>>;
 
-    /// Sets the model-specific registers.
-    fn set_msrs(&self, msrs: &[Register]) -> Result<()>;
+    /// Sets a single model-specific register's value.
+    fn set_msr(&self, msr_index: u32, value: u64) -> Result<()>;
 
     /// Sets up the data returned by the CPUID instruction.
     fn set_cpuid(&self, cpuid: &CpuId) -> Result<()>;
-
-    /// Gets the system emulated hyper-v CPUID values.
-    fn get_hyperv_cpuid(&self) -> Result<CpuId>;
 
     /// Sets up debug registers and configure vcpu for handling guest debug events.
     fn set_guest_debug(&self, addrs: &[GuestAddress], enable_singlestep: bool) -> Result<()>;
@@ -154,15 +159,62 @@ pub trait VcpuX86_64: Vcpu {
     /// will then set the appropriate registers on the vcpu.
     fn handle_cpuid(&mut self, entry: &CpuIdEntry) -> Result<()>;
 
-    /// Get the guest->host TSC offset
-    fn get_tsc_offset(&self) -> Result<u64>;
+    /// Gets the guest->host TSC offset.
+    ///
+    /// The default implementation uses [`VcpuX86_64::get_msr()`] to read the guest TSC.
+    fn get_tsc_offset(&self) -> Result<u64> {
+        // SAFETY:
+        // Safe because _rdtsc takes no arguments
+        let host_before_tsc = unsafe { _rdtsc() };
 
-    /// Set the guest->host TSC offset
-    fn set_tsc_offset(&self, offset: u64) -> Result<()>;
+        // get guest TSC value from our hypervisor
+        let guest_tsc = self.get_msr(crate::MSR_IA32_TSC)?;
+
+        // SAFETY:
+        // Safe because _rdtsc takes no arguments
+        let host_after_tsc = unsafe { _rdtsc() };
+
+        // Average the before and after host tsc to get the best value
+        let host_tsc = ((host_before_tsc as u128 + host_after_tsc as u128) / 2) as u64;
+
+        Ok(guest_tsc.wrapping_sub(host_tsc))
+    }
+
+    /// Sets the guest->host TSC offset.
+    ///
+    /// The default implementation uses [`VcpuX86_64::set_tsc_value()`] to set the TSC value.
+    ///
+    /// It sets TSC_OFFSET (VMCS / CB field) by setting the TSC MSR to the current
+    /// host TSC value plus the desired offset. We rely on the fact that hypervisors
+    /// determine the value of TSC_OFFSET by computing TSC_OFFSET = new_tsc_value
+    /// - _rdtsc() = _rdtsc() + offset - _rdtsc() ~= offset. Note that the ~= is
+    /// important: this is an approximate operation, because the two _rdtsc() calls
+    /// are separated by at least a few ticks.
+    ///
+    /// Note: TSC_OFFSET, host TSC, guest TSC, and TSC MSR are all different
+    /// concepts.
+    /// * When a guest executes rdtsc, the value (guest TSC) returned is host_tsc * TSC_MULTIPLIER +
+    ///   TSC_OFFSET + TSC_ADJUST.
+    /// * The TSC MSR is a special MSR that when written to by the host, will cause TSC_OFFSET to be
+    ///   set accordingly by the hypervisor.
+    /// * When the guest *writes* to TSC MSR, it actually changes the TSC_ADJUST MSR *for the
+    ///   guest*. Generally this is only happens if the guest is trying to re-zero or synchronize
+    ///   TSCs.
+    fn set_tsc_offset(&self, offset: u64) -> Result<()> {
+        // SAFETY: _rdtsc takes no arguments.
+        let host_tsc = unsafe { _rdtsc() };
+        self.set_tsc_value(host_tsc.wrapping_add(offset))
+    }
 
     /// Sets the guest TSC exactly to the provided value.
-    /// Required for snapshotting.
-    fn set_tsc_value(&self, value: u64) -> Result<()>;
+    ///
+    /// The default implementation sets the guest's TSC by writing the value to the MSR directly.
+    ///
+    /// See [`VcpuX86_64::set_tsc_offset()`] for an explanation of how this value is actually read
+    /// by the guest after being set.
+    fn set_tsc_value(&self, value: u64) -> Result<()> {
+        self.set_msr(crate::MSR_IA32_TSC, value)
+    }
 
     /// Some hypervisors require special handling to restore timekeeping when
     /// a snapshot is restored. They are provided with a host TSC reference
@@ -213,19 +265,16 @@ pub trait VcpuX86_64: Vcpu {
         self.set_regs(&snapshot.regs)?;
         self.set_sregs(&snapshot.sregs)?;
         self.set_debugregs(&snapshot.debug_regs)?;
-        self.set_xcrs(&snapshot.xcrs)?;
-
-        let mut msrs = HashMap::new();
-        for reg in self.get_all_msrs()? {
-            msrs.insert(reg.id, reg.value);
+        for (xcr_index, value) in &snapshot.xcrs {
+            self.set_xcr(*xcr_index, *value)?;
         }
 
-        for &msr in snapshot.msrs.iter() {
-            if Some(&msr.value) == msrs.get(&msr.id) {
+        for (msr_index, value) in snapshot.msrs.iter() {
+            if self.get_msr(*msr_index) == Ok(*value) {
                 continue; // no need to set MSR since the values are the same.
             }
-            if let Err(e) = self.set_msrs(&[msr]) {
-                if msr_allowlist.contains(&msr.id) {
+            if let Err(e) = self.set_msr(*msr_index, *value) {
+                if msr_allowlist.contains(msr_index) {
                     warn!(
                         "Failed to set MSR. MSR might not be supported in this kernel. Err: {}",
                         e
@@ -252,8 +301,8 @@ pub struct VcpuSnapshot {
     regs: Regs,
     sregs: Sregs,
     debug_regs: DebugRegs,
-    xcrs: Vec<Register>,
-    msrs: Vec<Register>,
+    xcrs: BTreeMap<u32, u64>,
+    msrs: BTreeMap<u32, u64>,
     xsave: Xsave,
     hypervisor_data: serde_json::Value,
     tsc_offset: u64,
@@ -263,70 +312,6 @@ impl_downcast!(VcpuX86_64);
 
 // TSC MSR
 pub const MSR_IA32_TSC: u32 = 0x00000010;
-
-/// Implementation of get_tsc_offset that uses VcpuX86_64::get_msrs.
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
-pub(crate) fn get_tsc_offset_from_msr(vcpu: &impl VcpuX86_64) -> Result<u64> {
-    let mut regs = vec![Register {
-        id: crate::MSR_IA32_TSC,
-        value: 0,
-    }];
-
-    // SAFETY:
-    // Safe because _rdtsc takes no arguments
-    let host_before_tsc = unsafe { _rdtsc() };
-
-    // get guest TSC value from our hypervisor
-    vcpu.get_msrs(&mut regs)?;
-
-    // SAFETY:
-    // Safe because _rdtsc takes no arguments
-    let host_after_tsc = unsafe { _rdtsc() };
-
-    // Average the before and after host tsc to get the best value
-    let host_tsc = ((host_before_tsc as u128 + host_after_tsc as u128) / 2) as u64;
-
-    Ok(regs[0].value.wrapping_sub(host_tsc))
-}
-
-/// Implementation of set_tsc_offset that uses VcpuX86_64::get_msrs.
-///
-/// It sets TSC_OFFSET (VMCS / CB field) by setting the TSC MSR to the current
-/// host TSC value plus the desired offset. We rely on the fact that hypervisors
-/// determine the value of TSC_OFFSET by computing TSC_OFFSET = new_tsc_value
-/// - _rdtsc() = _rdtsc() + offset - _rdtsc() ~= offset. Note that the ~= is
-/// important: this is an approximate operation, because the two _rdtsc() calls
-/// are separated by at least a few ticks.
-///
-/// Note: TSC_OFFSET, host TSC, guest TSC, and TSC MSR are all different
-/// concepts.
-/// * When a guest executes rdtsc, the value (guest TSC) returned is
-///   host_tsc * TSC_MULTIPLIER + TSC_OFFSET + TSC_ADJUST.
-/// * The TSC MSR is a special MSR that when written to by the host, will cause
-///   TSC_OFFSET to be set accordingly by the hypervisor.
-/// * When the guest *writes* to TSC MSR, it actually changes the TSC_ADJUST MSR
-///   *for the guest*. Generally this is only happens if the guest is trying to
-///   re-zero or synchronize TSCs.
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
-pub(crate) fn set_tsc_offset_via_msr(vcpu: &impl VcpuX86_64, offset: u64) -> Result<()> {
-    // SAFETY: _rdtsc takes no arguments.
-    let host_tsc = unsafe { _rdtsc() };
-    set_tsc_value_via_msr(vcpu, host_tsc.wrapping_add(offset))
-}
-
-/// Sets the guest's TSC by writing the value to the MSR directly. See
-/// [`set_tsc_offset_via_msr`] for an explanation of how this value is actually
-/// read by the guest after being set.
-#[cfg(any(unix, feature = "haxm", feature = "whpx"))]
-pub(crate) fn set_tsc_value_via_msr(vcpu: &impl VcpuX86_64, value: u64) -> Result<()> {
-    let regs = vec![Register {
-        id: crate::MSR_IA32_TSC,
-        value,
-    }];
-
-    // set guest TSC value from our hypervisor
-    vcpu.set_msrs(&regs)
-}
 
 /// Gets host cpu max physical address bits.
 #[cfg(any(unix, feature = "haxm", feature = "whpx"))]
@@ -356,7 +341,7 @@ pub struct VcpuInitX86_64 {
     pub fpu: Fpu,
 
     /// Machine-specific registers.
-    pub msrs: Vec<Register>,
+    pub msrs: BTreeMap<u32, u64>,
 }
 
 /// Hold the CPU feature configurations that are needed to setup a vCPU.
@@ -607,8 +592,8 @@ pub struct PicState {
     /// initialization. use_4_byte_icw is true if 4 bytes of ICW are needed.
     pub use_4_byte_icw: bool,
     /// "Edge/Level Control Registers", for edge trigger selection.
-    /// When a particular bit is set, the corresponding IRQ is in level-triggered mode. Otherwise it
-    /// is in edge-triggered mode.
+    /// When a particular bit is set, the corresponding IRQ is in level-triggered mode. Otherwise
+    /// it is in edge-triggered mode.
     pub elcr: u8,
     pub elcr_mask: u8,
 }
@@ -963,11 +948,83 @@ impl Default for Sregs {
     }
 }
 
+/// x87 80-bit floating point value.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FpuReg {
+    /// 64-bit mantissa.
+    pub significand: u64,
+
+    /// 15-bit biased exponent and sign bit.
+    pub sign_exp: u16,
+}
+
+impl FpuReg {
+    /// Convert an array of 8x16-byte arrays to an array of 8 `FpuReg`.
+    ///
+    /// Ignores any data in the upper 6 bytes of each element; the values represent 80-bit FPU
+    /// registers, so the upper 48 bits are unused.
+    pub fn from_16byte_arrays(byte_arrays: &[[u8; 16]; 8]) -> [FpuReg; 8] {
+        let mut regs = [FpuReg::default(); 8];
+        for (dst, src) in regs.iter_mut().zip(byte_arrays.iter()) {
+            let tbyte: [u8; 10] = src[0..10].try_into().unwrap();
+            *dst = FpuReg::from(tbyte);
+        }
+        regs
+    }
+
+    /// Convert an array of 8 `FpuReg` into 8x16-byte arrays.
+    pub fn to_16byte_arrays(regs: &[FpuReg; 8]) -> [[u8; 16]; 8] {
+        let mut byte_arrays = [[0u8; 16]; 8];
+        for (dst, src) in byte_arrays.iter_mut().zip(regs.iter()) {
+            *dst = (*src).into();
+        }
+        byte_arrays
+    }
+}
+
+impl From<[u8; 10]> for FpuReg {
+    /// Construct a `FpuReg` from an 80-bit representation.
+    fn from(value: [u8; 10]) -> FpuReg {
+        // These array sub-slices can't fail, but there's no (safe) way to express that in Rust
+        // without an `unwrap()`.
+        let significand_bytes = value[0..8].try_into().unwrap();
+        let significand = u64::from_le_bytes(significand_bytes);
+        let sign_exp_bytes = value[8..10].try_into().unwrap();
+        let sign_exp = u16::from_le_bytes(sign_exp_bytes);
+        FpuReg {
+            significand,
+            sign_exp,
+        }
+    }
+}
+
+impl From<FpuReg> for [u8; 10] {
+    /// Convert an `FpuReg` into its 80-bit "TBYTE" representation.
+    fn from(value: FpuReg) -> [u8; 10] {
+        let mut bytes = [0u8; 10];
+        bytes[0..8].copy_from_slice(&value.significand.to_le_bytes());
+        bytes[8..10].copy_from_slice(&value.sign_exp.to_le_bytes());
+        bytes
+    }
+}
+
+impl From<FpuReg> for [u8; 16] {
+    /// Convert an `FpuReg` into its 80-bit representation plus 6 unused upper bytes.
+    /// This is a convenience function for converting to hypervisor types.
+    fn from(value: FpuReg) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&value.significand.to_le_bytes());
+        bytes[8..10].copy_from_slice(&value.sign_exp.to_le_bytes());
+        bytes
+    }
+}
+
 /// State of a VCPU's floating point unit.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Fpu {
-    pub fpr: [[u8; 16usize]; 8usize],
+    pub fpr: [FpuReg; 8],
     pub fcw: u16,
     pub fsw: u16,
     pub ftwx: u8,
@@ -1003,13 +1060,6 @@ pub struct DebugRegs {
     pub dr7: u64,
 }
 
-/// State of one VCPU register.  Currently used for MSRs and XCRs.
-#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
-pub struct Register {
-    pub id: u32,
-    pub value: u64,
-}
-
 /// The hybrid type for intel hybrid CPU.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CpuHybridType {
@@ -1025,7 +1075,8 @@ pub enum CpuHybridType {
 pub struct Xsave {
     data: Vec<u32>,
 
-    // Actual length in bytes. May be smaller than data if a non-u32 multiple of bytes is requested.
+    // Actual length in bytes. May be smaller than data if a non-u32 multiple of bytes is
+    // requested.
     len: usize,
 }
 

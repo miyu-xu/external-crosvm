@@ -7,10 +7,15 @@ use std::fs::File;
 use crate::descriptor::FromRawDescriptor;
 use crate::sys::unix::RawDescriptor;
 use crate::unix::set_descriptor_cloexec;
+use crate::unix::Pid;
 use crate::MmapError;
 
+mod event;
+pub(in crate::sys::macos) mod kqueue;
 mod net;
+mod timer;
 
+pub(crate) use event::PlatformEvent;
 pub(in crate::sys) use libc::sendmsg;
 pub(in crate::sys) use net::sockaddr_un;
 pub(in crate::sys) use net::sockaddrv4_to_lib_c;
@@ -20,17 +25,7 @@ pub fn get_cpu_affinity() -> crate::errno::Result<Vec<usize>> {
     todo!();
 }
 
-pub fn get_filesystem_type(_file: &std::fs::File) -> crate::errno::Result<i64> {
-    todo!();
-}
-
-pub struct Pid {}
-
 pub fn getpid() -> Pid {
-    todo!();
-}
-
-pub fn number_of_logical_cores() -> crate::errno::Result<usize> {
     todo!();
 }
 
@@ -38,10 +33,6 @@ pub fn open_file_or_duplicate<P: AsRef<std::path::Path>>(
     _path: P,
     _options: &std::fs::OpenOptions,
 ) -> crate::Result<std::fs::File> {
-    todo!();
-}
-
-pub fn pagesize() -> usize {
     todo!();
 }
 
@@ -108,63 +99,6 @@ impl<T: crate::EventToken> crate::AsRawDescriptor for EventContext<T> {
 }
 
 pub struct MemoryMappingArena {}
-
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PlatformEvent {}
-
-impl PlatformEvent {
-    pub fn new() -> crate::errno::Result<PlatformEvent> {
-        todo!();
-    }
-    pub fn signal(&self) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn wait(&self) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn wait_timeout(
-        &self,
-        _timeout: std::time::Duration,
-    ) -> crate::errno::Result<crate::event::EventWaitResult> {
-        todo!();
-    }
-    pub fn reset(&self) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn try_clone(&self) -> crate::errno::Result<PlatformEvent> {
-        todo!();
-    }
-}
-
-impl crate::AsRawDescriptor for PlatformEvent {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        todo!();
-    }
-}
-
-impl crate::FromRawDescriptor for PlatformEvent {
-    unsafe fn from_raw_descriptor(_descriptor: RawDescriptor) -> Self {
-        todo!();
-    }
-}
-
-impl crate::IntoRawDescriptor for PlatformEvent {
-    fn into_raw_descriptor(self) -> RawDescriptor {
-        todo!();
-    }
-}
-
-impl From<PlatformEvent> for crate::SafeDescriptor {
-    fn from(_evt: PlatformEvent) -> Self {
-        todo!();
-    }
-}
-
-impl From<crate::SafeDescriptor> for PlatformEvent {
-    fn from(_evt: crate::SafeDescriptor) -> Self {
-        todo!();
-    }
-}
 
 #[derive(Debug)]
 pub struct MemoryMapping {}
@@ -318,34 +252,6 @@ impl crate::shm::PlatformSharedMemory for crate::SharedMemory {
         _descriptor: crate::SafeDescriptor,
         _size: u64,
     ) -> crate::Result<crate::SharedMemory> {
-        todo!();
-    }
-}
-
-impl crate::Timer {
-    pub fn new() -> crate::errno::Result<crate::Timer> {
-        todo!();
-    }
-}
-
-impl crate::TimerTrait for crate::Timer {
-    fn reset(
-        &mut self,
-        _dur: std::time::Duration,
-        mut _interval: Option<std::time::Duration>,
-    ) -> crate::errno::Result<()> {
-        todo!();
-    }
-    fn wait(&mut self) -> crate::errno::Result<()> {
-        todo!();
-    }
-    fn mark_waited(&mut self) -> crate::errno::Result<bool> {
-        todo!();
-    }
-    fn clear(&mut self) -> crate::errno::Result<()> {
-        todo!();
-    }
-    fn resolution(&self) -> crate::errno::Result<std::time::Duration> {
         todo!();
     }
 }

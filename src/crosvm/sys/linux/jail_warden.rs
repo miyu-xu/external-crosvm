@@ -14,8 +14,6 @@ use anyhow::Context;
 use anyhow::Result;
 use base::error;
 use base::info;
-use base::linux::process::fork_process;
-use base::linux::process::Child;
 use base::syslog;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
@@ -30,6 +28,8 @@ use devices::ProxyDevice;
 use devices::ResourceCarrier;
 use jail::create_base_minijail;
 use jail::create_sandbox_minijail;
+use jail::fork::fork_process;
+use jail::fork::Child;
 use jail::RunAsUser;
 use jail::SandboxConfig;
 use jail::MAX_OPEN_FILES_FOR_JAIL_WARDEN;
@@ -88,6 +88,7 @@ impl JailWardenImpl {
         let mut keep_rds = Vec::new();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
         let (main_tube, worker_tube) = Tube::pair()?;
         keep_rds.push(worker_tube.as_raw_descriptor());
         #[cfg(feature = "swap")]
@@ -126,7 +127,7 @@ impl JailWardenImpl {
                     #[cfg(feature = "swap")]
                     swap_device_helper,
                 ) {
-                    panic!("jail_worker_process exited with error: {:?}", e);
+                    error!("jail_worker_process exited with error: {:#}", e);
                 }
             })?;
         Ok(Self {
@@ -201,6 +202,7 @@ fn jail_worker_process(
                 let mut keep_rds = vec![];
                 syslog::push_descriptors(&mut keep_rds);
                 cros_tracing::push_descriptors!(&mut keep_rds);
+                metrics::push_descriptors(&mut keep_rds);
                 keep_rds.extend(pci_device.keep_rds());
                 let proxy_device_primitive = ChildProcIntf::new(
                     pci_device,

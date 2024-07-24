@@ -11,8 +11,6 @@ use base::clone_descriptor;
 use base::error;
 use base::info;
 use base::Event;
-use base::FromRawDescriptor;
-use base::SafeDescriptor;
 use base::WaitContext;
 use cros_async::select3;
 use cros_async::AsyncWrapper;
@@ -181,8 +179,8 @@ impl Worker {
     /// # Arguments
     ///
     /// * `device` - Instance of backend device
-    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
-    ///   to `wait_ctx`
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session to
+    ///   `wait_ctx`
     /// * `desc` - `DescriptorChain` to handle
     fn handle_command_desc(
         &mut self,
@@ -266,8 +264,8 @@ impl Worker {
     /// # Arguments
     ///
     /// * `device` - Instance of backend device
-    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session
-    ///   to `wait_ctx`
+    /// * `wait_ctx` - `device` may register a new `Token::Event` for a new stream session to
+    ///   `wait_ctx`
     fn handle_command_queue(
         &mut self,
         device: &mut dyn Device,
@@ -286,8 +284,8 @@ impl Worker {
     ///
     /// * `device` - Instance of backend device
     /// * `stream_id` - Stream session ID of the event
-    /// * `wait_ctx` - `device` may register a new `Token::Buffer` for a new stream session
-    ///   to `wait_ctx`
+    /// * `wait_ctx` - `device` may register a new `Token::Buffer` for a new stream session to
+    ///   `wait_ctx`
     fn handle_event(
         &mut self,
         device: &mut dyn Device,
@@ -403,12 +401,7 @@ impl Worker {
         let device_wait_ctx = WaitContext::new().map_err(Error::WaitContextCreationFailed)?;
         let device_evt = ex
             .async_from(AsyncWrapper::new(
-                clone_descriptor(&device_wait_ctx)
-                    .map(|fd|
-                        // SAFETY:
-                        // Safe because we just created this fd.
-                        unsafe { SafeDescriptor::from_raw_descriptor(fd) })
-                    .map_err(Error::CloneDescriptorFailed)?,
+                clone_descriptor(&device_wait_ctx).map_err(Error::CloneDescriptorFailed)?,
             ))
             .map_err(Error::EventAsyncCreationFailed)?;
 

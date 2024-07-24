@@ -13,8 +13,8 @@ use std::os::unix::net::UnixStream;
 use crate::FileReadWriteAtVolatile;
 use crate::FileReadWriteVolatile;
 
-// This module allows the below macros to refer to $crate::unix::file_traits::lib::X and ensures other
-// crates don't need to add additional crates to their Cargo.toml.
+// This module allows the below macros to refer to $crate::unix::file_traits::lib::X and ensures
+// other crates don't need to add additional crates to their Cargo.toml.
 pub mod lib {
     pub use libc::c_int;
     pub use libc::c_void;
@@ -130,7 +130,7 @@ macro_rules! volatile_at_impl {
     ($ty:ty) => {
         impl FileReadWriteAtVolatile for $ty {
             fn read_at_volatile(
-                &mut self,
+                &self,
                 slice: $crate::VolatileSlice,
                 offset: u64,
             ) -> std::io::Result<usize> {
@@ -154,7 +154,7 @@ macro_rules! volatile_at_impl {
             }
 
             fn read_vectored_at_volatile(
-                &mut self,
+                &self,
                 bufs: &[$crate::VolatileSlice],
                 offset: u64,
             ) -> std::io::Result<usize> {
@@ -184,7 +184,7 @@ macro_rules! volatile_at_impl {
             }
 
             fn write_at_volatile(
-                &mut self,
+                &self,
                 slice: $crate::VolatileSlice,
                 offset: u64,
             ) -> std::io::Result<usize> {
@@ -208,7 +208,7 @@ macro_rules! volatile_at_impl {
             }
 
             fn write_vectored_at_volatile(
-                &mut self,
+                &self,
                 bufs: &[$crate::VolatileSlice],
                 offset: u64,
             ) -> std::io::Result<usize> {

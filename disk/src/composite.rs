@@ -124,7 +124,7 @@ struct ComponentDiskPart {
     file: Box<dyn DiskFile>,
     offset: u64,
     length: u64,
-    needs_fsync: bool,
+    needs_fsync: AtomicBool,
 }
 
 impl ComponentDiskPart {
@@ -219,7 +219,8 @@ impl CompositeDiskFile {
                 };
                 let comp_file = open_file_or_duplicate(
                     &path,
-                    OpenOptions::new().read(true).write(writable), // TODO(b/190435784): add support for O_DIRECT.
+                    OpenOptions::new().read(true).write(writable), /* TODO(b/190435784): add
+                                                                    * support for O_DIRECT. */
                 )
                 .map_err(|e| Error::OpenFile(e.into(), disk.file_path.to_string()))?;
 
@@ -239,7 +240,7 @@ impl CompositeDiskFile {
                     .map_err(|e| Error::DiskError(Box::new(e)))?,
                     offset: disk.offset,
                     length: 0, // Assigned later
-                    needs_fsync: false,
+                    needs_fsync: AtomicBool::new(false),
                 })
             })
             .collect::<Result<Vec<ComponentDiskPart>>>()?;
@@ -282,9 +283,9 @@ impl CompositeDiskFile {
         }
     }
 
-    fn disk_at_offset(&mut self, offset: u64) -> io::Result<&mut ComponentDiskPart> {
+    fn disk_at_offset(&self, offset: u64) -> io::Result<&ComponentDiskPart> {
         self.component_disks
-            .iter_mut()
+            .iter()
             .find(|disk| disk.range().contains(&offset))
             .ok_or(io::Error::new(
                 ErrorKind::InvalidData,
@@ -315,7 +316,7 @@ impl FileSetLen for CompositeDiskFile {
 // If one of the component disks does a partial read or write, that also gets passed
 // transparently to the parent.
 impl FileReadWriteAtVolatile for CompositeDiskFile {
-    fn read_at_volatile(&mut self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
+    fn read_at_volatile(&self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
         let cursor_location = offset;
         let disk = self.disk_at_offset(cursor_location)?;
         let subslice = if cursor_location + slice.size() as u64 > disk.offset + disk.length {
@@ -329,7 +330,7 @@ impl FileReadWriteAtVolatile for CompositeDiskFile {
         disk.file
             .read_at_volatile(subslice, cursor_location - disk.offset)
     }
-    fn write_at_volatile(&mut self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
+    fn write_at_volatile(&self, slice: VolatileSlice, offset: u64) -> io::Result<usize> {
         let cursor_location = offset;
         let disk = self.disk_at_offset(cursor_location)?;
         let subslice = if cursor_location + slice.size() as u64 > disk.offset + disk.length {
@@ -344,7 +345,7 @@ impl FileReadWriteAtVolatile for CompositeDiskFile {
         let bytes = disk
             .file
             .write_at_volatile(subslice, cursor_location - disk.offset)?;
-        disk.needs_fsync = true;
+        disk.needs_fsync.store(true, Ordering::SeqCst);
         Ok(bytes)
     }
 }
@@ -382,11 +383,11 @@ impl FileSetLen for AsyncCompositeDiskFile {
 }
 
 impl FileAllocate for AsyncCompositeDiskFile {
-    fn allocate(&mut self, offset: u64, length: u64) -> io::Result<()> {
+    fn allocate(&self, offset: u64, length: u64) -> io::Result<()> {
         let range = offset..(offset + length);
         let disks = self
             .component_disks
-            .iter_mut()
+            .iter()
             .filter(|disk| ranges_overlap(&disk.range(), &range));
         for disk in disks {
             if let Some(intersection) = range_intersection(&range, &disk.range()) {
@@ -412,7 +413,7 @@ impl ToAsyncDisk for CompositeDiskFile {
                         file: disk.file.to_async_disk(ex)?,
                         offset: disk.offset,
                         length: disk.length,
-                        needs_fsync: AtomicBool::new(disk.needs_fsync),
+                        needs_fsync: disk.needs_fsync,
                     })
                 })
                 .collect::<crate::Result<Vec<_>>>()?,
@@ -459,21 +460,6 @@ impl AsyncCompositeDiskFile {
 
 #[async_trait(?Send)]
 impl AsyncDisk for AsyncCompositeDiskFile {
-    fn into_inner(self: Box<Self>) -> Box<dyn DiskFile> {
-        Box::new(CompositeDiskFile {
-            component_disks: self
-                .component_disks
-                .into_iter()
-                .map(|disk| ComponentDiskPart {
-                    file: disk.file.into_inner(),
-                    offset: disk.offset,
-                    length: disk.length,
-                    needs_fsync: disk.needs_fsync.into_inner(),
-                })
-                .collect(),
-        })
-    }
-
     async fn flush(&self) -> crate::Result<()> {
         futures::future::try_join_all(self.component_disks.iter().map(|c| c.file.flush())).await?;
         Ok(())
@@ -581,6 +567,7 @@ pub struct PartitionInfo {
     pub partition_type: ImagePartitionType,
     pub writable: bool,
     pub size: u64,
+    pub part_guid: Option<Uuid>,
 }
 
 /// Round `val` up to the next multiple of 2**`align_log`.
@@ -683,7 +670,7 @@ fn create_gpt_entry(partition: &PartitionInfo, offset: u64) -> GptPartitionEntry
 
     GptPartitionEntry {
         partition_type_guid: partition.partition_type.guid(),
-        unique_partition_guid: Uuid::new_v4(),
+        unique_partition_guid: partition.part_guid.unwrap_or(Uuid::new_v4()),
         first_lba: offset / SECTOR_SIZE,
         last_lba: (offset + partition.aligned_size()) / SECTOR_SIZE - 1,
         attributes: 0,
@@ -864,13 +851,13 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         assert!(CompositeDiskFile::new(vec![disk_part1, disk_part2]).is_err());
     }
@@ -883,13 +870,13 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2]).unwrap();
         let len = composite.get_len().unwrap();
@@ -904,13 +891,13 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2]).unwrap();
 
@@ -927,9 +914,9 @@ mod tests {
             file: Box::new(file),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
-        let mut composite = CompositeDiskFile::new(vec![disk_part]).unwrap();
+        let composite = CompositeDiskFile::new(vec![disk_part]).unwrap();
         let mut input_memory = [55u8; 5];
         let input_volatile_memory = VolatileSlice::new(&mut input_memory[..]);
         composite
@@ -950,7 +937,7 @@ mod tests {
             file: Box::new(file),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part]).unwrap();
         let ex = Executor::new().unwrap();
@@ -989,19 +976,19 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part3 = ComponentDiskPart {
             file: Box::new(file3),
             offset: 200,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let mut out_descriptors = composite.as_raw_descriptors();
@@ -1018,22 +1005,21 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part3 = ComponentDiskPart {
             file: Box::new(file3),
             offset: 200,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
-        let mut composite =
-            CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let mut input_memory = [55u8; 200];
         let input_volatile_memory = VolatileSlice::new(&mut input_memory[..]);
         composite
@@ -1056,19 +1042,19 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part3 = ComponentDiskPart {
             file: Box::new(file3),
             offset: 200,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
@@ -1117,19 +1103,19 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part3 = ComponentDiskPart {
             file: Box::new(file3),
             offset: 200,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
@@ -1197,19 +1183,19 @@ mod tests {
             file: Box::new(file1),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part2 = ComponentDiskPart {
             file: Box::new(file2),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let disk_part3 = ComponentDiskPart {
             file: Box::new(file3),
             offset: 200,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
@@ -1286,13 +1272,13 @@ mod tests {
             file: Box::new(rw_file),
             offset: 0,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let ro_part = ComponentDiskPart {
             file: Box::new(ro_file),
             offset: 100,
             length: 100,
-            needs_fsync: false,
+            needs_fsync: AtomicBool::new(false),
         };
         let composite = CompositeDiskFile::new(vec![rw_part, ro_part]).unwrap();
         let ex = Executor::new().unwrap();
@@ -1302,8 +1288,8 @@ mod tests {
             // Write to the RW part so that some fsync operation will occur.
             composite.write_zeroes_at(0, 20).await.unwrap();
 
-            // This is the test's assert. fsyncing should NOT touch a read-only disk part. On Windows,
-            // this would be an error.
+            // This is the test's assert. fsyncing should NOT touch a read-only disk part. On
+            // Windows, this would be an error.
             composite.fsync().await.expect(
                 "Failed to fsync composite disk. \
                      This can happen if the disk writable state is wrong.",
@@ -1401,6 +1387,7 @@ mod tests {
                     partition_type: ImagePartitionType::LinuxFilesystem,
                     writable: false,
                     size: 0,
+                    part_guid: None,
                 },
                 PartitionInfo {
                     label: "partition2".to_string(),
@@ -1408,6 +1395,7 @@ mod tests {
                     partition_type: ImagePartitionType::LinuxFilesystem,
                     writable: true,
                     size: 0,
+                    part_guid: Some(Uuid::from_u128(0x4049C8DC_6C2B_C740_A95A_BDAA629D4378)),
                 },
             ],
             Path::new("/zero_filler.img"),
@@ -1435,6 +1423,7 @@ mod tests {
                     partition_type: ImagePartitionType::LinuxFilesystem,
                     writable: false,
                     size: 0,
+                    part_guid: None,
                 },
                 PartitionInfo {
                     label: "label".to_string(),
@@ -1442,6 +1431,7 @@ mod tests {
                     partition_type: ImagePartitionType::LinuxFilesystem,
                     writable: true,
                     size: 0,
+                    part_guid: None,
                 },
             ],
             Path::new("/zero_filler.img"),

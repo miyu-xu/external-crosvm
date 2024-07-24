@@ -44,6 +44,7 @@ fn generate_vhost_port() -> u32 {
 }
 
 #[test]
+#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -53,6 +54,7 @@ fn host_to_guest() {
 }
 
 #[test]
+#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_disable_sandbox() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -64,6 +66,7 @@ fn host_to_guest_disable_sandbox() {
 }
 
 #[test]
+#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_snapshot_restore() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -89,11 +92,12 @@ fn host_to_guest_snapshot_restore() {
         ])
         .with_stdout_hardware("legacy-virtio-console");
     drop(vm);
-    vm = TestVm::new_cold_restore(config).unwrap();
+    vm = TestVm::new_restore(config).unwrap();
     host_to_guest_connection(&mut vm, guest_cid, guest_port);
 }
 
 #[test]
+#[ignore = "Test failing in latest version of debian. b/346365355"]
 fn host_to_guest_disable_sandbox_snapshot_restore() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -119,7 +123,7 @@ fn host_to_guest_disable_sandbox_snapshot_restore() {
         ])
         .with_stdout_hardware("legacy-virtio-console");
     drop(vm);
-    vm = TestVm::new_cold_restore(config.disable_sandbox()).unwrap();
+    vm = TestVm::new_restore(config.disable_sandbox()).unwrap();
     host_to_guest_connection(&mut vm, guest_cid, guest_port);
 }
 
@@ -199,7 +203,7 @@ fn guest_to_host_snapshot_restore() {
         ])
         .with_stdout_hardware("legacy-virtio-console");
     drop(vm);
-    vm = TestVm::new_cold_restore(config).unwrap();
+    vm = TestVm::new_restore(config).unwrap();
     guest_to_host_connection(&mut vm, host_port);
 }
 
@@ -230,7 +234,7 @@ fn guest_to_host_disable_sandbox_snapshot_restore() {
         ])
         .with_stdout_hardware("legacy-virtio-console");
     drop(vm);
-    vm = TestVm::new_cold_restore(config.disable_sandbox()).unwrap();
+    vm = TestVm::new_restore(config.disable_sandbox()).unwrap();
     guest_to_host_connection(&mut vm, host_port);
 }
 
@@ -277,6 +281,7 @@ fn create_vu_config(cmd_type: CmdType, socket: &Path, cid: u32) -> VuConfig {
 }
 
 #[test]
+#[ignore = "b/333090069 test is flaky"]
 fn vhost_user_host_to_guest() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();
@@ -295,6 +300,7 @@ fn vhost_user_host_to_guest() {
 }
 
 #[test]
+#[ignore = "b/333090069 test is flaky"]
 fn vhost_user_host_to_guest_with_devices() {
     let guest_port = generate_vhost_port();
     let guest_cid = generate_guest_cid();

@@ -29,7 +29,7 @@ use crate::virtio::gpu;
 use crate::virtio::gpu::QueueReader;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
 use crate::virtio::vhost::user::device::handler::VhostBackendReqConnection;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::DescriptorChain;
 use crate::virtio::Gpu;
@@ -86,7 +86,6 @@ struct GpuBackend {
     ex: Executor,
     gpu: Rc<RefCell<Gpu>>,
     resource_bridges: Arc<Mutex<Vec<Tube>>>,
-    acked_protocol_features: u64,
     state: Option<Rc<RefCell<gpu::Frontend>>>,
     fence_state: Arc<Mutex<gpu::FenceState>>,
     queue_workers: [Option<WorkerState<Arc<Mutex<Queue>>, ()>>; MAX_QUEUE_NUM],
@@ -94,7 +93,16 @@ struct GpuBackend {
     shmem_mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
 }
 
-impl VhostUserBackend for GpuBackend {
+impl GpuBackend {
+    fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
+        for handle in self.platform_workers.borrow_mut().drain(..) {
+            let _ = self.ex.run_until(handle.cancel());
+        }
+        Ok(())
+    }
+}
+
+impl VhostUserDevice for GpuBackend {
     fn max_queue_num(&self) -> usize {
         MAX_QUEUE_NUM
     }
@@ -108,29 +116,11 @@ impl VhostUserBackend for GpuBackend {
         Ok(())
     }
 
-    fn acked_features(&self) -> u64 {
-        self.features()
-    }
-
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         VhostUserProtocolFeatures::CONFIG
-            | VhostUserProtocolFeatures::SLAVE_REQ
+            | VhostUserProtocolFeatures::BACKEND_REQ
             | VhostUserProtocolFeatures::MQ
             | VhostUserProtocolFeatures::SHARED_MEMORY_REGIONS
-    }
-
-    fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        let unrequested_features = features & !self.protocol_features().bits();
-        if unrequested_features != 0 {
-            bail!("Unexpected protocol features: {:#x}", unrequested_features);
-        }
-
-        self.acked_protocol_features |= features;
-        Ok(())
-    }
-
-    fn acked_protocol_features(&self) -> u64 {
-        self.acked_protocol_features
     }
 
     fn read_config(&self, offset: u64, dst: &mut [u8]) {
@@ -250,11 +240,9 @@ impl VhostUserBackend for GpuBackend {
         }
     }
 
-    fn stop_non_queue_workers(&mut self) -> anyhow::Result<()> {
-        for handle in self.platform_workers.borrow_mut().drain(..) {
-            let _ = self.ex.run_until(handle.cancel());
-        }
-        Ok(())
+    fn enter_suspended_state(&mut self) -> anyhow::Result<bool> {
+        self.stop_non_queue_workers()?;
+        Ok(true)
     }
 
     fn reset(&mut self) {

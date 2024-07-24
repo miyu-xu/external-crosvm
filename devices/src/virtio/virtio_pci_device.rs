@@ -23,6 +23,8 @@ use data_model::Le32;
 use hypervisor::Datamatch;
 use hypervisor::MemCacheType;
 use libc::ERANGE;
+#[cfg(target_arch = "x86_64")]
+use metrics::MetricEventType;
 use resources::Alloc;
 use resources::AllocOptions;
 use resources::SystemAllocator;
@@ -35,6 +37,7 @@ use virtio_sys::virtio_config::VIRTIO_CONFIG_S_DRIVER_OK;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FAILED;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_FEATURES_OK;
 use virtio_sys::virtio_config::VIRTIO_CONFIG_S_NEEDS_RESET;
+use virtio_sys::virtio_config::VIRTIO_CONFIG_S_SUSPEND;
 use vm_control::api::VmMemoryClient;
 use vm_control::VmMemoryDestination;
 use vm_control::VmMemoryRegionId;
@@ -63,6 +66,7 @@ use crate::pci::PciBarConfiguration;
 use crate::pci::PciBarIndex;
 use crate::pci::PciBarPrefetchable;
 use crate::pci::PciBarRegionType;
+use crate::pci::PciBaseSystemPeripheralSubclass;
 use crate::pci::PciCapability;
 use crate::pci::PciCapabilityID;
 use crate::pci::PciClassCode;
@@ -72,9 +76,14 @@ use crate::pci::PciDeviceError;
 use crate::pci::PciDisplaySubclass;
 use crate::pci::PciHeaderType;
 use crate::pci::PciId;
+use crate::pci::PciInputDeviceSubclass;
 use crate::pci::PciInterruptPin;
 use crate::pci::PciMassStorageSubclass;
+use crate::pci::PciMultimediaSubclass;
+use crate::pci::PciNetworkControllerSubclass;
+use crate::pci::PciSimpleCommunicationControllerSubclass;
 use crate::pci::PciSubclass;
+use crate::pci::PciWirelessControllerSubclass;
 use crate::virtio::ipc_memory_mapper::IpcMemoryMapper;
 #[cfg(feature = "pci-hotplug")]
 use crate::HotPluggable;
@@ -236,19 +245,6 @@ impl VirtioPciShmCap {
     }
 }
 
-/// Subclasses for virtio.
-#[allow(dead_code)]
-#[derive(Copy, Clone)]
-pub enum PciVirtioSubclass {
-    NonTransitionalBase = 0xff,
-}
-
-impl PciSubclass for PciVirtioSubclass {
-    fn get_register_value(&self) -> u8 {
-        *self as u8
-    }
-}
-
 // Allocate one bar for the structs pointed to by the capability structures.
 const COMMON_CONFIG_BAR_OFFSET: u64 = 0x0000;
 const COMMON_CONFIG_SIZE: u64 = 56;
@@ -380,17 +376,89 @@ impl VirtioPciDevice {
         let pci_device_id = VIRTIO_PCI_DEVICE_ID_BASE + device.device_type() as u16;
 
         let (pci_device_class, pci_device_subclass) = match device.device_type() {
+            DeviceType::Net => (
+                PciClassCode::NetworkController,
+                &PciNetworkControllerSubclass::Other as &dyn PciSubclass,
+            ),
             DeviceType::Block => (
                 PciClassCode::MassStorage,
                 &PciMassStorageSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Console => (
+                PciClassCode::SimpleCommunicationController,
+                &PciSimpleCommunicationControllerSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Rng => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Balloon => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Scsi => (
+                PciClassCode::MassStorage,
+                &PciMassStorageSubclass::Scsi as &dyn PciSubclass,
+            ),
+            DeviceType::P9 => (
+                PciClassCode::NetworkController,
+                &PciNetworkControllerSubclass::Other as &dyn PciSubclass,
             ),
             DeviceType::Gpu => (
                 PciClassCode::DisplayController,
                 &PciDisplaySubclass::Other as &dyn PciSubclass,
             ),
-            _ => (
-                PciClassCode::TooOld,
-                &PciVirtioSubclass::NonTransitionalBase as &dyn PciSubclass,
+            DeviceType::Input => (
+                PciClassCode::InputDevice,
+                &PciInputDeviceSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Vsock => (
+                PciClassCode::NetworkController,
+                &PciNetworkControllerSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Iommu => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Iommu as &dyn PciSubclass,
+            ),
+            DeviceType::Sound => (
+                PciClassCode::MultimediaController,
+                &PciMultimediaSubclass::AudioController as &dyn PciSubclass,
+            ),
+            DeviceType::Fs => (
+                PciClassCode::MassStorage,
+                &PciMassStorageSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Pmem => (
+                PciClassCode::MassStorage,
+                &PciMassStorageSubclass::NonVolatileMemory as &dyn PciSubclass,
+            ),
+            DeviceType::Mac80211HwSim => (
+                PciClassCode::WirelessController,
+                &PciWirelessControllerSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::VideoEncoder => (
+                PciClassCode::MultimediaController,
+                &PciMultimediaSubclass::VideoController as &dyn PciSubclass,
+            ),
+            DeviceType::VideoDecoder => (
+                PciClassCode::MultimediaController,
+                &PciMultimediaSubclass::VideoController as &dyn PciSubclass,
+            ),
+            DeviceType::Scmi => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Wl => (
+                PciClassCode::DisplayController,
+                &PciDisplaySubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Tpm => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Other as &dyn PciSubclass,
+            ),
+            DeviceType::Pvclock => (
+                PciClassCode::BaseSystemPeripheral,
+                &PciBaseSystemPeripheralSubclass::Other as &dyn PciSubclass,
             ),
         };
 
@@ -455,6 +523,10 @@ impl VirtioPciDevice {
             | VIRTIO_CONFIG_S_FEATURES_OK) as u8;
         (self.common_config.driver_status & ready_bits) == ready_bits
             && self.common_config.driver_status & VIRTIO_CONFIG_S_FAILED as u8 == 0
+    }
+
+    fn is_device_suspended(&self) -> bool {
+        (self.common_config.driver_status & VIRTIO_CONFIG_S_SUSPEND as u8) != 0
     }
 
     /// Determines if the driver has requested the device reset itself
@@ -545,10 +617,11 @@ impl VirtioPciDevice {
             Some(self.msix_config.clone()),
             self.common_config.msix_config,
             #[cfg(target_arch = "x86_64")]
-            Some(PmWakeupEvent::new(
-                self.vm_control_tube.clone(),
-                self.pm_config.clone(),
-                self.device.debug_label(),
+            Some((
+                PmWakeupEvent::new(self.vm_control_tube.clone(), self.pm_config.clone()),
+                MetricEventType::VirtioWakeup {
+                    virtio_id: self.device.device_type() as u32,
+                },
             )),
         );
         self.interrupt = Some(interrupt.clone());
@@ -842,6 +915,8 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
+        let was_suspended = self.is_device_suspended();
+
         if bar_index == self.settings_bar {
             match offset {
                 COMMON_CONFIG_BAR_OFFSET..=COMMON_CONFIG_LAST => self.common_config.write(
@@ -899,15 +974,26 @@ impl PciDevice for VirtioPciDevice {
             }
         }
 
+        let is_suspended = self.is_device_suspended();
+        if is_suspended != was_suspended {
+            if let Some(interrupt) = self.interrupt.as_mut() {
+                interrupt.set_suspended(is_suspended);
+            }
+        }
+
         // Device has been reset by the driver
-        if self.device_activated && self.is_reset_requested() && self.device.reset() {
-            self.device_activated = false;
-            // reset queues
-            self.queues.iter_mut().for_each(QueueConfig::reset);
-            // select queue 0 by default
-            self.common_config.queue_select = 0;
-            if let Err(e) = self.unregister_ioevents() {
-                error!("failed to unregister ioevents: {:#}", e);
+        if self.device_activated && self.is_reset_requested() {
+            if let Err(e) = self.device.reset() {
+                error!("failed to reset {} device: {:#}", self.debug_label(), e);
+            } else {
+                self.device_activated = false;
+                // reset queues
+                self.queues.iter_mut().for_each(QueueConfig::reset);
+                // select queue 0 by default
+                self.common_config.queue_select = 0;
+                if let Err(e) = self.unregister_ioevents() {
+                    error!("failed to unregister ioevents: {:#}", e);
+                }
             }
         }
     }
@@ -1122,17 +1208,13 @@ impl Suspendable for VirtioPciDevice {
             return Ok(());
         }
 
-        // Don't call `self.device.virtio_sleep()` for vhost user devices if the device is not
-        // activated yet, since it will always return an empty Vec.
-        if !self.device_activated && self.device.is_vhost_user() {
-            // This will need to be set, so that a cold restore will work.
-            self.sleep_state = Some(SleepState::Inactive);
-            return Ok(());
-        }
         if let Some(queues) = self.device.virtio_sleep()? {
             anyhow::ensure!(
                 self.device_activated,
-                "unactivated device returned queues on sleep"
+                format!(
+                    "unactivated device {} returned queues on sleep",
+                    self.debug_label()
+                ),
             );
             self.sleep_state = Some(SleepState::Active {
                 activated_queues: queues,
@@ -1140,7 +1222,10 @@ impl Suspendable for VirtioPciDevice {
         } else {
             anyhow::ensure!(
                 !self.device_activated,
-                "activated device didn't return queues on sleep"
+                format!(
+                    "activated device {} didn't return queues on sleep",
+                    self.debug_label()
+                ),
             );
             self.sleep_state = Some(SleepState::Inactive);
         }
@@ -1148,19 +1233,17 @@ impl Suspendable for VirtioPciDevice {
     }
 
     fn wake(&mut self) -> anyhow::Result<()> {
-        // A vhost user device that isn't activated doesn't need to be woken up.
-        if !self.device_activated && self.device.is_vhost_user() {
-            self.sleep_state = None;
-            return Ok(());
-        }
         match self.sleep_state.take() {
             None => {
                 // If the device is already awake, we should not request it to wake again.
             }
             Some(SleepState::Inactive) => {
-                self.device
-                    .virtio_wake(None)
-                    .expect("virtio_wake failed, can't recover");
+                self.device.virtio_wake(None).with_context(|| {
+                    format!(
+                        "virtio_wake failed for {}, can't recover",
+                        self.debug_label(),
+                    )
+                })?;
             }
             Some(SleepState::Active { activated_queues }) => {
                 self.device
@@ -1171,7 +1254,12 @@ impl Suspendable for VirtioPciDevice {
                             .expect("interrupt missing for already active queues"),
                         activated_queues,
                     )))
-                    .expect("virtio_wake failed, can't recover");
+                    .with_context(|| {
+                        format!(
+                            "virtio_wake failed for {}, can't recover",
+                            self.debug_label(),
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -1291,10 +1379,11 @@ impl Suspendable for VirtioPciDevice {
                 self.common_config.msix_config,
                 deser_interrupt,
                 #[cfg(target_arch = "x86_64")]
-                Some(PmWakeupEvent::new(
-                    self.vm_control_tube.clone(),
-                    self.pm_config.clone(),
-                    self.device.debug_label(),
+                Some((
+                    PmWakeupEvent::new(self.vm_control_tube.clone(), self.pm_config.clone()),
+                    MetricEventType::VirtioWakeup {
+                        virtio_id: self.device.device_type() as u32,
+                    },
                 )),
             ));
         }
@@ -1334,42 +1423,7 @@ impl Suspendable for VirtioPciDevice {
                 .context("failed to wake doorbell")
         })?;
 
-        if self.device.is_vhost_user() {
-            let (queue_evts, interrupt) = if self.device_activated {
-                (
-                    Some(
-                        self.queue_evts
-                            .iter()
-                            .map(|queue_evt| {
-                                queue_evt
-                                    .event
-                                    .try_clone()
-                                    .context("Failed to clone queue_evt")
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?,
-                    ),
-                    Some(
-                        self.interrupt
-                            .as_ref()
-                            .expect("Interrupt should not be empty if device was activated.")
-                            .clone(),
-                    ),
-                )
-            } else {
-                (None, None)
-            };
-            self.device.vhost_user_restore(
-                deser.inner_device,
-                &self.queues,
-                queue_evts,
-                interrupt,
-                self.mem.clone(),
-                &self.msix_config,
-                self.device_activated,
-            )?;
-        } else {
-            self.device.virtio_restore(deser.inner_device)?;
-        }
+        self.device.virtio_restore(deser.inner_device)?;
 
         Ok(())
     }
@@ -1403,7 +1457,7 @@ impl SharedMemoryMapper for VmRequester {
     ) -> anyhow::Result<()> {
         if self.needs_prepare {
             self.vm_memory_client
-                .prepare_shared_memory_region(self.alloc)
+                .prepare_shared_memory_region(self.alloc, cache)
                 .context("prepare_shared_memory_region failed")?;
             self.needs_prepare = false;
         }

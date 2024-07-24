@@ -10,6 +10,8 @@ use base::AsRawDescriptor;
 use crate::sys::linux::PollSource;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use crate::sys::linux::UringSource;
+#[cfg(feature = "tokio")]
+use crate::sys::platform::tokio_source::TokioSource;
 #[cfg(windows)]
 use crate::sys::windows::HandleSource;
 #[cfg(windows)]
@@ -29,6 +31,8 @@ pub enum IoSource<F: base::AsRawDescriptor> {
     Handle(HandleSource<F>),
     #[cfg(windows)]
     Overlapped(OverlappedSource<F>),
+    #[cfg(feature = "tokio")]
+    Tokio(TokioSource<F>),
 }
 
 static_assertions::assert_impl_all!(IoSource<std::fs::File>: Send, Sync);
@@ -47,6 +51,8 @@ macro_rules! await_on_inner {
             IoSource::Handle(x) => HandleSource::$method(x, $($args),*).await,
             #[cfg(windows)]
             IoSource::Overlapped(x) => OverlappedSource::$method(x, $($args),*).await,
+            #[cfg(feature = "tokio")]
+            IoSource::Tokio(x) => TokioSource::$method(x, $($args),*).await,
         }
     };
 }
@@ -65,6 +71,8 @@ macro_rules! on_inner {
             IoSource::Handle(x) => HandleSource::$method(x, $($args),*),
             #[cfg(windows)]
             IoSource::Overlapped(x) => OverlappedSource::$method(x, $($args),*),
+            #[cfg(feature = "tokio")]
+            IoSource::Tokio(x) => TokioSource::$method(x, $($args),*),
         }
     };
 }
@@ -173,15 +181,16 @@ mod tests {
     use crate::mem::VecIoWrapper;
     #[cfg(any(target_os = "android", target_os = "linux"))]
     use crate::sys::linux::uring_executor::is_uring_stable;
+    use crate::sys::ExecutorKindSys;
     use crate::Executor;
     use crate::ExecutorKind;
     use crate::MemRegion;
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
     fn all_kinds() -> Vec<ExecutorKind> {
-        let mut kinds = vec![ExecutorKind::Fd];
+        let mut kinds = vec![ExecutorKindSys::Fd.into()];
         if is_uring_stable() {
-            kinds.push(ExecutorKind::Uring);
+            kinds.push(ExecutorKindSys::Uring.into());
         }
         kinds
     }
@@ -189,7 +198,7 @@ mod tests {
     fn all_kinds() -> Vec<ExecutorKind> {
         // TODO: Test OverlappedSource. It requires files to be opened specially, so this test
         // fixture needs to be refactored first.
-        vec![ExecutorKind::Handle]
+        vec![ExecutorKindSys::Handle.into()]
     }
 
     fn tmpfile_with_contents(bytes: &[u8]) -> File {

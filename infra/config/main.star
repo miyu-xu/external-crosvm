@@ -28,6 +28,7 @@ luci.project(
                 "role/swarming.poolOwner",
                 "role/swarming.poolUser",
                 "role/swarming.taskTriggerer",
+                "role/buildbucket.owner",
             ],
             groups = "mdb/crosvm-acl-luci-admin",
         ),
@@ -123,8 +124,6 @@ luci.cq_group(
         repo = "https://chromium.googlesource.com/crosvm/crosvm",
         refs = ["refs/heads/.+"],  # will watch all branches
     ),
-    # Allows us to submit chains of commits with a single CQ run.
-    allow_submit_with_open_deps = True,
 )
 
 # Console showing all postsubmit verify builders
@@ -344,12 +343,35 @@ verify_builder(
         "cpu": "x86-64",
     },
     executable = luci.recipe(
-        name = "health_check",
+        name = "presubmit",
     ),
+    properties = {
+        "group_name": "health_checks",
+    },
     caches = [
         swarming.cache("builder", name = "linux_builder_cache"),
     ],
     category = "linux",
+)
+
+verify_builder(
+    name = "android-aarch64",
+    dimensions = {
+        "os": "Ubuntu",
+        "cpu": "x86-64",
+    },
+    executable = luci.recipe(
+        name = "presubmit",
+    ),
+    properties = {
+        "group_name": "android-aarch64",
+    },
+    caches = [
+        swarming.cache("builder", name = "linux_builder_cache"),
+    ],
+    category = "android",
+    # TODO(b/349907813): Enable in presubmit once stabilized
+    presubmit = False,
 )
 
 infra_builder(

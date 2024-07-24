@@ -16,6 +16,7 @@ use vm_control::gpu::DisplayParameters;
 
 use super::GpuMode;
 use super::GpuWsi;
+use crate::virtio::gpu::VIRTIO_GPU_MAX_SCANOUTS;
 use crate::PciAddress;
 
 mod serde_capset_mask {
@@ -36,11 +37,23 @@ mod serde_capset_mask {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AudioDeviceMode {
+    #[serde(rename = "per-surface")]
+    PerSurface,
+    #[serde(rename = "one-global")]
+    OneGlobal,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
 pub struct GpuParameters {
     #[serde(rename = "backend")]
     pub mode: GpuMode,
+    #[serde(default = "default_max_num_displays")]
+    pub max_num_displays: u32,
+    #[serde(default = "default_audio_device_mode")]
+    pub audio_device_mode: AudioDeviceMode,
     #[serde(rename = "displays")]
     pub display_params: Vec<DisplayParameters>,
     // `width` and `height` are supported for CLI backwards compatibility.
@@ -69,13 +82,20 @@ pub struct GpuParameters {
     // enforce that blob resources MUST be exportable as file descriptors
     pub external_blob: bool,
     pub system_blob: bool,
+    // enable use of descriptor mapping to fixed host VA within a prepared vMMU mapping (e.g. kvm
+    // user memslot)
+    pub fixed_blob_mapping: bool,
     #[serde(rename = "implicit-render-server")]
     pub allow_implicit_render_server_exec: bool,
+    // Passthrough parameters sent to the underlying renderer in a renderer-specific format.
+    pub renderer_features: Option<String>,
 }
 
 impl Default for GpuParameters {
     fn default() -> Self {
         GpuParameters {
+            max_num_displays: default_max_num_displays(),
+            audio_device_mode: default_audio_device_mode(),
             display_params: vec![],
             __width_compat: None,
             __height_compat: None,
@@ -94,9 +114,22 @@ impl Default for GpuParameters {
             capset_mask: 0,
             external_blob: false,
             system_blob: false,
+            // TODO(b/324649619): not yet fully compatible with other platforms (windows)
+            // TODO(b/246334944): gfxstream may map vulkan opaque blobs directly (without vulkano),
+            // so set the default to disabled when built with the gfxstream feature.
+            fixed_blob_mapping: cfg!(target_os = "linux") && !cfg!(feature = "gfxstream"),
             allow_implicit_render_server_exec: false,
+            renderer_features: None,
         }
     }
+}
+
+fn default_max_num_displays() -> u32 {
+    VIRTIO_GPU_MAX_SCANOUTS as u32
+}
+
+fn default_audio_device_mode() -> AudioDeviceMode {
+    AudioDeviceMode::PerSurface
 }
 
 #[cfg(test)]

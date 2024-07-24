@@ -39,7 +39,7 @@ fn test_kvm_tsc_offsets() {
 }
 
 #[test]
-#[cfg(feature = "haxm")]
+#[cfg(all(windows, feature = "haxm"))]
 fn test_haxm_tsc_offsets() {
     use hypervisor::haxm::*;
     test_tsc_offsets(|guest_mem| {
@@ -177,11 +177,8 @@ fn test_tsc_offset_run(
     vcpu.set_regs(&vcpu_regs).expect("set regs failed");
 
     if let Some(value) = set_msr {
-        vcpu.set_msrs(&[Register {
-            id: 0x00000010,
-            value,
-        }])
-        .expect("set_msrs should not fail");
+        vcpu.set_msr(0x00000010, value)
+            .expect("set_msr should not fail");
     }
 
     if let Some(offset) = set_offset {

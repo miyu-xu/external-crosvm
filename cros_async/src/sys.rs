@@ -14,7 +14,4 @@ cfg_if::cfg_if! {
 
 pub use platform::async_types;
 pub use platform::event;
-pub use platform::executor::Executor;
-pub use platform::executor::ExecutorKind;
-pub use platform::executor::SetDefaultExecutorKindError;
-pub use platform::executor::TaskHandle;
+pub use platform::executor::ExecutorKindSys;

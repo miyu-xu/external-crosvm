@@ -2,20 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use cros_async::sys::ExecutorKindSys;
 use cros_async::Executor;
 use cros_async::ExecutorKind;
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn all_kinds() -> Vec<ExecutorKind> {
-    let mut kinds = vec![ExecutorKind::Fd];
+    let mut kinds = vec![ExecutorKindSys::Fd.into()];
     if cros_async::is_uring_stable() {
-        kinds.push(ExecutorKind::Uring);
+        kinds.push(ExecutorKindSys::Uring.into());
     }
     kinds
 }
 #[cfg(windows)]
 fn all_kinds() -> Vec<ExecutorKind> {
-    vec![ExecutorKind::Handle]
+    vec![ExecutorKindSys::Handle.into()]
 }
 
 #[test]

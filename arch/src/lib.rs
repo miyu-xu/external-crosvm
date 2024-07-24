@@ -26,9 +26,9 @@ use acpi_tables::sdt::SDT;
 use base::syslog;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
-use base::Event;
 use base::FileGetLen;
 use base::FileReadWriteAtVolatile;
+use base::RecvTube;
 use base::SendTube;
 use base::Tube;
 use devices::virtio::VirtioDevice;
@@ -81,7 +81,6 @@ pub use serial::get_serial_cmdline;
 pub use serial::set_default_serial_parameters;
 pub use serial::GetSerialCmdlineError;
 pub use serial::SERIAL_ADDR;
-#[cfg(any(target_os = "android", target_os = "linux"))]
 use sync::Condvar;
 use sync::Mutex;
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -331,6 +330,7 @@ pub struct VmComponents {
     pub ac_adapter: bool,
     pub acpi_sdts: Vec<SDT>,
     pub android_fstab: Option<File>,
+    pub boot_cpu: usize,
     pub bootorder_fw_cfg_blob: Vec<u8>,
     #[cfg(target_arch = "x86_64")]
     pub break_linux_pci_config_io: bool,
@@ -404,7 +404,7 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub resume_notify_devices: Vec<Arc<Mutex<dyn BusResumeDevice>>>,
     pub root_config: Arc<Mutex<PciRoot>>,
     pub rt_cpus: CpuSet,
-    pub suspend_evt: Event,
+    pub suspend_tube: (Arc<Mutex<SendTube>>, RecvTube),
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
     pub vcpu_init: Vec<VcpuInitArch>,
@@ -453,8 +453,8 @@ pub trait LinuxArch {
     /// # Arguments
     ///
     /// * `components` - Parts to use to build the VM.
-    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest
-    ///     wants to stop/shut down or requested reset.
+    /// * `vm_evt_wrtube` - Tube used by sub-devices to request that crosvm exit because guest wants
+    ///   to stop/shut down or requested reset.
     /// * `system_allocator` - Allocator created by this trait's implementation of
     ///   `get_system_allocator_config`.
     /// * `serial_parameters` - Definitions for how the serial devices should be configured.
@@ -485,9 +485,7 @@ pub trait LinuxArch {
         #[cfg(target_arch = "x86_64")] pflash_jail: Option<Minijail>,
         #[cfg(target_arch = "x86_64")] fw_cfg_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
-        #[cfg(any(target_os = "android", target_os = "linux"))] guest_suspended_cvar: Option<
-            Arc<(Mutex<bool>, Condvar)>,
-        >,
+        guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
         device_tree_overlays: Vec<DtbOverlay>,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
@@ -739,6 +737,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
     let mut keep_rds = device.keep_rds();
     syslog::push_descriptors(&mut keep_rds);
     cros_tracing::push_descriptors!(&mut keep_rds);
+    metrics::push_descriptors(&mut keep_rds);
 
     device
         .register_device_capabilities()
@@ -820,6 +819,7 @@ pub fn generate_virtio_mmio_bus(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
 
         let irq_num = resources
             .allocate_irq()
@@ -1147,6 +1147,7 @@ pub fn generate_pci_root(
         let mut keep_rds = device.keep_rds();
         syslog::push_descriptors(&mut keep_rds);
         cros_tracing::push_descriptors!(&mut keep_rds);
+        metrics::push_descriptors(&mut keep_rds);
         keep_rds.append(&mut vm.get_memory().as_raw_descriptors());
 
         let ranges = io_ranges.remove(&dev_idx).unwrap_or_default();
@@ -1238,8 +1239,12 @@ pub enum LoadImageError {
     GuestMemorySlice(GuestMemoryError),
     #[error("Image size too large: {0}")]
     ImageSizeTooLarge(u64),
+    #[error("No suitable memory region found")]
+    NoSuitableMemoryRegion,
     #[error("Reading image into memory failed: {0}")]
     ReadToMemory(io::Error),
+    #[error("Cannot load zero-sized image")]
+    ZeroSizedImage,
 }
 
 /// Load an image from a file into guest memory.
@@ -1263,7 +1268,7 @@ where
 {
     let size = image.get_len().map_err(LoadImageError::GetLen)?;
 
-    if size > usize::max_value() as u64 || size > max_size {
+    if size > usize::MAX as u64 || size > max_size {
         return Err(LoadImageError::ImageSizeTooLarge(size));
     }
 
@@ -1288,8 +1293,8 @@ where
 /// * `image` - The file containing the image to be loaded.
 /// * `min_guest_addr` - The minimum address of the start of the image.
 /// * `max_guest_addr` - The address to load the last byte of the image.
-/// * `align` - The minimum alignment of the start address of the image in bytes
-///   (must be a power of two).
+/// * `align` - The minimum alignment of the start address of the image in bytes (must be a power of
+///   two).
 ///
 /// The guest address and size in bytes of the loaded image are returned.
 pub fn load_image_high<F>(
@@ -1309,13 +1314,44 @@ where
     let max_size = max_guest_addr.offset_from(min_guest_addr) & !(align - 1);
     let size = image.get_len().map_err(LoadImageError::GetLen)?;
 
-    if size > usize::max_value() as u64 || size > max_size {
+    if size == 0 {
+        return Err(LoadImageError::ZeroSizedImage);
+    }
+
+    if size > usize::MAX as u64 || size > max_size {
         return Err(LoadImageError::ImageSizeTooLarge(size));
     }
 
-    // Load image at the maximum aligned address allowed.
-    // The subtraction cannot underflow because of the size checks above.
-    let guest_addr = GuestAddress((max_guest_addr.offset() - size) & !(align - 1));
+    // Sort the list of guest memory regions by address so we can iterate over them in reverse order
+    // (high to low).
+    let mut regions: Vec<_> = guest_mem.regions().collect();
+    regions.sort_unstable_by(|a, b| a.guest_addr.cmp(&b.guest_addr));
+
+    // Find the highest valid address inside a guest memory region that satisfies the requested
+    // alignment and min/max address requirements while having enough space for the image.
+    let guest_addr = regions
+        .into_iter()
+        .rev()
+        .filter_map(|r| {
+            // Highest address within this region.
+            let rgn_max_addr = r
+                .guest_addr
+                .checked_add((r.size as u64).checked_sub(1)?)?
+                .min(max_guest_addr);
+            // Lowest aligned address within this region.
+            let rgn_start_aligned = r.guest_addr.align(align)?;
+            // Hypothetical address of the image if loaded at the end of the region.
+            let image_addr = rgn_max_addr.checked_sub(size - 1)? & !(align - 1);
+
+            // Would the image fit within the region?
+            if image_addr >= rgn_start_aligned {
+                Some(image_addr)
+            } else {
+                None
+            }
+        })
+        .find(|&addr| addr >= min_guest_addr)
+        .ok_or(LoadImageError::NoSuitableMemoryRegion)?;
 
     // This is safe due to the bounds check above.
     let size = size as usize;
@@ -1360,6 +1396,7 @@ pub struct SmbiosOptions {
 #[cfg(test)]
 mod tests {
     use serde_keyvalue::from_key_values;
+    use tempfile::tempfile;
 
     use super::*;
 
@@ -1415,5 +1452,32 @@ mod tests {
         let res: CpuSet = serde_json::from_str(json_str).unwrap();
         assert_eq!(res, cpuset);
         assert_eq!(serde_json::to_string(&cpuset).unwrap(), json_str);
+    }
+
+    #[test]
+    fn load_image_high_max_4g() {
+        let mem = GuestMemory::new(&[
+            (GuestAddress(0x0000_0000), 0x4000_0000), // 0x00000000..0x40000000
+            (GuestAddress(0x8000_0000), 0x4000_0000), // 0x80000000..0xC0000000
+        ])
+        .unwrap();
+
+        const TEST_IMAGE_SIZE: u64 = 1234;
+        let mut test_image = tempfile().unwrap();
+        test_image.set_len(TEST_IMAGE_SIZE).unwrap();
+
+        const TEST_ALIGN: u64 = 0x8000;
+        let (addr, size) = load_image_high(
+            &mem,
+            &mut test_image,
+            GuestAddress(0x8000),
+            GuestAddress(0xFFFF_FFFF), // max_guest_addr beyond highest guest memory region
+            TEST_ALIGN,
+        )
+        .unwrap();
+
+        assert_eq!(addr, GuestAddress(0xBFFF_8000));
+        assert_eq!(addr.offset() % TEST_ALIGN, 0);
+        assert_eq!(size, TEST_IMAGE_SIZE as usize);
     }
 }

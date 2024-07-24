@@ -30,8 +30,8 @@
 //! What if the kernel's reference to the buffer outlives the buffer itself?  This could happen if a
 //! read operation was submitted, then the memory is dropped.  To solve this, the executor takes an
 //! Arc to the backing memory. Vecs being read to are also wrapped in an Arc before being passed to
-//! the executor.  The executor holds the Arc and ensures all operations are complete before dropping
-//! it, that guarantees the memory is valid for the duration.
+//! the executor.  The executor holds the Arc and ensures all operations are complete before
+//! dropping it, that guarantees the memory is valid for the duration.
 //!
 //! The buffers _have_ to be on the heap. Because we don't have a way to cancel a future if it is
 //! dropped(can't rely on drop running), there is no way to ensure the kernel's buffer remains valid
@@ -77,6 +77,7 @@ use sync::Mutex;
 use thiserror::Error as ThisError;
 
 use crate::common_executor::RawExecutor;
+use crate::common_executor::RawTaskHandle;
 use crate::common_executor::Reactor;
 use crate::mem::BackingMemory;
 use crate::waker::WakerToken;
@@ -85,6 +86,7 @@ use crate::AsyncError;
 use crate::AsyncResult;
 use crate::IoSource;
 use crate::MemRegion;
+use crate::TaskHandle;
 
 #[sorted]
 #[derive(Debug, ThisError)]
@@ -460,8 +462,8 @@ impl UringReactor {
         let src = ring
             .registered_sources
             .get(source.tag)
-            .map(Arc::clone)
-            .ok_or(Error::InvalidSource)?;
+            .ok_or(Error::InvalidSource)?
+            .clone();
         let entry = ring.ops.vacant_entry();
         let next_op_token = entry.key();
         self.ctx
@@ -488,8 +490,8 @@ impl UringReactor {
         let src = ring
             .registered_sources
             .get(source.tag)
-            .map(Arc::clone)
-            .ok_or(Error::InvalidSource)?;
+            .ok_or(Error::InvalidSource)?
+            .clone();
         let entry = ring.ops.vacant_entry();
         let next_op_token = entry.key();
         self.ctx
@@ -530,8 +532,8 @@ impl UringReactor {
         let src = ring
             .registered_sources
             .get(source.tag)
-            .map(Arc::clone)
-            .ok_or(Error::InvalidSource)?;
+            .ok_or(Error::InvalidSource)?
+            .clone();
         let entry = ring.ops.vacant_entry();
         let next_op_token = entry.key();
         self.ctx
@@ -572,8 +574,8 @@ impl UringReactor {
         let src = ring
             .registered_sources
             .get(source.tag)
-            .map(Arc::clone)
-            .ok_or(Error::InvalidSource)?;
+            .ok_or(Error::InvalidSource)?
+            .clone();
 
         let entry = ring.ops.vacant_entry();
         let next_op_token = entry.key();
@@ -628,8 +630,8 @@ impl UringReactor {
         let src = ring
             .registered_sources
             .get(source.tag)
-            .map(Arc::clone)
-            .ok_or(Error::InvalidSource)?;
+            .ok_or(Error::InvalidSource)?
+            .clone();
 
         let entry = ring.ops.vacant_entry();
         let next_op_token = entry.key();
@@ -786,6 +788,10 @@ impl Reactor for UringReactor {
     ) -> AsyncResult<IoSource<F>> {
         Ok(IoSource::Uring(super::UringSource::new(f, ex)?))
     }
+
+    fn wrap_task_handle<R>(task: RawTaskHandle<UringReactor, R>) -> TaskHandle<R> {
+        TaskHandle::Uring(task)
+    }
 }
 
 impl AsRawDescriptor for UringReactor {
@@ -895,6 +901,7 @@ mod tests {
     use crate::mem::MemRegion;
     use crate::mem::VecIoWrapper;
     use crate::BlockingPool;
+    use crate::ExecutorTrait;
 
     // A future that returns ready when the uring queue is empty.
     struct UringQueueEmpty<'a> {
@@ -936,8 +943,8 @@ mod tests {
             .register_source(&ex, &rx)
             .expect("register source failed");
 
-        // Submit the op to the kernel. Next, test that the source keeps its Arc open for the duration
-        // of the op.
+        // Submit the op to the kernel. Next, test that the source keeps its Arc open for the
+        // duration of the op.
         let pending_op = registered_source
             .start_read_to_mem(None, Arc::clone(&bm), [MemRegion { offset: 0, len: 8 }])
             .expect("failed to start read to mem");
@@ -983,8 +990,8 @@ mod tests {
             .register_source(&ex, &tx)
             .expect("register source failed");
 
-        // Submit the op to the kernel. Next, test that the source keeps its Arc open for the duration
-        // of the op.
+        // Submit the op to the kernel. Next, test that the source keeps its Arc open for the
+        // duration of the op.
         let pending_op = registered_source
             .start_write_from_mem(None, Arc::clone(&bm), [MemRegion { offset: 0, len: 8 }])
             .expect("failed to start write to mem");

@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
@@ -17,13 +18,14 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use arch::VirtioDeviceStub;
+use base::linux::MemfdSeals;
+use base::sys::SharedMemoryLinux;
 use base::ReadNotifier;
 use base::*;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
 use devices::serial_device::SerialType;
-use devices::vfio::VfioCommonSetup;
-use devices::vfio::VfioCommonTrait;
+use devices::vfio::VfioContainerManager;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
 use devices::virtio::console::asynchronous::AsyncConsole;
@@ -35,18 +37,17 @@ use devices::virtio::ipc_memory_mapper::create_ipc_mapper;
 use devices::virtio::ipc_memory_mapper::CreateIpcMapperRet;
 use devices::virtio::memory_mapper::BasicMemoryMapper;
 use devices::virtio::memory_mapper::MemoryMapperTrait;
+#[cfg(feature = "pvclock")]
+use devices::virtio::pvclock::PvClock;
 use devices::virtio::scsi::ScsiOption;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 use devices::virtio::vfio_wrapper::VfioWrapper;
-use devices::virtio::vhost::user::vmm::VhostUserVirtioDevice;
 #[cfg(feature = "net")]
 use devices::virtio::vhost::user::NetBackend;
-use devices::virtio::vhost::user::VhostUserDevice;
+use devices::virtio::vhost::user::VhostUserDeviceBuilder;
 use devices::virtio::vhost::user::VhostUserVsockDevice;
 use devices::virtio::vsock::VsockConfig;
-#[cfg(feature = "balloon")]
-use devices::virtio::BalloonMode;
 use devices::virtio::Console;
 #[cfg(feature = "net")]
 use devices::virtio::NetError;
@@ -54,6 +55,8 @@ use devices::virtio::NetError;
 use devices::virtio::NetParameters;
 #[cfg(feature = "net")]
 use devices::virtio::NetParametersMode;
+use devices::virtio::PmemConfig;
+use devices::virtio::VhostUserFrontend;
 use devices::virtio::VirtioDevice;
 use devices::virtio::VirtioDeviceType;
 use devices::BusDeviceObj;
@@ -84,9 +87,10 @@ use sync::Mutex;
 use vm_control::api::VmMemoryClient;
 use vm_memory::GuestAddress;
 
-use crate::crosvm::config::TouchDeviceOption;
+use crate::crosvm::config::PmemOption;
 use crate::crosvm::config::VhostUserFrontendOption;
 use crate::crosvm::config::VhostUserFsOption;
+use crate::crosvm::sys::config::PmemExt2Option;
 
 pub enum TaggedControlTube {
     Fs(Tube),
@@ -193,7 +197,7 @@ pub trait VirtioDeviceBuilder: Sized {
     fn create_vhost_user_device(
         self,
         _keep_rds: &mut Vec<RawDescriptor>,
-    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+    ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
         unimplemented!()
     }
 
@@ -271,7 +275,7 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
     fn create_vhost_user_device(
         self,
         keep_rds: &mut Vec<RawDescriptor>,
-    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+    ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
         let disk = self.disk;
         let disk_image = disk.open()?;
         let base_features = virtio::base_features(ProtectionType::Unprotected);
@@ -335,7 +339,7 @@ pub fn create_vhost_user_frontend(
     protection_type: ProtectionType,
     opt: &VhostUserFrontendOption,
 ) -> DeviceResult {
-    let dev = VhostUserVirtioDevice::new(
+    let dev = VhostUserFrontend::new(
         opt.type_,
         virtio::base_features(protection_type),
         vhost_user_connection(&opt.socket)?,
@@ -355,7 +359,7 @@ pub fn create_vhost_user_fs_device(
     protection_type: ProtectionType,
     option: &VhostUserFsOption,
 ) -> DeviceResult {
-    let dev = VhostUserVirtioDevice::new_fs(
+    let dev = VhostUserFrontend::new_fs(
         virtio::base_features(protection_type),
         vhost_user_connection(&option.socket)?,
         option.max_queue_size,
@@ -400,9 +404,11 @@ pub fn create_virtio_snd_device(
 
     let policy = match backend {
         Backend::NULL | Backend::FILE => "snd_null_device",
+        #[cfg(feature = "audio_aaudio")]
+        Backend::Sys(virtio::snd::sys::StreamSourceBackend::AAUDIO) => "snd_aaudio_device",
         #[cfg(feature = "audio_cras")]
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::CRAS) => "snd_cras_device",
-        #[cfg(not(feature = "audio_cras"))]
+        #[cfg(not(any(feature = "audio_cras", feature = "audio_aaudio")))]
         _ => unreachable!(),
     };
 
@@ -459,19 +465,19 @@ pub fn create_vtpm_proxy_device(
     })
 }
 
-pub fn create_single_touch_device(
+pub fn create_single_touch_device<T: IntoUnixStream>(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
-    single_touch_spec: &TouchDeviceOption,
+    single_touch_socket: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
     idx: u32,
 ) -> DeviceResult {
-    let socket = single_touch_spec
-        .get_path()
+    let socket = single_touch_socket
         .into_unix_stream()
         .context("failed configuring virtio single touch")?;
 
-    let (width, height) = single_touch_spec.get_size();
-    let name = single_touch_spec.get_name();
     let dev = virtio::input::new_single_touch(
         idx,
         socket,
@@ -487,19 +493,19 @@ pub fn create_single_touch_device(
     })
 }
 
-pub fn create_multi_touch_device(
+pub fn create_multi_touch_device<T: IntoUnixStream>(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
-    multi_touch_spec: &TouchDeviceOption,
+    multi_touch_socket: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
     idx: u32,
 ) -> DeviceResult {
-    let socket = multi_touch_spec
-        .get_path()
+    let socket = multi_touch_socket
         .into_unix_stream()
         .context("failed configuring virtio multi touch")?;
 
-    let (width, height) = multi_touch_spec.get_size();
-    let name = multi_touch_spec.get_name();
     let dev = virtio::input::new_multi_touch(
         idx,
         socket,
@@ -516,20 +522,49 @@ pub fn create_multi_touch_device(
     })
 }
 
-pub fn create_trackpad_device(
+pub fn create_trackpad_device<T: IntoUnixStream>(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
-    trackpad_spec: &TouchDeviceOption,
+    trackpad_socket: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
     idx: u32,
 ) -> DeviceResult {
-    let socket = trackpad_spec
-        .get_path()
+    let socket = trackpad_socket
         .into_unix_stream()
         .context("failed configuring virtio trackpad")?;
 
-    let (width, height) = trackpad_spec.get_size();
-    let name = trackpad_spec.get_name();
     let dev = virtio::input::new_trackpad(
+        idx,
+        socket,
+        width,
+        height,
+        name,
+        virtio::base_features(protection_type),
+    )
+    .context("failed to set up input device")?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(jail_config, "input_device")?,
+    })
+}
+
+pub fn create_multitouch_trackpad_device<T: IntoUnixStream>(
+    protection_type: ProtectionType,
+    jail_config: &Option<JailConfig>,
+    trackpad_socket: T,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+    idx: u32,
+) -> DeviceResult {
+    let socket = trackpad_socket
+        .into_unix_stream()
+        .context("failed configuring virtio trackpad")?;
+
+    let dev = virtio::input::new_multitouch_trackpad(
         idx,
         socket,
         width,
@@ -645,7 +680,6 @@ pub fn create_vinput_device(
 pub fn create_balloon_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
-    mode: BalloonMode,
     tube: Tube,
     inflate_tube: Option<Tube>,
     init_balloon_size: u64,
@@ -660,7 +694,6 @@ pub fn create_balloon_device(
         VmMemoryClient::new(dynamic_mapping_device_tube),
         inflate_tube,
         init_balloon_size,
-        mode,
         enabled_features,
         #[cfg(feature = "registered_events")]
         registered_evt_q,
@@ -671,6 +704,25 @@ pub fn create_balloon_device(
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
         jail: simple_jail(jail_config, "balloon_device")?,
+    })
+}
+
+#[cfg(feature = "pvclock")]
+pub fn create_pvclock_device(
+    protection_type: ProtectionType,
+    jail_config: &Option<JailConfig>,
+    tsc_frequency: u64,
+    suspend_tube: Tube,
+) -> DeviceResult {
+    let dev = PvClock::new(
+        virtio::base_features(protection_type),
+        tsc_frequency,
+        suspend_tube,
+    );
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(jail_config, "pvclock_device")?,
     })
 }
 
@@ -732,7 +784,7 @@ impl VirtioDeviceBuilder for &NetParameters {
     fn create_vhost_user_device(
         self,
         keep_rds: &mut Vec<RawDescriptor>,
-    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+    ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
         let vq_pairs = self.vq_pairs.unwrap_or(1);
         let multi_vq = vq_pairs > 1 && self.vhost_net.is_none();
         let (tap, _mac) = create_tap_for_net_device(&self.mode, multi_vq)?;
@@ -937,7 +989,7 @@ impl VirtioDeviceBuilder for &VsockConfig {
     fn create_vhost_user_device(
         self,
         keep_rds: &mut Vec<RawDescriptor>,
-    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+    ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
         let vsock_device = VhostUserVsockDevice::new(self.cid, &self.vhost_device)?;
 
         keep_rds.push(vsock_device.as_raw_descriptor());
@@ -1055,42 +1107,39 @@ pub fn create_pmem_device(
     jail_config: &Option<JailConfig>,
     vm: &mut impl Vm,
     resources: &mut SystemAllocator,
-    disk: &DiskOption,
+    pmem: &PmemOption,
     index: usize,
     pmem_device_tube: Tube,
 ) -> DeviceResult {
-    let fd = open_file_or_duplicate(
-        &disk.path,
-        OpenOptions::new().read(true).write(!disk.read_only),
-    )
-    .with_context(|| format!("failed to load disk image {}", disk.path.display()))?;
-
-    let (disk_size, arena_size) = {
-        let metadata = std::fs::metadata(&disk.path).with_context(|| {
-            format!("failed to get disk image {} metadata", disk.path.display())
-        })?;
-        let disk_len = metadata.len();
-        // Linux requires pmem region sizes to be 2 MiB aligned. Linux will fill any partial page
-        // at the end of an mmap'd file and won't write back beyond the actual file length, but if
-        // we just align the size of the file to 2 MiB then access beyond the last page of the
-        // mapped file will generate SIGBUS. So use a memory mapping arena that will provide
-        // padding up to 2 MiB.
-        let alignment = 2 * 1024 * 1024;
-        let align_adjust = if disk_len % alignment != 0 {
-            alignment - (disk_len % alignment)
-        } else {
-            0
-        };
-        (
-            disk_len,
-            disk_len
-                .checked_add(align_adjust)
-                .ok_or_else(|| anyhow!("pmem device image too big"))?,
-        )
+    let (fd, disk_size) = match pmem.vma_size {
+        None => {
+            let disk_image =
+                open_file_or_duplicate(&pmem.path, OpenOptions::new().read(true).write(!pmem.ro))
+                    .with_context(|| format!("failed to load disk image {}", pmem.path.display()))?;
+            let metadata = std::fs::metadata(&pmem.path).with_context(|| {
+                format!("failed to get disk image {} metadata", pmem.path.display())
+            })?;
+            (disk_image, metadata.len())
+        }
+        Some(size) => {
+            let anon_file =
+                create_anonymous_file(&pmem.path, size).context("failed to create anon file")?;
+            (anon_file, size)
+        }
     };
 
+    // Linux requires pmem region sizes to be 2 MiB aligned. Linux will fill any partial page
+    // at the end of an mmap'd file and won't write back beyond the actual file length, but if
+    // we just align the size of the file to 2 MiB then access beyond the last page of the
+    // mapped file will generate SIGBUS. So use a memory mapping arena that will provide
+    // padding up to 2 MiB.
+    let alignment = 2 * 1024 * 1024;
+    let arena_size = disk_size
+        .checked_next_multiple_of(alignment)
+        .ok_or_else(|| anyhow!("pmem device image too big"))?;
+
     let protection = {
-        if disk.read_only {
+        if pmem.ro {
             Protection::read()
         } else {
             Protection::read_write()
@@ -1123,24 +1172,27 @@ pub fn create_pmem_device(
         arena
     };
 
-    let mapping_address = resources
-        .allocate_mmio(
-            arena_size,
-            Alloc::PmemDevice(index),
-            format!("pmem_disk_image_{}", index),
-            AllocOptions::new()
+    let mapping_address = GuestAddress(
+        resources
+            .allocate_mmio(
+                arena_size,
+                Alloc::PmemDevice(index),
+                format!("pmem_disk_image_{}", index),
+                AllocOptions::new()
                 .top_down(true)
                 .prefetchable(true)
                 // Linux kernel requires pmem namespaces to be 128 MiB aligned.
+                // cf. https://github.com/pmem/ndctl/issues/76
                 .align(128 * 1024 * 1024), /* 128 MiB */
-        )
-        .context("failed to allocate memory for pmem device")?;
+            )
+            .context("failed to allocate memory for pmem device")?,
+    );
 
-    let slot = vm
+    let mapping_arena_slot = vm
         .add_memory_region(
-            GuestAddress(mapping_address),
+            mapping_address,
             Box::new(arena),
-            /* read_only = */ disk.read_only,
+            /* read_only = */ pmem.ro,
             /* log_dirty_pages = */ false,
             MemCacheType::CacheCoherent,
         )
@@ -1148,11 +1200,15 @@ pub fn create_pmem_device(
 
     let dev = virtio::Pmem::new(
         virtio::base_features(protection_type),
-        fd,
-        GuestAddress(mapping_address),
-        slot,
-        arena_size,
-        pmem_device_tube,
+        PmemConfig {
+            disk_image: Some(fd),
+            mapping_address,
+            mapping_arena_slot,
+            mapping_size: arena_size,
+            pmem_device_tube,
+            swap_interval: pmem.swap_interval,
+            mapping_writable: !pmem.ro,
+        },
     )
     .context("failed to create pmem device")?;
 
@@ -1160,6 +1216,85 @@ pub fn create_pmem_device(
         dev: Box::new(dev) as Box<dyn VirtioDevice>,
         jail: simple_jail(jail_config, "pmem_device")?,
     })
+}
+
+pub fn create_pmem_ext2_device(
+    protection_type: ProtectionType,
+    jail_config: &Option<JailConfig>,
+    vm: &mut impl Vm,
+    resources: &mut SystemAllocator,
+    opts: &PmemExt2Option,
+    index: usize,
+    pmem_device_tube: Tube,
+) -> DeviceResult {
+    let cfg = ext2::Config {
+        inodes_per_group: opts.inodes_per_group,
+        blocks_per_group: opts.blocks_per_group,
+        size: opts.size,
+    };
+    let arena = ext2::create_ext2_region(&cfg, Some(opts.path.as_path()))?;
+    let mapping_size = arena.size() as u64;
+
+    let mapping_address = GuestAddress(
+        resources
+            .allocate_mmio(
+                mapping_size,
+                Alloc::PmemDevice(index),
+                format!("pmem_ext2_image_{}", index),
+                AllocOptions::new()
+                .top_down(true)
+                .prefetchable(true)
+                // 2MB alignment for DAX
+                // cf. https://docs.pmem.io/persistent-memory/getting-started-guide/creating-development-environments/linux-environments/advanced-topics/i-o-alignment-considerations#verifying-io-alignment
+                .align(2 * 1024 * 1024),
+            )
+            .context("failed to allocate memory for pmem device")?,
+    );
+
+    let mapping_arena_slot = vm
+        .add_memory_region(
+            mapping_address,
+            Box::new(arena),
+            /* read_only= */ true,
+            /* log_dirty_pages= */ false,
+            MemCacheType::CacheCoherent,
+        )
+        .context("failed to add pmem device memory")?;
+
+    let dev = virtio::Pmem::new(
+        virtio::base_features(protection_type),
+        PmemConfig {
+            disk_image: None,
+            mapping_address,
+            mapping_arena_slot,
+            mapping_size,
+            pmem_device_tube,
+            swap_interval: None,
+            mapping_writable: false,
+        },
+    )
+    .context("failed to create pmem device")?;
+
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev) as Box<dyn VirtioDevice>,
+        jail: simple_jail(jail_config, "pmem_device")?,
+    })
+}
+
+pub fn create_anonymous_file<P: AsRef<Path>>(path: P, size: u64) -> Result<File> {
+    let file_name = path
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| Error::new(libc::EINVAL))?;
+    let mut shm = SharedMemory::new(file_name, size)?;
+    let mut seals = MemfdSeals::new();
+
+    seals.set_shrink_seal();
+    seals.set_grow_seal();
+    seals.set_seal_seal();
+    shm.add_seals(seals)?;
+
+    Ok(shm.descriptor.into())
 }
 
 pub fn create_iommu_device(
@@ -1231,7 +1366,7 @@ impl VirtioDeviceBuilder for &SerialParameters {
     fn create_vhost_user_device(
         self,
         keep_rds: &mut Vec<RawDescriptor>,
-    ) -> anyhow::Result<Box<dyn VhostUserDevice>> {
+    ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
         Ok(Box::new(virtio::vhost::user::create_vu_console_device(
             self, keep_rds,
         )?))
@@ -1292,8 +1427,10 @@ pub fn create_vfio_device(
     coiommu_endpoints: Option<&mut Vec<u16>>,
     iommu_dev: IommuDevType,
     dt_symbol: Option<String>,
+    vfio_container_manager: &mut VfioContainerManager,
 ) -> DeviceResult<(VfioDeviceVariant, Option<Minijail>, Option<VfioWrapper>)> {
-    let vfio_container = VfioCommonSetup::vfio_get_container(iommu_dev, Some(vfio_path))
+    let vfio_container = vfio_container_manager
+        .get_container(iommu_dev, Some(vfio_path))
         .context("failed to get vfio container")?;
 
     let (vfio_host_tube_mem, vfio_device_tube_mem) =

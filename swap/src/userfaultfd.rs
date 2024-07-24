@@ -25,6 +25,7 @@ use base::linux::MemoryMappingUnix;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::FromRawDescriptor;
+use base::IntoRawDescriptor;
 use base::MappedRegion;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
@@ -194,7 +195,7 @@ impl Factory {
             let res = unsafe {
                 ioctl_with_val(
                     dev_file,
-                    USERFAULTFD_IOC_NEW(),
+                    USERFAULTFD_IOC_NEW,
                     (libc::O_CLOEXEC | libc::O_NONBLOCK) as libc::c_ulong,
                 )
             };
@@ -212,7 +213,7 @@ impl Factory {
             };
             // SAFETY:
             // Safe because ioctl(2) UFFDIO_API with does not change Rust memory safety.
-            let res = unsafe { ioctl_with_mut_ref(&uffd, UFFDIO_API(), &mut api) };
+            let res = unsafe { ioctl_with_mut_ref(&uffd, UFFDIO_API, &mut api) };
             if res < 0 {
                 errno_result().context("UFFDIO_API")
             } else {
@@ -296,7 +297,7 @@ impl Userfaultfd {
     ///
     /// # Safety
     ///
-    /// [addr, addr+len) must lie within a [MemoryMapping](base::MemoryMapping), and that mapping
+    /// [addr, addr+len) must lie within a [MemoryMapping], and that mapping
     /// must live for the lifespan of the userfaultfd kernel object (which may be distinct from the
     /// `Userfaultfd` rust object in this process).
     pub unsafe fn register(&self, addr: usize, len: usize) -> Result<IoctlFlags> {
@@ -360,8 +361,8 @@ impl Userfaultfd {
         Ok(
             // SAFETY:
             // safe because filling untouched pages with data does not break the Rust memory safety
-            // since "All runtime-allocated memory in a Rust program begins its life as uninitialized."
-            // https://doc.rust-lang.org/nomicon/uninitialized.html
+            // since "All runtime-allocated memory in a Rust program begins its life as
+            // uninitialized." https://doc.rust-lang.org/nomicon/uninitialized.html
             unsafe {
                 self.uffd.copy(
                     data as *const libc::c_void,
@@ -396,7 +397,7 @@ impl Userfaultfd {
     pub fn try_clone(&self) -> Result<Self> {
         let dup_desc = base::clone_descriptor(self).map_err(Error::Clone)?;
         // SAFETY: no one owns dup_desc.
-        let uffd = unsafe { Self::from_raw_descriptor(dup_desc) };
+        let uffd = Self::from(unsafe { Uffd::from_raw_fd(dup_desc.into_raw_descriptor()) });
         Ok(uffd)
     }
 }
@@ -433,7 +434,8 @@ pub trait DeadUffdChecker {
 ///
 /// [DeadUffdCheckerImpl] uses `UFFD_ZERO` on a dummy mmap page to check the liveness.
 ///
-/// This must keep alive on the main process to make the dummy mmap present in all descendant processes.
+/// This must keep alive on the main process to make the dummy mmap present in all descendant
+/// processes.
 pub struct DeadUffdCheckerImpl {
     dummy_mmap: MemoryMapping,
 }

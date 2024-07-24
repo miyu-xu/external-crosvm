@@ -5,7 +5,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use argh::FromArgs;
@@ -19,7 +18,6 @@ use hypervisor::ProtectionType;
 use sync::Mutex;
 use vm_memory::GuestMemory;
 use vmm_vhost::message::VhostUserProtocolFeatures;
-use vmm_vhost::VhostUserSlaveReqHandler;
 use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 use zerocopy::AsBytes;
 
@@ -30,10 +28,10 @@ use crate::virtio::console::virtio_console_config;
 use crate::virtio::copy_config;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
-use crate::virtio::vhost::user::device::handler::VhostUserBackend;
+use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
-use crate::virtio::vhost::user::device::VhostUserDevice;
+use crate::virtio::vhost::user::device::VhostUserDeviceBuilder;
 use crate::virtio::Interrupt;
 use crate::virtio::Queue;
 use crate::SerialHardware;
@@ -60,24 +58,8 @@ impl Drop for VhostUserConsoleDevice {
     }
 }
 
-impl VhostUserDevice for VhostUserConsoleDevice {
-    fn max_queue_num(&self) -> usize {
-        // The port 0 receive and transmit queues always exist;
-        // other queues only exist if VIRTIO_CONSOLE_F_MULTIPORT is set.
-        if self.console.is_multi_port() {
-            let port_num = self.console.max_ports();
-
-            // Extra 1 is for control port; each port has two queues (tx & rx)
-            (port_num + 1) * 2
-        } else {
-            2
-        }
-    }
-
-    fn into_req_handler(
-        self: Box<Self>,
-        ex: &Executor,
-    ) -> anyhow::Result<Box<dyn VhostUserSlaveReqHandler>> {
+impl VhostUserDeviceBuilder for VhostUserConsoleDevice {
+    fn build(self: Box<Self>, ex: &Executor) -> anyhow::Result<Box<dyn vmm_vhost::Backend>> {
         if self.raw_stdin {
             // Set stdin() to raw mode so we can send over individual keystrokes unbuffered
             std::io::stdin()
@@ -85,68 +67,37 @@ impl VhostUserDevice for VhostUserConsoleDevice {
                 .context("failed to set terminal in raw mode")?;
         }
 
-        let queue_num = self.max_queue_num();
+        let queue_num = self.console.max_queues();
         let active_queues = vec![None; queue_num];
 
         let backend = ConsoleBackend {
             device: *self,
-            acked_features: 0,
-            acked_protocol_features: VhostUserProtocolFeatures::empty(),
             ex: ex.clone(),
             active_queues,
         };
 
-        let handler = DeviceRequestHandler::new(Box::new(backend));
+        let handler = DeviceRequestHandler::new(backend);
         Ok(Box::new(handler))
     }
 }
 
 struct ConsoleBackend {
     device: VhostUserConsoleDevice,
-    acked_features: u64,
-    acked_protocol_features: VhostUserProtocolFeatures,
     ex: Executor,
     active_queues: Vec<Option<Arc<Mutex<Queue>>>>,
 }
 
-impl VhostUserBackend for ConsoleBackend {
+impl VhostUserDevice for ConsoleBackend {
     fn max_queue_num(&self) -> usize {
-        self.device.max_queue_num()
+        self.device.console.max_queues()
     }
 
     fn features(&self) -> u64 {
         self.device.console.avail_features() | 1 << VHOST_USER_F_PROTOCOL_FEATURES
     }
 
-    fn ack_features(&mut self, value: u64) -> anyhow::Result<()> {
-        let unrequested_features = value & !self.features();
-        if unrequested_features != 0 {
-            bail!("invalid features are given: {:#x}", unrequested_features);
-        }
-
-        self.acked_features |= value;
-
-        Ok(())
-    }
-
-    fn acked_features(&self) -> u64 {
-        self.acked_features
-    }
-
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         VhostUserProtocolFeatures::CONFIG | VhostUserProtocolFeatures::MQ
-    }
-
-    fn ack_protocol_features(&mut self, features: u64) -> anyhow::Result<()> {
-        let features = VhostUserProtocolFeatures::from_bits(features)
-            .ok_or_else(|| anyhow!("invalid protocol features are given: {:#x}", features))?;
-        let supported = self.protocol_features();
-        self.acked_protocol_features = features & supported;
-        Ok(())
-    }
-
-    fn acked_protocol_features(&self) -> u64 {
-        self.acked_protocol_features.bits()
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -231,7 +182,8 @@ fn create_vu_multi_port_device(
             let port = x
                 .create_serial_device::<ConsolePort>(
                     ProtectionType::Unprotected,
-                    // We need to pass an event as per Serial Device API but we don't really use it anyway.
+                    // We need to pass an event as per Serial Device API but we don't really use it
+                    // anyway.
                     &Event::new()?,
                     keep_rds,
                 )

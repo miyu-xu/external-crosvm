@@ -566,7 +566,7 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
             let mut pic = self.pic.lock();
             if vcpu_ready {
                 if let Some(vector) = pic.get_external_interrupt() {
-                    vcpu.interrupt(vector as u32)?;
+                    vcpu.interrupt(vector)?;
                     self.apics[vcpu_id].lock().set_mp_state(&MPState::Runnable);
                     // Already injected a PIC interrupt, so APIC fixed interrupt can't be injected.
                     vcpu_ready = false;
@@ -595,7 +595,7 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
             };
 
             if do_interrupt {
-                vcpu.interrupt(vector as u32)?;
+                vcpu.interrupt(vector)?;
             }
         }
         for _ in 0..irqs.nmis {
@@ -673,7 +673,7 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
     /// `wait_until_runnable` calls go back to waiting for runnability normally.
     fn kick_halted_vcpus(&self) {
         for waiter in self.waiters.iter() {
-            waiter.set_and_notify(/*interrupted=*/ true);
+            waiter.set_and_notify(/* interrupted= */ true);
         }
     }
 

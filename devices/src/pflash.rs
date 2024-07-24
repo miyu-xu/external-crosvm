@@ -57,7 +57,7 @@ pub struct PflashParameters {
     pub block_size: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 enum State {
     ReadArray,
     ReadStatus,
@@ -232,7 +232,19 @@ impl BusDevice for Pflash {
 }
 
 impl Suspendable for Pflash {
+    fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value((self.status, self.state))?)
+    }
+
+    fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        let (status, state) = serde_json::from_value(data)?;
+        self.status = status;
+        self.state = state;
+        Ok(())
+    }
+
     fn sleep(&mut self) -> anyhow::Result<()> {
+        // TODO(schuffelen): Flush the disk after lifting flush() from AsyncDisk to DiskFile
         Ok(())
     }
 
@@ -252,7 +264,7 @@ mod tests {
     const BLOCK_SIZE: u32 = 4 * (1 << 10); // 4K
 
     fn empty_image() -> Box<dyn DiskFile> {
-        let mut f = Box::new(tempfile().unwrap());
+        let f = Box::new(tempfile().unwrap());
         f.write_all_at_volatile(VolatileSlice::new(&mut [0xff].repeat(IMAGE_SIZE)), 0)
             .unwrap();
         f
@@ -272,7 +284,7 @@ mod tests {
 
     #[test]
     fn read() {
-        let mut f = empty_image();
+        let f = empty_image();
         let mut want = [0xde, 0xad, 0xbe, 0xef];
         let offset = 0x1000;
         f.write_all_at_volatile(VolatileSlice::new(&mut want), offset)
@@ -322,7 +334,7 @@ mod tests {
 
     #[test]
     fn erase() {
-        let mut f = empty_image();
+        let f = empty_image();
         let mut data = [0xde, 0xad, 0xbe, 0xef];
         let offset = 0x1000;
         f.write_all_at_volatile(VolatileSlice::new(&mut data), offset)
@@ -353,7 +365,7 @@ mod tests {
 
     #[test]
     fn status() {
-        let mut f = empty_image();
+        let f = empty_image();
         let mut data = [0xde, 0xad, 0xbe, 0xff];
         let offset = 0x0;
         f.write_all_at_volatile(VolatileSlice::new(&mut data), offset)

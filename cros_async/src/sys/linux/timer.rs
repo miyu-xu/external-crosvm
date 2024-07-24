@@ -36,13 +36,14 @@ mod tests {
     use crate::common_executor::RawExecutor;
     use crate::sys::linux::uring_executor::is_uring_stable;
     use crate::Executor;
+    use crate::ExecutorTrait;
 
     impl TimerAsync<Timer> {
         pub(crate) fn new_poll(
             timer: Timer,
             ex: &Arc<RawExecutor<EpollReactor>>,
         ) -> AsyncResult<TimerAsync<Timer>> {
-            ex.new_source(timer)
+            ex.async_from(timer)
                 .map(|io_source| TimerAsync { io_source })
         }
 
@@ -50,7 +51,7 @@ mod tests {
             timer: Timer,
             ex: &Arc<RawExecutor<UringReactor>>,
         ) -> AsyncResult<TimerAsync<Timer>> {
-            ex.new_source(timer)
+            ex.async_from(timer)
                 .map(|io_source| TimerAsync { io_source })
         }
     }
@@ -79,7 +80,7 @@ mod tests {
 
             let dur = Duration::from_millis(200);
             let now = Instant::now();
-            tfd.reset(dur, None).expect("failed to arm timer");
+            tfd.reset_oneshot(dur).expect("failed to arm timer");
 
             let t = TimerAsync::new_uring(tfd, ex).unwrap();
             t.wait().await.expect("unable to wait for timer");
@@ -98,7 +99,7 @@ mod tests {
 
             let dur = Duration::from_millis(200);
             let now = Instant::now();
-            tfd.reset(dur, None).expect("failed to arm timer");
+            tfd.reset_oneshot(dur).expect("failed to arm timer");
 
             let t = TimerAsync::new_poll(tfd, ex).unwrap();
             t.wait().await.expect("unable to wait for timer");

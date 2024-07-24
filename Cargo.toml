@@ -39,11 +39,13 @@ codegen-units = 1
 members = [
     "aarch64",
     "acpi_tables",
+    "android_audio",
     "arch",
     "argh_helpers",
     "audio_util",
     "audio_streams_conformance_test",
     "base",
+    "base_tokio",
     "bit_field",
     "broker_ipc",
     "common/audio_streams",
@@ -59,10 +61,12 @@ members = [
     "devices",
     "disk",
     "e2e_tests",
+    "ext2",
     "fuse",
     "fuzz",
     "gpu_display",
     "hypervisor",
+    "hypervisor/hypervisor_test_macro",
     "io_uring",
     "kernel_cmdline",
     "kernel_loader",
@@ -72,6 +76,7 @@ members = [
     "linux_input_sys",
     "media/ffmpeg",
     "metrics",
+    "metrics_events",
     "net_sys",
     "net_util",
     "power_monitor",
@@ -89,6 +94,7 @@ members = [
     "usb_util",
     "vendor/generic/anti_tamper",
     "vendor/generic/crash_report",
+    "vendor/generic/crypto",
     "vfio_sys",
     "vhost",
     "virtio_sys",
@@ -103,14 +109,14 @@ exclude = [
     "sandbox",
     "tools/audio_streams_conformance_test",
     "tools/examples/baremetal",
-    "tube_transporter",
     "perfetto",
-    "win_audio",
-    "win_util",
 
     # This crate depends on optional features and is compiled via dependencies when enabled.
     "media/libvda",
 ]
+
+[workspace.dependencies]
+tokio = { version = "1.29.1", features = ["net", "rt-multi-thread", "time", "sync", "macros"] }
 
 [features]
 ## Default features of crosvm. This selection is somewhat arbitrary for historical reasons.
@@ -154,11 +160,11 @@ gdb = [
 ## Enables virtio-net and vhost-user-net backend.
 net = ["devices/net"]
 
-## Enables a panic handler that writes panic info to the `RUST_PANIC_SIG` memfd.
-panic-memfd = []
-
 ## Enables PCI hotplug. Only available on Linux, and currently only for x86/x86-64.
 pci-hotplug = ["devices/pci-hotplug", "vm_control/pci-hotplug"]
+
+## Enables virtio-pvclock. Currently only available for x86-64 and aarch64.
+pvclock = ["devices/pvclock"]
 
 ## Enables the use of the qcow format for block devices.
 qcow = ["disk/qcow"]
@@ -171,6 +177,9 @@ swap = ["aarch64/swap", "arch/swap", "devices/swap", "vm_control/swap", "x86_64/
 
 ## Enables collection of VM statistics.
 stats = ["devices/stats"]
+
+## Supports tokio as an asynchronous executor.
+tokio = ["cros_async/tokio"]
 
 ## Enables USB host device passthrough via an emulated XHCI controller.
 ## USB is supported only on unix/linux. The feature is a no-op on windows.
@@ -203,6 +212,21 @@ gfxstream_stub = ["rutabaga_gfx/gfxstream_stub"]
 
 ## Enables 3D acceleration for the guest via the virglrenderer library over virtio-gpu.
 virgl_renderer = ["devices/virgl_renderer"]
+
+## Enables the usage of Vulkan for display on the host.
+vulkan_display = ["gpu_display/vulkan_display"]
+
+# Enables the highly experimental vulkan graphics buffer allocator.
+# see rutabaga_gfx/Cargo.toml for instructions on building with enabled.
+vulkano = ["rutabaga_gfx/vulkano"]
+
+# Enables the GPU display backend for Android. The backend uses Android surface as the backing
+# store.
+android_display = ["devices/android_display"]
+
+# Stub implementation of the Android display backend. This is only used for building and testing the
+# Android display backend on a non-Android target
+android_display_stub = ["devices/android_display_stub"]
 
 #! ### Video features
 #!
@@ -273,9 +297,19 @@ default-no-sandbox = []
 #!
 #! These features will only be functional in ChromeOS builds running on ChromeOS.
 
-## Enables virtio-fs quota reporting for ARCVM. Requires access to the
-## org.chromium.ArcQuota dbus service.
+## Enables ARCVM specified virtio-fs feature including:
+## - Support quota reporting for ARCVM
+##   Requires access to the org.chromium.ArcQuota dbus service.
+## - Support for FS_IOC_SETPERMISSION ioctl
+## - Support for FS_IOC_SETPATHXATTR ioctl
 arc_quota = ["devices/arc_quota"]
+
+## Enables use of Android AAudio virtio-snd backend.
+audio_aaudio = ["devices/audio_aaudio"]
+
+## Stub implementation of Android AAudio NDK library. This is only used for building and testing the
+## Android audio on a non-Android target
+libaaudio_stub = ["android_audio/libaaudio_stub"]
 
 ## Enables use of the ChromeOS audio server. ChromeOS builds will replace libcras_stub with an
 ## implementation that talks to the audio server. In upstream builds, using this option will panic.
@@ -318,7 +352,6 @@ all-default = [
     "android-sparse",
     "arc_quota",
     "audio_cras",
-    "chromeos",
     "composite-disk",
     "crash-report",
     "default",
@@ -330,11 +363,13 @@ all-default = [
     "libvda-stub",
     "net",
     "noncoherent-dma",
-    "panic-memfd",
     "pci-hotplug",
     "power-monitor-powerd",
+    "pvclock",
+    "registered_events",
     "slirp",
     "swap",
+    "tokio",
     "trace_marker",
     "vaapi",
     "video-decoder",
@@ -347,8 +382,12 @@ all-default = [
 
 ## All features that are compiled and tested for aarch64
 all-aarch64 = [
+    "audio_aaudio",
     "all-default",
+    "android_display",
+    "android_display_stub",
     "gunyah",
+    "libaaudio_stub",
 ]
 
 ## All features that are compiled and tested for riscv64
@@ -358,7 +397,11 @@ all-riscv64 = [
 
 ## All features that are compiled and tested for x86_64
 all-x86_64 = [
+    "audio_aaudio",
     "all-default",
+    "android_display",
+    "android_display_stub",
+    "libaaudio_stub",
     "plugin",
     "scudo"
 ]
@@ -385,16 +428,31 @@ all-mingw64 = [
     "net",
     "slirp",
     "stats",
+    "vulkan_display",
+    "pvclock",
 ]
 
 ## All features that are compiled and tested for msvc64
 all-msvc64 = [ "all-mingw64" ]
 
-## All features that are enabled in ChromeOS builds.
-all-chromeos = ["audio_cras", "panic-memfd", "arc_quota", "vtpm", "registered_events"]
-
-# Deprecated feature flag. Remove after ChromeOS-side is updated.
-chromeos = ["all-chromeos"]
+## All features that are compiled and tested for android builds
+all-android = [
+        "android-sparse",
+        "audio",
+        "audio_aaudio",
+        "balloon",
+        "config-file",
+        "gdb",
+        "gdbstub",
+        "gdbstub_arch",
+        "geniezone",
+        "gunyah",
+        "libaaudio_stub",
+        "net",
+        "qcow",
+        "usb",
+        "composite-disk",
+]
 
 [dependencies]
 anyhow = "1.0.32"
@@ -402,7 +460,7 @@ arch = { path = "arch" }
 argh = "0.1.10"
 argh_helpers = { path = "argh_helpers" }
 audio_streams = "*"
-base = "*"
+base = { path = "base" }
 bit_field = { path = "bit_field" }
 broker_ipc = { path = "broker_ipc" }
 cfg-if = "1.0.0"
@@ -411,11 +469,11 @@ cros_async = { path = "cros_async" }
 cros_tracing = { path = "cros_tracing" }
 crosvm_cli = { path = "crosvm_cli" }
 crosvm_plugin = { path = "crosvm_plugin", optional = true }
-data_model = { path ="common/data_model" }
 devices = { path = "devices" }
 disk = { path = "disk" }
 document-features = { version = "0.2", optional = true }
 enumn = "0.1.0"
+ext2 = { path = "ext2" }
 gdbstub = { version = "0.7.0", optional = true }
 gdbstub_arch = { version = "0.3.0", optional = true }
 rutabaga_gfx = { path = "rutabaga_gfx"}
@@ -425,27 +483,27 @@ kernel_cmdline = { path = "kernel_cmdline" }
 kernel_loader = { path = "kernel_loader" }
 kvm = { path = "kvm", optional = true }
 kvm_sys = { path = "kvm_sys", optional = true }
-libc = "0.2.93"
+libc = "0.2.153"
 libcras = "*"
 # Compile out trace statements in release builds
 log = { version = "0", features = ["release_max_level_debug"]}
 merge = "0.1.0"
 metrics = { path = "metrics" }
+metrics_events = { path = "metrics_events" }
 net_util = { path = "net_util" }
 once_cell = "1.7"
 protobuf = { version = "3.2", optional = true }
 protos = { path = "protos", optional = true }
-remain = "*"
+remain = "0.2"
 resources = { path = "resources" }
 scudo = { version = "0.1", optional = true }
-serde = "*"
-serde_json = "*"
+serde = { version = "1", features = ["rc"] }
+serde_json = "1"
 serde_keyvalue = { path = "serde_keyvalue", features = ["argh_derive"] }
 smallvec = "1.6.1"
 static_assertions = "1.1"
 swap = { path = "swap" }
 sync = { path = "common/sync" }
-tempfile = "3"
 thiserror = { version = "1.0.20" }
 vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
@@ -466,28 +524,28 @@ aarch64 = { path = "aarch64" }
 minijail = "*" # provided by ebuild
 p9 = "0.2.3"
 vhost = { path = "vhost" }
+android_audio = { path = "android_audio"}
 
 [target.'cfg(windows)'.dependencies]
 anti_tamper = { path = "vendor/generic/anti_tamper" }
 cros_async = { path = "cros_async" }
-ctrlc = "*"
+ctrlc = "3"
 futures = "0.3"
 gpu_display = { path = "gpu_display", optional = true }
 rand = "0.8"
 sandbox = { path = "sandbox" }
 cros_tracing = { path = "cros_tracing" }
 tube_transporter = { path = "tube_transporter" }
-winapi = "*"
+winapi = "0.3"
 win_audio = { path = "win_audio" }
 win_util = { path = "win_util" }
 
 [dev-dependencies]
-base = "*"
 rand = "0.8"
+tempfile = "3"
 
 [patch.crates-io]
 audio_streams = { path = "common/audio_streams" }
-base = { path = "base" }
 cros_async = { path = "cros_async" }
 data_model = { path = "common/data_model" }
 libcras = { path = "libcras_stub" } # ignored by ebuild
