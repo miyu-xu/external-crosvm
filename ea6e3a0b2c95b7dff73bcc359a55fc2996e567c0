@@ -16,6 +16,24 @@
       "message": "can you upload the submitted version of the upstream CL? (or just wait for the merge, i\u0027m going to do one after your revert CL is submitted)",
       "revId": "ea6e3a0b2c95b7dff73bcc359a55fc2996e567c0",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a8dd7046_c2956a05",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1937676
+      },
+      "writtenOn": "2024-07-24T23:30:57Z",
+      "side": 1,
+      "message": "Oops, this is a downstream only patch, let me remove the tag.",
+      "parentUuid": "124bd753_ed16374f",
+      "revId": "ea6e3a0b2c95b7dff73bcc359a55fc2996e567c0",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
