@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+<<<<<<< HEAD   (7f0f6a Merge changes Ife9aec01,I9508a7b2,If07a2f0f into main)
 use base::sched_attr;
 use base::sched_setattr;
 use base::warn;
@@ -14,6 +15,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
 
+=======
+>>>>>>> BRANCH (99685e devices: vmwdt: change functions to return Results)
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
 use crate::BusDevice;
@@ -82,6 +85,7 @@ fn get_cpu_util_factor(cpu_id: u32) -> Result<u32, Error> {
 }
 
 impl VirtCpufreq {
+<<<<<<< HEAD   (7f0f6a Merge changes Ife9aec01,I9508a7b2,If07a2f0f into main)
     pub fn new(pcpu: u32, cpu_capacity: u32, cpu_fmax: u32) -> Self {
         let util_factor = get_cpu_util_factor(pcpu).expect("Error getting util factor");
         let pcpu_capacity = get_cpu_capacity(pcpu).expect("Error reading capacity");
@@ -97,6 +101,10 @@ impl VirtCpufreq {
             pcpu,
             util_factor,
         }
+=======
+    pub fn new(pcpu: u32, _cpu_capacity: u32, _cpu_fmax: u32) -> Self {
+        panic!("Virt Cpufreq not supported, do not use! {}", pcpu);
+>>>>>>> BRANCH (99685e devices: vmwdt: change functions to return Results)
     }
 }
 

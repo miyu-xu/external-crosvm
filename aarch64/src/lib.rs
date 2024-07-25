@@ -266,6 +266,8 @@ pub enum Error {
     CreateTube(base::TubeError),
     #[error("failed to create VCPU: {0}")]
     CreateVcpu(base::Error),
+    #[error("unable to create vm watchdog timer device: {0}")]
+    CreateVmwdtDevice(anyhow::Error),
     #[error("custom pVM firmware could not be loaded: {0}")]
     CustomPvmFwLoadFailure(arch::LoadImageError),
     #[error("vm created wrong kind of vcpu")]
@@ -651,11 +653,13 @@ impl arch::LinuxArch for AArch64 {
             .map_err(Error::CreatePlatformBus)?;
         pid_debug_label_map.append(&mut platform_pid_debug_label_map);
 
+        let (vmwdt_host_tube, vmwdt_control_tube) = Tube::pair().map_err(Error::CreateTube)?;
         Self::add_arch_devs(
             irq_chip.as_irq_chip_mut(),
             &mmio_bus,
             vcpu_count,
             _vm_evt_wrtube,
+            vmwdt_control_tube,
         )?;
 
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
@@ -837,6 +841,8 @@ impl arch::LinuxArch for AArch64 {
         )
         .map_err(Error::InitVmError)?;
 
+        let vm_request_tubes = vec![vmwdt_host_tube];
+
         Ok(RunnableLinuxVm {
             vm,
             vcpu_count,
@@ -860,7 +866,7 @@ impl arch::LinuxArch for AArch64 {
             platform_devices,
             hotplug_bus: BTreeMap::new(),
             devices_thread: None,
-            vm_request_tube: None,
+            vm_request_tubes,
         })
     }
 
@@ -1206,6 +1212,7 @@ impl AArch64 {
         bus: &Bus,
         vcpu_count: usize,
         vm_evt_wrtube: &SendTube,
+        vmwdt_request_tube: Tube,
     ) -> Result<()> {
         let rtc_evt = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let rtc = devices::pl030::Pl030::new(rtc_evt.try_clone().map_err(Error::CloneEvent)?);
@@ -1225,7 +1232,9 @@ impl AArch64 {
             vcpu_count,
             vm_evt_wrtube.try_clone().unwrap(),
             vmwdt_evt.try_clone().map_err(Error::CloneEvent)?,
-        );
+            vmwdt_request_tube,
+        )
+        .map_err(Error::CreateVmwdtDevice)?;
         irq_chip
             .register_edge_irq_event(
                 AARCH64_VMWDT_IRQ,
