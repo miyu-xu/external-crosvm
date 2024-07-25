@@ -1,5 +1,29 @@
 {
-  "comments": [],
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e0d3b45d_a07abbd9",
+        "filename": "cargo_embargo.json",
+        "patchSetId": 1
+      },
+      "lineNbr": 111,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-07-25T22:20:31Z",
+      "side": 1,
+      "message": "incorrect comma placement - fixed in aosp/3197051",
+      "range": {
+        "startLine": 111,
+        "startChar": 56,
+        "endLine": 111,
+        "endChar": 57
+      },
+      "revId": "f25a4fb85cefdafaadd02e03b6c0ca168c73e4d4",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ],
   "submitRequirementResults": [
     {
       "submitRequirement": {
