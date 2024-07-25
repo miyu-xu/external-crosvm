@@ -46,6 +46,30 @@
       },
       "revId": "ffb7c688421fad57ca3eec0c577608ef78fc8669",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b7ed5bd4_1e08c78f",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 8,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-25T22:26:45Z",
+      "side": 1,
+      "message": "Yeah, if they only merge from AOSP, they probably don\u0027t need to run the script\n\nWe probably said this before, but: crosvm isn\u0027t stable by itself. we sometimes need to make changes to other parts of the system partition for AVF to continue working, so, if you build guest images from this branch, expect some trouble stemming from version skew\n\nIf you only need fresh rutabaga sources, it might be smarter to copy that sub dir from the crosvm repo",
+      "parentUuid": "acaa3abd_38da0860",
+      "range": {
+        "startLine": 8,
+        "startChar": 0,
+        "endLine": 8,
+        "endChar": 51
+      },
+      "revId": "ffb7c688421fad57ca3eec0c577608ef78fc8669",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
