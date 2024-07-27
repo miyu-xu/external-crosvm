@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "61fadd96_c60d09c2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-07-27T01:13:32Z",
+      "side": 1,
+      "message": "Will upload fix in upstream crosvm as well.",
+      "revId": "03951e0f23f0865f22ceae944bd234dfe2e2db8d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
