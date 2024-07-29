@@ -3,6 +3,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "7b30fe6e_d6a7977c",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 7,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-07-29T23:43:43Z",
+      "side": 1,
+      "message": "ANDROID: or UPSTREAM: ?",
+      "range": {
+        "startLine": 7,
+        "startChar": 0,
+        "endLine": 7,
+        "endChar": 6
+      },
+      "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "9d97d19a_c9d248a3",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 3
@@ -14,6 +37,24 @@
       "writtenOn": "2024-07-29T18:17:47Z",
       "side": 1,
       "message": "you can add yourselves to OWNERS on your branch, esp since you aren\u0027t responding to earlier comments we\u0027ve made on CLs",
+      "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b36a4279_78d655c7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-07-29T23:43:43Z",
+      "side": 1,
+      "message": "+1 - if there\u0027s custom work here, for sure.\n\nThat being said, if you can merge these into upstream crosvm and backport them here, that\u0027s going to be much easier to maintain merge conflicts later. The more this forks, the harder it\u0027s going to be to maintain, and we can\u0027t provide any support for that (only support for non-forked things). Thank you!",
+      "parentUuid": "9d97d19a_c9d248a3",
       "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
