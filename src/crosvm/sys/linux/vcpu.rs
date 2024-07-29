@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::prelude::*;
+use std::process;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Barrier;
@@ -24,6 +25,9 @@ use arch::LinuxArch;
 use arch::VcpuArch;
 use arch::VcpuInitArch;
 use arch::VmArch;
+use base::gettid;
+use base::sched_attr;
+use base::sched_setattr;
 use base::signal::clear_signal_handler;
 use base::signal::BlockedSignal;
 use base::*;
@@ -35,8 +39,11 @@ use hypervisor::IoParams;
 use hypervisor::VcpuExit;
 use hypervisor::VcpuSignalHandle;
 use libc::c_int;
+use metrics_events::MetricEventType;
 #[cfg(target_arch = "riscv64")]
 use riscv64::Riscv64 as Arch;
+use serde::Deserialize;
+use serde::Serialize;
 #[cfg(target_arch = "x86_64")]
 use sync::Mutex;
 use vm_control::*;
@@ -48,6 +55,14 @@ use x86_64::X8664arch as Arch;
 use super::ExitState;
 #[cfg(target_arch = "x86_64")]
 use crate::crosvm::ratelimit::Ratelimit;
+
+// TODO(davidai): Import libc constant when updated
+const SCHED_FLAG_RESET_ON_FORK: u64 = 0x1;
+const SCHED_FLAG_KEEP_POLICY: u64 = 0x08;
+const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
+const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
+const SCHED_SCALE_CAPACITY: u32 = 1024;
+const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
 
 fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
     |IoParams {
@@ -80,16 +95,30 @@ fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
 
 /// Set the VCPU thread affinity and other per-thread scheduler properties.
 /// This function will be called from each VCPU thread at startup.
+#[allow(clippy::unnecessary_cast)]
 pub fn set_vcpu_thread_scheduling(
     vcpu_affinity: CpuSet,
     core_scheduling: bool,
     enable_per_vm_core_scheduling: bool,
     vcpu_cgroup_tasks_file: Option<File>,
     run_rt: bool,
+    boost_uclamp: bool,
 ) -> anyhow::Result<()> {
     if !vcpu_affinity.is_empty() {
         if let Err(e) = set_cpu_affinity(vcpu_affinity) {
             error!("Failed to set CPU affinity: {}", e);
+        }
+    }
+
+    if boost_uclamp {
+        let mut sched_attr = sched_attr::default();
+        sched_attr.sched_flags = SCHED_FLAG_KEEP_ALL as u64
+            | SCHED_FLAG_UTIL_CLAMP_MIN
+            | SCHED_FLAG_RESET_ON_FORK as u64;
+        sched_attr.sched_util_min = SCHED_SCALE_CAPACITY;
+
+        if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
+            warn!("Failed to boost vcpu util: {}", e);
         }
     }
 
@@ -167,7 +196,7 @@ where
     Ok(vcpu)
 }
 
-thread_local!(static VCPU_THREAD: RefCell<Option<VcpuSignalHandle>> = RefCell::new(None));
+thread_local!(static VCPU_THREAD: RefCell<Option<VcpuSignalHandle>> = const { RefCell::new(None) });
 
 fn set_vcpu_thread_local(vcpu: Option<&dyn VcpuArch>, signal_num: c_int) {
     // Block signal while we add -- if a signal fires (very unlikely,
@@ -389,7 +418,15 @@ where
                 }
                 Ok(VcpuExit::IrqWindowOpen) => {}
                 Ok(VcpuExit::Hlt) => irq_chip.halted(cpu_id),
-                Ok(VcpuExit::Shutdown) => return ExitState::Stop,
+                Ok(VcpuExit::Shutdown(reason)) => {
+                    if let Err(e) = reason {
+                        metrics::log_descriptor(
+                            MetricEventType::VcpuShutdownError,
+                            e.get_raw_error_code() as i64,
+                        );
+                    }
+                    return ExitState::Stop;
+                }
                 Ok(VcpuExit::FailEntry {
                     hardware_entry_failure_reason,
                 }) => {
@@ -467,6 +504,13 @@ where
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct VcpuPidTid {
+    pub vcpu_id: usize,
+    pub process_id: u32,
+    pub thread_id: u32,
+}
+
 pub fn run_vcpu<V>(
     cpu_id: usize,
     vcpu_id: usize,
@@ -490,6 +534,8 @@ pub fn run_vcpu<V>(
     vcpu_cgroup_tasks_file: Option<File>,
     #[cfg(target_arch = "x86_64")] bus_lock_ratelimit_ctrl: Arc<Mutex<Ratelimit>>,
     run_mode: VmRunMode,
+    boost_uclamp: bool,
+    vcpu_pid_tid_tube: mpsc::Sender<VcpuPidTid>,
 ) -> Result<JoinHandle<()>>
 where
     V: VcpuArch + 'static,
@@ -507,9 +553,19 @@ where
                     enable_per_vm_core_scheduling,
                     vcpu_cgroup_tasks_file,
                     run_rt && !delay_rt,
+                    boost_uclamp,
                 ) {
                     error!("vcpu thread setup failed: {:#}", e);
                     return ExitState::Stop;
+                }
+
+                if let Err(e) = vcpu_pid_tid_tube.send(VcpuPidTid {
+                    vcpu_id: cpu_id,
+                    process_id: process::id(),
+                    thread_id: gettid() as u32,
+                }) {
+                    error!("Failed to send vcpu process/thread id: {:#}", e);
+                    return ExitState::Crash;
                 }
 
                 #[cfg(feature = "gdb")]

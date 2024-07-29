@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use base::errno_result;
 use base::ioctl_with_ref;
 use base::Result;
@@ -107,14 +108,14 @@ impl KvmKernelIrqChip {
 
         // SAFETY:
         // Safe because we allocated the struct that's being passed in
-        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR(), &cpu_redist_attr) };
+        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR, &cpu_redist_attr) };
         if ret != 0 {
             return errno_result();
         }
 
         // SAFETY:
         // Safe because we allocated the struct that's being passed in
-        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR(), &dist_attr) };
+        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR, &dist_attr) };
         if ret != 0 {
             return errno_result();
         }
@@ -130,7 +131,7 @@ impl KvmKernelIrqChip {
         };
         // SAFETY:
         // Safe because we allocated the struct that's being passed in
-        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR(), &nr_irqs_attr) };
+        let ret = unsafe { ioctl_with_ref(&vgic, KVM_SET_DEVICE_ATTR, &nr_irqs_attr) };
         if ret != 0 {
             return errno_result();
         }
@@ -173,6 +174,32 @@ impl IrqChipAArch64 for KvmKernelIrqChip {
         self.device_kind
     }
 
+    fn snapshot(&self, _cpus_num: usize) -> anyhow::Result<serde_json::Value> {
+        if self.device_kind == DeviceKind::ArmVgicV3 {
+            let save_gic_attr = kvm_device_attr {
+                group: KVM_DEV_ARM_VGIC_GRP_CTRL,
+                attr: KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+                addr: 0,
+                flags: 0,
+            };
+            // SAFETY:
+            // Safe because we allocated the struct that's being passed in
+            // Safe because the device interrupts get stored in guest memory
+            let ret = unsafe { ioctl_with_ref(&self.vgic, KVM_SET_DEVICE_ATTR, &save_gic_attr) };
+            if ret != 0 {
+                return errno_result()
+                    .context("ioctl KVM_SET_DEVICE_ATTR for save_gic_attr failed.")?;
+            }
+        }
+        Ok(serde_json::Value::Null)
+    }
+
+    fn restore(&mut self, _data: serde_json::Value, _vcpus_num: usize) -> anyhow::Result<()> {
+        // SAVE_PENDING_TABLES operation wrote the pending tables into guest memory.
+        // Assumption is that no work is necessary on restore of IrqChip.
+        Ok(())
+    }
+
     fn finalize(&self) -> Result<()> {
         let init_gic_attr = kvm_device_attr {
             group: KVM_DEV_ARM_VGIC_GRP_CTRL,
@@ -183,7 +210,7 @@ impl IrqChipAArch64 for KvmKernelIrqChip {
 
         // SAFETY:
         // Safe because we allocated the struct that's being passed in
-        let ret = unsafe { ioctl_with_ref(&self.vgic, KVM_SET_DEVICE_ATTR(), &init_gic_attr) };
+        let ret = unsafe { ioctl_with_ref(&self.vgic, KVM_SET_DEVICE_ATTR, &init_gic_attr) };
         if ret != 0 {
             return errno_result();
         }

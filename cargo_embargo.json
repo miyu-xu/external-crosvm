@@ -9,6 +9,7 @@
     "android_display_stub",
     "android-sparse",
     "audio",
+    "audio_aaudio",
     "balloon",
     "config-file",
     // TODO: The "protos" crate has been modified such that it doesn't work with cargo. If we fix that,
@@ -25,6 +26,7 @@
     "gfxstream_stub",
     "gpu",
     "gunyah",
+    "libaaudio_stub",
     "net",
     "qcow",
     "usb",
@@ -90,7 +92,7 @@
       "//vendor:__subpackages__"
     ],
     "libbase_rust": [
-      "//packages/modules/Virtualization/virtualizationmanager",
+      "//packages/modules/Virtualization/android/virtmgr",
       // For QCOM's crosvm fork.
       "//vendor:__subpackages__"
     ],
@@ -99,13 +101,14 @@
       "//vendor:__subpackages__"
     ],
     "libdisk": [
-      "//packages/modules/Virtualization/virtualizationmanager",
+      "//packages/modules/Virtualization/android/virtmgr",
       // For QCOM's crosvm fork.
       "//vendor:__subpackages__"
     ],
     "libfuse_rust": [
-        "//packages/modules/Virtualization/authfs",
-        "//packages/modules/Virtualization/zipfuse"
+        "//packages/modules/Virtualization/guest/authfs",
+        "//packages/modules/Virtualization/guest/zipfuse",
+        "//packages/modules/Virtualization/tests/authfs"
     ],
     "libhypervisor": [
       // For QCOM's crosvm fork.
@@ -116,7 +119,7 @@
       "//vendor:__subpackages__"
     ],
     "libvm_control": [
-      "//packages/modules/Virtualization/virtualizationmanager"
+      "//packages/modules/Virtualization/android/virtmgr"
     ],
     "libvm_memory": [
       // For QCOM's crosvm fork.
@@ -126,6 +129,9 @@
   "package": {
     "aarch64": {
       "add_module_block": "aarch64/cargo2android_arch.bp"
+    },
+    "android_audio": {
+      "patch": "android_audio/patches/Android.bp.patch"
     },
     "base": {
       "patch": "base/patches/Android.bp.patch",
@@ -195,7 +201,8 @@
       "no_presubmit": true
     },
     "power_monitor": {
-      "copy_out": true
+      "copy_out": true,
+      "patch": "power_monitor/patches/Android.bp.patch"
     },
     "protos": {
       "add_toplevel_block": "protos/cargo2android_protobuf.bp",

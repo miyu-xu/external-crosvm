@@ -16,6 +16,7 @@ use vm_memory::MemoryRegionPurpose;
 
 use super::GunyahVcpu;
 use super::GunyahVm;
+use crate::AArch64SysRegId;
 use crate::Hypervisor;
 use crate::PsciVersion;
 use crate::VcpuAArch64;
@@ -39,6 +40,10 @@ fn fdt_create_shm_device(
     shm_node.set_prop("peer-default", ())?;
     shm_node.set_prop("dma_base", 0u64)?;
     let mem_node = shm_node.subnode_mut("memory")?;
+    // We have to add the shm device for RM to accept the swiotlb memparcel.
+    // Memparcel is only used on android14-6.1. Once android14-6.1 is EOL
+    // we should be able to remove all the times we call fdt_create_shm_device()
+    mem_node.set_prop("optional", ())?;
     mem_node.set_prop("label", index)?;
     mem_node.set_prop("#address-cells", 2u32)?;
     mem_node.set_prop("base", guest_addr.offset())
@@ -225,47 +230,31 @@ impl VcpuAArch64 for GunyahVcpu {
         Ok(PSCI_0_2)
     }
 
-    #[cfg(feature = "gdb")]
     fn set_guest_debug(&self, _addrs: &[GuestAddress], _enable_singlestep: bool) -> Result<()> {
         Err(Error::new(ENOTSUP))
     }
 
-    #[cfg(feature = "gdb")]
-    fn set_gdb_registers(
-        &self,
-        _regs: &<gdbstub_arch::aarch64::AArch64 as gdbstub::arch::Arch>::Registers,
-    ) -> Result<()> {
-        Err(Error::new(ENOTSUP))
-    }
-
-    #[cfg(feature = "gdb")]
-    fn get_gdb_registers(
-        &self,
-        _regs: &mut <gdbstub_arch::aarch64::AArch64 as gdbstub::arch::Arch>::Registers,
-    ) -> Result<()> {
-        Err(Error::new(ENOTSUP))
-    }
-
-    #[cfg(feature = "gdb")]
     fn get_max_hw_bps(&self) -> Result<usize> {
         Err(Error::new(ENOTSUP))
     }
 
-    #[cfg(feature = "gdb")]
-    fn set_gdb_register(
-        &self,
-        _reg: <gdbstub_arch::aarch64::AArch64 as gdbstub::arch::Arch>::RegId,
-        _data: &[u8],
-    ) -> Result<()> {
+    fn get_system_regs(&self) -> Result<BTreeMap<AArch64SysRegId, u64>> {
         Err(Error::new(ENOTSUP))
     }
 
-    #[cfg(feature = "gdb")]
-    fn get_gdb_register(
-        &self,
-        _reg: <gdbstub_arch::aarch64::AArch64 as gdbstub::arch::Arch>::RegId,
-        _data: &mut [u8],
-    ) -> Result<usize> {
+    fn get_cache_info(&self) -> Result<BTreeMap<u8, u64>> {
         Err(Error::new(ENOTSUP))
+    }
+
+    fn set_cache_info(&self, _cache_info: BTreeMap<u8, u64>) -> Result<()> {
+        Err(Error::new(ENOTSUP))
+    }
+
+    fn hypervisor_specific_snapshot(&self) -> anyhow::Result<serde_json::Value> {
+        unimplemented!()
+    }
+
+    fn hypervisor_specific_restore(&self, _data: serde_json::Value) -> anyhow::Result<()> {
+        unimplemented!()
     }
 }
