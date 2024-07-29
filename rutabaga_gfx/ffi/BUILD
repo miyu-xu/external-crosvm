@@ -34,6 +34,7 @@ rust_shared_library(
     edition = "2021",
     deps = [
         "//external/crosvm/rutabaga_gfx",
+        "//external/qemu:libmodule-common",
         "//hardware/google/gfxstream/host:gfxstream_backend",
         "@libc",
         "@log",
@@ -52,7 +53,9 @@ cc_library(
         "@platforms//os:windows": ["/DEFAULTLIB:Ntdll.lib"],
         "//conditions:default": [],
     }),
-    deps = [":rutabaga_ffi"],
+    deps = [
+        ":rutabaga_ffi",
+    ],
 )
 
 cargo_build_script(
