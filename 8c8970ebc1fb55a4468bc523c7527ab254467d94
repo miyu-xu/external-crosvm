@@ -131,7 +131,7 @@
       },
       "applicabilityExpressionResult": {},
       "submittabilityExpressionResult": {
-        "value": {"expression":{"expressionString":"-label:Code-Review=MIN AND (-is:android-cherry-pick_exemptedusers AND label:Code-Review=MAX,user=non_uploader OR (is:android-cherry-pick_exemptedusers AND label:Code-Review=MAX,count>=2) OR (label:Code-Review=MAX AND (label:Exempt=+1 OR (uploader:1474732 AND (project:platform/developers/docs OR project:platform/frameworks/support)))))"},"status":"FAIL","errorMessage":{"value":null},"passingAtoms":[],"failingAtoms":["label:Code-Review=MIN","is:android-cherry-pick_exemptedusers","label:Code-Review=MAX,user=non_uploader","is:android-cherry-pick_exemptedusers","label:Code-Review=MAX,count>=2","label:Code-Review=MAX","label:Exempt=+1","uploader:1474732","project:platform/developers/docs","project:platform/frameworks/support"]}
+        "value": {"expression":{"expressionString":"-label:Code-Review=MIN AND (-is:android-cherry-pick_exemptedusers AND label:Code-Review=MAX,user=non_uploader OR (is:android-cherry-pick_exemptedusers AND label:Code-Review=MAX,count>=2) OR (label:Code-Review=MAX AND (label:Exempt=+1 OR (uploader:1474732 AND (project:platform/developers/docs OR project:platform/frameworks/support)))))"},"status":"PASS","errorMessage":{"value":null},"passingAtoms":["label:Code-Review=MAX,user=non_uploader","label:Code-Review=MAX"],"failingAtoms":["label:Code-Review=MIN","is:android-cherry-pick_exemptedusers","is:android-cherry-pick_exemptedusers","label:Code-Review=MAX,count>=2","label:Exempt=+1","uploader:1474732","project:platform/developers/docs","project:platform/frameworks/support"]}
       },
       "overrideExpressionResult": {
         "value": {"expression":{"expressionString":"is:android_exemptedusers OR is:android-but-lint_exemptedusers OR (branch:\"^refs/heads/cherrypick-temp-.*\" AND is:android-cherry-pick_exemptedusers) OR (ownerin:mdb/android-triage-xwf-extended-access-team-policy AND is:pure-revert)"},"status":"FAIL","errorMessage":{"value":null},"passingAtoms":[],"failingAtoms":["is:android_exemptedusers","is:android-but-lint_exemptedusers","branch:\"^refs/heads/cherrypick-temp-.*\"","is:android-cherry-pick_exemptedusers","is:pure-revert","ownerin:mdb/android-triage-xwf-extended-access-team-policy"]}
@@ -454,7 +454,7 @@
         "value": {"expression":{"expressionString":"is:review-enforced_gerrit"},"status":"PASS","errorMessage":{"value":null},"passingAtoms":["is:review-enforced_gerrit"],"failingAtoms":[]}
       },
       "submittabilityExpressionResult": {
-        "value": {"expression":{"expressionString":"is:review-enforcement-satisfied_gerrit"},"status":"FAIL","errorMessage":{"value":null},"passingAtoms":[],"failingAtoms":["is:review-enforcement-satisfied_gerrit"]}
+        "value": {"expression":{"expressionString":"is:review-enforcement-satisfied_gerrit"},"status":"PASS","errorMessage":{"value":null},"passingAtoms":["is:review-enforcement-satisfied_gerrit"],"failingAtoms":[]}
       },
       "overrideExpressionResult": {},
       "patchSetCommitId": "8c8970ebc1fb55a4468bc523c7527ab254467d94",
