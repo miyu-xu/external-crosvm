@@ -57,6 +57,23 @@
       "parentUuid": "9d97d19a_c9d248a3",
       "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "825baa37_f7bdbbca",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1278660
+      },
+      "writtenOn": "2024-07-30T01:28:48Z",
+      "side": 1,
+      "message": "Erwin, should we have automerger or even track `main` in our manifest?",
+      "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
