@@ -941,6 +941,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c415646c_8b342201",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1426,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-07-30T19:51:29Z",
+      "side": 1,
+      "message": "Something like this to accept a generic iterator over (start, end) pairs:\n\n```\nfn punch_holes_in_guest_memory_for_mappings(\n    guest_mem_layout: Vec\u003c(...)\u003e,\n    mappings: impl Iterator\u003cItem \u003d (u64, u64)\u003e,\n) {\n    ...\n\n    for (mapping_start, mapping_end) in mappings {\n        ...\n    }\n\n    ...\n}\n```\n\nAnd then call it like this:\n\n```\nlet guest_mem_layout \u003d punch_holes_in_guest_mem_layout_for_mappings(\n    guest_mem_layout,\n    cma_backed_mappings\n        .iter()\n        .map(|region| (region.start().offset(), region.end().offset())),\n);\n\nlet guest_mem_layout \u003d punch_holes_in_guest_mem_layout_for_mappings(\n    guest_mem_layout,\n    cfg.file_backed_mappings\n        .iter()\n        .map(|mapping| (mapping.address, mapping.address + address.mapping.size)),\n);\n\n```",
+      "parentUuid": "515ce6f3_5e998afb",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "8ff64334_2d799477",
         "filename": "src/crosvm/sys/linux.rs",
         "patchSetId": 1
