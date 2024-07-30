@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "d3d93907_c4a2889f",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "This change was already merged - https://chromium-review.googlesource.com/c/crosvm/crosvm/+/3976062. I thought of noting all the differences here.",
+      "parentUuid": "93a92e42_18459795",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 57
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "5faa16f9_64a25e89",
@@ -71,6 +95,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "can you explain this change more? i want to make sure it is backwards compatible with existing gunyah usage in AVF. it seems like this is going to change the DT, unless we just expect that there were never actually multiple `MemoryRegionPurpose::GuestMemoryRegion`",
+      "range": {
+        "startLine": 133,
+        "startChar": 0,
+        "endLine": 134,
+        "endChar": 64
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "263c73bf_20ba46b0",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 134,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "we create shm nodes that Gunyah parses to create some objects. That\u0027s necessary only for actual shared memory like swiotlb(StaticSwiotlbRegion). We would never have to add this node for any guest private memory (GuestMemoryRegion).",
+      "parentUuid": "0e3a429f_26aab291",
       "range": {
         "startLine": 133,
         "startChar": 0,
@@ -145,6 +193,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "db1b5060_6781da34",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "0ad4cc0d_7510542b",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "89459c47_fc4daa35",
@@ -158,6 +224,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "put this next to the `open` call so that it is easier to verify the safety requirements are met\n\nmaybe could move the `open` call into this function, taking the path as an argument instead of a RawFd",
+      "range": {
+        "startLine": 117,
+        "startChar": 0,
+        "endLine": 117,
+        "endChar": 80
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "958e76b4_2d3b24d0",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 117,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "89459c47_fc4daa35",
       "range": {
         "startLine": 117,
         "startChar": 0,
@@ -193,6 +283,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "00cddec7_22e4a9b7",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 126,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "I would say more like a guest_memfd or a dma_buf fd. This is an IOCTL that is creating a file from within the kernel and providing the fd to that file to the userspace.",
+      "parentUuid": "9620edff_1e446c58",
+      "range": {
+        "startLine": 126,
+        "startChar": 8,
+        "endLine": 126,
+        "endChar": 10
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "1a7411c1_c5ef22d0",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
@@ -210,6 +324,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "7f786760_6c41ae88",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 135,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "I did think about it but the problem is the file only gets created by the IOCTL above. I am not sure if I can pass that to the CrosVM as an argument.",
+      "parentUuid": "1a7411c1_c5ef22d0",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "65c2a567_f8c42417",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
@@ -221,6 +353,24 @@
       "writtenOn": "2024-07-30T02:23:26Z",
       "side": 1,
       "message": "nit: try to avoid `is_none()` + `unwrap()` using a `match` or similar",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f6f3c5fd_955ba77d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 148,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "65c2a567_f8c42417",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -272,6 +422,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "32f4950f_bc6a122d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 154,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "d6f62b71_85a9ca52",
+      "range": {
+        "startLine": 153,
+        "startChar": 0,
+        "endLine": 154,
+        "endChar": 108
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a61f0047_cb261f64",
@@ -289,6 +463,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3edae35b_cf63781a",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 157,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "a61f0047_cb261f64",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "762b6e8c_b3cb069b",
@@ -302,6 +494,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "automatic fallbacks are often dangerous. is there a specific errno we can ignore and treat the rest as errors? or, communicate via the cmdline whether the CMA is required so that we only attempt this when it should succeed",
+      "range": {
+        "startLine": 158,
+        "startChar": 0,
+        "endLine": 163,
+        "endChar": 21
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fd8ff167_195324d0",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 163,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "762b6e8c_b3cb069b",
       "range": {
         "startLine": 158,
         "startChar": 0,
@@ -337,6 +553,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5aeb6f60_29758fbd",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 167,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Sorry, I didn\u0027t understand the comment.",
+      "parentUuid": "bd7800b2_04092b32",
+      "range": {
+        "startLine": 167,
+        "startChar": 40,
+        "endLine": 167,
+        "endChar": 75
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "ecbc6f4e_a762bc84",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
@@ -348,6 +588,24 @@
       "writtenOn": "2024-07-30T02:23:26Z",
       "side": 1,
       "message": "`unwrap_or_else( ... panic!() ... )` doesn\u0027t really make sense; ideally this should just return a `Result`, or if it\u0027s truly unrecoverable, then just use `.expect()`.",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "73d6a248_0df3d589",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 171,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "ecbc6f4e_a762bc84",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -365,6 +623,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "using `BackingObject::File` vs `BackingObject::Shm` to determine if it is backed by CMA doesn\u0027t seem right. how about adding a `is_cma: bool` field to `MemoryRegion` to track it?",
+      "range": {
+        "startLine": 364,
+        "startChar": 16,
+        "endLine": 364,
+        "endChar": 38
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "21a0c2b3_5f8ec19c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 364,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Not sure why its not correct because we just created the MemoryRegion based on the file in Line#126.",
+      "parentUuid": "2aaec5d0_d6a4451e",
       "range": {
         "startLine": 364,
         "startChar": 16,
@@ -400,6 +682,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "e2ed4420_2e923640",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 374,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "We need a way to pass the fd to the kernel. SET_USER_MEM passes the user_addr. Instead of changing the existing UAPI, we prefer to have a separate IOCTL to map this fd to the VM.",
+      "parentUuid": "203f0bc1_a30ce51d",
+      "range": {
+        "startLine": 366,
+        "startChar": 0,
+        "endLine": 374,
+        "endChar": 27
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "1c8a3cc0_eb7ad530",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
@@ -411,6 +717,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "this will panic in a somewhat cryptic way if `name.len() \u003e 16`. can you add an explicit check with a nicer error messag?",
+      "range": {
+        "startLine": 422,
+        "startChar": 0,
+        "endLine": 424,
+        "endChar": 63
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "390a79b1_53d89313",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 424,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "1c8a3cc0_eb7ad530",
       "range": {
         "startLine": 422,
         "startChar": 0,
@@ -457,6 +787,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "a13733cf_ccf6c910",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1942,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "All I need to pass is a \"vm_name\" and there are only 2 supported at this time and I can probably provide that in the help line and I could keep it as a separate option until maybe in the future we have more and then we can add it in the enum like you suggested. Does that sound okay?",
+      "parentUuid": "2f517350_9f6cb278",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6539c3f8_d3791653",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 1
@@ -468,6 +816,24 @@
       "writtenOn": "2024-07-30T02:23:26Z",
       "side": 1,
       "message": "The `cfg` check should also probably be applied to the option in the struct above if the option only works on Linux.\n\nShould this also be limited to arm, or is there a scenario where this option will be functional on other architectures too?",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ba73163a_8feadbdc",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3474,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "6539c3f8_d3791653",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -491,6 +857,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "13d69457_989f298c",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1426,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "I need to check how to do that.",
+      "parentUuid": "49e2469a_8c27a5ef",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "8ff64334_2d799477",
         "filename": "src/crosvm/sys/linux.rs",
         "patchSetId": 1
@@ -502,6 +886,24 @@
       "writtenOn": "2024-07-30T02:23:26Z",
       "side": 1,
       "message": "nit: it looks like something went wrong with the formatting/line wrapping here and elsewhere",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e5bec40_577ab627",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1489,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "8ff64334_2d799477",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -519,6 +921,30 @@
       "writtenOn": "2024-07-30T00:23:49Z",
       "side": 1,
       "message": "let\u0027s try to integrate the CMA stuff into the existing `create_guest_memory` code instead of duplicating it. the duplicated branch won\u0027t be tested upstream and will go stale quickly\n\ni\u0027m going to look into it more and hopefully can give a more concrete suggestion",
+      "range": {
+        "startLine": 1424,
+        "startChar": 0,
+        "endLine": 1522,
+        "endChar": 1
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "346871ce_e9288e09",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1522,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T16:04:26Z",
+      "side": 1,
+      "message": "I am open to suggestions. Thanks.",
+      "parentUuid": "94861b51_a79bf7ef",
       "range": {
         "startLine": 1424,
         "startChar": 0,
