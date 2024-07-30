@@ -875,6 +875,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "515ce6f3_5e998afb",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1426,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T17:11:07Z",
+      "side": 1,
+      "message": "Not sure how to assign the mapping_start \u0026 mapping_end for them even if i have a generic iterator.",
+      "parentUuid": "13d69457_989f298c",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "8ff64334_2d799477",
         "filename": "src/crosvm/sys/linux.rs",
         "patchSetId": 1
