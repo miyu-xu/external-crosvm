@@ -72,6 +72,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "f1835ee2_b2a7dc11",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-30T18:42:07Z",
+      "side": 1,
+      "message": "We plan to merge crosvm generated DT \u0026 the static DT. We hope to do this with the pvmfw. There is a separate discussion going on for that.",
+      "parentUuid": "b55c819b_a74385e2",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 57
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "5faa16f9_64a25e89",
