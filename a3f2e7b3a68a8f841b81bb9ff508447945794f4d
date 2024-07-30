@@ -48,6 +48,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "b55c819b_a74385e2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-30T18:14:15Z",
+      "side": 1,
+      "message": "I see. In the current setup, it seems like crosvm is going to generate a DT and put it into a guest RAM, but then I guess you just ignore that and use the DT from your ELF file instead?\n\nEven if it technically works, it is probably a good idea to rethink this a bit so it is less confusing.\n\nNot a blocker for this CL ofc",
+      "parentUuid": "d3d93907_c4a2889f",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 57
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "5faa16f9_64a25e89",
