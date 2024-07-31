@@ -1337,6 +1337,29 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "9e60bd9b_4e3400fc",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 823,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2024-07-31T22:18:11Z",
+      "side": 1,
+      "message": "I\u0027m curious what Frederick thinks as well, but could we make this generic, e.g. \u0027vm_name\u0027 so that we can use it with other systems as well?\n\nIf not, could it be the name of a technology instead of the company that\u0027s using it?",
+      "range": {
+        "startLine": 823,
+        "startChar": 0,
+        "endLine": 823,
+        "endChar": 44
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "49e2469a_8c27a5ef",
         "filename": "src/crosvm/sys/linux.rs",
         "patchSetId": 1
