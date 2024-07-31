@@ -171,6 +171,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "2418c405_f70160df",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-31T04:48:49Z",
+      "side": 1,
+      "message": "I meant to just say \"Acknowledged\" but not mark it Resolved. Looks like Acknowledged sets Resolved too? :( Sorry for that!",
+      "parentUuid": "466d5ff1_e0e8b313",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "0e3a429f_26aab291",
