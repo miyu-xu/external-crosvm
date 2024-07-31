@@ -98,6 +98,30 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "082d1056_7f5f6586",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "Nice! No concern then",
+      "parentUuid": "f1835ee2_b2a7dc11",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 57
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "5faa16f9_64a25e89",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 1
@@ -126,6 +150,23 @@
       "writtenOn": "2024-07-30T01:00:30Z",
       "side": 1,
       "message": "(internal bug with some associated discussion http://b/315041576#comment58)",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "466d5ff1_e0e8b313",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "FYI: Not a big deal, but \"Acknowledged\" + resolving the comment is usually meant as something like \"i will take no further action w.r.t. this comment\"",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -167,6 +208,30 @@
       "side": 1,
       "message": "we create shm nodes that Gunyah parses to create some objects. That\u0027s necessary only for actual shared memory like swiotlb(StaticSwiotlbRegion). We would never have to add this node for any guest private memory (GuestMemoryRegion).",
       "parentUuid": "0e3a429f_26aab291",
+      "range": {
+        "startLine": 133,
+        "startChar": 0,
+        "endLine": 134,
+        "endChar": 64
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b629985e_ba6631bb",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 134,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "i don\u0027t understand but if @quic_eberman@quicinc.com thinks it is OK, i\u0027m happy",
+      "parentUuid": "263c73bf_20ba46b0",
       "range": {
         "startLine": 133,
         "startChar": 0,
@@ -353,6 +418,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "11ed7c3f_caeeba9b",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 126,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "👍",
+      "parentUuid": "00cddec7_22e4a9b7",
+      "range": {
+        "startLine": 126,
+        "startChar": 8,
+        "endLine": 126,
+        "endChar": 10
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "1a7411c1_c5ef22d0",
@@ -384,6 +473,24 @@
       "side": 1,
       "message": "I did think about it but the problem is the file only gets created by the IOCTL above. I am not sure if I can pass that to the CrosVM as an argument.",
       "parentUuid": "1a7411c1_c5ef22d0",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a27b5642_8cfbf1ce",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 135,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "Right, you\u0027d have virtmanager make the ioctl before crosvm gets invoked. Or, the \"app\" would make the ioctl and pass the FD as part of the AVF AIDL call to create the VM.\n\nResolving for now.",
+      "parentUuid": "7f786760_6c41ae88",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -623,6 +730,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a8dda57e_20a1c6f7",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 167,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "sorry, copy/paste error. i meant to suggest the same thing as one of Daniel\u0027s comments above (https://android-review.git.corp.google.com/c/platform/external/crosvm/+/3191424/comment/0ad4cc0d_7510542b/)",
+      "parentUuid": "5aeb6f60_29758fbd",
+      "range": {
+        "startLine": 167,
+        "startChar": 40,
+        "endLine": 167,
+        "endChar": 75
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "ecbc6f4e_a762bc84",
@@ -654,6 +785,24 @@
       "side": 1,
       "message": "Acknowledged",
       "parentUuid": "ecbc6f4e_a762bc84",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "618e0425_8d84fe43",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 171,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "I think this is the idiomatic way to do `.expect()` with formatting arguments unfortunately",
+      "parentUuid": "73d6a248_0df3d589",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -707,6 +856,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "85fbe865_8686bba9",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 364,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "in general, `BackingObject::File` does not imply CMA memory. there is crosvm code that creates `BackingObject::File` backed `MemoryRegion` objects that aren\u0027t CMA files. it might be that in the way your projects invoke crosvm you\u0027ll never see a `BackingObject::File` except for CMA memory, but you shouldn\u0027t write the code that way, it will confuse others that have to maintain it later",
+      "parentUuid": "21a0c2b3_5f8ec19c",
+      "range": {
+        "startLine": 364,
+        "startChar": 16,
+        "endLine": 364,
+        "endChar": 38
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "203f0bc1_a30ce51d",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
@@ -742,6 +915,30 @@
       "side": 1,
       "message": "We need a way to pass the fd to the kernel. SET_USER_MEM passes the user_addr. Instead of changing the existing UAPI, we prefer to have a separate IOCTL to map this fd to the VM.",
       "parentUuid": "203f0bc1_a30ce51d",
+      "range": {
+        "startLine": 366,
+        "startChar": 0,
+        "endLine": 374,
+        "endChar": 27
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "75674a60_a512dcff",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 374,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-07-31T00:28:35Z",
+      "side": 1,
+      "message": "OK. i wonder if you can make the new ioctl more generic though, e.g. if we want guest_memfd support eventually (CC @quic_eberman@quicinc.com), then you\u0027ll need to add yet another ioctl. maybe that is inevitable because guest_memfd has its own nuances though",
+      "parentUuid": "e2ed4420_2e923640",
       "range": {
         "startLine": 366,
         "startChar": 0,
