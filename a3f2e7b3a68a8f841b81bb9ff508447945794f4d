@@ -1360,6 +1360,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "febcbd64_f0e74f73",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 823,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-31T23:00:01Z",
+      "side": 1,
+      "message": "I am leaning more towards the option1 in the comment https://android-review.googlesource.com/c/platform/external/crosvm/+/3191424/comment/2f517350_9f6cb278/. This way I can contain it within Gunyah if there are no current users.",
+      "parentUuid": "9e60bd9b_4e3400fc",
+      "range": {
+        "startLine": 823,
+        "startChar": 0,
+        "endLine": 823,
+        "endChar": 44
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "49e2469a_8c27a5ef",
         "filename": "src/crosvm/sys/linux.rs",
         "patchSetId": 1
