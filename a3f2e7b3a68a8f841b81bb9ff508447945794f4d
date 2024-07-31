@@ -1050,6 +1050,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5a870b51_10ac88e3",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1942,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-07-31T00:55:47Z",
+      "side": 1,
+      "message": "If we might expand this in the future, then it would be good to either:\n\n1. Use the HypervisorKind backend-specific fields, or\n2. Add a separate option but as a `struct` rather than just a `String` so we can expand it with multiple named sub-options later (e.g. `--qualcomm-trusted-vm name\u003dMyName,some-other-option\u003dsomething`); the crosvm option parser will also allow omitting the name of the first field, so just `--qualcomm-trusted-vm MyName` would also work even if we make it a struct, while allowing additions without breaking compatibility.\n\nAlso, in my opinion at least, it would be preferable to use \"gunyah\" rather than \"qualcomm\" in the option name if we do go the route of having a separate option, just for consistency.",
+      "parentUuid": "a13733cf_ccf6c910",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6539c3f8_d3791653",
         "filename": "src/crosvm/cmdline.rs",
         "patchSetId": 1
