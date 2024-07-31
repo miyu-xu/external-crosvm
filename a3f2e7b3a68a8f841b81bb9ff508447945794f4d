@@ -880,6 +880,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "30d0e4ff_ed4a069a",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 364,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-07-31T04:20:15Z",
+      "side": 1,
+      "message": "Sure. What do you think about defining a new enum BackingObject::Cma?",
+      "parentUuid": "85fbe865_8686bba9",
+      "range": {
+        "startLine": 364,
+        "startChar": 16,
+        "endLine": 364,
+        "endChar": 38
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "203f0bc1_a30ce51d",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 1
