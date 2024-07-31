@@ -38,7 +38,10 @@ pub struct kvm_vfio_iommu_config {
     pub sid_idx: u32,
     pub vsid: u32,
 }
+<<<<<<< HEAD   (e23f78 Merge "UPSTREAM: bindgen: Update KVM_PVIOMMU_SET_CONFIG ioct)
 pub const KVM_PVIOMMU_SET_CONFIG: i32 = 0xc00cae01u32 as i32;
+=======
+>>>>>>> BRANCH (9ac9aa Roll recipe dependencies (trivial).)
 
 #[repr(C)]
 #[derive(Default)]
