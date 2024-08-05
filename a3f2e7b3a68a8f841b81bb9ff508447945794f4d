@@ -360,6 +360,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "532721f8_e43f65af",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 116,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "4f14bd67_c7c473be",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "89459c47_fc4daa35",
@@ -421,6 +439,30 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "958e76b4_2d3b24d0",
+      "range": {
+        "startLine": 117,
+        "startChar": 0,
+        "endLine": 117,
+        "endChar": 80
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ba74481a_f62f1824",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 117,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "c45022a9_dbeb44b4",
       "range": {
         "startLine": 117,
         "startChar": 0,
@@ -608,6 +650,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f25b7ccc_8901def9",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 148,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "36398719_14fc2f04",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "3b7dbda2_9b2de178",
@@ -703,6 +763,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "dd264cb8_62a3e713",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 154,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "30a1b13c_69d9c966",
+      "range": {
+        "startLine": 153,
+        "startChar": 0,
+        "endLine": 154,
+        "endChar": 108
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a61f0047_cb261f64",
@@ -752,6 +836,24 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "3edae35b_cf63781a",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3a72f8cc_38079566",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 157,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "I have tried to keep it consistent with how we open /dev/gunyah.",
+      "parentUuid": "7ce91667_bd30f42c",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -817,6 +919,30 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "fd8ff167_195324d0",
+      "range": {
+        "startLine": 158,
+        "startChar": 0,
+        "endLine": 163,
+        "endChar": 21
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "7f6c9465_eee7fd21",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 163,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done. I prefer to allow the VMM to create a VM if there is no CMA present. This way we don\u0027t have to keep VMM and DT (where we specify the CMA pool) in sync.",
+      "parentUuid": "df8e4eb3_6fc72d24",
       "range": {
         "startLine": 158,
         "startChar": 0,
@@ -912,6 +1038,30 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "a8dda57e_20a1c6f7",
+      "range": {
+        "startLine": 167,
+        "startChar": 40,
+        "endLine": 167,
+        "endChar": 75
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cc99721e_fa47620f",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 167,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "b0c7e330_1c9a2aee",
       "range": {
         "startLine": 167,
         "startChar": 40,
@@ -1212,6 +1362,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "b90295f9_d1ca7a01",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 424,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3cb6628a_bcec9d70",
+      "range": {
+        "startLine": 422,
+        "startChar": 0,
+        "endLine": 424,
+        "endChar": 63
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "8acd787a_6179d5c8",
@@ -1225,6 +1399,24 @@
       "writtenOn": "2024-07-30T02:23:26Z",
       "side": 1,
       "message": "The comment for each field in this struct will appear as the command-line help output, so it should explain the format of the option and what it does - is this the VM name?",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "9be00af0_12c3d96e",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1941,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "8acd787a_6179d5c8",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -1282,6 +1474,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "cbe795e1_e88a0408",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1942,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "We prefer to go with #1.",
+      "parentUuid": "5a870b51_10ac88e3",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "6539c3f8_d3791653",
@@ -1331,6 +1541,24 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "ba73163a_8feadbdc",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c4532748_46114e61",
+        "filename": "src/crosvm/cmdline.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 3474,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "a530d85d_26c7ddce",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
@@ -1489,6 +1717,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e5d65c8d_3a40e3d8",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1426,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "d00c783c_dc0e4483",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "8ff64334_2d799477",
@@ -1538,6 +1784,24 @@
       "side": 1,
       "message": "Will do!",
       "parentUuid": "5e5bec40_577ab627",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4152532f_cc5ae82a",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1489,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-05T16:06:21Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3768d454_2245e6b1",
       "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
