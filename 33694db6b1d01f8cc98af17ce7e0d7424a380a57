@@ -1,0 +1,38 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "60d81048_e741f569",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 142,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-08-05T19:12:15Z",
+      "side": 1,
+      "message": "nit: this can probably use `self.gunyah_cma_pool.is_some()` (as written, I think clippy will warn about it)",
+      "revId": "33694db6b1d01f8cc98af17ce7e0d7424a380a57",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f2e230d9_1f04dcac",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 198,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2024-08-05T19:12:15Z",
+      "side": 1,
+      "message": "nit: consider flipping this check around for clarity:\n\n```\nif lend {\n    flags |\u003d GUNYAH_MEM_FORCE_LEND;\n} else {\n    flags |\u003d GUNYAH_MEM_FORCE_SHARE;\n}\n```",
+      "revId": "33694db6b1d01f8cc98af17ce7e0d7424a380a57",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
