@@ -858,6 +858,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "57bd30bf_3ad01f1d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 157,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-05T20:53:54Z",
+      "side": 1,
+      "message": "We also do this in KVM. Maybe can bulk switch them all over in a separate CL if it makes sense.",
+      "parentUuid": "3a72f8cc_38079566",
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "762b6e8c_b3cb069b",
@@ -1210,6 +1228,30 @@
       "side": 1,
       "message": "Sure. What do you think about defining a new enum BackingObject::Cma?",
       "parentUuid": "85fbe865_8686bba9",
+      "range": {
+        "startLine": 364,
+        "startChar": 16,
+        "endLine": 364,
+        "endChar": 38
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5e70f27d_50a59afd",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 364,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-05T20:53:54Z",
+      "side": 1,
+      "message": "That is probably fine, but I think a dedicated `is_cma` field would make more sense. Right now, nothing in crosvm ever inspects `BackingObject`. Even here, you don\u0027t use the `c` of `BackingObject::Cma(c)`. And a CMA represented as a memfd or similar doesn\u0027t sound too crazy in the future, so we might end up with a `BackingObject::CmaShm` if we go this route",
+      "parentUuid": "30d0e4ff_ed4a069a",
       "range": {
         "startLine": 364,
         "startChar": 16,
@@ -1600,6 +1642,30 @@
       "side": 1,
       "message": "I am leaning more towards the option1 in the comment https://android-review.googlesource.com/c/platform/external/crosvm/+/3191424/comment/2f517350_9f6cb278/. This way I can contain it within Gunyah if there are no current users.",
       "parentUuid": "9e60bd9b_4e3400fc",
+      "range": {
+        "startLine": 823,
+        "startChar": 0,
+        "endLine": 823,
+        "endChar": 44
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ef867f4e_444c6860",
+        "filename": "src/crosvm/config.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 823,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-05T20:53:54Z",
+      "side": 1,
+      "message": "I think keeping it gunyah specific to start with is a good idea. We could replace it with a more generic option later if it turns out to make sense.\n\nPersonally, I\u0027d rather there be no VM name at all. I think it could be abused to break abtractrations / divisions of responsibility and would like to discuss more if we can get rid of it.\n\n\u003e If not, could it be the name of a technology instead of the company that\u0027s using it?\n\nIt seems like it is the name of the technology since that\u0027s how they named the ioctl arguments, e.g. `gunyah_auth_type_GUNYAH_QCOM_TRUSTED_VM_TYPE`.",
+      "parentUuid": "febcbd64_f0e74f73",
       "range": {
         "startLine": 823,
         "startChar": 0,

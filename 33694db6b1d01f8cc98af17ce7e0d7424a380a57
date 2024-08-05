@@ -33,6 +33,52 @@
       "message": "nit: consider flipping this check around for clarity:\n\n```\nif lend {\n    flags |\u003d GUNYAH_MEM_FORCE_LEND;\n} else {\n    flags |\u003d GUNYAH_MEM_FORCE_SHARE;\n}\n```",
       "revId": "33694db6b1d01f8cc98af17ce7e0d7424a380a57",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "19c4935f_cfb6d8a7",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 339,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-05T20:53:54Z",
+      "side": 1,
+      "message": "don\u0027t silently skip this case. i think you should treat it the same as `BackingObject::Shm`. you can do `BackingObject::File(_) | BackingObject::Shm(_) \u003d\u003e {` to handle them together",
+      "range": {
+        "startLine": 339,
+        "startChar": 0,
+        "endLine": 339,
+        "endChar": 43
+      },
+      "revId": "33694db6b1d01f8cc98af17ce7e0d7424a380a57",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9fcc32c6_60a345b8",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 406,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-05T20:53:54Z",
+      "side": 1,
+      "message": "the ioctl struct uses `vm_name`. would it make sense to rename this variable to match it?",
+      "range": {
+        "startLine": 406,
+        "startChar": 16,
+        "endLine": 406,
+        "endChar": 23
+      },
+      "revId": "33694db6b1d01f8cc98af17ce7e0d7424a380a57",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
