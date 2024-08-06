@@ -16,6 +16,24 @@
       "message": "There are presubmit warnings including for `avf_presubmit_coverage_test`, but I don\u0027t know what the warning is... All of the tests passed (0/666 failed) but about half were skipped, I see crashes, and I don\u0027t see any flakes. These results look the same as the recent post submit runs, so I don\u0027t think it\u0027s an issue.",
       "revId": "32bc0cf6f7f3680526569f5e28a92926b8def343",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "364803b2_4f6d18bf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-06T17:40:48Z",
+      "side": 1,
+      "message": "I\u0027ve been mystified by that too in previous merges. Maybe it is the `715 crashes detected`?",
+      "parentUuid": "78b5f193_099d5515",
+      "revId": "32bc0cf6f7f3680526569f5e28a92926b8def343",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
