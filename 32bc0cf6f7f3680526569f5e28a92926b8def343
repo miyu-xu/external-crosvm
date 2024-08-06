@@ -34,6 +34,23 @@
       "parentUuid": "78b5f193_099d5515",
       "revId": "32bc0cf6f7f3680526569f5e28a92926b8def343",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "54829c03_11d30c0b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-08-06T20:09:23Z",
+      "side": 1,
+      "message": "Build infra error. Ran out of disk space! rerunning presubmits.",
+      "revId": "32bc0cf6f7f3680526569f5e28a92926b8def343",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
