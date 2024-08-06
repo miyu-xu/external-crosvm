@@ -134,6 +134,24 @@
       "parentUuid": "b36a4279_78d655c7",
       "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ccbc411e_fd162ffa",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-06T21:36:50Z",
+      "side": 1,
+      "message": "For posterity: one interesting detail is that they are only using this branch to build qemu. It isn\u0027t used to build android images, so they don\u0027t need to worry about incompatibilities with AVF when backporting.",
+      "parentUuid": "f756412c_a0405a2a",
+      "revId": "04c09703b23e0f8a3fdce8d9f6f982a00b712bc1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
