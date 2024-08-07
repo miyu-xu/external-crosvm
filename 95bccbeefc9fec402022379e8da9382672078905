@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ad46e798_009d11bf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-07T18:16:59Z",
+      "side": 1,
+      "message": "bypassing \"Fixes without Tests\" lint. this is a build fix, don\u0027t need a unit test for it!",
+      "revId": "95bccbeefc9fec402022379e8da9382672078905",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
