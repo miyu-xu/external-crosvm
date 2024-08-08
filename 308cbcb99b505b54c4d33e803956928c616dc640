@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a841a738_71726e30",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-08T18:20:56Z",
+      "side": 1,
+      "message": "fixing riscv. bypassing presubmit because it is broken at head and want a quick fix in",
+      "revId": "308cbcb99b505b54c4d33e803956928c616dc640",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
