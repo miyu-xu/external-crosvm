@@ -35,8 +35,5 @@ rust_ffi_shared {
         host: {
             compile_multilib: "64",
         },
-        android: {
-            compile_multilib: "64",
-        },
     },
 }
