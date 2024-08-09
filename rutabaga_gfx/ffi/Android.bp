@@ -28,15 +28,12 @@ rust_ffi_shared {
         "libthiserror",
         "libzerocopy",
     ],
-    shared_libs: [
-        "libgfxstream_backend",
-    ],
     target: {
         host: {
             compile_multilib: "64",
-        },
-        android: {
-            compile_multilib: "64",
+            shared_libs: [
+                "libgfxstream_backend",
+            ],
         },
     },
 }
