@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9be5a8a4_14c5ef68",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-12T17:53:41Z",
+      "side": 0,
+      "message": "this already turned off the 32bit build i thought. we don\u0027t support 32bit crosvm binaries as far as i know, so i don\u0027t understand why rutabaga would need to opt out of it",
+      "revId": "518920e4612c069e1db41c65117e372e66900e81",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
