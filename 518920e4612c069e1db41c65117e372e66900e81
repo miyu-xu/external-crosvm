@@ -16,6 +16,24 @@
       "message": "this already turned off the 32bit build i thought. we don\u0027t support 32bit crosvm binaries as far as i know, so i don\u0027t understand why rutabaga would need to opt out of it",
       "revId": "518920e4612c069e1db41c65117e372e66900e81",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6482e172_d28354e3",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-08-12T22:07:43Z",
+      "side": 0,
+      "message": "We actually want to build 32-bit Android for `librutabaga_gfx_gfxstream`, which `virtgpu_kumquat_ffi` relies on, which gfxstream guest libraries rely on for end2endtests:\n\nhttps://android-review.git.corp.google.com/c/platform/hardware/google/gfxstream/+/3213122\n\nThis simplifies gfxstream build logic a lot (I have another gfxstream side change for that).\n\nFor `librutabaga_gfx` (which is actually run via crosvm), then yes 32-bit builds aren\u0027t important for that.",
+      "parentUuid": "9be5a8a4_14c5ef68",
+      "revId": "518920e4612c069e1db41c65117e372e66900e81",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
