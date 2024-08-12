@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "54a65b65_a0119d8b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-12T21:12:24Z",
+      "side": 1,
+      "message": "please run `./tools/fmt` from the crosvm directory to fix the formatting\n\nalso, ideally, you can run the upstream presubmits yourself and fix some more issues. i think they don\u0027t work in AOSP right now, so you\u0027d want to do `git clone https://chromium.googlesource.com/crosvm/crosvm`, cherry-pick this CL, then run `./tools/dev_container ./tools/presubmit` (requires docker)\n\nhere is sample of some of the current warnings and errors\n\n```\nwarning: unused import: `std::os::fd::RawFd`\n  --\u003e src/crosvm/sys/linux.rs:43:5\n   |\n43 | use std::os::fd::RawFd;\n   |     ^^^^^^^^^^^^^^^^^^\n   |\n   \u003d note: `#[warn(unused_imports)]` on by default\n\nwarning: unused import: `vm_memory::MemoryRegionPurpose`\n   --\u003e src/crosvm/sys/linux.rs:190:5\n    |\n190 | use vm_memory::MemoryRegionPurpose;\n    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nwarning: unused import: `crate::crosvm::config::FileBackedMappingParameters`\n   --\u003e src/crosvm/sys/linux.rs:196:5\n    |\n196 | use crate::crosvm::config::FileBackedMappingParameters;\n    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nerror[E0277]: `\u0026[_; 0]` is not an iterator\n    --\u003e src/crosvm/sys/linux.rs:4990:17\n     |\n4985 |             punch_holes_in_guest_mem_layout_for_mappings(\n     |             -------------------------------------------- required by a bound introduced by this call\n...\n4990 |                 \u0026[]\n     |                 ^^^ `\u0026[_; 0]` is not an iterator\n     |\n     \u003d help: the trait `Iterator` is not implemented for `\u0026[_; 0]`\nnote: required by a bound in `crosvm::sys::linux::punch_holes_in_guest_mem_layout_for_mappings`\n    --\u003e src/crosvm/sys/linux.rs:1397:20\n     |\n1395 | fn punch_holes_in_guest_mem_layout_for_mappings(\n     |    -------------------------------------------- required by a bound in this function\n1396 |     guest_mem_layout: Vec\u003c(GuestAddress, u64, MemoryRegionOptions)\u003e,\n1397 |     mappings: impl Iterator\u003cItem \u003d (u64, u64)\u003e,\n     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `punch_holes_in_guest_mem_layout_for_mappings`\n\nerror[E0277]: `\u0026[crosvm::config::FileBackedMappingParameters; 1]` is not an iterator\n    --\u003e src/crosvm/sys/linux.rs:5005:17\n     |\n5000 |             punch_holes_in_guest_mem_layout_for_mappings(\n     |             -------------------------------------------- required by a bound introduced by this call\n...\n5005 |                 \u0026[test_file_backed_mapping(0xD000_0000, 0x1000)]\n     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `\u0026[crosvm::config::FileBackedMappingParameters; 1]` is not an iterator\n     |\n     \u003d help: the trait `Iterator` is not implemented for `\u0026[crosvm::config::FileBackedMappingParameters; 1]`\n```",
+      "revId": "826c489808c5433c4f0f8360bf983f56363f2ae1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
