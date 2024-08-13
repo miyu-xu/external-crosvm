@@ -34,6 +34,24 @@
       "parentUuid": "9be5a8a4_14c5ef68",
       "revId": "518920e4612c069e1db41c65117e372e66900e81",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ce7b6d2a_cc0c4215",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-13T00:37:04Z",
+      "side": 0,
+      "message": "OK, so kumquat is used in the guest and depends on this. If I\u0027m curious, is there anything I can read to understand what kumquat is?\n\nIt would be nice to add a comment here explaining why this build module is unusual. Sometimes we get tricky build errors when doing a merge and might get stuck on this one.\n\nCC @smoreland@google.com @devinmoore@google.com @khei@google.com @waghpawan@google.com",
+      "parentUuid": "6482e172_d28354e3",
+      "revId": "518920e4612c069e1db41c65117e372e66900e81",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
