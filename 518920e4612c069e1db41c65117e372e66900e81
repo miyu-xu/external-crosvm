@@ -52,6 +52,24 @@
       "parentUuid": "6482e172_d28354e3",
       "revId": "518920e4612c069e1db41c65117e372e66900e81",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0af1c3d1_9f0db7ea",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 3
+      },
+      "lineNbr": 68,
+      "author": {
+        "id": 1101621
+      },
+      "writtenOn": "2024-08-13T01:22:32Z",
+      "side": 0,
+      "message": "Docs on Kumquat are available here:\n\nhttps://crosvm.dev/book/appendix/rutabaga_gfx.html#kumquat-media-server\n\nAdded a comment on how it\u0027s leveraged in AOSP for gfxstream testing.",
+      "parentUuid": "ce7b6d2a_cc0c4215",
+      "revId": "518920e4612c069e1db41c65117e372e66900e81",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
