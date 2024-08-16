@@ -270,6 +270,12 @@ impl VirtioDevice for Sound {
     }
 }
 
+impl Drop for Sound {
+    fn drop(&mut self) {
+        let _ = self.reset();
+    }
+}
+
 /// Creates a new virtio sound device connected to a VioS backend
 pub fn new_sound<P: AsRef<Path>>(path: P, virtio_features: u64) -> Result<Sound> {
     let vios_client = VioSClient::try_new(path).map_err(SoundError::ClientNew)?;
