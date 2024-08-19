@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ef776cbc_7e989836",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956258
+      },
+      "writtenOn": "2024-08-19T19:48:13Z",
+      "side": 1,
+      "message": "One failing cts test case has been failing already on TOT : b/336517773.",
+      "revId": "0a653976b785c6cfef0734fc44070e23abcbb663",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
