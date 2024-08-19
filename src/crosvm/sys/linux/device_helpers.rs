@@ -25,13 +25,11 @@ use base::linux::MemfdSeals;
 use base::sys::SharedMemoryLinux;
 use base::ReadNotifier;
 use base::*;
-use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
 use devices::serial_device::SerialType;
 use devices::vfio::VfioContainerManager;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
-use devices::virtio::console::asynchronous::AsyncConsole;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 use devices::virtio::device_constants::video::VideoBackendType;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
@@ -1384,6 +1382,7 @@ impl VirtioDeviceBuilder for &SerialParameters {
         let mut keep_rds = Vec::new();
         let evt = Event::new().context("failed to create event")?;
 
+<<<<<<< HEAD   (988155 Merge remote-tracking branch 'aosp/upstream-main' into merge)
         // TODO(b/243198718): Switch back to AsyncConsole in android (remove the `true ||`).
         if true || self.hardware == SerialHardware::LegacyVirtioConsole {
             Ok(Box::new(
@@ -1396,6 +1395,12 @@ impl VirtioDeviceBuilder for &SerialParameters {
                     .context("failed to create console device")?,
             ))
         }
+=======
+        Ok(Box::new(
+            self.create_serial_device::<Console>(protection_type, &evt, &mut keep_rds)
+                .context("failed to create console device")?,
+        ))
+>>>>>>> BRANCH (759a86 devices: fs: Cosmetic change for the order of cast and bitwi)
     }
 
     fn create_vhost_user_device(
