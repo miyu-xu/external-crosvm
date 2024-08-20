@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use arch::set_default_serial_parameters;
 use arch::CpuSet;
+use arch::FdtPosition;
 use arch::Pstore;
 #[cfg(target_arch = "x86_64")]
 use arch::SmbiosOptions;
@@ -772,6 +773,7 @@ pub struct Config {
     pub executable_path: Option<Executable>,
     #[cfg(windows)]
     pub exit_stats: bool,
+    pub fdt_position: Option<FdtPosition>,
     pub file_backed_mappings: Vec<FileBackedMappingParameters>,
     pub force_calibrated_tsc_leaf: bool,
     pub force_s2idle: bool,
@@ -901,6 +903,7 @@ pub struct Config {
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi_device: PathBuf,
     pub vhost_user: Vec<VhostUserFrontendOption>,
+    pub vhost_user_connect_timeout_ms: Option<u64>,
     pub vhost_user_fs: Vec<VhostUserFsOption>,
     #[cfg(feature = "video-decoder")]
     pub video_dec: Vec<VideoDeviceConfig>,
@@ -987,6 +990,7 @@ impl Default for Config {
             executable_path: None,
             #[cfg(windows)]
             exit_stats: false,
+            fdt_position: None,
             file_backed_mappings: Vec::new(),
             force_calibrated_tsc_leaf: false,
             force_s2idle: false,
@@ -1119,6 +1123,7 @@ impl Default for Config {
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user: Vec::new(),
+            vhost_user_connect_timeout_ms: None,
             vhost_user_fs: Vec::new(),
             vsock: None,
             #[cfg(feature = "video-decoder")]

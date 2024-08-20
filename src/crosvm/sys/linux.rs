@@ -770,7 +770,11 @@ fn create_virtio_devices(
     }
 
     for opt in &cfg.vhost_user {
-        devs.push(create_vhost_user_frontend(cfg.protection_type, opt)?);
+        devs.push(create_vhost_user_frontend(
+            cfg.protection_type,
+            opt,
+            cfg.vhost_user_connect_timeout_ms,
+        )?);
     }
 
     Ok(devs)
@@ -2189,6 +2193,7 @@ where
         &mut swap_controller,
         guest_suspended_cvar.clone(),
         dt_overlays,
+        cfg.fdt_position,
     )
     .context("the architecture failed to build the vm")?;
 
