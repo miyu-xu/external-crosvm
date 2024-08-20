@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "05d77f6f_a15b46ad",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-20T22:05:13Z",
+      "side": 1,
+      "message": "LGTM once the cherry-pick is added to the topic",
+      "revId": "2fe9c4b417be5a1cea1848a3061442544bc7c841",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
