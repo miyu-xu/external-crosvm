@@ -16,6 +16,24 @@
       "message": "(need to add https://crrev.com/c/5801010 too, once it is submitted)",
       "revId": "c9bd6cc40878161fb338e088bcd149743b77220e",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0614d3dd_ec1e894d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1956258
+      },
+      "writtenOn": "2024-08-20T23:38:05Z",
+      "side": 1,
+      "message": "Cherrypicked and added to this topic.",
+      "parentUuid": "cc5cb4cd_ee545e41",
+      "revId": "c9bd6cc40878161fb338e088bcd149743b77220e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
