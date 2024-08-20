@@ -16,6 +16,24 @@
       "message": "LGTM once the cherry-pick is added to the topic",
       "revId": "2fe9c4b417be5a1cea1848a3061442544bc7c841",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a415ecef_e510457d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-20T23:11:41Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "05d77f6f_a15b46ad",
+      "revId": "2fe9c4b417be5a1cea1848a3061442544bc7c841",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
