@@ -16,6 +16,24 @@
       "message": "Landed on https://chromium-review.googlesource.com/c/crosvm/crosvm/+/5796023\n\nWhen will the next merge be? If possible, I\u0027d like land this cherry-pick earlier.",
       "revId": "af23e93ac8b5f07a4b4801b56f3ecdf9a6b58096",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "468c4eec_b84c7d97",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2024-08-22T12:45:33Z",
+      "side": 1,
+      "message": "Or you will experience a build error during the next merge. You will need the other change in the same topic.",
+      "parentUuid": "596a1c1c_1b835987",
+      "revId": "af23e93ac8b5f07a4b4801b56f3ecdf9a6b58096",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
