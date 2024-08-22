@@ -34,6 +34,24 @@
       "parentUuid": "596a1c1c_1b835987",
       "revId": "af23e93ac8b5f07a4b4801b56f3ecdf9a6b58096",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e35bd705_9435c522",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-08-22T16:26:08Z",
+      "side": 1,
+      "message": "cherry picking is ok",
+      "parentUuid": "468c4eec_b84c7d97",
+      "revId": "af23e93ac8b5f07a4b4801b56f3ecdf9a6b58096",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
