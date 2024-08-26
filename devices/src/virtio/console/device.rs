@@ -108,6 +108,7 @@ impl ConsoleDevice {
     }
 
     fn ensure_worker_stopped(&mut self) {
+<<<<<<< HEAD   (8402d0 Merge "UPSTREAM: Let UnixSeqpacketListener convert into Owne)
         if let Some(mut worker) = self.worker.take() {
             let ports = worker.stop();
             for (worker_port, port) in ports.into_iter().zip(self.ports.iter_mut()) {
@@ -123,6 +124,18 @@ impl ConsoleDevice {
         interrupt: Interrupt,
     ) -> anyhow::Result<()> {
         let worker = self.ensure_worker_started(interrupt);
+=======
+        if let Some(worker) = self.worker.take() {
+            let ports = worker.stop();
+            for (worker_port, port) in ports.into_iter().zip(self.ports.iter_mut()) {
+                worker_port.into_console_port(port);
+            }
+        }
+    }
+
+    pub fn start_queue(&mut self, idx: usize, queue: Queue) -> anyhow::Result<()> {
+        let worker = self.ensure_worker_started(queue.interrupt().clone());
+>>>>>>> BRANCH (6a8a9c Roll recipe dependencies (trivial).)
         worker.start_queue(idx, queue)
     }
 
