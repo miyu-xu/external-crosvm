@@ -1843,7 +1843,10 @@ impl VmRequest {
                 if vm.check_capability(VmCap::PvClock) {
                     if suspended_pvclock_state.is_none() {
                         *suspended_pvclock_state = Some(match vm.get_pvclock() {
-                            Ok(x) => x,
+                            Ok(x) => {
+                                error!("FMAYLE: saving pv clock as: {x:?}");
+                                x
+                            }
                             Err(e) => {
                                 error!("suspend_pvclock failed: {e:?}");
                                 return VmResponse::Err(SysError::new(EIO));
@@ -1905,6 +1908,7 @@ impl VmRequest {
                 if vm.check_capability(VmCap::PvClock) {
                     // If None, then we aren't suspended, which is a valid case.
                     if let Some(x) = suspended_pvclock_state {
+                        error!("FMAYLE: restoring pv clock to: {x:?}");
                         if let Err(e) = vm.set_pvclock(x) {
                             error!("resume_pvclock failed: {e:?}");
                             return VmResponse::Err(SysError::new(EIO));

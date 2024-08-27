@@ -269,6 +269,12 @@ pub trait VcpuX86_64: Vcpu {
             self.set_xcr(*xcr_index, *value)?;
         }
 
+        error!(
+            "FMAYLE: vCPU {}: restoring TSC: {:?}",
+            self.id(),
+            snapshot.msrs.get(&MSR_IA32_TSC)
+        );
+
         for (msr_index, value) in snapshot.msrs.iter() {
             if self.get_msr(*msr_index) == Ok(*value) {
                 continue; // no need to set MSR since the values are the same.
