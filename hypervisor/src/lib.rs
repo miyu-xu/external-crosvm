@@ -332,7 +332,10 @@ pub trait Vcpu: downcast_rs::DowncastSync {
     /// Once called, it will determine whether a MMIO read or MMIO write was the reason for the MMIO
     /// exit, call `handle_fn` with the respective IoParams to perform the MMIO read or write, and
     /// set the return data in the vcpu so that the vcpu can resume running.
-    fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()>;
+    fn handle_mmio(
+        &self,
+        handle_fn: &mut dyn FnMut(IoParams) -> Result<Option<[u8; 8]>>,
+    ) -> Result<()>;
 
     /// Handles an incoming PIO from the guest.
     ///
@@ -575,7 +578,7 @@ impl ProtectionType {
     }
 
     /// Returns whether the VMM needs to load the pVM firmware.
-    pub fn loads_firmware(&self) -> bool {
+    pub fn needs_firmware_loaded(&self) -> bool {
         matches!(
             self,
             Self::UnprotectedWithFirmware | Self::ProtectedWithCustomFirmware
@@ -584,7 +587,7 @@ impl ProtectionType {
 
     /// Returns whether the VM runs a pVM firmware.
     pub fn runs_firmware(&self) -> bool {
-        self.loads_firmware() || matches!(self, Self::Protected)
+        self.needs_firmware_loaded() || matches!(self, Self::Protected)
     }
 }
 

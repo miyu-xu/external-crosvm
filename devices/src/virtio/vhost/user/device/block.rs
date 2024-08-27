@@ -18,7 +18,6 @@ use crate::virtio::block::asynchronous::BlockAsync;
 use crate::virtio::vhost::user::device::handler::DeviceRequestHandler;
 use crate::virtio::vhost::user::device::handler::VhostUserDevice;
 use crate::virtio::vhost::user::device::VhostUserDeviceBuilder;
-use crate::virtio::Interrupt;
 use crate::virtio::VirtioDevice;
 
 const NUM_QUEUES: u16 = 16;
@@ -79,21 +78,20 @@ impl VhostUserDevice for BlockBackend {
         idx: usize,
         queue: virtio::Queue,
         mem: GuestMemory,
-        doorbell: Interrupt,
     ) -> anyhow::Result<()> {
-        self.inner.start_queue(idx, queue, mem, doorbell)
+        self.inner.start_queue(idx, queue, mem)
     }
 
     fn stop_queue(&mut self, idx: usize) -> anyhow::Result<virtio::Queue> {
         self.inner.stop_queue(idx)
     }
 
-    fn enter_suspended_state(&mut self) -> anyhow::Result<bool> {
+    fn enter_suspended_state(&mut self) -> anyhow::Result<()> {
         // TODO: This assumes that `reset` only stops workers which might not be true in the
         // future. Consider moving the `reset` code into a `stop_all_workers` method or, maybe,
         // make `stop_queue` implicitly stop a worker thread when there is no active queue.
         self.inner.reset()?;
-        Ok(true)
+        Ok(())
     }
 
     fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
