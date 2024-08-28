@@ -39,6 +39,30 @@
       },
       "revId": "826c489808c5433c4f0f8360bf983f56363f2ae1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a30bbfc0_e8846bb5",
+        "filename": "hypervisor/src/gunyah/gunyah_sys.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 34,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2024-08-28T20:26:08Z",
+      "side": 1,
+      "message": "We are yet to send this upstream for review. If this doesn\u0027t meet the timeline for this effort, I will be adding them as a Special Binding for ACK.",
+      "parentUuid": "988840f6_9d97fdfd",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 34,
+        "endChar": 77
+      },
+      "revId": "826c489808c5433c4f0f8360bf983f56363f2ae1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
