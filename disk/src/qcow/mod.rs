@@ -643,30 +643,31 @@ impl QcowFile {
 
     /// Creates a new QcowFile at the given path.
     pub fn new_from_backing(params: DiskFileParams, backing_file_name: &str) -> Result<QcowFile> {
-        let backing_path = Path::new(backing_file_name);
-        let backing_raw_file = open_file_or_duplicate(
-            backing_path,
-            OpenOptions::new().read(true), // TODO(b/190435784): add support for O_DIRECT.
-        )
-        .map_err(|e| Error::BackingFileIo(e.into()))?;
-        let backing_file = create_disk_file(DiskFileParams {
-            raw_image: backing_raw_file,
-            image_path: backing_path.to_owned(),
-            // The backing file is only read from.
-            is_read_only: true,
-            // Sparse isn't meaningful for read only files.
-            is_sparse_file: false,
-            // TODO: Should pass `params.is_overlapped` through here. Needs testing.
-            is_overlapped: false,
-            depth: params.depth + 1,
-        })
-        .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
-        let size = backing_file.get_len().map_err(Error::BackingFileIo)?;
-
+        // Open the backing file as a `DiskFile` to determine its size (which may not match the
+        // filesystem size).
+        let size = {
+            let backing_path = Path::new(backing_file_name);
+            let backing_raw_file = open_file_or_duplicate(
+                backing_path,
+                OpenOptions::new().read(true), // TODO(b/190435784): add support for O_DIRECT.
+            )
+            .map_err(|e| Error::BackingFileIo(e.into()))?;
+            let backing_file = create_disk_file(DiskFileParams {
+                raw_image: backing_raw_file,
+                image_path: backing_path.to_owned(),
+                // The backing file is only read from.
+                is_read_only: true,
+                // Sparse isn't meaningful for read only files.
+                is_sparse_file: false,
+                // TODO: Should pass `params.is_overlapped` through here. Needs testing.
+                is_overlapped: false,
+                depth: params.depth + 1,
+            })
+            .map_err(|e| Error::BackingFileOpen(Box::new(e)))?;
+            backing_file.get_len().map_err(Error::BackingFileIo)?
+        };
         let header = QcowHeader::create_for_size_and_path(size, Some(backing_file_name))?;
-        let mut result = QcowFile::new_from_header(params, header)?;
-        result.inner.get_mut().backing_file = Some(backing_file);
-        Ok(result)
+        QcowFile::new_from_header(params, header)
     }
 
     fn new_from_header(mut params: DiskFileParams, header: QcowHeader) -> Result<QcowFile> {
