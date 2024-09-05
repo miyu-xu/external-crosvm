@@ -52,17 +52,17 @@ impl DiskOption {
             open_option.custom_flags(flags);
         }
 
-        let file = open_option
+        let raw_image = open_option
             .open(&self.path)
             .context("Failed to open disk file")?;
-        let image_type = disk::detect_image_type(&file, is_overlapped)?;
-        Ok(disk::create_disk_file_of_type(
-            file,
-            self.sparse,
-            disk::MAX_NESTING_DEPTH,
-            &self.path,
-            image_type,
-        )?)
+        Ok(disk::create_disk_file(disk::DiskFileParams {
+            raw_image,
+            image_path: self.path.to_owned(),
+            is_read_only: self.read_only,
+            is_sparse_file: self.sparse,
+            is_overlapped,
+            depth: 0,
+        })?)
     }
 }
 
