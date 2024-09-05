@@ -141,6 +141,8 @@ impl ComponentDiskPart {
 #[derive(Debug)]
 pub struct CompositeDiskFile {
     component_disks: Vec<ComponentDiskPart>,
+    // We keep the root composite file open so that the file lock is not dropped.
+    _raw_image: File,
 }
 
 // TODO(b/271381851): implement `try_clone`. It allows virtio-blk to run multiple workers.
@@ -169,7 +171,7 @@ const COMPOSITE_DISK_VERSION: u64 = 2;
 pub const CDISK_MAGIC: &str = "composite_disk\x1d";
 
 impl CompositeDiskFile {
-    fn new(mut disks: Vec<ComponentDiskPart>) -> Result<CompositeDiskFile> {
+    fn new(mut disks: Vec<ComponentDiskPart>, raw_image: File) -> Result<CompositeDiskFile> {
         disks.sort_by(|d1, d2| d1.offset.cmp(&d2.offset));
         for s in disks.windows(2) {
             if s[0].offset == s[1].offset {
@@ -181,6 +183,7 @@ impl CompositeDiskFile {
         }
         Ok(CompositeDiskFile {
             component_disks: disks,
+            _raw_image: raw_image,
         })
     }
 
@@ -275,7 +278,7 @@ impl CompositeDiskFile {
             return Err(Error::InvalidSpecification(text));
         }
 
-        CompositeDiskFile::new(disks)
+        CompositeDiskFile::new(disks, params.raw_image)
     }
 
     fn length(&self) -> u64 {
@@ -846,6 +849,10 @@ mod tests {
 
     use super::*;
 
+    fn new_from_components(disks: Vec<ComponentDiskPart>) -> Result<CompositeDiskFile> {
+        CompositeDiskFile::new(disks, tempfile().unwrap())
+    }
+
     #[test]
     fn block_duplicate_offset_disks() {
         let file1 = tempfile().unwrap();
@@ -862,7 +869,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        assert!(CompositeDiskFile::new(vec![disk_part1, disk_part2]).is_err());
+        assert!(new_from_components(vec![disk_part1, disk_part2]).is_err());
     }
 
     #[test]
@@ -881,7 +888,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2]).unwrap();
         let len = composite.get_len().unwrap();
         assert_eq!(len, 200);
     }
@@ -902,7 +909,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2]).unwrap();
 
         let ex = Executor::new().unwrap();
         let composite = Box::new(composite).to_async_disk(&ex).unwrap();
@@ -919,7 +926,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part]).unwrap();
+        let composite = new_from_components(vec![disk_part]).unwrap();
         let mut input_memory = [55u8; 5];
         let input_volatile_memory = VolatileSlice::new(&mut input_memory[..]);
         composite
@@ -942,7 +949,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part]).unwrap();
+        let composite = new_from_components(vec![disk_part]).unwrap();
         let ex = Executor::new().unwrap();
         ex.run_until(async {
             let composite = Box::new(composite).to_async_disk(&ex).unwrap();
@@ -993,7 +1000,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let mut out_descriptors = composite.as_raw_descriptors();
         out_descriptors.sort_unstable();
         assert_eq!(in_descriptors, out_descriptors);
@@ -1022,7 +1029,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let mut input_memory = [55u8; 200];
         let input_volatile_memory = VolatileSlice::new(&mut input_memory[..]);
         composite
@@ -1059,7 +1066,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
         ex.run_until(async {
             let composite = Box::new(composite).to_async_disk(&ex).unwrap();
@@ -1120,7 +1127,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
         ex.run_until(async {
             let composite = Box::new(composite).to_async_disk(&ex).unwrap();
@@ -1200,7 +1207,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![disk_part1, disk_part2, disk_part3]).unwrap();
+        let composite = new_from_components(vec![disk_part1, disk_part2, disk_part3]).unwrap();
         let ex = Executor::new().unwrap();
         ex.run_until(async {
             let composite = Box::new(composite).to_async_disk(&ex).unwrap();
@@ -1283,7 +1290,7 @@ mod tests {
             length: 100,
             needs_fsync: AtomicBool::new(false),
         };
-        let composite = CompositeDiskFile::new(vec![rw_part, ro_part]).unwrap();
+        let composite = new_from_components(vec![rw_part, ro_part]).unwrap();
         let ex = Executor::new().unwrap();
         ex.run_until(async {
             let composite = Box::new(composite).to_async_disk(&ex).unwrap();
