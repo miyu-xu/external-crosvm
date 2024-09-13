@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "07c9f84e_91413861",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 3634502
+      },
+      "writtenOn": "2024-09-13T18:37:22Z",
+      "side": 1,
+      "message": "git fetch https://android.googlesource.com/platform/external/crosvm refs/changes/53/3267553/1 \u0026\u0026 git checkout FETCH_HEAD",
+      "revId": "5b40086c9dc6eb445840e5e12a2acff9b043bf8e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
