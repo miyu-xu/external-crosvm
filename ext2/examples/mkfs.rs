@@ -12,6 +12,7 @@ mod linux {
 
     use argh::FromArgs;
     use base::MappedRegion;
+    use ext2::create_ext2_region;
 
     #[derive(FromArgs)]
     /// Create ext2 filesystem.
@@ -45,15 +46,12 @@ mod linux {
     pub fn main() -> anyhow::Result<()> {
         let args: Args = argh::from_env();
         let src_dir = args.src.as_ref().map(|s| Path::new(s.as_str()));
-        let builder = ext2::Builder {
+        let cfg = ext2::Config {
             blocks_per_group: args.blocks_per_group,
             inodes_per_group: args.inodes_per_group,
             size: args.size,
         };
-        let mem = builder
-            .allocate_memory()?
-            .build_mmap_info(src_dir)?
-            .do_mmap()?;
+        let mem = create_ext2_region(&cfg, src_dir)?;
         if args.dry_run {
             println!("Done!");
             return Ok(());

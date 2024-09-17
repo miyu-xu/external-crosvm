@@ -21,7 +21,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use base::MappedRegion;
-use ext2::Builder;
+use ext2::create_ext2_region;
+use ext2::Config;
 use tempfile::tempdir;
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -63,15 +64,9 @@ fn run_debugfs_cmd(args: &[&str], disk: &PathBuf) -> String {
     stdout.trim_start().trim_end().to_string()
 }
 
-fn mkfs(td: &TempDir, builder: Builder, src_dir: Option<&Path>) -> PathBuf {
+fn mkfs(td: &TempDir, cfg: &Config, src_dir: Option<&Path>) -> PathBuf {
     let path = td.path().join("empty.ext2");
-    let mem = builder
-        .allocate_memory()
-        .unwrap()
-        .build_mmap_info(src_dir)
-        .unwrap()
-        .do_mmap()
-        .unwrap();
+    let mem = create_ext2_region(cfg, src_dir).unwrap();
     // SAFETY: `mem` has a valid pointer and its size.
     let buf = unsafe { std::slice::from_raw_parts(mem.as_ptr(), mem.size()) };
     let mut file = OpenOptions::new()
@@ -92,7 +87,7 @@ fn test_mkfs_empty() {
     let td = tempdir().unwrap();
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 1024,
             inodes_per_group: 1024,
             ..Default::default()
@@ -118,7 +113,7 @@ fn test_mkfs_empty_multi_block_groups() {
     let num_groups = 2;
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group,
             inodes_per_group: 4096,
             size: 4096 * blocks_per_group * num_groups,
@@ -232,7 +227,7 @@ fn test_simple_dir() {
     File::create(dir.join("dir/c.txt")).unwrap();
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -266,7 +261,7 @@ fn test_nested_dirs() {
     create_dir(dir3).unwrap();
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -295,7 +290,7 @@ fn test_file_contents() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -318,7 +313,7 @@ fn test_max_file_name() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -347,7 +342,7 @@ fn test_mkfs_indirect_block() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 4096,
             inodes_per_group: 4096,
             ..Default::default()
@@ -384,7 +379,7 @@ fn test_mkfs_symlink() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -415,7 +410,7 @@ fn test_mkfs_abs_symlink() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -441,7 +436,7 @@ fn test_mkfs_symlink_to_deleted() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -482,7 +477,7 @@ fn test_mkfs_long_symlink() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -516,7 +511,7 @@ fn test_ignore_lost_found() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -574,7 +569,7 @@ fn test_multiple_block_directory_entry() {
 
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
             ..Default::default()
@@ -613,7 +608,7 @@ fn test_multiple_bg_multi_inode_bitmap() {
     let num_groups = 2;
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group,
             inodes_per_group,
             size: BLOCK_SIZE * blocks_per_group * num_groups,
@@ -652,7 +647,7 @@ fn test_multiple_bg_multi_block_bitmap() {
     let num_groups = 4;
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group,
             inodes_per_group,
             size: BLOCK_SIZE * blocks_per_group * num_groups,
@@ -690,7 +685,7 @@ fn test_multiple_bg_big_files() {
     let num_groups = 30;
     let disk = mkfs(
         &td,
-        Builder {
+        &Config {
             blocks_per_group,
             inodes_per_group: 1024,
             size: BLOCK_SIZE * blocks_per_group * num_groups,

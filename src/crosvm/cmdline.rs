@@ -3002,7 +3002,12 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
         cfg.pstore = cmd.pstore;
 
-        cfg.enable_fw_cfg = cmd.enable_fw_cfg.unwrap_or_default();
+        cfg.enable_fw_cfg = if let Some(fw) = cmd.enable_fw_cfg {
+            fw
+        } else {
+            false
+        };
+
         cfg.fw_cfg_parameters = cmd.fw_cfg;
 
         #[cfg(any(target_os = "android", target_os = "linux"))]

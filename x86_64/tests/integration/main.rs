@@ -8,6 +8,7 @@
 mod sys;
 
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::sync::Arc;
 use std::thread;
 
@@ -215,7 +216,7 @@ where
 
     X8664arch::setup_system_memory(
         &guest_mem,
-        cmdline,
+        &CString::new(cmdline).expect("failed to create cmdline"),
         initrd_image,
         None,
         kernel_end,
