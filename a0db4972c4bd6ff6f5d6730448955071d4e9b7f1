@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ee8b368f_e1b40afe",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 366,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2024-09-20T23:07:51Z",
+      "side": 1,
+      "message": "I\u0027m not sure if this is best type to use here. I was happy with it because it made rustc happy.",
+      "range": {
+        "startLine": 366,
+        "startChar": 59,
+        "endLine": 366,
+        "endChar": 86
+      },
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
