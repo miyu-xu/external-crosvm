@@ -1,6 +1,23 @@
 {
   "comments": [
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "d44a4f35_3280aec7",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-09-23T11:43:52Z",
+      "side": 1,
+      "message": "Looks fine, but please submit upstream first.",
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "ee8b368f_e1b40afe",
@@ -14,6 +31,30 @@
       "writtenOn": "2024-09-20T23:07:51Z",
       "side": 1,
       "message": "I\u0027m not sure if this is best type to use here. I was happy with it because it made rustc happy.",
+      "range": {
+        "startLine": 366,
+        "startChar": 59,
+        "endLine": 366,
+        "endChar": 86
+      },
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "22b429eb_9e218db0",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 366,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-09-23T11:43:52Z",
+      "side": 1,
+      "message": "Huh, when do you have an unsized `Hypervisor`?",
+      "parentUuid": "ee8b368f_e1b40afe",
       "range": {
         "startLine": 366,
         "startChar": 59,
