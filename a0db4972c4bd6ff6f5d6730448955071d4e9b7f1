@@ -20,6 +20,23 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "659f9c1e_89350aa8",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-09-23T17:38:01Z",
+      "side": 1,
+      "message": "Sorry about that. I probably need to rethink `VmComponents::memory_size` into something that captures these nuances so it isn\u0027t so easy to mess up.",
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "ee8b368f_e1b40afe",
         "filename": "aarch64/src/lib.rs",
         "patchSetId": 1
@@ -55,6 +72,30 @@
       "side": 1,
       "message": "Huh, when do you have an unsized `Hypervisor`?",
       "parentUuid": "ee8b368f_e1b40afe",
+      "range": {
+        "startLine": 366,
+        "startChar": 59,
+        "endLine": 366,
+        "endChar": 86
+      },
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "33ec8849_158788c9",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 366,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-09-23T17:38:01Z",
+      "side": 1,
+      "message": "In the new `main_memory_size(\u0026components, vm.get_hypervisor())` line added below, `vm.get_hypervisor()` is a `dyn Hypervisor`. This seems good to me.\n\nI bet with some refactoring we could replace the `dyn` usage in the hypervisor traits by using associated types. The bulk of the code (like `build_vm` and `run_vm`) are templated using the concrete types. Would reduce the codesize a bit (maybe the same could be said of going in the opposite direction and using `dyn` throughout if that is possible)",
+      "parentUuid": "22b429eb_9e218db0",
       "range": {
         "startLine": 366,
         "startChar": 59,
