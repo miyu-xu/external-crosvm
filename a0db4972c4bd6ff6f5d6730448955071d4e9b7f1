@@ -37,6 +37,24 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "b157878c_68e39fca",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-09-23T17:38:29Z",
+      "side": 1,
+      "message": "Have to submit QCOM changes to AOSP first unfortunately",
+      "parentUuid": "d44a4f35_3280aec7",
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "ee8b368f_e1b40afe",
         "filename": "aarch64/src/lib.rs",
         "patchSetId": 1
