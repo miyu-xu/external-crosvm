@@ -53,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "18465066_cf936315",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-09-23T20:34:01Z",
+      "side": 1,
+      "message": "Tracking further improvements and unit tests in http://b/369188581.\n\nBy the way, the RAM size reported in the FDT includes the swiotlb region, not just the \"normal\" memory region. That\u0027s what you expect, right?",
+      "parentUuid": "659f9c1e_89350aa8",
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "ee8b368f_e1b40afe",
