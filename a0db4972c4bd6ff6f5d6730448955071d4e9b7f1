@@ -89,6 +89,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "ba5dd286_c84fea22",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-09-24T18:11:19Z",
+      "side": 1,
+      "message": "OK. I\u0027m referring to the \"memory\" node generated at https://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/aarch64/src/fdt.rs;l\u003d79;drc\u003d2b5aa15470253ee7caf84a481df71ed2720efc44. Adjacent memory regions are merged together, so the main memory and swiotlb regions get merged and exposed as one contiguous range. I think its been like that since the original Gunyah integration.",
+      "parentUuid": "979edfce_4e84fc9d",
+      "revId": "a0db4972c4bd6ff6f5d6730448955071d4e9b7f1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "ee8b368f_e1b40afe",
