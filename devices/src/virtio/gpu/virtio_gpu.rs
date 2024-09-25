@@ -1288,6 +1288,10 @@ impl VirtioGpu {
         Ok(OkNoData)
     }
 
+    pub fn suspend(&self) -> anyhow::Result<()> {
+        self.rutabaga.suspend().context("failed to suspend rutabaga")
+    }
+
     pub fn snapshot(&self) -> anyhow::Result<VirtioGpuSnapshot> {
         Ok(VirtioGpuSnapshot {
             scanouts: self
@@ -1352,5 +1356,9 @@ impl VirtioGpu {
         }
 
         Ok(())
+    }
+
+    pub fn resume(&self) -> anyhow::Result<()> {
+        self.rutabaga.resume().context("failed to resume rutabaga")
     }
 }

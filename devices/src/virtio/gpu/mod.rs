@@ -1535,6 +1535,11 @@ impl Gpu {
                     .virtio_gpu
                     .restore(snapshot.virtio_gpu_snapshot, &worker.mem)
                     .expect("failed to restore VirtioGpu");
+                worker
+                    .state
+                    .virtio_gpu
+                    .resume()
+                    .expect("failed to resume VirtioGpu");
             }
 
             worker.run();
@@ -1548,6 +1553,12 @@ impl Gpu {
             // If we are stopping the worker because of a virtio_sleep request, then take a
             // snapshot and reclaim the queues.
             let activated_state = if sleep_requested.load(Ordering::SeqCst) {
+                worker
+                    .state
+                    .virtio_gpu
+                    .suspend()
+                    .expect("failed to suspend VirtioGpu");
+
                 let worker_snapshot = WorkerSnapshot {
                     fence_state_snapshot: worker.state.fence_state.lock().snapshot(),
                     virtio_gpu_snapshot: worker
