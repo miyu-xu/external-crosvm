@@ -185,10 +185,16 @@ extern "C" {
     ) -> c_int;
 
     #[cfg(gfxstream_unstable)]
+    fn stream_renderer_suspend() -> c_int;
+
+    #[cfg(gfxstream_unstable)]
     fn stream_renderer_snapshot(dir: *const c_char) -> c_int;
 
     #[cfg(gfxstream_unstable)]
     fn stream_renderer_restore(dir: *const c_char) -> c_int;
+
+    #[cfg(gfxstream_unstable)]
+    fn stream_renderer_resume() -> c_int;
 }
 
 /// The virtio-gpu backend state tracker which supports accelerated rendering.
@@ -784,6 +790,13 @@ impl RutabagaComponent for Gfxstream {
     }
 
     #[cfg(gfxstream_unstable)]
+    fn suspend(&self) -> RutabagaResult<()> {
+        let ret = unsafe { stream_renderer_suspend() };
+        ret_to_res(ret)?;
+        Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
     fn snapshot(&self, directory: &str) -> RutabagaResult<()> {
         let cstring = CString::new(directory)?;
 
@@ -802,6 +815,13 @@ impl RutabagaComponent for Gfxstream {
         // SAFETY:
         // Safe because directory string is valid
         let ret = unsafe { stream_renderer_restore(cstring.as_ptr() as *const c_char) };
+        ret_to_res(ret)?;
+        Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
+    fn resume(&self) -> RutabagaResult<()> {
+        let ret = unsafe { stream_renderer_resume() };
         ret_to_res(ret)?;
         Ok(())
     }
