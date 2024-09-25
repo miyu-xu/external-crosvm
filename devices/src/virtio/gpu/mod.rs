@@ -1002,6 +1002,11 @@ impl Worker {
                 .restore(snapshot.virtio_gpu_snapshot, &activation_resources.mem)
                 .expect("failed to restore VirtioGpu");
         }
+
+        self.state
+            .virtio_gpu
+            .resume()
+            .expect("failed to resume VirtioGpu");
     }
 
     fn on_deactivate(
@@ -1009,6 +1014,11 @@ impl Worker {
         activation_resources: GpuActivationResources,
         stop_reason: WorkerStopReason,
     ) -> GpuDeactivationResources {
+        self.state
+            .virtio_gpu
+            .suspend()
+            .expect("failed to suspend VirtioGpu");
+
         self.fence_handler_resources.lock().take();
 
         let mut deactivation_resources = GpuDeactivationResources {
