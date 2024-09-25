@@ -48,17 +48,22 @@ rust_library {
                 "libcutils",
                 "liblog",
             ],
+            static_libs: [
+                "libgfxstream_backend",
+            ],
         },
         host: {
             features: ["vulkano"],
             rustlibs: [
                 "libvulkano",
             ],
+            shared_libs: [
+                "libgfxstream_backend",
+            ],
         },
     },
     static_libs: [
         "libepoxy",
-        "libgfxstream_backend",
         "libvirglrenderer",
     ],
 }
