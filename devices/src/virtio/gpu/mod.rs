@@ -976,8 +976,20 @@ impl Worker {
                     .expect("failed to restore VirtioGpu");
             }
 
+            self.state
+                .virtio_gpu
+                .resume()
+                .expect("failed to resume VirtioGpu");
+
             let stop_reason = self.run_until_sleep_or_exit(&activation_resources)?;
 
+            self.state
+                .virtio_gpu
+                .suspend()
+                .expect("failed to suspend VirtioGpu");
+
+            // Remove references to any resources that are returned to the main thread
+            // upon deactivation.
             self.fence_handler_resources.lock().take();
 
             let event_devices = self
