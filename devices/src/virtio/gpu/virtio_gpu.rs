@@ -1051,7 +1051,11 @@ impl VirtioGpu {
             .get_mut(&resource_id)
             .ok_or(ErrInvalidResourceId)?;
 
+        base::error!("jasonjason mapping resource id:{:?}", resource_id);
+
         let map_info = self.rutabaga.map_info(resource_id).map_err(|_| ErrUnspec)?;
+
+        base::error!("jasonjason mapping map info:{:?}", map_info);
 
         let mut source: Option<VmMemorySource> = None;
         if let Ok(export) = self.rutabaga.export_blob(resource_id) {
@@ -1077,6 +1081,7 @@ impl VirtioGpu {
         // mapping are both disabled as neither is currently compatible.
         if source.is_none() {
             if self.external_blob || self.fixed_blob_mapping {
+                base::error!("jasonjason not blob or fixed mapping?");
                 return Err(ErrUnspec);
             }
 
@@ -1104,12 +1109,17 @@ impl VirtioGpu {
             MemCacheType::CacheCoherent
         };
 
+        base::error!("jasonjason doing mapper lock");
+
         self.mapper
             .lock()
             .as_mut()
             .expect("No backend request connection found")
             .add_mapping(source.unwrap(), offset, prot, cache)
-            .map_err(|_| ErrUnspec)?;
+            .map_err(|e| {
+                base::error!("jasonjason lock failed: {:?}", e);
+                ErrUnspec
+            })?;
 
         resource.shmem_offset = Some(offset);
         // Access flags not a part of the virtio-gpu spec.
@@ -1288,6 +1298,12 @@ impl VirtioGpu {
         Ok(OkNoData)
     }
 
+    pub fn suspend(&self) -> anyhow::Result<()> {
+        self.rutabaga
+            .suspend()
+            .context("failed to suspend rutabaga")
+    }
+
     pub fn snapshot(&self) -> anyhow::Result<VirtioGpuSnapshot> {
         Ok(VirtioGpuSnapshot {
             scanouts: self
@@ -1352,5 +1368,9 @@ impl VirtioGpu {
         }
 
         Ok(())
+    }
+
+    pub fn resume(&self) -> anyhow::Result<()> {
+        self.rutabaga.resume().context("failed to resume rutabaga")
     }
 }
