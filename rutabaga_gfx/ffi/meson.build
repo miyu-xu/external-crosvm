@@ -23,10 +23,16 @@ shared_lib_major = '@0@.0'.format(shared_lib)
 shared_lib_full_ver = '@0@.@1@'.format(shared_lib, meson.project_version())
 
 build_script = find_program('build.sh')
+
 with_gfxstream = get_option('gfxstream')
+with_snapshot = get_option('snapshot')
+
 features = ''
 if with_gfxstream
   features += 'gfxstream'
+endif
+if with_snapshot_support
+  features += 'snapshot'
 endif
 
 buildtype = 'debug'

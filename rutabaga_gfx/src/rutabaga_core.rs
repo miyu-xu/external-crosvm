@@ -16,7 +16,9 @@ use crate::gfxstream::Gfxstream;
 use crate::rutabaga_2d::Rutabaga2D;
 use crate::rutabaga_os::MemoryMapping;
 use crate::rutabaga_os::SafeDescriptor;
+#[cfg(feature = "snapshot")]
 use crate::rutabaga_snapshot::RutabagaResourceSnapshot;
+#[cfg(feature = "snapshot")]
 use crate::rutabaga_snapshot::RutabagaSnapshot;
 use crate::rutabaga_utils::*;
 #[cfg(feature = "virgl_renderer")]
@@ -387,38 +389,45 @@ impl Rutabaga {
     /// Take a snapshot of Rutabaga's current state. The snapshot is serialized into an opaque byte
     /// stream and written to `w`.
     pub fn snapshot(&self, w: &mut impl Write, directory: &str) -> RutabagaResult<()> {
-        if self.default_component == RutabagaComponentType::Gfxstream {
-            let component = self
-                .components
-                .get(&self.default_component)
-                .ok_or(RutabagaError::InvalidComponent)?;
-
-            component.snapshot(directory)
-        } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-            let snapshot = RutabagaSnapshot {
-                resources: self
-                    .resources
-                    .iter()
-                    .map(|(i, r)| {
-                        let info = r.info_2d.as_ref().ok_or(RutabagaError::Unsupported)?;
-                        assert_eq!(
-                            usize::try_from(info.width * info.height * 4).unwrap(),
-                            info.host_mem.len()
-                        );
-                        assert_eq!(usize::try_from(r.size).unwrap(), info.host_mem.len());
-                        let s = RutabagaResourceSnapshot {
-                            resource_id: r.resource_id,
-                            width: info.width,
-                            height: info.height,
-                        };
-                        Ok((*i, s))
-                    })
-                    .collect::<RutabagaResult<_>>()?,
-            };
-
-            return snapshot.serialize_to(w).map_err(RutabagaError::IoError);
-        } else {
+        #[cfg(not(feature = "snapshot"))]
+        {
             Err(RutabagaError::Unsupported)
+        }
+        #[cfg(feature = "snapshot")]
+        {
+            if self.default_component == RutabagaComponentType::Gfxstream {
+                let component = self
+                    .components
+                    .get(&self.default_component)
+                    .ok_or(RutabagaError::InvalidComponent)?;
+
+                component.snapshot(directory)
+            } else if self.default_component == RutabagaComponentType::Rutabaga2D {
+                let snapshot = RutabagaSnapshot {
+                    resources: self
+                        .resources
+                        .iter()
+                        .map(|(i, r)| {
+                            let info = r.info_2d.as_ref().ok_or(RutabagaError::Unsupported)?;
+                            assert_eq!(
+                                usize::try_from(info.width * info.height * 4).unwrap(),
+                                info.host_mem.len()
+                            );
+                            assert_eq!(usize::try_from(r.size).unwrap(), info.host_mem.len());
+                            let s = RutabagaResourceSnapshot {
+                                resource_id: r.resource_id,
+                                width: info.width,
+                                height: info.height,
+                            };
+                            Ok((*i, s))
+                        })
+                        .collect::<RutabagaResult<_>>()?,
+                };
+
+                serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
+            } else {
+                Err(RutabagaError::Unsupported)
+            }
         }
     }
 
@@ -444,52 +453,61 @@ impl Rutabaga {
     /// approach would scale to support 3D modes, which have others problems that require VMM help,
     /// like resource handles.
     pub fn restore(&mut self, r: &mut impl Read, directory: &str) -> RutabagaResult<()> {
-        if self.default_component == RutabagaComponentType::Gfxstream {
-            let component = self
-                .components
-                .get_mut(&self.default_component)
-                .ok_or(RutabagaError::InvalidComponent)?;
-
-            component.restore(directory)
-        } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-            let snapshot = RutabagaSnapshot::deserialize_from(r).map_err(RutabagaError::IoError)?;
-
-            self.resources = snapshot
-                .resources
-                .into_iter()
-                .map(|(i, s)| {
-                    let size = u64::from(s.width * s.height * 4);
-                    let r = RutabagaResource {
-                        resource_id: s.resource_id,
-                        handle: None,
-                        blob: false,
-                        blob_mem: 0,
-                        blob_flags: 0,
-                        map_info: None,
-                        info_2d: Some(Rutabaga2DInfo {
-                            width: s.width,
-                            height: s.height,
-                            host_mem: vec![0; usize::try_from(size).unwrap()],
-                        }),
-                        info_3d: None,
-                        vulkan_info: None,
-                        // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because the
-                        // pointers won't be valid at restore time, see the `Rutabaga::restore` doc.
-                        // If the client doesn't attach new iovecs, the restored resource will
-                        // behave as if they had been detached (instead of segfaulting on the stale
-                        // iovec pointers).
-                        backing_iovecs: None,
-                        component_mask: 1 << (RutabagaComponentType::Rutabaga2D as u8),
-                        size,
-                        mapping: None,
-                    };
-                    (i, r)
-                })
-                .collect();
-
-            return Ok(());
-        } else {
+        #[cfg(not(feature = "snapshot"))]
+        {
             Err(RutabagaError::Unsupported)
+        }
+        #[cfg(feature = "snapshot")]
+        {
+            if self.default_component == RutabagaComponentType::Gfxstream {
+                let component = self
+                    .components
+                    .get_mut(&self.default_component)
+                    .ok_or(RutabagaError::InvalidComponent)?;
+
+                component.restore(directory)
+            } else if self.default_component == RutabagaComponentType::Rutabaga2D {
+                let snapshot: RutabagaSnapshot =
+                    serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
+
+                self.resources = snapshot
+                    .resources
+                    .into_iter()
+                    .map(|(i, s)| {
+                        let size = u64::from(s.width * s.height * 4);
+                        let r = RutabagaResource {
+                            resource_id: s.resource_id,
+                            handle: None,
+                            blob: false,
+                            blob_mem: 0,
+                            blob_flags: 0,
+                            map_info: None,
+                            info_2d: Some(Rutabaga2DInfo {
+                                width: s.width,
+                                height: s.height,
+                                host_mem: vec![0; usize::try_from(size).unwrap()],
+                            }),
+                            info_3d: None,
+                            vulkan_info: None,
+                            // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because
+                            // the pointers won't be valid at restore
+                            // time, see the `Rutabaga::restore` doc. If
+                            // the client doesn't attach new iovecs, the restored resource will
+                            // behave as if they had been detached (instead of segfaulting on the
+                            // stale iovec pointers).
+                            backing_iovecs: None,
+                            component_mask: 1 << (RutabagaComponentType::Rutabaga2D as u8),
+                            size,
+                            mapping: None,
+                        };
+                        (i, r)
+                    })
+                    .collect();
+
+                return Ok(());
+            } else {
+                Err(RutabagaError::Unsupported)
+            }
         }
     }
 
@@ -1353,6 +1371,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snapshot")]
     fn snapshot_restore_2d_no_resources() {
         let mut buffer = std::io::Cursor::new(Vec::new());
 
@@ -1364,6 +1383,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snapshot")]
     fn snapshot_restore_2d_one_resource() {
         let resource_id = 123;
         let resource_create_3d = ResourceCreate3D {
