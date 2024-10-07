@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::custom_serde::deserialize_map_from_kv_vec;
+use base::custom_serde::serialize_map_as_kv_vec;
 use base::debug;
 use base::error;
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -160,6 +162,10 @@ pub struct FenceState {
 
 #[derive(Serialize, Deserialize)]
 struct FenceStateSnapshot {
+    #[serde(
+        serialize_with = "serialize_map_as_kv_vec",
+        deserialize_with = "deserialize_map_from_kv_vec"
+    )]
     completed_fences: BTreeMap<VirtioGpuRing, u64>,
 }
 
@@ -2003,9 +2009,7 @@ impl VirtioDevice for Gpu {
                 .context("failed to receive response for virtio gpu worker suspend request")?;
 
             match response {
-                WorkerResponse::Snapshot(snapshot) => {
-                    Ok(serde_json::to_value(snapshot)?)
-                },
+                WorkerResponse::Snapshot(snapshot) => Ok(serde_json::to_value(snapshot)?),
                 WorkerResponse::Err(e) => Err(e),
                 _ => {
                     panic!("unexpected response from virtio gpu worker sleep request");
