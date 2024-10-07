@@ -21,7 +21,9 @@ use crate::gfxstream::Gfxstream;
 use crate::rutabaga_2d::Rutabaga2D;
 use crate::rutabaga_os::MemoryMapping;
 use crate::rutabaga_os::SafeDescriptor;
+#[cfg(feature = "snapshot")]
 use crate::rutabaga_snapshot::RutabagaResourceSnapshot;
+#[cfg(feature = "snapshot")]
 use crate::rutabaga_snapshot::RutabagaSnapshot;
 use crate::rutabaga_utils::*;
 #[cfg(feature = "virgl_renderer")]
@@ -211,11 +213,13 @@ pub trait RutabagaComponent {
     }
 
     /// Implementations must snapshot to the specified directory
+    #[cfg(feature = "snapshot")]
     fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 
     /// Implementations must restore from the specified directory
+    #[cfg(feature = "snapshot")]
     fn restore(&self, _directory: &str) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
@@ -386,6 +390,7 @@ impl Rutabaga {
 
     /// Take a snapshot of Rutabaga's current state. The snapshot is serialized into an opaque byte
     /// stream and written to `w`.
+    #[cfg(feature = "snapshot")]
     pub fn snapshot(&self, w: &mut impl Write, directory: &str) -> RutabagaResult<()> {
         if self.default_component == RutabagaComponentType::Gfxstream {
             let component = self
@@ -416,7 +421,7 @@ impl Rutabaga {
                     .collect::<RutabagaResult<_>>()?,
             };
 
-            return snapshot.serialize_to(w).map_err(RutabagaError::IoError);
+            serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
         } else {
             Err(RutabagaError::Unsupported)
         }
@@ -443,6 +448,7 @@ impl Rutabaga {
     /// to translate to/from stable guest physical addresses, but it is unclear how well that
     /// approach would scale to support 3D modes, which have others problems that require VMM help,
     /// like resource handles.
+    #[cfg(feature = "snapshot")]
     pub fn restore(&mut self, r: &mut impl Read, directory: &str) -> RutabagaResult<()> {
         if self.default_component == RutabagaComponentType::Gfxstream {
             let component = self
@@ -452,7 +458,8 @@ impl Rutabaga {
 
             component.restore(directory)
         } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-            let snapshot = RutabagaSnapshot::deserialize_from(r).map_err(RutabagaError::IoError)?;
+            let snapshot: RutabagaSnapshot =
+                serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
 
             self.resources = snapshot
                 .resources
@@ -1336,6 +1343,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snapshot")]
     fn snapshot_restore_2d_no_resources() {
         let mut buffer = std::io::Cursor::new(Vec::new());
 
@@ -1347,6 +1355,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snapshot")]
     fn snapshot_restore_2d_one_resource() {
         let resource_id = 123;
         let resource_create_3d = ResourceCreate3D {

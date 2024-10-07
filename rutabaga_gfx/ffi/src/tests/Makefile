@@ -6,7 +6,7 @@ SOURCES += rutabaga_test.c
 OBJS = $(SOURCES:.c=.o)
 DEPS = $(SOURCES:.c=.d)
 PKG_CONFIG ?= pkg-config
-CFLAGS += -O0 -ggdb3
+CFLAGS += -O0 -ggdb3 -DRUTABAGA_ENABLE_SNAPSHOT_SUPPORT
 CCFLAGS += $(shell $(PKG_CONFIG) --cflags rutabaga_gfx_ffi)
 LDLIBS += $(PC_LIBS)
 LDLIBS += $(shell $(PKG_CONFIG) --libs rutabaga_gfx_ffi)
