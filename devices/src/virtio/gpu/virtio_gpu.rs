@@ -1329,13 +1329,16 @@ impl VirtioGpu {
         if let Some(snapshot) = self.deferred_snapshot_load.take() {
             assert!(self.scanouts.keys().eq(snapshot.scanouts.keys()));
             for (i, s) in snapshot.scanouts.into_iter() {
-                self.scanouts.get_mut(&i).unwrap().restore(
-                    s,
-                    // Only the cursor scanout can have a parent.
-                    None,
-                    &self.display,
-                )
-                .context("failed to restore scanouts")?;
+                self.scanouts
+                    .get_mut(&i)
+                    .unwrap()
+                    .restore(
+                        s,
+                        // Only the cursor scanout can have a parent.
+                        None,
+                        &self.display,
+                    )
+                    .context("failed to restore scanouts")?;
             }
             self.scanouts_updated
                 .store(snapshot.scanouts_updated, Ordering::SeqCst);
@@ -1344,12 +1347,13 @@ impl VirtioGpu {
                 .cursor_scanout
                 .parent_scanout_id
                 .and_then(|i| self.scanouts.get(&i).unwrap().surface_id);
-            self.cursor_scanout.restore(
-                snapshot.cursor_scanout,
-                cursor_parent_surface_id,
-                &self.display,
-            )
-            .context("failed to restore cursor scanout")?;
+            self.cursor_scanout
+                .restore(
+                    snapshot.cursor_scanout,
+                    cursor_parent_surface_id,
+                    &self.display,
+                )
+                .context("failed to restore cursor scanout")?;
 
             self.rutabaga
                 .restore(&mut &snapshot.rutabaga[..], "")
