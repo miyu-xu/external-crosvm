@@ -666,6 +666,7 @@ pub extern "C" fn rutabaga_create_fence(ptr: &mut rutabaga, fence: &rutabaga_fen
 
 /// # Safety
 /// - `dir` must be a null-terminated C-string.
+#[cfg(snapshot)]
 #[no_mangle]
 pub unsafe extern "C" fn rutabaga_snapshot(ptr: &mut rutabaga, dir: *const c_char) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
@@ -683,6 +684,7 @@ pub unsafe extern "C" fn rutabaga_snapshot(ptr: &mut rutabaga, dir: *const c_cha
 
 /// # Safety
 /// - `dir` must be a null-terminated C-string.
+#[cfg(snapshot)]
 #[no_mangle]
 pub unsafe extern "C" fn rutabaga_restore(ptr: &mut rutabaga, dir: *const c_char) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {

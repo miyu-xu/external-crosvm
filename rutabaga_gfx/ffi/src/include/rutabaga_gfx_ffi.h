@@ -346,6 +346,8 @@ int32_t rutabaga_submit_command(struct rutabaga *ptr, struct rutabaga_command *c
 
 int32_t rutabaga_create_fence(struct rutabaga *ptr, const struct rutabaga_fence *fence);
 
+#ifdef RUTABAGA_ENABLE_SNAPSHOT_SUPPORT
+
 /**
  * Write a snapshot to `dir`. The directory is expected to already exist and to be empty.
  *
@@ -363,6 +365,8 @@ int32_t rutabaga_snapshot(struct rutabaga *ptr, const char *dir);
  * - Unstable, don't use until version > 0.1.3
  */
 int32_t rutabaga_restore(struct rutabaga *ptr, const char *dir);
+
+#endif  // #ifdef RUTABAGA_ENABLE_SNAPSHOT_SUPPORT
 
 #ifdef __cplusplus
 }
