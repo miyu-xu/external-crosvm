@@ -822,6 +822,7 @@ impl RutabagaComponent for Gfxstream {
     #[cfg(gfxstream_unstable)]
     fn resume(&self) -> RutabagaResult<()> {
         let ret = unsafe { stream_renderer_resume() };
+        base::error!("jasonjason stream_renderer_resume() returned {:?}", ret);
         ret_to_res(ret)?;
         Ok(())
     }

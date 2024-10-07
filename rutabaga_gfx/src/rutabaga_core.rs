@@ -10,6 +10,11 @@ use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
 
+#[cfg(feature = "snapshot")]
+use serde::Deserialize;
+#[cfg(feature = "snapshot")]
+use serde::Serialize;
+
 use crate::cross_domain::CrossDomain;
 #[cfg(feature = "gfxstream")]
 use crate::gfxstream::Gfxstream;

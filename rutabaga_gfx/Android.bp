@@ -26,6 +26,7 @@ rust_library {
         "virgl_renderer",
     ],
     rustlibs: [
+        "libbase_rust",
         "libcfg_if",
         "liblibc",
         "liblog_rust",

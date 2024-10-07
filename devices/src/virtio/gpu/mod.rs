@@ -152,6 +152,37 @@ struct FenceDescriptor {
     len: u32,
 }
 
+pub mod vectorize {
+    use std::iter::FromIterator;
+
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serialize;
+    use serde::Serializer;
+
+    pub fn serialize<'a, T, K, V, S>(target: T, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: IntoIterator<Item = (&'a K, &'a V)>,
+        K: Serialize + 'a,
+        V: Serialize + 'a,
+    {
+        let container: Vec<_> = target.into_iter().collect();
+        serde::Serialize::serialize(&container, ser)
+    }
+
+    pub fn deserialize<'de, T, K, V, D>(des: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromIterator<(K, V)>,
+        K: Deserialize<'de>,
+        V: Deserialize<'de>,
+    {
+        let container: Vec<_> = serde::Deserialize::deserialize(des)?;
+        Ok(T::from_iter(container.into_iter()))
+    }
+}
+
 #[derive(Default)]
 pub struct FenceState {
     descs: Vec<FenceDescriptor>,
@@ -160,6 +191,7 @@ pub struct FenceState {
 
 #[derive(Serialize, Deserialize)]
 struct FenceStateSnapshot {
+    #[serde(with = "vectorize")]
     completed_fences: BTreeMap<VirtioGpuRing, u64>,
 }
 
@@ -2003,9 +2035,7 @@ impl VirtioDevice for Gpu {
                 .context("failed to receive response for virtio gpu worker suspend request")?;
 
             match response {
-                WorkerResponse::Snapshot(snapshot) => {
-                    Ok(serde_json::to_value(snapshot)?)
-                },
+                WorkerResponse::Snapshot(snapshot) => Ok(serde_json::to_value(snapshot)?),
                 WorkerResponse::Err(e) => Err(e),
                 _ => {
                     panic!("unexpected response from virtio gpu worker sleep request");
