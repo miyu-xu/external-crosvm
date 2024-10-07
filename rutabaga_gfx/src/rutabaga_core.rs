@@ -416,7 +416,7 @@ impl Rutabaga {
                     .collect::<RutabagaResult<_>>()?,
             };
 
-            return snapshot.serialize_to(w).map_err(RutabagaError::IoError);
+            serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
         } else {
             Err(RutabagaError::Unsupported)
         }
@@ -452,7 +452,8 @@ impl Rutabaga {
 
             component.restore(directory)
         } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-            let snapshot = RutabagaSnapshot::deserialize_from(r).map_err(RutabagaError::IoError)?;
+            let snapshot: RutabagaSnapshot =
+                serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
 
             self.resources = snapshot
                 .resources
@@ -473,11 +474,12 @@ impl Rutabaga {
                         }),
                         info_3d: None,
                         vulkan_info: None,
-                        // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because the
-                        // pointers won't be valid at restore time, see the `Rutabaga::restore` doc.
-                        // If the client doesn't attach new iovecs, the restored resource will
-                        // behave as if they had been detached (instead of segfaulting on the stale
-                        // iovec pointers).
+                        // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because
+                        // the pointers won't be valid at restore
+                        // time, see the `Rutabaga::restore` doc. If
+                        // the client doesn't attach new iovecs, the restored resource will
+                        // behave as if they had been detached (instead of segfaulting on the
+                        // stale iovec pointers).
                         backing_iovecs: None,
                         component_mask: 1 << (RutabagaComponentType::Rutabaga2D as u8),
                         size,
