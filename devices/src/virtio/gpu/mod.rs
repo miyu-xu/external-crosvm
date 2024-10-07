@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::custom_serde::deserialize_map_from_kv_vec;
+use base::custom_serde::serialize_map_as_kv_vec;
 use base::debug;
 use base::error;
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -160,6 +162,10 @@ pub struct FenceState {
 
 #[derive(Serialize, Deserialize)]
 struct FenceStateSnapshot {
+    #[serde(
+        serialize_with = "serialize_map_as_kv_vec",
+        deserialize_with = "deserialize_map_from_kv_vec"
+    )]
     completed_fences: BTreeMap<VirtioGpuRing, u64>,
 }
 
