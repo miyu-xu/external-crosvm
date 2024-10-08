@@ -465,26 +465,28 @@ impl Rutabaga {
         }
         #[cfg(feature = "snapshot")]
         {
-            if self.default_component == RutabagaComponentType::Gfxstream {
-                let component = self
-                    .components
-                    .get(&self.default_component)
-                    .ok_or(RutabagaError::InvalidComponent)?;
-
-                component.snapshot(directory)
-            } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-                let snapshot = RutabagaSnapshot {
-                    resources: self
-                        .resources
-                        .iter()
-                        .map(|(i, r)| Ok((*i, RutabagaResourceSnapshot::try_from(r)?)))
-                        .collect::<RutabagaResult<_>>()?,
-                };
-
-                serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
-            } else {
-                Err(RutabagaError::Unsupported)
+            if self.default_component != RutabagaComponentType::Gfxstream
+                && self.default_component != RutabagaComponentType::Rutabaga2D
+            {
+                return Err(RutabagaError::Unsupported);
             }
+
+            let component = self
+                .components
+                .get(&self.default_component)
+                .ok_or(RutabagaError::InvalidComponent)?;
+
+            component.snapshot(directory)?;
+
+            let snapshot = RutabagaSnapshot {
+                resources: self
+                    .resources
+                    .iter()
+                    .map(|(i, r)| Ok((*i, RutabagaResourceSnapshot::try_from(r)?)))
+                    .collect::<RutabagaResult<_>>()?,
+            };
+
+            serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
         }
     }
 
@@ -516,27 +518,29 @@ impl Rutabaga {
         }
         #[cfg(feature = "snapshot")]
         {
-            if self.default_component == RutabagaComponentType::Gfxstream {
-                let component = self
-                    .components
-                    .get_mut(&self.default_component)
-                    .ok_or(RutabagaError::InvalidComponent)?;
-
-                component.restore(directory)
-            } else if self.default_component == RutabagaComponentType::Rutabaga2D {
-                let snapshot: RutabagaSnapshot =
-                    serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
-
-                self.resources = snapshot
-                    .resources
-                    .into_iter()
-                    .map(|(i, s)| Ok((i, RutabagaResource::try_from(s)?)))
-                    .collect::<RutabagaResult<_>>()?;
-
-                Ok(())
-            } else {
-                Err(RutabagaError::Unsupported)
+            if self.default_component != RutabagaComponentType::Gfxstream
+                && self.default_component != RutabagaComponentType::Rutabaga2D
+            {
+                return Err(RutabagaError::Unsupported);
             }
+
+            let component = self
+                .components
+                .get_mut(&self.default_component)
+                .ok_or(RutabagaError::InvalidComponent)?;
+
+            component.restore(directory)?;
+
+            let snapshot: RutabagaSnapshot =
+                serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
+
+            self.resources = snapshot
+                .resources
+                .into_iter()
+                .map(|(i, s)| Ok((i, RutabagaResource::try_from(s)?)))
+                .collect::<RutabagaResult<_>>()?;
+
+            Ok(())
         }
     }
 

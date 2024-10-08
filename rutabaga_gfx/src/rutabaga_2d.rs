@@ -292,4 +292,12 @@ impl RutabagaComponent for Rutabaga2D {
     fn resume(&self) -> RutabagaResult<()> {
         Ok(())
     }
+
+    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
+        Ok(())
+    }
+
+    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
+        Ok(())
+    }
 }
