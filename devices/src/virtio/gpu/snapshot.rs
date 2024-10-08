@@ -33,20 +33,60 @@ fn get_files_under(directory: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+struct ScopedDir {
+    dir: PathBuf,
+}
+
+impl ScopedDir {
+    pub fn in_tempdir() -> anyhow::Result<Self> {
+        let dir = tempfile::tempdir()
+            .context("failed to create temporary directory")?;
+
+        // Take ownership.
+        let dir = dir.into_path();
+
+        Ok(Self { dir })
+    }
+
+    pub fn in_existing(parent: &Path) -> anyhow::Result<Self> {
+        let dir = parent.join("scopeddir");
+
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create scoped directory under {}", parent.display()))?;
+
+        Ok(Self{ dir })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for ScopedDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 pub struct SnapshotArchiveWriter {
-    dir: TempDir,
+    dir: ScopedDir,
     writer: RutabagaSnapshotWriter,
 }
 
 impl SnapshotArchiveWriter {
-    pub fn new() -> anyhow::Result<Self> {
-        let dir = tempfile::tempdir()
-            .context("failed to create temporary directory for snapshot archive writer")?;
+    pub fn new(scratch_directory: &Option<String>) -> anyhow::Result<Self> {
+        let dir =
+            if let Some(scratch_directory) = scratch_directory {
+                ScopedDir::in_existing(Path::new(scratch_directory))
+            } else {
+                ScopedDir::in_tempdir()
+            }?;
 
         let writer = RutabagaSnapshotWriter::from_existing(dir.path().to_path_buf());
 
         Ok(Self { dir, writer })
     }
+
 
     pub fn add_namespace(&self, name: &str) -> anyhow::Result<RutabagaSnapshotWriter> {
         Ok(self.writer.add_namespace(name)?)
@@ -89,14 +129,19 @@ impl SnapshotArchiveWriter {
 }
 
 pub struct SnapshotArchiveReader {
-    _dir: TempDir,
+    dir: ScopedDir,
     reader: RutabagaSnapshotReader,
 }
 
 impl SnapshotArchiveReader {
-    pub fn unpack(mut archive: serde_json::Value) -> anyhow::Result<Self> {
-        let dir = tempfile::tempdir()
-            .context("failed to create temporary directory for snapshot archive reader")?;
+    pub fn unpack(scratch_directory: &Option<String>, mut archive: serde_json::Value) -> anyhow::Result<Self> {
+        let dir =
+            if let Some(scratch_directory) = scratch_directory {
+                ScopedDir::in_existing(Path::new(scratch_directory))
+            } else {
+                ScopedDir::in_tempdir()
+            }
+            .context("failed to get directory for snapshot archive reader")?;
 
         let snapshot_root = dir.path().to_path_buf();
 
@@ -125,7 +170,7 @@ impl SnapshotArchiveReader {
         }
 
         Ok(Self {
-            _dir: dir,
+            dir,
             reader: RutabagaSnapshotReader::new(snapshot_root)?,
         })
     }

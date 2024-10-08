@@ -1427,6 +1427,7 @@ pub struct Gpu {
     capset_mask: u64,
     #[cfg(any(target_os = "android", target_os = "linux"))]
     gpu_cgroup_path: Option<PathBuf>,
+    snapshot_scratch_path: Option<String>,
 }
 
 impl Gpu {
@@ -1535,6 +1536,7 @@ impl Gpu {
             capset_mask: gpu_parameters.capset_mask,
             #[cfg(any(target_os = "android", target_os = "linux"))]
             gpu_cgroup_path: gpu_cgroup_path.cloned(),
+            snapshot_scratch_path: gpu_parameters.snapshot_scratch_path.clone(),
         }
     }
 
@@ -2049,7 +2051,7 @@ impl VirtioDevice for Gpu {
         if let (Some(worker_request_sender), Some(worker_response_receiver)) =
             (&self.worker_request_sender, &self.worker_response_receiver)
         {
-            let snapshot_archiver = SnapshotArchiveWriter::new()?;
+            let snapshot_archiver = SnapshotArchiveWriter::new(&self.snapshot_scratch_path)?;
             let snapshot_writer = snapshot_archiver
                 .add_namespace("gpu")
                 .context("failed to get gpu namespace")?;
@@ -2097,7 +2099,7 @@ impl VirtioDevice for Gpu {
             _ => (),
         };
 
-        let snapshot_archive_reader = SnapshotArchiveReader::unpack(data)
+        let snapshot_archive_reader = SnapshotArchiveReader::unpack(&self.snapshot_scratch_path, data)
             .context("failed to unpack virtio gpu snapshot archive")?;
         let snapshot_reader = snapshot_archive_reader
             .get_namespace("gpu")
