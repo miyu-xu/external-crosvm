@@ -17,6 +17,10 @@ use std::sync::Arc;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use nix::Error as NixError;
 use remain::sorted;
+#[cfg(feature = "snapshot")]
+use serde::Deserialize;
+#[cfg(feature = "snapshot")]
+use serde::Serialize;
 use thiserror::Error;
 #[cfg(feature = "vulkano")]
 use vulkano::device::DeviceCreationError;
@@ -60,6 +64,7 @@ pub const RUTABAGA_PIPE_TEXTURE_2D: u32 = 2;
 pub const RUTABAGA_PIPE_BIND_RENDER_TARGET: u32 = 2;
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "snapshot", derive(Deserialize, Serialize))]
 pub struct ResourceCreate3D {
     pub target: u32,
     pub format: u32,
@@ -99,6 +104,7 @@ pub struct RutabagaMapping {
 
 /// Metadata associated with a swapchain, video or camera image.
 #[derive(Default, Copy, Clone, Debug)]
+#[cfg_attr(feature = "snapshot", derive(Deserialize, Serialize))]
 pub struct Resource3DInfo {
     pub width: u32,
     pub height: u32,
@@ -126,6 +132,7 @@ pub struct Resource3DInfo {
     AsBytes,
 )]
 #[repr(C)]
+#[cfg_attr(feature = "snapshot", derive(Deserialize, Serialize))]
 pub struct DeviceId {
     pub device_uuid: [u8; 16],
     pub driver_uuid: [u8; 16],
@@ -147,6 +154,7 @@ pub struct DeviceId {
     AsBytes,
 )]
 #[repr(C)]
+#[cfg_attr(feature = "snapshot", derive(Deserialize, Serialize))]
 pub struct VulkanInfo {
     pub memory_idx: u32,
     pub device_id: DeviceId,
