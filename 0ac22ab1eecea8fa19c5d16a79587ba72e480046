@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4d43cbe3_18dd5f09",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1768393
+      },
+      "writtenOn": "2024-10-08T06:01:24Z",
+      "side": 1,
+      "message": "This series is likely to get merged to the main crosvm repository soon - do we need to add it manually in the Android copy? I\u0027m not sure how sync is performed between the two repos, a quick explanation would probably help me understand.",
+      "revId": "0ac22ab1eecea8fa19c5d16a79587ba72e480046",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
