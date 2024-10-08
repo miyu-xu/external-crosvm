@@ -17,6 +17,8 @@ use std::sync::Arc;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use nix::Error as NixError;
 use remain::sorted;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 #[cfg(feature = "vulkano")]
 use vulkano::device::DeviceCreationError;
@@ -98,7 +100,7 @@ pub struct RutabagaMapping {
 }
 
 /// Metadata associated with a swapchain, video or camera image.
-#[derive(Default, Copy, Clone, Debug)]
+#[derive(Default, Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Resource3DInfo {
     pub width: u32,
     pub height: u32,
@@ -124,6 +126,8 @@ pub struct Resource3DInfo {
     FromZeroes,
     FromBytes,
     AsBytes,
+    Serialize,
+    Deserialize,
 )]
 #[repr(C)]
 pub struct DeviceId {
@@ -145,6 +149,8 @@ pub struct DeviceId {
     FromZeroes,
     FromBytes,
     AsBytes,
+    Serialize,
+    Deserialize,
 )]
 #[repr(C)]
 pub struct VulkanInfo {

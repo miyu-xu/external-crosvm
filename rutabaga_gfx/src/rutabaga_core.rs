@@ -29,6 +29,7 @@ const RUTABAGA_DEFAULT_WIDTH: u32 = 1280;
 const RUTABAGA_DEFAULT_HEIGHT: u32 = 1024;
 
 /// Information required for 2D functionality.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Rutabaga2DInfo {
     pub width: u32,
     pub height: u32,
@@ -47,38 +48,57 @@ pub struct RutabagaResource {
     pub info_3d: Option<Resource3DInfo>,
     pub vulkan_info: Option<VulkanInfo>,
     pub backing_iovecs: Option<Vec<RutabagaIovec>>,
-
     /// Bitmask of components that have already imported this resource
     pub component_mask: u8,
     pub size: u64,
     pub mapping: Option<MemoryMapping>,
 }
 
+/// The preserved fields of `RutabagaResource` that are saved and loaded across snapshot and
+/// restore.
 #[cfg(feature = "snapshot")]
 #[derive(Serialize, Deserialize)]
-pub struct RutabagaResourceSnapshot {
-    pub resource_id: u32,
-    pub width: u32,
-    pub height: u32,
+struct RutabagaResourceSnapshot {
+    resource_id: u32,
+    // NOTE: `RutabagaResource::handle` is not included here because OS handles will
+    // not be valid across snapshot and restore.  The caller of `Rutagaba::restore()`
+    // is expected to re-map resources (via `Rutabaga::map()` or `Rutabaga::export_blob()`)
+    // when restoring snapshots.
+    blob: bool,
+    blob_mem: u32,
+    blob_flags: u32,
+    map_info: Option<u32>,
+    info_2d: Option<Rutabaga2DInfo>,
+    info_3d: Option<Resource3DInfo>,
+    vulkan_info: Option<VulkanInfo>,
+    // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because the
+    // pointers won't be valid at restore time, see the `Rutabaga::restore` doc.
+    // If the client doesn't attach new iovecs, the restored resource will
+    // behave as if they had been detached (instead of segfaulting on the stale
+    // iovec pointers).
+    component_mask: u8,
+    size: u64,
+    // NOTE: `RutabagaResource::mapping` is not included here because mapped resources
+    // generally will not be mapped to the same host virtual address across snapshot
+    // and restore. The caller of `Rutagaba::restore()` is expected to re-map resources
+    // (via `Rutabaga::map()`) when restoring snapshots.
 }
 
 #[cfg(feature = "snapshot")]
 impl TryFrom<&RutabagaResource> for RutabagaResourceSnapshot {
     type Error = RutabagaError;
     fn try_from(resource: &RutabagaResource) -> Result<Self, Self::Error> {
-        let info = resource
-            .info_2d
-            .as_ref()
-            .ok_or(RutabagaError::Unsupported)?;
-        assert_eq!(
-            usize::try_from(info.width * info.height * 4).unwrap(),
-            info.host_mem.len()
-        );
-        assert_eq!(usize::try_from(resource.size).unwrap(), info.host_mem.len());
         Ok(RutabagaResourceSnapshot {
             resource_id: resource.resource_id,
-            width: info.width,
-            height: info.height,
+            blob: resource.blob,
+            blob_mem: resource.blob_mem,
+            blob_flags: resource.blob_flags,
+            map_info: resource.map_info,
+            info_2d: resource.info_2d.clone(),
+            info_3d: resource.info_3d,
+            vulkan_info: resource.vulkan_info,
+            size: resource.size,
+            component_mask: resource.component_mask,
         })
     }
 }
@@ -87,29 +107,19 @@ impl TryFrom<&RutabagaResource> for RutabagaResourceSnapshot {
 impl TryFrom<RutabagaResourceSnapshot> for RutabagaResource {
     type Error = RutabagaError;
     fn try_from(snapshot: RutabagaResourceSnapshot) -> Result<Self, Self::Error> {
-        let size = u64::from(snapshot.width * snapshot.height * 4);
         Ok(RutabagaResource {
             resource_id: snapshot.resource_id,
             handle: None,
-            blob: false,
-            blob_mem: 0,
-            blob_flags: 0,
-            map_info: None,
-            info_2d: Some(Rutabaga2DInfo {
-                width: snapshot.width,
-                height: snapshot.height,
-                host_mem: vec![0; usize::try_from(size).unwrap()],
-            }),
-            info_3d: None,
-            vulkan_info: None,
-            // NOTE: `RutabagaResource::backing_iovecs` isn't snapshotted because the
-            // pointers won't be valid at restore time, see the `Rutabaga::restore` doc.
-            // If the client doesn't attach new iovecs, the restored resource will
-            // behave as if they had been detached (instead of segfaulting on the stale
-            // iovec pointers).
+            blob: snapshot.blob,
+            blob_mem: snapshot.blob_mem,
+            blob_flags: snapshot.blob_flags,
+            map_info: snapshot.map_info,
+            info_2d: snapshot.info_2d,
+            info_3d: snapshot.info_3d,
+            vulkan_info: snapshot.vulkan_info,
             backing_iovecs: None,
-            component_mask: 1 << (RutabagaComponentType::Rutabaga2D as u8),
-            size,
+            size: snapshot.size,
+            component_mask: snapshot.component_mask,
             mapping: None,
         })
     }
