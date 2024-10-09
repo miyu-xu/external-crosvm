@@ -147,6 +147,7 @@ rust_binary {
                 "libbinder_ndk",
                 "libnativewindow",
                 "libprocessgroup",
+                "libprotobuf-cpp-full",
             ],
         },
         host_linux: {

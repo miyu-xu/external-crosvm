@@ -63,6 +63,7 @@ rust_library {
             ],
             shared_libs: [
                 "libgfxstream_backend",
+                "libprotobuf-cpp-full",
             ],
         },
     },
