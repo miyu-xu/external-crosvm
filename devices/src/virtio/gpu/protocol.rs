@@ -798,12 +798,17 @@ impl Display for GpuResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use self::GpuResponse::*;
         match self {
+            ErrUnspec => write!(f, "unspecified error"),
             ErrTube(e) => write!(f, "tube error: {}", e),
             ErrBase(e) => write!(f, "base error: {}", e),
             ErrRutabaga(e) => write!(f, "renderer error: {}", e),
             ErrDisplay(e) => write!(f, "display error: {}", e),
             ErrScanout { num_scanouts } => write!(f, "non-zero scanout: {}", num_scanouts),
             ErrUdmabuf(e) => write!(f, "udmabuf error: {}", e),
+            ErrInvalidScanoutId => write!(f, "invalid scanout id"),
+            ErrInvalidResourceId => write!(f, "invalid resource id"),
+            ErrInvalidContextId => write!(f, "invalid context id"),
+            ErrInvalidParameter => write!(f, "invalid parameter"),
             _ => Ok(()),
         }
     }
