@@ -12,10 +12,6 @@ pub trait PowerMonitor: ReadNotifier {
     fn read_message(&mut self) -> std::result::Result<Option<PowerData>, Box<dyn Error>>;
 }
 
-pub trait PowerClient {
-    fn get_power_data(&mut self) -> std::result::Result<PowerData, Box<dyn Error>>;
-}
-
 pub struct PowerData {
     pub ac_online: bool,
     pub battery: Option<BatteryData>,
