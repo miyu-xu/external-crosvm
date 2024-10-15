@@ -31,6 +31,7 @@ rust_library {
     rustlibs: [
         "libbase_rust",
         "libprotobuf",
+        "libsystem_api",
         "libthiserror",
     ],
     srcs: [
