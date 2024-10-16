@@ -33,6 +33,24 @@
       "message": "(Frederick should look as well)",
       "revId": "8c5e8f2121e1823ae40d15abd0133174a3a15131",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6f36f7ee_1e43a732",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-10-16T16:19:17Z",
+      "side": 1,
+      "message": "I\u0027ll try to sort it out after this revert goes in.\n\n@quic_pheragu@quicinc.com: FYI, this never landed upstream because it caused performance issues for ChromeOS and now it is causing conflicts in the crosvm merge. We are temporarily reverting it here, but I\u0027ll rebase it onto AOSP soon and try to restart the upstream discussion.",
+      "parentUuid": "fdf0d2cf_5aec38bd",
+      "revId": "8c5e8f2121e1823ae40d15abd0133174a3a15131",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
