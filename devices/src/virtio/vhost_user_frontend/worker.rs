@@ -38,6 +38,7 @@ impl Worker {
             NonMsixEvt,
             Resample,
             ReqHandlerRead,
+            #[cfg(target_os = "windows")]
             ReqHandlerClose,
             // monitor whether backend_client_fd is broken
             BackendCloseNotify,
@@ -62,14 +63,6 @@ impl Worker {
                 )
                 .context("failed to add backend req handler to WaitContext")?;
 
-            #[cfg(any(target_os = "android", target_os = "linux"))]
-            wait_ctx
-                .add_for_event(
-                    backend_req_handler.get_read_notifier(),
-                    EventType::None, // only get hangup events from the close notifier
-                    Token::ReqHandlerClose,
-                )
-                .context("failed to add backend req handler close notifier to WaitContext")?;
             #[cfg(target_os = "windows")]
             wait_ctx
                 .add(
@@ -132,11 +125,10 @@ impl Worker {
                                 let _ = wait_ctx.delete(backend_req_handler.get_close_notifier());
                                 self.backend_req_handler = None;
                             }
-                            Err(e) => {
-                                bail!("failed to handle a vhost-user request: {}", e);
-                            }
+                            Err(e) => return Err(e).context("failed to handle vhost-user request"),
                         }
                     }
+                    #[cfg(target_os = "windows")]
                     Token::ReqHandlerClose => {
                         let Some(backend_req_handler) = self.backend_req_handler.as_mut() else {
                             continue;
@@ -144,7 +136,6 @@ impl Worker {
 
                         info!("backend req handler connection closed");
                         let _ = wait_ctx.delete(backend_req_handler.get_read_notifier());
-                        #[cfg(target_os = "windows")]
                         let _ = wait_ctx.delete(backend_req_handler.get_close_notifier());
                         self.backend_req_handler = None;
                     }
@@ -156,7 +147,7 @@ impl Worker {
                             warn!("event besides hungup should not be notified");
                             continue;
                         }
-                        panic!("Backend device disconnected");
+                        bail!("Backend device disconnected early");
                     }
                 }
             }
