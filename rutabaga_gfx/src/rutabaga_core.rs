@@ -284,6 +284,15 @@ pub trait RutabagaComponent {
         Err(RutabagaError::Unsupported)
     }
 
+    /// Implementations must restore the context from the given stream.
+    fn restore_context(
+        &self,
+        _snapshot: Vec<u8>,
+        _fence_handler: RutabagaFenceHandler,
+    ) -> RutabagaResult<Box<dyn RutabagaContext>> {
+        Err(RutabagaError::Unsupported)
+    }
+
     /// Implementations should resume workers.
     fn resume(&self) -> RutabagaResult<()> {
         Ok(())
@@ -334,6 +343,11 @@ pub trait RutabagaContext {
 
     /// Implementations must return the component type associated with the context.
     fn component_type(&self) -> RutabagaComponentType;
+
+    /// Implementations must serialize the context.
+    fn snapshot(&self) -> RutabagaResult<Vec<u8>> {
+        Err(RutabagaError::Unsupported)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -448,6 +462,7 @@ pub struct Rutabaga {
 #[derive(Deserialize, Serialize)]
 pub struct RutabagaSnapshot {
     resources: Map<u32, RutabagaResourceSnapshot>,
+    contexts: Map<u32, Vec<u8>>,
 }
 
 impl Rutabaga {
@@ -475,6 +490,11 @@ impl Rutabaga {
                 .resources
                 .iter()
                 .map(|(i, r)| Ok((*i, RutabagaResourceSnapshot::try_from(r)?)))
+                .collect::<RutabagaResult<_>>()?,
+            contexts: self
+                .contexts
+                .iter()
+                .map(|(i, c)| Ok((*i, c.snapshot()?)))
                 .collect::<RutabagaResult<_>>()?,
         };
 
@@ -517,6 +537,11 @@ impl Rutabaga {
             .resources
             .into_iter()
             .map(|(i, s)| Ok((i, RutabagaResource::try_from(s)?)))
+            .collect::<RutabagaResult<_>>()?;
+        self.contexts = snapshot
+            .contexts
+            .into_iter()
+            .map(|(i, c)| Ok((i, component.restore_context(c, self.fence_handler.clone())?)))
             .collect::<RutabagaResult<_>>()?;
 
         Ok(())

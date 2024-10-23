@@ -11,6 +11,8 @@
 use std::convert::TryInto;
 use std::ffi::CString;
 use std::io::IoSliceMut;
+use std::io::Read;
+use std::io::Write;
 use std::mem::size_of;
 use std::os::raw::c_char;
 use std::os::raw::c_int;
@@ -21,6 +23,9 @@ use std::process::abort;
 use std::ptr::null;
 use std::ptr::null_mut;
 use std::sync::Arc;
+
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::generated::virgl_renderer_bindings::iovec;
 use crate::generated::virgl_renderer_bindings::virgl_box;
@@ -206,6 +211,11 @@ pub struct Gfxstream {
     _cookie: Box<RutabagaCookie>,
 }
 
+#[derive(Deserialize, Serialize)]
+struct GfxstreamContextSnapshot {
+    ctx_id: u32,
+}
+
 struct GfxstreamContext {
     ctx_id: u32,
     fence_handler: RutabagaFenceHandler,
@@ -307,6 +317,17 @@ impl RutabagaContext for GfxstreamContext {
         }
 
         Ok(hnd)
+    }
+
+    fn snapshot(&self) -> RutabagaResult<Vec<u8>> {
+        let snapshot = GfxstreamContextSnapshot {
+            ctx_id: self.ctx_id,
+        };
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        serde_json::to_writer(&mut buffer, &snapshot)
+            .map_err(|e| RutabagaError::IoError(e.into()))?;
+        Ok(buffer.into_inner())
     }
 }
 
@@ -822,6 +843,21 @@ impl RutabagaComponent for Gfxstream {
         let ret = unsafe { stream_renderer_restore(cstring.as_ptr() as *const c_char) };
         ret_to_res(ret)?;
         Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
+    fn restore_context(
+        &self,
+        snapshot: Vec<u8>,
+        fence_handler: RutabagaFenceHandler,
+    ) -> RutabagaResult<Box<dyn RutabagaContext>> {
+        let context_snapshot: GfxstreamContextSnapshot =
+            serde_json::from_reader(&snapshot[..]).map_err(|e| RutabagaError::IoError(e.into()))?;
+
+        Ok(Box::new(GfxstreamContext {
+            ctx_id: context_snapshot.ctx_id,
+            fence_handler,
+        }))
     }
 
     #[cfg(gfxstream_unstable)]
