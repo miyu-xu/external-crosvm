@@ -822,6 +822,7 @@ pub struct Config {
     pub mmio_address_ranges: Vec<AddressRange>,
     #[cfg(target_arch = "aarch64")]
     pub mte: bool,
+    pub name: Option<String>,
     #[cfg(feature = "net")]
     pub net: Vec<NetParameters>,
     #[cfg(windows)]
@@ -919,6 +920,7 @@ pub struct Config {
         any(target_os = "android", target_os = "linux")
     ))]
     pub virt_cpufreq: bool,
+    pub virt_cpufreq_v2: bool,
     pub virtio_input: Vec<InputDeviceOption>,
     #[cfg(feature = "audio")]
     #[serde(skip)]
@@ -1050,6 +1052,7 @@ impl Default for Config {
             mmio_address_ranges: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             mte: false,
+            name: None,
             #[cfg(feature = "net")]
             net: Vec::new(),
             #[cfg(windows)]
@@ -1141,6 +1144,7 @@ impl Default for Config {
                 any(target_os = "android", target_os = "linux")
             ))]
             virt_cpufreq: false,
+            virt_cpufreq_v2: false,
             virtio_input: Vec::new(),
             #[cfg(feature = "audio")]
             virtio_snds: Vec::new(),

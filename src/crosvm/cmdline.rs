@@ -1634,6 +1634,14 @@ pub struct RunCommand {
     /// to 800x1280) and a name for the input device
     pub multi_touch: Vec<TouchDeviceOption>,
 
+    #[argh(option)]
+    #[merge(strategy = overwrite_option)]
+    /// optional name for the VM. This is used as the name of the crosvm
+    /// process which is helpful to distinguish multiple crosvm processes.
+    /// A name longer than 15 bytes is truncated on Linux-like OSes. This
+    /// is no-op on Windows and MacOS at the moment.
+    pub name: Option<String>,
+
     #[cfg(all(unix, feature = "net"))]
     #[argh(
         option,
@@ -2579,6 +2587,17 @@ pub struct RunCommand {
     /// enable a virtual cpu freq device
     pub virt_cpufreq: Option<bool>,
 
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[argh(switch)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// enable version of the virtual cpu freq device compatible
+    /// with the driver in upstream linux
+    pub virt_cpufreq_upstream: Option<bool>,
+
     #[cfg(feature = "audio")]
     #[argh(
         option,
@@ -2775,6 +2794,10 @@ impl TryFrom<RunCommand> for super::config::Config {
         ))]
         {
             cfg.virt_cpufreq = cmd.virt_cpufreq.unwrap_or_default();
+            cfg.virt_cpufreq_v2 = cmd.virt_cpufreq_upstream.unwrap_or_default();
+            if cfg.virt_cpufreq && cfg.virt_cpufreq_v2 {
+                return Err("Only one version of virt-cpufreq can be used!".to_string());
+            }
             if let Some(frequencies) = cmd.cpu_frequencies_khz {
                 cfg.cpu_frequencies_khz = frequencies;
             }
@@ -3651,6 +3674,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         if cmd.disable_sandbox.unwrap_or_default() {
             cfg.jail_config = None;
         }
+
+        cfg.name = cmd.name;
 
         // Now do validation of constructed config
         super::config::validate_config(&mut cfg)?;
