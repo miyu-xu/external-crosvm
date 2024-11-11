@@ -79,8 +79,6 @@ rust_library {
         "liblibc",
         "liblog_rust",
         "libnix",
-        "libserde",
-        "libserde_json",
         "libthiserror",
         "libzerocopy",
     ],
