@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "c87a5815_47dc695a",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-11-11T17:46:46Z",
+      "side": 0,
+      "message": "This seems odd to me. serde/serde_json are still part of the Cargo.toml, I wonder why they\u0027d be removed here.\n\nhttps://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/rutabaga_gfx/Cargo.toml#23",
+      "range": {
+        "startLine": 82,
+        "startChar": 9,
+        "endLine": 83,
+        "endChar": 24
+      },
+      "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
