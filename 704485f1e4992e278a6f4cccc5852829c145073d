@@ -22,6 +22,30 @@
       },
       "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6b34ae79_bf2760cd",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-11-11T17:51:23Z",
+      "side": 0,
+      "message": "I\u0027m not sure, I don\u0027t see any changes with `serde` in this merge so I also don\u0027t see why it would be removed.\n\nThese were removed in the cargo_embargo step, and everything built fine locally. I see the test_suites are failing in presubmits because of this though.",
+      "parentUuid": "c87a5815_47dc695a",
+      "range": {
+        "startLine": 82,
+        "startChar": 9,
+        "endLine": 83,
+        "endChar": 24
+      },
+      "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
