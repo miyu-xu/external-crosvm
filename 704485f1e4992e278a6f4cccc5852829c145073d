@@ -46,6 +46,30 @@
       },
       "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "56a68e65_89df5097",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2024-11-11T18:44:38Z",
+      "side": 0,
+      "message": "I think `derive` should be added to cargo_embargo.json features? Although that wouldn\u0027t explain why libzerocopy is still there, definitely sounds like there\u0027s a bug\n\nhttps://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/cargo_embargo.json;l\u003d3?q\u003dcrosvm%20cargo_embargo.json\u0026ss\u003dandroid%2Fplatform%2Fsuperproject%2Fmain",
+      "parentUuid": "6b34ae79_bf2760cd",
+      "range": {
+        "startLine": 82,
+        "startChar": 9,
+        "endLine": 83,
+        "endChar": 24
+      },
+      "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
