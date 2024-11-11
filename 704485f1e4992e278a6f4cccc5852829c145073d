@@ -94,6 +94,30 @@
       },
       "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "69e0e31d_95f6fd7e",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 1
+      },
+      "lineNbr": 83,
+      "author": {
+        "id": 1956258
+      },
+      "writtenOn": "2024-11-11T21:07:17Z",
+      "side": 0,
+      "message": "Is updating patch files something we manually do for the merges? I remember adding these two libs to fix the same test breakage in previous merge.",
+      "parentUuid": "77135aac_63344a24",
+      "range": {
+        "startLine": 82,
+        "startChar": 9,
+        "endLine": 83,
+        "endChar": 24
+      },
+      "revId": "704485f1e4992e278a6f4cccc5852829c145073d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
