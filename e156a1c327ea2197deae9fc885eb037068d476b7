@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bf8d210a_777def3b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-11-11T21:15:54Z",
+      "side": 1,
+      "message": "Trying to figure out how to update `external/mesa3d`. First attempt with `external_updater` failed to find the latest changes that fixed the `exec.fence_fd` error.",
+      "revId": "e156a1c327ea2197deae9fc885eb037068d476b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
