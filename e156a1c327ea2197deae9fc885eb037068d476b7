@@ -16,6 +16,24 @@
       "message": "Trying to figure out how to update `external/mesa3d`. First attempt with `external_updater` failed to find the latest changes that fixed the `exec.fence_fd` error.",
       "revId": "e156a1c327ea2197deae9fc885eb037068d476b7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cc8d1423_f7448f29",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2024-11-12T00:31:01Z",
+      "side": 1,
+      "message": "Done with cherry-pick https://r.android.com/c/platform/external/mesa3d/+/3326457-together",
+      "parentUuid": "bf8d210a_777def3b",
+      "revId": "e156a1c327ea2197deae9fc885eb037068d476b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
