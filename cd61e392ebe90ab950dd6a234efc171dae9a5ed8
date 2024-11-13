@@ -22,6 +22,30 @@
       },
       "revId": "cd61e392ebe90ab950dd6a234efc171dae9a5ed8",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "95fc563b_a7be864e",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1882526
+      },
+      "writtenOn": "2024-11-13T09:48:21Z",
+      "side": 1,
+      "message": "Hadn\u0027t looked into the details so thanks for letting me know!",
+      "parentUuid": "2535d5cc_392e1836",
+      "range": {
+        "startLine": 14,
+        "startChar": 0,
+        "endLine": 17,
+        "endChar": 0
+      },
+      "revId": "cd61e392ebe90ab950dd6a234efc171dae9a5ed8",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
