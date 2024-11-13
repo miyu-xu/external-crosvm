@@ -9,7 +9,10 @@ mod virtio_gpu;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::BufWriter;
 use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -2059,6 +2062,22 @@ impl VirtioDevice for Gpu {
         } else {
             Err(anyhow!("virtio gpu worker not available for snapshot"))
         }
+    }
+
+    fn supports_virtio_snapshot_to_file(&self) -> bool {
+        true
+    }
+
+    fn virtio_snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let snapshot = self.virtio_snapshot()?;
+
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer(&mut writer, &snapshot)
+            .context("failed to write virtio gpu snapshot to file")?;
+        writer.flush()
+              .context("failed to flush virtio gpu snapshot to file")?;
+
+        Ok(())
     }
 
     fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {

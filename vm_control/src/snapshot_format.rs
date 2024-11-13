@@ -118,6 +118,22 @@ impl SnapshotWriter {
         Ok(())
     }
 
+    /// Creates a file for writing a snapshot fragment into.
+    pub fn write_fragment_file(&self, name: &str) -> Result<File> {
+        let path = self.dir.join(name);
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| {
+                format!(
+                    "failed to create snapshot fragment file {name:?} at {}",
+                    path.display()
+                )
+            })?;
+        Ok(file)
+    }
+
     /// Creates new namespace and returns a `SnapshotWriter` that writes to it. Namespaces can be
     /// nested.
     pub fn add_namespace(&self, name: &str) -> Result<Self> {

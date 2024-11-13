@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::File;
 use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
@@ -835,6 +836,14 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
 impl<T: PciDevice + ?Sized> Suspendable for Box<T> {
     fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         (**self).snapshot()
+    }
+
+    fn supports_snapshot_to_file(&mut self) -> anyhow::Result<bool> {
+        (**self).supports_snapshot_to_file()
+    }
+
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        (**self).snapshot_to_file(file)
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {

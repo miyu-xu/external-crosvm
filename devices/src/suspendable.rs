@@ -4,6 +4,8 @@
 
 //! Trait to suspend virtual hardware.
 
+use std::fs::File;
+
 use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,6 +23,17 @@ pub trait Suspendable {
     fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
         Err(anyhow!(
             "Suspendable::snapshot not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+    /// Whether or not `snapshot_to_file()` is supported for the device.
+    fn supports_snapshot_to_file(&mut self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    /// Save the device state into a file that can be restored.
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "Suspendable::snapshot_to_file not implemented for {}",
             std::any::type_name::<Self>()
         ))
     }

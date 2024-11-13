@@ -504,12 +504,22 @@ impl Bus {
                 BusDeviceEntry::OuterSync(dev) => {
                     let mut dev = dev.lock();
                     debug!("Snapshot on device: {}", dev.debug_label());
-                    snapshot_writer.write_fragment(
-                        &snapshot_key,
-                        &(*dev)
-                            .snapshot()
-                            .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
-                    )?;
+                    if dev.supports_snapshot_to_file()? {
+                        let fragment_file = snapshot_writer
+                            .write_fragment_file(&snapshot_key)
+                            .with_context(|| format!("failed to create snapshot fragment file for {}", dev.debug_label()))?;
+
+                        &(*dev).snapshot_to_file(fragment_file)
+                               .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?;
+                    } else {
+                        snapshot_writer.write_fragment(
+                            &snapshot_key,
+                            &(*dev)
+                                .snapshot()
+                                .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
+                        )?;
+                    }
+
                 }
                 BusDeviceEntry::InnerSync(dev) => {
                     debug!("Snapshot on device: {}", dev.debug_label());

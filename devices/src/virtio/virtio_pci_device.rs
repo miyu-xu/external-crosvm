@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
@@ -1308,6 +1309,14 @@ impl Suspendable for VirtioPciDevice {
             },
         })
         .context("failed to serialize VirtioPciDeviceSnapshot")
+    }
+
+    fn supports_snapshot_to_file(&mut self) -> anyhow::Result<bool> {
+        Ok(self.device.supports_virtio_snapshot_to_file())
+    }
+
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        self.device.virtio_snapshot_to_file(file)
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
