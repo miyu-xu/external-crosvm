@@ -11,6 +11,7 @@ use anyhow::Result;
 use base::Protection;
 use base::RawDescriptor;
 use hypervisor::MemCacheType;
+use std::fs::File;
 use vm_control::VmMemorySource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
@@ -268,6 +269,26 @@ pub trait VirtioDevice: Send {
     /// TODO(b/280607404): Vhost user will need fds passed to the device process.
     fn virtio_restore(&mut self, _data: serde_json::Value) -> anyhow::Result<()> {
         anyhow::bail!("virtio_restore not implemented for {}", self.debug_label());
+    }
+
+    /// Whether or not this device supports `virtio_snapshot_to_file()` and
+    /// `virtio_restore_from_file()`.
+    ///
+    /// Useful for devices which generate very large snapshots that are potentially
+    /// too large to be serialized and sent over a Tube (e.g. the GPU device with
+    /// textures).
+    fn virtio_supports_file_based_snapshot_restore(&self) -> bool {
+        false
+    }
+
+    /// Snapshot current state into the writable file. Device must be asleep.
+    fn virtio_snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        anyhow::bail!("virtio_snapshot_to_file() not implemented for {}", self.debug_label());
+    }
+
+    /// Restore device state from a snapshot provided as a readable file.
+    fn virtio_restore_from_file(&mut self, file: File) -> anyhow::Result<()> {
+        anyhow::bail!("virtio_restore_from_file() not implemented for {}", self.debug_label());
     }
 
     // Returns a tuple consisting of the non-arch specific part of the OpenFirmware path,

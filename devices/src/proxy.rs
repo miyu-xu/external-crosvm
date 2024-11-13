@@ -5,10 +5,12 @@
 //! Runs hardware devices in child processes.
 
 use std::fs;
+use std::fs::File;
 
 use anyhow::anyhow;
 use base::error;
 use base::info;
+use base::with_as_descriptor;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
 use base::AsRawDescriptors;
@@ -86,6 +88,15 @@ enum Command {
     Restore {
         data: serde_json::Value,
     },
+    GetFileBasedSnapshotRestoreSupport,
+    SnapshotToFile {
+        #[serde(with = "with_as_descriptor")]
+        file: File,
+    },
+    RestoreFromFile {
+        #[serde(with = "with_as_descriptor")]
+        file: File,
+    },
     Sleep,
     Wake,
 }
@@ -106,6 +117,9 @@ enum CommandResult {
     GetRangesResult(Vec<(BusRange, BusType)>),
     SnapshotResult(std::result::Result<serde_json::Value, String>),
     RestoreResult(std::result::Result<(), String>),
+    GetFileBasedSnapshotRestoreSupportResult(std::result::Result<bool, String>),
+    SnapshotToFileResult(std::result::Result<(), String>),
+    RestoreFromFileResult(std::result::Result<(), String>),
     SleepResult(std::result::Result<(), String>),
     WakeResult(std::result::Result<(), String>),
 }
@@ -224,6 +238,24 @@ fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
             Command::Restore { data } => {
                 let res = device.restore(data);
                 tube.send(&CommandResult::RestoreResult(
+                    res.map_err(|e| e.to_string()),
+                ))
+            }
+            Command::GetFileBasedSnapshotRestoreSupport => {
+                let res = device.supports_file_based_snapshot_restore();
+                tube.send(&CommandResult::GetFileBasedSnapshotRestoreSupportResult(
+                    res.map_err(|e| e.to_string()),
+                ))
+            }
+            Command::SnapshotToFile { file } => {
+                let res = device.snapshot_to_file(file);
+                tube.send(&CommandResult::SnapshotToFileResult(
+                    res.map_err(|e| e.to_string()),
+                ))
+            }
+            Command::RestoreFromFile { file } => {
+                let res = device.restore_from_file(file);
+                tube.send(&CommandResult::RestoreFromFileResult(
                     res.map_err(|e| e.to_string()),
                 ))
             }
@@ -552,6 +584,46 @@ impl Suspendable for ProxyDevice {
                 Err(anyhow!("failed to restore {}: {:#}", self.debug_label(), e))
             }
             _ => Err(anyhow!("unexpected restore result {:?}", res)),
+        }
+    }
+
+
+    fn supports_file_based_snapshot_restore(&mut self) -> anyhow::Result<bool> {
+        let res = self.sync_send(&Command::GetFileBasedSnapshotRestoreSupport);
+        match res {
+            Some(CommandResult::GetFileBasedSnapshotRestoreSupportResult(Ok(supported))) => Ok(supported),
+            Some(CommandResult::GetFileBasedSnapshotRestoreSupportResult(Err(e))) => Err(anyhow!(
+                "failed to get snapshot to file support {}: {:#}",
+                self.debug_label(),
+                e
+            )),
+            _ => Err(anyhow!("unexpected get snapshot to file result {:?}", res)),
+        }
+    }
+
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let res = self.sync_send(&Command::SnapshotToFile { file: file });
+        match res {
+            Some(CommandResult::SnapshotToFileResult(Ok(()))) => Ok(()),
+            Some(CommandResult::SnapshotToFileResult(Err(e))) => Err(anyhow!(
+                "failed to snapshot {} to file: {:#}",
+                self.debug_label(),
+                e
+            )),
+            _ => Err(anyhow!("unexpected snapshot to file result {:?}", res)),
+        }
+    }
+
+    fn restore_from_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let res = self.sync_send(&Command::RestoreFromFile { file: file });
+        match res {
+            Some(CommandResult::RestoreFromFileResult(Ok(()))) => Ok(()),
+            Some(CommandResult::RestoreFromFileResult(Err(e))) => Err(anyhow!(
+                "failed to restore {} from file: {:#}",
+                self.debug_label(),
+                e
+            )),
+            _ => Err(anyhow!("unexpected snapshot to file result {:?}", res)),
         }
     }
 

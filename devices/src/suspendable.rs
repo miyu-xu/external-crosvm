@@ -4,6 +4,8 @@
 
 //! Trait to suspend virtual hardware.
 
+use std::fs::File;
+
 use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,6 +33,30 @@ pub trait Suspendable {
             std::any::type_name::<Self>()
         ))
     }
+    /// Whether or not `snapshot_to_file()` and `restore_from_file()` is
+    /// supported for the device.
+    ///
+    /// Useful for devices which generate very large snapshots that are potentially
+    /// too large to be serialized and sent over a Tube (e.g. the GPU device with
+    /// textures).
+    fn supports_file_based_snapshot_restore(&mut self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    /// Save the device state into a file that can be restored.
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "Suspendable::snapshot_to_file not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+    /// Load a saved snapshot of an image from a given file.
+    fn restore_from_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        Err(anyhow!(
+            "Suspendable::restore_from_file not implemented for {}",
+            std::any::type_name::<Self>()
+        ))
+    }
+
     /// Stop all threads related to the device.
     /// Sleep should be idempotent.
     fn sleep(&mut self) -> anyhow::Result<()> {

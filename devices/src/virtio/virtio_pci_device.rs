@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
+use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(target_arch = "x86_64")]
@@ -333,7 +336,7 @@ enum SleepState {
 struct VirtioPciDeviceSnapshot {
     config_regs: serde_json::Value,
 
-    inner_device: serde_json::Value,
+    inner_device: Option<serde_json::Value>,
     device_activated: bool,
 
     interrupt: Option<InterruptSnapshot>,
@@ -708,6 +711,181 @@ impl VirtioPciDevice {
 
     #[cfg(not(target_arch = "x86_64"))]
     fn handle_pm_status_change(&mut self, _status: &PmStatusChange) {}
+
+    fn snasphot_impl(&mut self, include_inner_device: bool) -> anyhow::Result<VirtioPciDeviceSnapshot> {
+        if self.iommu.is_some() {
+            return Err(anyhow!("Cannot snapshot if iommu is present."));
+        }
+
+        Ok(VirtioPciDeviceSnapshot {
+            config_regs: self.config_regs.snapshot()?,
+            inner_device:
+                if include_inner_device {
+                    Some(self.device.virtio_snapshot()?)
+                } else {
+                    None
+                },
+            device_activated: self.device_activated,
+            interrupt: self.interrupt.as_ref().map(|i| i.snapshot()),
+            msix_config: self.msix_config.lock().snapshot()?,
+            common_config: self.common_config,
+            queues: self
+                .queues
+                .iter()
+                .map(|q| q.snapshot())
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            activated_queues: match &self.sleep_state {
+                None => {
+                    anyhow::bail!("tried snapshotting while awake")
+                }
+                Some(SleepState::Inactive) => None,
+                Some(SleepState::Active { activated_queues }) => {
+                    let mut serialized_queues = Vec::new();
+                    for (index, queue) in activated_queues.iter() {
+                        serialized_queues.push((*index, queue.snapshot()?));
+                    }
+                    Some(serialized_queues)
+                }
+            },
+        })
+    }
+
+    fn restore_impl(&mut self, snapshot: VirtioPciDeviceSnapshot) -> anyhow::Result<()> {
+        // Restoring from an activated state is more complex and low priority, so just fail for
+        // now. We'll need to reset the device before restoring, e.g. must call
+        // self.unregister_ioevents().
+        anyhow::ensure!(
+            !self.device_activated,
+            "tried to restore after virtio device activated. not supported yet"
+        );
+
+        self.config_regs.restore(snapshot.config_regs)?;
+        self.device_activated = snapshot.device_activated;
+
+        self.msix_config.lock().restore(snapshot.msix_config)?;
+        self.common_config = snapshot.common_config;
+
+        // Restore the interrupt. This must be done after restoring the MSI-X configuration, but
+        // before restoring the queues.
+        if let Some(interrupt) = snapshot.interrupt {
+            self.interrupt = Some(Interrupt::new_from_snapshot(
+                self.interrupt_evt
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("{} interrupt_evt is none", self.debug_label()))?
+                    .try_clone()
+                    .with_context(|| {
+                        format!("{} failed to clone interrupt_evt", self.debug_label())
+                    })?,
+                Some(self.msix_config.clone()),
+                self.common_config.msix_config,
+                interrupt,
+                #[cfg(target_arch = "x86_64")]
+                Some((
+                    PmWakeupEvent::new(self.vm_control_tube.clone(), self.pm_config.clone()),
+                    MetricEventType::VirtioWakeup {
+                        virtio_id: self.device.device_type() as u32,
+                    },
+                )),
+            ));
+        }
+
+        assert_eq!(
+            self.queues.len(),
+            snapshot.queues.len(),
+            "device must have the same number of queues"
+        );
+        for (q, s) in self.queues.iter_mut().zip(snapshot.queues.into_iter()) {
+            q.restore(s)?;
+        }
+
+        // Verify we are asleep and inactive.
+        match &self.sleep_state {
+            None => {
+                anyhow::bail!("tried restoring while awake")
+            }
+            Some(SleepState::Inactive) => {}
+            Some(SleepState::Active { .. }) => {
+                anyhow::bail!("tried to restore after virtio device activated. not supported yet")
+            }
+        };
+        // Restore `sleep_state`.
+        if let Some(activated_queues_snapshot) = snapshot.activated_queues {
+            let interrupt = self
+                .interrupt
+                .as_ref()
+                .context("tried to restore active queues without an interrupt")?;
+            let mut activated_queues = BTreeMap::new();
+            for (index, queue_snapshot) in activated_queues_snapshot {
+                let queue_config = self
+                    .queues
+                    .get(index)
+                    .with_context(|| format!("missing queue config for activated queue {index}"))?;
+                let queue_evt = self
+                    .queue_evts
+                    .get(index)
+                    .with_context(|| format!("missing queue event for activated queue {index}"))?
+                    .event
+                    .try_clone()
+                    .context("failed to clone queue event")?;
+                activated_queues.insert(
+                    index,
+                    Queue::restore(
+                        queue_config,
+                        queue_snapshot,
+                        &self.mem,
+                        queue_evt,
+                        interrupt.clone(),
+                    )?,
+                );
+            }
+
+            // Restore the activated queues.
+            self.sleep_state = Some(SleepState::Active { activated_queues });
+        } else {
+            self.sleep_state = Some(SleepState::Inactive);
+        }
+
+        // Call register_io_events for the activated queue events.
+        let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
+        let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
+        self.queues
+            .iter()
+            .enumerate()
+            .zip(self.queue_evts.iter_mut())
+            .filter(|((_, q), _)| q.ready())
+            .try_for_each(|((queue_index, _queue), evt)| {
+                if !evt.ioevent_registered {
+                    self.ioevent_vm_memory_client
+                        .register_io_event(
+                            evt.event.try_clone().context("failed to clone Event")?,
+                            notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
+                            Datamatch::AnyLength,
+                        )
+                        .context("failed to register ioevent")?;
+                    evt.ioevent_registered = true;
+                }
+                Ok::<(), anyhow::Error>(())
+            })?;
+
+        // There might be data in the queue that wasn't drained by the device
+        // at the time it was snapshotted. In this case, the doorbell should
+        // still be signaled. If it is not, the driver may never re-trigger the
+        // doorbell, and the device will stall. So here, we explicitly signal
+        // every doorbell. Spurious doorbells are safe (devices will check their
+        // queue, realize nothing is there, and go back to sleep.)
+        self.queue_evts.iter_mut().try_for_each(|queue_event| {
+            queue_event
+                .event
+                .signal()
+                .context("failed to wake doorbell")
+        })?;
+
+        if let Some(inner_device) = snapshot.inner_device {
+            self.device.virtio_restore(inner_device)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl PciDevice for VirtioPciDevice {
@@ -1277,174 +1455,51 @@ impl Suspendable for VirtioPciDevice {
     }
 
     fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
-        if self.iommu.is_some() {
-            return Err(anyhow!("Cannot snapshot if iommu is present."));
-        }
+        let snapshot = self.snasphot_impl(true)?;
 
-        serde_json::to_value(VirtioPciDeviceSnapshot {
-            config_regs: self.config_regs.snapshot()?,
-            inner_device: self.device.virtio_snapshot()?,
-            device_activated: self.device_activated,
-            interrupt: self.interrupt.as_ref().map(|i| i.snapshot()),
-            msix_config: self.msix_config.lock().snapshot()?,
-            common_config: self.common_config,
-            queues: self
-                .queues
-                .iter()
-                .map(|q| q.snapshot())
-                .collect::<anyhow::Result<Vec<_>>>()?,
-            activated_queues: match &self.sleep_state {
-                None => {
-                    anyhow::bail!("tried snapshotting while awake")
-                }
-                Some(SleepState::Inactive) => None,
-                Some(SleepState::Active { activated_queues }) => {
-                    let mut serialized_queues = Vec::new();
-                    for (index, queue) in activated_queues.iter() {
-                        serialized_queues.push((*index, queue.snapshot()?));
-                    }
-                    Some(serialized_queues)
-                }
-            },
-        })
-        .context("failed to serialize VirtioPciDeviceSnapshot")
+        serde_json::to_value(snapshot)
+            .context("failed to serialize VirtioPciDeviceSnapshot")
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
-        // Restoring from an activated state is more complex and low priority, so just fail for
-        // now. We'll need to reset the device before restoring, e.g. must call
-        // self.unregister_ioevents().
-        anyhow::ensure!(
-            !self.device_activated,
-            "tried to restore after virtio device activated. not supported yet"
-        );
+        let snapshot: VirtioPciDeviceSnapshot = serde_json::from_value(data)?;
 
-        let deser: VirtioPciDeviceSnapshot = serde_json::from_value(data)?;
+        self.restore_impl(snapshot)
+    }
 
-        self.config_regs.restore(deser.config_regs)?;
-        self.device_activated = deser.device_activated;
+    fn supports_file_based_snapshot_restore(&mut self) -> anyhow::Result<bool> {
+        Ok(self.device.virtio_supports_file_based_snapshot_restore())
+    }
 
-        self.msix_config.lock().restore(deser.msix_config)?;
-        self.common_config = deser.common_config;
+    fn snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let snapshot = self.snasphot_impl(false)
+                           .context("failed to snapshot virtio pci device")?;
 
-        // Restore the interrupt. This must be done after restoring the MSI-X configuration, but
-        // before restoring the queues.
-        if let Some(deser_interrupt) = deser.interrupt {
-            self.interrupt = Some(Interrupt::new_from_snapshot(
-                self.interrupt_evt
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("{} interrupt_evt is none", self.debug_label()))?
-                    .try_clone()
-                    .with_context(|| {
-                        format!("{} failed to clone interrupt_evt", self.debug_label())
-                    })?,
-                Some(self.msix_config.clone()),
-                self.common_config.msix_config,
-                deser_interrupt,
-                #[cfg(target_arch = "x86_64")]
-                Some((
-                    PmWakeupEvent::new(self.vm_control_tube.clone(), self.pm_config.clone()),
-                    MetricEventType::VirtioWakeup {
-                        virtio_id: self.device.device_type() as u32,
-                    },
-                )),
-            ));
-        }
+        let mut w = std::io::BufWriter::new(file);
+        serde_json::to_writer(&mut w, &snapshot)
+            .context("failed to write virtio pci device snapshot")?;
+        w.flush()
+         .context("failed to flush virtio pci device snapshot")?;
 
-        assert_eq!(
-            self.queues.len(),
-            deser.queues.len(),
-            "device must have the same number of queues"
-        );
-        for (q, s) in self.queues.iter_mut().zip(deser.queues.into_iter()) {
-            q.restore(s)?;
-        }
+        let file = w.into_inner()
+                    .context("failed to get virtio pci device snapshot file")?;
+        self.device
+            .virtio_snapshot_to_file(file)
+            .context("failed to snapshot virtio pci device's inner device.")
+    }
 
-        // Verify we are asleep and inactive.
-        match &self.sleep_state {
-            None => {
-                anyhow::bail!("tried restoring while awake")
-            }
-            Some(SleepState::Inactive) => {}
-            Some(SleepState::Active { .. }) => {
-                anyhow::bail!("tried to restore after virtio device activated. not supported yet")
-            }
-        };
-        // Restore `sleep_state`.
-        if let Some(activated_queues_snapshot) = deser.activated_queues {
-            let interrupt = self
-                .interrupt
-                .as_ref()
-                .context("tried to restore active queues without an interrupt")?;
-            let mut activated_queues = BTreeMap::new();
-            for (index, queue_snapshot) in activated_queues_snapshot {
-                let queue_config = self
-                    .queues
-                    .get(index)
-                    .with_context(|| format!("missing queue config for activated queue {index}"))?;
-                let queue_evt = self
-                    .queue_evts
-                    .get(index)
-                    .with_context(|| format!("missing queue event for activated queue {index}"))?
-                    .event
-                    .try_clone()
-                    .context("failed to clone queue event")?;
-                activated_queues.insert(
-                    index,
-                    Queue::restore(
-                        queue_config,
-                        queue_snapshot,
-                        &self.mem,
-                        queue_evt,
-                        interrupt.clone(),
-                    )?,
-                );
-            }
+    fn restore_from_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let deserializer = serde_json::Deserializer::from_reader(&mut file);
 
-            // Restore the activated queues.
-            self.sleep_state = Some(SleepState::Active { activated_queues });
-        } else {
-            self.sleep_state = Some(SleepState::Inactive);
-        }
+        // "read one thing without closing the stream"
+        let snapshot = deserializer.into_iter::<VirtioPciDeviceSnapshot>().next()
+            .ok_or_else(|| anyhow!("failed to read virtio pci device snapshot from file"))??;
 
-        // Call register_io_events for the activated queue events.
-        let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
-        let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
-        self.queues
-            .iter()
-            .enumerate()
-            .zip(self.queue_evts.iter_mut())
-            .filter(|((_, q), _)| q.ready())
-            .try_for_each(|((queue_index, _queue), evt)| {
-                if !evt.ioevent_registered {
-                    self.ioevent_vm_memory_client
-                        .register_io_event(
-                            evt.event.try_clone().context("failed to clone Event")?,
-                            notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
-                            Datamatch::AnyLength,
-                        )
-                        .context("failed to register ioevent")?;
-                    evt.ioevent_registered = true;
-                }
-                Ok::<(), anyhow::Error>(())
-            })?;
+        self.restore_impl(snapshot)?;
 
-        // There might be data in the queue that wasn't drained by the device
-        // at the time it was snapshotted. In this case, the doorbell should
-        // still be signaled. If it is not, the driver may never re-trigger the
-        // doorbell, and the device will stall. So here, we explicitly signal
-        // every doorbell. Spurious doorbells are safe (devices will check their
-        // queue, realize nothing is there, and go back to sleep.)
-        self.queue_evts.iter_mut().try_for_each(|queue_event| {
-            queue_event
-                .event
-                .signal()
-                .context("failed to wake doorbell")
-        })?;
-
-        self.device.virtio_restore(deser.inner_device)?;
-
-        Ok(())
+        self.device
+            .virtio_restore_from_file(file)
+            .context("failed to restore virtio pci device's inner device")
     }
 }
 

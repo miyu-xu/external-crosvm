@@ -9,7 +9,10 @@ mod virtio_gpu;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::BufWriter;
 use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -1745,6 +1748,91 @@ impl Gpu {
             .send::<VmEventType>(&VmEventType::Exit)
             .context("failed to send exit event")
     }
+
+    fn virtio_snapshot_impl(&mut self) -> anyhow::Result<WorkerSnapshot> {
+        match self.worker_state {
+            WorkerState::Error => {
+                return Err(anyhow!(
+                    "failed to snapshot virtio gpu worker which is in error state"
+                ));
+            }
+            WorkerState::Active => {
+                return Err(anyhow!(
+                    "failed to snapshot virtio gpu worker which is in active state"
+                ));
+            }
+            _ => (),
+        };
+
+        if let (Some(worker_request_sender), Some(worker_response_receiver)) =
+            (&self.worker_request_sender, &self.worker_response_receiver)
+        {
+            worker_request_sender
+                .send(WorkerRequest::Snapshot)
+                .map_err(|e| {
+                    anyhow!(
+                        "failed to send snapshot request to virtio gpu worker: {:?}",
+                        e
+                    )
+                })?;
+
+            match worker_response_receiver
+                .recv()
+                .inspect_err(|_| self.worker_state = WorkerState::Error)
+                .context("failed to receive response for virtio gpu worker suspend request")??
+            {
+                WorkerResponse::Snapshot(snapshot) => Ok(snapshot),
+                _ => {
+                    panic!("unexpected response from virtio gpu worker sleep request");
+                }
+            }
+        } else {
+            Err(anyhow!("virtio gpu worker not available for snapshot"))
+        }
+    }
+
+    fn virtio_restore_impl(&mut self, snapshot: WorkerSnapshot) -> anyhow::Result<()> {
+        match self.worker_state {
+            WorkerState::Error => {
+                return Err(anyhow!(
+                    "failed to restore virtio gpu worker which is in error state"
+                ));
+            }
+            WorkerState::Active => {
+                return Err(anyhow!(
+                    "failed to restore virtio gpu worker which is in active state"
+                ));
+            }
+            _ => (),
+        };
+
+        if let (Some(worker_request_sender), Some(worker_response_receiver)) =
+            (&self.worker_request_sender, &self.worker_response_receiver)
+        {
+            worker_request_sender
+                .send(WorkerRequest::Restore(snapshot))
+                .map_err(|e| {
+                    anyhow!(
+                        "failed to send suspend request to virtio gpu worker: {:?}",
+                        e
+                    )
+                })?;
+
+            let response = worker_response_receiver
+                .recv()
+                .inspect_err(|_| self.worker_state = WorkerState::Error)
+                .context("failed to receive response for virtio gpu worker suspend request")??;
+
+            match response {
+                WorkerResponse::Ok => Ok(()),
+                _ => {
+                    panic!("unexpected response from virtio gpu worker sleep request");
+                }
+            }
+        } else {
+            Err(anyhow!("virtio gpu worker not available for restore"))
+        }
+    }
 }
 
 impl VirtioDevice for Gpu {
@@ -2020,90 +2108,36 @@ impl VirtioDevice for Gpu {
     }
 
     fn virtio_snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
-        match self.worker_state {
-            WorkerState::Error => {
-                return Err(anyhow!(
-                    "failed to snapshot virtio gpu worker which is in error state"
-                ));
-            }
-            WorkerState::Active => {
-                return Err(anyhow!(
-                    "failed to snapshot virtio gpu worker which is in active state"
-                ));
-            }
-            _ => (),
-        };
-
-        if let (Some(worker_request_sender), Some(worker_response_receiver)) =
-            (&self.worker_request_sender, &self.worker_response_receiver)
-        {
-            worker_request_sender
-                .send(WorkerRequest::Snapshot)
-                .map_err(|e| {
-                    anyhow!(
-                        "failed to send snapshot request to virtio gpu worker: {:?}",
-                        e
-                    )
-                })?;
-
-            match worker_response_receiver
-                .recv()
-                .inspect_err(|_| self.worker_state = WorkerState::Error)
-                .context("failed to receive response for virtio gpu worker suspend request")??
-            {
-                WorkerResponse::Snapshot(snapshot) => Ok(serde_json::to_value(snapshot)?),
-                _ => {
-                    panic!("unexpected response from virtio gpu worker sleep request");
-                }
-            }
-        } else {
-            Err(anyhow!("virtio gpu worker not available for snapshot"))
-        }
+        let snapshot = self.virtio_snapshot_impl()?;
+        Ok(serde_json::to_value(snapshot)?)
     }
 
     fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
-        match self.worker_state {
-            WorkerState::Error => {
-                return Err(anyhow!(
-                    "failed to restore virtio gpu worker which is in error state"
-                ));
-            }
-            WorkerState::Active => {
-                return Err(anyhow!(
-                    "failed to restore virtio gpu worker which is in active state"
-                ));
-            }
-            _ => (),
-        };
-
         let snapshot: WorkerSnapshot = serde_json::from_value(data)?;
+        self.virtio_restore_impl(snapshot)
+    }
 
-        if let (Some(worker_request_sender), Some(worker_response_receiver)) =
-            (&self.worker_request_sender, &self.worker_response_receiver)
-        {
-            worker_request_sender
-                .send(WorkerRequest::Restore(snapshot))
-                .map_err(|e| {
-                    anyhow!(
-                        "failed to send suspend request to virtio gpu worker: {:?}",
-                        e
-                    )
-                })?;
+    fn virtio_supports_file_based_snapshot_restore(&self) -> bool {
+        true
+    }
 
-            let response = worker_response_receiver
-                .recv()
-                .inspect_err(|_| self.worker_state = WorkerState::Error)
-                .context("failed to receive response for virtio gpu worker suspend request")??;
+    fn virtio_snapshot_to_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let snapshot = self.virtio_snapshot()?;
 
-            match response {
-                WorkerResponse::Ok => Ok(()),
-                _ => {
-                    panic!("unexpected response from virtio gpu worker sleep request");
-                }
-            }
-        } else {
-            Err(anyhow!("virtio gpu worker not available for restore"))
-        }
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer(&mut writer, &snapshot)
+            .context("failed to write virtio gpu snapshot to file")?;
+        writer.flush()
+              .context("failed to flush virtio gpu snapshot to file")?;
+
+        Ok(())
+    }
+
+    fn virtio_restore_from_file(&mut self, mut file: File) -> anyhow::Result<()> {
+        let mut r = std::io::BufReader::new(file);
+        let snapshot : WorkerSnapshot = serde_json::from_reader(&mut r)
+            .context("failed to read virtio gpu snapshot from file")?;
+        self.virtio_restore_impl(snapshot)
     }
 
     fn reset(&mut self) -> anyhow::Result<()> {

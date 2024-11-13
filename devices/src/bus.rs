@@ -504,12 +504,22 @@ impl Bus {
                 BusDeviceEntry::OuterSync(dev) => {
                     let mut dev = dev.lock();
                     debug!("Snapshot on device: {}", dev.debug_label());
-                    snapshot_writer.write_fragment(
-                        &snapshot_key,
-                        &(*dev)
-                            .snapshot()
-                            .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
-                    )?;
+                    if dev.supports_file_based_snapshot_restore()? {
+                        let fragment_file = snapshot_writer
+                            .write_fragment_file(&snapshot_key)
+                            .with_context(|| format!("failed to create snapshot fragment file for {}", dev.debug_label()))?;
+
+                        &(*dev).snapshot_to_file(fragment_file)
+                               .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?;
+                    } else {
+                        snapshot_writer.write_fragment(
+                            &snapshot_key,
+                            &(*dev)
+                                .snapshot()
+                                .with_context(|| format!("failed to snapshot {}", dev.debug_label()))?,
+                        )?;
+                    }
+
                 }
                 BusDeviceEntry::InnerSync(dev) => {
                     debug!("Snapshot on device: {}", dev.debug_label());
@@ -536,10 +546,19 @@ impl Bus {
                 BusDeviceEntry::OuterSync(dev) => {
                     let mut dev = dev.lock();
                     debug!("Restore on device: {}", dev.debug_label());
-                    dev.restore(snapshot_reader.read_fragment(&snapshot_key)?)
-                        .with_context(|| {
-                            format!("restore failed for device {}", dev.debug_label())
-                        })?;
+                    if dev.supports_file_based_snapshot_restore()? {
+                        let fragment_file = snapshot_reader
+                            .read_fragment_file(&snapshot_key)
+                            .with_context(|| format!("failed to create snapshot fragment file for {}", dev.debug_label()))?;
+
+                        &(*dev).restore_from_file(fragment_file)
+                               .with_context(|| format!("failed to restore {}", dev.debug_label()))?;
+                    } else {
+                        dev.restore(snapshot_reader.read_fragment(&snapshot_key)?)
+                           .with_context(|| {
+                               format!("restore failed for device {}", dev.debug_label())
+                           })?;
+                    }
                 }
                 BusDeviceEntry::InnerSync(dev) => {
                     debug!("Restore on device: {}", dev.debug_label());
