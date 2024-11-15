@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::descriptor::AsRawDescriptor;
 use crate::descriptor_reflection::deserialize_with_descriptors;
 use crate::descriptor_reflection::SerializeDescriptors;
+use crate::error;
 use crate::handle_eintr;
 use crate::tube::Error;
 use crate::tube::RecvTube;
@@ -101,8 +102,34 @@ impl Tube {
             return Err(Error::SendTooManyFds);
         }
 
-        handle_eintr!(self.socket.send_with_fds(&msg_json, &msg_descriptors))
-            .map_err(Error::Send)?;
+        let msg_json_size: usize = msg_json.len();
+        let msg_json_size_as_bytes = msg_json_size.to_le_bytes();
+
+        handle_eintr!(self.socket.send_with_fds(&msg_json_size_as_bytes, &msg_descriptors))
+            .map_err(|e| {
+                error!("jasonjason failed to send msg size + fds: {}", e);
+                Error::Send(e)
+            })?;
+
+        let no_fds: [RawFd; 0] = [];
+
+        let send_size: usize = 65507; // TODO: find this programatically
+
+        let mut total_sent: usize = 0;
+        while total_sent < msg_json_size {
+            let next_chunk_start = total_sent;
+            let next_chunk_stop = std::cmp::min(total_sent + send_size, msg_json_size);
+            let next_chunk = &msg_json[next_chunk_start..next_chunk_stop];
+
+            let just_sent = handle_eintr!(self.socket.send_with_fds(next_chunk, &no_fds))
+                .map_err(|e| {
+                    error!("jasonjason failed to send msg bytes at offset {}: {}", total_sent, e);
+                    Error::Send(e)
+                })?;
+
+            total_sent += just_sent;
+        }
+
         Ok(())
     }
 
@@ -123,18 +150,41 @@ impl Tube {
         // is readable, then a call to `Tube::recv` will not block (which ought to be true since we
         // use SOCK_SEQPACKET and a single recvmsg call currently).
 
-        let msg_size = handle_eintr!(self.socket.inner().peek_size()).map_err(Error::Recv)?;
-        // This buffer is the right size, as the size received in peek_size() represents the size
-        // of only the message itself and not the file descriptors. The descriptors are stored
-        // separately in msghdr::msg_control.
-        let mut msg_json = vec![0u8; msg_size];
+        let mut msg_json_size_bytes = [0u8; 8];
 
-        let (msg_json_size, msg_descriptors) =
-            handle_eintr!(self.socket.recv_with_fds(&mut msg_json, max_fds))
-                .map_err(Error::Recv)?;
-
-        if msg_json_size == 0 {
+        let (msg_json_size_recv, msg_descriptors) =
+            handle_eintr!(self.socket.recv_with_fds(&mut msg_json_size_bytes, max_fds))
+                .map_err(|e| {
+                    error!("jasonjason failed to receive message size + fds: {}", e);
+                    Error::Recv(e)
+                })?;
+        if msg_json_size_recv == 0 {
             return Err(Error::Disconnected);
+        }
+        if msg_json_size_recv != 8 {
+            error!("jasonjason didn't receive 8 bytes for message len: instead {}", msg_json_size_recv);
+            return Err(Error::Recv(std::io::Error::new(std::io::ErrorKind::Other, "failed to fully read msg size")));
+        }
+
+        let packet_size: usize = 65507; // TODO: find this programatically
+
+        let msg_json_size = usize::from_le_bytes(msg_json_size_bytes);
+        let mut msg_json = vec![0u8; msg_json_size];
+
+        let mut total_recv: usize = 0;
+        while total_recv < msg_json_size {
+            let next_chunk_start = total_recv;
+            let next_chunk_end = std::cmp::min(total_recv + packet_size, msg_json_size);
+            let mut next_chunk = &mut msg_json[next_chunk_start..next_chunk_end];
+
+            let (just_recv, _) =
+                handle_eintr!(self.socket.recv_with_fds(&mut next_chunk, 0))
+                    .map_err(Error::Recv)?;
+            if just_recv == 0 {
+                return Err(Error::Disconnected);
+            }
+
+            total_recv += just_recv;
         }
 
         deserialize_with_descriptors(
