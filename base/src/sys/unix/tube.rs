@@ -101,8 +101,22 @@ impl Tube {
             return Err(Error::SendTooManyFds);
         }
 
-        handle_eintr!(self.socket.send_with_fds(&msg_json, &msg_descriptors))
+        let msg_json_size: usize = msg_json.len();
+        let msg_json_size_as_bytes = msg_json_size.to_le_bytes();
+
+        handle_eintr!(self.socket.send_with_fds(&msg_json_size_as_bytes, &msg_descriptors))
             .map_err(Error::Send)?;
+
+        let no_fds: [RawFd; 0] = [];
+
+        let mut total_sent: usize = 0;
+        while total_sent < msg_json_size {
+            let just_sent = handle_eintr!(self.socket.send_with_fds(&msg_json[total_sent..msg_json_size], &msg_descriptors))
+                .map_err(Error::Send)?;
+
+            total_sent += just_sent;
+        }
+
         Ok(())
     }
 
@@ -123,18 +137,28 @@ impl Tube {
         // is readable, then a call to `Tube::recv` will not block (which ought to be true since we
         // use SOCK_SEQPACKET and a single recvmsg call currently).
 
-        let msg_size = handle_eintr!(self.socket.inner().peek_size()).map_err(Error::Recv)?;
-        // This buffer is the right size, as the size received in peek_size() represents the size
-        // of only the message itself and not the file descriptors. The descriptors are stored
-        // separately in msghdr::msg_control.
-        let mut msg_json = vec![0u8; msg_size];
+        let mut msg_json_size_bytes = [0u8; 8];
 
-        let (msg_json_size, msg_descriptors) =
-            handle_eintr!(self.socket.recv_with_fds(&mut msg_json, max_fds))
+        let (msg_json_size_recv, msg_descriptors) =
+            handle_eintr!(self.socket.recv_with_fds(&mut msg_json_size_bytes, max_fds))
                 .map_err(Error::Recv)?;
+        if msg_json_size_recv != 8 {
+            return Err(Error::Recv(std::io::Error::new(std::io::ErrorKind::Other, "failed to fully read msg size")));
+        }
 
-        if msg_json_size == 0 {
-            return Err(Error::Disconnected);
+        let msg_json_size = usize::from_le_bytes(msg_json_size_bytes);
+        let mut msg_json = vec![0u8; msg_json_size];
+
+        let mut total_recv: usize = 0;
+        while total_recv < msg_json_size {
+            let (just_recv, _) =
+                handle_eintr!(self.socket.recv_with_fds(&mut msg_json[total_recv..msg_json_size], max_fds))
+                    .map_err(Error::Recv)?;
+            if just_recv == 0 {
+                return Err(Error::Disconnected);
+            }
+
+            total_recv += just_recv;
         }
 
         deserialize_with_descriptors(
