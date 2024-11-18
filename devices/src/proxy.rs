@@ -5,10 +5,18 @@
 //! Runs hardware devices in child processes.
 
 use std::fs;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Read;
+use std::io::Seek;
+use std::io::Write;
 
 use anyhow::anyhow;
+use anyhow::Context;
 use base::error;
 use base::info;
+use base::with_as_descriptor;
 use base::AsRawDescriptor;
 #[cfg(feature = "swap")]
 use base::AsRawDescriptors;
@@ -20,8 +28,10 @@ use jail::fork::fork_process;
 use libc::pid_t;
 use minijail::Minijail;
 use remain::sorted;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use tempfile::tempfile;
 use thiserror::Error;
 
 use crate::bus::ConfigWriteResult;
@@ -49,6 +59,60 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Wrapper for sending snapshots to and receiving snapshots from proxied devices using a file
+/// to handle the case of snapshot being potentially too large to send across a Tube in a single message.
+#[derive(Debug, Serialize, Deserialize)]
+struct SnapshotFile {
+    #[serde(with = "with_as_descriptor")]
+    file: File,
+}
+
+impl SnapshotFile {
+    fn new() -> anyhow::Result<SnapshotFile> {
+        Ok(SnapshotFile{
+            file: tempfile::tempfile()
+                .context("failed to create snasphot wrapper tempfile")?
+        })
+    }
+
+    fn from_data(data: serde_json::Value) -> anyhow::Result<SnapshotFile> {
+        let mut snapshot = SnapshotFile::new()?;
+        snapshot.write(data)?;
+        Ok(snapshot)
+    }
+
+    fn read(&mut self) -> anyhow::Result<serde_json::Value> {
+        let mut data: Option<serde_json::Value> = None;
+
+        {
+            let mut reader = BufReader::new(&self.file);
+
+            data = Some(serde_json::from_reader(&mut reader)
+                .context("failed to read snapshot data from snapshot temp file")?);
+        }
+
+        self.file.rewind();
+
+        Ok(data.unwrap())
+    }
+
+    fn write(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
+        {
+            let mut writer = BufWriter::new(&self.file);
+
+            serde_json::to_writer(&mut writer, &data)
+                .context("failed to write data to snasphot temp file")?;
+
+            writer.flush()
+                .context("failed to flush data to snapshot temp file")?;
+        }
+
+        self.file.rewind();
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Command {
@@ -82,13 +146,18 @@ enum Command {
     DestroyDevice,
     Shutdown,
     GetRanges,
-    Snapshot,
+    Snapshot {
+        // NOTE: the SnapshotFile is created by the parent and sent to the child proxied device
+        // as the jailed child may not have permission to create a temp file.
+        snapshot: SnapshotFile,
+    },
     Restore {
-        data: serde_json::Value,
+        snapshot: SnapshotFile,
     },
     Sleep,
     Wake,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 enum CommandResult {
     Ok,
@@ -104,7 +173,7 @@ enum CommandResult {
     InitPciConfigMappingResult(bool),
     ReadVirtualConfigResult(u32),
     GetRangesResult(Vec<(BusRange, BusType)>),
-    SnapshotResult(std::result::Result<serde_json::Value, String>),
+    SnapshotResult(std::result::Result<SnapshotFile, String>),
     RestoreResult(std::result::Result<(), String>),
     SleepResult(std::result::Result<(), String>),
     WakeResult(std::result::Result<(), String>),
@@ -215,14 +284,19 @@ fn child_proc<D: BusDevice>(tube: Tube, mut device: D) {
                 let ranges = device.get_ranges();
                 tube.send(&CommandResult::GetRangesResult(ranges))
             }
-            Command::Snapshot => {
-                let res = device.snapshot();
+            Command::Snapshot { mut snapshot } => {
+                let res = device.snapshot()
+                                .and_then(|data| {
+                                    snapshot.write(data)?;
+                                    Ok(snapshot)
+                                });
                 tube.send(&CommandResult::SnapshotResult(
                     res.map_err(|e| e.to_string()),
                 ))
             }
-            Command::Restore { data } => {
-                let res = device.restore(data);
+            Command::Restore { mut snapshot } => {
+                let res = snapshot.read()
+                                  .and_then(|data| device.restore(data));
                 tube.send(&CommandResult::RestoreResult(
                     res.map_err(|e| e.to_string()),
                 ))
@@ -532,9 +606,11 @@ impl BusDevice for ProxyDevice {
 
 impl Suspendable for ProxyDevice {
     fn snapshot(&mut self) -> anyhow::Result<serde_json::Value> {
-        let res = self.sync_send(&Command::Snapshot);
+        let res = self.sync_send(&Command::Snapshot { snapshot: SnapshotFile::new()? });
         match res {
-            Some(CommandResult::SnapshotResult(Ok(snap))) => Ok(snap),
+            Some(CommandResult::SnapshotResult(Ok(mut snapshot))) => {
+                snapshot.read()
+            },
             Some(CommandResult::SnapshotResult(Err(e))) => Err(anyhow!(
                 "failed to snapshot {}: {:#}",
                 self.debug_label(),
@@ -545,7 +621,7 @@ impl Suspendable for ProxyDevice {
     }
 
     fn restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
-        let res = self.sync_send(&Command::Restore { data });
+        let res = self.sync_send(&Command::Restore { snapshot: SnapshotFile::from_data(data)? });
         match res {
             Some(CommandResult::RestoreResult(Ok(()))) => Ok(()),
             Some(CommandResult::RestoreResult(Err(e))) => {
