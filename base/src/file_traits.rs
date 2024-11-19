@@ -69,6 +69,12 @@ impl FileGetLen for File {
     }
 }
 
+impl FileGetLen for &mut File {
+    fn get_len(&self) -> Result<u64> {
+        Ok(self.metadata()?.len())
+    }
+}
+
 /// A trait similar to `Read` and `Write`, but uses volatile memory as buffers.
 pub trait FileReadWriteVolatile {
     /// Read bytes from this file into the given slice, returning the number of bytes read on

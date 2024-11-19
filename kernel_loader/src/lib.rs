@@ -6,6 +6,7 @@
 
 use std::mem;
 
+use base::FileGetLen;
 use base::FileReadWriteAtVolatile;
 use base::VolatileSlice;
 use remain::sorted;
@@ -15,6 +16,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
+use std::cmp::max;
 
 mod multiboot;
 
@@ -111,7 +113,7 @@ pub fn load_elf32<F>(
     phys_offset: u64,
 ) -> Result<LoadedKernel>
 where
-    F: FileReadWriteAtVolatile,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
     load_elf_for_class(
         guest_mem,
@@ -140,7 +142,7 @@ pub fn load_elf64<F>(
     phys_offset: u64,
 ) -> Result<LoadedKernel>
 where
-    F: FileReadWriteAtVolatile,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
     load_elf_for_class(
         guest_mem,
@@ -169,7 +171,7 @@ pub fn load_elf<F>(
     phys_offset: u64,
 ) -> Result<LoadedKernel>
 where
-    F: FileReadWriteAtVolatile,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
     load_elf_for_class(guest_mem, kernel_start, kernel_image, phys_offset, None)
 }
@@ -182,7 +184,7 @@ fn load_elf_for_class<F>(
     ei_class: Option<u32>,
 ) -> Result<LoadedKernel>
 where
-    F: FileReadWriteAtVolatile,
+    F: FileReadWriteAtVolatile + FileGetLen,
 {
     let elf = read_elf(kernel_image, ei_class)?;
     let mut start = None;
@@ -226,11 +228,14 @@ where
     // We should have found at least one PT_LOAD program header. If not, `start` will not be set.
     let start = start.ok_or(Error::NoLoadableProgramHeaders)?;
 
-    let size = end
+    let file_size = kernel_image.get_len().map_err(|_| Error::SeekKernelEnd)?;
+    let load_size = end
         .checked_sub(start)
         .ok_or(Error::InvalidProgramHeaderSize)?;
+    let range_size = max(file_size, load_size);
 
-    let address_range = AddressRange { start, end };
+    let address_range = AddressRange::from_start_and_size(start, range_size)
+        .ok_or(Error::InvalidKernelSize)?;
 
     // The entry point address must fall within one of the loaded sections.
     // We approximate this by checking whether it within the bounds of the first and last sections.
@@ -245,7 +250,7 @@ where
 
     Ok(LoadedKernel {
         address_range,
-        size,
+        size: range_size,
         entry: GuestAddress(entry),
     })
 }
