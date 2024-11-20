@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::ffi::CStr;
 use std::ffi::CString;
-use std::fs::File;
 use std::io::IoSliceMut;
 use std::os::raw::c_char;
 use std::os::raw::c_void;
@@ -43,6 +42,8 @@ use rutabaga_gfx::RutabagaHandle;
 use rutabaga_gfx::RutabagaIntoRawDescriptor;
 use rutabaga_gfx::RutabagaIovec;
 use rutabaga_gfx::RutabagaResult;
+use rutabaga_gfx::RutabagaSnapshotReader;
+use rutabaga_gfx::RutabagaSnapshotWriter;
 use rutabaga_gfx::RutabagaWsi;
 use rutabaga_gfx::Transfer3D;
 use rutabaga_gfx::RUTABAGA_DEBUG_ERROR;
@@ -92,18 +93,6 @@ macro_rules! return_on_error {
             Err(e) => {
                 log_error(e.to_string());
                 return -EINVAL;
-            }
-        }
-    };
-}
-
-macro_rules! return_on_io_error {
-    ($result:expr) => {
-        match $result {
-            Ok(t) => t,
-            Err(e) => {
-                log_error(e.to_string());
-                return -e.raw_os_error().unwrap_or(EINVAL);
             }
         }
     };
@@ -696,10 +685,11 @@ pub unsafe extern "C" fn rutabaga_snapshot(ptr: &mut rutabaga, dir: *const c_cha
         let c_str_slice = CStr::from_ptr(dir);
 
         let result = c_str_slice.to_str();
-        let directory = return_on_error!(result);
+        let directory_str = return_on_error!(result);
+        let directory = Path::new(directory_str).to_path_buf();
 
-        let file = return_on_io_error!(File::create(Path::new(directory).join("snapshot")));
-        let result = ptr.snapshot(&mut std::io::BufWriter::new(file), directory);
+        let writer = RutabagaSnapshotWriter::from_existing(directory);
+        let result = ptr.snapshot(writer);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)
@@ -713,10 +703,11 @@ pub unsafe extern "C" fn rutabaga_restore(ptr: &mut rutabaga, dir: *const c_char
         let c_str_slice = CStr::from_ptr(dir);
 
         let result = c_str_slice.to_str();
-        let directory = return_on_error!(result);
+        let directory_str = return_on_error!(result);
+        let directory = Path::new(directory_str).to_path_buf();
 
-        let file = return_on_io_error!(File::open(Path::new(directory).join("snapshot")));
-        let result = ptr.restore(&mut std::io::BufReader::new(file), directory);
+        let reader = return_on_error!(RutabagaSnapshotReader::new(directory));
+        let result = ptr.restore(reader);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)

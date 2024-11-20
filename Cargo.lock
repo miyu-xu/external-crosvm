@@ -2698,6 +2698,7 @@ dependencies = [
  "remain",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "vulkano 0.33.0",
  "winapi",
