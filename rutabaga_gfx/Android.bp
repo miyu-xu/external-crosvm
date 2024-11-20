@@ -135,6 +135,7 @@ rust_test {
         "libnix",
         "libserde",
         "libserde_json",
+        "libtempfile",
         "libthiserror",
         "libzerocopy",
     ],
