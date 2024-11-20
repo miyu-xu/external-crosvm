@@ -41,6 +41,8 @@ pub use crate::rutabaga_os::MappedRegion as RutabagaMappedRegion;
 pub use crate::rutabaga_os::OwnedDescriptor as RutabagaDescriptor;
 pub use crate::rutabaga_os::RawDescriptor as RutabagaRawDescriptor;
 pub use crate::rutabaga_utils::*;
+pub use crate::snapshot::RutabagaSnapshotReader;
+pub use crate::snapshot::RutabagaSnapshotWriter;
 
 pub mod kumquat_support {
     pub use crate::bytestream::Reader as RutabagaReader;
