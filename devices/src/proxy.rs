@@ -406,6 +406,8 @@ impl ChildProcIntf {
         // child processes on its exit by `crosvm::sys::linux::main::wait_all_children()`.
         let pid = child_process.into_pid();
 
+        base::error!("forked child pid {} for device {}", pid, debug_label);
+
         Ok(ChildProcIntf {
             tube: parent_tube,
             pid,

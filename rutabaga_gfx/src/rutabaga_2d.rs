@@ -12,6 +12,7 @@ use std::io::IoSliceMut;
 use crate::rutabaga_core::Rutabaga2DInfo;
 use crate::rutabaga_core::RutabagaComponent;
 use crate::rutabaga_core::RutabagaResource;
+use crate::rutabaga_snapshot::*;
 use crate::rutabaga_utils::*;
 
 /// Transfers a resource from potentially many chunked src slices to a dst slice.
@@ -285,11 +286,11 @@ impl RutabagaComponent for Rutabaga2D {
         Ok(())
     }
 
-    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
+    fn snapshot(&self, _writer: RutabagaSnapshotWriter) -> RutabagaResult<()> {
         Ok(())
     }
 
-    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
+    fn restore(&self, _reader: RutabagaSnapshotReader) -> RutabagaResult<()> {
         Ok(())
     }
 }
