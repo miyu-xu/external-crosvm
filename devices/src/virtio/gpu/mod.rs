@@ -5,6 +5,7 @@
 mod edid;
 mod parameters;
 mod protocol;
+mod snapshot;
 mod virtio_gpu;
 
 use std::cell::RefCell;
@@ -76,6 +77,8 @@ pub use self::protocol::VIRTIO_GPU_F_VIRGL;
 pub use self::protocol::VIRTIO_GPU_MAX_SCANOUTS;
 pub use self::protocol::VIRTIO_GPU_SHM_ID_HOST_VISIBLE;
 use self::protocol::*;
+use self::snapshot::SnapshotArchiveReader;
+use self::snapshot::SnapshotArchiveWriter;
 use self::virtio_gpu::to_rutabaga_descriptor;
 pub use self::virtio_gpu::ProcessDisplayResult;
 use self::virtio_gpu::VirtioGpu;
@@ -877,14 +880,13 @@ struct WorkerActivateRequest {
 enum WorkerRequest {
     Activate(WorkerActivateRequest),
     Suspend,
-    Snapshot,
-    Restore(WorkerSnapshot),
+    Snapshot(RutabagaSnapshotWriter),
+    Restore(RutabagaSnapshotReader),
 }
 
 enum WorkerResponse {
     Ok,
     Suspend(GpuDeactivationResources),
-    Snapshot(WorkerSnapshot),
 }
 
 struct GpuActivationResources {
@@ -1028,14 +1030,16 @@ impl Worker {
                         .send(response)
                         .expect("failed to send gpu worker response for suspend");
                 }
-                WorkerRequest::Snapshot => {
-                    let response = self.on_snapshot().map(WorkerResponse::Snapshot);
+                WorkerRequest::Snapshot(snapshot_writer) => {
+                    let response = self
+                        .on_snapshot(snapshot_writer)
+                        .map(|_| WorkerResponse::Ok);
                     self.response_sender
                         .send(response)
                         .expect("failed to send gpu worker response for snapshot");
                 }
-                WorkerRequest::Restore(snapshot) => {
-                    let response = self.on_restore(snapshot).map(|_| WorkerResponse::Ok);
+                WorkerRequest::Restore(snapshot_reader) => {
+                    let response = self.on_restore(snapshot_reader).map(|_| WorkerResponse::Ok);
                     self.response_sender
                         .send(response)
                         .expect("failed to send gpu worker response for restore");
@@ -1085,28 +1089,36 @@ impl Worker {
         Ok(GpuDeactivationResources { queues })
     }
 
-    fn on_snapshot(&mut self) -> anyhow::Result<WorkerSnapshot> {
-        Ok(WorkerSnapshot {
-            fence_state_snapshot: self.fence_state.lock().snapshot(),
-            virtio_gpu_snapshot: self
-                .state
-                .virtio_gpu
-                .snapshot()
-                .context("failed to snapshot VirtioGpu")?,
-        })
-    }
-
-    fn on_restore(&mut self, snapshot: WorkerSnapshot) -> anyhow::Result<()> {
-        self.fence_state
-            .lock()
-            .restore(snapshot.fence_state_snapshot);
+    fn on_snapshot(&mut self, writer: RutabagaSnapshotWriter) -> anyhow::Result<()> {
+        let fence_state_snapshot = self.fence_state.lock().snapshot();
+        writer
+            .add_fragment("fence_state", &fence_state_snapshot)
+            .context("failed to write virtio gpu fence state snapshot fragment")?;
 
         self.state
             .virtio_gpu
-            .restore(snapshot.virtio_gpu_snapshot)
-            .context("failed to restore VirtioGpu")?;
+            .snapshot(
+                writer
+                    .add_namespace("virtio_gpu")
+                    .context("failed to create namespace for virtio gpu snapshot")?,
+            )
+            .context("failed to snapshot VirtioGpu")
+    }
 
-        Ok(())
+    fn on_restore(&mut self, reader: RutabagaSnapshotReader) -> anyhow::Result<()> {
+        let fence_state_snapshot: FenceStateSnapshot = reader
+            .get_fragment("fence_state")
+            .context("failed to read virtio gpu fence state snapshot fragment")?;
+        self.fence_state.lock().restore(fence_state_snapshot);
+
+        self.state
+            .virtio_gpu
+            .restore(
+                reader
+                    .get_namespace("virtio_gpu")
+                    .context("failed to get namespace for virtio gpu snapshot")?,
+            )
+            .context("failed to restore VirtioGpu")
     }
 
     fn run_until_sleep_or_exit(&mut self) -> anyhow::Result<WorkerStopReason> {
@@ -2037,8 +2049,13 @@ impl VirtioDevice for Gpu {
         if let (Some(worker_request_sender), Some(worker_response_receiver)) =
             (&self.worker_request_sender, &self.worker_response_receiver)
         {
+            let snapshot_archiver = SnapshotArchiveWriter::new()?;
+            let snapshot_writer = snapshot_archiver
+                .add_namespace("gpu")
+                .context("failed to get gpu namespace")?;
+
             worker_request_sender
-                .send(WorkerRequest::Snapshot)
+                .send(WorkerRequest::Snapshot(snapshot_writer))
                 .map_err(|e| {
                     anyhow!(
                         "failed to send snapshot request to virtio gpu worker: {:?}",
@@ -2051,11 +2068,15 @@ impl VirtioDevice for Gpu {
                 .inspect_err(|_| self.worker_state = WorkerState::Error)
                 .context("failed to receive response for virtio gpu worker suspend request")??
             {
-                WorkerResponse::Snapshot(snapshot) => Ok(serde_json::to_value(snapshot)?),
+                WorkerResponse::Ok => (),
                 _ => {
                     panic!("unexpected response from virtio gpu worker sleep request");
                 }
             }
+
+            Ok(snapshot_archiver
+                .collect_fragments_into_archive()
+                .context("failed to get virtio gpu snapshot archive")?)
         } else {
             Err(anyhow!("virtio gpu worker not available for snapshot"))
         }
@@ -2076,13 +2097,17 @@ impl VirtioDevice for Gpu {
             _ => (),
         };
 
-        let snapshot: WorkerSnapshot = serde_json::from_value(data)?;
+        let snapshot_archive_reader = SnapshotArchiveReader::unpack(data)
+            .context("failed to unpack virtio gpu snapshot archive")?;
+        let snapshot_reader = snapshot_archive_reader
+            .get_namespace("gpu")
+            .context("failed to get gpu namespace")?;
 
         if let (Some(worker_request_sender), Some(worker_response_receiver)) =
             (&self.worker_request_sender, &self.worker_response_receiver)
         {
             worker_request_sender
-                .send(WorkerRequest::Restore(snapshot))
+                .send(WorkerRequest::Restore(snapshot_reader))
                 .map_err(|e| {
                     anyhow!(
                         "failed to send suspend request to virtio gpu worker: {:?}",

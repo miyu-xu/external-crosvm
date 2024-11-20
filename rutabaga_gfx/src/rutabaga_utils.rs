@@ -316,6 +316,9 @@ pub enum RutabagaError {
     NixError(NixError),
     #[error("Nul Error occured {0}")]
     NulError(NulError),
+    /// An error with a snapshot.
+    #[error("a snapshot error occured: {0}")]
+    SnapshotError(String),
     /// Violation of the Rutabaga spec occured.
     #[error("violation of the rutabaga spec: {0}")]
     SpecViolation(&'static str),
@@ -661,6 +664,17 @@ pub enum RutabagaComponentType {
     VirglRenderer,
     Gfxstream,
     CrossDomain,
+}
+
+impl RutabagaComponentType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RutabagaComponentType::CrossDomain => "crossdomain",
+            RutabagaComponentType::Gfxstream => "gfxstream",
+            RutabagaComponentType::Rutabaga2D => "rutabaga2d",
+            RutabagaComponentType::VirglRenderer => "virglrenderer",
+        }
+    }
 }
 
 /// Rutabaga handle types (memory and sync in same namespace)
