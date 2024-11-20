@@ -19,6 +19,7 @@ mod rutabaga_2d;
 mod rutabaga_core;
 mod rutabaga_gralloc;
 mod rutabaga_os;
+mod rutabaga_snapshot;
 mod rutabaga_utils;
 mod virgl_renderer;
 
@@ -39,6 +40,7 @@ pub use crate::rutabaga_os::IntoRawDescriptor as RutabagaIntoRawDescriptor;
 pub use crate::rutabaga_os::MappedRegion as RutabagaMappedRegion;
 pub use crate::rutabaga_os::OwnedDescriptor as RutabagaDescriptor;
 pub use crate::rutabaga_os::RawDescriptor as RutabagaRawDescriptor;
+pub use crate::rutabaga_snapshot::*;
 pub use crate::rutabaga_utils::*;
 
 pub mod kumquat_support {

@@ -420,6 +420,15 @@ pub fn create_gpu_minijail(
         jail.mount_bind(perfetto_path, perfetto_path, true)?;
     }
 
+    // Scratch space for the GPU device to build or unpack snapshots.
+    jail.mount_bind(
+        tempfile::tempdir()
+            .context("failed to create temporary directory for gpu jail")?
+            .into_path(),
+        Path::new("/tmp"),
+        true,
+    )?;
+
     Ok(jail)
 }
 
