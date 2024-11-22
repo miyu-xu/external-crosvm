@@ -19,6 +19,7 @@ use crate::gfxstream::Gfxstream;
 use crate::rutabaga_2d::Rutabaga2D;
 use crate::rutabaga_os::MemoryMapping;
 use crate::rutabaga_os::OwnedDescriptor;
+use crate::rutabaga_snapshot::*;
 use crate::rutabaga_utils::*;
 #[cfg(feature = "virgl_renderer")]
 use crate::virgl_renderer::VirglRenderer;
@@ -275,12 +276,12 @@ pub trait RutabagaComponent {
     }
 
     /// Implementations must snapshot to the specified directory
-    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
+    fn snapshot(&self) -> RutabagaResult<serde_json::Value> {
         Err(RutabagaError::Unsupported)
     }
 
     /// Implementations must restore from the specified directory
-    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
+    fn restore(&self, _snapshot: serde_json::Value) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 
@@ -463,6 +464,7 @@ pub struct Rutabaga {
 pub struct RutabagaSnapshot {
     resources: Map<u32, RutabagaResourceSnapshot>,
     contexts: Map<u32, Vec<u8>>,
+    component: serde_json::Value,
 }
 
 impl Rutabaga {
@@ -477,13 +479,11 @@ impl Rutabaga {
 
     /// Take a snapshot of Rutabaga's current state. The snapshot is serialized into an opaque byte
     /// stream and written to `w`.
-    pub fn snapshot(&self, w: &mut impl Write, directory: &str) -> RutabagaResult<()> {
+    pub fn snapshot(&self) -> RutabagaResult<serde_json::Value> {
         let component = self
             .components
             .get(&self.default_component)
             .ok_or(RutabagaError::InvalidComponent)?;
-
-        component.snapshot(directory)?;
 
         let snapshot = RutabagaSnapshot {
             resources: self
@@ -496,9 +496,9 @@ impl Rutabaga {
                 .iter()
                 .map(|(i, c)| Ok((*i, c.snapshot()?)))
                 .collect::<RutabagaResult<_>>()?,
+            component: component.snapshot()?,
         };
-
-        serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
+        serde_json::to_value(snapshot).map_err(|e| RutabagaError::IoError(e.into()))
     }
 
     fn destroy_objects(&mut self) -> RutabagaResult<()> {
@@ -533,28 +533,29 @@ impl Rutabaga {
     /// to translate to/from stable guest physical addresses, but it is unclear how well that
     /// approach would scale to support 3D modes, which have others problems that require VMM help,
     /// like resource handles.
-    pub fn restore(&mut self, r: &mut impl Read, directory: &str) -> RutabagaResult<()> {
+    pub fn restore(&mut self, raw_snapshot: serde_json::Value) -> RutabagaResult<()> {
         self.destroy_objects()?;
+
+        let snapshot: RutabagaSnapshot =
+            serde_json::from_value(raw_snapshot).map_err(|e| RutabagaError::IoError(e.into()))?;
 
         let component = self
             .components
             .get_mut(&self.default_component)
             .ok_or(RutabagaError::InvalidComponent)?;
 
-        component.restore(directory)?;
+        component.restore(snapshot.component)?;
 
-        let snapshot: RutabagaSnapshot =
-            serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
+        self.contexts = snapshot
+            .contexts
+            .into_iter()
+            .map(|(i, c)| Ok((i, component.restore_context(c, self.fence_handler.clone())? )))
+            .collect::<RutabagaResult<_>>()?;
 
         self.resources = snapshot
             .resources
             .into_iter()
             .map(|(i, s)| Ok((i, RutabagaResource::try_from(s)?)))
-            .collect::<RutabagaResult<_>>()?;
-        self.contexts = snapshot
-            .contexts
-            .into_iter()
-            .map(|(i, c)| Ok((i, component.restore_context(c, self.fence_handler.clone())? )))
             .collect::<RutabagaResult<_>>()?;
 
         Ok(())
@@ -1421,13 +1422,11 @@ mod tests {
 
     #[test]
     fn snapshot_restore_2d_no_resources() {
-        let mut buffer = std::io::Cursor::new(Vec::new());
-
         let rutabaga1 = new_2d();
-        rutabaga1.snapshot(&mut buffer, "").unwrap();
+        let rutabaga1_snapshot = rutabaga1.snapshot().unwrap();
 
         let mut rutabaga1 = new_2d();
-        rutabaga1.restore(&mut &buffer.get_ref()[..], "").unwrap();
+        rutabaga1.restore(rutabaga1).unwrap();
     }
 
     #[test]
@@ -1461,10 +1460,10 @@ mod tests {
                 }],
             )
             .unwrap();
-        rutabaga1.snapshot(&mut buffer, "").unwrap();
+        let rutabaga1_snapshot = rutabaga1.snapshot().unwrap();
 
         let mut rutabaga2 = new_2d();
-        rutabaga2.restore(&mut &buffer.get_ref()[..], "").unwrap();
+        rutabaga2.restore(rutabaga1_snapshot).unwrap();
 
         assert_eq!(rutabaga2.resources.len(), 1);
         let rutabaga_resource = rutabaga2.resources.get(&resource_id).unwrap();

@@ -477,7 +477,7 @@ pub struct VirtioGpuSnapshot {
     scanouts: Map<u32, VirtioGpuScanoutSnapshot>,
     scanouts_updated: bool,
     cursor_scanout: VirtioGpuScanoutSnapshot,
-    rutabaga: Vec<u8>,
+    rutabaga: serde_json::Value,
     resources: Map<u32, VirtioGpuResourceSnapshot>,
 }
 
@@ -1306,13 +1306,9 @@ impl VirtioGpu {
                 .collect(),
             scanouts_updated: self.scanouts_updated.load(Ordering::SeqCst),
             cursor_scanout: self.cursor_scanout.snapshot(),
-            rutabaga: {
-                let mut buffer = std::io::Cursor::new(Vec::new());
-                self.rutabaga
-                    .snapshot(&mut buffer, "")
-                    .context("failed to snapshot rutabaga")?;
-                buffer.into_inner()
-            },
+            rutabaga: self.rutabaga
+                          .snapshot()
+                          .context("failed to snapshot rutabaga")?,
             resources: self
                 .resources
                 .iter()
@@ -1357,7 +1353,7 @@ impl VirtioGpu {
                 .context("failed to restore cursor scanout")?;
 
             self.rutabaga
-                .restore(&mut &snapshot.rutabaga[..], "")
+                .restore(snapshot.rutabaga)
                 .context("failed to restore rutabaga")?;
 
             for (id, s) in snapshot.resources.into_iter() {
