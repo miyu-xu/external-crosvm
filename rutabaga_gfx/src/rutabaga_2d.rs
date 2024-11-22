@@ -285,11 +285,11 @@ impl RutabagaComponent for Rutabaga2D {
         Ok(())
     }
 
-    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
-        Ok(())
+    fn snapshot(&self) -> RutabagaResult<serde_json::Value> {
+        Ok(serde_json::Value::Null)
     }
 
-    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
+    fn restore(&self, _snapshot: serde_json::Value) -> RutabagaResult<()> {
         Ok(())
     }
 }

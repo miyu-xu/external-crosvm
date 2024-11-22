@@ -655,12 +655,37 @@ pub struct RutabagaChannel {
 
 /// Enumeration of possible rutabaga components.
 #[repr(u8)]
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RutabagaComponentType {
     Rutabaga2D,
     VirglRenderer,
     Gfxstream,
     CrossDomain,
+}
+
+impl fmt::Display for RutabagaComponentType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::RutabagaComponentType::*;
+        match self {
+            CrossDomain => write!(f, "crossdomain"),
+            Gfxstream => write!(f, "gfxstream"),
+            Rutabaga2D => write!(f, "rutabaga2d"),
+            VirglRenderer => write!(f, "virglrenderer"),
+        }
+    }
+}
+
+impl TryFrom<String> for RutabagaComponentType {
+    type Error = RutabagaError;
+    fn try_from(s: String) -> Result<RutabagaComponentType, Self::Error> {
+        match s.as_str() {
+            "crossdomain" => Ok(RutabagaComponentType::CrossDomain),
+            "gfxstream" => Ok(RutabagaComponentType::Gfxstream),
+            "rutabaga2d" => Ok(RutabagaComponentType::Rutabaga2D),
+            "virglrenderer" => Ok(RutabagaComponentType::VirglRenderer),
+            _ => Err(RutabagaError::InvalidComponent),
+        }
+    }
 }
 
 /// Rutabaga handle types (memory and sync in same namespace)

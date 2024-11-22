@@ -35,6 +35,8 @@ use crate::rutabaga_os::FromRawDescriptor;
 use crate::rutabaga_os::IntoRawDescriptor;
 use crate::rutabaga_os::OwnedDescriptor;
 use crate::rutabaga_os::RawDescriptor;
+use crate::rutabaga_snapshot::RutabagaSnapshotArchiveReader;
+use crate::rutabaga_snapshot::RutabagaSnapshotArchiveWriter;
 use crate::rutabaga_utils::*;
 
 use serde::Deserialize;
@@ -822,20 +824,24 @@ impl RutabagaComponent for Gfxstream {
     }
 
     #[cfg(gfxstream_unstable)]
-    fn snapshot(&self, directory: &str) -> RutabagaResult<()> {
-        let cstring = CString::new(directory)?;
+    fn snapshot(&self) -> RutabagaResult<serde_json::Value> {
+        let archiver = RutabagaSnapshotArchiveWriter::new()?;
+
+        let cstring = CString::new(archiver.path_string())?;
 
         // SAFETY:
         // Safe because directory string is valid
         let ret = unsafe { stream_renderer_snapshot(cstring.as_ptr() as *const c_char) };
         ret_to_res(ret)?;
 
-        Ok(())
+        Ok(archiver.as_archive_value()?)
     }
 
     #[cfg(gfxstream_unstable)]
-    fn restore(&self, directory: &str) -> RutabagaResult<()> {
-        let cstring = CString::new(directory)?;
+    fn restore(&self, snapshot: serde_json::Value) -> RutabagaResult<()> {
+        let archive = RutabagaSnapshotArchiveReader::unpack(snapshot)?;
+
+        let cstring = CString::new(archive.path_string())?;
 
         // SAFETY:
         // Safe because directory string is valid
