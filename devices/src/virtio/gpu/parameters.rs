@@ -89,6 +89,9 @@ pub struct GpuParameters {
     pub allow_implicit_render_server_exec: bool,
     // Passthrough parameters sent to the underlying renderer in a renderer-specific format.
     pub renderer_features: Option<String>,
+    // When running with device sandboxing, the path of a directory available for
+    // scratch space.
+    pub snapshot_scratch_path: Option<String>,
 }
 
 impl Default for GpuParameters {
@@ -120,6 +123,7 @@ impl Default for GpuParameters {
             fixed_blob_mapping: cfg!(target_os = "linux") && !cfg!(feature = "gfxstream"),
             allow_implicit_render_server_exec: false,
             renderer_features: None,
+            snapshot_scratch_path: None,
         }
     }
 }

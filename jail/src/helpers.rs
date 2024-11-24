@@ -358,6 +358,7 @@ pub fn create_gpu_minijail(
     root: &Path,
     config: &SandboxConfig,
     render_node_only: bool,
+    snapshot_scratch_directory: &Option<String>,
 ) -> Result<Minijail> {
     let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
 
@@ -418,6 +419,18 @@ pub fn create_gpu_minijail(
     let perfetto_path = Path::new("/run/perfetto");
     if perfetto_path.exists() {
         jail.mount_bind(perfetto_path, perfetto_path, true)?;
+    }
+
+    // Provide scratch space for the GPU device to build or unpack snapshots.
+    //jail.mount_tmp_size(4 * 1024 * 1024 * 1024);
+    if let Some(snapshot_scratch_directory) = snapshot_scratch_directory {
+        jail.mount_with_data(
+            Path::new("none"),
+            Path::new(snapshot_scratch_directory),
+            "tmpfs",
+            (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as usize,
+            "size=4294967296",
+        )?;
     }
 
     Ok(jail)
