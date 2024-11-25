@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5e1377ef_27f15ac4",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 3
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-11-25T19:28:41Z",
+      "side": 1,
+      "message": "Needed for `m kumquat` to build\n\nCC @gurchetansingh@google.com",
+      "range": {
+        "startLine": 33,
+        "startChar": 0,
+        "endLine": 35,
+        "endChar": 28
+      },
+      "revId": "bcb3658f492def493239913a932e94ea74242d7e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
