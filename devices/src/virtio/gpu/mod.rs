@@ -5,6 +5,7 @@
 mod edid;
 mod parameters;
 mod protocol;
+mod snapshot;
 mod virtio_gpu;
 
 use std::cell::RefCell;
