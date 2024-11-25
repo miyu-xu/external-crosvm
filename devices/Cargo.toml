@@ -54,6 +54,7 @@ audio_streams = "*"
 audio_util = { path = "../audio_util" }
 balloon_control = { path = "../common/balloon_control" }
 base = { path = "../base" }
+base64 = "0.22.1"
 bit_field = { path = "../bit_field" }
 cfg-if = "1.0.0"
 chrono = { version = "0.4.34", features = [ "serde", "now" ], default-features = false }
