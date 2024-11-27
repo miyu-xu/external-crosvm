@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "95cf73aa_eed0ad95",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1971194
+      },
+      "writtenOn": "2024-11-27T06:35:29Z",
+      "side": 1,
+      "message": "Hi, I\u0027d like to cherry-pick this and the parent CL manually. PTAL!",
+      "revId": "74aea95250abe75953e2048738808d0ba2f6863e",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
