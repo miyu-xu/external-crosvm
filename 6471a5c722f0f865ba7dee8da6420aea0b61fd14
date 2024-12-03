@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "136ff85b_0694d73e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2024-12-03T18:35:24Z",
+      "side": 1,
+      "message": "LGTM assuming it is a clean cherry pick",
+      "revId": "6471a5c722f0f865ba7dee8da6420aea0b61fd14",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
